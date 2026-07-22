@@ -848,11 +848,22 @@ def inspect_key(key: str) -> dict | None:
       * Pre-flight from the CLI / dashboard before clicking *Activate*.
       * Air-gap: validate a key on a staging box before transporting it.
 
-    Returns a dict with the same shape as :func:`current_license_info` (so the
-    UI can render the two the same way), or ``None`` if the signature is bogus
-    or the token is malformed. An EXPIRED but otherwise-valid token returns a
-    dict with ``valid=False`` + ``status="expired"`` so the caller can still
-    show what the (now-stale) key was for. Never raises, never touches disk."""
+    Returns a dict with the same field set as :func:`current_license_info` (so
+    the UI can render the two the same way, and a support script can jq the
+    same keys off either) — or ``None`` if the signature is bogus or the token
+    is malformed. An EXPIRED but otherwise-valid token returns a dict with
+    ``valid=False`` + ``status="expired"`` so the caller can still show what
+    the (now-stale) key was for.
+
+    ``pubkey_fingerprint_sha256`` carries the payload-independent trust anchor
+    identity so a support call ("does the key you're pasting verify against
+    the fingerprint we ship?") can be answered off the same envelope. The two
+    on-disk-only fields — ``permissions_safe`` and ``file_mode`` — collapse to
+    ``None`` on a dry-run since there is no file to stat yet; the keys are
+    kept for shape parity with :func:`current_license_info` so a UI branching
+    on either envelope never has to check for missing keys.
+
+    Never raises, never touches disk."""
     import time as _t
 
     try:
@@ -876,6 +887,15 @@ def inspect_key(key: str) -> dict | None:
             "sub": str(payload.get("sub", "")),
             "exp": exp,
             "days_left": days_left,
+            # Trust-anchor identity is payload-independent — same value as
+            # current_license_info() populates on every file-exists branch, so
+            # a UI can render either envelope through one code path.
+            "pubkey_fingerprint_sha256": pubkey_fingerprint(),
+            # On-disk fields are meaningless on a dry-run (no file exists yet);
+            # kept in the envelope with None so the shape matches
+            # current_license_info() exactly.
+            "permissions_safe": None,
+            "file_mode": None,
         }
     except Exception as exc:  # never raise from a dry-run inspector
         logger.warning("license: inspect_key failed: %s", exc)
