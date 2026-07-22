@@ -23,8 +23,7 @@ name: C6 auto-heal (daily required-checks application)
 #     clawmetry, clawmetry-cloud, clawmetry-landing
 #   This workflow picks it up at 10:15am UTC and closes C6 automatically.
 #
-# Tracking: vivekchand/clawmetry#3864 (E2E robustness epic)
-#           vivekchand/clawmetry#3752 (C6)
+# Tracking: vivekchand/clawmetry#3906
 
 on:
   schedule:
@@ -139,7 +138,7 @@ jobs:
               echo "bash scripts/close-c6.sh"
               echo "\`\`\`"
               echo ""
-              echo "Tracking: [#3864](https://github.com/vivekchand/clawmetry/issues/3864)"
+              echo "Tracking: [#3906](https://github.com/vivekchand/clawmetry/issues/3906)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -150,7 +149,7 @@ jobs:
           echo ""
           echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6."
           echo "See the job summary above for a formatted status report and close options."
-          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/3864"
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/3906"
           exit 1
 
       - name: Apply required E2E status checks (C6)
@@ -173,7 +172,7 @@ jobs:
             echo "- [clawmetry-cloud branch protection](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
             echo "- [clawmetry-landing branch protection](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
             echo ""
-            echo "Tracking: [#3864](https://github.com/vivekchand/clawmetry/issues/3864)"
+            echo "Tracking: [#3906](https://github.com/vivekchand/clawmetry/issues/3906)"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "C6 auto-heal complete. If apply_required_status_checks.py exited 0, branch protection"
-          echo "is configured on all 3 repos. Tracking: https://github.com/vivekchand/clawmetry/issues/3864"
+          echo "is configured on all 3 repos. Tracking: https://github.com/vivekchand/clawmetry/issues/3906"
