@@ -2700,6 +2700,26 @@ def _cmd_onboard(args) -> None:
 
     if not already_connected:
         print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
+
+    # Show what is actually on this machine before asking how to run:
+    # a box full of Cursor/Claude Code sessions should hear, at the
+    # conversion moment, that the free tier watches OpenClaw + NVIDIA
+    # NemoClaw and the rest need a key or the Cloud plan (#3917).
+    try:
+        from clawmetry.runtime_probe import probe_runtimes, render_detection_lines
+
+        _detect_lines = render_detection_lines(probe_runtimes())
+    except Exception:
+        _detect_lines = []
+    if _detect_lines:
+        print()
+        for _i, _line in enumerate(_detect_lines):
+            if _i == 0:
+                print(f"  {BOLD(_line)}")
+            elif _line.startswith("  [x]"):
+                print(f"  {GREEN('✓')} {_line[6:]}")
+            else:
+                print(f"  {DIM(_line)}" if _line else "")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
