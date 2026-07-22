@@ -7108,6 +7108,7 @@ def api_license_pubkey():
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
+    body: dict = {}
     try:
         body = request.get_json(silent=True) or {}
         event = str(body.get("event", ""))[:64]
@@ -7120,7 +7121,117 @@ def api_paywall_event():
         )
     except Exception as exc:
         logger.debug("api_paywall_event: ignored error: %s", exc)
+    # Best-effort rolling store for `/api/paywall/events/summary` +
+    # `/api/paywall/events/recent`. Never raises; the beacon stays 204 even
+    # if the store import fails on a broken install.
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        _pe.record_event(body)
+    except Exception as exc:
+        logger.debug("api_paywall_event: store swallowed error: %s", exc)
     return "", 204
+
+
+@bp_entitlement.route("/api/paywall/events/summary")
+def api_paywall_events_summary():
+    """``GET /api/paywall/events/summary`` -- rolling in-process aggregate
+    of client-side ``POST /api/paywall/event`` beacons.
+
+    Body shape::
+
+        {
+          "total": <int>,        # all-time recorded events (survives eviction)
+          "in_window": <int>,    # currently in the ring
+          "dropped": <int>,      # events evicted by ring rotation
+          "capacity": <int>,     # ring size (CLAWMETRY_PAYWALL_EVENT_CAPACITY)
+          "first_ts": <float|null>,  # epoch seconds of first-ever event
+          "last_ts":  <float|null>,  # epoch seconds of most-recent event
+          "by_event": {"<name>": <int>, ...},        # in-window
+          "by_feature": {"<key>":  <int>, ...},
+          "by_harness": {"<key>":  <int>, ...},
+          "by_source":  {"<key>":  <int>, ...},
+          "by_plan_chosen": {"<plan>": <int>, ...}
+        }
+
+    Ships in GRACE -- no entitlement gate, no capacity accounting. Grace-
+    mode read of a grace-mode write.
+
+    Never 5xxs -- on any failure the endpoint returns the neutral empty
+    snapshot so a paywall-dashboard tile keeps rendering.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        return jsonify(_pe.summary())
+    except Exception as exc:
+        logger.warning("api_paywall_events_summary: error: %s", exc)
+        return jsonify(
+            {
+                "total": 0,
+                "in_window": 0,
+                "dropped": 0,
+                "capacity": 0,
+                "first_ts": None,
+                "last_ts": None,
+                "by_event": {},
+                "by_feature": {},
+                "by_harness": {},
+                "by_source": {},
+                "by_plan_chosen": {},
+            }
+        )
+
+
+@bp_entitlement.route("/api/paywall/events/recent")
+def api_paywall_events_recent():
+    """``GET /api/paywall/events/recent?limit=N`` -- most-recent N paywall
+    beacons, newest first.
+
+    ``limit`` defaults to 50 and is clamped into ``[0, 200]`` -- a caller
+    passing a bad, negative, or oversized value falls back to the default so
+    the response size stays bounded.
+
+    Body shape::
+
+        {
+          "events": [
+            {"event": "...", "feature": "...", "harness": "...",
+             "source": "...", "plan_chosen": "...", "ts": <float>},
+            ...
+          ],
+          "count": <int>,          # events actually returned
+          "limit": <int>,          # the resolved (post-clamp) limit
+          "in_window": <int>       # size of the underlying ring right now
+        }
+
+    Ships in GRACE. Never 5xxs -- on any failure returns an empty envelope.
+    """
+    raw_limit = request.args.get("limit", "")
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        try:
+            limit_val = int(raw_limit) if raw_limit != "" else _pe.RECENT_DEFAULT_LIMIT
+        except (TypeError, ValueError):
+            limit_val = _pe.RECENT_DEFAULT_LIMIT
+        if limit_val < 0:
+            limit_val = _pe.RECENT_DEFAULT_LIMIT
+        if limit_val > _pe.RECENT_MAX_LIMIT:
+            limit_val = _pe.RECENT_MAX_LIMIT
+        events = _pe.recent(limit_val)
+        summary = _pe.summary()
+        return jsonify(
+            {
+                "events": events,
+                "count": len(events),
+                "limit": limit_val,
+                "in_window": summary.get("in_window", 0),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_recent: error: %s", exc)
+        return jsonify({"events": [], "count": 0, "limit": 0, "in_window": 0})
 
 
 def _route_actor() -> str:
