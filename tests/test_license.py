@@ -390,6 +390,109 @@ def test_current_license_info(lic):
     assert info["days_left"] > 300
 
 
+# ── inspect_key: shape parity with current_license_info ─────────────────────
+#
+# The docstring on ``inspect_key`` promises "the same field set as
+# ``current_license_info`` (so the UI can render the two the same way)". Pin
+# the invariant: every non-None return from ``inspect_key`` MUST carry the
+# same 10-key envelope as ``current_license_info``'s file-exists branches, so
+# a UI, ``jq`` filter, or support script never has to branch on which envelope
+# it received. The two on-disk-only fields collapse to ``None`` on the dry-run
+# side; the trust-anchor fingerprint is payload-independent and byte-equals
+# what ``current_license_info`` populates.
+
+
+def test_inspect_key_active_matches_current_license_info_shape(lic):
+    tok = lic.L._encode_token(_payload("pro", nodes=7), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+
+
+def test_inspect_key_expired_matches_current_license_info_shape(lic):
+    tok = lic.L._encode_token(_payload("pro", nodes=4, exp_delta=-7200), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert set(info.keys()) == _EXPECTED_FILE_EXISTS_KEYS
+
+
+def test_inspect_key_carries_trust_anchor_fingerprint(lic):
+    """The pubkey fingerprint is payload-independent, so an inspection
+    envelope MUST carry the same value ``current_license_info`` would
+    populate — a support script can then verify "does the pasted key
+    verify against the pubkey we ship?" without an extra API round-trip."""
+    tok = lic.L._encode_token(_payload("pro", nodes=1), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    fp = info["pubkey_fingerprint_sha256"]
+    assert isinstance(fp, str)
+    assert len(fp) == 64
+    # Matches the standalone helper — the two must never drift.
+    assert fp == lic.L.pubkey_fingerprint()
+
+
+def test_inspect_key_on_disk_fields_are_none_on_dry_run(lic):
+    """A dry-run inspection never touches disk, so the two on-disk-only
+    fields (``permissions_safe`` / ``file_mode``) MUST collapse to ``None``.
+    Keeps the shape identical to ``current_license_info`` while making it
+    obvious to a caller that those fields carry no information yet."""
+    tok = lic.L._encode_token(_payload("pro", nodes=1), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert info["permissions_safe"] is None
+    assert info["file_mode"] is None
+
+
+def test_inspect_key_expired_carries_trust_anchor_fingerprint(lic):
+    """Expired-but-parseable keys still populate the fingerprint — support
+    can confirm "this key was minted with our pubkey" even for a stale key."""
+    tok = lic.L._encode_token(_payload("pro", nodes=1, exp_delta=-3600), lic.priv)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert info["status"] == "expired"
+    assert info["pubkey_fingerprint_sha256"] == lic.L.pubkey_fingerprint()
+    assert info["permissions_safe"] is None
+    assert info["file_mode"] is None
+
+
+def test_inspect_key_shape_parity_with_active_current_license_info(lic):
+    """End-to-end shape check: ``inspect_key`` on a token and
+    ``current_license_info`` after activating the SAME token must return the
+    exact same key set. Guards against future drift where either side adds
+    a field the other forgets."""
+    tok = lic.L._encode_token(_payload("pro", nodes=5), lic.priv)
+    dry = lic.L.inspect_key(tok)
+    lic.L.activate(tok)
+    live = lic.L.current_license_info()
+    assert dry is not None and live is not None
+    assert set(dry.keys()) == set(live.keys())
+    # Both envelopes must agree on the trust anchor — a mismatch would mean
+    # inspect_key was validating against a different key than the resolver.
+    assert dry["pubkey_fingerprint_sha256"] == live["pubkey_fingerprint_sha256"]
+
+
+def test_inspect_key_fingerprint_degrades_to_none_when_pubkey_broken(lic, monkeypatch):
+    """If the embedded pubkey PEM can't parse, ``pubkey_fingerprint`` returns
+    ``None`` (see its docstring). ``inspect_key`` must degrade cleanly to the
+    same ``None`` for the fingerprint field instead of raising — the outer
+    ``try/except`` would swallow it back to ``None`` anyway, but a token
+    that verified BEFORE the pubkey broke must still surface as an
+    inspection envelope with ``fingerprint=None``, not a total ``None``."""
+    tok = lic.L._encode_token(_payload("pro", nodes=1), lic.priv)
+    # Break the fingerprint helper AFTER we've minted a token so verification
+    # still passes. The two operations use the same pubkey source in prod so
+    # in practice a broken PEM breaks both — but the helper is defensive and
+    # returns None on any parse failure, so mirror that here.
+    monkeypatch.setattr(lic.L, "pubkey_fingerprint", lambda: None)
+    info = lic.L.inspect_key(tok)
+    assert info is not None
+    assert info["pubkey_fingerprint_sha256"] is None
+    # Rest of the envelope stays intact — a broken fingerprint helper is
+    # NOT allowed to blank the actual payload fields.
+    assert info["tier"] == "pro"
+    assert info["valid"] is True
+
+
 # ── current_license_info: uniform shape across active/expired/invalid ─────────
 #
 # When a license file exists, EVERY branch must return the same field set so
