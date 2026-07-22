@@ -22402,6 +22402,299 @@ def api_entitlement_min_tier_for_runtimes_batch():
         )
 
 
+def _parse_aggregate_bundles_body(body, key: str = "bundles"):
+    """Extract a list of aggregate 5-axis bundle dicts from a JSON POST body.
+
+    Unlike :func:`_parse_bundles_body` (which expects list-of-list-of-
+    strings for the single-axis feature / runtime bundle batches), each
+    row here is a dict carrying up to five keys -- ``features``,
+    ``runtimes``, ``channels``, ``retention_days``, ``nodes`` -- matching
+    the ``/api/entitlement/required-tier-batch`` GET query args on a
+    per-bundle basis. This is the parser for the aggregate
+    ``/required-tier-bundle-batch`` family.
+
+    Accepts::
+
+        {"bundles": [
+            {"features": ["fleet"], "runtimes": ["claude_code"]},
+            {"channels": 5, "retention_days": 30},
+            {}
+        ]}
+
+    Plus a single-bundle shorthand ``{"bundles": {"features": [...]}}``
+    (a bare dict) so the caller does not have to wrap a single bundle in
+    a list. Missing / non-list / non-dict-and-non-list values follow the
+    same error posture as :func:`_parse_bundles_body`:
+
+    * ``None`` / missing ``bundles`` -- ``([], "missing")``
+    * scalar / non-list-non-dict -- ``([], "bundles_must_be_list")``
+    * empty ``[]`` -- ``([], "empty")``
+
+    Non-dict row entries (e.g. a bare list or scalar inside ``bundles``)
+    collapse to an empty ``{}`` dict so the aggregate fold still emits a
+    stable row rather than a 500 -- matches the never-crash posture of
+    :func:`_parse_bundles_body`. Returns ``(bundles, err)`` with ``err``
+    ``None`` on success.
+    """
+    if not isinstance(body, dict):
+        return [], "bundles_must_be_list"
+    raw = body.get(key)
+    if raw is None:
+        return [], "missing"
+    if isinstance(raw, dict):
+        return [dict(raw)], None
+    if not isinstance(raw, (list, tuple)):
+        return [], "bundles_must_be_list"
+    if not raw:
+        return [], "empty"
+    out = []
+    for bundle in raw:
+        if isinstance(bundle, dict):
+            out.append(dict(bundle))
+        else:
+            out.append({})
+    return out, None
+
+
+def _min_tier_for_all_row_to_body(row: dict) -> dict:
+    """Rename the aggregate batch helper's ``required_tier*`` keys through
+    unchanged (they already match the endpoint body), coerce the axis
+    lists to lists, and default a missing rank to ``-1``.
+
+    Kept alongside :func:`_min_tier_for_bundle_row_to_body` so future
+    per-row envelope adjustments (extra keys, capacity coercion) have
+    one obvious edit-site per family instead of drifting inside the
+    endpoint bodies. Never raises: a missing key surfaces as the
+    empty-row shape.
+    """
+    return {
+        "features": list(row.get("features") or []),
+        "runtimes": list(row.get("runtimes") or []),
+        "channels": row.get("channels"),
+        "retention_days": row.get("retention_days"),
+        "nodes": row.get("nodes"),
+        "required_tier": row.get("required_tier"),
+        "required_tier_label": row.get("required_tier_label"),
+        "required_tier_rank": (
+            row.get("required_tier_rank")
+            if row.get("required_tier_rank") is not None
+            else -1
+        ),
+        "free": bool(row.get("free")),
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/required-tier-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_required_tier_bundle_batch():
+    """``POST /api/entitlement/required-tier-bundle-batch`` -- bundle-axis
+    batch sibling of ``/api/entitlement/required-tier-batch``.
+
+    Where the singular ``/required-tier-batch`` folds ONE aggregate 5-
+    axis bundle (features + runtimes + channels + retention + nodes)
+    to ONE ``required_tier``, this folds N caller-supplied aggregate
+    bundles to N ``required_tier`` rows in ONE round-trip. Distinct from
+    ``/min-tier-for-features-batch`` and ``/min-tier-for-runtimes-batch``
+    (which batch N *single-axis* bundles): each row here spans the same
+    five axes ``/required-tier-batch`` does, so a pricing-matrix or
+    upgrade-walkthrough surface comparing several hypothetical *whole*
+    configs ("Starter-shaped install vs Pro-shaped install vs
+    Enterprise-shaped install") renders off one call instead of N calls
+    to ``/required-tier-batch``.
+
+    POST rather than GET because each bundle already carries five axes
+    and N of them can grow well past a comfortable query-string length;
+    the sibling singular endpoint uses GET+CSV where the input is small.
+
+    Request body::
+
+        {
+          "bundles": [
+            {"features": ["fleet"], "runtimes": ["claude_code"]},
+            {"channels": 5, "retention_days": 30, "nodes": 2},
+            {}
+          ]
+        }
+
+    A shorthand ``{"bundles": {"features": ["fleet"]}}`` (a bare dict)
+    is treated as ONE bundle for symmetry with the list-of-strings
+    shorthand on ``/min-tier-for-features-batch``; a missing /
+    non-list-non-dict ``bundles`` value is a 400. An empty
+    ``bundles=[]`` list is a 400 for the same reason
+    ``/min-tier-for-features-batch`` 400s on an empty ``bundles`` --
+    distinguishes "caller asked for nothing" from "caller asked and
+    every axis was empty".
+
+    Response shape::
+
+        {
+          "bundles": [<row>, ...],
+          "count":   <int>,        # len(bundles)
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` mirrors the ``/required-tier-batch`` endpoint body
+    minus the resolver envelope::
+
+        {
+          "features":            ["fleet"],
+          "runtimes":            ["claude_code"],
+          "channels":            5 | null,
+          "retention_days":      30 | null,
+          "nodes":               2 | null,
+          "required_tier":       "pro" | null,
+          "required_tier_label": "Pro" | null,
+          "required_tier_rank":  <int>,   # -1 when required_tier is null
+          "free":                <bool>,
+        }
+
+    Per-bundle normalisation matches the singular endpoint: CSV
+    normalisation on ``features`` / ``runtimes`` (whitespace stripped,
+    lowercased, deduplicated preserving first-seen order); runtime
+    aliases (``claude-code`` -> ``claude_code``) canonicalised; the
+    three capacity axes coerced through ``int(...)`` with a blank /
+    non-int collapsing to ``null`` so a typo cannot silently mis-route
+    the aggregate to Enterprise. Critically, ``retention_days=null``
+    here means *unset*, NOT *unlimited* -- matches every other batch
+    endpoint's posture.
+
+    - **400** when ``bundles`` is missing / non-list-non-dict / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the pricing surface keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.min_tier_for_all_batch(bundles)
+        out_rows = [_min_tier_for_all_row_to_body(row) for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_required_tier_bundle_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/required-tier-bundle-batch-at",
+    methods=["POST"],
+)
+def api_entitlement_required_tier_bundle_batch_at():
+    """``POST /api/entitlement/required-tier-bundle-batch-at?tier=<perspective>``
+    -- hypothetical-perspective sibling of
+    ``/api/entitlement/required-tier-bundle-batch``.
+
+    Wraps :func:`clawmetry.entitlements.min_tier_for_all_at_batch` so a
+    pricing-matrix walkthrough can call the aggregate bundle-batch from
+    any tier's perspective without first switching the resolver. Fills
+    the ``_at`` slot for the aggregate bundle-batch family alongside the
+    per-single-axis ``_at_batch`` siblings so a caller can call
+    ``X_at_batch(perspective, bundles)`` uniformly across every ``_at``
+    family. Perspective is validated against
+    :data:`entitlements._TIER_ORDER` (including ``trial``) but does NOT
+    shape rows -- the per-row fold walks the static per-tier caps, so
+    grace vs enforce yields byte-identical row bodies (only the
+    ``perspective_tier`` / ``current_tier`` envelope shifts).
+
+    Request body is byte-identical to
+    ``/required-tier-bundle-batch``. The extra ``tier=<perspective>``
+    query arg is required.
+
+    Response layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the bare batch envelope so a
+    caller can render "from <perspective> this bundle needs Pro" copy
+    off one call.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown (body carries ``which=tier`` so a
+      caller can render the right "unknown tier" message)
+    - **400** when ``bundles`` is missing / non-list-non-dict / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      so the pricing surface keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.min_tier_for_all_at_batch(tier_in, bundles) or []
+        out_rows = [_min_tier_for_all_row_to_body(row) for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": _ent.tier_label(tier_in),
+                "perspective_tier_rank": _ent.tier_rank(tier_in),
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_required_tier_bundle_batch_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/tiers-for-features-batch",
     methods=["POST"],

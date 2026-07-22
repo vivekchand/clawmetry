@@ -8,7 +8,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # /branches/main endpoint (works for public repos; falls back to
 # UNKNOWN if protection detail is not visible cross-repo).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #3752
+# On failure: posts an @-mentioned reminder to tracking issue #3906
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6:
@@ -18,7 +18,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#3752
+# Tracking: vivekchand/clawmetry#3906
 
 on:
   schedule:
@@ -48,7 +48,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 3752
+          TRACKING_ISSUE = 3906
           MARKER = "<!-- c6-health-check -->"
 
           HEADERS = {
