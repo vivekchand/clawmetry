@@ -8982,9 +8982,38 @@ def _detect_any_local_data():
     return False
 
 
+def _detect_other_runtimes_lite():
+    """Best-effort list of NON-free runtimes with data on this machine
+    (Claude Code, Codex, Cursor, …), each ``{id, label, sessions}``.
+    Delegates to the free-tier lite detector in ``clawmetry.sync`` so the
+    empty-state banner and the Fleet teaser can never disagree about what
+    is installed. Never raises."""
+    try:
+        from clawmetry.sync import _detect_runtimes_lite
+        return list(_detect_runtimes_lite() or [])
+    except Exception:
+        return []
+
+
+def _entitled_runtime_ids(runtime_ids):
+    """Subset of ``runtime_ids`` the current plan actually covers. Uses
+    ``entitled_runtime`` (plan membership), NOT ``allows_runtime`` — grace
+    mode answers True for everything, which would hide the trial pitch from
+    every free-tier user. Never raises."""
+    try:
+        from clawmetry.entitlements import get_entitlement
+        ent = get_entitlement()
+        return [rid for rid in runtime_ids if ent.entitled_runtime(rid)]
+    except Exception:
+        return []
+
+
 def detect_agent_install():
     """Return ``{openclaw_detected, nemoclaw_detected, any_data, signals}``
-    answering "is there an underlying agent producing data?".
+    answering "is there an underlying agent producing data?", plus
+    ``detected_runtimes`` — non-free runtimes found on disk, each carrying an
+    ``entitled`` flag so the no-agent banner can pitch a Pro trial instead of
+    telling a Claude Code / Cursor user to install a second agent.
 
     Cached for ``_AGENT_PRESENCE_TTL_SEC`` (60s) — every tab switch on the
     dashboard polls this; the underlying filesystem state changes on the
@@ -8998,6 +9027,18 @@ def detect_agent_install():
     openclaw_running = bool(_openclaw_gateway_running()) if openclaw else False
     nemoclaw = bool(_detect_nemoclaw_install())
     any_data = bool(_detect_any_local_data())
+    others = _detect_other_runtimes_lite()
+    entitled = set(_entitled_runtime_ids([r.get("id") for r in others]))
+    detected_runtimes = [
+        {
+            "id": r.get("id"),
+            "label": r.get("label") or r.get("id"),
+            "sessions": int(r.get("sessions") or 0),
+            "entitled": r.get("id") in entitled,
+        }
+        for r in others
+        if r.get("id")
+    ]
     signals = []
     if openclaw:
         signals.append("openclaw")
@@ -9011,7 +9052,12 @@ def detect_agent_install():
         "nemoclaw_detected": nemoclaw,
         "any_data": any_data,
         "signals": signals,
+        # Unchanged on purpose: "no agent WE ARE OBSERVING" — a detected but
+        # unentitled Claude Code install still needs the banner (in its
+        # upgrade variant), so it must not clear no_agent.
         "no_agent": not (openclaw or nemoclaw or any_data),
+        "detected_runtimes": detected_runtimes,
+        "upgrade_candidate": any(not r["entitled"] for r in detected_runtimes),
     }
     _agent_presence_cache["ts"] = now
     _agent_presence_cache["value"] = payload
