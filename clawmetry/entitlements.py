@@ -6012,6 +6012,123 @@ def min_tier_for_node_count_at(
         return None
 
 
+def min_tier_for_channel_count_at_batch(
+    perspective_tier: str, counts
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`min_tier_for_channel_count_batch`: per-value cheapest
+    *purchasable* tier for N channel-count values in one round-trip,
+    scoped by a caller-supplied ``perspective_tier``.
+
+    Fills the last ``_at`` slot on the channel-count capacity axis
+    alongside :func:`min_tier_for_channel_count_at` (singular ``_at``)
+    and :func:`min_tier_for_features_at_batch` /
+    :func:`min_tier_for_runtimes_at_batch` on the grant axes, so a
+    pricing-matrix walkthrough can call ``X_at_batch(perspective, ...)``
+    uniformly across every ``_at_batch`` sibling in the
+    ``min_tier_for_*`` family.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the batch is
+    identical to :func:`min_tier_for_channel_count_batch` regardless
+    of perspective. A parity test pins
+    ``min_tier_for_channel_count_at_batch(p, cs) ==
+    min_tier_for_channel_count_batch(cs)`` for every ``p`` in
+    :data:`_TIER_ORDER` so the ``_at`` prefix cannot silently drift
+    into shaping rows.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404), matching the ``None`` posture the
+    rest of the ``_at_batch`` family uses for the perspective-
+    validation failure mode. All other semantics (non-iterable ->
+    ``[]``, non-int rows collapse to the all-``None`` shape,
+    duplicates dropped by parsed int key preserving first-seen order,
+    grace vs enforce byte-identical) inherit from
+    :func:`min_tier_for_channel_count_batch` unchanged. Never raises:
+    a delegation failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_channel_count_batch(counts)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_channel_count_at_batch failed: %s",
+            exc,
+        )
+        return None
+
+
+def min_tier_for_retention_window_at_batch(
+    perspective_tier: str, days_list
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`min_tier_for_retention_window_batch`. Retention-axis twin
+    of :func:`min_tier_for_channel_count_at_batch`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows. Admits the same
+    ``None`` / case-insensitive ``"unlimited"`` sentinel that
+    :func:`min_tier_for_retention_window_batch` admits (routes to the
+    unlimited-history row with ``key="unlimited"``).
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all
+    other semantics inherit from
+    :func:`min_tier_for_retention_window_batch` unchanged. Never
+    raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_retention_window_batch(days_list)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_retention_window_at_batch "
+            "failed: %s",
+            exc,
+        )
+        return None
+
+
+def min_tier_for_node_count_at_batch(
+    perspective_tier: str, counts
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`min_tier_for_node_count_batch`. Node-axis twin of
+    :func:`min_tier_for_channel_count_at_batch`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows. Delegates per row to
+    :func:`min_tier_for_node_count_batch`; grace vs enforce yields
+    byte-identical rows.
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all
+    other semantics inherit from :func:`min_tier_for_node_count_batch`
+    unchanged. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_node_count_batch(counts)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_node_count_at_batch failed: %s",
+            exc,
+        )
+        return None
+
 
 def _min_tier_for_features_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`min_tier_for_features_batch`.
@@ -18512,3 +18629,119 @@ def _tiers_for_null_row(raw, kind: str) -> dict:
         "min_tier_rank": None,
         "tiers": [],
     }
+
+
+def tiers_for_channel_count_at_batch(
+    perspective_tier: str, counts
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`tiers_for_channel_count_batch`: per-value full availability
+    ladder for N channel-count values in one round-trip, scoped by a
+    caller-supplied ``perspective_tier``.
+
+    Fills the last ``_at`` slot on the channel-count capacity axis
+    alongside :func:`tiers_for_channel_count_at` (singular ``_at``),
+    :func:`tiers_for_capacity_batch_at` (grant-axis batch ``_at``) and
+    :func:`tiers_for_features_at_batch` /
+    :func:`tiers_for_runtimes_at_batch` on the grant axes, so a
+    pricing-matrix walkthrough can call ``X_at_batch(perspective, ...)``
+    uniformly across every ``_at_batch`` sibling in the
+    ``tiers_for_*`` family.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows -- the batch is
+    identical to :func:`tiers_for_channel_count_batch` regardless of
+    perspective. A parity test pins
+    ``tiers_for_channel_count_at_batch(p, cs) ==
+    tiers_for_channel_count_batch(cs)`` for every ``p`` in
+    :data:`_TIER_ORDER` so the ``_at`` prefix cannot silently drift
+    into shaping rows.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404), matching the ``None`` posture the
+    rest of the ``_at_batch`` family uses for the perspective-
+    validation failure mode. All other semantics (non-iterable ->
+    ``[]``, non-int rows collapse to the all-``None`` shape,
+    duplicates dropped by parsed int key preserving first-seen order,
+    grace vs enforce byte-identical) inherit from
+    :func:`tiers_for_channel_count_batch` unchanged. Never raises: a
+    delegation failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_channel_count_batch(counts)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_channel_count_at_batch failed: %s", exc
+        )
+        return None
+
+
+def tiers_for_retention_window_at_batch(
+    perspective_tier: str, days_list
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`tiers_for_retention_window_batch`. Retention-axis twin of
+    :func:`tiers_for_channel_count_at_batch`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows. Admits the same
+    ``None`` / case-insensitive ``"unlimited"`` sentinel that
+    :func:`tiers_for_retention_window_batch` admits (routes to the
+    unlimited-history row with ``item=None`` /
+    ``label="unlimited"``).
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all
+    other semantics inherit from
+    :func:`tiers_for_retention_window_batch` unchanged. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_retention_window_batch(days_list)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_retention_window_at_batch failed: %s",
+            exc,
+        )
+        return None
+
+
+def tiers_for_node_count_at_batch(
+    perspective_tier: str, counts
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of
+    :func:`tiers_for_node_count_batch`. Node-axis twin of
+    :func:`tiers_for_channel_count_at_batch`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape rows. Delegates per row to
+    :func:`tiers_for_node_count_batch`; grace vs enforce yields
+    byte-identical rows.
+
+    Returns ``None`` for empty / unknown ``perspective_tier``; all
+    other semantics inherit from :func:`tiers_for_node_count_batch`
+    unchanged. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return tiers_for_node_count_batch(counts)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: tiers_for_node_count_at_batch failed: %s", exc
+        )
+        return None
