@@ -18,6 +18,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #     With only GITHUB_TOKEN (ghs_): read-only verify path in the script
 #     (exits 0 if C6 configured, exits 1 if not -- no admin rights needed).
 #     With E2E_ADMIN_PAT: full apply + verify.
+#     On failure, posts a notification comment on tracking issue #3970.
 #
 # TOKEN PATHS (priority order):
 #   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
@@ -36,7 +37,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #   clawmetry-landing.
 #
 # Idempotent: running multiple times is safe.
-# Tracking: vivekchand/clawmetry#3906
+# Tracking: vivekchand/clawmetry#3970
 
 on:
   workflow_dispatch:
@@ -57,9 +58,11 @@ on:
     branches: [main]
 
 # contents:read is required for actions/checkout.
+# issues:write is required for the C6 gap notification step.
 # administration:write is intentionally absent (see note above).
 permissions:
   contents: read
+  issues: write
 
 jobs:
   apply-required-checks:
@@ -108,8 +111,65 @@ jobs:
         run: echo "::add-mask::${{ inputs.pat_token }}"
 
       - name: Apply required status checks
+        id: c6_verify
         if: github.event_name == 'push' || github.event.inputs.confirm == 'APPLY'
         env:
           GITHUB_TOKEN: ${{ inputs.pat_token || secrets.E2E_ADMIN_PAT || github.token }}
           CONFIRM_INPUT: ${{ inputs.confirm || '' }}
         run: python3 scripts/apply_required_status_checks.py
+
+      # When the C6 read-only verify exits 1 (checks not yet configured on main),
+      # post or update a comment on the E2E Robustness tracking issue #3970 so the
+      # repo admin receives a GitHub notification.
+      #
+      # Only fires on push-to-main (the automated verify path), NOT on manual
+      # workflow_dispatch runs (those already have the confirm/pat_token UI in-scope).
+      # Also skips if checkout failed (c6_verify would be skipped, not failed).
+      - name: Notify tracking issue when C6 checks are missing
+        if: failure() && github.event_name == 'push' && steps.c6_verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER="<!-- c6-notify-bot -->"
+          RUN_URL="https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
+          BODY="${MARKER}
+          ## C6: Required status checks not configured on clawmetry/main
+
+          The [apply-required-checks workflow](${RUN_URL}) detected that required E2E status checks are NOT configured on \`clawmetry/main\`. PRs can currently merge without E2E passing.
+
+          **Missing checks:**
+          - \`OSS golden path (wheel + OpenClaw + 9 tabs)\`
+          - \`Cross-repo handoff (C4)\`
+          - \`MOAT Keystone (13-endpoint bar)\`
+          - \`E2E Browser Tests (critical subset)\`
+
+          **Fix option A (60 seconds, no PAT needed -- GitHub Settings UI):**
+          Go to: https://github.com/vivekchand/clawmetry/settings/branches
+          Edit main > Require status checks > add the 4 names above.
+
+          **Fix option B (30 seconds, terminal):**
+          \`\`\`bash
+          bash scripts/close-c6.sh
+          \`\`\`
+
+          **Fix option C (Actions one-shot, fine-grained PAT with Administration read+write):**
+          Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow
+          confirm=APPLY, pat_token=paste-token-here
+
+          Once any option above is done, the next push to main self-heals to green."
+
+          # Upsert: update existing comment if present, otherwise create new.
+          existing_id=$(gh api -X GET \
+            "repos/${REPO}/issues/3970/comments" \
+            --jq 'map(select(.body | startswith("<!-- c6-notify-bot -->"))) | .[0].id // empty' \
+            2>/dev/null || echo "")
+          if [ -n "${existing_id}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" \
+              -f body="${BODY}" > /dev/null
+            echo "Updated existing C6 notification on #3970 (comment ${existing_id})"
+          else
+            gh api -X POST "repos/${REPO}/issues/3970/comments" \
+              -f body="${BODY}" > /dev/null
+            echo "Posted new C6 notification on #3970"
+          fi
