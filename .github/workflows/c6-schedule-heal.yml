@@ -57,6 +57,12 @@ jobs:
       # scope needed) to read the current protection.required_status_checks.
       # Writes a formatted summary to GITHUB_STEP_SUMMARY so the state is
       # visible directly in the job summary panel without reading log lines.
+      #
+      # NOTE: reads BOTH 'contexts' (legacy, written by API/script) AND
+      # 'checks' (current, written by GitHub Settings UI). Previously only
+      # 'contexts' was read, so checks configured via Option A (Settings UI)
+      # appeared as MISSING even though they were correctly configured.
+      # This matches the logic in c6-health.yml and apply_required_status_checks.py.
       - name: Read current required-check state (read-only)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,8 +80,26 @@ jobs:
           ALL_OK=true
           SUMMARY_ROWS=""
           for REPO in $REPOS; do
-            PROTECTION=$(gh api "/repos/${OWNER}/${REPO}/branches/main" \
-              --jq '.protection.required_status_checks.contexts // []' 2>/dev/null || echo "[]")
+            # Read BOTH 'contexts' (legacy API/script path) AND 'checks'
+            # (GitHub Settings UI path) into a single sorted JSON array.
+            # The old jq query (.protection.required_status_checks.contexts // [])
+            # only read the legacy array, causing false MISSING reports after
+            # an admin used Option A (Settings UI) to configure required checks.
+            PROTECTION=$(gh api "/repos/${OWNER}/${REPO}/branches/main" 2>/dev/null | \
+              python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    prot = (data.get('protection') or {})
+    rsc = (prot.get('required_status_checks') or {})
+    ctx = set(rsc.get('contexts') or [])
+    for item in (rsc.get('checks') or []):
+        if isinstance(item, dict) and item.get('context'):
+            ctx.add(item['context'])
+    print(json.dumps(sorted(ctx)))
+except Exception:
+    print('[]')
+" || echo "[]")
             IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
             for CHECK in "${EXPECTED_CHECKS[@]}"; do
               if echo "$PROTECTION" | python3 -c \
