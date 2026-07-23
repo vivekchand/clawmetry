@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 import time as _time
 from typing import List, Optional, Set
 
@@ -469,6 +470,12 @@ def _gateway_log_files() -> list:
         "/tmp/openclaw",
         os.path.join(openclaw_dir, "logs"),
     ]
+    # On Windows and on hosts where /tmp/openclaw is unsafe the gateway writes
+    # to a user-scoped openclaw-* directory under the OS temp dir instead.
+    tmp_base = tempfile.gettempdir()
+    for entry in sorted(glob.glob(os.path.join(tmp_base, "openclaw-*"))):
+        if os.path.isdir(entry):
+            candidates.append(entry)
     for d in candidates:
         matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
         if matches:
