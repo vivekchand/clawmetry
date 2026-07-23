@@ -205,6 +205,72 @@ def loaded_plugins() -> List[str]:
         return list(_loaded_plugins)
 
 
+def probe_plugins() -> List[Dict[str, Any]]:
+    """Side-effect-free discovery of ``clawmetry.extensions`` entry points.
+
+    Companion to :func:`loaded_plugins` / :func:`failed_plugins`, which only
+    carry state populated by :func:`load_plugins` inside the process that
+    called it. In the sync daemon and the dashboard that's fine — both call
+    ``load_plugins`` at startup. But ``clawmetry status`` (and the ``clawmetry
+    extensions`` CLI sibling) run as short-lived processes that never call
+    ``load_plugins``, so the two mirrors always read empty there. Operators
+    triaging "did ``clawmetry-pro`` install correctly?" from the CLI got no
+    signal beyond the disk-marker check in :func:`clawmetry.license._pro_installed_version`,
+    which only reports whether the wheel was extracted — a broken import in
+    the pro package (a downgrade to an incompatible ``clawmetry`` core, a
+    partial extract that lost a module, a mismatched entry-point path) would
+    still show green on disk while the plugin silently never loaded.
+
+    This function bridges that gap by enumerating the entry points and
+    calling ``ep.load()`` on each — which imports the target callable but
+    does NOT invoke it. So a plugin that would raise inside
+    ``register_all()`` still reports ``importable: True`` here (the
+    invocation happens in :func:`load_plugins`, not in this probe). That's
+    the intent: the probe answers "would ClawMetry try to load this on the
+    next dashboard/sync start?" without running any plugin code.
+
+    Returned rows are dicts::
+
+        {"name": "<ep.name>", "value": "<ep.value>", "importable": bool,
+         "error": "<str(exc)>" | None}
+
+    ``value`` is the ``module:attr`` string from the entry point (useful for
+    telling apart two entries with the same name from different packages).
+    ``error`` is populated only when ``ep.load()`` raises; only the
+    exception's ``str`` is captured — no traceback — matching the same
+    posture as :func:`failed_plugins` so paths / secrets in frames never
+    leak into ``clawmetry status --json`` or the ``/api/extensions`` probe.
+
+    Never raises. If entry-point enumeration itself blows up (e.g. a
+    corrupt distribution metadata file), returns ``[]`` and logs the
+    failure at warning level — the caller sees an empty list, same
+    contract as every other diagnostic helper on this module.
+    """
+    try:
+        eps = _select_entry_points("clawmetry.extensions")
+    except Exception as exc:
+        logger.warning("probe_plugins: entry-point enumeration failed: %s", exc)
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for ep in eps:
+        name = getattr(ep, "name", "") or ""
+        value = getattr(ep, "value", "") or ""
+        row: Dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "importable": False,
+            "error": None,
+        }
+        try:
+            ep.load()
+            row["importable"] = True
+        except Exception as exc:
+            row["error"] = str(exc)
+        rows.append(row)
+    return rows
+
+
 def failed_plugins() -> List[Dict[str, str]]:
     """Entry-point plugins that raised during load, in attempted-load order.
 

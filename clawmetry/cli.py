@@ -2024,6 +2024,15 @@ def _status_snapshot(args) -> dict:
       path shells out to ``docker exec kubectl`` per NemoClaw pod, which is
       too slow for a scriptable diagnostic; scripts that need per-pod state
       should target that surface directly.
+    * ``extensions``: side-effect-free probe of the ``clawmetry.extensions``
+      entry points via :func:`clawmetry.extensions.probe_plugins`, so an
+      operator can tell from a fresh ``clawmetry status`` whether the
+      ``clawmetry-pro`` wheel is not only installed on disk (that lives in
+      ``runtimes.pro_installed_version``) but also *importable* — catching
+      the trap where the wheel extracted but its entry-point module raises
+      on import. Shape: ``{"discovered": [{"name", "value", "importable",
+      "error"}], "importable_count": int, "broken_count": int}``. Empty
+      ``discovered`` on installs with no plugins registered.
 
     Best-effort throughout: every helper is wrapped so a broken corner (e.g.
     an unreadable config file, an unavailable network) degrades to ``null``
@@ -2050,6 +2059,11 @@ def _status_snapshot(args) -> dict:
         "daemon": {"running": False, "manager": None},
         "log": None,
         "sandboxes": [],
+        "extensions": {
+            "discovered": [],
+            "importable_count": 0,
+            "broken_count": 0,
+        },
     }
 
     # Installed version (lightweight metadata read; no dashboard import).
@@ -2207,6 +2221,25 @@ def _status_snapshot(args) -> dict:
             lines = []
         snap["log"] = {"path": str(LOG_FILE), "tail": lines}
 
+    # Extensions — side-effect-free probe of the ``clawmetry.extensions`` entry
+    # points. Complements ``runtimes.pro_installed_version`` (which only reads
+    # the disk marker after ``clawmetry activate``): the probe catches the case
+    # where the wheel is on disk but its entry point fails to import (partial
+    # extract, incompatible core, mismatched entry-point path). This is a fresh
+    # CLI process — ``loaded_plugins()`` / ``failed_plugins()`` would read empty
+    # here because ``load_plugins`` is only called in the daemon/dashboard — so
+    # ``probe_plugins`` is the meaningful signal for the ``status`` snapshot.
+    try:
+        from clawmetry.extensions import probe_plugins as _probe
+        rows = _probe() or []
+        snap["extensions"] = {
+            "discovered": rows,
+            "importable_count": sum(1 for r in rows if r.get("importable")),
+            "broken_count": sum(1 for r in rows if not r.get("importable")),
+        }
+    except Exception:
+        pass
+
     return snap
 
 
@@ -2359,6 +2392,31 @@ def _cmd_status(args) -> None:
             print("      the cloud. Link to a Trial/Pro account (the dashboard prompts you) to sync them.")
         elif _prover and not _det:
             print(f"    clawmetry-pro {_prover} installed — no other runtimes found on this machine yet.")
+    except Exception:
+        pass
+
+    # Extensions — a side-effect-free probe of ``clawmetry.extensions`` entry
+    # points. Complements the disk-marker check above: catches the case where
+    # ``clawmetry-pro`` is on disk but its entry point cannot be imported.
+    # ``load_plugins`` never runs in this CLI process, so we can't read
+    # ``loaded_plugins``; ``probe_plugins`` is the meaningful signal here.
+    try:
+        from clawmetry.extensions import probe_plugins as _probe
+        _rows = _probe() or []
+        if _rows:
+            _ok = sum(1 for r in _rows if r.get("importable"))
+            _bad = sum(1 for r in _rows if not r.get("importable"))
+            print()
+            print("  Extensions:")
+            for _r in _rows:
+                _name = str(_r.get("name") or "?")
+                if _r.get("importable"):
+                    print(f"    ✅ {_name}  (importable)")
+                else:
+                    _err = str(_r.get("error") or "import failed")
+                    print(f"    ❌ {_name}  — {_err}")
+            if _bad:
+                print(f"    → {_bad} plugin(s) will NOT load on daemon start; {_ok} will.")
     except Exception:
         pass
 
