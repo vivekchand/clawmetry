@@ -17977,3 +17977,235 @@ def tiers_for_capacity_batch_at(
             "retention_days": None,
             "nodes": None,
         }
+
+
+def tiers_for_channel_count_batch(counts) -> list[dict]:
+    """Per-value availability-ladder for N channel-count values in ONE
+    round-trip.
+
+    Per-value axis batch sibling of :func:`tiers_for_channel_count`. The
+    ``tiers_for_*`` twin of :func:`min_tier_for_channel_count_batch`: where
+    ``min_tier_for_channel_count_batch`` yields one cheapest-tier answer
+    per value, this yields the full "Fits in: <tier>, ..." availability
+    ladder per value so a pricing-matrix walkthrough comparing several
+    hypothetical channel counts renders every column in one round-trip
+    instead of N calls to :func:`tiers_for_channel_count` + client-side
+    row assembly.
+
+    Row shape is byte-identical to :func:`tiers_for_channel_count`::
+
+        {
+          "item":            <int>,
+          "kind":            "channel_count",
+          "label":           "5 channels",
+          "free":            <bool>,
+          "min_tier":        "<tier id>" | None,
+          "min_tier_label":  "<label>" | None,
+          "min_tier_rank":   <int> | None,
+          "tiers":           [<row>, ...],
+        }
+
+    Per-row parity with :func:`tiers_for_channel_count` is pinned in the
+    test suite so the batch cannot silently drift from the scalar.
+
+    Argument handling mirrors :func:`min_tier_for_channel_count_batch`:
+
+    * ``counts is None`` or non-iterable -- returns ``[]``.
+    * Non-int items collapse to a row where every field is ``None``
+      (matches :func:`tiers_for_channel_count`'s ``None``-on-bad-input
+      posture rather than raising). The raw stringified token surfaces
+      in ``item`` so a caller can still identify the offending entry.
+    * Duplicates by normalised int key are dropped preserving first-seen
+      order so the response is stable and byte-deterministic across
+      calls.
+
+    Decoupled from the resolved entitlement: delegates per row to
+    :func:`tiers_for_channel_count`, which walks the static
+    ``_TIER_CHANNEL_LIMIT`` map. Grace vs enforce yields byte-identical
+    rows -- pinned in the test suite via a grace/enforce reload
+    roundtrip. Never raises: per-row failures short-circuit to the
+    all-``None`` shape so the batch keeps building.
+    """
+    return _tiers_for_capacity_batch(counts, "channel_count")
+
+
+def tiers_for_retention_window_batch(days_list) -> list[dict]:
+    """Per-value availability-ladder for N retention-window values in ONE
+    round-trip. Retention-axis twin of
+    :func:`tiers_for_channel_count_batch`.
+
+    Each item in ``days_list`` may be:
+
+    * an int (or int-parseable string) -- a finite ``days`` window.
+    * ``None`` or the case-insensitive string ``"unlimited"`` -- an
+      unlimited-history request. The emitted row's ``item`` is ``None``
+      and ``label`` is ``"unlimited"`` (matches
+      :func:`tiers_for_retention_window` (``days=None``) byte-for-byte).
+      This is the *only* per-axis batch on the retention axis that
+      admits the unlimited sentinel; :func:`tiers_for_capacity_batch`
+      treats ``retention_days=None`` as *unset* (matching
+      :func:`min_tier_batch` semantics), so a caller previously had to
+      route the unlimited-history question through the singular
+      endpoint.
+    * Any other value (blank / non-int / non-``"unlimited"`` string) --
+      collapses to the all-``None`` row shape (matches
+      :func:`tiers_for_retention_window`'s ``None``-on-bad-input
+      posture rather than raising).
+
+    Duplicates by normalised key (``<n>`` for a parsed int, the string
+    ``"unlimited"`` for the unlimited sentinel, ``str(raw)`` otherwise)
+    are dropped preserving first-seen order for byte-stable output.
+
+    ``days_list is None`` or non-iterable -- returns ``[]``. Never
+    raises: per-row failures short-circuit to the all-``None`` shape.
+    """
+    try:
+        if days_list is None:
+            return []
+        items = list(days_list)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            row, key = _tiers_for_retention_batch_row(raw)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: tiers_for_retention_window_batch row "
+                "failed: %s",
+                exc,
+            )
+            row = _tiers_for_null_row(raw, "retention_window")
+            key = str(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def tiers_for_node_count_batch(counts) -> list[dict]:
+    """Per-value availability-ladder for N node-count values in ONE
+    round-trip. Node-axis twin of :func:`tiers_for_channel_count_batch`.
+
+    Same per-value grouping, same never-raise posture, same duplicate
+    dedup by normalised int key. Delegates per row to
+    :func:`tiers_for_node_count`; grace vs enforce yields byte-identical
+    rows.
+    """
+    return _tiers_for_capacity_batch(counts, "node_count")
+
+
+def _tiers_for_capacity_batch(values, kind: str) -> list[dict]:
+    """Shared body for :func:`tiers_for_channel_count_batch` and
+    :func:`tiers_for_node_count_batch` (the two integer-only capacity
+    axes -- retention has its own body because it admits the
+    ``None`` / ``"unlimited"`` sentinel).
+
+    Iterates ``values``, dedupes by normalised int key preserving
+    first-seen order, and delegates to the singular ``tiers_for_*``
+    helper for the per-row shape so parity is automatic. Non-int items
+    collapse to the all-``None`` shape (matches the singular helpers'
+    ``None``-on-bad-input posture).
+
+    Never raises: per-row failures short-circuit to the all-``None``
+    shape so the batch keeps building.
+    """
+    try:
+        if values is None:
+            return []
+        items = list(values)
+    except TypeError:
+        return []
+    delegate = (
+        tiers_for_channel_count
+        if kind == "channel_count"
+        else tiers_for_node_count
+    )
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            n = int(raw)
+            key = str(n)
+            parsed: int | None = n
+        except (TypeError, ValueError):
+            key = str(raw)
+            parsed = None
+        if key in seen:
+            continue
+        seen.add(key)
+        if parsed is None:
+            out.append(_tiers_for_null_row(raw, kind))
+            continue
+        try:
+            body = delegate(parsed)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _tiers_for_capacity_batch row failed: %s",
+                exc,
+            )
+            body = None
+        if body is None:
+            out.append(_tiers_for_null_row(raw, kind))
+        else:
+            out.append(body)
+    return out
+
+
+def _tiers_for_retention_batch_row(raw) -> tuple[dict, str]:
+    """Per-value row for :func:`tiers_for_retention_window_batch`.
+
+    Handles the ``None`` / ``"unlimited"`` sentinel that the shared
+    integer-only capacity batch cannot express: ``None`` and the
+    case-insensitive string ``"unlimited"`` both route to
+    :func:`tiers_for_retention_window` (``days=None``) and dedup under
+    the key ``"unlimited"``. Any other value falls through to
+    :func:`tiers_for_retention_window` for parity with the singular
+    helper.
+
+    Returns ``(row, dedup_key)``.
+    """
+    if raw is None or (
+        isinstance(raw, str) and raw.strip().lower() == "unlimited"
+    ):
+        body = tiers_for_retention_window(None)
+        if body is None:
+            return _tiers_for_null_row(None, "retention_window"), "unlimited"
+        return body, "unlimited"
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _tiers_for_null_row(raw, "retention_window"), str(raw)
+    body = tiers_for_retention_window(n)
+    if body is None:
+        return _tiers_for_null_row(raw, "retention_window"), str(n)
+    return body, str(n)
+
+
+def _tiers_for_null_row(raw, kind: str) -> dict:
+    """All-``None`` row for :func:`_tiers_for_capacity_batch` /
+    :func:`tiers_for_retention_window_batch` when the input value cannot
+    be parsed or the singular helper returned ``None``. Field set
+    matches the happy-path row so a caller does not have to branch on
+    the shape.
+
+    ``item`` echoes the raw token (stringified) so a UI can still
+    label the offending row; ``label`` / ``free`` / ``min_tier*`` /
+    ``tiers`` are all ``None`` / ``False`` / ``[]`` respectively.
+    """
+    try:
+        item = int(raw)
+    except (TypeError, ValueError):
+        item = raw if raw is None else str(raw)
+    return {
+        "item": item,
+        "kind": kind,
+        "label": None,
+        "free": False,
+        "min_tier": None,
+        "min_tier_label": None,
+        "min_tier_rank": None,
+        "tiers": [],
+    }
