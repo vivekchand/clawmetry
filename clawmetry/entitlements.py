@@ -5710,6 +5710,110 @@ def min_tier_for_runtimes_at(
         return None
 
 
+def min_tier_for_channel_count_at(
+    perspective_tier: str, count: int
+) -> str | None:
+    """Hypothetical-perspective sibling of :func:`min_tier_for_channel_count`.
+
+    Fills the ``_at`` slot for the channel-count capacity axis alongside
+    :func:`min_tier_for_features_at` / :func:`min_tier_for_runtimes_at` so a
+    pricing-matrix walkthrough can call ``X_at(perspective, ...)`` uniformly
+    across every ``_at`` sibling in the ``min_tier_for_*`` family. Same
+    relationship to :func:`min_tier_for_channel_count` that
+    :func:`tiers_for_channel_count_at` has to :func:`tiers_for_channel_count`:
+    ``perspective_tier`` is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape the answer -- the scalar tier id
+    depends only on the static :data:`_TIER_CHANNEL_LIMIT` table, not on the
+    caller's live plan. A parity test pins
+    ``min_tier_for_channel_count_at(p, n) == min_tier_for_channel_count(n)``
+    for every ``p`` in :data:`_TIER_ORDER` so the ``_at`` prefix cannot
+    silently drift into shaping the result.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller renders
+    "unknown tier" / 404), matching the ``None`` posture the rest of the
+    ``_at`` family uses for the perspective-validation failure mode. All
+    other semantics -- ``count <= 0`` -> :data:`TIER_OSS`, non-int ->
+    ``None``, over-cap -> :data:`TIER_ENTERPRISE` -- inherit from
+    :func:`min_tier_for_channel_count` unchanged. Never raises: a delegate
+    failure logs a warning and returns ``None``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_channel_count(count)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_channel_count_at failed: %s", exc
+        )
+        return None
+
+
+def min_tier_for_retention_window_at(
+    perspective_tier: str, days: int | None
+) -> str | None:
+    """Hypothetical-perspective sibling of
+    :func:`min_tier_for_retention_window`. Retention-axis twin of
+    :func:`min_tier_for_channel_count_at`.
+
+    Accepts the explicit ``days=None`` "unlimited" sentinel that the
+    singular helper accepts -- delegates without further parsing, so the
+    same "None means unlimited on this axis" semantics carry through
+    unchanged and only tiers whose retention cap is ``None`` admit the
+    request. Non-int (non-``None``) ``days`` yields ``None`` (matches the
+    singular helper's posture on bad input rather than mis-routing to
+    Enterprise). ``days <= 0`` collapses to :data:`TIER_OSS`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape the answer. Returns ``None`` for
+    empty / unknown ``perspective_tier``. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_retention_window(days)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_retention_window_at failed: %s", exc
+        )
+        return None
+
+
+def min_tier_for_node_count_at(
+    perspective_tier: str, count: int
+) -> str | None:
+    """Hypothetical-perspective sibling of :func:`min_tier_for_node_count`.
+    Node-axis twin of :func:`min_tier_for_channel_count_at`.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`) but does NOT shape the answer -- the scalar tier
+    id depends only on the static :data:`_TIER_NODE_LIMIT` table. Returns
+    ``None`` for empty / unknown ``perspective_tier`` (caller renders
+    "unknown tier" / 404) and for non-int ``count``. All other semantics
+    inherit from :func:`min_tier_for_node_count`. Never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return min_tier_for_node_count(count)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: min_tier_for_node_count_at failed: %s", exc
+        )
+        return None
+
+
 def _min_tier_for_features_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`min_tier_for_features_batch`.
 
