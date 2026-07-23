@@ -101,6 +101,7 @@ CHANNEL_NAMES: tuple[str, ...] = (
     "tlon",
     "synologychat",
     "nextcloudtalk",
+    "clickclack",
 )
 
 
