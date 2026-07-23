@@ -449,7 +449,7 @@ jobs:
         run: |
           python3 -m pytest \
             tests/test_e2e.py::TestTabsLoad \
-            tests/test_e2e_oss_all_tabs.py::TestAllTabsPostAuth \
+            tests/test_e2e_oss_all_tabs.py \
             -v --tb=short -m 'not quarantine' \
             --junitxml=/tmp/junit-e2e-critical.xml
 
