@@ -40,14 +40,22 @@ def _reset_cache(monkeypatch):
     )
 
 
-def _force(monkeypatch, openclaw, nemoclaw, any_data):
-    """Stub all three detectors so a test can drive the exact combo it
-    wants without touching the real filesystem or DuckDB."""
+def _force(monkeypatch, openclaw, nemoclaw, any_data,
+           other_runtimes=(), entitled_ids=()):
+    """Stub all detectors so a test can drive the exact combo it wants
+    without touching the real filesystem, DuckDB, or the entitlement
+    resolver. ``other_runtimes`` feeds the paid-runtime lite detector
+    (``{id,label,sessions}`` dicts); ``entitled_ids`` is the subset the
+    plan covers."""
     import dashboard as _d
     _reset_cache(monkeypatch)
     monkeypatch.setattr(_d, "_detect_openclaw_install", lambda: openclaw)
     monkeypatch.setattr(_d, "_detect_nemoclaw_install", lambda: nemoclaw)
     monkeypatch.setattr(_d, "_detect_any_local_data", lambda: any_data)
+    monkeypatch.setattr(_d, "_detect_other_runtimes_lite",
+                        lambda: list(other_runtimes))
+    monkeypatch.setattr(_d, "_entitled_runtime_ids",
+                        lambda ids: [r for r in ids if r in set(entitled_ids)])
 
 
 # ── Scenario 1: no openclaw + no nemoclaw + empty store → no-agent ──────
@@ -285,4 +293,89 @@ def test_no_agent_js_polls_at_least_every_minute():
     assert "60000" in block, (
         "no-agent banner must re-poll at the 60s server-cache cadence so "
         "an agent installed mid-session clears the banner within ~1 min"
+    )
+
+
+# ── Runtime-aware upgrade variant (14-runtime detection) ────────────────
+_CLAUDE_CODE = {"id": "claude_code", "label": "Claude Code", "sessions": 12}
+_CURSOR = {"id": "cursor", "label": "Cursor", "sessions": 0}
+
+
+def test_detected_paid_runtime_keeps_no_agent_but_flags_upgrade(monkeypatch):
+    """A machine with ONLY Claude Code on it: the banner must still show
+    (there is nothing we are observing), but in the upgrade variant, not
+    the install variant. The payload carries the detected runtimes with
+    ``entitled=False`` and ``upgrade_candidate=True`` so the JS can pitch
+    the Pro trial instead of telling the user to install a second agent.
+    """
+    import dashboard as _d
+    _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False,
+           other_runtimes=[_CLAUDE_CODE, _CURSOR], entitled_ids=[])
+    payload = _d.detect_agent_install()
+    assert payload["no_agent"] is True, (
+        "detected-but-unobserved runtimes must NOT clear no_agent — the "
+        "banner still needs to render (in its upgrade variant)"
+    )
+    assert [r["id"] for r in payload["detected_runtimes"]] == ["claude_code", "cursor"]
+    assert all(r["entitled"] is False for r in payload["detected_runtimes"])
+    assert payload["detected_runtimes"][0]["label"] == "Claude Code"
+    assert payload["upgrade_candidate"] is True
+    assert payload["signals"] == [], (
+        "signals stays the free-agent contract; paid-runtime detection "
+        "rides in detected_runtimes, not signals"
+    )
+
+
+def test_entitled_runtime_is_not_an_upgrade_candidate(monkeypatch):
+    """Pro user whose plan covers claude_code: no trial pitch."""
+    import dashboard as _d
+    _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False,
+           other_runtimes=[_CLAUDE_CODE], entitled_ids=["claude_code"])
+    payload = _d.detect_agent_install()
+    assert payload["detected_runtimes"][0]["entitled"] is True
+    assert payload["upgrade_candidate"] is False
+
+
+def test_truly_empty_machine_has_no_detected_runtimes(monkeypatch):
+    """Nothing anywhere → install variant: empty list, no upgrade flag."""
+    import dashboard as _d
+    _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False)
+    payload = _d.detect_agent_install()
+    assert payload["detected_runtimes"] == []
+    assert payload["upgrade_candidate"] is False
+
+
+def test_no_agent_banner_partial_carries_pro_trial_cta():
+    """The upgrade variant needs its CTA in the partial (hidden by
+    default; JS toggles it). Free-trial wording per the paywall modal."""
+    html = _read_banners_html()
+    assert 'id="no-agent-upgrade-cta"' in html
+    assert "Start 7-day free trial" in html
+    assert "app.clawmetry.com/upgrade?source=no-agent-banner" in html
+
+
+def test_no_agent_js_swaps_to_upgrade_variant():
+    """The JS must read detected_runtimes, hide the install CTAs in the
+    upgrade variant, and emit paywall_view telemetry attributed to this
+    banner so conversion is measurable."""
+    js = _read_app_js()
+    anchor = js.find("_cmApplyNoAgentVariant")
+    assert anchor != -1, "upgrade-variant helper must exist in app.js"
+    block = js[anchor:anchor + 5000]
+    assert "detected_runtimes" in block
+    assert "no-agent-install-openclaw" in block
+    assert "no-agent-upgrade-cta" in block
+    assert "paywall_view" in block and "no-agent-banner" in block
+
+
+# ── Announcement pill: Agent Builder cross-sell ─────────────────────────
+def test_announcement_pill_cross_sells_agent_builder():
+    """ONE announcement pill, and it points at Agent Builder now — the
+    desk-device launch pill was retired in its favor."""
+    html = _read_banners_html()
+    assert "build.clawmetry.com" in html
+    assert "Agent Builder" in html
+    assert "desk device, $49" not in html, (
+        "the desk-device pill was replaced by the Agent Builder pill — "
+        "only ONE announcement pill may exist at a time"
     )

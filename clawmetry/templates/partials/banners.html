@@ -1,14 +1,15 @@
-<!-- Desk device launch pill (dismissable, centered) -->
+<!-- Agent Builder cross-sell pill (dismissable, centered). ONE announcement
+     pill at a time: this replaced the desk-device pill, it does not stack. -->
 <div id="cm-device-pill" style="display:none; justify-content:center; align-items:center; padding:8px 16px; background:#0b0d12; border-bottom:1px solid rgba(124,140,255,0.18);">
-  <a href="https://clawmetry.com/device" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; gap:8px; padding:6px 15px; border-radius:999px; background:rgba(124,140,255,0.12); border:1px solid rgba(124,140,255,0.4); color:#a5b4ff; font-size:13px; font-weight:600; text-decoration:none;">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-    New: the ClawMetry desk device, $49 launch →
+  <a href="https://build.clawmetry.com/?utm_source=oss-dashboard&utm_medium=pill" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; gap:8px; padding:6px 15px; border-radius:999px; background:rgba(124,140,255,0.12); border:1px solid rgba(124,140,255,0.4); color:#a5b4ff; font-size:13px; font-weight:600; text-decoration:none;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z"/></svg>
+    <span data-i18n="banners.agent_builder_pill">New: Agent Builder · describe your agent, we build it, host it, you watch every move</span> →
   </a>
   <button onclick="dismissDevicePill()" title="Dismiss" aria-label="Dismiss" style="background:transparent; border:none; color:#6b7280; cursor:pointer; margin-left:10px; font-size:18px; line-height:1; padding:0 4px;">×</button>
 </div>
 <script>
-function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismissed','1'); }catch(e){} var p=document.getElementById('cm-device-pill'); if(p) p.style.display='none'; }
-(function(){ try{ if(!localStorage.getItem('cm_device_pill_dismissed')){ var p=document.getElementById('cm-device-pill'); if(p) p.style.display='flex'; } }catch(e){} })();
+function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','1'); }catch(e){} var p=document.getElementById('cm-device-pill'); if(p) p.style.display='none'; }
+(function(){ try{ if(!localStorage.getItem('cm_ab_pill_dismissed')){ var p=document.getElementById('cm-device-pill'); if(p) p.style.display='flex'; } }catch(e){} })();
 </script>
 
 <!-- Update Available Banner -->
@@ -153,7 +154,13 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismisse
 <!-- No-Agent-Detected Empty-State Banner -->
 <!-- Shown when ClawMetry is installed but NEITHER OpenClaw nor NVIDIA -->
 <!-- NemoClaw is detected on this machine, AND the local store has zero -->
-<!-- events. Distinct from the first-heartbeat-race banner below: -->
+<!-- events. Two variants, chosen by checkAgentPresence() in app.js: -->
+<!--   * install variant (default markup below): nothing detected at all -->
+<!--   * upgrade variant: a paid runtime (Claude Code, Cursor, ...) IS on -->
+<!--     this machine but the plan does not cover it; the msg swaps to the -->
+<!--     detected-runtimes copy, the install CTAs hide, and the Pro-trial -->
+<!--     CTA shows. Never tell a Cursor user to install a second agent. -->
+<!-- Distinct from the first-heartbeat-race banner below: -->
 <!--   * this one is persistent (until the user installs an agent) -->
 <!--   * the first-heartbeat one is transient (~30s after install) -->
 <!-- Mutual-exclusion is enforced in app.js so we never show both. -->
@@ -173,7 +180,7 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismisse
   <span id="no-agent-banner-msg" style="flex:1;min-width:240px;" data-i18n="banners.no_agent_msg">
     No OpenClaw or NVIDIA NemoClaw detected. Install one to start seeing data.
   </span>
-  <a href="https://openclaw.ai/" target="_blank" rel="noopener" style="
+  <a id="no-agent-install-openclaw" href="https://openclaw.ai/" target="_blank" rel="noopener" style="
     background:#16a34a;
     color:#fff;
     border:none;
@@ -185,7 +192,7 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismisse
     text-decoration:none;
     white-space:nowrap;
     " data-i18n="banners.install_openclaw">Install OpenClaw</a>
-  <a href="https://www.nvidia.com/en-us/ai/nemoclaw/" target="_blank" rel="noopener" style="
+  <a id="no-agent-install-nemoclaw" href="https://www.nvidia.com/en-us/ai/nemoclaw/" target="_blank" rel="noopener" style="
     background:#76b900;
     color:#000;
     border:none;
@@ -197,6 +204,19 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_device_pill_dismisse
     text-decoration:none;
     white-space:nowrap;
     " data-i18n="banners.install_nemoclaw">Install NVIDIA NemoClaw</a>
+  <a id="no-agent-upgrade-cta" href="https://app.clawmetry.com/upgrade?source=no-agent-banner" target="_blank" rel="noopener" style="
+    display:none;
+    background:#3b82f6;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:6px 14px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    white-space:nowrap;
+    " data-i18n="banners.start_pro_trial">Start 7-day free trial</a>
 </div>
 
 <!-- Onboarding / First-Heartbeat Banner (closes #1604) -->
