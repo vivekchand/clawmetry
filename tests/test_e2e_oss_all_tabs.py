@@ -168,6 +168,117 @@ def test_canonical_tabs_cover_all_templates():
     )
 
 
+def test_pr_screenshot_tabs_match_canonical():
+    """PR_SCREENSHOT_TABS in pr-screenshots.yml must equal CANONICAL_TABS exactly.
+
+    Closes a silent-drift gap: a tab added to CANONICAL_TABS (so the
+    post-auth overlay sweep covers it) but NOT added to PR_SCREENSHOT_TABS
+    would never appear in the visual-diff screenshot run, meaning a login-
+    overlay regression on that tab would pass CI undetected.
+
+    When this test fails it names the diverging entries and the three files
+    that must be kept in sync.
+    """
+    import re
+
+    workflow_path = (
+        pathlib.Path(__file__).parent.parent
+        / ".github"
+        / "workflows"
+        / "pr-screenshots.yml"
+    )
+    if not workflow_path.exists():
+        pytest.skip(
+            f"pr-screenshots.yml not found at {workflow_path} -- not a source checkout"
+        )
+
+    content = workflow_path.read_text()
+    m = re.search(r'PR_SCREENSHOT_TABS:\s+"([^"]+)"', content)
+    if not m:
+        pytest.fail(
+            "Could not find PR_SCREENSHOT_TABS: \"...\" in "
+            ".github/workflows/pr-screenshots.yml. "
+            "Ensure the env var uses double-quoted value on one line."
+        )
+
+    pr_tabs = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    canonical_set = set(CANONICAL_TABS)
+    pr_set = set(pr_tabs)
+
+    errors = []
+    only_in_canonical = canonical_set - pr_set
+    only_in_pr = pr_set - canonical_set
+    if only_in_canonical:
+        errors.append(
+            f"In CANONICAL_TABS but NOT in PR_SCREENSHOT_TABS: {sorted(only_in_canonical)}"
+        )
+    if only_in_pr:
+        errors.append(
+            f"In PR_SCREENSHOT_TABS but NOT in CANONICAL_TABS: {sorted(only_in_pr)}"
+        )
+
+    assert not errors, (
+        "Tab list mismatch -- these three sources must be identical:\n"
+        "  CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
+        "  PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
+        "  DEFAULT_TABS in .github/scripts/visual-diff.mjs\n"
+        + "\n".join(errors)
+    )
+
+
+def test_visual_diff_default_tabs_match_canonical():
+    """DEFAULT_TABS in visual-diff.mjs must equal CANONICAL_TABS exactly.
+
+    Closes a silent-drift gap: a tab added to CANONICAL_TABS but NOT to
+    DEFAULT_TABS would never be screenshotted in the visual-diff run, so a
+    login-overlay regression on that tab would pass CI undetected.
+    """
+    import re
+
+    script_path = (
+        pathlib.Path(__file__).parent.parent
+        / ".github"
+        / "scripts"
+        / "visual-diff.mjs"
+    )
+    if not script_path.exists():
+        pytest.skip(
+            f"visual-diff.mjs not found at {script_path} -- not a source checkout"
+        )
+
+    content = script_path.read_text()
+    m = re.search(r'const DEFAULT_TABS\s*=\s*"([^"]+)"', content)
+    if not m:
+        pytest.fail(
+            "Could not find `const DEFAULT_TABS = \"...\"` in "
+            ".github/scripts/visual-diff.mjs."
+        )
+
+    vd_tabs = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    canonical_set = set(CANONICAL_TABS)
+    vd_set = set(vd_tabs)
+
+    errors = []
+    only_in_canonical = canonical_set - vd_set
+    only_in_vd = vd_set - canonical_set
+    if only_in_canonical:
+        errors.append(
+            f"In CANONICAL_TABS but NOT in DEFAULT_TABS: {sorted(only_in_canonical)}"
+        )
+    if only_in_vd:
+        errors.append(
+            f"In DEFAULT_TABS but NOT in CANONICAL_TABS: {sorted(only_in_vd)}"
+        )
+
+    assert not errors, (
+        "Tab list mismatch -- these three sources must be identical:\n"
+        "  CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
+        "  PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
+        "  DEFAULT_TABS in .github/scripts/visual-diff.mjs\n"
+        + "\n".join(errors)
+    )
+
+
 class TestAllTabsPostAuth:
     """Every canonical OSS dashboard tab must render without auth overlay post-login.
 
