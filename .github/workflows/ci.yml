@@ -19,16 +19,42 @@ jobs:
         run: |
           python3 -c "
           import ast, glob, sys
+          # dashboard.py imports every routes/*.py Blueprint at module
+          # top level, so a SyntaxError anywhere under routes/ bricks the
+          # dashboard startup end-to-end. PR #3946 corrupted
+          # routes/entitlement.py (dropped module docstring open, lost
+          # tail fn body) and rode green through this gate because the
+          # glob only covered clawmetry/**/*.py -- CI api-tests then
+          # failed for three consecutive merged PRs before anyone
+          # noticed. Include routes/**/*.py + tests/**/*.py + the
+          # top-level scripts alongside dashboard.py so this gate
+          # covers every .py the server actually loads.
           errors = 0
-          for f in ['dashboard.py'] + glob.glob('clawmetry/**/*.py', recursive=True):
+          files = (
+              ['dashboard.py', 'dashboard_claudecode.py', 'history.py']
+              + glob.glob('clawmetry/**/*.py', recursive=True)
+              + glob.glob('routes/**/*.py', recursive=True)
+              + glob.glob('tests/**/*.py', recursive=True)
+          )
+          seen = set()
+          checked = []
+          for f in files:
+              if f in seen:
+                  continue
+              seen.add(f)
               try:
-                  ast.parse(open(f).read(), filename=f)
+                  src = open(f).read()
+              except FileNotFoundError:
+                  continue
+              checked.append(f)
+              try:
+                  ast.parse(src, filename=f)
               except SyntaxError as e:
                   print(f'❌ {f}:{e.lineno}: {e.msg}')
                   errors += 1
           if errors:
               sys.exit(1)
-          print(f'✅ Syntax OK ({len(glob.glob(\"clawmetry/**/*.py\", recursive=True)) + 1} files)')
+          print(f'✅ Syntax OK ({len(checked)} files)')
           "
       - name: Install ruff (fast linter)
         run: pip install ruff
@@ -46,8 +72,15 @@ jobs:
           import glob, re, sys
           pat = re.compile(r'sys\.(stdout|stderr)\s*=\s*io\.TextIOWrapper\(', re.S)
           bad = []
-          for f in ['dashboard.py'] + glob.glob('clawmetry/**/*.py', recursive=True):
-              src = open(f, encoding='utf-8', errors='replace').read()
+          for f in (
+              ['dashboard.py']
+              + glob.glob('clawmetry/**/*.py', recursive=True)
+              + glob.glob('routes/**/*.py', recursive=True)
+          ):
+              try:
+                  src = open(f, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  continue
               for m in pat.finditer(src):
                   line = src[:m.start()].count(chr(10)) + 1
                   bad.append(f'{f}:{line}: use sys.{m.group(1)}.reconfigure(...) instead of a TextIOWrapper rebind')
