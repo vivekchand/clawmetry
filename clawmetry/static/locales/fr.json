@@ -492,7 +492,7 @@
   "approvals.tool_write": "Écritures de fichiers (write)",
   "approvals.trial_note": "Essai gratuit de 7 jours · sans carte bancaire",
   "approvals.upgrade_pitch": "Les approbations gérées par le Cloud bloquent les actions risquées des agents avant leur exécution. Recevez une notification via Slack, e-mail, PagerDuty ou Telegram, puis approuvez ou refusez en un clic.",
-  "banners.agent_builder_pill": "Nouveau : Agent Builder · décrivez votre agent, nous le construisons, nous l'hébergeons, vous suivez chacun de ses mouvements",
+  "banners.agent_builder_pill": "Nouveau : Agent Builder · décrivez votre agent, on le construit, on l'héberge, vous suivez chaque action",
   "banners.changelog": "Journal des modifications",
   "banners.detected_runtimes_msg": "{runtimes} détecté(s) sur cette machine. ClawMetry Pro les surveille en temps réel.",
   "banners.hide": "Masquer",
