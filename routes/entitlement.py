@@ -1,4 +1,3 @@
-"""
 routes/entitlement.py -- ``bp_entitlement``.
 
 Exposes the resolved open-core entitlement so the frontend knows which
@@ -7209,6 +7208,21 @@ def api_paywall_events_recent():
     passing a bad, negative, or oversized value falls back to the default so
     the response size stays bounded.
 
+    Optional filter query params narrow the returned rows to those whose
+    corresponding field matches the supplied value exactly (case-
+    sensitive, ``AND``-combined across dimensions)::
+
+      ?event=<paywall_view|paywall_cta_click|...>
+      ?feature=<feature-key>
+      ?harness=<harness-key>
+      ?source=<source-key>
+      ?plan_chosen=<plan-code>
+
+    A blank or missing filter is "not supplied" and does not restrict on
+    that dimension -- there is deliberately no way to query for rows with
+    an empty field via this API. Filter mismatches never fail the request:
+    they simply return an empty ``events`` list and ``matched=0``.
+
     Body shape::
 
         {
@@ -7217,10 +7231,16 @@ def api_paywall_events_recent():
              "source": "...", "plan_chosen": "...", "ts": <float>},
             ...
           ],
-          "count": <int>,          # events actually returned
+          "count": <int>,          # events actually returned (post-filter, post-limit)
+          "matched": <int>,        # rows matching the filters, pre-limit (>= count)
           "limit": <int>,          # the resolved (post-clamp) limit
-          "in_window": <int>       # size of the underlying ring right now
+          "in_window": <int>,      # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...}   # echo of applied filters (blank ones omitted)
         }
+
+    ``matched`` lets a UI render "showing N of M matches" without a second
+    round-trip. On an unfiltered request ``matched`` byte-equals
+    ``in_window``.
 
     Ships in GRACE. Never 5xxs -- on any failure returns an empty envelope.
     """
@@ -7236,19 +7256,43 @@ def api_paywall_events_recent():
             limit_val = _pe.RECENT_DEFAULT_LIMIT
         if limit_val > _pe.RECENT_MAX_LIMIT:
             limit_val = _pe.RECENT_MAX_LIMIT
-        events = _pe.recent(limit_val)
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        # `_pe.recent` / `count_matching` treat empty / whitespace strings as
+        # "not supplied" so the query-string echo below is the canonical
+        # applied-filter set.
+        events = _pe.recent(limit_val, **filter_kwargs)
+        matched = _pe.count_matching(**filter_kwargs)
         summary = _pe.summary()
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
         return jsonify(
             {
                 "events": events,
                 "count": len(events),
+                "matched": matched,
                 "limit": limit_val,
                 "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
             }
         )
     except Exception as exc:
         logger.warning("api_paywall_events_recent: error: %s", exc)
-        return jsonify({"events": [], "count": 0, "limit": 0, "in_window": 0})
+        return jsonify(
+            {
+                "events": [],
+                "count": 0,
+                "matched": 0,
+                "limit": 0,
+                "in_window": 0,
+                "filters": {},
+            }
+        )
 
 
 def _route_actor() -> str:
@@ -22393,6 +22437,528 @@ def api_entitlement_min_tier_for_retention_window():
         )
 
 
+def _min_tier_for_capacity_at_body(
+    _ent, tier_in: str, item, kind: str, label, required
+) -> dict:
+    """Assemble the response body for a ``min-tier-for-<capacity-axis>-at``
+    endpoint. Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard capacity body so a
+    pricing-matrix walkthrough surface can render the "from <perspective>"
+    copy off one round-trip, matching how ``/min-tier-for-features-at`` /
+    ``/min-tier-for-runtimes-at`` layer perspective onto the grant-axis
+    bodies. Never raises.
+    """
+    return {
+        "item": item,
+        "kind": kind,
+        "label": label,
+        "free": bool(required == _ent.TIER_OSS),
+        "required_tier": required,
+        "required_tier_label": (
+            _ent.tier_label(required) if required else None
+        ),
+        "required_tier_rank": (
+            _ent.tier_rank(required) if required else -1
+        ),
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _min_tier_for_capacity_at_fallback(
+    tier_in: str, item, kind: str
+) -> dict:
+    """Grace-shape fallback body for the three
+    ``min-tier-for-<capacity-axis>-at`` endpoints. Same never-5xx posture
+    as :func:`_min_tier_for_capacity_fallback` with the perspective envelope
+    left null so a caller can still render the "from <perspective>" copy
+    with placeholders on a resolver crash.
+    """
+    return {
+        "item": item,
+        "kind": kind,
+        "label": None,
+        "free": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": None,
+        "perspective_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/min-tier-for-channel-count-at")
+def api_entitlement_min_tier_for_channel_count_at():
+    """``GET /api/entitlement/min-tier-for-channel-count-at?tier=<perspective>
+    &count=<int>`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/min-tier-for-channel-count``.
+
+    Fills the ``_at`` slot for the channel-count capacity axis alongside
+    ``/min-tier-for-features-at`` / ``/min-tier-for-runtimes-at`` so a
+    pricing-matrix walkthrough (``?tier=<p>``) can hit every scalar
+    ``min-tier-for-*`` axis uniformly at a fixed perspective.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the answer is
+    perspective-independent (parity-pinned by
+    :func:`entitlements.min_tier_for_channel_count_at`). Response layers
+    ``perspective_tier`` on top of the ``/min-tier-for-channel-count``
+    body so a walkthrough surface renders the "from <perspective>" copy
+    off one round-trip.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``count=`` is
+      missing / blank / non-int.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace body.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        required = _ent.min_tier_for_channel_count_at(tier_in, n)
+        label = f"{n} channel" if n == 1 else f"{n} channels"
+        return jsonify(
+            _min_tier_for_capacity_at_body(
+                _ent, tier_in, n, "channel_count", label, required
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_channel_count_at: error: %s", exc
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_fallback(tier_in, n, "channel_count")
+        )
+
+
+@bp_entitlement.route("/api/entitlement/min-tier-for-node-count-at")
+def api_entitlement_min_tier_for_node_count_at():
+    """``GET /api/entitlement/min-tier-for-node-count-at?tier=<perspective>
+    &count=<int>`` -- node-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at``. Same perspective
+    contract, same never-5xx posture, same perspective-independence
+    guarantee (parity-pinned). Response shape and error paths mirror
+    ``/min-tier-for-channel-count-at`` with ``kind="node_count"`` and
+    ``label="4 nodes"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+
+    raw = request.args.get("count")
+    if raw is None:
+        return jsonify({"error": "missing count"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing count"}), 400
+    try:
+        n = int(raw_stripped)
+    except (TypeError, ValueError):
+        return jsonify({"error": "count must be an integer"}), 400
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        required = _ent.min_tier_for_node_count_at(tier_in, n)
+        label = f"{n} node" if n == 1 else f"{n} nodes"
+        return jsonify(
+            _min_tier_for_capacity_at_body(
+                _ent, tier_in, n, "node_count", label, required
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_node_count_at: error: %s", exc
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_fallback(tier_in, n, "node_count")
+        )
+
+
+@bp_entitlement.route("/api/entitlement/min-tier-for-retention-window-at")
+def api_entitlement_min_tier_for_retention_window_at():
+    """``GET /api/entitlement/min-tier-for-retention-window-at?tier=<perspective>
+    &days=<int|unlimited>`` -- retention-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at``.
+
+    ``days=unlimited`` (case-insensitive) requests the unlimited-history
+    window; only tiers whose retention cap is ``None`` admit the request
+    (Enterprise on the current tier table). ``item`` is ``null`` and
+    ``label`` is ``"unlimited"`` in that case, matching the bare
+    ``/min-tier-for-retention-window`` endpoint's shape.
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier /
+    never-5xx contracts as the two count-axis siblings.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+
+    raw = request.args.get("days")
+    if raw is None:
+        return jsonify({"error": "missing days"}), 400
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return jsonify({"error": "missing days"}), 400
+    unlimited = raw_stripped.lower() == "unlimited"
+    if unlimited:
+        parsed: int | None = None
+    else:
+        try:
+            parsed = int(raw_stripped)
+        except (TypeError, ValueError):
+            return (
+                jsonify(
+                    {"error": "days must be an integer or 'unlimited'"}
+                ),
+                400,
+            )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        required = _ent.min_tier_for_retention_window_at(tier_in, parsed)
+        if parsed is None:
+            label = "unlimited"
+        else:
+            label = (
+                f"{parsed} day" if parsed == 1 else f"{parsed} days"
+            )
+        return jsonify(
+            _min_tier_for_capacity_at_body(
+                _ent, tier_in, parsed, "retention_window", label, required
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_retention_window_at: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_fallback(
+                tier_in, parsed, "retention_window"
+            )
+        )
+
+
+
+def _capacity_batch_row_to_body(row: dict, endpoint_kind: str) -> dict:
+    """Translate a :func:`min_tier_for_channel_count_batch` /
+    :func:`min_tier_for_node_count_batch` /
+    :func:`min_tier_for_retention_window_batch` helper row into the
+    endpoint body row shape.
+
+    Rekeys ``min_tier*`` -> ``required_tier*`` so each row is byte-
+    identical to the bare singular endpoint body (minus the resolver
+    envelope). Adds an ``item`` field (int on the two count axes;
+    ``null`` on the unlimited retention row) and a human ``label``
+    matching the singular endpoint's conjugation ("1 channel" /
+    "5 channels" / "unlimited") so a UI can render each row through
+    the existing singular-endpoint components without reshaping.
+
+    ``endpoint_kind`` is one of ``"channel_count"`` / ``"node_count"``
+    / ``"retention_window"`` (the singular endpoint's ``kind``, NOT
+    the helper's ``kind``).
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape so the batch keeps building.
+    """
+    key = row.get("key")
+    if endpoint_kind == "retention_window" and key == "unlimited":
+        item: int | None = None
+        label = "unlimited"
+    else:
+        try:
+            item = int(key)
+        except (TypeError, ValueError):
+            item = None
+            label = None
+        else:
+            if endpoint_kind == "channel_count":
+                label = f"{item} channel" if item == 1 else f"{item} channels"
+            elif endpoint_kind == "node_count":
+                label = f"{item} node" if item == 1 else f"{item} nodes"
+            else:
+                label = f"{item} day" if item == 1 else f"{item} days"
+    return {
+        "item": item,
+        "kind": endpoint_kind,
+        "label": label,
+        "free": bool(row.get("free")),
+        "required_tier": row.get("min_tier"),
+        "required_tier_label": row.get("min_tier_label"),
+        "required_tier_rank": (
+            row.get("min_tier_rank")
+            if row.get("min_tier_rank") is not None
+            else -1
+        ),
+    }
+
+
+def _min_tier_for_capacity_batch_fallback(kind: str) -> dict:
+    """Grace-shape fallback body for the three per-value
+    ``min-tier-for-<capacity-axis>-batch`` endpoints. Never 5xxs: on a
+    resolver crash the pricing surface keeps rendering with an empty
+    ``rows`` list instead of a stack trace. Envelope mirrors the happy-
+    path body so a caller does not have to branch on the error shape.
+    """
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _parse_capacity_batch_csv(name: str, unlimited_ok: bool):
+    """Parse a comma-separated capacity-batch query arg.
+
+    Empty / whitespace tokens are dropped. Duplicates by normalised key
+    are dropped preserving first-seen order so the response payload is
+    stable. When ``unlimited_ok`` is True the case-insensitive string
+    ``"unlimited"`` is emitted verbatim (the helper routes it to the
+    None sentinel); otherwise it collapses to the all-``None`` row
+    shape via passthrough. Non-int tokens on the two count axes pass
+    through unmodified so :func:`_min_tier_for_capacity_batch` yields
+    the documented all-``None`` row for them.
+
+    Returns ``(values, err)`` where ``err`` is ``None`` on success,
+    ``"missing"`` when the arg is absent or blank end-to-end (endpoint
+    should 400). Never raises.
+    """
+    raw = request.args.get(name)
+    if raw is None or not raw.strip():
+        return [], "missing"
+    out: list = []
+    for token in raw.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        if unlimited_ok and t.lower() == "unlimited":
+            out.append("unlimited")
+            continue
+        out.append(t)
+    if not out:
+        return [], "missing"
+    return out, None
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-channel-count-batch"
+)
+def api_entitlement_min_tier_for_channel_count_batch():
+    """``GET /api/entitlement/min-tier-for-channel-count-batch?counts=1,5,10``
+    -- per-value batch sibling of
+    ``/api/entitlement/min-tier-for-channel-count``.
+
+    Where the singular endpoint folds ONE channel count to ONE tier
+    answer, this preserves the per-value grouping so a pricing-matrix
+    walkthrough comparing several hypothetical channel counts
+    ("at 1 / 5 / 10 / 25 channels -- cheapest qualifying tier per row")
+    renders off ONE round-trip instead of N calls to
+    ``/min-tier-for-channel-count`` + client-side row assembly. Wraps
+    :func:`clawmetry.entitlements.min_tier_for_channel_count_batch`.
+
+    Distinct from ``/api/entitlement/min-tier-batch`` (per-axis rows
+    for a FIVE-axis bundle -- one row per axis, single scalar per
+    axis) and ``/api/entitlement/min-tier-for-features-batch`` (per-
+    bundle folded answer across N feature *bundles*). This endpoint
+    preserves per-value rows on a SINGLE capacity axis.
+
+    ``counts=`` is required. Missing / blank -> ``400``. Comma-
+    separated tokens are normalised: whitespace-stripped, deduplicated
+    by parsed int key preserving first-seen order. Non-int tokens
+    collapse to the all-``None`` row shape (matches the singular
+    endpoint's ``None``-on-bad-input posture rather than failing the
+    whole batch). Never 5xxs: the grace-shape envelope is returned on
+    any resolver failure.
+
+    Response shape::
+
+        {
+          "kind":  "channel_count",
+          "count": <int>,
+          "rows":  [<row>, ...],
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` mirrors the bare singular endpoint body minus the
+    resolver envelope: ``item`` / ``kind`` (``"channel_count"``) /
+    ``label`` / ``free`` / ``required_tier`` / ``required_tier_label``
+    / ``required_tier_rank`` (``-1`` when ``required_tier`` is
+    ``null``). Per-row parity with
+    ``/api/entitlement/min-tier-for-channel-count?count=<n>`` is
+    pinned in the test suite so the batch cannot silently drift from
+    the scalar.
+    """
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = [
+            _capacity_batch_row_to_body(r, "channel_count")
+            for r in _ent.min_tier_for_channel_count_batch(values)
+        ]
+        return jsonify(
+            {
+                "kind": "channel_count",
+                "count": len(rows),
+                "rows": rows,
+                **_resolver_envelope(_ent),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_channel_count_batch: error: %s",
+            exc,
+        )
+        return jsonify(_min_tier_for_capacity_batch_fallback("channel_count"))
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-node-count-batch"
+)
+def api_entitlement_min_tier_for_node_count_batch():
+    """``GET /api/entitlement/min-tier-for-node-count-batch?counts=1,3,5`` --
+    node-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-batch``.
+
+    Same never-5xx posture, same 400-on-missing-arg parsing, same
+    per-value dedup. Row ``kind`` is ``"node_count"`` and ``label``
+    conjugates as ``"1 node"`` / ``"5 nodes"``.
+    """
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = [
+            _capacity_batch_row_to_body(r, "node_count")
+            for r in _ent.min_tier_for_node_count_batch(values)
+        ]
+        return jsonify(
+            {
+                "kind": "node_count",
+                "count": len(rows),
+                "rows": rows,
+                **_resolver_envelope(_ent),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_node_count_batch: error: %s",
+            exc,
+        )
+        return jsonify(_min_tier_for_capacity_batch_fallback("node_count"))
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-retention-window-batch"
+)
+def api_entitlement_min_tier_for_retention_window_batch():
+    """``GET /api/entitlement/min-tier-for-retention-window-batch?days=7,30,unlimited``
+    -- retention-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-batch``.
+
+    Each token may be a finite int (``7`` / ``30`` / ``90``) or the
+    case-insensitive string ``"unlimited"`` (routes to
+    ``min_tier_for_retention_window(None)``). The unlimited row
+    surfaces with ``item=null`` and ``label="unlimited"``; matches the
+    singular endpoint's ``days=unlimited`` posture. This is the *only*
+    per-axis batch on the retention axis that admits the unlimited
+    sentinel -- ``/api/entitlement/min-tier-batch`` treats
+    ``retention_days=`` (no value) as *unset*, not *unlimited*.
+
+    ``days=`` is required. Missing / blank -> ``400``. Non-int / non-
+    ``unlimited`` tokens collapse to the all-``None`` row shape rather
+    than failing the whole batch. Never 5xxs: grace-shape fallback on
+    any resolver failure.
+
+    Row shape mirrors ``/api/entitlement/min-tier-for-retention-window``
+    with ``kind="retention_window"``.
+    """
+    values, err = _parse_capacity_batch_csv("days", unlimited_ok=True)
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = [
+            _capacity_batch_row_to_body(r, "retention_window")
+            for r in _ent.min_tier_for_retention_window_batch(values)
+        ]
+        return jsonify(
+            {
+                "kind": "retention_window",
+                "count": len(rows),
+                "rows": rows,
+                **_resolver_envelope(_ent),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_retention_window_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_batch_fallback("retention_window")
+        )
+
+
 def _min_tier_for_bundle_row_to_body(row: dict, list_key: str) -> dict:
     """Rename the batch helper's ``min_tier*`` keys to the endpoint's
     ``required_tier*`` keys so per-row bodies stay byte-identical to
@@ -23656,22 +24222,4 @@ def api_entitlement_runtime_detection():
 
 
 def _runtime_detection_counts(probes: list) -> dict:
-    """Aggregate row for ``/api/entitlement/runtime-detection``. Pure fn."""
-    total = len(probes)
-    detected = sum(1 for r in probes if r.get("found"))
-    detected_free = sum(
-        1 for r in probes if r.get("found") and r.get("free")
-    )
-    detected_locked = sum(
-        1 for r in probes if r.get("found") and not r.get("allowed")
-    )
-    unlocked = sum(1 for r in probes if r.get("allowed"))
-    locked = total - unlocked
-    return {
-        "total": total,
-        "detected": detected,
-        "detected_free": detected_free,
-        "detected_locked": detected_locked,
-        "unlocked": unlocked,
-        "locked": locked,
-    }
+    """Aggregate row for ``/api/entitlement/runtime-detection``. Pure fn.

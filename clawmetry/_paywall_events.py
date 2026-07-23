@@ -105,6 +105,54 @@ def _coerce_str(value: Any, limit: int) -> str:
     return text
 
 
+_FILTER_KEYS = ("event", "feature", "harness", "source", "plan_chosen")
+
+
+def _normalise_filters(**kwargs: Any) -> dict[str, str]:
+    """Collapse the filter kwargs to a ``{key: value}`` dict keeping only
+    non-blank string values.
+
+    A ``None``, empty string, or all-whitespace value means "not supplied"
+    and is dropped so the caller doesn't have to enumerate every
+    dimension. Non-string values are coerced via ``str(...)`` (matching
+    the store's own :func:`_coerce_str` posture) so a caller passing an
+    int is not silently unmatchable. Whitespace is stripped from the ends
+    only -- the stored values are never whitespace-padded, and stripping
+    the interior would break exact-match on legitimately spaced
+    ``source`` labels like ``"runtime switcher"``.
+
+    Never raises.
+    """
+    out: dict[str, str] = {}
+    for key in _FILTER_KEYS:
+        raw = kwargs.get(key)
+        if raw is None:
+            continue
+        try:
+            text = str(raw).strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        out[key] = text
+    return out
+
+
+def _row_matches_filters(row: dict, filters: dict[str, str]) -> bool:
+    """Return True iff every filter key/value matches the row's stored
+    field exactly. Missing row fields short-circuit to ``False`` (a filter
+    on a dimension the row does not carry is a mismatch, not a wildcard).
+    Never raises.
+    """
+    try:
+        for key, want in filters.items():
+            if row.get(key, "") != want:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 class _PaywallEventStore:
     """Thread-safe bounded ring + running aggregates for paywall beacons.
 
@@ -255,12 +303,38 @@ class _PaywallEventStore:
                 "by_plan_chosen": {},
             }
 
-    def recent(self, limit: int) -> list[dict]:
+    def recent(
+        self,
+        limit: int,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+    ) -> list[dict]:
         """Return up to ``limit`` most-recent events, newest first.
 
         ``limit`` is clamped into ``[0, _RECENT_MAX]`` so an operator can't
         blow the response size out with ``?limit=999999``. A negative or
         non-int limit falls back to ``_RECENT_DEFAULT``. Never raises.
+
+        Optional keyword filters (``event`` / ``feature`` / ``harness`` /
+        ``source`` / ``plan_chosen``) restrict the returned rows to those
+        whose corresponding field matches the supplied value exactly. A
+        ``None`` or empty-string filter is treated as "not supplied" and
+        does not restrict on that dimension -- there is deliberately no
+        way to query for rows with an empty field via this API, because
+        ``?feature=`` in the query string would then be ambiguous.
+
+        Filter matching is case-sensitive against the stored (post-
+        :func:`_coerce_str`) value, matching the case-sensitive keys of
+        :meth:`summary`'s ``by_*`` breakdowns. Filters are ``AND``-
+        combined so ``event=paywall_cta_click`` + ``feature=fleet`` narrows
+        the ring to CTA clicks on the ``fleet`` feature.
+
+        Never raises: a filter failure short-circuits to ``[]`` instead of
+        propagating.
         """
         try:
             try:
@@ -273,13 +347,63 @@ class _PaywallEventStore:
                 n = _RECENT_MAX
             if n == 0:
                 return []
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
             with self._lock:
                 snap = list(self._ring)
             snap.reverse()
+            if filters:
+                return [
+                    dict(e) for e in snap
+                    if _row_matches_filters(e, filters)
+                ][:n]
             return [dict(e) for e in snap[:n]]
         except Exception as exc:
             logger.warning("paywall.events: recent swallowed error: %s", exc)
             return []
+
+    def count_matching(
+        self,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+    ) -> int:
+        """Return the count of ring rows matching the supplied filters,
+        BEFORE any ``limit`` clamp is applied.
+
+        Same filter semantics as :meth:`recent` (``None`` / empty string
+        means "not supplied", case-sensitive exact match, ``AND`` combined).
+        With no filters, returns the full ring size -- byte-equal to
+        :meth:`summary`'s ``in_window`` on a quiet store, and always the
+        ceiling ``recent(limit, **filters)`` could return at ``limit >=
+        RECENT_MAX_LIMIT``.
+
+        Purpose: a paywall dashboard tile rendering "showing N of M matches"
+        needs the pre-limit total. Splitting this off from :meth:`recent`
+        keeps :meth:`recent`'s return type stable (``list[dict]``) and
+        lets a caller ask "how many matched?" without paying the
+        ``dict(e)`` copy cost on every ring entry.
+
+        Never raises.
+        """
+        try:
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
+            with self._lock:
+                snap = list(self._ring)
+            if not filters:
+                return len(snap)
+            return sum(1 for e in snap if _row_matches_filters(e, filters))
+        except Exception as exc:
+            logger.warning("paywall.events: count_matching swallowed: %s", exc)
+            return 0
 
     def reset(self) -> None:
         with self._lock:
@@ -303,11 +427,49 @@ def summary() -> dict:
     return _STORE.summary()
 
 
-def recent(limit: int | None = None) -> list[dict]:
-    """Public shim for ``GET /api/paywall/events/recent``."""
+def recent(
+    limit: int | None = None,
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+) -> list[dict]:
+    """Public shim for ``GET /api/paywall/events/recent``.
+
+    ``limit`` defaults to :data:`RECENT_DEFAULT_LIMIT`. Filter kwargs are
+    optional; a ``None`` or empty-string value means "not supplied" and
+    does not restrict on that dimension. See
+    :meth:`_PaywallEventStore.recent` for the exact filter contract.
+    """
     if limit is None:
         limit = _RECENT_DEFAULT
-    return _STORE.recent(limit)
+    return _STORE.recent(
+        limit,
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+    )
+
+
+def count_matching(
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+) -> int:
+    """Public shim for :meth:`_PaywallEventStore.count_matching`.
+
+    Returns the count of ring rows matching the supplied filters BEFORE
+    any ``limit`` clamp. Used by ``/api/paywall/events/recent`` so it can
+    render "showing N of M matches" alongside the filtered event list.
+    """
+    return _STORE.count_matching(
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+    )
 
 
 def reset() -> None:

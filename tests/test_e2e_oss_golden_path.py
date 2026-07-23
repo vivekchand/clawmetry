@@ -7,8 +7,9 @@ Verifies four tiers of correctness after a full wheel-install + OpenClaw boot:
   2. /api/sessions returns >= 1 session -- the synthetic JSONL was ingested
      into DuckDB by the dashboard sync thread (proves the "send a message"
      path works end-to-end from an installed wheel).
-  3. All 9 C1 canonical tabs navigate without any auth-blocking overlay --
-     sessions, brain, tokens, crons, flow, memory, security, health.
+  3. All C1 canonical tabs navigate without any auth-blocking overlay --
+     sessions, brain, tokens, crons, channels, flow, memory, security, health,
+     subagents.
   4. Sessions tab DOM contains the seeded session title "Golden Path E2E" --
      proves the full render pipeline from JSONL seed to DOM is intact.
 
@@ -49,7 +50,7 @@ TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 #   Brain     -> brain
 #   Tokens    -> usage
 #   Crons     -> crons
-#   Channels  -> channels  (skipped if not present in dashboard version)
+#   Channels  -> channels
 #   Flow      -> flow
 #   Memory    -> memory
 #   Security  -> security
@@ -59,6 +60,7 @@ C1_TABS = [
     "brain",        # Brain
     "usage",        # Tokens
     "crons",        # Crons
+    "channels",     # Channels
     "flow",         # Flow
     "memory",       # Memory
     "security",     # Security
@@ -113,12 +115,12 @@ def _switch_tab(page, tab: str) -> None:
 
 
 class TestOSSGoldenPath:
-    """Full OSS golden path: wheel-installed dashboard + synced OpenClaw data + 9 tabs.
+    """Full OSS golden path: wheel-installed dashboard + synced OpenClaw data + C1 tabs.
 
     All four test groups must pass together for criterion C1 to be green:
-      * auth group  -- token plumbing
-      * data group  -- JSONL ingestion via sync thread
-      * tab group   -- Playwright overlay sweep
+      * auth group   -- token plumbing
+      * data group   -- JSONL ingestion via sync thread
+      * tab group    -- Playwright overlay sweep
       * render group -- DOM content verification (seeded session title present)
     """
 

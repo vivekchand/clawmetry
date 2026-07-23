@@ -2,19 +2,24 @@
 
 Tests the full funnel in four tiers:
 
-  T1 -- landing signup:   POST /api/subscribe returns {ok:true, handoff_url}
+  T1 -- landing signup:   POST /api/subscribe returns {ok:true}.
+                          Boots the real clawmetry-landing app via run_landing.py
+                          with all external deps stubbed (Firestore, Resend,
+                          sqlite3). Falls back to an inline Flask stub when
+                          run_landing.py is absent (local dev without checkout).
   T2 -- cloud server:     /cloud returns HTTP 200 (stubbed DB + auth)
   T3 -- daemon pair:      /ingest/heartbeat returns 200 (daemon authenticated)
   T4 -- first sync event: cache_push included in heartbeat, accepted by cloud
 
 Checkout layout expected by the workflow:
 
-  $GITHUB_WORKSPACE/oss/    <- this repo (clawmetry)
-  $GITHUB_WORKSPACE/cloud/  <- vivekchand/clawmetry-cloud
+  $GITHUB_WORKSPACE/oss/     <- this repo (clawmetry)
+  $GITHUB_WORKSPACE/cloud/   <- vivekchand/clawmetry-cloud (private, needs CLOUD_REPO_PAT)
+  $GITHUB_WORKSPACE/landing/ <- vivekchand/clawmetry-landing (public, no PAT)
 
-T1 currently uses an inline Flask stub for the landing server so there is no
-dependency on clawmetry-landing#279 being merged. Once that PR lands, replace
-the inline stub with a subprocess that boots clawmetry-landing/tests/run_landing.py.
+Override checkout paths via env vars:
+  CLOUD_CHECKOUT_PATH  (default: $GITHUB_WORKSPACE/cloud)
+  LANDING_CHECKOUT_PATH (default: $GITHUB_WORKSPACE/landing/clawmetry-landing)
 
 DaemonSim (T3/T4) is imported from $GITHUB_WORKSPACE/cloud/tests/e2e_browser/
 when the cloud checkout is available; otherwise _InlineDaemonSim is used so
@@ -42,11 +47,17 @@ import requests
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-# Workflow layout: oss/ and cloud/ are siblings under $GITHUB_WORKSPACE.
+# Workflow layout: oss/, cloud/, landing/ are siblings under $GITHUB_WORKSPACE.
 _WORKSPACE = os.path.abspath(os.path.join(_REPO_ROOT, ".."))
 _CLOUD_DIR = os.environ.get("CLOUD_CHECKOUT_PATH",
                              os.path.join(_WORKSPACE, "cloud"))
 _CLOUD_E2E_DIR = os.path.join(_CLOUD_DIR, "tests", "e2e_browser")
+# clawmetry-landing repo has a clawmetry-landing/ subdirectory containing app.py.
+_LANDING_DIR = os.environ.get(
+    "LANDING_CHECKOUT_PATH",
+    os.path.join(_WORKSPACE, "landing", "clawmetry-landing"),
+)
+_RUN_LANDING_PY = os.path.join(_LANDING_DIR, "tests", "run_landing.py")
 
 # True when the real cloud checkout + run_cloud.py is present.
 _CLOUD_AVAILABLE = os.path.exists(os.path.join(_CLOUD_E2E_DIR, "run_cloud.py"))
@@ -96,13 +107,12 @@ def _dump_log(path: str, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T1 landing stub (inline Flask, no clawmetry-landing dep required)
+# T1: landing server
 # ---------------------------------------------------------------------------
-# Replace with a subprocess booting clawmetry-landing/tests/run_landing.py
-# once clawmetry-landing#279 is merged.
 
-def _start_landing_stub() -> threading.Thread:
-    """Boot a minimal stub for the landing /api/subscribe endpoint."""
+def _start_landing_stub_fallback() -> threading.Thread:
+    """Minimal inline stub for /api/subscribe -- used only when run_landing.py
+    is absent (local dev without clawmetry-landing checkout)."""
     import flask  # noqa: PLC0415
 
     app = flask.Flask(__name__)
@@ -113,12 +123,7 @@ def _start_landing_stub() -> threading.Thread:
         email = str(body.get("email", "")).strip()
         if not email or "@" not in email:
             return flask.jsonify({"ok": False, "error": "invalid email"}), 400
-        # handoff_url is the cloud signup deep-link the landing page redirects to.
-        return flask.jsonify({
-            "ok": True,
-            "email": email,
-            "handoff_url": "https://app.clawmetry.com/connect",
-        })
+        return flask.jsonify({"ok": True})
 
     @app.route("/", methods=["GET"])
     def root():
@@ -261,16 +266,36 @@ def _get_daemon_sim(*, push_cache: bool = False, events_count: int = 2) -> objec
 
 _cloud_proc: subprocess.Popen | None = None
 _cloud_log_f = None
+_landing_proc: subprocess.Popen | None = None
+_landing_log_f = None
 _landing_thread: threading.Thread | None = None
 _cloud_stub_thread: threading.Thread | None = None
 
 
 def setup_module(module):  # noqa: ARG001
-    global _cloud_proc, _cloud_log_f, _landing_thread, _cloud_stub_thread
+    global _cloud_proc, _cloud_log_f, _landing_proc, _landing_log_f, _landing_thread, _cloud_stub_thread
 
-    # T1 landing stub (in-process, no port collision risk).
-    _landing_thread = _start_landing_stub()
-    _wait_http(f"{LANDING_BASE}/", 10, label="landing")
+    # T1: boot real landing app via run_landing.py subprocess.
+    # Falls back to inline stub when run_landing.py is absent.
+    if os.path.exists(_RUN_LANDING_PY):
+        landing_env = os.environ.copy()
+        landing_env["CLAWMETRY_LANDING_PORT"] = str(LANDING_PORT)
+        _landing_log_f = open("/tmp/c4-landing.log", "wb")  # noqa: SIM115
+        _landing_proc = subprocess.Popen(
+            [sys.executable, _RUN_LANDING_PY],
+            cwd=_LANDING_DIR,
+            env=landing_env,
+            stdout=_landing_log_f,
+            stderr=subprocess.STDOUT,
+        )
+    else:
+        _landing_thread = _start_landing_stub_fallback()
+
+    try:
+        _wait_http(f"{LANDING_BASE}/", 20, label="landing")
+    except TimeoutError:
+        _dump_log("/tmp/c4-landing.log", "landing")
+        raise
 
     if _CLOUD_AVAILABLE:
         # Higher-fidelity path: boot real cloud server via run_cloud.py.
@@ -303,15 +328,17 @@ def setup_module(module):  # noqa: ARG001
 
 
 def teardown_module(module):  # noqa: ARG001
-    if _cloud_proc and _cloud_proc.poll() is None:
-        _cloud_proc.terminate()
-        try:
-            _cloud_proc.wait(5)
-        except subprocess.TimeoutExpired:
-            _cloud_proc.kill()
-            _cloud_proc.wait(2)
-    if _cloud_log_f:
-        _cloud_log_f.close()
+    for proc in (_cloud_proc, _landing_proc):
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(2)
+    for f in (_cloud_log_f, _landing_log_f):
+        if f:
+            f.close()
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +347,12 @@ def teardown_module(module):  # noqa: ARG001
 
 
 def test_t1_landing_signup_returns_ok():
-    """T1: landing POST /api/subscribe returns {ok:true, handoff_url}.
+    """T1: landing POST /api/subscribe returns {ok:true}.
 
-    Proves the landing signup endpoint accepts a valid email and returns
-    the cloud handoff URL. Currently exercises the inline stub server;
-    will be upgraded to boot the real clawmetry-landing app once
-    clawmetry-landing#279 merges.
+    Boots the real clawmetry-landing app via run_landing.py with all external
+    deps stubbed (Firestore, Resend, sqlite3). This is the entry point of the
+    C4 cross-repo funnel: a user signs up on the landing page before being
+    handed off to the cloud dashboard.
     """
     r = requests.post(
         f"{LANDING_BASE}/api/subscribe",
@@ -338,10 +365,6 @@ def test_t1_landing_signup_returns_ok():
     body = r.json()
     assert body.get("ok") is True, (
         f"/api/subscribe: expected ok=true. Got: {body!r}"
-    )
-    assert "handoff_url" in body, (
-        f"Response must include a handoff_url pointing to cloud signup. "
-        f"Got: {body!r}"
     )
 
 
