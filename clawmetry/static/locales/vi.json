@@ -492,7 +492,7 @@
   "approvals.tool_write": "Ghi tệp (write)",
   "approvals.trial_note": "Dùng thử miễn phí 7 ngày · không cần thẻ tín dụng",
   "approvals.upgrade_pitch": "Phê duyệt qua Cloud chặn các hành động rủi ro của tác nhân trước khi chúng được thực thi. Nhận thông báo qua Slack, Email, PagerDuty hoặc Telegram, và phê duyệt hoặc từ chối chỉ với một cú nhấp.",
-  "banners.agent_builder_pill": "Mới: Agent Builder · bạn mô tả agent, chúng tôi xây dựng và lưu trữ nó, bạn theo dõi mọi hoạt động",
+  "banners.agent_builder_pill": "Mới: Agent Builder · mô tả agent bạn muốn, chúng tôi xây dựng, lưu trữ nó, bạn theo dõi từng bước",
   "banners.changelog": "Nhật ký thay đổi",
   "banners.detected_runtimes_msg": "Đã phát hiện {runtimes} trên máy này. ClawMetry Pro theo dõi chúng theo thời gian thực.",
   "banners.hide": "Ẩn",
