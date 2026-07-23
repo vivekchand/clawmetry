@@ -151,11 +151,18 @@ def add_required_check(repo: str, context: str, token: str) -> None:
     path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
     try:
         current = _api("GET", path, token=token)
-        existing: list[str] = current.get("contexts", [])
+        existing: list[str] = list(current.get("contexts") or [])
+        # Build a full set from both arrays to avoid duplicates when checks were
+        # already configured via the Settings UI (which writes to 'checks' only).
+        existing_set: set[str] = set(existing)
+        for item in (current.get("checks") or []):
+            if isinstance(item, dict) and item.get("context"):
+                existing_set.add(item["context"])
     except RuntimeError:
         existing = []
+        existing_set = set()
 
-    if context in existing:
+    if context in existing_set:
         print(f"  [{repo}] already required: {context!r}")
         return
 
@@ -169,7 +176,7 @@ def remove_required_check(repo: str, context: str, token: str) -> None:
     path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
     try:
         current = _api("GET", path, token=token)
-        existing: list[str] = current.get("contexts", [])
+        existing: list[str] = list(current.get("contexts") or [])
     except RuntimeError:
         print(f"  [{repo}] no branch protection found, skipping removal of: {context!r}")
         return
@@ -192,6 +199,11 @@ def _get_branch_protection_contexts(repo: str, token: str) -> set[str] | None:
 
     Returns the set of configured context strings, or None if the branch
     endpoint is unreachable or returns no protection data.
+
+    Reads from both 'contexts' (legacy) and 'checks' (current) arrays.
+    GitHub Settings UI writes required checks to the 'checks' array only;
+    reading only 'contexts' causes false C6-missing reports after an admin
+    configures checks via the Settings UI.
     """
     path = f"/repos/{OWNER}/{repo}/branches/main"
     try:
@@ -201,7 +213,12 @@ def _get_branch_protection_contexts(repo: str, token: str) -> set[str] | None:
         return None
     protection = data.get("protection") or {}
     rsc = protection.get("required_status_checks") or {}
-    return set(rsc.get("contexts", []))
+    contexts: set[str] = set(rsc.get("contexts") or [])
+    # Also extract from 'checks' array so Settings UI-configured checks are seen.
+    for item in (rsc.get("checks") or []):
+        if isinstance(item, dict) and item.get("context"):
+            contexts.add(item["context"])
+    return contexts
 
 
 def verify_required_checks_readonly(
@@ -250,6 +267,9 @@ def verify_required_checks(
 
     Returns True if all required checks are present and no deprecated checks
     remain. Prints a FAIL line for each discrepancy so CI logs are actionable.
+
+    Reads from both 'contexts' (legacy) and 'checks' (current) arrays so
+    checks configured via the GitHub Settings UI are detected as present.
     """
     repos = dict.fromkeys([r for r, _ in checks + deprecated])
     ok = True
@@ -257,7 +277,11 @@ def verify_required_checks(
         path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
         try:
             current = _api("GET", path, token=token)
-            actual: set[str] = set(current.get("contexts", []))
+            actual: set[str] = set(current.get("contexts") or [])
+            # Also read from 'checks' array: Settings UI writes here, not 'contexts'.
+            for check in (current.get("checks") or []):
+                if isinstance(check, dict) and check.get("context"):
+                    actual.add(check["context"])
         except RuntimeError as exc:
             print(f"  [{repo}] FAIL: could not read required checks: {exc}")
             ok = False
