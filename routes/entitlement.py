@@ -20904,6 +20904,235 @@ def api_entitlement_tiers_for_capacity_batch():
         )
 
 
+def _tiers_for_capacity_perval_fallback(kind: str) -> dict:
+    """Grace-shape fallback body for the three per-value
+    ``/tiers-for-<capacity-axis>-batch`` endpoints. Never 5xxs: on a
+    resolver crash the pricing surface keeps rendering with an empty
+    ``rows`` list instead of a stack trace. Envelope mirrors the happy-
+    path body so a caller does not have to branch on the error shape.
+    """
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _parse_tiers_for_capacity_batch_csv(name: str, unlimited_ok: bool):
+    """Parse a comma-separated ``/tiers-for-<axis>-batch`` query arg.
+
+    Empty / whitespace tokens are dropped. When ``unlimited_ok`` is
+    True the case-insensitive string ``"unlimited"`` is emitted
+    verbatim (the retention helper routes it to the ``None``
+    sentinel); otherwise it passes through unmodified and collapses to
+    the all-``None`` row shape via the helper's non-int branch. Non-
+    int tokens on the two count axes pass through unmodified so
+    :func:`clawmetry.entitlements._tiers_for_capacity_batch` yields
+    the documented all-``None`` row for them.
+
+    Returns ``(values, err)`` where ``err`` is ``None`` on success,
+    ``"missing"`` when the arg is absent, blank, or contains only
+    commas / whitespace (endpoint should 400). Never raises.
+    """
+    raw = request.args.get(name)
+    if raw is None or not raw.strip():
+        return [], "missing"
+    out: list = []
+    for token in raw.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        if unlimited_ok and t.lower() == "unlimited":
+            out.append("unlimited")
+            continue
+        out.append(t)
+    if not out:
+        return [], "missing"
+    return out, None
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-channel-count-batch"
+)
+def api_entitlement_tiers_for_channel_count_batch():
+    """``GET /api/entitlement/tiers-for-channel-count-batch?counts=1,5,10``
+    -- per-value batch sibling of
+    ``/api/entitlement/tiers-for-channel-count``.
+
+    Where the singular endpoint folds ONE channel count to ONE
+    availability ladder, this preserves the per-value grouping so a
+    pricing-matrix walkthrough comparing several hypothetical channel
+    counts ("at 1 / 5 / 10 / 25 channels -- Fits in: <tiers> per row")
+    renders off ONE round-trip instead of N calls to
+    ``/tiers-for-channel-count`` + client-side row assembly. Wraps
+    :func:`clawmetry.entitlements.tiers_for_channel_count_batch`.
+
+    Distinct from ``/api/entitlement/tiers-for-capacity-batch`` (per-
+    axis rows for a THREE-axis bundle -- one row per axis, single
+    scalar per axis) and ``/api/entitlement/tiers-for-batch`` (per-
+    bundle folded answer across N feature+runtime *bundles*). This
+    endpoint preserves per-value rows on a SINGLE capacity axis.
+
+    ``counts=`` is required. Missing / blank / only-commas ->
+    ``400``. Comma-separated tokens are normalised: whitespace-
+    stripped, deduplicated by parsed int key preserving first-seen
+    order. Non-int tokens collapse to the all-``None`` row shape
+    (matches the singular endpoint's ``None``-on-bad-input posture
+    rather than failing the whole batch). Never 5xxs: the grace-shape
+    envelope is returned on any resolver failure.
+
+    Response shape::
+
+        {
+          "kind":  "channel_count",
+          "count": <int>,
+          "rows":  [<row>, ...],
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` mirrors the bare singular endpoint body minus the
+    resolver envelope: ``item`` / ``kind`` (``"channel_count"``) /
+    ``label`` / ``free`` / ``min_tier`` / ``min_tier_label`` /
+    ``min_tier_rank`` / ``tiers``. Per-row parity with
+    ``/api/entitlement/tiers-for-channel-count?count=<n>`` is pinned
+    in the test suite so the batch cannot silently drift from the
+    scalar.
+    """
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tiers_for_channel_count_batch(values)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "kind": "channel_count",
+                "count": len(rows),
+                "rows": rows,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_channel_count_batch: error: %s",
+            exc,
+        )
+        return jsonify(_tiers_for_capacity_perval_fallback("channel_count"))
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-node-count-batch"
+)
+def api_entitlement_tiers_for_node_count_batch():
+    """``GET /api/entitlement/tiers-for-node-count-batch?counts=1,3,5`` --
+    per-value batch sibling of
+    ``/api/entitlement/tiers-for-node-count``. Node-axis twin of
+    ``/api/entitlement/tiers-for-channel-count-batch``.
+
+    Same posture: ``counts=`` required (missing / blank / only-commas
+    -> ``400``), comma-separated int tokens deduped by parsed int key
+    preserving first-seen order, non-int tokens collapse to the all-
+    ``None`` row shape, never 5xxs. Wraps
+    :func:`clawmetry.entitlements.tiers_for_node_count_batch`.
+
+    Response shape and row shape byte-identical to
+    ``/api/entitlement/tiers-for-channel-count-batch`` with ``kind``
+    ``"node_count"``.
+    """
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tiers_for_node_count_batch(values)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "kind": "node_count",
+                "count": len(rows),
+                "rows": rows,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_node_count_batch: error: %s",
+            exc,
+        )
+        return jsonify(_tiers_for_capacity_perval_fallback("node_count"))
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-retention-window-batch"
+)
+def api_entitlement_tiers_for_retention_window_batch():
+    """``GET /api/entitlement/tiers-for-retention-window-batch?days=7,30,unlimited``
+    -- per-value batch sibling of
+    ``/api/entitlement/tiers-for-retention-window``. Retention-axis
+    twin of ``/api/entitlement/tiers-for-channel-count-batch``.
+
+    Same posture with one addition: the case-insensitive token
+    ``unlimited`` is accepted and routes to the unlimited-history row
+    (``item=null`` / ``label="unlimited"``). This is the *only* per-
+    value batch on the retention axis that admits the unlimited
+    sentinel; ``/tiers-for-capacity-batch`` treats
+    ``retention_days=None`` as *unset* (matching
+    ``/min-tier-batch``'s posture), so a caller previously had to
+    route the unlimited-history question through the singular
+    endpoint.
+
+    ``days=`` is required. Missing / blank / only-commas -> ``400``.
+    Duplicates by parsed int key or the ``"unlimited"`` sentinel are
+    dropped preserving first-seen order. Non-int / non-
+    ``"unlimited"`` tokens collapse to the all-``None`` row shape.
+    Never 5xxs.
+
+    Response shape and row shape byte-identical to
+    ``/api/entitlement/tiers-for-channel-count-batch`` with ``kind``
+    ``"retention_window"``.
+    """
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "days", unlimited_ok=True
+    )
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.tiers_for_retention_window_batch(values)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "kind": "retention_window",
+                "count": len(rows),
+                "rows": rows,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_retention_window_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_fallback("retention_window")
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tiers-for-features")
 def api_entitlement_tiers_for_features():
     """``GET /api/entitlement/tiers-for-features?features=a,b,c`` --
