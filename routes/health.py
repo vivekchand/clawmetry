@@ -2,8 +2,9 @@
 routes/health.py — Health / reliability / diagnostics / rate-limits endpoints.
 
 Extracted from dashboard.py as Phase 5.5 of the incremental modularisation.
-Owns the 11 routes registered on bp_health:
+Owns the routes registered on bp_health:
 
+  GET  /healthz                   — liveness probe (k8s / load-balancer, unauthenticated)
   GET  /api/reliability           — cross-session behavioral reliability trend
   GET  /api/heatmap               — activity heatmap (events per hour, N days)
   GET  /api/system-health         — comprehensive system health (services, disks, crons)
@@ -50,6 +51,13 @@ from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_health = Blueprint('health', __name__)
+
+
+@bp_health.route("/healthz")
+def healthz():
+    """Kubernetes/load-balancer liveness probe — always returns 200."""
+    import dashboard as _d
+    return jsonify({"status": "ok", "service": "clawmetry", "version": _d.__version__})
 
 
 # ---------------------------------------------------------------------------
