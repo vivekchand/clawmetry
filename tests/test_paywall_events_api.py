@@ -231,14 +231,21 @@ def test_recent_event_rows_carry_all_fields(client):
 def test_recent_never_5xxs_on_store_failure(client, monkeypatch):
     from clawmetry import _paywall_events as pe
 
-    def _boom(_):
+    def _boom(*_a, **_kw):
         raise RuntimeError("simulated store failure")
 
     monkeypatch.setattr(pe, "recent", _boom)
     resp = client.get("/api/paywall/events/recent")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body == {"events": [], "count": 0, "limit": 0, "in_window": 0}
+    assert body == {
+        "events": [],
+        "count": 0,
+        "matched": 0,
+        "limit": 0,
+        "in_window": 0,
+        "filters": {},
+    }
 
 
 def test_recent_does_not_consult_entitlement(client, monkeypatch):

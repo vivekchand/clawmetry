@@ -7209,6 +7209,21 @@ def api_paywall_events_recent():
     passing a bad, negative, or oversized value falls back to the default so
     the response size stays bounded.
 
+    Optional filter query params narrow the returned rows to those whose
+    corresponding field matches the supplied value exactly (case-
+    sensitive, ``AND``-combined across dimensions)::
+
+      ?event=<paywall_view|paywall_cta_click|...>
+      ?feature=<feature-key>
+      ?harness=<harness-key>
+      ?source=<source-key>
+      ?plan_chosen=<plan-code>
+
+    A blank or missing filter is "not supplied" and does not restrict on
+    that dimension -- there is deliberately no way to query for rows with
+    an empty field via this API. Filter mismatches never fail the request:
+    they simply return an empty ``events`` list and ``matched=0``.
+
     Body shape::
 
         {
@@ -7217,10 +7232,16 @@ def api_paywall_events_recent():
              "source": "...", "plan_chosen": "...", "ts": <float>},
             ...
           ],
-          "count": <int>,          # events actually returned
+          "count": <int>,          # events actually returned (post-filter, post-limit)
+          "matched": <int>,        # rows matching the filters, pre-limit (>= count)
           "limit": <int>,          # the resolved (post-clamp) limit
-          "in_window": <int>       # size of the underlying ring right now
+          "in_window": <int>,      # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...}   # echo of applied filters (blank ones omitted)
         }
+
+    ``matched`` lets a UI render "showing N of M matches" without a second
+    round-trip. On an unfiltered request ``matched`` byte-equals
+    ``in_window``.
 
     Ships in GRACE. Never 5xxs -- on any failure returns an empty envelope.
     """
@@ -7236,19 +7257,43 @@ def api_paywall_events_recent():
             limit_val = _pe.RECENT_DEFAULT_LIMIT
         if limit_val > _pe.RECENT_MAX_LIMIT:
             limit_val = _pe.RECENT_MAX_LIMIT
-        events = _pe.recent(limit_val)
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        # `_pe.recent` / `count_matching` treat empty / whitespace strings as
+        # "not supplied" so the query-string echo below is the canonical
+        # applied-filter set.
+        events = _pe.recent(limit_val, **filter_kwargs)
+        matched = _pe.count_matching(**filter_kwargs)
         summary = _pe.summary()
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
         return jsonify(
             {
                 "events": events,
                 "count": len(events),
+                "matched": matched,
                 "limit": limit_val,
                 "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
             }
         )
     except Exception as exc:
         logger.warning("api_paywall_events_recent: error: %s", exc)
-        return jsonify({"events": [], "count": 0, "limit": 0, "in_window": 0})
+        return jsonify(
+            {
+                "events": [],
+                "count": 0,
+                "matched": 0,
+                "limit": 0,
+                "in_window": 0,
+                "filters": {},
+            }
+        )
 
 
 def _route_actor() -> str:
