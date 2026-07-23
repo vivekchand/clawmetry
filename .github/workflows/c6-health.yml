@@ -119,6 +119,11 @@ jobs:
                                  /branches/main returns protection=None)
                 'unprotected' -- branch has no protection configured
                 'error'       -- API error / repo not reachable
+
+              Reads from both 'contexts' (legacy) and 'checks' (current) arrays
+              so checks configured via the GitHub Settings UI are correctly seen.
+              Settings UI writes to 'checks' only; reading only 'contexts' causes
+              false C6-missing reports after admin configuration via the UI.
               """
               data, err = api_get(f"/repos/{OWNER}/{repo}/branches/main")
               if err is not None or data is None:
@@ -133,7 +138,11 @@ jobs:
               if prot is None:
                   return set(), "unknown"
               rsc = (prot.get("required_status_checks") or {})
-              contexts = set(rsc.get("contexts", []))
+              contexts = set(rsc.get("contexts") or [])
+              # Also extract from 'checks' array (Settings UI writes here, not 'contexts').
+              for item in (rsc.get("checks") or []):
+                  if isinstance(item, dict) and item.get("context"):
+                      contexts.add(item["context"])
               return contexts, "ok"
 
           # Audit all repos.
