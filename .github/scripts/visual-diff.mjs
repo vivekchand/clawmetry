@@ -158,7 +158,7 @@ async function shoot(browser, baseUrl, view, tab, file) {
   try {
     // The dashboard opens long-lived SSE streams (logs/brain/health), so
     // waiting for `networkidle` deadlocks. Use `domcontentloaded` and rely
-    // on the explicit dwell + scroll loop below to settle content.
+    // on the explicit overlay-wait + scroll loop below to settle content.
     const resp = await page.goto(baseUrl + "/", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
@@ -171,16 +171,39 @@ async function shoot(browser, baseUrl, view, tab, file) {
     // a wall of identical "login" screenshots.
     if (resp && resp.status() >= 300 && resp.status() < 400) ok = false;
 
-    // Switch to the requested tab via the page's own router. Overview is the
-    // default landing tab so we only call switchTab() for everything else.
+    // Wait for the auth overlay to be dismissed before switching tabs.
+    // The dashboard bootstrap fetches /api/auth/check asynchronously after
+    // domcontentloaded. A fixed 1200ms dwell raced this async request on
+    // slow CI runners: the overlay was still visible when switchTab() ran,
+    // switchTab() returned "no-switchtab" (app.js blocked behind the overlay),
+    // and every screenshot landed on the overview tab with the overlay visible.
+    // This was the root cause of the user-reported bug (2026-05-17):
+    // "screenshots always broken -- gateway token not passed for OSS,
+    // never displays other screens."
     //
-    // Use an explicit return string instead of the old short-circuit guard
-    //   (typeof switchTab === 'function' && switchTab(tab))
-    // so that a missing switchTab() surfaces as a logged error rather than
-    // silently screenshotting the overview tab for every non-overview case.
-    // This was the root cause of the user-reported issue (2026-05-17):
-    // "screenshots are always broken -- gateway token not passed for OSS,
-    // never displays other screens" -- the bot was always on overview.
+    // Polling until the overlay is hidden (up to 5s) eliminates the race
+    // and also guarantees window.switchTab is available before we call it,
+    // because app.js only registers switchTab after a successful auth check.
+    try {
+      await page.waitForFunction(
+        () => {
+          for (const id of ["login-overlay", "gw-setup-overlay"]) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display !== "none" && cs.visibility !== "hidden") return false;
+          }
+          return true;
+        },
+        { timeout: 5000, polling: 200 }
+      );
+    } catch {
+      // Overlay still blocking after 5s. The canary check below flags it
+      // with a clear error; the screenshot will show the overlay for diagnosis.
+    }
+
+    // Switch to the requested tab. The overlay wait above ensures app.js
+    // has loaded and window.switchTab is registered before this runs.
     if (tab !== "overview") {
       try {
         const switchResult = await page.evaluate((name) => {
@@ -193,7 +216,7 @@ async function shoot(browser, baseUrl, view, tab, file) {
           console.error(
             `[switch-fail] ${baseUrl} tab=${tab}: window.switchTab() not available ` +
             `(result=${switchResult}). app.js may have failed to load or ` +
-            `auth is blocking. Ensure OPENCLAW_GATEWAY_TOKEN matches CLAWMETRY_VISUAL_DIFF_TOKEN.`
+            `auth is still blocking after 5s. Ensure OPENCLAW_GATEWAY_TOKEN matches CLAWMETRY_VISUAL_DIFF_TOKEN.`
           );
         }
       } catch (switchErr) {
@@ -202,15 +225,11 @@ async function shoot(browser, baseUrl, view, tab, file) {
       }
     }
 
-    // Let JS-driven content fetch + render. Most tabs fire one or two
-    // /api/* calls and paint. networkidle would block forever if any SSE
-    // stream is open, so just dwell.
-    await page.waitForTimeout(1200);
+    // Brief settle for tab-specific API calls and content to render.
+    await page.waitForTimeout(400);
 
-    // Auth-gap canary #2: if the login overlay or the gateway-setup
-    // overlay is visible after dwell, the token seed didn't take. Surface
-    // it now so the workflow can fail loudly instead of publishing a wall
-    // of identical overlay shots.
+    // Auth-gap canary #2: overlay still visible after the explicit wait
+    // confirms a real token mismatch, not a timing race.
     const overlayBlocking = await page.evaluate(() => {
       const seen = [];
       for (const id of ["login-overlay", "gw-setup-overlay"]) {
@@ -220,13 +239,13 @@ async function shoot(browser, baseUrl, view, tab, file) {
         if (cs.display !== "none" && cs.visibility !== "hidden") {
           seen.push(id);
         }
-      }
+      }  
       return seen;
     });
     if (overlayBlocking.length > 0) {
       ok = false;
       console.error(
-        `[auth-gap] ${baseUrl} tab=${tab} overlay still visible: ${overlayBlocking.join(", ")}`
+        `[auth-gap] ${baseUrl} tab=${tab} overlay still visible after 5s poll: ${overlayBlocking.join(", ")}`
       );
     }
 
