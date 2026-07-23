@@ -4389,7 +4389,7 @@ function _enterBrainHistoryMode() {
 }
 
 // Provider → emoji + display name. Mirrors routes/brain.py `_CHANNEL_ICON`
-// and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 21-adapter list).
+// and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 22-adapter list).
 // Keep these three in sync when a new adapter ships.
 var _channelIcons = {
   'telegram': '📱', 'whatsapp': '💬', 'discord': '🎮', 'slack': '💼',
@@ -4397,7 +4397,7 @@ var _channelIcons = {
   'googlechat': '🔵', 'matrix': '🔢', 'msteams': '🏢', 'mattermost': '⚡',
   'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
   'feishu': '🟠', 'zalo': '🩵', 'tlon': '🟤', 'synologychat': '🟦',
-  'nextcloudtalk': '☁️',
+  'nextcloudtalk': '☁️', 'clickclack': '🗨️',
   'cli': '🖥️', 'tui': '⌨️', 'cron': '⏰'
 };
 var _channelColors = {
@@ -4406,7 +4406,7 @@ var _channelColors = {
   'googlechat': '#1A73E8', 'matrix': '#0DBD8B', 'msteams': '#4B53BC', 'mattermost': '#0072C6',
   'line': '#06C755', 'nostr': '#9333ea', 'twitch': '#9146FF', 'bluebubbles': '#3478F6',
   'feishu': '#00D6B9', 'zalo': '#0068FF', 'tlon': '#A78BFA', 'synologychat': '#1A73E8',
-  'nextcloudtalk': '#0082C9',
+  'nextcloudtalk': '#0082C9', 'clickclack': '#FF6B35',
   'cli': '#94a3b8', 'tui': '#94a3b8', 'cron': '#6B7280'
 };
 // Display-name overrides for channels whose snake/lower-case key isn't a
@@ -4422,7 +4422,8 @@ var _channelDisplayNames = {
   'cli':        'CLI',
   'tui':        'TUI',
   'synologychat': 'Synology Chat',
-  'nextcloudtalk': 'Nextcloud Talk'
+  'nextcloudtalk': 'Nextcloud Talk',
+  'clickclack':    'ClickClack'
 };
 
 function _channelDisplayName(provider) {
@@ -12562,6 +12563,7 @@ async function loadSystemHealth() {
                : p === 'tlon'           ? '🌊'
                : p === 'synology-chat'  ? '🖥️'
                : p === 'nextcloud-talk' ? '☁️'
+               : p === 'clickclack'     ? '🗨️'
                : '📨';
         };
         if (ingest.length === 0) {
@@ -16827,7 +16829,7 @@ function hideUnconfiguredChannels(svgRoot) {
   // Priority order for slot assignment (up to 3 visible at a time)
   var SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                     'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
-                    'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo'];
+                    'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack'];
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     // Build display list: up to 3 channels, prioritized by SLOT_ORDER
@@ -18425,7 +18427,7 @@ function initOverviewFlow() {
     };
     var OV_SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                          'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
-                         'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo'];
+                         'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack'];
     var visibleChannels = OV_SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
     // Use the clone SVG as root for getElementById (it's already in DOM via container)
     function ovEl(id) { return document.getElementById(id); }
