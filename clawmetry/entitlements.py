@@ -1,4 +1,4 @@
-clawmetry/entitlements.py — open-core entitlement resolution.
+"""clawmetry/entitlements.py -- open-core entitlement resolution.
 
 Single source of truth for "what is this install allowed to do". Everything
 that gates a runtime or an advanced feature reads :func:`get_entitlement` —

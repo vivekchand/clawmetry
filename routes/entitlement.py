@@ -1,4 +1,4 @@
-routes/entitlement.py -- ``bp_entitlement``.
+"""routes/entitlement.py -- ``bp_entitlement``.
 
 Exposes the resolved open-core entitlement so the frontend knows which
 runtimes/features to surface (and, once enforcement is live, which to render
@@ -24222,4 +24222,22 @@ def api_entitlement_runtime_detection():
 
 
 def _runtime_detection_counts(probes: list) -> dict:
-    """Aggregate row for ``/api/entitlement/runtime-detection``. Pure fn.
+    """Aggregate row for ``/api/entitlement/runtime-detection``. Pure fn."""
+    total = len(probes)
+    detected = sum(1 for r in probes if r.get("found"))
+    detected_free = sum(
+        1 for r in probes if r.get("found") and r.get("free")
+    )
+    detected_locked = sum(
+        1 for r in probes if r.get("found") and not r.get("allowed")
+    )
+    unlocked = sum(1 for r in probes if r.get("allowed"))
+    locked = total - unlocked
+    return {
+        "total": total,
+        "detected": detected,
+        "detected_free": detected_free,
+        "detected_locked": detected_locked,
+        "unlocked": unlocked,
+        "locked": locked,
+    }
