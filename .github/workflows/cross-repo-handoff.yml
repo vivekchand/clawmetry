@@ -27,9 +27,9 @@ jobs:
 
       # CLOUD_REPO_PAT is NOT exposed to pull_request runs from a fork (GitHub
       # withholds repo secrets from fork PRs to prevent exfiltration). Without it
-      # the private clawmetry-cloud checkout below cannot authenticate. All four
-      # C4 tiers (T1-T4) still run via inline stubs; the cloud checkout provides
-      # higher-fidelity T3/T4 (real DaemonSim + run_cloud.py) when PAT is present.
+      # neither clawmetry-cloud nor clawmetry-landing (both private) can be
+      # checked out. All four C4 tiers (T1-T4) still run via inline stubs;
+      # the private checkouts provide higher-fidelity T3/T4 when PAT is present.
       - name: Detect cloud-repo access
         id: access
         env:
@@ -41,6 +41,17 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=C4 cloud checkout unavailable::CLOUD_REPO_PAT is not set (fork PR or secret not configured). T2/T3/T4 will use inline stubs -- all four tiers still run."
           fi
+
+      # clawmetry-landing is a private repo -- requires CLOUD_REPO_PAT (which
+      # covers all repos owned by vivekchand). Gated on access.available so fork
+      # PRs skip gracefully; the test falls back to its inline stub in that case.
+      - name: Checkout clawmetry-landing
+        if: steps.access.outputs.available == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: vivekchand/clawmetry-landing
+          token: ${{ secrets.CLOUD_REPO_PAT }}
+          path: landing
 
       # Cloud repo provides run_cloud.py stub + DaemonSim wire-format simulator.
       - name: Checkout clawmetry-cloud
@@ -91,22 +102,37 @@ jobs:
       - name: Run C4 cross-repo handoff
         env:
           CLAWMETRY_E2E_STUB_AUTH: "1"
+          LANDING_CHECKOUT_PATH: ${{ github.workspace }}/landing/clawmetry-landing
         run: |
           cd "${{ github.workspace }}"
           python -m pytest oss/tests/test_e2e_cross_repo_handoff.py \
-            -v --tb=short
+            -v --tb=short \
+            --junitxml=/tmp/junit-c4-${{ github.run_id }}.xml
+
+      - name: Upload JUnit results
+        if: always() && steps.access.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-c4-${{ github.run_id }}
+          path: /tmp/junit-c4-${{ github.run_id }}.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Dump server logs on failure
         if: failure()
         run: |
           echo "=== cloud server log ==="
           cat /tmp/c4-cloud.log 2>/dev/null | tail -200 || true
+          echo "=== landing server log ==="
+          cat /tmp/c4-landing.log 2>/dev/null | tail -200 || true
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: c4-handoff-logs
-          path: /tmp/c4-cloud.log
+          path: |
+            /tmp/c4-cloud.log
+            /tmp/c4-landing.log
           if-no-files-found: warn
           retention-days: 7
