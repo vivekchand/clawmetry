@@ -42,6 +42,16 @@ CHANNELS_PATH = _CLAWMETRY_DIR / "questions-channels.json"
 KILLSWITCH_PATH = _CLAWMETRY_DIR / "killswitch.json"
 MODE_PATH = _CLAWMETRY_DIR / "approval-mode.json"
 _DISCOVERY_PATH = _CLAWMETRY_DIR / "local_query.json"
+# Existing channel configs we reuse so approvals need zero extra setup on
+# a machine that already has alert channels configured:
+#   * alerts webhook config (Slack / Discord URLs) — routes/alerts.py
+#   * budget config SQLite (Telegram bot token + chat id) — bp_budget
+#   * gateway cache + OpenClaw config — the connected chat channel
+#     (WhatsApp / Signal / Telegram / iMessage / …) via message.send
+ALERTS_CONFIG_PATH = Path.home() / ".openclaw" / "clawmetry-alerts.json"
+FLEET_DB_PATH = _CLAWMETRY_DIR / "fleet.db"
+GW_CACHE_PATH = Path.home() / ".clawmetry-gateway.json"
+OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 
 QUESTION_TYPES = ("confirm", "select", "input")
 # Where approval is requested (Pushary-parity delivery modes):
@@ -75,7 +85,16 @@ _DEFAULT_CHANNELS: dict[str, Any] = {
     "pushover_token": "",
     "pushover_user": "",
     "slack_webhook_url": "",
+    "discord_webhook_url": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
     "webhook_url": "",
+    # Deliver through the chat channel the operator already talks to
+    # their agent on (WhatsApp / Signal / Telegram / iMessage / …) via
+    # the OpenClaw gateway `message` tool. Off by default — it's the
+    # only sender that goes through the agent runtime itself.
+    "notify_gateway": False,
+    "gateway_channel": "",
 }
 
 
@@ -217,6 +236,50 @@ def save_channels_config(update: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+def effective_channels_config() -> tuple[dict[str, Any], dict[str, str]]:
+    """Channels config with fallbacks from configs the user already has.
+
+    Configure once, notify everywhere: when the questions config leaves a
+    channel blank, we borrow the credential from where it already lives —
+    Slack / Discord webhooks from the alerts config, the Telegram bot from
+    the budget config. Returns ``(cfg, sources)`` where ``sources`` maps
+    each borrowed channel to where its credential came from."""
+    cfg = load_channels_config()
+    sources: dict[str, str] = {}
+    if not (cfg.get("slack_webhook_url") and cfg.get("discord_webhook_url")):
+        try:
+            alerts = json.loads(ALERTS_CONFIG_PATH.read_text())
+            if isinstance(alerts, dict):
+                if not cfg.get("slack_webhook_url") and alerts.get("slack_webhook_url"):
+                    cfg["slack_webhook_url"] = alerts["slack_webhook_url"]
+                    sources["slack"] = "alerts config"
+                if not cfg.get("discord_webhook_url") and alerts.get("discord_webhook_url"):
+                    cfg["discord_webhook_url"] = alerts["discord_webhook_url"]
+                    sources["discord"] = "alerts config"
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    if not (cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id")):
+        try:
+            import sqlite3
+            db = sqlite3.connect(str(FLEET_DB_PATH), timeout=5)
+            try:
+                rows = dict(db.execute(
+                    "SELECT key, value FROM budget_config "
+                    "WHERE key IN ('telegram_bot_token', 'telegram_chat_id')"
+                ).fetchall())
+            finally:
+                db.close()
+            token = (rows.get("telegram_bot_token") or "").strip()
+            chat_id = (rows.get("telegram_chat_id") or "").strip()
+            if token and chat_id and not cfg.get("telegram_bot_token"):
+                cfg["telegram_bot_token"] = token
+                cfg["telegram_chat_id"] = chat_id
+                sources["telegram"] = "budget config"
+        except Exception:
+            pass
+    return cfg, sources
+
+
 def load_mode() -> dict[str, Any]:
     """Current delivery mode, honoring a temporary override window.
 
@@ -324,6 +387,66 @@ def _dashboard_url() -> str:
     return f"http://localhost:{port}"
 
 
+def _gateway_conn() -> Optional[dict[str, str]]:
+    """Resolve OpenClaw gateway url+token without importing dashboard.py
+    (this runs inside hook / MCP subprocesses where the Flask module is
+    too heavy). Resolution mirrors dashboard._load_gw_config: env var →
+    live openclaw.json → cached ~/.clawmetry-gateway.json."""
+    token = (os.environ.get("OPENCLAW_GATEWAY_TOKEN") or "").strip()
+    url = (os.environ.get("OPENCLAW_GATEWAY_URL") or "").strip()
+    if not token:
+        try:
+            oc = json.loads(OPENCLAW_CONFIG_PATH.read_text())
+            token = (((oc.get("gateway") or {}).get("auth") or {}).get("token") or "").strip()
+            port = (oc.get("gateway") or {}).get("port")
+            if not url and port:
+                url = f"http://127.0.0.1:{int(port)}"
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            pass
+    if not token or not url:
+        try:
+            cache = json.loads(GW_CACHE_PATH.read_text())
+            token = token or (cache.get("token") or "").strip()
+            url = url or (cache.get("url") or "").strip()
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    if not url:
+        url = "http://127.0.0.1:18789"
+    if not token:
+        return None
+    return {"url": url.rstrip("/"), "token": token}
+
+
+def _gateway_send(message: str, channel: str = "") -> bool:
+    """Send a text through the operator's connected OpenClaw chat channel
+    (WhatsApp / Signal / Telegram / iMessage / …) via the gateway
+    ``message`` tool — the same path budget alerts already use."""
+    conn = _gateway_conn()
+    if not conn:
+        return False
+    args: dict[str, Any] = {"action": "send", "message": message}
+    if channel:
+        args["channel"] = channel
+    payload = json.dumps({"tool": "message", "args": args}).encode("utf-8")
+    import urllib.request
+    req = urllib.request.Request(
+        f"{conn['url']}/tools/invoke",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {conn['token']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return bool(data.get("ok"))
+    except Exception as exc:
+        log.debug("gateway send failed: %s", exc)
+        return False
+
+
 def notify_channels(
     title: str,
     body: str,
@@ -334,12 +457,23 @@ def notify_channels(
     configured channel. Returns the list of channels that accepted it.
     Only redacted question metadata travels — title, body, tool name —
     never transcripts or code."""
-    cfg = cfg or load_channels_config()
+    if cfg is None:
+        cfg, _ = effective_channels_config()
     title = redact_secrets((title or "")[:100])
     body = redact_secrets((body or "")[:500])
     sent: list[str] = []
     qid = (question or {}).get("id") or ""
     inbox_url = f"{_dashboard_url()}/?tab=approvals"
+    # Plain-text answer lines for channels without interactive buttons
+    # (Telegram / gateway chat). Clickable on the same network; always a
+    # copy-pasteable fallback.
+    answer_lines = ""
+    if question and qid:
+        base = f"{_dashboard_url()}/api/questions/{qid}/answer"
+        if (question.get("qtype") or "confirm") == "confirm":
+            answer_lines = f"\n✅ Approve: {base}?value=yes\n❌ Deny: {base}?value=no"
+        else:
+            answer_lines = f"\n💬 Answer: {inbox_url}"
 
     # ntfy — phone push with tap-to-answer action buttons on confirms.
     if cfg.get("ntfy_topic"):
@@ -403,6 +537,36 @@ def notify_channels(
         if _http_post(cfg["slack_webhook_url"], payload,
                       {"Content-Type": "application/json"}):
             sent.append("slack")
+
+    # Telegram — bot sendMessage; the answer links ride in the text since
+    # inline URL buttons reject non-public hosts.
+    if cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
+        payload = json.dumps({
+            "chat_id": cfg["telegram_chat_id"],
+            "text": f"🤖 {title}\n{body}{answer_lines}",
+            "disable_web_page_preview": True,
+        }).encode("utf-8")
+        if _http_post(
+                f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage",
+                payload, {"Content-Type": "application/json"}):
+            sent.append("telegram")
+
+    # Discord — incoming webhook.
+    if cfg.get("discord_webhook_url"):
+        payload = json.dumps({
+            "content": f"**{title}**\n{body}{answer_lines}",
+        }).encode("utf-8")
+        if _http_post(cfg["discord_webhook_url"], payload,
+                      {"Content-Type": "application/json"}):
+            sent.append("discord")
+
+    # Connected OpenClaw chat channel (WhatsApp / Signal / Telegram /
+    # iMessage / …) — the channel the operator already talks to their
+    # agent on, via the gateway message tool.
+    if cfg.get("notify_gateway"):
+        text = f"🤖 ClawMetry — {title}\n{body}{answer_lines}"
+        if _gateway_send(text, channel=cfg.get("gateway_channel") or ""):
+            sent.append("gateway_chat")
 
     # Generic webhook — n8n / custom automations get the full envelope.
     if cfg.get("webhook_url"):

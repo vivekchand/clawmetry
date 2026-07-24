@@ -401,13 +401,16 @@ def doctor() -> int:
         print(f"  {'✓' if installed else '✗'} {event} hook "
               f"{'installed' if installed else 'missing — run: clawmetry hooks setup'}")
         ok = ok and installed
-    cfg = _q.load_channels_config()
+    cfg, sources = _q.effective_channels_config()
     channels = [name for name, key in
                 (("ntfy", "ntfy_topic"), ("pushover", "pushover_token"),
-                 ("slack", "slack_webhook_url"), ("webhook", "webhook_url"))
+                 ("slack", "slack_webhook_url"), ("telegram", "telegram_bot_token"),
+                 ("discord", "discord_webhook_url"), ("webhook", "webhook_url"),
+                 ("gateway_chat", "notify_gateway"))
                 if cfg.get(key)]
     if channels:
-        print(f"  ✓ channels configured: {', '.join(channels)}")
+        borrowed = "".join(f" ({ch} via {src})" for ch, src in sources.items())
+        print(f"  ✓ channels configured: {', '.join(channels)}{borrowed}")
     else:
         print("  ✗ no delivery channels configured — set one in the "
               "Approvals tab or POST /api/questions/channels")

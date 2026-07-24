@@ -219,12 +219,25 @@ def killswitch_set():
 def channels_get():
     q = _engine()
     cfg = q.load_channels_config()
+    effective, sources = q.effective_channels_config()
     # Never echo credentials back in full — mask like the alerts config UI.
     masked = dict(cfg)
-    for key in ("pushover_token", "pushover_user"):
+    for key in ("pushover_token", "pushover_user", "telegram_bot_token"):
         if masked.get(key):
-            masked[key] = masked[key][:4] + "…"
+            masked[key] = str(masked[key])[:4] + "…"
     masked["mode_effective"] = q.load_mode()
+    # Which channels a question would actually reach right now, including
+    # credentials borrowed from the alerts / budget configs ("configure
+    # once"). `fallbacks` says where each borrowed credential came from.
+    masked["channels_active"] = [
+        name for name, key in (
+            ("ntfy", "ntfy_topic"), ("pushover", "pushover_token"),
+            ("slack", "slack_webhook_url"), ("telegram", "telegram_bot_token"),
+            ("discord", "discord_webhook_url"), ("webhook", "webhook_url"),
+            ("gateway_chat", "notify_gateway"))
+        if effective.get(key)
+    ]
+    masked["fallbacks"] = sources
     return jsonify(masked)
 
 

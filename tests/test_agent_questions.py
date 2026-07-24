@@ -36,7 +36,13 @@ def engine(tmp_path, monkeypatch):
     monkeypatch.setattr(q, "CHANNELS_PATH", tmp_path / "questions-channels.json")
     monkeypatch.setattr(q, "KILLSWITCH_PATH", tmp_path / "killswitch.json")
     monkeypatch.setattr(q, "MODE_PATH", tmp_path / "approval-mode.json")
+    monkeypatch.setattr(q, "ALERTS_CONFIG_PATH", tmp_path / "clawmetry-alerts.json")
+    monkeypatch.setattr(q, "FLEET_DB_PATH", tmp_path / "fleet.db")
+    monkeypatch.setattr(q, "GW_CACHE_PATH", tmp_path / "gateway.json")
+    monkeypatch.setattr(q, "OPENCLAW_CONFIG_PATH", tmp_path / "openclaw.json")
     monkeypatch.setattr(q, "_read_discovery", lambda: None)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
 
     monkeypatch.setattr(ah, "_CLAUDE_SETTINGS", tmp_path / "claude-settings.json")
     monkeypatch.setattr(approvals, "POLICIES_PATH", tmp_path / "policies.yml")
@@ -135,6 +141,59 @@ def test_redact_secrets_masks_credentials(engine):
     assert "[redacted]" in engine.redact_secrets("API_KEY=sk_live_abc4567890123456789")
     assert "hunter2" not in engine.redact_secrets("password: hunter2")
     assert engine.redact_secrets("plain rm -rf build") == "plain rm -rf build"
+
+
+# ── Channel reuse + fan-out ──────────────────────────────────────────────
+
+
+def test_effective_config_borrows_alert_and_budget_channels(engine):
+    # Slack + Discord from the alerts config, Telegram from budget config.
+    engine.ALERTS_CONFIG_PATH.write_text(json.dumps({
+        "slack_webhook_url": "https://hooks.slack.com/services/T/alerts",
+        "discord_webhook_url": "https://discord.com/api/webhooks/alerts"}))
+    import sqlite3
+    db = sqlite3.connect(str(engine.FLEET_DB_PATH))
+    db.execute("CREATE TABLE budget_config (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("INSERT INTO budget_config VALUES ('telegram_bot_token', '123:abc')")
+    db.execute("INSERT INTO budget_config VALUES ('telegram_chat_id', '42')")
+    db.commit(); db.close()
+    cfg, sources = engine.effective_channels_config()
+    assert cfg["slack_webhook_url"].endswith("/alerts")
+    assert cfg["telegram_bot_token"] == "123:abc" and cfg["telegram_chat_id"] == "42"
+    assert sources == {"slack": "alerts config", "discord": "alerts config",
+                       "telegram": "budget config"}
+    # Own config always wins over the borrowed credential.
+    engine.save_channels_config({"slack_webhook_url": "https://hooks.slack.com/services/T/mine"})
+    cfg, sources = engine.effective_channels_config()
+    assert cfg["slack_webhook_url"].endswith("/mine") and "slack" not in sources
+
+
+def test_notify_fans_out_to_telegram_discord_and_gateway(engine, monkeypatch):
+    posts = []
+    monkeypatch.setattr(engine, "_http_post",
+                        lambda url, data, headers, timeout=10:
+                        posts.append((url, data)) or True)
+    gw = []
+    monkeypatch.setattr(engine, "_gateway_send",
+                        lambda message, channel="": gw.append((message, channel)) or True)
+    engine.save_channels_config({
+        "telegram_bot_token": "123:abc", "telegram_chat_id": "42",
+        "discord_webhook_url": "https://discord.com/api/webhooks/x",
+        "notify_gateway": True, "gateway_channel": "whatsapp"})
+    row = engine.create_question("Deploy to prod?", agent_name="CC")
+    assert set(row["notified_channels"]) == {"telegram", "discord", "gateway_chat"}
+    tg_payload = json.loads([d for u, d in posts if "telegram" in u][0])
+    assert "Deploy to prod?" in tg_payload["text"]
+    assert f"/api/questions/{row['id']}/answer?value=yes" in tg_payload["text"]
+    assert gw[0][1] == "whatsapp" and "Deploy to prod?" in gw[0][0]
+
+
+def test_gateway_send_resolves_conn_from_openclaw_config(engine, monkeypatch):
+    assert engine._gateway_conn() is None  # nothing configured → no send
+    engine.OPENCLAW_CONFIG_PATH.write_text(json.dumps(
+        {"gateway": {"port": 18789, "auth": {"token": "tok123"}}}))
+    conn = engine._gateway_conn()
+    assert conn == {"url": "http://127.0.0.1:18789", "token": "tok123"}
 
 
 # ── Hooks: classification + gate ─────────────────────────────────────────

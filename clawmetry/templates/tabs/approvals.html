@@ -111,11 +111,31 @@
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Slack incoming webhook URL</label>
           <input id="qch-slack" type="text" placeholder="https://hooks.slack.com/…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
         </div>
-        <div style="grid-column:1 / -1;">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Telegram bot token <span id="qch-tg-fallback" style="color:#22c55e;"></span></label>
+          <input id="qch-tg-token" type="text" placeholder="123456:ABC-…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Telegram chat ID</label>
+          <input id="qch-tg-chat" type="text" placeholder="e.g. 123456789" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Discord webhook URL <span id="qch-dc-fallback" style="color:#22c55e;"></span></label>
+          <input id="qch-discord" type="text" placeholder="https://discord.com/api/webhooks/…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Generic webhook URL (n8n / custom automations)</label>
           <input id="qch-webhook" type="text" placeholder="https://…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
         </div>
+        <div style="grid-column:1 / -1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:12px;color:var(--text-primary);display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input id="qch-gateway" type="checkbox" style="accent-color:var(--bg-accent,#3b82f6);">
+            Notify via my connected OpenClaw chat channel (WhatsApp, Signal, Telegram, iMessage, …)
+          </label>
+          <input id="qch-gateway-channel" type="text" placeholder="channel (optional, default: last used)" style="flex:1;min-width:180px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
       </div>
+      <div id="qch-active" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
       <div style="display:flex;gap:8px;align-items:center;">
         <button onclick="saveQuestionChannels()" style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
         <button onclick="testQuestionChannels()" style="background:transparent;color:var(--text-primary);border:1px solid var(--border-secondary);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">Send test push</button>
@@ -966,6 +986,24 @@
       set('qch-wait', cfg.wait_seconds); set('qch-expiry', cfg.expiry_seconds);
       set('qch-ntfy', cfg.ntfy_topic); set('qch-slack', cfg.slack_webhook_url);
       set('qch-webhook', cfg.webhook_url);
+      set('qch-tg-chat', cfg.telegram_chat_id); set('qch-discord', cfg.discord_webhook_url);
+      // Masked token: show as placeholder, keep the field empty so a save
+      // without edits doesn't clobber the stored credential with "1234…".
+      var tg = document.getElementById('qch-tg-token');
+      if (tg && cfg.telegram_bot_token) tg.placeholder = cfg.telegram_bot_token + ' (saved)';
+      var gw = document.getElementById('qch-gateway');
+      if (gw) gw.checked = !!cfg.notify_gateway;
+      set('qch-gateway-channel', cfg.gateway_channel);
+      var fb = cfg.fallbacks || {};
+      var tgf = document.getElementById('qch-tg-fallback');
+      if (tgf && fb.telegram) tgf.textContent = '· reusing ' + fb.telegram;
+      var dcf = document.getElementById('qch-dc-fallback');
+      if (dcf && fb.discord) dcf.textContent = '· reusing ' + fb.discord;
+      var slf = fb.slack ? ' (Slack reusing ' + fb.slack + ')' : '';
+      var act = document.getElementById('qch-active');
+      if (act) act.textContent = (cfg.channels_active && cfg.channels_active.length)
+        ? 'Questions will reach: ' + cfg.channels_active.join(', ') + slf
+        : 'No channel active yet — questions only appear in this inbox until one is configured.';
     } catch (e) {}
   }
 
@@ -973,17 +1011,27 @@
     var get = function(id) { var el = document.getElementById(id); return el ? el.value : undefined; };
     var st = document.getElementById('qch-status');
     try {
+      var payload = {
+        mode: get('qch-mode'), unanswered: get('qch-unanswered'),
+        wait_seconds: parseInt(get('qch-wait') || '45', 10),
+        expiry_seconds: parseInt(get('qch-expiry') || '600', 10),
+        ntfy_topic: get('qch-ntfy'), slack_webhook_url: get('qch-slack'),
+        webhook_url: get('qch-webhook'),
+        telegram_chat_id: get('qch-tg-chat'),
+        discord_webhook_url: get('qch-discord'),
+        notify_gateway: !!(document.getElementById('qch-gateway') || {}).checked,
+        gateway_channel: get('qch-gateway-channel')
+      };
+      // Omit the token when the field is blank so we don't clobber a
+      // saved credential (the GET only ever returns a masked prefix).
+      var tgTok = (get('qch-tg-token') || '').trim();
+      if (tgTok) payload.telegram_bot_token = tgTok;
       var r = await fetch('/api/questions/channels', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          mode: get('qch-mode'), unanswered: get('qch-unanswered'),
-          wait_seconds: parseInt(get('qch-wait') || '45', 10),
-          expiry_seconds: parseInt(get('qch-expiry') || '600', 10),
-          ntfy_topic: get('qch-ntfy'), slack_webhook_url: get('qch-slack'),
-          webhook_url: get('qch-webhook')
-        })
+        body: JSON.stringify(payload)
       });
       if (st) st.textContent = r.ok ? 'Saved.' : 'Save failed.';
+      _loadQuestionChannels();
     } catch (e) { if (st) st.textContent = 'Save failed.'; }
   };
 
