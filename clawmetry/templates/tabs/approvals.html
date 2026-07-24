@@ -11,6 +11,10 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
+      <button id="killswitch-btn" onclick="toggleKillswitch()" title="While engaged, every gated tool call is denied until released"
+              style="border:1px solid var(--border-secondary);background:var(--bg-secondary);color:var(--text-primary);padding:5px 12px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
+        ⏻ Kill switch: <span id="killswitch-state">…</span>
+      </button>
       <button class="refresh-btn" onclick="loadApprovalsTab()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
   </div>
@@ -23,6 +27,16 @@
 
   <!-- ═══ LEFT COLUMN — Review (queue + history) ═══ -->
   <div>
+
+  <!-- ═══ SECTION 0: Agent Questions inbox (human-in-the-loop ask engine,
+       clawmetry/questions.py). Confirm / select / input questions asked by
+       agents via the MCP ask_user tool or the PreToolUse hook gate. ═══ -->
+  <div id="questions-inbox-section" style="margin-bottom:16px;">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Agent Questions</div>
+    <div id="questions-pending-list">
+      <div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No agent questions waiting. Agents ask here via the <code>ask_user</code> MCP tool or the permission hooks (<code>clawmetry hooks setup</code>).</div>
+    </div>
+  </div>
 
   <!-- ═══ SECTION 1: Pending Queue (top of LEFT col) ═══ -->
   <div id="approvals-pending-section" style="margin-bottom:16px;">
@@ -56,6 +70,59 @@
 
   <!-- ═══ RIGHT COLUMN — Configure (rules + notifications) ═══ -->
   <div>
+
+  <!-- ═══ SECTION 1.5: Phone & push delivery (questions engine channels) ═══ -->
+  <div style="margin-bottom:16px;">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Phone &amp; Push Delivery</div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:14px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Delivery mode</label>
+          <select id="qch-mode" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="push_first">Push first (fall back to terminal)</option>
+            <option value="push_only">Push only (phone decides)</option>
+            <option value="terminal_only">Terminal only (never push approvals)</option>
+            <option value="notify_only">Notify only (never gate)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">If unanswered</label>
+          <select id="qch-unanswered" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="deny">Deny (fail closed)</option>
+            <option value="terminal">Fall back to terminal prompt</option>
+            <option value="wait">Keep waiting (hold for the phone)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Wait for phone (seconds)</label>
+          <input id="qch-wait" type="number" min="5" max="3600" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Question expiry (seconds)</label>
+          <input id="qch-expiry" type="number" min="30" max="86400" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">ntfy topic (phone push — install the ntfy app, pick a secret topic)</label>
+          <input id="qch-ntfy" type="text" placeholder="e.g. clawmetry-a8f2k1" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Slack incoming webhook URL</label>
+          <input id="qch-slack" type="text" placeholder="https://hooks.slack.com/…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Generic webhook URL (n8n / custom automations)</label>
+          <input id="qch-webhook" type="text" placeholder="https://…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button onclick="saveQuestionChannels()" style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button onclick="testQuestionChannels()" style="background:transparent;color:var(--text-primary);border:1px solid var(--border-secondary);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;">Send test push</button>
+        <span id="qch-status" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══ SECTION 2: Protection Rules (visual policy builder) ═══ -->
   <div style="margin-bottom:16px;">
@@ -482,6 +549,7 @@
 
   /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
+    loadQuestionsInbox();  // agent questions + kill switch (fire-and-forget)
     try {
       var ossMode = _isOssMode();
       var [pending, history, policies, integrations] = await Promise.all([
@@ -780,6 +848,154 @@
       _refreshBulkHeader();
     }
   });
+
+  /* ── Agent Questions inbox + kill switch + channels (questions engine) ── */
+
+  function _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  var _ksEngaged = false;
+  var _qchLoaded = false;
+
+  window.loadQuestionsInbox = async function() {
+    try {
+      var d = await fetchJsonWithTimeout('/api/questions?limit=50', 6000);
+      var ks = d.killswitch || {};
+      _ksEngaged = !!ks.engaged;
+      var stateEl = document.getElementById('killswitch-state');
+      var btn = document.getElementById('killswitch-btn');
+      if (stateEl && btn) {
+        var nSess = Object.keys(ks.sessions || {}).length;
+        stateEl.textContent = _ksEngaged ? 'ENGAGED' : (nSess ? nSess + ' session(s)' : 'off');
+        btn.style.borderColor = _ksEngaged ? '#ef4444' : 'var(--border-secondary)';
+        btn.style.color = _ksEngaged ? '#ef4444' : 'var(--text-primary)';
+      }
+      var pending = (d.questions || []).filter(function(r){ return r.status === 'pending'; });
+      var el = document.getElementById('questions-pending-list');
+      if (!el) return;
+      if (!pending.length) {
+        el.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No agent questions waiting. Agents ask here via the <code>ask_user</code> MCP tool or the permission hooks (<code>clawmetry hooks setup</code>).</div>';
+      } else {
+        el.innerHTML = pending.map(_renderQuestion).join('');
+      }
+      if (!_qchLoaded) { _qchLoaded = true; _loadQuestionChannels(); }
+    } catch (e) { /* endpoint absent (old server) — leave the empty state */ }
+  };
+
+  function _renderQuestion(r) {
+    var age = '';
+    try {
+      var secs = Math.max(0, (Date.now() - new Date(r.created_at).getTime()) / 1000);
+      age = secs < 90 ? Math.round(secs) + 's ago' : Math.round(secs / 60) + 'm ago';
+    } catch (e) {}
+    var head =
+      '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:6px;">' +
+        '<span style="font-size:11px;font-weight:700;color:var(--text-muted);">' +
+          _esc(r.agent_name || r.source || 'agent') + '</span>' +
+        '<span style="font-size:11px;color:var(--text-faint);">' + _esc(age) + '</span>' +
+      '</div>' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px;">' + _esc(r.question) + '</div>' +
+      (r.context ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">' + _esc(r.context) + '</div>' : '');
+    var controls = '';
+    if (r.qtype === 'select') {
+      var opts = Array.isArray(r.options) ? r.options : [];
+      controls = opts.map(function(o) {
+        return '<button onclick="answerQuestion(\'' + _esc(r.id) + '\', this.dataset.v)" data-v="' + _esc(o) + '" ' +
+          'style="background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-secondary);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin:0 6px 6px 0;">' +
+          _esc(o) + '</button>';
+      }).join('');
+    } else if (r.qtype === 'input') {
+      controls =
+        '<div style="display:flex;gap:6px;">' +
+          '<input id="q-input-' + _esc(r.id) + '" type="text" placeholder="' + _esc(r.placeholder || 'Type your answer…') + '" ' +
+            'style="flex:1;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">' +
+          '<button onclick="answerQuestion(\'' + _esc(r.id) + '\', document.getElementById(\'q-input-' + _esc(r.id) + '\').value)" ' +
+            'style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Send</button>' +
+        '</div>';
+    } else {
+      controls =
+        '<button onclick="answerQuestion(\'' + _esc(r.id) + '\', \'yes\')" style="background:#22c55e;color:#062614;border:0;padding:6px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;margin-right:6px;">Approve</button>' +
+        '<button onclick="answerQuestion(\'' + _esc(r.id) + '\', \'no\')" style="background:#ef4444;color:#fff;border:0;padding:6px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;margin-right:6px;">Deny</button>';
+    }
+    controls += '<button onclick="cancelQuestion(\'' + _esc(r.id) + '\')" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Dismiss</button>';
+    return '<div style="background:var(--bg-secondary);border:1px solid #f59e0b55;border-left:3px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:8px;">' +
+      head + '<div>' + controls + '</div></div>';
+  }
+
+  window.answerQuestion = async function(id, value) {
+    if (value == null || String(value).trim() === '') return;
+    try {
+      await fetch('/api/questions/' + encodeURIComponent(id) + '/answer', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({value: String(value), answered_by: 'dashboard'})
+      });
+    } catch (e) {}
+    loadQuestionsInbox();
+  };
+
+  window.cancelQuestion = async function(id) {
+    try {
+      await fetch('/api/questions/' + encodeURIComponent(id) + '/cancel', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({actor: 'dashboard'})
+      });
+    } catch (e) {}
+    loadQuestionsInbox();
+  };
+
+  window.toggleKillswitch = async function() {
+    var engaging = !_ksEngaged;
+    if (engaging && !confirm('Engage the kill switch? Every gated tool call is denied until you release it.')) return;
+    try {
+      await fetch('/api/killswitch', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({engaged: engaging, actor: 'dashboard'})
+      });
+    } catch (e) {}
+    loadQuestionsInbox();
+  };
+
+  async function _loadQuestionChannels() {
+    try {
+      var cfg = await fetchJsonWithTimeout('/api/questions/channels', 5000);
+      var set = function(id, v) { var el = document.getElementById(id); if (el && v != null) el.value = v; };
+      set('qch-mode', cfg.mode); set('qch-unanswered', cfg.unanswered);
+      set('qch-wait', cfg.wait_seconds); set('qch-expiry', cfg.expiry_seconds);
+      set('qch-ntfy', cfg.ntfy_topic); set('qch-slack', cfg.slack_webhook_url);
+      set('qch-webhook', cfg.webhook_url);
+    } catch (e) {}
+  }
+
+  window.saveQuestionChannels = async function() {
+    var get = function(id) { var el = document.getElementById(id); return el ? el.value : undefined; };
+    var st = document.getElementById('qch-status');
+    try {
+      var r = await fetch('/api/questions/channels', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          mode: get('qch-mode'), unanswered: get('qch-unanswered'),
+          wait_seconds: parseInt(get('qch-wait') || '45', 10),
+          expiry_seconds: parseInt(get('qch-expiry') || '600', 10),
+          ntfy_topic: get('qch-ntfy'), slack_webhook_url: get('qch-slack'),
+          webhook_url: get('qch-webhook')
+        })
+      });
+      if (st) st.textContent = r.ok ? 'Saved.' : 'Save failed.';
+    } catch (e) { if (st) st.textContent = 'Save failed.'; }
+  };
+
+  window.testQuestionChannels = async function() {
+    var st = document.getElementById('qch-status');
+    if (st) st.textContent = 'Sending…';
+    try {
+      var r = await fetch('/api/questions/channels/test', {method: 'POST'});
+      var d = await r.json();
+      if (st) st.textContent = d.sent ? ('Delivered to: ' + (d.channels || []).join(', ')) : 'No channel accepted it — check the config.';
+    } catch (e) { if (st) st.textContent = 'Test failed.'; }
+  };
 
   /* ── Background badge poll ──
      #1969: gate on document visibility too. Pre-fix, this fetched

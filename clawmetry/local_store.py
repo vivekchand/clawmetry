@@ -623,6 +623,37 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_approvals_owner_status ON approvals(owner_hash, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(requestor_session_id, created_at)",
+    # Agent questions — the human-in-the-loop ask/notify engine
+    # (clawmetry/questions.py). Unlike `approvals` (tool-call gating rows
+    # authored by the policy watcher), a question is agent-authored:
+    # confirm (yes/no), select (2-6 options), or input (free text), asked
+    # via the MCP ask_user tool, the PreToolUse hook escalation path, or
+    # POST /api/questions/ask. `options` is a JSON-encoded list for the
+    # select type. Additive; no schema-version bump required (CREATE TABLE
+    # IF NOT EXISTS is idempotent).
+    """
+    CREATE TABLE IF NOT EXISTS agent_questions (
+        id           VARCHAR PRIMARY KEY,
+        owner_hash   VARCHAR,
+        session_id   VARCHAR,
+        agent_name   VARCHAR,
+        source       VARCHAR,
+        qtype        VARCHAR NOT NULL DEFAULT 'confirm',
+        question     VARCHAR,
+        options      VARCHAR,
+        placeholder  VARCHAR,
+        context      VARCHAR,
+        status       VARCHAR NOT NULL DEFAULT 'pending',
+        answer       VARCHAR,
+        answered_by  VARCHAR,
+        created_at   VARCHAR,
+        expires_at   VARCHAR,
+        answered_at  VARCHAR,
+        latency_ms   BIGINT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_agent_questions_status ON agent_questions(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_questions_session ON agent_questions(session_id, created_at)",
     # Issue #876 — NemoClaw guardrail enforcement events. The sync daemon
     # writes via ingest_guardrail_event(); the dashboard reads via
     # query_guardrail_events() through the daemon proxy. Additive; no
@@ -3494,6 +3525,191 @@ class LocalStore:
             """, [new_status, decision, reason, resolver, resolved_at,
                   str(approval_id)])
         return 1
+
+    # ── agent_questions helpers (human-in-the-loop ask engine) ───────────
+
+    def ingest_question(self, question: dict[str, Any]) -> None:
+        """Upsert one agent-question row. Required: ``id``.
+
+        Optional: ``owner_hash``, ``session_id``, ``agent_name``, ``source``
+        (mcp / hook / api), ``qtype`` (confirm / select / input),
+        ``question``, ``options`` (JSON-encoded list for select),
+        ``placeholder``, ``context``, ``status`` (default ``"pending"``),
+        ``created_at``, ``expires_at``.
+
+        Re-ingesting the same id preserves any answer already recorded —
+        the answer flow goes through ``update_question_answer`` below."""
+        qid = question.get("id")
+        if not qid:
+            raise ValueError("question must include 'id'")
+        options = question.get("options")
+        if isinstance(options, (list, tuple)):
+            options = json.dumps(list(options))
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_questions (
+                    id, owner_hash, session_id, agent_name, source, qtype,
+                    question, options, placeholder, context, status,
+                    answer, answered_by, created_at, expires_at,
+                    answered_at, latency_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    owner_hash  = COALESCE(excluded.owner_hash, agent_questions.owner_hash),
+                    session_id  = COALESCE(excluded.session_id, agent_questions.session_id),
+                    agent_name  = COALESCE(excluded.agent_name, agent_questions.agent_name),
+                    source      = COALESCE(excluded.source, agent_questions.source),
+                    qtype       = COALESCE(excluded.qtype, agent_questions.qtype),
+                    question    = COALESCE(excluded.question, agent_questions.question),
+                    options     = COALESCE(excluded.options, agent_questions.options),
+                    placeholder = COALESCE(excluded.placeholder, agent_questions.placeholder),
+                    context     = COALESCE(excluded.context, agent_questions.context),
+                    status      = agent_questions.status,
+                    created_at  = COALESCE(agent_questions.created_at, excluded.created_at),
+                    expires_at  = COALESCE(excluded.expires_at, agent_questions.expires_at)
+            """, [
+                str(qid),
+                question.get("owner_hash"),
+                question.get("session_id"),
+                question.get("agent_name"),
+                question.get("source"),
+                question.get("qtype") or "confirm",
+                question.get("question"),
+                options,
+                question.get("placeholder"),
+                question.get("context"),
+                question.get("status") or "pending",
+                question.get("answer"),
+                question.get("answered_by"),
+                question.get("created_at"),
+                question.get("expires_at"),
+                question.get("answered_at"),
+                question.get("latency_ms"),
+            ])
+
+    def update_question_answer(
+        self,
+        question_id: str,
+        answer: str | None = None,
+        answered_by: str | None = None,
+        status: str = "answered",
+    ) -> int:
+        """Resolve a pending question. Returns 1 on the first successful
+        flip, 0 when the row is missing OR already resolved (idempotent —
+        first answer wins, same contract as ``update_approval_decision``).
+
+        ``status`` is ``answered`` for a real answer, or ``cancelled`` /
+        ``expired`` / ``timeout`` for lifecycle transitions (``answer``
+        stays NULL for those). ``latency_ms`` is stamped from
+        ``created_at`` so the audit log records decision latency."""
+        if not question_id:
+            return 0
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        answered_at = now.isoformat()
+        with self._write_lock:
+            pre = self._conn.execute(
+                "SELECT status, created_at FROM agent_questions WHERE id = ? LIMIT 1",
+                [str(question_id)],
+            ).fetchone()
+            if not pre:
+                return 0
+            if pre[0] != "pending":
+                return 0
+            latency_ms = None
+            try:
+                created = datetime.fromisoformat(str(pre[1]))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                latency_ms = max(0, int((now - created).total_seconds() * 1000))
+            except (TypeError, ValueError):
+                pass
+            self._conn.execute("""
+                UPDATE agent_questions
+                SET status      = ?,
+                    answer      = ?,
+                    answered_by = ?,
+                    answered_at = ?,
+                    latency_ms  = ?
+                WHERE id = ?
+                  AND status = 'pending'
+            """, [status, answer, answered_by, answered_at, latency_ms,
+                  str(question_id)])
+        return 1
+
+    def expire_questions(self, now_iso: str | None = None) -> int:
+        """Flip every pending question past its ``expires_at`` to
+        ``expired``. Returns the number of rows flipped. Called lazily by
+        the inbox/list paths so unanswered questions never linger as
+        pending (Pushary-parity: questions expire, default 10 minutes)."""
+        from datetime import datetime, timezone
+        now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            pre = self._conn.execute("""
+                SELECT count(*) FROM agent_questions
+                WHERE status = 'pending'
+                  AND expires_at IS NOT NULL
+                  AND expires_at < ?
+            """, [now_iso]).fetchone()
+            n = int(pre[0]) if pre else 0
+            if n:
+                self._conn.execute("""
+                    UPDATE agent_questions
+                    SET status = 'expired', answered_at = ?
+                    WHERE status = 'pending'
+                      AND expires_at IS NOT NULL
+                      AND expires_at < ?
+                """, [now_iso, now_iso])
+        return n
+
+    def query_questions(
+        self,
+        *,
+        owner_hash: str | None = None,
+        status: str | None = None,
+        session_id: str | None = None,
+        question_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read agent questions, newest-first. Filters are AND-combined."""
+        sql = """
+            SELECT id, owner_hash, session_id, agent_name, source, qtype,
+                   question, options, placeholder, context, status, answer,
+                   answered_by, created_at, expires_at, answered_at, latency_ms
+            FROM agent_questions
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if question_id:
+            clauses.append("id = ?")
+            params.append(str(question_id))
+        if owner_hash:
+            clauses.append("owner_hash = ?")
+            params.append(owner_hash)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 200), 1000)))
+        cols = ["id", "owner_hash", "session_id", "agent_name", "source",
+                "qtype", "question", "options", "placeholder", "context",
+                "status", "answer", "answered_by", "created_at",
+                "expires_at", "answered_at", "latency_ms"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            row = dict(zip(cols, r))
+            opts = row.get("options")
+            if isinstance(opts, str) and opts.startswith("["):
+                try:
+                    row["options"] = json.loads(opts)
+                except (ValueError, TypeError):
+                    pass
+            out.append(row)
+        return out
 
     # ── review_queue helpers (issue #1615) ────────────────────────────────
     def ingest_review_sample(self, sample: dict[str, Any]) -> int:

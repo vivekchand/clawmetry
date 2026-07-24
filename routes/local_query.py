@@ -807,6 +807,14 @@ _DAEMON_METHODS = frozenset({
     "query_ar_history",
     # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
     "query_backups",
+    # Human-in-the-loop agent questions (clawmetry/questions.py). Reads +
+    # read-then-write resolution routed through the daemon proxy so the
+    # dashboard / MCP / hook processes never grab the DuckDB writer lock —
+    # same pattern as ingest_approval / update_approval_decision above.
+    "query_questions",
+    "ingest_question",
+    "update_question_answer",
+    "expire_questions",
 })
 
 

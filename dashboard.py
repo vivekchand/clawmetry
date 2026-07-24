@@ -140,6 +140,7 @@ from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from routes.sla import bp_sla
 from routes.hitl import bp_hitl
+from routes.questions import bp_questions
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -11761,6 +11762,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
     app.register_blueprint(bp_hitl)
+    app.register_blueprint(bp_questions)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user

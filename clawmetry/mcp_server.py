@@ -148,10 +148,164 @@ _TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    # ── Human-in-the-loop tools (clawmetry/questions.py) ──────────────────
+    {
+        "name": "send_notification",
+        "description": (
+            "Send a push notification to the operator's configured channels "
+            "(phone push, Slack, webhook). Use when a long task finishes, a "
+            "build/test/deploy fails, or a status update is worth sharing. "
+            "Optionally include structured context (summary, filesChanged, "
+            "errorMessage, nextSteps) for a richer message."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["title", "body"],
+            "properties": {
+                "title": {"type": "string", "description": "Notification title (aim for under 60 chars)"},
+                "body": {"type": "string", "description": "Notification body (aim for under 200 chars)"},
+                "agentName": {
+                    "type": "string",
+                    "description": "Which agent sent this, e.g. 'Claude Code - myproject'",
+                },
+                "context": {
+                    "type": "object",
+                    "description": "Structured context: {type: task_complete|error|info, summary, details, filesChanged, errorMessage, errorFile, nextSteps}",
+                },
+            },
+        },
+    },
+    {
+        "name": "ask_user",
+        "description": (
+            "Ask the operator a question via push notification and wait for "
+            "the answer. Types: 'confirm' (yes/no — use before destructive or "
+            "irreversible actions), 'select' (2-6 options), 'input' (free "
+            "text). Blocks until answered or timeout. If it returns "
+            "answered: false, do NOT proceed with the risky action."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+                "question": {"type": "string", "description": "The question (max 500 chars). Be specific — the user is on their phone."},
+                "type": {
+                    "type": "string",
+                    "enum": ["confirm", "select", "input"],
+                    "description": "Question type (default confirm)",
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Choices for select type (2-6). Required when type is select.",
+                },
+                "placeholder": {"type": "string", "description": "Placeholder for input type"},
+                "context": {"type": "string", "description": "What you're working on, shown with the question (max 500 chars)"},
+                "wait": {"type": "boolean", "description": "Block for the answer (default true). false returns a correlationId for wait_for_answer."},
+                "timeoutMs": {"type": "integer", "description": "Max wait in ms (max 55000). Uses the configured wait ladder if omitted."},
+                "agentName": {"type": "string", "description": "Which agent is asking, e.g. 'Claude Code - myproject'"},
+                "sessionId": {"type": "string", "description": "Session ID for the audit trail"},
+            },
+        },
+    },
+    {
+        "name": "wait_for_answer",
+        "description": (
+            "Poll for the operator's answer to a question created with "
+            "ask_user wait: false. Returns {answered, value} or a timeout."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["correlationId"],
+            "properties": {
+                "correlationId": {"type": "string", "description": "The correlationId returned by ask_user"},
+                "timeoutMs": {"type": "integer", "description": "How long to wait in ms (default 30000, max 55000)"},
+            },
+        },
+    },
+    {
+        "name": "cancel_question",
+        "description": (
+            "Cancel a pending question so it can no longer be answered. Use "
+            "when the question became irrelevant (e.g. the user answered in "
+            "chat first)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["correlationId"],
+            "properties": {
+                "correlationId": {"type": "string", "description": "The correlationId of the question to cancel"},
+            },
+        },
+    },
 ]
+
+_MAX_WAIT_MS = 55_000
+
+
+def _call_hitl_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """Dispatch the human-in-the-loop tools. Returns None for other names."""
+    try:
+        from clawmetry import questions as _q
+    except ImportError as exc:  # never crash the server loop
+        return {"error": f"questions engine unavailable: {exc}"}
+    if name == "send_notification":
+        try:
+            return _q.send_notification(
+                title=arguments.get("title") or "",
+                body=arguments.get("body") or "",
+                agent_name=arguments.get("agentName") or "",
+                context=arguments.get("context") or None,
+            )
+        except Exception as exc:
+            return {"error": str(exc)}
+    if name == "ask_user":
+        try:
+            wait = arguments.get("wait", True)
+            timeout_ms = min(int(arguments.get("timeoutMs") or 0) or 30_000, _MAX_WAIT_MS)
+            if wait:
+                return _q.ask_blocking(
+                    question=arguments.get("question") or "",
+                    qtype=(arguments.get("type") or "confirm").strip().lower(),
+                    options=arguments.get("options"),
+                    placeholder=arguments.get("placeholder") or "",
+                    context=arguments.get("context") or "",
+                    agent_name=arguments.get("agentName") or "",
+                    session_id=arguments.get("sessionId") or "",
+                    source="mcp",
+                    timeout_s=timeout_ms / 1000.0,
+                )
+            row = _q.create_question(
+                question=arguments.get("question") or "",
+                qtype=(arguments.get("type") or "confirm").strip().lower(),
+                options=arguments.get("options"),
+                placeholder=arguments.get("placeholder") or "",
+                context=arguments.get("context") or "",
+                agent_name=arguments.get("agentName") or "",
+                session_id=arguments.get("sessionId") or "",
+                source="mcp",
+            )
+            expires = row.get("expires_at") or ""
+            return {"correlationId": row["id"], "status": "pending",
+                    "expiresAt": expires,
+                    "notifiedChannels": row.get("notified_channels", [])}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:
+            return {"error": str(exc)}
+    if name == "wait_for_answer":
+        timeout_ms = min(int(arguments.get("timeoutMs") or 30_000), _MAX_WAIT_MS)
+        return _q.wait_for_answer(
+            arguments.get("correlationId") or "", timeout_s=timeout_ms / 1000.0)
+    if name == "cancel_question":
+        return _q.cancel_question(arguments.get("correlationId") or "", actor="agent")
+    return None
 
 
 def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    hitl = _call_hitl_tool(name, arguments)
+    if hitl is not None:
+        return hitl
     if name == "list_sessions":
         return _query(
             "sessions",

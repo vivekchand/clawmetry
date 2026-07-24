@@ -3368,6 +3368,80 @@ def _cmd_mcp(args) -> None:
     run()
 
 
+def _cmd_hooks(args) -> None:
+    """Manage the agent permission hooks (clawmetry/agent_hooks.py)."""
+    from clawmetry import agent_hooks
+    cmd = getattr(args, "hooks_cmd", None) or "setup"
+    if cmd == "setup":
+        print("Wiring ClawMetry into Claude Code…")
+        agent_hooks.setup_hooks()
+        print("\nApprovals + questions now route through ClawMetry.")
+        print("Optional — register the MCP tools (ask_user / send_notification):")
+        print("  claude mcp add clawmetry -- clawmetry mcp")
+        print("Configure phone/Slack delivery in the dashboard Approvals tab,")
+        print("then verify everything with: clawmetry hooks doctor")
+    elif cmd == "doctor":
+        raise SystemExit(agent_hooks.doctor())
+    elif cmd == "clean":
+        agent_hooks.clean_hooks()
+    elif cmd == "stats":
+        raise SystemExit(agent_hooks.stats())
+    elif cmd == "mode":
+        from clawmetry import questions as _q
+        if getattr(args, "mode", None):
+            duration = None
+            if getattr(args, "for_", None):
+                duration = agent_hooks.parse_duration(args.for_)
+                if duration is None:
+                    print(f"bad duration: {args.for_!r} (use e.g. 30m, 2h)")
+                    raise SystemExit(2)
+            state = _q.set_mode(args.mode, duration)
+            until = f" for {args.for_}" if duration else ""
+            print(f"delivery mode: {state['mode']}{until}")
+        else:
+            state = _q.load_mode()
+            print(f"delivery mode: {state['mode']}"
+                  + (" (temporary override)" if state.get("override") else ""))
+            print(f"available: {', '.join(_q.DELIVERY_MODES)}")
+    elif cmd == "wait":
+        from clawmetry import questions as _q
+        if getattr(args, "seconds", None) is not None:
+            cfg = _q.save_channels_config({"wait_seconds": args.seconds})
+            print(f"wait-for-your-phone ladder: {cfg['wait_seconds']}s")
+        else:
+            print(f"wait-for-your-phone ladder: "
+                  f"{_q.load_channels_config()['wait_seconds']}s")
+    elif cmd == "killswitch":
+        from clawmetry import questions as _q
+        engaged = args.state == "on"
+        state = _q.set_killswitch(
+            engaged,
+            session_id=getattr(args, "session", None),
+            reason=getattr(args, "reason", "") or "",
+            actor="cli",
+        )
+        scope = f"session {args.session}" if getattr(args, "session", None) else "global"
+        print(f"kill switch {'ENGAGED' if engaged else 'released'} ({scope})")
+        if engaged:
+            print("Every gated tool call is denied until you release it:")
+            print("  clawmetry hooks killswitch off")
+        _ = state
+
+
+def _cmd_hook(args) -> None:
+    """Hook entry point — invoked by the agent, JSON on stdin/stdout."""
+    from clawmetry import agent_hooks
+    event = (getattr(args, "event", "") or "").lower()
+    if event in ("pretooluse", "pre-tool-use", "pre_tool_use"):
+        raise SystemExit(agent_hooks.run_pretooluse_hook())
+    if event == "notification":
+        raise SystemExit(agent_hooks.run_notification_hook())
+    if event == "stop":
+        raise SystemExit(agent_hooks.run_stop_hook())
+    print(f"unknown hook event: {event!r}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def _cmd_reports(args) -> None:
     """Open the reports browser (refs #1005)."""
     import webbrowser
@@ -5519,6 +5593,40 @@ def main() -> None:
         help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
     )
 
+    # hooks — human-in-the-loop permission hooks for coding agents
+    p_hooks = sub.add_parser(
+        "hooks",
+        help="Wire agent permission hooks: approve risky commands from your phone",
+    )
+    hooks_sub = p_hooks.add_subparsers(dest="hooks_cmd")
+    hooks_sub.add_parser("setup", help="Install Claude Code hooks (PreToolUse/Notification/Stop)")
+    hooks_sub.add_parser("doctor", help="Verify hooks, channels, store, and delivery end to end")
+    hooks_sub.add_parser("clean", help="Remove every hook entry setup added")
+    hooks_sub.add_parser("stats", help="Approval moments by outcome + answer latency")
+    p_hooks_mode = hooks_sub.add_parser(
+        "mode", help="Show or set delivery mode (push_only|push_first|terminal_only|notify_only)")
+    p_hooks_mode.add_argument(
+        "mode", nargs="?", default=None,
+        choices=["push_only", "push_first", "terminal_only", "notify_only"])
+    p_hooks_mode.add_argument(
+        "--for", dest="for_", default=None,
+        help="Temporary override window, e.g. 30m or 2h")
+    p_hooks_wait = hooks_sub.add_parser(
+        "wait", help="Show or set the wait-for-your-phone ladder (seconds)")
+    p_hooks_wait.add_argument("seconds", nargs="?", type=int, default=None)
+    p_hooks_ks = hooks_sub.add_parser(
+        "killswitch", help="Deny every gated tool call until released")
+    p_hooks_ks.add_argument("state", choices=["on", "off"])
+    p_hooks_ks.add_argument("--session", default=None, help="Scope to one session ID")
+    p_hooks_ks.add_argument("--reason", default="", help="Recorded in the audit trail")
+
+    # hook — the hook entry point the agent invokes (JSON on stdin/stdout)
+    p_hook = sub.add_parser(
+        "hook",
+        help="Run as an agent hook (internal — wired by `clawmetry hooks setup`)",
+    )
+    p_hook.add_argument("event", choices=["pretooluse", "notification", "stop"])
+
     # uninstall — fully remove clawmetry
     sub.add_parser(
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
@@ -5839,6 +5947,8 @@ def main() -> None:
         "reports",
         "eval",
         "mcp",
+        "hooks",
+        "hook",
         "update",
         "uninstall",
         "activate",
@@ -5881,6 +5991,10 @@ def main() -> None:
             _cmd_eval(args)
         elif args.cmd == "mcp":
             _cmd_mcp(args)
+        elif args.cmd == "hooks":
+            _cmd_hooks(args)
+        elif args.cmd == "hook":
+            _cmd_hook(args)
         elif args.cmd == "update":
             _cmd_update()
         elif args.cmd == "uninstall":

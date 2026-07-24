@@ -43,6 +43,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
 | `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
+| `routes/questions.py` | ~250 | `bp_questions` — human-in-the-loop agent questions (ask/answer/cancel, long-poll), kill switch, delivery-channel config, decision audit + CSV export |
 | `routes/__init__.py` | — | Package marker |
 
 ### Package (`clawmetry/`)
@@ -55,6 +56,9 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `proxy.py` | ~2,600 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
 | `interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
 | `providers_pricing.py` | ~390 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
+| `questions.py` | ~600 | Human-in-the-loop ask/notify engine — confirm/select/input questions, kill switch, delivery modes, channel fan-out (ntfy/Pushover/Slack/webhook), secret redaction |
+| `agent_hooks.py` | ~500 | Pre-execution permission gate — Claude Code PreToolUse/Notification/Stop hooks, risky-command detection, `clawmetry hooks setup/doctor/clean/mode/wait/stats/killswitch` |
+| `mcp_server.py` | ~500 | MCP stdio server — telemetry tools + `send_notification`/`ask_user`/`wait_for_answer`/`cancel_question` |
 | `config.py` | ~200 | Configuration dataclass |
 | `extensions.py` | ~230 | Plugin/hook system |
 | `track.py` | ~60 | Zero-config interceptor shorthand |
@@ -105,6 +109,8 @@ The daemon owns the DuckDB writer lock and runs a localhost query server so the 
 - `/api/nodes` — Multi-node fleet view
 - `/api/budget/*` — Budget monitoring and alerts
 - `/api/alerts/*` — Custom alert rules
+- `/api/questions*` — Human-in-the-loop agent questions (ask/answer/cancel, `?wait_ms=` long-poll, audit + CSV)
+- `/api/killswitch` — Deny every gated tool call until released (global or per-session)
 
 ## Dependencies
 Minimal by design:
