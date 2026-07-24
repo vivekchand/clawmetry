@@ -649,7 +649,8 @@ _DDL = [
         created_at   VARCHAR,
         expires_at   VARCHAR,
         answered_at  VARCHAR,
-        latency_ms   BIGINT
+        latency_ms   BIGINT,
+        action_token VARCHAR
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_agent_questions_status ON agent_questions(status, created_at)",
@@ -1187,6 +1188,12 @@ _MIGRATIONS_V2 = [
     # Issue #3719 — per-cron-job model attribution (openclaw Quick Create
     # lets users pick an agent-turn model; harness exposes it per job).
     ("crons",    "model",             "VARCHAR"),
+    # Agent questions cloud relay: per-question bearer secret. A relayed
+    # answer (cloud link tap / cloud inbox click) must present the matching
+    # token; the NODE validates it, so the cloud is never trusted with
+    # authorization. Guards branch-era stores created before the column
+    # landed in the fresh-store DDL.
+    ("agent_questions", "action_token", "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -3551,8 +3558,8 @@ class LocalStore:
                     id, owner_hash, session_id, agent_name, source, qtype,
                     question, options, placeholder, context, status,
                     answer, answered_by, created_at, expires_at,
-                    answered_at, latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    answered_at, latency_ms, action_token
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO UPDATE SET
                     owner_hash  = COALESCE(excluded.owner_hash, agent_questions.owner_hash),
                     session_id  = COALESCE(excluded.session_id, agent_questions.session_id),
@@ -3565,7 +3572,8 @@ class LocalStore:
                     context     = COALESCE(excluded.context, agent_questions.context),
                     status      = agent_questions.status,
                     created_at  = COALESCE(agent_questions.created_at, excluded.created_at),
-                    expires_at  = COALESCE(excluded.expires_at, agent_questions.expires_at)
+                    expires_at  = COALESCE(excluded.expires_at, agent_questions.expires_at),
+                    action_token = COALESCE(agent_questions.action_token, excluded.action_token)
             """, [
                 str(qid),
                 question.get("owner_hash"),
@@ -3584,6 +3592,7 @@ class LocalStore:
                 question.get("expires_at"),
                 question.get("answered_at"),
                 question.get("latency_ms"),
+                question.get("action_token"),
             ])
 
     def update_question_answer(
@@ -3674,7 +3683,8 @@ class LocalStore:
         sql = """
             SELECT id, owner_hash, session_id, agent_name, source, qtype,
                    question, options, placeholder, context, status, answer,
-                   answered_by, created_at, expires_at, answered_at, latency_ms
+                   answered_by, created_at, expires_at, answered_at,
+                   latency_ms, action_token
             FROM agent_questions
         """
         clauses: list[str] = []
@@ -3698,7 +3708,7 @@ class LocalStore:
         cols = ["id", "owner_hash", "session_id", "agent_name", "source",
                 "qtype", "question", "options", "placeholder", "context",
                 "status", "answer", "answered_by", "created_at",
-                "expires_at", "answered_at", "latency_ms"]
+                "expires_at", "answered_at", "latency_ms", "action_token"]
         out: list[dict[str, Any]] = []
         for r in self._fetch(sql, params):
             row = dict(zip(cols, r))

@@ -196,6 +196,107 @@ def test_gateway_send_resolves_conn_from_openclaw_config(engine, monkeypatch):
     assert conn == {"url": "http://127.0.0.1:18789", "token": "tok123"}
 
 
+# ── Cloud relay (Pushary-style answer-from-anywhere) ─────────────────────
+
+
+def test_create_question_stamps_owner_hash_and_action_token(engine, monkeypatch):
+    monkeypatch.setattr(engine, "CLOUD_CONFIG_PATH", engine._CLAWMETRY_DIR / "config.json")
+    engine.CLOUD_CONFIG_PATH.write_text(json.dumps(
+        {"api_key": "cm_testkey", "node_id": "node-1"}))
+    row = engine.create_question("Cloudy?", notify=False)
+    import hashlib
+    assert row["owner_hash"] == hashlib.sha256(b"cm_testkey").hexdigest()
+    assert len(row["action_token"]) == 32
+    stored = engine.get_question(row["id"])
+    assert stored["action_token"] == row["action_token"]
+
+
+def test_answer_links_prefer_cloud_when_connected(engine, monkeypatch):
+    monkeypatch.setattr(engine, "CLOUD_CONFIG_PATH", engine._CLAWMETRY_DIR / "config.json")
+    q = {"id": "qid-1", "action_token": "tok1"}
+    links = engine._answer_links(q)
+    assert links["approve"].startswith("http://localhost")  # not connected
+    engine.CLOUD_CONFIG_PATH.write_text(json.dumps(
+        {"api_key": "cm_testkey", "node_id": "node-1"}))
+    links = engine._answer_links(q)
+    assert links["approve"] == (
+        f"{engine.CLOUD_APP_URL}/q/qid-1?n=node-1&t=tok1&v=yes")
+    assert links["inbox"].startswith(engine.CLOUD_APP_URL)
+
+
+def test_relayed_answer_requires_matching_action_token(engine):
+    from clawmetry import sync as _sync
+    from clawmetry import local_store
+    row = engine.create_question("Relay me?", notify=False)
+    store = local_store.get_store()
+    # wrong token → rejected, row stays pending
+    _sync._apply_question_action({
+        "type": "question_answer", "id": row["id"],
+        "value": "yes", "action_token": "wrong"})
+    assert engine.get_question(row["id"])["status"] == "pending"
+    # matching token → flips
+    _sync._apply_question_action({
+        "type": "question_answer", "id": row["id"],
+        "value": "approve", "resolver": "link",
+        "action_token": row["action_token"]})
+    final = engine.get_question(row["id"])
+    assert final["status"] == "answered" and final["answer"] == "yes"
+    assert final["answered_by"] == "link"
+    _ = store
+
+
+def test_relayed_select_answer_validates_options(engine):
+    from clawmetry import sync as _sync
+    row = engine.create_question("Pick", qtype="select",
+                                 options=["A", "B"], notify=False)
+    _sync._apply_question_action({
+        "type": "question_answer", "id": row["id"],
+        "value": "C", "action_token": row["action_token"]})
+    assert engine.get_question(row["id"])["status"] == "pending"
+    _sync._apply_question_action({
+        "type": "question_cancel", "id": row["id"],
+        "action_token": row["action_token"]})
+    assert engine.get_question(row["id"])["status"] == "cancelled"
+
+
+def test_relayed_killswitch_set(engine):
+    from clawmetry import sync as _sync
+    _sync._apply_killswitch_set({"type": "killswitch_set", "engaged": True,
+                                 "reason": "from phone"})
+    assert engine.killswitch_active()
+    _sync._apply_killswitch_set({"type": "killswitch_set", "engaged": False})
+    assert not engine.killswitch_active()
+
+
+def test_heartbeat_goes_fast_while_question_pending(engine):
+    from clawmetry import sync as _sync
+    assert _sync._pick_heartbeat_interval(None) == _sync.HEARTBEAT_INTERVAL_SLOW
+    assert _sync._pick_heartbeat_interval(None, awaiting_human=True) == \
+        _sync.HEARTBEAT_INTERVAL_FAST
+    assert _sync._pick_heartbeat_interval({"viewer_active": False},
+                                          awaiting_human=True) == \
+        _sync.HEARTBEAT_INTERVAL_FAST
+
+
+def test_questions_cache_push_builds_encrypted_blob(engine, monkeypatch):
+    from clawmetry import sync as _sync
+    monkeypatch.setattr(engine, "CLOUD_CONFIG_PATH", engine._CLAWMETRY_DIR / "config.json")
+    engine.CLOUD_CONFIG_PATH.write_text(json.dumps(
+        {"api_key": "cm_testkey", "node_id": "node-1"}))
+    row = engine.create_question("Push me?", notify=False)
+    import base64
+    enc_key = base64.b64encode(b"0" * 32).decode()
+    config = {"api_key": "cm_testkey", "encryption_key": enc_key}
+    pushes = _sync._build_questions_cache_pushes(config)
+    assert len(pushes) == 1
+    owner_hash = _sync._owner_hash_for_token("cm_testkey")
+    assert pushes[0]["key"] == f"questions:{owner_hash}:queue"
+    assert pushes[0]["blob"] and pushes[0]["ttl_s"] == _sync.APPROVALS_CACHE_TTL_SEC
+    assert _sync._pending_questions_count(config) == 1
+    engine.answer_question(row["id"], "yes")
+    assert _sync._pending_questions_count(config) == 0
+
+
 # ── Hooks: classification + gate ─────────────────────────────────────────
 
 

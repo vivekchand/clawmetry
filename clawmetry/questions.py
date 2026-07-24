@@ -52,6 +52,13 @@ ALERTS_CONFIG_PATH = Path.home() / ".openclaw" / "clawmetry-alerts.json"
 FLEET_DB_PATH = _CLAWMETRY_DIR / "fleet.db"
 GW_CACHE_PATH = Path.home() / ".clawmetry-gateway.json"
 OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
+# `clawmetry connect` writes api_key (cm_) + node_id here. When present,
+# answer links in outbound messages point at the cloud relay so a tap
+# works from anywhere (Pushary-style), not just the local network; the
+# node still validates every relayed answer against the per-question
+# action_token, so the cloud is never trusted with authorization.
+CLOUD_CONFIG_PATH = _CLAWMETRY_DIR / "config.json"
+CLOUD_APP_URL = os.environ.get("CLAWMETRY_CLOUD_APP_URL", "https://app.clawmetry.com")
 
 QUESTION_TYPES = ("confirm", "select", "input")
 # Where approval is requested (Pushary-parity delivery modes):
@@ -387,6 +394,43 @@ def _dashboard_url() -> str:
     return f"http://localhost:{port}"
 
 
+def _cloud_config() -> dict[str, Any]:
+    """Return {api_key, node_id, owner_hash} when the node is cloud-connected
+    (`clawmetry connect` ran), else {}."""
+    try:
+        cfg = json.loads(CLOUD_CONFIG_PATH.read_text())
+        api_key = (cfg.get("api_key") or "").strip()
+        if not api_key.startswith("cm_"):
+            return {}
+        import hashlib
+        return {
+            "api_key": api_key,
+            "node_id": (cfg.get("node_id") or "").strip(),
+            "owner_hash": hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
+        }
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+
+
+def _answer_links(question: dict[str, Any]) -> dict[str, str]:
+    """Answer URLs for one question: {approve, deny, inbox}.
+
+    Cloud-connected nodes get app.clawmetry.com relay links (tap from
+    anywhere; the tap enqueues a heartbeat action the node validates
+    against action_token). Local-only nodes get dashboard links."""
+    qid = question.get("id") or ""
+    token = question.get("action_token") or ""
+    cloud = _cloud_config()
+    if cloud and qid and token:
+        node = cloud.get("node_id") or ""
+        base = f"{CLOUD_APP_URL}/q/{qid}?n={node}&t={token}"
+        return {"approve": f"{base}&v=yes", "deny": f"{base}&v=no",
+                "inbox": f"{CLOUD_APP_URL}/fleet/"}
+    base = f"{_dashboard_url()}/api/questions/{qid}/answer"
+    return {"approve": f"{base}?value=yes", "deny": f"{base}?value=no",
+            "inbox": f"{_dashboard_url()}/?tab=approvals"}
+
+
 def _gateway_conn() -> Optional[dict[str, str]]:
     """Resolve OpenClaw gateway url+token without importing dashboard.py
     (this runs inside hook / MCP subprocesses where the Flask module is
@@ -463,15 +507,15 @@ def notify_channels(
     body = redact_secrets((body or "")[:500])
     sent: list[str] = []
     qid = (question or {}).get("id") or ""
-    inbox_url = f"{_dashboard_url()}/?tab=approvals"
+    links = _answer_links(question or {})
+    inbox_url = links["inbox"]
     # Plain-text answer lines for channels without interactive buttons
-    # (Telegram / gateway chat). Clickable on the same network; always a
-    # copy-pasteable fallback.
+    # (Telegram / gateway chat). Cloud-connected nodes get tap-from-anywhere
+    # relay links; local-only nodes get same-network dashboard links.
     answer_lines = ""
     if question and qid:
-        base = f"{_dashboard_url()}/api/questions/{qid}/answer"
         if (question.get("qtype") or "confirm") == "confirm":
-            answer_lines = f"\n✅ Approve: {base}?value=yes\n❌ Deny: {base}?value=no"
+            answer_lines = f"\n✅ Approve: {links['approve']}\n❌ Deny: {links['deny']}"
         else:
             answer_lines = f"\n💬 Answer: {inbox_url}"
 
@@ -482,12 +526,9 @@ def notify_channels(
                    "Priority": "high" if question else "default",
                    "Tags": "robot" if not question else "question"}
         if question and (question.get("qtype") or "confirm") == "confirm" and qid:
-            base = f"{_dashboard_url()}/api/questions/{qid}/answer"
             headers["Actions"] = (
-                f"http, Approve, {base}, method=POST, "
-                f"headers.Content-Type=application/json, body={{\"value\":\"yes\"}}; "
-                f"http, Deny, {base}, method=POST, "
-                f"headers.Content-Type=application/json, body={{\"value\":\"no\"}}"
+                f"http, Approve, {links['approve']}, method=GET; "
+                f"http, Deny, {links['deny']}, method=GET"
             )
         elif question:
             headers["Click"] = inbox_url
@@ -519,14 +560,13 @@ def notify_channels(
         if question:
             elements = []
             if (question.get("qtype") or "confirm") == "confirm" and qid:
-                base = f"{_dashboard_url()}/api/questions/{qid}/answer"
                 elements = [
                     {"type": "button", "style": "primary",
                      "text": {"type": "plain_text", "text": "Approve"},
-                     "url": f"{base}?value=yes"},
+                     "url": links["approve"]},
                     {"type": "button", "style": "danger",
                      "text": {"type": "plain_text", "text": "Deny"},
-                     "url": f"{base}?value=no"},
+                     "url": links["deny"]},
                 ]
             else:
                 elements = [{"type": "button",
@@ -583,6 +623,8 @@ def notify_channels(
                 "agent_name": (question or {}).get("agent_name"),
                 "expires_at": (question or {}).get("expires_at"),
                 "answer_url": f"{_dashboard_url()}/api/questions/{qid}/answer" if qid else None,
+                "approve_url": links["approve"] if qid else None,
+                "deny_url": links["deny"] if qid else None,
             } if question else None,
             "ts": datetime.now(timezone.utc).isoformat(),
         }).encode("utf-8")
@@ -651,6 +693,11 @@ def create_question(
     now = datetime.now(timezone.utc)
     row = {
         "id": str(uuid.uuid4()),
+        # Cloud relay: bind to the owning cm_ token (so the daemon's
+        # heartbeat cache push picks the row up) and mint the per-question
+        # bearer secret a relayed answer must present.
+        "owner_hash": _cloud_config().get("owner_hash"),
+        "action_token": uuid.uuid4().hex,
         "session_id": session_id or None,
         "agent_name": agent_name or None,
         "source": source,

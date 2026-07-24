@@ -5998,15 +5998,24 @@ def _collect_activity_counters_today(runtime: str | None = None) -> dict | None:
 _LAST_HEARTBEAT_RESPONSE: dict | None = None
 
 
-def _pick_heartbeat_interval(resp_json: dict | None) -> int:
+def _pick_heartbeat_interval(
+    resp_json: dict | None, awaiting_human: bool = False
+) -> int:
     """Adaptive cadence (#775 PR 2/3): FAST when a viewer is watching the
     cloud dashboard, SLOW otherwise. Pure function so it can be unit-tested
     without booting the daemon loop.
+
+    ``awaiting_human`` forces FAST regardless of viewer state: while an
+    agent question is pending, the answer arrives via the heartbeat
+    ``pending_queries`` drain, so a SLOW cadence would add up to 60 s to a
+    phone-tap round-trip and blow past the blocking ask's wait window.
 
     Back-compat: a cloud that hasn't deployed PR 1 yet won't return the
     `viewer_active` field, so missing → SLOW. Same for `None` (no successful
     heartbeat yet) and any non-dict input.
     """
+    if awaiting_human:
+        return HEARTBEAT_INTERVAL_FAST
     if not isinstance(resp_json, dict):
         return HEARTBEAT_INTERVAL_SLOW
     return (
@@ -7215,6 +7224,21 @@ def send_heartbeat(config: dict) -> bool:
             payload["pending_approvals_count"] = _ap_ct
     except Exception as _ap_ct_e:
         log.debug("pending_approvals_count failed (continuing): %s", _ap_ct_e)
+    # Agent questions (human-in-the-loop ask engine): same push + plaintext
+    # count pattern as approvals so the cloud inbox paints the pending
+    # questions and can trigger a push notification.
+    try:
+        qn_pushes = _build_questions_cache_pushes(config)
+        if qn_pushes:
+            payload.setdefault("cache_pushes", []).extend(qn_pushes)
+    except Exception as _qn_e:
+        log.debug("questions cache_push build failed (continuing): %s", _qn_e)
+    try:
+        _qn_ct = _pending_questions_count(config)
+        if _qn_ct:
+            payload["pending_questions_count"] = _qn_ct
+    except Exception as _qn_ct_e:
+        log.debug("pending_questions_count failed (continuing): %s", _qn_ct_e)
     # Memory tab (epic #1032): proactively push the user's memory-file
     # snapshot so the cloud Node Detail → Memory tab paints from cache.
     # Without this push the cloud handler returns `{blob: None}` and the
@@ -8171,6 +8195,12 @@ _PENDING_ACTIONS = frozenset({
     "alert_rule_upsert",
     "alert_rule_delete",
     "approval_decision",
+    # Agent-questions cloud relay: cloud-relayed answer / cancel for a
+    # pending question (validated against the row's action_token), plus
+    # the operator kill switch flipped from the cloud UI.
+    "question_answer",
+    "question_cancel",
+    "killswitch_set",
     "selfevolve_fix",
     "selfevolve_analyze",
     "cron_create",
@@ -8365,6 +8395,12 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
             atype, action,
             owner_hash=_owner_hash_for_token(config.get("api_key", "")),
         )
+        return
+    if atype in ("question_answer", "question_cancel"):
+        _apply_question_action(action)
+        return
+    if atype == "killswitch_set":
+        _apply_killswitch_set(action)
         return
     if atype == "approval_decision":
         _apply_approval_decision(action)
@@ -9419,6 +9455,89 @@ def _pending_approvals_count(config: dict) -> int:
         return 0
 
 
+# ── Agent questions cloud relay (Pushary-style answer-from-anywhere) ─────────
+# Same architecture as the approvals push above: the questions engine
+# (clawmetry/questions.py) writes rows locally, the daemon pushes the pending
+# queue to the cloud cache under `questions:{owner_hash}:queue`, and answers
+# come back via the heartbeat `pending_queries` channel as `question_answer`
+# actions. The NODE validates each relayed answer against the per-question
+# action_token, so a compromised cloud can never approve anything.
+
+
+def _build_questions_cache_pushes(config: dict) -> list:
+    """Heartbeat `cache_pushes` entry for pending agent questions —
+    mirrors `_build_approvals_cache_pushes` (same envelope, TTL, and
+    empty-list degradations)."""
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    try:
+        store = local_store.get_store(read_only=True)
+        store.expire_questions()
+        rows = store.query_questions(
+            owner_hash=owner_hash,
+            status="pending",
+            limit=APPROVALS_CACHE_LIMIT,
+        )
+    except Exception:
+        return []
+    try:
+        from clawmetry.questions import killswitch_state
+        ks = killswitch_state()
+    except Exception:
+        ks = {"engaged": False, "sessions": {}}
+    ks_active = bool(ks.get("engaged") or ks.get("sessions"))
+    # Push when there's something for the cloud inbox to show: pending
+    # questions, or an engaged kill switch (so the cloud UI can render the
+    # release control even with an empty queue).
+    if not rows and not ks_active:
+        return []
+    payload = {
+        "questions":  rows,
+        "count":      len(rows),
+        "killswitch": ks,
+        "_source":    "local_store",
+        "_shape":     "questions_queue",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    return [{
+        "key":    f"questions:{owner_hash}:queue",
+        "ttl_s":  APPROVALS_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+
+
+def _pending_questions_count(config: dict) -> int:
+    """Plaintext pending-questions count for the heartbeat — the cloud's
+    cue to send a push notification without decrypting the cache blob
+    (same contract as `pending_approvals_count`)."""
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return 0
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_questions(
+            owner_hash=_owner_hash_for_token(api_key),
+            status="pending",
+            limit=APPROVALS_CACHE_LIMIT,
+        )
+        return len(rows) if rows else 0
+    except Exception:
+        return 0
+
+
 # ── Phase 6: proactive cron-runs cache_push (issue #1640) ────────────────────
 # Cloud READ path (routes/cloud.py:cloud_cron_runs) reads from
 # ``cron_runs:{owner_hash}:{node_id}:{job_id}``.  Without this push the
@@ -9789,6 +9908,134 @@ def _apply_approval_decision(q: dict) -> None:
         # Either unknown id or already decided — both safe to ignore.
         log.debug("[approval] %s relayed decision=%s — no-op (row missing or "
                   "already decided)", approval_id, decision)
+
+
+def _apply_question_action(q: dict) -> None:
+    """Apply a cloud-relayed answer/cancel to an agent-questions row.
+
+    Expected shape: ``{type: "question_answer"|"question_cancel", id,
+    value, resolver, action_token}``. The relayed ``action_token`` MUST
+    match the row's — it is the per-question bearer secret minted at
+    creation, carried only inside the E2E-encrypted queue blob and the
+    answer links the node itself sent to the operator's channels. A
+    relay that can't present it is dropped, so the cloud (or anyone who
+    can reach it) can never approve on its own.
+
+    Idempotent — ``update_question_answer`` only flips pending rows."""
+    qid = (q.get("id") or "").strip()
+    if not qid:
+        log.warning("question action missing id: %r", q)
+        return
+    resolver = (q.get("resolver") or "cloud-relay").strip()
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception as e:
+        log.warning("question %s: local_store unavailable: %s", qid, e)
+        return
+    try:
+        rows = store.query_questions(question_id=qid, limit=1)
+    except Exception as e:
+        log.warning("question %s: lookup failed: %s", qid, e)
+        return
+    if not rows:
+        log.debug("[question] %s relayed action — unknown id, dropped", qid)
+        return
+    row = rows[0]
+    expected = (row.get("action_token") or "").strip()
+    presented = (q.get("action_token") or "").strip()
+    if not expected or presented != expected:
+        log.warning("[question] %s relayed action REJECTED — action_token "
+                    "mismatch (resolver=%s)", qid, resolver)
+        return
+    if q.get("type") == "question_cancel":
+        n = store.update_question_answer(qid, answer=None,
+                                         answered_by=resolver,
+                                         status="cancelled")
+        log.info("[question] %s relayed cancel by %s (%s)", qid, resolver,
+                 "flipped" if n else "no-op")
+        return
+    value = str(q.get("value") or "").strip()
+    qtype = row.get("qtype") or "confirm"
+    if qtype == "confirm":
+        low = value.lower()
+        if low in ("yes", "y", "approve", "approved", "true", "1", "ok"):
+            value = "yes"
+        elif low in ("no", "n", "deny", "denied", "false", "0"):
+            value = "no"
+        else:
+            log.warning("[question] %s relayed confirm answer invalid: %r",
+                        qid, value)
+            return
+    elif qtype == "select":
+        opts = row.get("options") or []
+        if isinstance(opts, str):
+            try:
+                opts = json.loads(opts)
+            except (ValueError, TypeError):
+                opts = []
+        if value not in [str(o) for o in opts]:
+            log.warning("[question] %s relayed select answer not an option",
+                        qid)
+            return
+    elif not value:
+        log.warning("[question] %s relayed input answer empty", qid)
+        return
+    n = store.update_question_answer(qid, answer=value[:1000],
+                                     answered_by=resolver, status="answered")
+    if n:
+        log.info("[question] %s relayed answer by %s (status flipped)",
+                 qid, resolver)
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "question.answer",
+                actor=resolver,
+                target=qid,
+                result="answered",
+                source="cloud-relay",
+                metadata={"qtype": qtype},
+            )
+        except Exception:
+            pass
+    else:
+        log.debug("[question] %s relayed answer — no-op (already resolved)",
+                  qid)
+
+
+def _apply_killswitch_set(q: dict) -> None:
+    """Flip the operator kill switch from a cloud-relayed action.
+
+    Expected shape: ``{type: "killswitch_set", engaged, session_id?,
+    reason?, resolver?}``. Engaging is always honored (fail-safe bias:
+    an attacker who can forge heartbeat responses can at worst STOP
+    agents, never approve anything); the flip is audited either way."""
+    engaged = bool(q.get("engaged"))
+    session_id = (q.get("session_id") or "").strip() or None
+    resolver = (q.get("resolver") or "cloud-relay").strip()
+    reason = (q.get("reason") or "").strip()
+    try:
+        from clawmetry import questions as _questions
+        _questions.set_killswitch(engaged, session_id=session_id,
+                                  reason=reason, actor=resolver)
+    except Exception as e:
+        log.warning("killswitch_set failed: %s", e)
+        return
+    log.info("[killswitch] %s (session=%s) by %s via cloud relay",
+             "ENGAGED" if engaged else "released",
+             session_id or "global", resolver)
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "killswitch.set",
+            actor=resolver,
+            target=session_id or "global",
+            result="engaged" if engaged else "released",
+            source="cloud-relay",
+            metadata={"reason": reason} if reason else None,
+        )
+    except Exception:
+        pass
 
 
 def _get_version() -> str:
@@ -18480,9 +18727,15 @@ def run_daemon() -> None:
                     # live viewer, drop to FAST so Telegram / brain events
                     # appear in the dashboard within seconds. Otherwise stay
                     # at SLOW. Missing field → SLOW (back-compat with a cloud
-                    # that hasn't deployed PR 1 of the epic yet).
+                    # that hasn't deployed PR 1 of the epic yet). Also FAST
+                    # while an agent question awaits a human, so a phone-tap
+                    # answer drains within seconds instead of one SLOW cycle.
+                    try:
+                        _awaiting = _pending_questions_count(config) > 0
+                    except Exception:
+                        _awaiting = False
                     heartbeat_interval = _pick_heartbeat_interval(
-                        _LAST_HEARTBEAT_RESPONSE
+                        _LAST_HEARTBEAT_RESPONSE, awaiting_human=_awaiting
                     )
                 else:
                     consecutive_hb_failures += 1

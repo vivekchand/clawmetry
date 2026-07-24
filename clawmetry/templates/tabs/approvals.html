@@ -882,28 +882,58 @@
 
   window.loadQuestionsInbox = async function() {
     try {
-      var d = await fetchJsonWithTimeout('/api/questions?limit=50', 6000);
-      var ks = d.killswitch || {};
-      _ksEngaged = !!ks.engaged;
-      var stateEl = document.getElementById('killswitch-state');
-      var btn = document.getElementById('killswitch-btn');
-      if (stateEl && btn) {
-        var nSess = Object.keys(ks.sessions || {}).length;
-        stateEl.textContent = _ksEngaged ? 'ENGAGED' : (nSess ? nSess + ' session(s)' : 'off');
-        btn.style.borderColor = _ksEngaged ? '#ef4444' : 'var(--border-secondary)';
-        btn.style.color = _ksEngaged ? '#ef4444' : 'var(--text-primary)';
+      var cloudMode = !_isOssMode();
+      var d, pendingRows, ks;
+      if (cloudMode) {
+        // Cloud: encrypted queue blob pushed by the daemon heartbeat —
+        // decrypted in this browser via the injected decryptBlob helper.
+        d = await fetchJsonWithTimeout('/api/cloud/questions?' + _q().replace(/^&/,''), 6000);
+        var all = (typeof unwrapListAsync === 'function')
+          ? await unwrapListAsync(d, 'questions', 'questions_blob') : [];
+        pendingRows = all.filter(function(r){ return r.status === 'pending'; });
+        ks = {};
+        if (d && d._source !== 'relay_pending' && d.questions_blob) {
+          try {
+            var keyB64 = window.CLOUD_NODE_ID ? localStorage.getItem('cm-enc-key-' + window.CLOUD_NODE_ID) : null;
+            if (keyB64 && typeof window.decryptBlob === 'function') {
+              var dec = await window.decryptBlob(d.questions_blob, keyB64);
+              if (dec && dec.killswitch) ks = dec.killswitch;
+            }
+          } catch (e) {}
+        }
+        _renderQuestionsState(pendingRows, ks);
+        return;
       }
-      var pending = (d.questions || []).filter(function(r){ return r.status === 'pending'; });
-      var el = document.getElementById('questions-pending-list');
-      if (!el) return;
-      if (!pending.length) {
-        el.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No agent questions waiting. Agents ask here via the <code>ask_user</code> MCP tool or the permission hooks (<code>clawmetry hooks setup</code>).</div>';
-      } else {
-        el.innerHTML = pending.map(_renderQuestion).join('');
-      }
+      d = await fetchJsonWithTimeout('/api/questions?limit=50', 6000);
+      ks = d.killswitch || {};
+      pendingRows = (d.questions || []).filter(function(r){ return r.status === 'pending'; });
+      _renderQuestionsState(pendingRows, ks);
       if (!_qchLoaded) { _qchLoaded = true; _loadQuestionChannels(); }
     } catch (e) { /* endpoint absent (old server) — leave the empty state */ }
   };
+
+  var _qActionTokens = {};  // id → action_token (cloud relay needs it)
+
+  function _renderQuestionsState(pending, ks) {
+    ks = ks || {};
+    (pending || []).forEach(function(r){ if (r && r.id) _qActionTokens[r.id] = r.action_token || ''; });
+    _ksEngaged = !!ks.engaged;
+    var stateEl = document.getElementById('killswitch-state');
+    var btn = document.getElementById('killswitch-btn');
+    if (stateEl && btn) {
+      var nSess = Object.keys(ks.sessions || {}).length;
+      stateEl.textContent = _ksEngaged ? 'ENGAGED' : (nSess ? nSess + ' session(s)' : 'off');
+      btn.style.borderColor = _ksEngaged ? '#ef4444' : 'var(--border-secondary)';
+      btn.style.color = _ksEngaged ? '#ef4444' : 'var(--text-primary)';
+    }
+    var el = document.getElementById('questions-pending-list');
+    if (!el) return;
+    if (!pending || !pending.length) {
+      el.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No agent questions waiting. Agents ask here via the <code>ask_user</code> MCP tool or the permission hooks (<code>clawmetry hooks setup</code>).</div>';
+    } else {
+      el.innerHTML = pending.map(_renderQuestion).join('');
+    }
+  }
 
   function _renderQuestion(r) {
     var age = '';
@@ -948,20 +978,35 @@
   window.answerQuestion = async function(id, value) {
     if (value == null || String(value).trim() === '') return;
     try {
-      await fetch('/api/questions/' + encodeURIComponent(id) + '/answer', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({value: String(value), answered_by: 'dashboard'})
-      });
+      if (!_isOssMode()) {
+        await fetch('/api/cloud/questions/' + encodeURIComponent(id) + '/answer?' + _q().replace(/^&/,''), {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({value: String(value), answered_by: 'dashboard',
+                                action_token: _qActionTokens[id] || ''})
+        });
+      } else {
+        await fetch('/api/questions/' + encodeURIComponent(id) + '/answer', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({value: String(value), answered_by: 'dashboard'})
+        });
+      }
     } catch (e) {}
     loadQuestionsInbox();
   };
 
   window.cancelQuestion = async function(id) {
     try {
-      await fetch('/api/questions/' + encodeURIComponent(id) + '/cancel', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({actor: 'dashboard'})
-      });
+      if (!_isOssMode()) {
+        await fetch('/api/cloud/questions/' + encodeURIComponent(id) + '/cancel?' + _q().replace(/^&/,''), {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({actor: 'dashboard', action_token: _qActionTokens[id] || ''})
+        });
+      } else {
+        await fetch('/api/questions/' + encodeURIComponent(id) + '/cancel', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({actor: 'dashboard'})
+        });
+      }
     } catch (e) {}
     loadQuestionsInbox();
   };
@@ -970,10 +1015,17 @@
     var engaging = !_ksEngaged;
     if (engaging && !confirm('Engage the kill switch? Every gated tool call is denied until you release it.')) return;
     try {
-      await fetch('/api/killswitch', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({engaged: engaging, actor: 'dashboard'})
-      });
+      if (!_isOssMode()) {
+        await fetch('/api/cloud/killswitch?' + _q().replace(/^&/,''), {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({engaged: engaging})
+        });
+      } else {
+        await fetch('/api/killswitch', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({engaged: engaging, actor: 'dashboard'})
+        });
+      }
     } catch (e) {}
     loadQuestionsInbox();
   };
