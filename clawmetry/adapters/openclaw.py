@@ -758,6 +758,8 @@ def _sandbox_inference_configs() -> list:
                 or (entry.get("runtime") or {}).get("kind")
                 or ""
             )
+            # Read sandboxGpuProof before entry is reassigned (gap #3994).
+            raw_gpu_proof = entry.get("sandboxGpuProof")
             base_url = _MANAGED_URL
             if provider == "openai-api":
                 provider_key = "openai"
@@ -792,6 +794,8 @@ def _sandbox_inference_configs() -> list:
                 entry.update(_sandbox_egress_denied_count(name))
                 if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
+                if isinstance(raw_gpu_proof, dict):
+                    entry["sandboxGpuProof"] = raw_gpu_proof
                 out.append(entry)
                 continue
             elif provider in ("minimax", "minimax-api"):
@@ -819,6 +823,8 @@ def _sandbox_inference_configs() -> list:
             entry.update(_sandbox_egress_denied_count(name))
             if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                 entry["sandboxRuntimeKind"] = json_runtime_kind
+            if isinstance(raw_gpu_proof, dict):
+                entry["sandboxGpuProof"] = raw_gpu_proof
             out.append(entry)
         except Exception:
             continue
@@ -1821,6 +1827,43 @@ def _gateway_trusted_proxy_devices() -> dict:
         }
     except Exception:
         return {}
+
+
+def _workshop_approval_config() -> dict:
+    """Read Skill Workshop approval-policy from openclaw.json (#3992).
+
+    Surfaces ``skills.workshop.approvalPolicy`` in the adapter's detect()
+    metadata so cloud-synced fleet views can show whether agent-initiated
+    skill apply/reject/quarantine actions are gated by human approval.
+
+    Returns ``{"workshopApprovalPolicy": <value>}`` when the key is present,
+    ``{}`` otherwise. Never raises.
+    """
+    try:
+        import json as _json
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        cfg_path = os.path.join(home, "openclaw.json")
+        if not os.path.isfile(cfg_path):
+            alt = os.path.expanduser("~/.clawdbot/openclaw.json")
+            if os.path.isfile(alt):
+                cfg_path = alt
+            else:
+                return {}
+        with open(cfg_path) as fh:
+            cfg = _json.load(fh)
+        if not isinstance(cfg, dict):
+            return {}
+        workshop = (cfg.get("skills") or {}).get("workshop")
+        if not isinstance(workshop, dict):
+            return {}
+        policy = workshop.get("approvalPolicy")
+        if policy is None:
+            return {}
+        return {"workshopApprovalPolicy": str(policy)}
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1940,6 +1983,11 @@ class OpenClawAdapter(AgentAdapter):
             _gw_events = _gateway_log_events()
             if _gw_events:
                 meta["gatewayLogEvents"] = _gw_events
+            # Skill Workshop approval-policy (#3992): surfaces
+            # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
+            # fleet views know whether autonomous skill actions are gated by
+            # human approval.  Returns {} on installs without the key.
+            meta.update(_workshop_approval_config())
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
