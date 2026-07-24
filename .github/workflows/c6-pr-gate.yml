@@ -8,6 +8,10 @@ name: C6 Required-status-checks gate (PR audit)
 # list alongside OSS golden path, E2E Browser Tests, etc. -- impossible to
 # miss when reviewing a PR.
 #
+# When C6 is not configured, this job also posts a PR comment (upsert
+# pattern) with the exact steps to close C6. The comment is automatically
+# deleted once C6 is closed so it does not pollute merged PRs.
+#
 # The job is NOT in REQUIRED_CHECKS (it cannot block merges by itself --
 # that would be circular: C6 is what adds required checks). Its purpose
 # is visibility only. Once C6 is closed, this check is permanently green.
@@ -45,6 +49,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   c6-pr-gate:
@@ -64,6 +69,80 @@ jobs:
       # to close C6. The "Details" link in the PR check list takes the admin
       # directly here.
       - name: Audit C6 -- required-status-checks on clawmetry/main
+        id: c6-audit
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/apply_required_status_checks.py
+
+      # Post or update a PR comment listing the exact close steps.
+      # Skipped for fork PRs (GITHUB_TOKEN cannot comment on fork pull_request
+      # events -- same constraint as pr-screenshots.yml step 11).
+      - name: Post PR comment (C6 not configured)
+        if: failure() && steps.c6-audit.outcome == 'failure' && !github.event.pull_request.head.repo.fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER="<!-- c6-pr-gate-bot -->"
+          BODY="${MARKER}
+          ### C6: Required status checks not configured on main
+
+          E2E tests run on this PR but are not required to pass before merging.
+          Branch protection on \`main\` does not yet enforce the E2E gate -- a
+          broken E2E could be merged without anyone noticing.
+
+          **Fastest fix (60 seconds, browser only):**
+
+          1. Open [clawmetry Settings > Branches](https://github.com/vivekchand/clawmetry/settings/branches) and edit \`main\`
+          2. Enable \"Require status checks to pass\" and search for + add:
+             - \`OSS golden path (wheel + OpenClaw + 9 tabs)\`
+             - \`Cross-repo handoff (C4)\`
+             - \`MOAT Keystone (13-endpoint bar)\`
+             - \`E2E Browser Tests (critical subset)\`
+          3. Do the same for [clawmetry-cloud](https://github.com/vivekchand/clawmetry-cloud/settings/branches): add \`Cloud golden-path browser E2E\`
+          4. And for [clawmetry-landing](https://github.com/vivekchand/clawmetry-landing/settings/branches): add \`Landing golden path (C3)\`
+
+          **Or close all 3 repos in 30 seconds from the terminal:**
+          \`\`\`bash
+          bash scripts/close-c6.sh
+          \`\`\`
+
+          **Or via the Actions UI (needs a fine-grained PAT with Administration: write):**
+          [Apply required E2E status checks (C6)](https://github.com/vivekchand/clawmetry/actions/workflows/apply-required-checks.yml)
+          -- confirm=APPLY, pat_token=paste-token-here
+
+          _C6 is the sole remaining criterion of the E2E Robustness epic. All other 6 criteria (C1 OSS golden path, C2 Cloud golden path, C3 Landing, C4 Cross-repo handoff, C5 Visual diff all tabs, C7 Quarantine) are green. Tracking: [#3864](https://github.com/vivekchand/clawmetry/issues/3864)_"
+
+          existing_id=$(gh api -X GET \
+            "repos/${REPO}/issues/${PR}/comments" \
+            --jq 'map(select(.body | startswith("<!-- c6-pr-gate-bot -->"))) | .[0].id // empty' \
+            2>/dev/null || echo "")
+          if [ -n "${existing_id}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" \
+              -f body="${BODY}" > /dev/null
+            echo "Updated existing C6 gate comment on PR #${PR}"
+          else
+            gh pr comment "${PR}" --repo "${REPO}" --body "${BODY}"
+            echo "Posted C6 gate comment on PR #${PR}"
+          fi
+
+      # When C6 is fixed, delete any previous gate comment so it does not
+      # pollute the PR thread or confuse reviewers after the fact.
+      - name: Remove PR comment (C6 now configured)
+        if: success() && !github.event.pull_request.head.repo.fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          existing_id=$(gh api -X GET \
+            "repos/${REPO}/issues/${PR}/comments" \
+            --jq 'map(select(.body | startswith("<!-- c6-pr-gate-bot -->"))) | .[0].id // empty' \
+            2>/dev/null || echo "")
+          if [ -n "${existing_id}" ]; then
+            gh api -X DELETE "repos/${REPO}/issues/comments/${existing_id}" > /dev/null
+            echo "Removed C6 gate comment -- C6 is now configured."
+          else
+            echo "No C6 gate comment to remove -- PR is clean."
+          fi
