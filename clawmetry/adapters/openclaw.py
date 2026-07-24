@@ -511,6 +511,72 @@ def _gateway_log_meta() -> dict:
         return {}
 
 
+def _gateway_log_events(count: int = 50) -> list:
+    """Return the last ``count`` structured events from the gateway log file.
+
+    The gateway writes line-delimited JSON to rotating ``openclaw-*.log`` files
+    (same paths as ``_gateway_log_files()``).  Each line carries at minimum
+    ``level`` and ``msg``; most also carry ``subsystem`` and a timestamp field
+    (``time``, ``ts``, or ``timestamp``).
+
+    Returns a list of event dicts, newest-first.  Returns ``[]`` when no log
+    file exists, on any parse error, or on non-OpenClaw hosts.  Never raises.
+
+    Closes #3991.
+    """
+    try:
+        files = _gateway_log_files()
+        if not files:
+            return []
+        log_path = files[-1]
+        # Read a trailing chunk large enough to hold ``count`` typical lines
+        # (~300 bytes each) without loading the full (potentially large) log.
+        chunk_size = max(8192, count * 300)
+        try:
+            with open(log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - chunk_size))
+                raw_bytes = fh.read()
+        except OSError:
+            return []
+        lines = raw_bytes.decode("utf-8", "replace").splitlines()
+        events: list = []
+        for raw in reversed(lines):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            evt: dict = {}
+            # Timestamp — accept any common key name.
+            for _ts_key in ("time", "ts", "timestamp"):
+                _ts_val = obj.get(_ts_key)
+                if _ts_val is not None:
+                    evt["ts"] = _ts_val
+                    break
+            for _field, _key in (
+                ("level", "level"),
+                ("msg", "msg"),
+                ("message", "msg"),
+                ("subsystem", "subsystem"),
+            ):
+                _val = obj.get(_field)
+                if _val is not None and _key not in evt:
+                    evt[_key] = _val
+            if evt:
+                events.append(evt)
+            if len(events) >= count:
+                break
+        return events
+    except Exception:
+        return []
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -1871,6 +1937,9 @@ class OpenClawAdapter(AgentAdapter):
             _gw_log = _gateway_log_meta()
             if _gw_log:
                 meta.update(_gw_log)
+            _gw_events = _gateway_log_events()
+            if _gw_events:
+                meta["gatewayLogEvents"] = _gw_events
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
