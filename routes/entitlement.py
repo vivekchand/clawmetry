@@ -834,6 +834,97 @@ def api_entitlement_capacity_headroom_at():
         return jsonify({"error": "capacity-headroom-at failed"}), 500
 
 
+@bp_entitlement.route("/api/entitlement/capacity-headroom-batch")
+def api_entitlement_capacity_headroom_batch():
+    """``GET /api/entitlement/capacity-headroom-batch?channels=<int>
+    &retention_days=<int>&nodes=<int>`` -- per-tier headroom envelope for
+    every purchasable tier in one pass, given the caller-supplied per-axis
+    usage.
+
+    Plural sibling of ``/api/entitlement/capacity-headroom-at``: where the
+    singular ``_at`` endpoint returns one hypothetical tier's per-axis
+    envelope, the batch returns the same envelope for every entry in
+    :data:`entitlements._PURCHASABLE_TIERS` so a pricing-page "at each
+    tier, would my usage fit?" table can render every rung off **one**
+    round-trip instead of N calls to ``/capacity-headroom-at``.
+
+    Fills the ``_batch`` slot on the capacity-headroom axis alongside
+    ``/capacity-diff-batch`` (per-tier per-axis transition triples against
+    the resolved entitlement) and the per-axis
+    ``/tiers-for-channel-count-batch`` / ``/tiers-for-retention-window-batch``
+    / ``/tiers-for-node-count-batch`` families.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-headroom-at`` for
+    the same axis inputs byte-for-byte
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``, with each per-axis row matching the
+    :func:`entitlements._headroom_row` shape). Rows are sorted by tier
+    rank ascending with ``id`` as a stable tiebreaker -- byte-stable
+    against ``/capacity-diff-batch`` / ``/tier-unlocks-batch`` /
+    ``/tier-locks-batch`` / ``/preview-batch`` so a pricing table lines
+    up rung-for-rung without client-side re-sort. The trial tier is
+    excluded (mirrors the other ``*-batch`` siblings -- not purchasable).
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom`` and ``/tiers-for-capacity-batch``'s posture).
+    A blank, non-int, negative, or ``bool``-in-disguise value on any
+    axis short-circuits that axis to ``None`` on every row -- a stray
+    query string cannot silently blank the whole ladder.
+
+    Decoupled from the resolved entitlement -- every row walks the
+    static per-tier caps -- so grace vs enforce yields byte-identical
+    ``tiers`` payloads. The envelope's ``current_tier`` / ``grace`` /
+    ``enforced`` still track the live resolver so the UI can highlight
+    the caller's current rung on the ladder.
+
+    Never 5xxs: on a resolver failure the empty-tiers grace envelope is
+    returned so a pricing table falls back to an empty list instead of
+    500-ing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        rows = _ent.capacity_headroom_batch(**kwargs)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff-batch")
 def api_entitlement_capacity_diff_batch():
     """``GET /api/entitlement/capacity-diff-batch`` -- per-axis capacity

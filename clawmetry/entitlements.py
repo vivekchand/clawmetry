@@ -3221,6 +3221,69 @@ def capacity_headroom_at(
         return None
 
 
+def capacity_headroom_batch(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict]:
+    """Per-tier :func:`capacity_headroom_at` envelope for every purchasable
+    tier, walked in the same ``(rank, id)`` order the other ``*_batch``
+    siblings use.
+
+    Plural sibling of :func:`capacity_headroom_at`. Where the singular
+    ``_at`` helper answers "given my usage, what does headroom look like
+    at tier X" one tier at a time, the batch returns the same envelope
+    shape for every entry in :data:`_PURCHASABLE_TIERS` so a pricing-page
+    "at each tier, would my usage fit?" table can render every rung off
+    **one** round-trip instead of N calls to ``/capacity-headroom-at``.
+
+    Fills the ``_batch`` slot on the capacity-headroom axis alongside
+    :func:`capacity_diff_batch` (per-tier per-axis transition triples
+    against the resolved entitlement) and the per-axis
+    ``tiers_for_channel_count_batch`` / ``tiers_for_retention_window_batch``
+    / ``tiers_for_node_count_batch`` families. Each row is the exact
+    envelope :func:`capacity_headroom_at` returns
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``) so a caller can pass any row through the existing
+    ``capacity_headroom_at`` renderer without reshaping.
+
+    Rows are ordered by tier rank ascending (cheapest -> most capable)
+    with ``id`` as a stable tiebreaker -- byte-stable against
+    :func:`capacity_diff_batch` / :func:`tier_unlocks_batch` /
+    :func:`tier_locks_batch` / :func:`preview_batch` so a pricing table
+    lines up rung-for-rung without client-side re-sort. The trial tier
+    is excluded (mirrors the other batches -- not purchasable).
+
+    Decoupled from the resolved entitlement -- every row walks the static
+    per-tier caps via :func:`capacity_headroom_at`, so grace vs enforce
+    yields byte-identical rows. Same per-axis "None means axis not
+    supplied" posture as the singular helpers: an unsupplied axis stays
+    ``None`` on every row; a supplied axis is echoed on every row.
+
+    Never raises: if the walker blows up the helper returns ``[]`` so the
+    pricing table falls back to an empty list instead of 500-ing.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            row = capacity_headroom_at(
+                tid,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+            if row is not None:
+                out.append(row)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: capacity_headroom_batch failed: %s", exc)
+        return []
+
+
 def _capacity_row(from_tier: str, to_tier: str) -> dict:
     """Build one ``capacity_diff``-shape row for an arbitrary ``from -> to`` pair.
 
