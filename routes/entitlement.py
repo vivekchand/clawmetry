@@ -7155,21 +7155,43 @@ def api_paywall_events_summary():
     """``GET /api/paywall/events/summary`` -- rolling in-process aggregate
     of client-side ``POST /api/paywall/event`` beacons.
 
+    Optional filter query params narrow the aggregation to rows whose
+    corresponding field matches the supplied value exactly (case-
+    sensitive, ``AND``-combined). Same names + semantics as
+    ``/api/paywall/events/recent`` so a dashboard tile can bind one
+    filter set to both endpoints without translation::
+
+      ?event=<paywall_view|paywall_cta_click|...>
+      ?feature=<feature-key>
+      ?harness=<harness-key>
+      ?source=<source-key>
+      ?plan_chosen=<plan-code>
+
     Body shape::
 
         {
           "total": <int>,        # all-time recorded events (survives eviction)
-          "in_window": <int>,    # currently in the ring
+          "in_window": <int>,    # currently in the ring, unfiltered
           "dropped": <int>,      # events evicted by ring rotation
           "capacity": <int>,     # ring size (CLAWMETRY_PAYWALL_EVENT_CAPACITY)
           "first_ts": <float|null>,  # epoch seconds of first-ever event
           "last_ts":  <float|null>,  # epoch seconds of most-recent event
-          "by_event": {"<name>": <int>, ...},        # in-window
+          "by_event": {"<name>": <int>, ...},        # in-window, post-filter
           "by_feature": {"<key>":  <int>, ...},
           "by_harness": {"<key>":  <int>, ...},
           "by_source":  {"<key>":  <int>, ...},
-          "by_plan_chosen": {"<plan>": <int>, ...}
+          "by_plan_chosen": {"<plan>": <int>, ...},
+          "filters": {"<key>": "<value>", ...},      # echo of applied filters
+          "matched": <int>                           # rows the by_* aggregate covers
         }
+
+    Process-lifetime counters (``total``, ``dropped``, ``first_ts``,
+    ``last_ts``, ``capacity``) and ``in_window`` are NEVER filtered --
+    they describe the ring itself, not the subset the caller cares about,
+    so a filtered dashboard tile can still see churn / evictions in
+    context. The ``by_*`` breakdowns and ``matched`` count reflect the
+    filtered subset. On an unfiltered request ``matched`` byte-equals
+    ``in_window``.
 
     Ships in GRACE -- no entitlement gate, no capacity accounting. Grace-
     mode read of a grace-mode write.
@@ -7180,7 +7202,11 @@ def api_paywall_events_summary():
     try:
         from clawmetry import _paywall_events as _pe
 
-        return jsonify(_pe.summary())
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        return jsonify(_pe.summary(**filter_kwargs))
     except Exception as exc:
         logger.warning("api_paywall_events_summary: error: %s", exc)
         return jsonify(
@@ -7196,6 +7222,8 @@ def api_paywall_events_summary():
                 "by_harness": {},
                 "by_source": {},
                 "by_plan_chosen": {},
+                "filters": {},
+                "matched": 0,
             }
         )
 

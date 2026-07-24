@@ -234,7 +234,15 @@ class _PaywallEventStore:
             # Genuinely defensive -- record must never leak into the 204 route.
             logger.debug("paywall.events: record swallowed error: %s", exc)
 
-    def summary(self) -> dict:
+    def summary(
+        self,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+    ) -> dict:
         """Return a JSON-safe aggregate snapshot of the current ring.
 
         Aggregations (``by_event`` etc.) reflect ONLY the events currently
@@ -246,9 +254,33 @@ class _PaywallEventStore:
         from the per-key dicts so a mostly-empty payload doesn't flood
         every dimension's tally with an ``""`` bucket.
 
+        Optional keyword filters (``event`` / ``feature`` / ``harness`` /
+        ``source`` / ``plan_chosen``) narrow the aggregation to rows whose
+        corresponding field matches the supplied value exactly. Same
+        semantics as :meth:`recent` / :meth:`count_matching`: ``None`` or
+        empty-string means "not supplied", case-sensitive exact match,
+        ``AND`` combined. With no filters the returned shape is byte-
+        identical to the pre-filter contract EXCEPT for the always-present
+        ``filters`` and ``matched`` fields (added below).
+
+        ``filters`` echoes the applied filter set (empty dict when none
+        supplied) so a caller can distinguish "I asked for feature=X and
+        got 0 rows" from "I asked for nothing and got 0 rows". ``matched``
+        is the count of rows the ``by_*`` aggregation was computed over --
+        byte-equal to ``in_window`` on an unfiltered call, otherwise the
+        pre-aggregation subset size. Process-lifetime counters
+        (``total``, ``dropped``, ``first_ts``, ``last_ts``, ``capacity``)
+        are NOT sliced by the filters -- they describe the ring itself, not
+        the subset the caller cares about, and slicing them would silently
+        under-report churn to a filtered dashboard tile.
+
         Never raises.
         """
         try:
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
             with self._lock:
                 snap = list(self._ring)
                 total = self._total
@@ -257,12 +289,17 @@ class _PaywallEventStore:
                 last_ts = self._last_ts
                 capacity = self._capacity
 
+            if filters:
+                bucket = [e for e in snap if _row_matches_filters(e, filters)]
+            else:
+                bucket = snap
+
             by_event: Counter = Counter()
             by_feature: Counter = Counter()
             by_harness: Counter = Counter()
             by_source: Counter = Counter()
             by_plan: Counter = Counter()
-            for e in snap:
+            for e in bucket:
                 if e.get("event"):
                     by_event[e["event"]] += 1
                 if e.get("feature"):
@@ -286,6 +323,8 @@ class _PaywallEventStore:
                 "by_harness": dict(by_harness),
                 "by_source": dict(by_source),
                 "by_plan_chosen": dict(by_plan),
+                "filters": dict(filters),
+                "matched": len(bucket),
             }
         except Exception as exc:
             logger.warning("paywall.events: summary swallowed error: %s", exc)
@@ -301,6 +340,8 @@ class _PaywallEventStore:
                 "by_harness": {},
                 "by_source": {},
                 "by_plan_chosen": {},
+                "filters": {},
+                "matched": 0,
             }
 
     def recent(
@@ -422,9 +463,25 @@ def record_event(payload: Any) -> None:
     _STORE.record(payload)
 
 
-def summary() -> dict:
-    """Public shim for ``GET /api/paywall/events/summary``."""
-    return _STORE.summary()
+def summary(
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+) -> dict:
+    """Public shim for ``GET /api/paywall/events/summary``.
+
+    Filter kwargs are optional; a ``None`` or empty-string value means
+    "not supplied" and does not restrict on that dimension. See
+    :meth:`_PaywallEventStore.summary` for the filter contract and the
+    exact response shape (always includes ``filters`` and ``matched``).
+    """
+    return _STORE.summary(
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+    )
 
 
 def recent(

@@ -90,12 +90,15 @@ def test_summary_reflects_prior_paywall_event_posts(client):
 def test_summary_shape_is_stable(client):
     """A pricing dashboard tile binds to a fixed set of keys. If the
     endpoint ever drops one, tiles blank silently -- pin the full key
-    set."""
+    set. ``filters`` and ``matched`` are the always-present mirror of
+    ``/api/paywall/events/recent`` so a tile binding one filter set to
+    both endpoints reads the same shape from each."""
     body = client.get("/api/paywall/events/summary").get_json()
     expected = {
         "total", "in_window", "dropped", "capacity",
         "first_ts", "last_ts",
         "by_event", "by_feature", "by_harness", "by_source", "by_plan_chosen",
+        "filters", "matched",
     }
     assert set(body.keys()) == expected
 
