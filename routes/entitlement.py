@@ -21134,6 +21134,227 @@ def api_entitlement_tiers_for_retention_window_batch():
         )
 
 
+def _tiers_for_capacity_perval_at_body(_ent, tier_in: str, kind: str, rows):
+    """Assemble the response envelope for a
+    ``tiers-for-<capacity-axis>-at-batch`` endpoint.
+
+    Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard per-value tiers-for
+    batch envelope so a pricing-matrix walkthrough surface can render
+    the "from <perspective>" copy off one round-trip, matching how
+    ``/tiers-for-capacity-batch-at`` layers perspective onto the
+    per-axis grant-axis batch. Never raises.
+    """
+    return {
+        "kind": kind,
+        "count": len(rows),
+        "rows": rows,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _tiers_for_capacity_perval_at_fallback(tier_in: str, kind: str) -> dict:
+    """Grace-shape fallback body for the three per-value
+    ``tiers-for-<capacity-axis>-at-batch`` endpoints. Same never-5xx
+    posture as :func:`_tiers_for_capacity_perval_fallback` with the
+    perspective envelope layered on so a caller can still render the
+    "from <perspective>" copy with placeholders on a resolver crash.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-channel-count-at-batch"
+)
+def api_entitlement_tiers_for_channel_count_at_batch():
+    """``GET /api/entitlement/tiers-for-channel-count-at-batch?tier=<perspective>
+    &counts=1,5,10`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-channel-count-batch``.
+
+    Fills the last ``_at_batch`` slot on the channel-count capacity axis
+    alongside ``/tiers-for-channel-count-at`` (singular ``_at``),
+    ``/tiers-for-capacity-batch-at`` (grant-axis batch ``_at``) and
+    ``/tiers-for-features-at-batch`` / ``/tiers-for-runtimes-at-batch``
+    on the grant axes, so a pricing-matrix walkthrough (``?tier=<p>``)
+    can hit every ``_at_batch`` sibling in the ``tiers-for-*`` family
+    with a uniform URL.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the batch is
+    identical to ``/tiers-for-channel-count-batch`` regardless of
+    perspective (parity-pinned by
+    :func:`entitlements.tiers_for_channel_count_at_batch`). Response
+    layers ``perspective_tier`` on top of the batch body so a
+    walkthrough surface renders the "from <perspective>" copy off one
+    round-trip.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tiers_for_channel_count_at_batch(tier_in, values) or []
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "channel_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_channel_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(tier_in, "channel_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-node-count-at-batch"
+)
+def api_entitlement_tiers_for_node_count_at_batch():
+    """``GET /api/entitlement/tiers-for-node-count-at-batch?tier=<perspective>
+    &counts=1,3,5`` -- node-axis twin of
+    ``/api/entitlement/tiers-for-channel-count-at-batch``. Same
+    perspective contract, same never-5xx posture, same perspective-
+    independence guarantee (parity-pinned). Response shape and error
+    paths mirror ``/tiers-for-channel-count-at-batch`` with ``kind``
+    ``"node_count"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tiers_for_node_count_at_batch(tier_in, values) or []
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "node_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_node_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(tier_in, "node_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-retention-window-at-batch"
+)
+def api_entitlement_tiers_for_retention_window_at_batch():
+    """``GET /api/entitlement/tiers-for-retention-window-at-batch?tier=<perspective>
+    &days=7,30,unlimited`` -- retention-axis twin of
+    ``/api/entitlement/tiers-for-channel-count-at-batch``.
+
+    Each token may be a finite int or the case-insensitive string
+    ``"unlimited"``; the unlimited row surfaces with ``item=null`` /
+    ``label="unlimited"``. This is the *only* per-value ``_at_batch``
+    on the retention axis that admits the unlimited sentinel --
+    ``/tiers-for-capacity-batch-at`` treats ``retention_days=None`` as
+    *unset*, not *unlimited*.
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier
+    / never-5xx contracts as the two count-axis siblings.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "days", unlimited_ok=True
+    )
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = (
+            _ent.tiers_for_retention_window_at_batch(tier_in, values) or []
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "retention_window", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_retention_window_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(
+                tier_in, "retention_window"
+            )
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tiers-for-features")
 def api_entitlement_tiers_for_features():
     """``GET /api/entitlement/tiers-for-features?features=a,b,c`` --
@@ -22957,6 +23178,240 @@ def api_entitlement_min_tier_for_retention_window_batch():
         )
         return jsonify(
             _min_tier_for_capacity_batch_fallback("retention_window")
+        )
+
+
+def _min_tier_for_capacity_at_batch_body(_ent, tier_in: str, kind: str, rows):
+    """Assemble the response envelope for a
+    ``min-tier-for-<capacity-axis>-at-batch`` endpoint.
+
+    Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard capacity-batch
+    envelope so a pricing-matrix walkthrough surface can render the
+    "from <perspective>" copy off one round-trip, matching how
+    ``/min-tier-for-features-at-batch`` layers perspective onto the
+    grant-axis batches. Never raises.
+    """
+    return {
+        "kind": kind,
+        "count": len(rows),
+        "rows": rows,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _min_tier_for_capacity_at_batch_fallback(tier_in: str, kind: str) -> dict:
+    """Grace-shape fallback body for the three
+    ``min-tier-for-<capacity-axis>-at-batch`` endpoints. Same never-5xx
+    posture as :func:`_min_tier_for_capacity_batch_fallback` with the
+    perspective envelope layered on so a caller can still render the
+    "from <perspective>" copy with placeholders on a resolver crash.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-channel-count-at-batch"
+)
+def api_entitlement_min_tier_for_channel_count_at_batch():
+    """``GET /api/entitlement/min-tier-for-channel-count-at-batch?tier=<perspective>
+    &counts=1,5,10`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/min-tier-for-channel-count-batch``.
+
+    Fills the last ``_at_batch`` slot on the channel-count capacity axis
+    alongside ``/min-tier-for-channel-count-at`` (singular ``_at``) and
+    ``/min-tier-for-features-at-batch`` /
+    ``/min-tier-for-runtimes-at-batch`` on the grant axes, so a
+    pricing-matrix walkthrough (``?tier=<p>``) can hit every
+    ``_at_batch`` sibling in the ``min-tier-for-*`` family with a
+    uniform URL.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the batch is
+    identical to ``/min-tier-for-channel-count-batch`` regardless of
+    perspective (parity-pinned by
+    :func:`entitlements.min_tier_for_channel_count_at_batch`). Response
+    layers ``perspective_tier`` on top of the batch body so a
+    walkthrough surface renders the "from <perspective>" copy off one
+    round-trip.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_channel_count_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "channel_count")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "channel_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_channel_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(tier_in, "channel_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-node-count-at-batch"
+)
+def api_entitlement_min_tier_for_node_count_at_batch():
+    """``GET /api/entitlement/min-tier-for-node-count-at-batch?tier=<perspective>
+    &counts=1,3,5`` -- node-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at-batch``. Same
+    perspective contract, same never-5xx posture, same perspective-
+    independence guarantee (parity-pinned). Response shape and error
+    paths mirror ``/min-tier-for-channel-count-at-batch`` with ``kind``
+    ``"node_count"`` and per-row ``label="1 node"`` /  ``"5 nodes"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_node_count_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "node_count")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "node_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_node_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(tier_in, "node_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-retention-window-at-batch"
+)
+def api_entitlement_min_tier_for_retention_window_at_batch():
+    """``GET /api/entitlement/min-tier-for-retention-window-at-batch?tier=<perspective>
+    &days=7,30,unlimited`` -- retention-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at-batch``.
+
+    Each token may be a finite int or the case-insensitive string
+    ``"unlimited"`` (routes to
+    ``min_tier_for_retention_window(None)``); the unlimited row
+    surfaces with ``item=null`` / ``label="unlimited"``. This is the
+    *only* per-axis ``_at_batch`` on the retention axis that admits
+    the unlimited sentinel -- the grant-axis
+    ``/tiers-for-capacity-batch-at`` treats ``retention_days=None`` as
+    *unset*, not *unlimited* (matching ``/min-tier-batch``'s posture).
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier
+    / never-5xx contracts as the two count-axis siblings.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("days", unlimited_ok=True)
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_retention_window_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "retention_window")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "retention_window", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_retention_window_at_batch: "
+            "error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(
+                tier_in, "retention_window"
+            )
         )
 
 
