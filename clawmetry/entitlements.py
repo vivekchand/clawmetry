@@ -437,6 +437,64 @@ def enforce_at_epoch() -> float | None:
         return None
 
 
+def _headroom_row(kind: str, used, cap) -> dict | None:
+    """Build one per-axis headroom row for :meth:`Entitlement.capacity_headroom`.
+
+    Returns ``None`` when ``used`` is not supplied or is not a real int
+    (blank / non-numeric / negative / ``bool``) so a caller supplying only
+    some axes -- or a stray query string -- cannot silently blank a gauge
+    with a bogus ``0 / cap`` row. When ``cap`` is ``None`` (the unlimited
+    sentinel) the row still resolves; ``remaining`` / ``pct_used`` collapse
+    to ``None`` and ``is_unlimited`` flips ``True`` so the caller can pick
+    an unlimited-badge render off the same primitive.
+    """
+    try:
+        if used is None or isinstance(used, bool):
+            return None
+        try:
+            u = int(used)
+        except (TypeError, ValueError):
+            return None
+        if u < 0:
+            return None
+        is_unlimited = cap is None
+        if is_unlimited:
+            return {
+                "kind": kind,
+                "used": u,
+                "cap": None,
+                "remaining": None,
+                "is_unlimited": True,
+                "at_limit": False,
+                "over_limit": False,
+                "pct_used": None,
+            }
+        try:
+            c = int(cap)
+        except (TypeError, ValueError):
+            return None
+        if c < 0:
+            return None
+        remaining = c - u
+        if c == 0:
+            pct: float | None = 100.0 if u > 0 else 0.0
+        else:
+            pct = round((u / c) * 100.0, 1)
+        return {
+            "kind": kind,
+            "used": u,
+            "cap": c,
+            "remaining": remaining,
+            "is_unlimited": False,
+            "at_limit": u == c,
+            "over_limit": u > c,
+            "pct_used": pct,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: _headroom_row failed: %s", exc)
+        return None
+
+
 def _capacity_transition(before: int | None, after: int | None) -> dict:
     """Encode one capacity-axis transition between two tiers.
 
@@ -685,6 +743,91 @@ class Entitlement:
         except Exception as exc:
             logger.warning("entitlements: previous_tier_capacity_diff failed: %s", exc)
             return None
+
+    def capacity_headroom(
+        self,
+        *,
+        channels: int | None = None,
+        retention_days: int | None = None,
+        nodes: int | None = None,
+    ) -> dict:
+        """Per-axis "how much room is left" against this entitlement's caps.
+
+        Resolver-pinned companion to :func:`tiers_for_capacity_batch` (which is
+        decoupled from the resolved entitlement and returns the full pricing
+        ladder). Given caller-supplied *current usage* on any of the three
+        capacity axes (channels / retention_days / nodes), returns one row per
+        supplied axis describing how close to (or past) the current tier's cap
+        the caller is. A quota gauge or a "you're at 4/5 channels on Starter"
+        badge reads off this single primitive without re-deriving per-tier caps
+        client-side.
+
+        Envelope shape::
+
+            {
+              "tier":           "<resolved>",
+              "tier_label":     "<human>",
+              "channels":       <row> | None,
+              "retention_days": <row> | None,
+              "nodes":          <row> | None,
+            }
+
+        Each ``<row>``::
+
+            {
+              "kind":         "channels" | "retention_days" | "nodes",
+              "used":         <int>,
+              "cap":          <int> | None,   # None = unlimited
+              "remaining":    <int> | None,   # None on the unlimited side
+              "is_unlimited": <bool>,
+              "at_limit":     <bool>,         # used == cap (cap not None)
+              "over_limit":   <bool>,         # used > cap  (cap not None)
+              "pct_used":     <float> | None, # None on the unlimited side
+            }
+
+        Per-axis ``None`` on the envelope means "axis not supplied" (matches
+        :func:`tiers_for_capacity_batch`'s "None means unset, not unlimited"
+        posture). A blank, non-int, negative, or ``bool`` value on any axis
+        short-circuits that axis to ``None`` -- a stray query string cannot
+        silently blank a gauge; the caller opts in per-axis by supplying a
+        real int.
+
+        The cap side comes off :meth:`channel_limit` / :meth:`event_retention_days`
+        / ``self.node_limit`` (the exact same accessors :meth:`allows_channel_count`
+        / :meth:`allows_retention_window` / :meth:`allows_node_count` gate on),
+        so the ``at_limit`` / ``over_limit`` booleans agree with the
+        allow-checks byte-for-byte on the enforce side. In grace mode
+        :meth:`channel_limit` returns ``None`` (unlimited), so every axis
+        collapses to the unlimited-side row shape -- the gauge renders
+        "unlimited / N used" instead of a bogus percentage while the grace
+        window is still open.
+
+        Never raises: any per-axis resolver failure short-circuits that axis
+        to ``None`` and the envelope keeps rendering.
+        """
+        try:
+            return {
+                "tier": self.tier,
+                "tier_label": tier_label(self.tier),
+                "channels": _headroom_row(
+                    "channels", channels, self.channel_limit()
+                ),
+                "retention_days": _headroom_row(
+                    "retention_days", retention_days, self.event_retention_days()
+                ),
+                "nodes": _headroom_row(
+                    "nodes", nodes, self.node_limit if not self.grace else None
+                ),
+            }
+        except Exception as exc:
+            logger.warning("entitlements: capacity_headroom failed: %s", exc)
+            return {
+                "tier": self.tier,
+                "tier_label": tier_label(self.tier),
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            }
 
     def upgrade_diff(self, target_tier: str) -> dict:
         try:
@@ -2979,6 +3122,102 @@ def previous_tier_capacity_diff() -> dict | None:
         return get_entitlement().previous_tier_capacity_diff()
     except Exception as exc:
         logger.warning("entitlements: previous_tier_capacity_diff (module) failed: %s", exc)
+        return None
+
+
+def capacity_headroom(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Module-level :meth:`Entitlement.capacity_headroom` against the
+    resolved entitlement. Never raises: a resolver failure short-circuits to
+    the neutral envelope shape (``tier=oss``, every axis ``None``) so a
+    quota gauge keeps rendering."""
+    try:
+        return get_entitlement().capacity_headroom(
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning("entitlements: capacity_headroom (module) failed: %s", exc)
+        return {
+            "tier": TIER_OSS,
+            "tier_label": tier_label(TIER_OSS),
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+
+def capacity_headroom_at(
+    perspective_tier: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`capacity_headroom`: given
+    a caller-supplied ``perspective_tier`` and per-axis current-usage
+    values, returns the per-axis headroom rows computed off the *static*
+    per-tier caps (:data:`_TIER_CHANNEL_LIMIT` / :data:`_TIER_RETENTION_DAYS`
+    / :data:`_TIER_NODE_LIMIT`) rather than the resolved entitlement.
+
+    Fills the ``_at`` slot on the capacity-headroom axis alongside
+    :func:`tiers_for_channel_count_at` / :func:`tiers_for_retention_window_at`
+    / :func:`tiers_for_node_count_at`, so a pricing-page "what would my
+    usage look like on tier X?" walk-through can call every ``_at`` sibling
+    uniformly.
+
+    Row shape matches :func:`capacity_headroom` byte-for-byte
+    (``kind`` / ``used`` / ``cap`` / ``remaining`` / ``is_unlimited`` /
+    ``at_limit`` / ``over_limit`` / ``pct_used``) so callers can pass any
+    row through the existing headroom rendering component without
+    reshaping.
+
+    Envelope carries the perspective::
+
+        {
+          "tier":           "<perspective>",
+          "tier_label":     "<human>",
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` (caller
+    renders "unknown tier" / 404). Decoupled from the resolved entitlement
+    (walks the static caps), so grace vs enforce yields byte-identical
+    rows -- pinned in the test suite via a grace / enforce reload
+    roundtrip. Never raises.
+    """
+    try:
+        pt = (perspective_tier or "").strip().lower()
+        if not pt or pt not in _TIER_FEATURES:
+            return None
+        return {
+            "tier": pt,
+            "tier_label": tier_label(pt),
+            "channels": _headroom_row(
+                "channels",
+                channels,
+                _TIER_CHANNEL_LIMIT.get(pt, _FREE_CHANNEL_LIMIT),
+            ),
+            "retention_days": _headroom_row(
+                "retention_days",
+                retention_days,
+                _TIER_RETENTION_DAYS.get(pt, 7),
+            ),
+            "nodes": _headroom_row(
+                "nodes",
+                nodes,
+                _TIER_NODE_LIMIT.get(pt, _FREE_NODE_LIMIT),
+            ),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: capacity_headroom_at failed: %s", exc)
         return None
 
 

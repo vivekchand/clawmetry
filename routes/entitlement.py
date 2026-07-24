@@ -702,6 +702,138 @@ def api_entitlement_capacity_diff():
         )
 
 
+@bp_entitlement.route("/api/entitlement/capacity-headroom")
+def api_entitlement_capacity_headroom():
+    """``GET /api/entitlement/capacity-headroom?channels=<int>&retention_days=<int>&nodes=<int>``
+    -- per-axis "how much room is left" against the resolved entitlement's
+    capacity caps.
+
+    Resolver-pinned companion to
+    ``/api/entitlement/tiers-for-capacity-batch`` (which is decoupled from
+    the resolver and returns the full pricing ladder): given caller-
+    supplied *current usage* on any of the three capacity axes, returns one
+    row per supplied axis describing how close to (or past) the current
+    tier's cap the caller is. A quota gauge or a "you're at 4/5 channels
+    on Starter" badge reads off this single primitive without re-deriving
+    per-tier caps client-side.
+
+    Envelope shape::
+
+        {
+          "tier":           "<resolved>",
+          "tier_label":     "<human>",
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` (matches :func:`clawmetry.entitlements._headroom_row`
+    byte-for-byte)::
+
+        {
+          "kind":         "channels" | "retention_days" | "nodes",
+          "used":         <int>,
+          "cap":          <int> | None,
+          "remaining":    <int> | None,
+          "is_unlimited": <bool>,
+          "at_limit":     <bool>,
+          "over_limit":   <bool>,
+          "pct_used":     <float> | None,
+        }
+
+    Per-axis ``None`` means "axis not supplied" (matches
+    ``/tiers-for-capacity-batch``'s "None means unset, not unlimited"
+    posture). A blank, non-int, negative, or ``bool``-in-disguise
+    (``?channels=true``) value on any axis short-circuits that axis to
+    ``None`` -- a stray query string cannot silently blank a gauge; the
+    caller opts in per-axis by supplying a real int.
+
+    In grace mode :meth:`Entitlement.channel_limit` returns ``None``
+    (unlimited), so every axis collapses to the unlimited-side row shape
+    and the gauge renders "unlimited / N used" instead of a bogus
+    percentage while the grace window is still open.
+
+    Never 5xxs: on a resolver failure the neutral envelope shape
+    (``tier=oss``, every axis ``None``) is returned so a paywall tile
+    keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        return jsonify(_ent.capacity_headroom(**kwargs))
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_headroom: error: %s", exc)
+        try:
+            from clawmetry import entitlements as _ent
+
+            return jsonify(
+                {
+                    "tier": _ent.TIER_OSS,
+                    "tier_label": _ent.tier_label(_ent.TIER_OSS),
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                }
+            )
+        except Exception:
+            return jsonify(
+                {
+                    "tier": "oss",
+                    "tier_label": "OSS",
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                }
+            )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-at")
+def api_entitlement_capacity_headroom_at():
+    """``GET /api/entitlement/capacity-headroom-at?tier=<perspective>&channels=<int>&retention_days=<int>&nodes=<int>``
+    -- hypothetical-perspective sibling of
+    ``/api/entitlement/capacity-headroom``: per-axis headroom against a
+    caller-supplied ``tier``'s static caps rather than the resolved
+    entitlement.
+
+    Fills the ``_at`` slot on the capacity-headroom axis alongside
+    ``/tiers-for-channel-count-at`` / ``/tiers-for-retention-window-at``
+    / ``/tiers-for-node-count-at``, so a pricing-page "what would my
+    usage look like on tier X?" walk-through can call every ``_at``
+    endpoint uniformly.
+
+    Response shape mirrors ``/api/entitlement/capacity-headroom``
+    byte-for-byte; the ``tier`` echo carries the perspective. Returns
+    ``{"error": "unknown tier"}`` + HTTP 404 for an empty / unknown
+    ``?tier=`` (matches ``/tier-diff-at`` / ``/tiers-for-batch-at``).
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    caps), so grace vs enforce yields byte-identical rows. Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        perspective = (request.args.get("tier") or "").strip().lower()
+        if not perspective:
+            return jsonify({"error": "unknown tier"}), 404
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        row = _ent.capacity_headroom_at(perspective, **kwargs)
+        if row is None:
+            return jsonify({"error": "unknown tier"}), 404
+        return jsonify(row)
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_headroom_at: error: %s", exc)
+        return jsonify({"error": "capacity-headroom-at failed"}), 500
+
+
 @bp_entitlement.route("/api/entitlement/capacity-diff-batch")
 def api_entitlement_capacity_diff_batch():
     """``GET /api/entitlement/capacity-diff-batch`` -- per-axis capacity
