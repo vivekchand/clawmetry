@@ -758,6 +758,8 @@ def _sandbox_inference_configs() -> list:
                 or (entry.get("runtime") or {}).get("kind")
                 or ""
             )
+            # Read sandboxGpuProof before entry is reassigned (gap #3994).
+            raw_gpu_proof = entry.get("sandboxGpuProof")
             base_url = _MANAGED_URL
             if provider == "openai-api":
                 provider_key = "openai"
@@ -792,6 +794,8 @@ def _sandbox_inference_configs() -> list:
                 entry.update(_sandbox_egress_denied_count(name))
                 if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
+                if isinstance(raw_gpu_proof, dict):
+                    entry["sandboxGpuProof"] = raw_gpu_proof
                 out.append(entry)
                 continue
             elif provider in ("minimax", "minimax-api"):
@@ -819,6 +823,8 @@ def _sandbox_inference_configs() -> list:
             entry.update(_sandbox_egress_denied_count(name))
             if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                 entry["sandboxRuntimeKind"] = json_runtime_kind
+            if isinstance(raw_gpu_proof, dict):
+                entry["sandboxGpuProof"] = raw_gpu_proof
             out.append(entry)
         except Exception:
             continue
