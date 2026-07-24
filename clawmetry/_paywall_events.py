@@ -153,6 +153,83 @@ def _row_matches_filters(row: dict, filters: dict[str, str]) -> bool:
         return False
 
 
+def _coerce_ts_bound(raw: Any) -> float | None:
+    """Coerce one of ``since`` / ``until`` to epoch-seconds ``float``, or
+    return ``None`` for "not supplied".
+
+    A ``None``, empty string, all-whitespace string, non-numeric string,
+    ``NaN``, or negative timestamp collapses to ``None`` so a caller's
+    stray query string cannot restrict the window unexpectedly. An ``int``
+    or ``float`` passes through after the same NaN / negative filter.
+
+    Never raises.
+    """
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, bool):
+            # ``bool`` is an ``int`` subclass in Python; treat it as "not
+            # supplied" so a stray ``True`` / ``False`` doesn't get coerced
+            # to ``1.0`` / ``0.0`` and start slicing.
+            return None
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+        else:
+            text = str(raw).strip()
+            if not text:
+                return None
+            value = float(text)
+    except (TypeError, ValueError):
+        return None
+    # NaN comparisons always return False; treat NaN and negative epoch as
+    # "not supplied" so a bogus bound is ignored rather than dropping every
+    # row on the floor.
+    if value != value:  # pragma: no cover - explicit NaN guard
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _normalise_time_bounds(
+    since: Any, until: Any,
+) -> tuple[float | None, float | None]:
+    """Return the coerced ``(since, until)`` pair (each ``float | None``).
+
+    ``since`` is inclusive, ``until`` is exclusive -- the standard half-open
+    ``[since, until)`` convention -- so back-to-back windows do NOT double-
+    count events landing exactly on the boundary. If both bounds resolve
+    and ``since >= until`` the window is empty by construction; the store
+    passes the pair through unchanged and every row is filtered out, which
+    is the intended "empty window" behaviour.
+
+    Never raises.
+    """
+    return _coerce_ts_bound(since), _coerce_ts_bound(until)
+
+
+def _row_matches_time_window(
+    row: dict, since: float | None, until: float | None,
+) -> bool:
+    """Return True iff ``row['ts']`` falls in the half-open window
+    ``[since, until)``. Either bound may be ``None`` meaning "unbounded on
+    that side". A row without a numeric ``ts`` is treated as a mismatch
+    when either bound is supplied (a bounded query cannot match a row of
+    unknown age), and as a match when neither bound is supplied. Never
+    raises.
+    """
+    if since is None and until is None:
+        return True
+    ts = row.get("ts")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return False
+    if since is not None and ts < since:
+        return False
+    if until is not None and ts >= until:
+        return False
+    return True
+
+
 class _PaywallEventStore:
     """Thread-safe bounded ring + running aggregates for paywall beacons.
 
@@ -242,6 +319,8 @@ class _PaywallEventStore:
         harness: str | None = None,
         source: str | None = None,
         plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
     ) -> dict:
         """Return a JSON-safe aggregate snapshot of the current ring.
 
@@ -261,18 +340,32 @@ class _PaywallEventStore:
         empty-string means "not supplied", case-sensitive exact match,
         ``AND`` combined. With no filters the returned shape is byte-
         identical to the pre-filter contract EXCEPT for the always-present
-        ``filters`` and ``matched`` fields (added below).
+        ``filters``, ``matched``, and ``time_window`` fields (added below).
 
-        ``filters`` echoes the applied filter set (empty dict when none
-        supplied) so a caller can distinguish "I asked for feature=X and
-        got 0 rows" from "I asked for nothing and got 0 rows". ``matched``
-        is the count of rows the ``by_*`` aggregation was computed over --
-        byte-equal to ``in_window`` on an unfiltered call, otherwise the
-        pre-aggregation subset size. Process-lifetime counters
-        (``total``, ``dropped``, ``first_ts``, ``last_ts``, ``capacity``)
-        are NOT sliced by the filters -- they describe the ring itself, not
-        the subset the caller cares about, and slicing them would silently
-        under-report churn to a filtered dashboard tile.
+        Optional keyword bounds (``since`` / ``until``) further restrict
+        the aggregation to rows whose ``ts`` falls in the half-open
+        interval ``[since, until)`` (epoch seconds; either bound may be
+        ``None`` = unbounded on that side). Bounds and categorical
+        filters are ``AND`` combined. A bogus bound (non-numeric string,
+        ``NaN``, negative epoch, ``bool``) collapses to "not supplied" so
+        an operator typo cannot silently drop every row; see
+        :func:`_coerce_ts_bound` for the exact contract.
+
+        ``filters`` echoes the applied categorical filter set (empty dict
+        when none supplied) so a caller can distinguish "I asked for
+        feature=X and got 0 rows" from "I asked for nothing and got 0
+        rows". ``time_window`` is a sibling ``{"since": <float|null>,
+        "until": <float|null>}`` echo of the resolved time bounds -- it
+        is always present so a dashboard tile can trust the top-level key
+        set is stable regardless of whether time bounds were supplied.
+        ``matched`` is the count of rows the ``by_*`` aggregation was
+        computed over -- byte-equal to ``in_window`` on a fully-unfiltered
+        call, otherwise the post-filter, post-window subset size. Process-
+        lifetime counters (``total``, ``dropped``, ``first_ts``,
+        ``last_ts``, ``capacity``) are NOT sliced by the filters or the
+        window -- they describe the ring itself, not the subset the caller
+        cares about, and slicing them would silently under-report churn to
+        a filtered dashboard tile.
 
         Never raises.
         """
@@ -281,6 +374,7 @@ class _PaywallEventStore:
                 event=event, feature=feature, harness=harness,
                 source=source, plan_chosen=plan_chosen,
             )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
             with self._lock:
                 snap = list(self._ring)
                 total = self._total
@@ -289,10 +383,14 @@ class _PaywallEventStore:
                 last_ts = self._last_ts
                 capacity = self._capacity
 
+            bucket = snap
             if filters:
-                bucket = [e for e in snap if _row_matches_filters(e, filters)]
-            else:
-                bucket = snap
+                bucket = [e for e in bucket if _row_matches_filters(e, filters)]
+            if since_ts is not None or until_ts is not None:
+                bucket = [
+                    e for e in bucket
+                    if _row_matches_time_window(e, since_ts, until_ts)
+                ]
 
             by_event: Counter = Counter()
             by_feature: Counter = Counter()
@@ -325,6 +423,7 @@ class _PaywallEventStore:
                 "by_plan_chosen": dict(by_plan),
                 "filters": dict(filters),
                 "matched": len(bucket),
+                "time_window": {"since": since_ts, "until": until_ts},
             }
         except Exception as exc:
             logger.warning("paywall.events: summary swallowed error: %s", exc)
@@ -342,6 +441,7 @@ class _PaywallEventStore:
                 "by_plan_chosen": {},
                 "filters": {},
                 "matched": 0,
+                "time_window": {"since": None, "until": None},
             }
 
     def recent(
@@ -353,6 +453,8 @@ class _PaywallEventStore:
         harness: str | None = None,
         source: str | None = None,
         plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
     ) -> list[dict]:
         """Return up to ``limit`` most-recent events, newest first.
 
@@ -367,6 +469,13 @@ class _PaywallEventStore:
         does not restrict on that dimension -- there is deliberately no
         way to query for rows with an empty field via this API, because
         ``?feature=`` in the query string would then be ambiguous.
+
+        Optional keyword bounds (``since`` / ``until``) restrict the
+        returned rows to those whose ``ts`` falls in the half-open
+        interval ``[since, until)`` (epoch seconds; either bound may be
+        ``None`` = unbounded on that side). Bounds combine with categorical
+        filters via ``AND``. See :func:`_coerce_ts_bound` for the exact
+        "bad bound collapses to unbounded" contract.
 
         Filter matching is case-sensitive against the stored (post-
         :func:`_coerce_str`) value, matching the case-sensitive keys of
@@ -392,14 +501,21 @@ class _PaywallEventStore:
                 event=event, feature=feature, harness=harness,
                 source=source, plan_chosen=plan_chosen,
             )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
             with self._lock:
                 snap = list(self._ring)
             snap.reverse()
-            if filters:
-                return [
-                    dict(e) for e in snap
-                    if _row_matches_filters(e, filters)
-                ][:n]
+
+            def _keep(row: dict) -> bool:
+                if filters and not _row_matches_filters(row, filters):
+                    return False
+                if (since_ts is not None or until_ts is not None) and not \
+                        _row_matches_time_window(row, since_ts, until_ts):
+                    return False
+                return True
+
+            if filters or since_ts is not None or until_ts is not None:
+                return [dict(e) for e in snap if _keep(e)][:n]
             return [dict(e) for e in snap[:n]]
         except Exception as exc:
             logger.warning("paywall.events: recent swallowed error: %s", exc)
@@ -413,13 +529,17 @@ class _PaywallEventStore:
         harness: str | None = None,
         source: str | None = None,
         plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
     ) -> int:
         """Return the count of ring rows matching the supplied filters,
         BEFORE any ``limit`` clamp is applied.
 
-        Same filter semantics as :meth:`recent` (``None`` / empty string
-        means "not supplied", case-sensitive exact match, ``AND`` combined).
-        With no filters, returns the full ring size -- byte-equal to
+        Same filter + window semantics as :meth:`recent` (``None`` /
+        empty string means "not supplied", case-sensitive exact match,
+        ``AND`` combined; ``since`` / ``until`` restrict to the half-open
+        ``[since, until)`` epoch-seconds interval). With no filters and no
+        window, returns the full ring size -- byte-equal to
         :meth:`summary`'s ``in_window`` on a quiet store, and always the
         ceiling ``recent(limit, **filters)`` could return at ``limit >=
         RECENT_MAX_LIMIT``.
@@ -437,11 +557,22 @@ class _PaywallEventStore:
                 event=event, feature=feature, harness=harness,
                 source=source, plan_chosen=plan_chosen,
             )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
             with self._lock:
                 snap = list(self._ring)
-            if not filters:
+            has_window = since_ts is not None or until_ts is not None
+            if not filters and not has_window:
                 return len(snap)
-            return sum(1 for e in snap if _row_matches_filters(e, filters))
+            count = 0
+            for e in snap:
+                if filters and not _row_matches_filters(e, filters):
+                    continue
+                if has_window and not _row_matches_time_window(
+                    e, since_ts, until_ts,
+                ):
+                    continue
+                count += 1
+            return count
         except Exception as exc:
             logger.warning("paywall.events: count_matching swallowed: %s", exc)
             return 0
@@ -470,17 +601,23 @@ def summary(
     harness: str | None = None,
     source: str | None = None,
     plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
 ) -> dict:
     """Public shim for ``GET /api/paywall/events/summary``.
 
     Filter kwargs are optional; a ``None`` or empty-string value means
-    "not supplied" and does not restrict on that dimension. See
-    :meth:`_PaywallEventStore.summary` for the filter contract and the
-    exact response shape (always includes ``filters`` and ``matched``).
+    "not supplied" and does not restrict on that dimension. Time bounds
+    (``since`` / ``until``) restrict to the half-open ``[since, until)``
+    epoch-seconds interval and may be supplied as ``float`` / ``int`` /
+    numeric-string; bad or blank values collapse to "not supplied". See
+    :meth:`_PaywallEventStore.summary` for the exact response shape
+    (always includes ``filters``, ``matched``, and ``time_window``).
     """
     return _STORE.summary(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
     )
 
 
@@ -492,12 +629,15 @@ def recent(
     harness: str | None = None,
     source: str | None = None,
     plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
 ) -> list[dict]:
     """Public shim for ``GET /api/paywall/events/recent``.
 
     ``limit`` defaults to :data:`RECENT_DEFAULT_LIMIT`. Filter kwargs are
     optional; a ``None`` or empty-string value means "not supplied" and
-    does not restrict on that dimension. See
+    does not restrict on that dimension. ``since`` / ``until`` restrict
+    to the half-open ``[since, until)`` epoch-seconds interval. See
     :meth:`_PaywallEventStore.recent` for the exact filter contract.
     """
     if limit is None:
@@ -506,6 +646,7 @@ def recent(
         limit,
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
     )
 
 
@@ -516,16 +657,20 @@ def count_matching(
     harness: str | None = None,
     source: str | None = None,
     plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
 ) -> int:
     """Public shim for :meth:`_PaywallEventStore.count_matching`.
 
-    Returns the count of ring rows matching the supplied filters BEFORE
-    any ``limit`` clamp. Used by ``/api/paywall/events/recent`` so it can
-    render "showing N of M matches" alongside the filtered event list.
+    Returns the count of ring rows matching the supplied filters +
+    time-window BEFORE any ``limit`` clamp. Used by
+    ``/api/paywall/events/recent`` so it can render "showing N of M
+    matches" alongside the filtered event list.
     """
     return _STORE.count_matching(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
     )
 
 
