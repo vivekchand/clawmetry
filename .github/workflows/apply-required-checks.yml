@@ -18,7 +18,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #     With only GITHUB_TOKEN (ghs_): read-only verify path in the script
 #     (exits 0 if C6 configured, exits 1 if not -- no admin rights needed).
 #     With E2E_ADMIN_PAT: full apply + verify.
-#     On failure, posts a notification comment on tracking issue #3970.
+#     On failure, posts a notification comment on tracking issue #3864.
 #
 # TOKEN PATHS (priority order):
 #   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
@@ -37,7 +37,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #   clawmetry-landing.
 #
 # Idempotent: running multiple times is safe.
-# Tracking: vivekchand/clawmetry#3970
+# Tracking: vivekchand/clawmetry#3864
 
 on:
   workflow_dispatch:
@@ -119,7 +119,7 @@ jobs:
         run: python3 scripts/apply_required_status_checks.py
 
       # When the C6 read-only verify exits 1 (checks not yet configured on main),
-      # post or update a comment on the E2E Robustness tracking issue #3970 so the
+      # post or update a comment on the E2E Robustness tracking issue #3864 so the
       # repo admin receives a GitHub notification.
       #
       # Only fires on push-to-main (the automated verify path), NOT on manual
@@ -161,15 +161,15 @@ jobs:
 
           # Upsert: update existing comment if present, otherwise create new.
           existing_id=$(gh api -X GET \
-            "repos/${REPO}/issues/3970/comments" \
+            "repos/${REPO}/issues/3864/comments" \
             --jq 'map(select(.body | startswith("<!-- c6-notify-bot -->"))) | .[0].id // empty' \
             2>/dev/null || echo "")
           if [ -n "${existing_id}" ]; then
             gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" \
               -f body="${BODY}" > /dev/null
-            echo "Updated existing C6 notification on #3970 (comment ${existing_id})"
+            echo "Updated existing C6 notification on #3864 (comment ${existing_id})"
           else
-            gh api -X POST "repos/${REPO}/issues/3970/comments" \
+            gh api -X POST "repos/${REPO}/issues/3864/comments" \
               -f body="${BODY}" > /dev/null
-            echo "Posted new C6 notification on #3970"
+            echo "Posted new C6 notification on #3864"
           fi
