@@ -262,6 +262,8 @@ def test_api_extensions_shape_empty(client):
         "plugin_count": 0,
         "failed_plugins": [],
         "failed_plugin_count": 0,
+        "probed_plugins": [],
+        "probed_plugin_count": 0,
         "events": [],
         "handler_counts": {},
     }
@@ -307,6 +309,8 @@ def test_api_extensions_never_raises(client, monkeypatch):
         "plugin_count": 0,
         "failed_plugins": [],
         "failed_plugin_count": 0,
+        "probed_plugins": [],
+        "probed_plugin_count": 0,
         "events": [],
         "handler_counts": {},
     }
@@ -358,3 +362,127 @@ def test_api_extensions_survives_missing_failed_plugins_helper(client, monkeypat
     assert body["plugin_count"] == 1
     assert body["failed_plugins"] == []
     assert body["failed_plugin_count"] == 0
+
+
+# ── GET /api/extensions × probed_plugins ────────────────────────────────────
+
+
+def _probe_fake_eps(*triples):
+    """Build a fake entry-point list that matches the ``probe_plugins`` row
+    shape — same helper the probe unit tests use, inlined here so the API
+    test doesn't reach across modules for its stubs."""
+    class _EP:
+        def __init__(self, fn, name, value):
+            self._fn = fn
+            self.name = name
+            self.value = value
+
+        def load(self):
+            return self._fn()
+
+    return [_EP(fn, n, v) for fn, n, v in triples]
+
+
+def test_api_extensions_reports_probed_plugins(client, monkeypatch):
+    """The probe surfaces every visible entry point with its ``value`` string
+    and whether ``ep.load()`` succeeds right now — even ones ``load_plugins``
+    hasn't touched (a wheel installed post-startup, before a daemon reload)."""
+    def _ok():
+        return lambda: None
+
+    def _bad():
+        raise RuntimeError("import kaboom")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _probe_fake_eps(
+            (_ok,  "clawmetry-pro", "clawmetry_pro.ext:register_all"),
+            (_bad, "flaky-plugin",  "flaky.mod:register_all"),
+        ),
+    )
+
+    body = json.loads(client.get("/api/extensions").data)
+    assert body["probed_plugin_count"] == 2
+    assert body["probed_plugins"] == [
+        {
+            "name": "clawmetry-pro",
+            "value": "clawmetry_pro.ext:register_all",
+            "importable": True,
+            "error": None,
+        },
+        {
+            "name": "flaky-plugin",
+            "value": "flaky.mod:register_all",
+            "importable": False,
+            "error": "import kaboom",
+        },
+    ]
+
+
+def test_api_extensions_probed_independent_of_load_plugins(client, monkeypatch):
+    """``probed_plugins`` reflects the CURRENT importability of every visible
+    entry point — it must NOT require ``load_plugins`` to have run. That's
+    the whole point: on a short-lived process (``clawmetry status`` shell,
+    or a dashboard restart after a post-startup wheel install) the probe
+    still populates while ``plugins`` reads empty.
+    """
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _probe_fake_eps(
+            (lambda: (lambda: None), "clawmetry-pro", "pkg:reg"),
+        ),
+    )
+    # Deliberately do NOT call ext.load_plugins() — the ``plugins`` mirror
+    # should stay empty while the probe still surfaces the entry point.
+
+    body = json.loads(client.get("/api/extensions").data)
+    assert body["plugins"] == []
+    assert body["plugin_count"] == 0
+    assert body["probed_plugin_count"] == 1
+    assert body["probed_plugins"][0]["name"] == "clawmetry-pro"
+    assert body["probed_plugins"][0]["importable"] is True
+
+
+def test_api_extensions_survives_missing_probe_plugins_helper(client, monkeypatch):
+    """A mixed deploy where the routes package is new but the core
+    ``clawmetry`` is old (no :func:`probe_plugins`) must still populate the
+    rest of the envelope instead of 5xx'ing the whole response — same
+    contract we honour for the older ``failed_plugins`` accessor.
+    """
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _fake_eps((lambda: None, "clawmetry-pro")),
+    )
+    ext.load_plugins()
+
+    def missing():
+        raise AttributeError("probe_plugins")
+
+    monkeypatch.setattr(ext, "probe_plugins", missing)
+
+    body = json.loads(client.get("/api/extensions").data)
+    assert body["plugins"] == ["clawmetry-pro"]
+    assert body["plugin_count"] == 1
+    assert body["probed_plugins"] == []
+    assert body["probed_plugin_count"] == 0
+
+
+def test_api_extensions_probed_row_never_leaks_traceback(client, monkeypatch):
+    """A load-time error surfaces as ``str(exc)`` only — no traceback / frame
+    locals — matching the same posture the ``failed_plugins`` mirror honours,
+    so a stack-frame path never leaks into ``GET /api/extensions``.
+    """
+    def _leaky():
+        secret = "/home/op/.clawmetry/license.key"  # noqa: F841
+        raise RuntimeError("plain")
+
+    monkeypatch.setattr(
+        ext, "_select_entry_points",
+        lambda group: _probe_fake_eps((_leaky, "clawmetry-pro", "pkg:reg")),
+    )
+
+    body = json.loads(client.get("/api/extensions").data)
+    row = body["probed_plugins"][0]
+    assert row["error"] == "plain"
+    assert "Traceback" not in row["error"]
+    assert "license.key" not in row["error"]
