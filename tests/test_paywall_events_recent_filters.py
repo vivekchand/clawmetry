@@ -338,6 +338,7 @@ def test_api_recent_envelope_shape_is_stable(client):
     body = client.get("/api/paywall/events/recent").get_json()
     assert set(body.keys()) == {
         "events", "count", "matched", "limit", "in_window", "filters",
+        "time_window",
     }
 
 
@@ -501,6 +502,7 @@ def test_api_recent_filter_never_5xxs_on_store_failure(client, monkeypatch):
         "limit": 0,
         "in_window": 0,
         "filters": {},
+        "time_window": {"since": None, "until": None},
     }
 
 

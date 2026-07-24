@@ -7299,6 +7299,16 @@ def api_paywall_events_summary():
       ?source=<source-key>
       ?plan_chosen=<plan-code>
 
+    Optional time-window params further restrict to rows whose ``ts``
+    falls in the half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank (= "unbounded on that side").
+    A non-numeric, NaN, or negative bound collapses to "not supplied"
+    so an operator typo cannot silently drop every row.
+
     Body shape::
 
         {
@@ -7313,8 +7323,10 @@ def api_paywall_events_summary():
           "by_harness": {"<key>":  <int>, ...},
           "by_source":  {"<key>":  <int>, ...},
           "by_plan_chosen": {"<plan>": <int>, ...},
-          "filters": {"<key>": "<value>", ...},      # echo of applied filters
-          "matched": <int>                           # rows the by_* aggregate covers
+          "filters": {"<key>": "<value>", ...},      # echo of applied categorical filters
+          "matched": <int>,                          # rows the by_* aggregate covers
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                     # echo of resolved bounds
         }
 
     Process-lifetime counters (``total``, ``dropped``, ``first_ts``,
@@ -7322,8 +7334,8 @@ def api_paywall_events_summary():
     they describe the ring itself, not the subset the caller cares about,
     so a filtered dashboard tile can still see churn / evictions in
     context. The ``by_*`` breakdowns and ``matched`` count reflect the
-    filtered subset. On an unfiltered request ``matched`` byte-equals
-    ``in_window``.
+    filtered subset (categorical + time-window). On a fully-unfiltered
+    request ``matched`` byte-equals ``in_window``.
 
     Ships in GRACE -- no entitlement gate, no capacity accounting. Grace-
     mode read of a grace-mode write.
@@ -7338,6 +7350,11 @@ def api_paywall_events_summary():
             key: request.args.get(key, "") or None
             for key in ("event", "feature", "harness", "source", "plan_chosen")
         }
+        # ``since`` / ``until`` share the same "blank means not supplied"
+        # posture as the categorical filters; the store layer does the
+        # numeric coercion + NaN / negative guarding.
+        for key in ("since", "until"):
+            filter_kwargs[key] = request.args.get(key, "") or None
         return jsonify(_pe.summary(**filter_kwargs))
     except Exception as exc:
         logger.warning("api_paywall_events_summary: error: %s", exc)
@@ -7356,6 +7373,7 @@ def api_paywall_events_summary():
                 "by_plan_chosen": {},
                 "filters": {},
                 "matched": 0,
+                "time_window": {"since": None, "until": None},
             }
         )
 
@@ -7384,6 +7402,15 @@ def api_paywall_events_recent():
     an empty field via this API. Filter mismatches never fail the request:
     they simply return an empty ``events`` list and ``matched=0``.
 
+    Optional time-window params restrict to rows whose ``ts`` falls in the
+    half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank. Bad bounds (non-numeric, NaN,
+    negative) collapse to "not supplied".
+
     Body shape::
 
         {
@@ -7393,14 +7420,16 @@ def api_paywall_events_recent():
             ...
           ],
           "count": <int>,          # events actually returned (post-filter, post-limit)
-          "matched": <int>,        # rows matching the filters, pre-limit (>= count)
+          "matched": <int>,        # rows matching the filters + window, pre-limit (>= count)
           "limit": <int>,          # the resolved (post-clamp) limit
           "in_window": <int>,      # size of the underlying ring right now
-          "filters": {"<key>": "<value>", ...}   # echo of applied filters (blank ones omitted)
+          "filters": {"<key>": "<value>", ...},  # echo of applied categorical filters
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
         }
 
     ``matched`` lets a UI render "showing N of M matches" without a second
-    round-trip. On an unfiltered request ``matched`` byte-equals
+    round-trip. On a fully-unfiltered request ``matched`` byte-equals
     ``in_window``.
 
     Ships in GRACE. Never 5xxs -- on any failure returns an empty envelope.
@@ -7421,12 +7450,19 @@ def api_paywall_events_recent():
             key: request.args.get(key, "") or None
             for key in ("event", "feature", "harness", "source", "plan_chosen")
         }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
         # `_pe.recent` / `count_matching` treat empty / whitespace strings as
         # "not supplied" so the query-string echo below is the canonical
-        # applied-filter set.
-        events = _pe.recent(limit_val, **filter_kwargs)
-        matched = _pe.count_matching(**filter_kwargs)
-        summary = _pe.summary()
+        # applied-filter set. Time bounds go through their own numeric
+        # coercion in the store, so we ask the store what it actually
+        # resolved to (via `summary(**window_kwargs)["time_window"]`)
+        # rather than echoing the raw string.
+        events = _pe.recent(limit_val, **filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
         applied_filters = {
             key: value.strip()
             for key, value in filter_kwargs.items()
@@ -7440,6 +7476,9 @@ def api_paywall_events_recent():
                 "limit": limit_val,
                 "in_window": summary.get("in_window", 0),
                 "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
             }
         )
     except Exception as exc:
@@ -7452,6 +7491,7 @@ def api_paywall_events_recent():
                 "limit": 0,
                 "in_window": 0,
                 "filters": {},
+                "time_window": {"since": None, "until": None},
             }
         )
 
