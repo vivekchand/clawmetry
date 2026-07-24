@@ -9,7 +9,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # used cross-repo (returns 403 even on public repos); unauthenticated
 # reads return the full protection.required_status_checks object.
 #
-# On failure: posts an @-mentioned reminder to tracking issue #3906
+# On failure: posts an @-mentioned reminder to tracking issue #3864
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6:
@@ -19,7 +19,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#3906
+# Tracking: vivekchand/clawmetry#3864
 
 on:
   schedule:
@@ -49,7 +49,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 3906
+          TRACKING_ISSUE = 3864
           MARKER = "<!-- c6-health-check -->"
           # Repo this workflow runs in. Cross-repo reads must NOT send the
           # scoped GITHUB_TOKEN: Actions tokens are repo-scoped and return 403
