@@ -7837,6 +7837,99 @@ def api_paywall_events_first():
         )
 
 
+@bp_entitlement.route("/api/paywall/events/count")
+def api_paywall_events_count():
+    """``GET /api/paywall/events/count`` -- scalar count of ring rows
+    matching the supplied filters + time-window.
+
+    Scalar sibling of ``/api/paywall/events/{summary,recent,first,last}``
+    for the common case where a dashboard tile only needs the number
+    (e.g. "42 CTA clicks in the last hour") and does not want to pay
+    the per-row ``dict(e)`` copy cost of ``/recent`` or the five
+    ``by_*`` aggregations of ``/summary``. A pricing-page widget
+    binding "how many paywall_view beacons in this window?" to a
+    single number reaches for this instead of unwrapping
+    ``summary()['matched']``.
+
+    Same categorical filter query params + semantics as
+    ``/api/paywall/events/recent`` -- ``?event=`` / ``?feature=`` /
+    ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
+    exact match, ``AND`` combined, blank / missing = "not supplied".
+
+    Same time-window params as ``/api/paywall/events/{summary,recent}``::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Half-open ``[since, until)``; either bound may be omitted or blank.
+    Bad bounds (non-numeric, NaN, negative) collapse to "not supplied"
+    so an operator typo cannot silently drop every row.
+
+    Body shape::
+
+        {
+          "count": <int>,      # rows matching filters + window
+          "in_window": <int>,  # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...},  # echo of applied categorical filters
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
+        }
+
+    ``count`` byte-equals ``/api/paywall/events/recent``'s ``matched``
+    for the same filter + window inputs (both call
+    :func:`_paywall_events.count_matching`), and byte-equals
+    ``/api/paywall/events/summary``'s ``matched`` for the same inputs.
+    On a fully-unfiltered request ``count`` byte-equals ``in_window``.
+
+    Ships in GRACE. Never 5xxs -- on any failure returns the neutral
+    ``count=0`` envelope so a paywall-dashboard tile keeps rendering.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        # `count_matching` and `summary` treat empty / whitespace strings
+        # as "not supplied" so the query-string echo below is the
+        # canonical applied-filter set. Time bounds go through their
+        # own numeric coercion in the store, so we ask the store what
+        # it actually resolved to (via `summary(**window_kwargs)`)
+        # rather than echoing the raw string.
+        count = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "count": count,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_count: error: %s", exc)
+        return jsonify(
+            {
+                "count": 0,
+                "in_window": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+        )
+
+
 def _route_actor() -> str:
     try:
         for h in ("X-Actor", "X-Forwarded-For"):
