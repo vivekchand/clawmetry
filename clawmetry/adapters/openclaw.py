@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time as _time
 from typing import List, Optional, Set
@@ -24,6 +25,12 @@ from typing import List, Optional, Set
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
+
+# Named OpenClaw profiles write openclaw-{name}-YYYY-MM-DD.log alongside the
+# default-profile openclaw-YYYY-MM-DD.log.  Matching only the date-only form
+# prevents lexicographic sort from mis-selecting a named-profile log as
+# "the current log" and silently dropping default-profile gateway events.
+_DEFAULT_LOG_RE = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
@@ -477,7 +484,10 @@ def _gateway_log_files() -> list:
         if os.path.isdir(entry):
             candidates.append(entry)
     for d in candidates:
-        matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        matches = sorted(
+            m for m in glob.glob(os.path.join(d, "openclaw-*.log"))
+            if _DEFAULT_LOG_RE.search(os.path.basename(m))
+        )
         if matches:
             return matches[-5:]
     return []
