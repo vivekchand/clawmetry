@@ -297,6 +297,9 @@ builds canary URLs from endpoint names, and fails with guidance when an
 event-data response omits `_source` or reports anything other than
 `local_store`.
 
+### Entitlements & open-core
+ClawMetry is open-core. `clawmetry/entitlements.py` is the single source of truth for what an install is allowed to do; `clawmetry/license.py` verifies self-hosted license keys offline with Ed25519 (using the `cryptography` dep, no new packages); `routes/entitlement.py` exposes the resolved entitlement plus the preview/diff family at `/api/entitlement*`. The resolver currently runs in GRACE mode (every `allows_*` check answers "allowed" regardless of tier), so wiring the gate in changes no behaviour today. See [`docs/ENTITLEMENTS.md`](docs/ENTITLEMENTS.md) for the FREE vs paid split, per-tier feature/capacity matrix, resolution order, and the `clawmetry license` CLI.
+
 ### Dependencies
 Minimal by design:
 - **Flask** — Web server
