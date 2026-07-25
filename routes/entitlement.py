@@ -7743,21 +7743,36 @@ def api_paywall_events_last():
     ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
     exact match, ``AND`` combined, blank / missing = "not supplied".
 
+    Optional time-window params restrict to rows whose ``ts`` falls in
+    the half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank. Bad bounds (non-numeric, NaN,
+    negative) collapse to "not supplied" -- matching the semantics of
+    ``/api/paywall/events/recent`` so a caller can rebind the same
+    window pair without translation.
+
     Body shape::
 
         {
           "event": {"event": "...", "feature": "...", "harness": "...",
                     "source": "...", "plan_chosen": "...", "ts": <float>} | null,
-          "matched": <int>,  # rows matching the filters (0 iff event is null)
+          "matched": <int>,  # rows matching the filters + window (0 iff event is null)
           "in_window": <int>,  # size of the underlying ring right now
-          "filters": {"<key>": "<value>", ...}
+          "filters": {"<key>": "<value>", ...},
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
         }
 
     ``matched`` uses the same helper as ``/api/paywall/events/recent`` so
     a UI can render "last of M matches" without a second round-trip.
+    ``time_window`` is always present so the top-level key set stays
+    stable regardless of whether time bounds were supplied.
 
     Ships in GRACE. Never 5xxs -- on any failure returns the neutral
-    ``event=null`` envelope.
+    ``event=null`` envelope (still carrying ``time_window``).
     """
     try:
         from clawmetry import _paywall_events as _pe
@@ -7766,9 +7781,13 @@ def api_paywall_events_last():
             key: request.args.get(key, "") or None
             for key in ("event", "feature", "harness", "source", "plan_chosen")
         }
-        event_row = _pe.last_matching(**filter_kwargs)
-        matched = _pe.count_matching(**filter_kwargs)
-        summary = _pe.summary()
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        event_row = _pe.last_matching(**filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
         applied_filters = {
             key: value.strip()
             for key, value in filter_kwargs.items()
@@ -7780,6 +7799,9 @@ def api_paywall_events_last():
                 "matched": matched,
                 "in_window": summary.get("in_window", 0),
                 "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
             }
         )
     except Exception as exc:
@@ -7790,6 +7812,7 @@ def api_paywall_events_last():
                 "matched": 0,
                 "in_window": 0,
                 "filters": {},
+                "time_window": {"since": None, "until": None},
             }
         )
 
@@ -7810,9 +7833,16 @@ def api_paywall_events_first():
     binds this rather than paging the full ring via
     ``/api/paywall/events/recent`` and inspecting the tail.
 
-    Body shape is identical to ``/api/paywall/events/last``. Ships in
-    GRACE. Never 5xxs -- on any failure returns the neutral
-    ``event=null`` envelope.
+    Optional time-window params (``?since=`` / ``?until=``) restrict to
+    rows whose ``ts`` falls in the half-open ``[since, until)`` epoch-
+    seconds interval. With a window supplied, "first" means "oldest
+    resident row in the window" -- rows evicted from the ring cannot be
+    re-surfaced by a wider window. Same coercion contract as
+    ``/api/paywall/events/recent``.
+
+    Body shape is identical to ``/api/paywall/events/last`` and always
+    carries ``time_window``. Ships in GRACE. Never 5xxs -- on any
+    failure returns the neutral ``event=null`` envelope.
     """
     try:
         from clawmetry import _paywall_events as _pe
@@ -7821,9 +7851,13 @@ def api_paywall_events_first():
             key: request.args.get(key, "") or None
             for key in ("event", "feature", "harness", "source", "plan_chosen")
         }
-        event_row = _pe.first_matching(**filter_kwargs)
-        matched = _pe.count_matching(**filter_kwargs)
-        summary = _pe.summary()
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        event_row = _pe.first_matching(**filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
         applied_filters = {
             key: value.strip()
             for key, value in filter_kwargs.items()
@@ -7835,6 +7869,9 @@ def api_paywall_events_first():
                 "matched": matched,
                 "in_window": summary.get("in_window", 0),
                 "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
             }
         )
     except Exception as exc:
@@ -7845,6 +7882,7 @@ def api_paywall_events_first():
                 "matched": 0,
                 "in_window": 0,
                 "filters": {},
+                "time_window": {"since": None, "until": None},
             }
         )
 

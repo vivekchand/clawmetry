@@ -58,6 +58,7 @@ def test_last_empty_ring_returns_null_envelope(client):
         "matched": 0,
         "in_window": 0,
         "filters": {},
+        "time_window": {"since": None, "until": None},
     }
 
 
@@ -145,6 +146,7 @@ def test_last_never_5xxs_on_broken_store(client, monkeypatch):
         "matched": 0,
         "in_window": 0,
         "filters": {},
+        "time_window": {"since": None, "until": None},
     }
 
 
@@ -158,6 +160,7 @@ def test_first_empty_ring_returns_null_envelope(client):
         "matched": 0,
         "in_window": 0,
         "filters": {},
+        "time_window": {"since": None, "until": None},
     }
 
 
@@ -217,6 +220,7 @@ def test_first_never_5xxs_on_broken_store(client, monkeypatch):
         "matched": 0,
         "in_window": 0,
         "filters": {},
+        "time_window": {"since": None, "until": None},
     }
 
 

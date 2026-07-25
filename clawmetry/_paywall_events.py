@@ -585,6 +585,8 @@ class _PaywallEventStore:
         harness: str | None = None,
         source: str | None = None,
         plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
     ) -> dict | None:
         """Return the single most-recent event matching the supplied
         filters, or ``None`` if nothing matches.
@@ -600,6 +602,16 @@ class _PaywallEventStore:
         O(k) where k is the distance from the newest row to the first
         matching row, not O(n).
 
+        Optional keyword bounds (``since`` / ``until``) further restrict
+        the walk to rows whose ``ts`` falls in the half-open interval
+        ``[since, until)`` (epoch seconds; either bound may be ``None`` =
+        unbounded on that side). Bounds and categorical filters are
+        ``AND`` combined; a bogus bound collapses to "not supplied" via
+        :func:`_coerce_ts_bound`. Semantics match :meth:`recent` so a
+        dashboard tile can rebind the same window pair from
+        ``/api/paywall/events/recent`` to ``/api/paywall/events/last``
+        without translation.
+
         Never raises: a filter failure short-circuits to ``None`` instead
         of propagating.
         """
@@ -608,10 +620,16 @@ class _PaywallEventStore:
                 event=event, feature=feature, harness=harness,
                 source=source, plan_chosen=plan_chosen,
             )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
+            has_window = since_ts is not None or until_ts is not None
             with self._lock:
                 snap = list(self._ring)
             for e in reversed(snap):
                 if filters and not _row_matches_filters(e, filters):
+                    continue
+                if has_window and not _row_matches_time_window(
+                    e, since_ts, until_ts,
+                ):
                     continue
                 return dict(e)
             return None
@@ -627,6 +645,8 @@ class _PaywallEventStore:
         harness: str | None = None,
         source: str | None = None,
         plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
     ) -> dict | None:
         """Return the single oldest event matching the supplied filters,
         or ``None`` if nothing matches.
@@ -644,6 +664,15 @@ class _PaywallEventStore:
         matches the rest of this module's semantics (aggregations
         reflect what's live, not what's been evicted).
 
+        Optional keyword bounds (``since`` / ``until``) restrict the walk
+        to rows whose ``ts`` falls in the half-open interval
+        ``[since, until)`` (epoch seconds; either bound may be ``None`` =
+        unbounded on that side). Bounds and categorical filters are
+        ``AND`` combined; a bogus bound collapses to "not supplied" via
+        :func:`_coerce_ts_bound`. "First" with a window means "oldest
+        resident row whose ``ts`` is in the window" -- rows evicted from
+        the ring cannot be re-surfaced by a wider window.
+
         Never raises.
         """
         try:
@@ -651,10 +680,16 @@ class _PaywallEventStore:
                 event=event, feature=feature, harness=harness,
                 source=source, plan_chosen=plan_chosen,
             )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
+            has_window = since_ts is not None or until_ts is not None
             with self._lock:
                 snap = list(self._ring)
             for e in snap:
                 if filters and not _row_matches_filters(e, filters):
+                    continue
+                if has_window and not _row_matches_time_window(
+                    e, since_ts, until_ts,
+                ):
                     continue
                 return dict(e)
             return None
@@ -766,6 +801,8 @@ def last_matching(
     harness: str | None = None,
     source: str | None = None,
     plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
 ) -> dict | None:
     """Public shim for :meth:`_PaywallEventStore.last_matching`.
 
@@ -773,10 +810,15 @@ def last_matching(
     filters, or ``None`` if nothing matches. Scalar counterpart to
     :func:`recent` -- a dashboard tile binding "last paywall CTA click
     for feature X" avoids the one-element-list unwrap this way.
+
+    Optional ``since`` / ``until`` restrict to the half-open
+    ``[since, until)`` epoch-seconds interval, matching the contract of
+    :func:`recent` / :func:`summary` / :func:`count_matching`.
     """
     return _STORE.last_matching(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
     )
 
 
@@ -787,6 +829,8 @@ def first_matching(
     harness: str | None = None,
     source: str | None = None,
     plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
 ) -> dict | None:
     """Public shim for :meth:`_PaywallEventStore.first_matching`.
 
@@ -794,10 +838,15 @@ def first_matching(
     or ``None`` if nothing matches. Anchored to what the ring currently
     holds -- see :meth:`_PaywallEventStore.first_matching` for the
     eviction contract.
+
+    Optional ``since`` / ``until`` restrict to the half-open
+    ``[since, until)`` epoch-seconds interval, matching the contract of
+    :func:`recent` / :func:`summary` / :func:`count_matching`.
     """
     return _STORE.first_matching(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
     )
 
 
