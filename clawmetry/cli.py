@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import sys
 import os
@@ -5172,6 +5171,25 @@ def main() -> None:
     if _otel_ep:
         os.environ["CLAWMETRY_OTEL_EXPORT_ENDPOINT"] = _otel_ep
         print(f"OpenTelemetry export ON → {_otel_ep} (GenAI semconv)", flush=True)
+    # Short-circuit --version before loading dashboard + DuckDB.
+    # dashboard.py calls get_store() at module level when CLAWMETRY_ROLE=dashboard is
+    # set; on some Linux runners duckdb init SIGSEGVs in that path. --version never
+    # needs the store so we read __version__ directly and return immediately.
+    if "--version" in sys.argv:
+        try:
+            import importlib.util as _ilu
+            _spec = _ilu.find_spec("dashboard")
+            if _spec and _spec.origin:
+                import re as _re
+                _src = open(_spec.origin, encoding="utf-8", errors="replace").read(50000)
+                _m = _re.search(r'__version__\s*=\s*"(.+?)"', _src)
+                _v = _m.group(1) if _m else "unknown"
+            else:
+                _v = "unknown"
+        except Exception:
+            _v = "unknown"
+        print(f"clawmetry {_v}")
+        return
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
     # DuckDB writer — only the sync daemon writes. Set before the import or a
