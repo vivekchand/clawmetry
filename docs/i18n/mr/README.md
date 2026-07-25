@@ -1,4 +1,4 @@
-<!-- i18n-src:48548997be76 -->
+<!-- i18n-src:8f42d460a973 -->
 > मराठी translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -11,40 +11,40 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**तुमचा एजंट विचार करताना पाहा.** **१२ AI एजंट रनटाइम्ससाठी** रिअल-टाइम निरीक्षण: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex आणि इतर ८. तुमच्या संपूर्ण एजंट ताफ्यासाठी एक डॅशबोर्ड.
+**तुमचा एजंट कसा विचार करतो ते पहा.** **14 AI एजंट रनटाइम्ससाठी** रिअल-टाइम ऑब्झर्व्हेबिलिटी: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex आणि आणखी 10. तुमच्या संपूर्ण एजंट फ्लीटसाठी एकच डॅशबोर्ड.
 
 > 🌐 **हे यामध्ये वाचा:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [अधिक →](docs/i18n/)
 
-एक कमांड. कोणतीही कॉन्फिगरेशन नाही. सर्व काही आपोआप शोधते.
+एकच कमांड. शून्य कॉन्फिगरेशन. सर्वकाही आपोआप शोधले जाते.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-**http://localhost:8900** वर उघडते आणि काम पूर्ण.
+**http://localhost:8900** वर उघडते आणि झाले.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## १२ एजंट रनटाइम्ससह काम करते
+## 14 एजंट रनटाइम्ससह कार्य करते
 
-ClawMetry OpenClaw साठी निरीक्षण म्हणून सुरू झाले, आणि आता एका डॅशबोर्डमध्ये तुमच्या **संपूर्ण एजंट ताफ्याचे** मापन करते, तुमच्या मशीनवर प्रत्येक रनटाइम आपोआप शोधते:
+ClawMetry ची सुरुवात OpenClaw साठी ऑब्झर्व्हेबिलिटी म्हणून झाली, आणि आता ते तुमच्या **संपूर्ण एजंट फ्लीट**चे मापन एकाच डॅशबोर्डमध्ये करते, तुमच्या मशीनवरील प्रत्येक रनटाइम आपोआप शोधून:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
 
-OpenClaw आणि NemoClaw ओपन-सोर्स ॲपमध्ये विनामूल्य आहेत; इतर रनटाइम्स ClawMetry Cloud किंवा स्वत: होस्ट केलेल्या Pro परवान्यासह सक्रिय होतात. हेडरमधून रनटाइम बदला आणि प्रत्येक टॅब — खर्च, टोकन्स, टूल्स, ट्रेसेस — त्या रनटाइमनुसार बदलतो.
+OpenClaw आणि NemoClaw ओपन-सोर्स अ‍ॅपमध्ये मोफत आहेत; इतर रनटाइम्स ClawMetry Cloud किंवा सेल्फ-होस्टेड Pro लायसन्ससह सक्रिय होतात. हेडरमधून रनटाइम्स बदला आणि प्रत्येक टॅब — कॉस्ट, टोकन्स, टूल्स, ट्रेसेस — त्या रनटाइमनुसार पुन्हा-स्कोप होतो. नेमका फ्री/पेड विभाग, टियर मॅट्रिक्स, `/api/entitlement` शेप, आणि `clawmetry license` CLI साठी **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** पहा.
 
 ## तुम्हाला काय मिळते
 
-- **Flow** — चॅनेल्स, ब्रेन, टूल्समधून संदेश वाहताना दाखवणारा लाइव्ह अॅनिमेटेड आकृती
-- **Overview** — हेल्थ चेक्स, क्रियाकलाप हीटमॅप, सेशन संख्या, मॉडेल माहिती
-- **Usage** — दैनिक/साप्ताहिक/मासिक विश्लेषणासह टोकन आणि खर्च ट्रॅकिंग
-- **Sessions** — मॉडेल, टोकन्स, शेवटची क्रियाकलापासह सक्रिय एजंट सेशन्स
-- **Crons** — स्थिती, पुढील रन, कालावधीसह शेड्यूल केलेल्या जॉब्स
-- **Logs** — रंग-कोड केलेले रिअल-टाइम लॉग स्ट्रीमिंग
-- **Memory** — SOUL.md, MEMORY.md, AGENTS.md, दैनिक नोट्स ब्राउझ करा
+- **Flow** — चॅनेल्स, ब्रेन, टूल्स आणि परत यामधून जाणाऱ्या मेसेजेस दाखवणारा लाइव्ह अ‍ॅनिमेटेड डायग्राम
+- **Overview** — हेल्थ चेक्स, अ‍ॅक्टिव्हिटी हीटमॅप, सेशन काउंट्स, मॉडेल माहिती
+- **Usage** — दैनिक/साप्ताहिक/मासिक ब्रेकडाउनसह टोकन आणि कॉस्ट ट्रॅकिंग
+- **Sessions** — मॉडेल, टोकन्स, शेवटची अ‍ॅक्टिव्हिटीसह सक्रिय एजंट सेशन्स
+- **Crons** — स्टेटस, पुढील रन, कालावधीसह शेड्युल्ड जॉब्स
+- **Logs** — रंग-कोडेड रिअल-टाइम लॉग स्ट्रीमिंग
+- **Memory** — SOUL.md, MEMORY.md, AGENTS.md, दैनंदिन नोट्स ब्राउझ करा
 - **Transcripts** — सेशन इतिहास वाचण्यासाठी चॅट-बबल UI
-- **Alerts** — बजेट मर्यादा, एरर-रेट ट्रिगर्स, एजंट-ऑफलाइन शोध; Slack, Discord, PagerDuty, Telegram, Email वर पाठवते
-- **Approvals** — विनाशकारी हटवणे, फोर्स पुश, DB बदल, sudo, पॅकेज इन्स्टॉल, नेटवर्क कॉल एका क्लिकच्या मंजुरीमागे ठेवा
+- **Alerts** — बजेट कॅप्स, एरर-रेट ट्रिगर्स, एजंट-ऑफलाइन डिटेक्शन; Slack, Discord, PagerDuty, Telegram, Email कडे रूट करते
+- **Approvals** — विनाशकारी डिलीट्स, फोर्स पुश, DB म्युटेशन्स, sudo, पॅकेज इन्स्टॉल्स, नेटवर्क कॉल्स एका क्लिकच्या सही-मंजुरीमागे गेट करा
 
 ## स्क्रीनशॉट्स
 
@@ -57,7 +57,7 @@ OpenClaw आणि NemoClaw ओपन-सोर्स ॲपमध्ये व�
 ### ⚡ Flow — रिअल-टाइम टूल कॉल फीड
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 Tokens — मॉडेल आणि सेशनद्वारे खर्चाचे विश्लेषण
+### 💰 Tokens — मॉडेल आणि सेशननुसार कॉस्ट ब्रेकडाउन
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
 ### 🧬 Memory — वर्कस्पेस फाइल ब्राउझर
@@ -66,15 +66,15 @@ OpenClaw आणि NemoClaw ओपन-सोर्स ॲपमध्ये व�
 ### 🔐 Security — पोश्चर आणि ऑडिट लॉग
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 Alerts — बजेट मर्यादा, एरर-रेट ट्रिगर्स, Slack / Discord / PagerDuty / Email वर वेबहुक्स
+### 🚨 Alerts — बजेट कॅप्स, एरर-रेट ट्रिगर्स, Slack / Discord / PagerDuty / Email कडे वेबहूक्स
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals — धोकादायक टूल कॉल्स मॅन्युअल मंजुरीमागे ठेवा; धोरण-समर्थित संरक्षण नियम
+### ✋ Approvals — जोखमीच्या टूल कॉल्सना मॅन्युअल सही-मंजुरीमागे गेट करा; पॉलिसी-समर्थित संरक्षण नियम
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-## इन्स्टॉल करा
+## इन्स्टॉल
 
-**एक-लायनर (शिफारस केलेले):**
+**वन-लाइनर (शिफारसीय):**
 ```bash
 curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
@@ -85,17 +85,18 @@ pip install clawmetry
 clawmetry
 ```
 
-**सोर्सवरून:**
+**स्त्रोतापासून:**
 ```bash
 git clone https://github.com/vivekchand/clawmetry.git
 cd clawmetry && pip install flask && python3 dashboard.py
 ```
 
-## v2 फ्रंटएंड विकास
+## v2 फ्रंटएंड डेव्हलपमेंट
 
-v2 React ॲप `frontend/` मध्ये आहे आणि Flask सर्व्हर v2 सक्षम करून सुरू केल्यावर `/v2` वर सर्व्ह केली जाते.
+v2 React अ‍ॅप `frontend/` मध्ये आहे आणि Flask सर्व्हर v2 सक्षम करून सुरू केल्यावर
+`/v2` वर सर्व्ह केला जातो.
 
-विकास करताना दोन टर्मिनल वापरा:
+डेव्हलप करताना दोन टर्मिनल्स वापरा:
 
 ```bash
 # Terminal 1: Flask API/server on :8900
@@ -110,40 +111,44 @@ npm ci
 npm run dev
 ```
 
-`http://localhost:5173/v2/` उघडा. Vite `/api` विनंत्या `http://localhost:8900` वर प्रॉक्सी करतो, त्यामुळे React ॲप अतिरिक्त CORS सेटअपशिवाय स्थानिक Flask सर्व्हरशी बोलू शकतो.
+`http://localhost:5173/v2/` उघडा. Vite `/api` रिक्वेस्ट्स
+`http://localhost:8900` कडे प्रॉक्सी करतो, त्यामुळे React अ‍ॅप कोणत्याही
+अतिरिक्त CORS सेटअपशिवाय स्थानिक Flask सर्व्हरशी बोलू शकतो.
 
-Python पॅकेजसोबत पाठवला जाणारा बंडल तयार करण्यासाठी:
+Python पॅकेजसोबत शिप होणारा बंडल तयार करण्यासाठी:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-प्रोडक्शन बंडल `clawmetry/static/v2/dist/` मध्ये लिहिला जातो.
+प्रॉडक्शन बंडल `clawmetry/static/v2/dist/` मध्ये लिहिला जातो.
 
 ## रनटाइम / एजंट सुसंगतता
 
-ClawMetry अनेक AI-एजंट रनटाइम्सचे निरीक्षण करते, केवळ OpenClaw नाही. प्रत्येक OpenClaw-नसलेल्या रनटाइमसाठी एक समर्पित रीडर अडॅप्टर येतो जो त्याच्या नेटिव्ह सेशन स्वरूपाचे ClawMetry च्या एकत्रित आकारांमध्ये रूपांतर करतो; डेमन त्यांना रनटाइमसह टॅग करून त्याच DuckDB स्टोर आणि क्लाउड स्नॅपशॉटमध्ये घेतो, आणि Session रिप्ले टॅब एकापेक्षा जास्त रनटाइम असताना **रनटाइम स्विचर** दाखवतो. पूर्ण मॅट्रिक्स आणि रनटाइम जोडण्याचे मार्गदर्शन [`docs/compatibility.md`](docs/compatibility.md) मध्ये, आणि OpenClaw-कुटुंब प्राइमर [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) मध्ये पाहा.
+ClawMetry फक्त OpenClaw नाही तर अनेक AI-एजंट रनटाइम्सचे निरीक्षण करते. प्रत्येक OpenClaw-नसलेला रनटाइम एक समर्पित रीडर अ‍ॅडॅप्टर शिप करतो जो त्याच्या मूळ सेशन फॉरमॅटचे ClawMetry च्या एकसंध शेप्समध्ये भाषांतर करतो; डिमन ते त्याच DuckDB स्टोअर + क्लाउड स्नॅपशॉटमध्ये इनजेस्ट करतो, रनटाइमनुसार टॅग करून, आणि एकापेक्षा जास्त उपस्थित असल्यास Session replay टॅब एक **रनटाइम स्विचर** दाखवतो. पूर्ण मॅट्रिक्स + रनटाइम्स जोडण्याच्या मार्गदर्शकासाठी [`docs/compatibility.md`](docs/compatibility.md) पहा, आणि OpenClaw-फॅमिली प्राइमरसाठी [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) पहा.
 
-| रनटाइम / एजंट | स्थिती | नोट्स |
+| रनटाइम / एजंट | स्टेटस | नोंदी |
 |---|---|---|
 | **OpenClaw** | नेटिव्ह | संदर्भ रनटाइम, आपोआप शोधले जाते |
-| **PicoClaw** | बीटा अडॅप्टर | सपाट `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स. |
-| **NanoClaw** | बीटा अडॅप्टर | प्रति-सेशन SQLite (`data/v2-sessions`). ट्रान्सक्रिप्ट्स आणि संदेश संख्या. |
-| **Hermes** | बीटा अडॅप्टर | SQLite `~/.hermes/state.db`. ट्रान्सक्रिप्ट्स, मॉडेल, टोकन्स/खर्च. |
-| **Claude Code** | बीटा अडॅप्टर | JSONL `~/.claude/projects/.../<id>.jsonl`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स आणि थिंकिंग, टोकन वापर. |
-| **Codex** | बीटा अडॅप्टर | Rollout JSONL `~/.codex/sessions/...`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन वापर. |
-| **Cursor** | बीटा अडॅप्टर | SQLite `state.vscdb`. चॅट/कम्पोझर ट्रान्सक्रिप्ट्स, मॉडेल. |
-| **Aider** | बीटा अडॅप्टर | प्रति प्रकल्प `.aider.chat.history.md`. ट्रान्सक्रिप्ट्स, मॉडेल, टोकन संख्या. |
-| **Goose** | बीटा अडॅप्टर | SQLite `~/.local/share/goose`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, एकूण टोकन्स. |
-| **opencode** | बीटा अडॅप्टर | SQLite `~/.local/share/opencode`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन्स आणि खर्च. |
-| **Qwen Code** | बीटा अडॅप्टर | JSONL `~/.qwen/projects/.../chats`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन वापर. |
+| **PicoClaw** | बीटा अ‍ॅडॅप्टर | फ्लॅट `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स. |
+| **NanoClaw** | बीटा अ‍ॅडॅप्टर | प्रति-सेशन SQLite (`data/v2-sessions`). ट्रान्सक्रिप्ट्स + मेसेज काउंट्स. |
+| **Hermes** | बीटा अ‍ॅडॅप्टर | SQLite `~/.hermes/state.db`. ट्रान्सक्रिप्ट्स, मॉडेल, टोकन्स/कॉस्ट. |
+| **Claude Code** | बीटा अ‍ॅडॅप्टर | JSONL `~/.claude/projects/.../<id>.jsonl`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स + थिंकिंग, टोकन वापर. |
+| **Codex** | बीटा अ‍ॅडॅप्टर | Rollout JSONL `~/.codex/sessions/...`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन वापर. |
+| **Cursor** | बीटा अ‍ॅडॅप्टर | SQLite `state.vscdb`. चॅट/कंपोझर ट्रान्सक्रिप्ट्स, मॉडेल. |
+| **Aider** | बीटा अ‍ॅडॅप्टर | प्रति-प्रोजेक्ट `.aider.chat.history.md`. ट्रान्सक्रिप्ट्स, मॉडेल, टोकन काउंट्स. |
+| **Goose** | बीटा अ‍ॅडॅप्टर | SQLite `~/.local/share/goose`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन एकूण. |
+| **opencode** | बीटा अ‍ॅडॅप्टर | SQLite `~/.local/share/opencode`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन्स + कॉस्ट. |
+| **Qwen Code** | बीटा अ‍ॅडॅप्टर | JSONL `~/.qwen/projects/.../chats`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन वापर. |
+| **Pi** | बीटा अ‍ॅडॅप्टर | JSONL `~/.pi/agent/sessions`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन्स + कॉस्ट. |
+| **Deep Agents** | बीटा अ‍ॅडॅप्टर | SQLite `~/.deepagents/.state/sessions.db`. ट्रान्सक्रिप्ट्स, मॉडेल, टूल कॉल्स, टोकन्स + कॉस्ट. |
 
-"बीटा अडॅप्टर" म्हणजे ClawMetry त्या रनटाइमच्या खऱ्या ऑन-डिस्क स्वरूपासाठी रीडर पाठवतो, प्रत्येक खऱ्या मशीनवर खऱ्या इन्स्टॉलविरुद्ध तयार आणि सत्यापित केला जातो (पाहा `tests/fixtures/runtimes/<rt>/`). अडॅप्टर्स केवळ-वाचन आहेत; प्रत्येक त्याच्या रनटाइम प्रत्यक्षात काय साठवतो याबद्दल प्रामाणिक आहे (उदा. PicoClaw/NanoClaw/Cursor डिस्कवर टोकन खर्च लिहित नाहीत). जेव्हा एका नोडवर अनेक रनटाइम चालतात, तेव्हा रनटाइम स्विचर स्वच्छ सखोल-शोधासाठी सेशन्स दृश्य एकावर स्कोप करतो.
+"बीटा अ‍ॅडॅप्टर" म्हणजे ClawMetry त्या रनटाइमच्या खऱ्या ऑन-डिस्क फॉरमॅटसाठी एक रीडर शिप करते, प्रत्येक खऱ्या मशीनवरील खऱ्या इन्स्टॉलविरुद्ध तयार + पडताळलेला (`tests/fixtures/runtimes/<rt>/` पहा). अ‍ॅडॅप्टर्स फक्त-वाचनीय आहेत; प्रत्येक त्याच्या रनटाइमने प्रत्यक्षात डिस्कवर काय साठवले आहे याबद्दल प्रामाणिक आहे (उदा. PicoClaw/NanoClaw/Cursor टोकन कॉस्ट डिस्कवर लिहीत नाहीत). एका नोडवर अनेक रनटाइम्स चालत असताना, रनटाइम स्विचर एका स्वच्छ डीप-डाइव्हसाठी सेशन्स व्ह्यूला एकाच रनटाइमपुरते स्कोप करतो.
 
-## कोणत्याही SDK एजंटचे ट्रॅकिंग करा — आउट-लूप खर्च अट्रिब्युशन
+## कोणताही SDK एजंट ट्रॅक करा — आउट-लूप कॉस्ट अ‍ॅट्रिब्युशन
 
-वरील रनटाइम्स सर्व डिस्कवर सेशन्स लिहितात. तुमचा स्वतःचा **प्रोडक्शन एजंट** — OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B किंवा साध्या `httpx` लूपवर बनवलेला — तसे करत नाही. ClawMetry चा झीरो-कॉन्फिग इंटरसेप्टर तरीही `httpx`/`requests` मंकी-पॅचिंग करून त्याचे LLM कॉल्स (खर्च, टोकन्स, विलंब, एरर्स) कॅप्चर करतो:
+वरील सर्व रनटाइम्स सेशन्स डिस्कवर लिहितात. तुमचा स्वतःचा **प्रॉडक्शन एजंट** — जो तुम्ही OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, किंवा एक साधा `httpx` लूप वापरून बनवला आहे — तसे करत नाही. ClawMetry चा शून्य-कॉन्फिग इंटरसेप्टर तरीही `httpx`/`requests` मंकी-पॅच करून त्याचे LLM कॉल्स (कॉस्ट, टोकन्स, लेटन्सी, एरर्स) कॅप्चर करतो:
 
 ```python
 import clawmetry.track            # activate the interceptor
@@ -152,19 +157,19 @@ clawmetry.track.set_source("support-agent")   # name this product
 # ...your agent runs as normal; every LLM call is now tracked + attributed.
 ```
 
-`set_source()` (किंवा `CLAWMETRY_SOURCE=support-agent` env var) प्रत्येक कॉलला **नावाच्या स्रोत**सह टॅग करतो, त्यामुळे तुम्ही चालवत असलेले प्रत्येक उत्पादन Overview वरील डॅशबोर्डच्या **🔌 Out-loop sources** कार्डमध्ये स्वतःची प्रथम-श्रेणी, खर्च-अट्रिब्युटेबल ओळ म्हणून दिसते — प्रति एजंट कॉल्स, प्रोव्हायडर्स, विलंब, एरर दर. स्रोत सेट नाही? कॉल्स तरीही ट्रॅक केले जातात; कार्ड फक्त लपलेले राहते.
+`set_source()` (किंवा `CLAWMETRY_SOURCE=support-agent` एन्व्ह व्हेरिएबल) प्रत्येक कॉलला एका **नामांकित स्त्रोतासोबत** टॅग करते, त्यामुळे तुम्ही चालवत असलेले प्रत्येक प्रॉडक्ट डॅशबोर्डच्या Overview वरील **🔌 Out-loop sources** कार्डमध्ये स्वतःची पहिल्या-दर्जाची, कॉस्ट-अ‍ॅट्रिब्युटेबल ओळ म्हणून दिसते — प्रत्येक एजंटसाठी कॉल्स, प्रोव्हायडर्स, लेटन्सी, एरर रेट. स्त्रोत सेट केला नाही? कॉल्स तरीही ट्रॅक होतात; कार्ड फक्त लपून राहते.
 
 ```bash
 CLAWMETRY_SOURCE=billing-agent python my_agent.py
 ```
 
-हा तोच डेटा लेयर आहे जो रनटाइम अडॅप्टर्स फीड करतात (DuckDB → क्लाउड स्नॅपशॉट), त्यामुळे आउट-लूप स्रोत इतर सर्व गोष्टींप्रमाणेच क्लाउड डॅशबोर्डवर सिंक होतात, E2E-एन्क्रिप्टेड.
+ही तीच डेटा लेयर आहे जी रनटाइम अ‍ॅडॅप्टर्स फीड करतात (DuckDB → क्लाउड स्नॅपशॉट), त्यामुळे आउट-लूप स्त्रोत बाकी सर्वकाहीसारखेच क्लाउड डॅशबोर्डशी, E2E-एन्क्रिप्टेड सिंक होतात.
 
-## OpenTelemetry — व्हेंडर-तटस्थ, तुमचे ट्रेसेस कुठेही पाठवा
+## OpenTelemetry — व्हेंडर-न्यूट्रल, तुमचे ट्रेसेस कुठेही पाठवा
 
-ClawMetry **GenAI सिमँटिक कन्व्हेन्शन्स** वापरून दोन्ही दिशांमध्ये **OpenTelemetry** बोलतो, त्यामुळे तुमचे एजंट ट्रेसेस कधीही एका टूलमध्ये अडकत नाहीत.
+ClawMetry दोन्ही दिशांनी **OpenTelemetry** बोलतो, **GenAI सिमॅंटिक कन्व्हेन्शन्स** वापरून, त्यामुळे तुमचे एजंट ट्रेसेस कधीही एका टूलमध्ये लॉक-इन होत नाहीत.
 
-प्रत्येक सेशन — LLM कॉल्स, टूल्स, सब-एजंट्स, टोकन्स, खर्च — OTLP/HTTP GenAI spans म्हणून कोणत्याही कलेक्टरला (Datadog, Grafana, Honeycomb, किंवा तुमचा स्वतःचा OTel Collector) **निर्यात** करा:
+प्रत्येक सेशन — LLM कॉल्स, टूल्स, सब-एजंट्स, टोकन्स, कॉस्ट — कोणत्याही कलेक्टरला (Datadog, Grafana, Honeycomb, किंवा तुमचा स्वतःचा OTel Collector) OTLP/HTTP GenAI स्पॅन्स म्हणून **एक्सपोर्ट** करा:
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -172,22 +177,22 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-ऑथ हेडर्स आणि पोल इंटरव्हल पर्यायी env vars आहेत:
+ऑथ हेडर्स आणि पोल इंटरव्हल पर्यायी एन्व्ह व्हेरिएबल्स आहेत:
 
 ```bash
 CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**इनजेस्ट** — अंगभूत OTLP रिसीव्हर `/v1/traces` आणि `/v1/metrics` वर इतर कुठल्याहीकडून ट्रेसेस आणि मेट्रिक्स स्वीकारतो (protobuf इनजेस्टसाठी `pip install clawmetry[otel]`).
+**इनजेस्ट** — बिल्ट-इन OTLP रिसीव्हर इतर कशाहीकडून `/v1/traces` आणि `/v1/metrics` वर ट्रेसेस आणि मेट्रिक्स स्वीकारतो (प्रोटोबफ इनजेस्टसाठी `pip install clawmetry[otel]`).
 
-तुम्हाला झीरो-कॉन्फिग, लोकल-फर्स्ट ClawMetry डॅशबोर्ड **आणि** तुमच्या टीमने आधीपासून चालवत असलेल्या कोणत्याही बॅकएंडमध्ये तुमचा डेटा मिळतो — कोणताही लॉक-इन नाही, इन्स्टॉल करण्यासाठी दुसरा एजंट नाही.
+तुम्हाला शून्य-कॉन्फिग, लोकल-फर्स्ट ClawMetry डॅशबोर्ड **आणि** तुमचा डेटा तुमची टीम आधीच वापरत असलेल्या कोणत्याही बॅकएंडमध्ये मिळतो — कोणतेही लॉक-इन नाही, इन्स्टॉल करण्यासाठी दुसरा एजंट नाही.
 
 ## कॉन्फिगरेशन
 
-बहुतेक लोकांना कोणतीही कॉन्फिगरेशन लागत नाही. ClawMetry तुमचे वर्कस्पेस, लॉग्स, सेशन्स आणि crons आपोआप शोधते.
+बहुतांश लोकांना कोणत्याही कॉन्फिगची गरज नसते. ClawMetry तुमचे वर्कस्पेस, लॉग्स, सेशन्स आणि क्रॉन्स आपोआप शोधतो.
 
-तुम्हाला सानुकूलित करायचे असल्यास:
+तुम्हाला कस्टमाइझ करायचे असल्यास:
 
 ```bash
 clawmetry --port 9000              # Custom port (default: 8900)
@@ -200,38 +205,38 @@ clawmetry --name "Alice"           # Your name in Flow visualization
 
 ## समर्थित चॅनेल्स
 
-ClawMetry तुम्ही कॉन्फिगर केलेल्या प्रत्येक OpenClaw चॅनेलसाठी लाइव्ह क्रियाकलाप दाखवतो. केवळ तुमच्या `openclaw.json` मध्ये प्रत्यक्षात सेट केलेले चॅनेल Flow आकृतीत दिसतात — कॉन्फिगर न केलेले आपोआप लपवले जातात.
+ClawMetry तुम्ही कॉन्फिगर केलेल्या प्रत्येक OpenClaw चॅनेलसाठी लाइव्ह अ‍ॅक्टिव्हिटी दाखवतो. फक्त तुमच्या `openclaw.json` मध्ये प्रत्यक्षात सेटअप केलेले चॅनेल्स Flow डायग्राममध्ये दिसतात — कॉन्फिगर न केलेले आपोआप लपवले जातात.
 
-लाइव्ह चॅट बबल दृश्य येणाऱ्या/जाणाऱ्या संदेश संख्येसह पाहण्यासाठी Flow मधील कोणताही चॅनेल नोड क्लिक करा.
+Flow मधील कोणत्याही चॅनेल नोडवर क्लिक करून येणाऱ्या/जाणाऱ्या मेसेज काउंट्ससह लाइव्ह चॅट बबल व्ह्यू पहा.
 
-| चॅनेल | स्थिती | लाइव्ह पॉपअप | नोट्स |
+| चॅनेल | स्टेटस | लाइव्ह पॉपअप | नोंदी |
 |---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ पूर्ण | ✅ | संदेश, आकडेवारी, १०s रिफ्रेश |
-| 💬 **iMessage** | ✅ पूर्ण | ✅ | `~/Library/Messages/chat.db` थेट वाचते |
+| 📱 **Telegram** | ✅ पूर्ण | ✅ | मेसेजेस, स्टॅट्स, 10s रिफ्रेश |
+| 💬 **iMessage** | ✅ पूर्ण | ✅ | `~/Library/Messages/chat.db` थेट वाचतो |
 | 💚 **WhatsApp** | ✅ पूर्ण | ✅ | WhatsApp Web (Baileys) द्वारे |
 | 🔵 **Signal** | ✅ पूर्ण | ✅ | signal-cli द्वारे |
-| 🟣 **Discord** | ✅ पूर्ण | ✅ | Guild आणि चॅनेल शोध |
-| 🟪 **Slack** | ✅ पूर्ण | ✅ | वर्कस्पेस आणि चॅनेल शोध |
-| 🌐 **Webchat** | ✅ पूर्ण | ✅ | अंगभूत वेब UI सेशन्स |
+| 🟣 **Discord** | ✅ पूर्ण | ✅ | गिल्ड + चॅनेल डिटेक्शन |
+| 🟪 **Slack** | ✅ पूर्ण | ✅ | वर्कस्पेस + चॅनेल डिटेक्शन |
+| 🌐 **Webchat** | ✅ पूर्ण | ✅ | बिल्ट-इन वेब UI सेशन्स |
 | 📡 **IRC** | ✅ पूर्ण | ✅ | टर्मिनल-स्टाइल बबल UI |
 | 🍏 **BlueBubbles** | ✅ पूर्ण | ✅ | BlueBubbles REST API द्वारे iMessage |
-| 🔵 **Google Chat** | ✅ पूर्ण | ✅ | Chat API वेबहुक्स द्वारे |
+| 🔵 **Google Chat** | ✅ पूर्ण | ✅ | Chat API वेबहूक्स द्वारे |
 | 🟣 **MS Teams** | ✅ पूर्ण | ✅ | Teams बॉट प्लगइन द्वारे |
-| 🔷 **Mattermost** | ✅ पूर्ण | ✅ | स्वत: होस्ट केलेले टीम चॅट |
-| 🟩 **Matrix** | ✅ पूर्ण | ✅ | विकेंद्रित, E2EE समर्थन |
+| 🔷 **Mattermost** | ✅ पूर्ण | ✅ | सेल्फ-होस्टेड टीम चॅट |
+| 🟩 **Matrix** | ✅ पूर्ण | ✅ | विकेंद्रित, E2EE सपोर्ट |
 | 🟢 **LINE** | ✅ पूर्ण | ✅ | LINE Messaging API |
 | ⚡ **Nostr** | ✅ पूर्ण | ✅ | विकेंद्रित NIP-04 DMs |
 | 🟣 **Twitch** | ✅ पूर्ण | ✅ | IRC कनेक्शनद्वारे चॅट |
-| 🔷 **Feishu/Lark** | ✅ पूर्ण | ✅ | WebSocket इव्हेंट सदस्यता |
+| 🔷 **Feishu/Lark** | ✅ पूर्ण | ✅ | WebSocket इव्हेंट सबस्क्रिप्शन |
 | 🔵 **Zalo** | ✅ पूर्ण | ✅ | Zalo Bot API |
 
-> **आपोआप शोध:** ClawMetry तुमचे `~/.openclaw/openclaw.json` वाचतो आणि केवळ तुम्ही प्रत्यक्षात कॉन्फिगर केलेले चॅनेल दाखवतो. कोणत्याही मॅन्युअल सेटअपची आवश्यकता नाही.
+> **ऑटो-डिटेक्शन:** ClawMetry तुमचा `~/.openclaw/openclaw.json` वाचतो आणि तुम्ही प्रत्यक्षात कॉन्फिगर केलेले चॅनेल्सच रेंडर करतो. कोणतेही मॅन्युअल सेटअप आवश्यक नाही.
 
-## Docker तैनाती
+## Docker डिप्लॉयमेंट
 
-ClawMetry कंटेनरमध्ये चालवायचे आहे? कोणतीही अडचण नाही! 🐳
+ClawMetry ला कंटेनरमध्ये चालवायचे आहे? काही हरकत नाही! 🐳
 
-**Docker सह त्वरित सुरुवात:**
+**Docker सह क्विक स्टार्ट:**
 
 ```bash
 # Build the image
@@ -262,33 +267,33 @@ services:
     restart: unless-stopped
 ```
 
-> **टीप:** Docker मध्ये चालवताना, तुमच्या एजंटचे डेटा आणि लॉग डिरेक्टरी (उदा. `~/.openclaw`, `~/.claude`, `~/.codex`) माउंट करा जेणेकरून ClawMetry तुमची सेटअप आपोआप शोधू शकेल.
+> **नोंद:** Docker मध्ये चालवताना, तुमच्या एजंटच्या डेटा + लॉग डिरेक्टरीज (उदा. `~/.openclaw`, `~/.claude`, `~/.codex`) माउंट करा जेणेकरून ClawMetry तुमचे सेटअप आपोआप शोधू शकेल.
 
 ## आवश्यकता
 
 - Python 3.8+
 - Flask (pip द्वारे आपोआप इन्स्टॉल होते)
-- त्याच मशीनवर एक AI एजंट रनटाइम: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, किंवा PicoClaw (किंवा Docker साठी माउंट केलेले व्हॉल्युम्स)
+- त्याच मशीनवर एक AI एजंट रनटाइम: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, किंवा Deep Agents (किंवा Docker साठी माउंट केलेले व्हॉल्यूम्स)
 - Linux किंवा macOS
 
 ## NemoClaw / OpenShell समर्थन
 
-ClawMetry आपोआप [NemoClaw](https://github.com/NVIDIA/NemoClaw) शोधतो — NVIDIA चा OpenClaw साठी एंटरप्राइझ सिक्युरिटी रॅपर जो एजंट्स सँडबॉक्स्ड OpenShell कंटेनर्समध्ये चालवतो.
+ClawMetry आपोआप [NemoClaw](https://github.com/NVIDIA/NemoClaw) शोधतो — NVIDIA चा एंटरप्राइझ सिक्युरिटी रॅपर जो OpenClaw साठी असून सँडबॉक्स्ड OpenShell कंटेनर्समध्ये एजंट्स चालवतो.
 
-बहुतांश प्रकरणांमध्ये कोणत्याही अतिरिक्त कॉन्फिगरेशनची आवश्यकता नाही. सिंक डेमन सेशन फाइल्स आपोआप शोधतो, मग त्या होस्टवरील `~/.openclaw/` मध्ये असोत किंवा OpenShell कंटेनरमध्ये.
+बहुतांश प्रकरणांमध्ये कोणत्याही अतिरिक्त कॉन्फिगरेशनची गरज नाही. सिंक डिमन सेशन फाइल्स आपोआप शोधतो, मग त्या होस्टवरील `~/.openclaw/` मध्ये असोत किंवा OpenShell कंटेनरच्या आत.
 
-### हे कसे काम करते
+### हे कसे कार्य करते
 
-ClawMetry NemoClaw दोन प्रकारे शोधतो:
+ClawMetry दोन प्रकारे NemoClaw शोधतो:
 
-1. **बायनरी शोध** — `nemoclaw` CLI साठी तपासतो आणि सँडबॉक्स माहिती मिळवण्यासाठी `nemoclaw status` चालवतो
-2. **कंटेनर शोध** — `openshell`, `nemoclaw`, किंवा `ghcr.io/nvidia/` इमेजेससाठी चालणाऱ्या Docker कंटेनर्स स्कॅन करतो, नंतर व्हॉल्युम माउंट्स किंवा `docker cp` द्वारे सेशन्स वाचतो
+1. **बायनरी डिटेक्शन** — `nemoclaw` CLI ची तपासणी करते आणि सँडबॉक्स माहिती मिळवण्यासाठी `nemoclaw status` चालवते
+2. **कंटेनर डिटेक्शन** — चालू असलेल्या Docker कंटेनर्समध्ये `openshell`, `nemoclaw`, किंवा `ghcr.io/nvidia/` इमेजेससाठी स्कॅन करते, नंतर व्हॉल्यूम माउंट्स किंवा `docker cp` द्वारे सेशन्स वाचते
 
-NemoClaw कंटेनर्समधून सिंक केलेल्या सेशन फाइल्स क्लाउड डॅशबोर्डमध्ये `runtime=nemoclaw` आणि `container_id` मेटाडेटासह टॅग केल्या जातात, त्यामुळे तुम्ही त्या एका दृष्टीक्षेपात मानक OpenClaw सेशन्सपासून वेगळ्या ओळखू शकता.
+NemoClaw कंटेनर्समधून सिंक केलेल्या सेशन फाइल्स क्लाउड डॅशबोर्डमध्ये `runtime=nemoclaw` आणि `container_id` मेटाडेटासह टॅग केल्या जातात, त्यामुळे तुम्ही त्यांना एका दृष्टिक्षेपात मानक OpenClaw सेशन्सपासून वेगळे ओळखू शकता.
 
-### शिफारस केलेली सेटअप: HOST वर सिंक डेमन
+### शिफारसीय सेटअप: सिंक डिमन HOST वर
 
-सर्वोत्तम अनुभवासाठी, ClawMetry चा सिंक डेमन **होस्ट मशीनवर** (सँडबॉक्सच्या आत नाही) चालवा. हे NemoClaw नेटवर्क पॉलिसी निर्बंध टाळते.
+सर्वोत्तम अनुभवासाठी, ClawMetry चा सिंक डिमन **होस्ट मशीन**वर चालवा (सँडबॉक्सच्या आत नाही). हे NemoClaw नेटवर्क पॉलिसी निर्बंध टाळते.
 
 ```bash
 # On the host (outside the sandbox)
@@ -297,11 +302,11 @@ clawmetry connect
 clawmetry sync
 ```
 
-सिंक डेमन आपोआप कोणत्याही चालणाऱ्या OpenShell कंटेनर्समधील सेशन्स शोधेल.
+सिंक डिमन आपोआप चालू असलेल्या कोणत्याही OpenShell कंटेनर्समधील सेशन्स शोधेल.
 
 ### पर्यायी: स्पष्ट सँडबॉक्स नाव
 
-आपोआप शोध काम न केल्यास, ClawMetry ला योग्य सँडबॉक्सकडे निर्देशित करा:
+ऑटो-डिटेक्शन काम करत नसल्यास, ClawMetry ला योग्य सँडबॉक्सकडे निर्देशित करा:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
@@ -310,7 +315,7 @@ clawmetry sync
 
 ### सँडबॉक्सच्या आत चालवणे (प्रगत)
 
-जर तुम्हाला सिंक डेमन OpenShell सँडबॉक्सच्या **आत** चालवायचा असेल, तर ClawMetry ingest API पर्यंत पोहोचण्यासाठी तुमच्या NemoClaw नेटवर्क पॉलिसीमध्ये हा egress नियम जोडा:
+सिंक डिमन OpenShell सँडबॉक्सच्या **आत** चालवणे आवश्यक असल्यास, तो ClawMetry इनजेस्ट API पर्यंत पोहोचू शकेल यासाठी तुमच्या NemoClaw नेटवर्क पॉलिसीमध्ये हा एग्रेस नियम जोडा:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -321,7 +326,7 @@ network:
       protocol: https
 ```
 
-यासह लागू करा:
+लागू करा:
 
 ```bash
 nemoclaw policy apply --file nemoclaw-policy.yaml
@@ -331,42 +336,50 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 | एंडपॉइंट | पोर्ट | प्रोटोकॉल | आवश्यक |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | होय (सिंक डेमन → क्लाउड) |
-| `localhost:8900` | 8900 | HTTP | होय (स्थानिक डॅशबोर्ड UI) |
-| Docker socket (`/var/run/docker.sock`) | — | Unix socket | कंटेनर सेशन शोधासाठी |
+| `ingest.clawmetry.com` | 443 | HTTPS | होय (सिंक डिमन → क्लाउड) |
+| `localhost:8900` | 8900 | HTTP | होय (लोकल डॅशबोर्ड UI) |
+| Docker सॉकेट (`/var/run/docker.sock`) | — | Unix सॉकेट | कंटेनर सेशन डिस्कव्हरीसाठी |
 
-सिंक डेमन केवळ `ingest.clawmetry.com` वर आउटबाउंड HTTPS कॉल्स करतो. कोणत्याही इनबाउंड पोर्ट्सची आवश्यकता नाही.
+सिंक डिमन फक्त `ingest.clawmetry.com` कडे आउटबाउंड HTTPS कॉल्स करतो. कोणतेही इनबाउंड पोर्ट्स आवश्यक नाहीत.
 
 ---
 
-## क्लाउड तैनाती
+## क्लाउड डिप्लॉयमेंट
 
-SSH टनेल्स, रिव्हर्स प्रॉक्सी, आणि Docker साठी **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** पाहा.
+SSH टनेल्स, रिव्हर्स प्रॉक्सी, आणि Docker साठी **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** पहा.
 
-## चाचणी
+## टेस्टिंग
 
-हा प्रकल्प BrowserStack सह चाचणी केला जातो.
+हा प्रोजेक्ट BrowserStack सोबत टेस्ट केला जातो.
 
 [![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
 
-## टेलिमेट्री
+## टेलीमेट्री
 
-ClawMetry नवीन मशीनवर `clawmetry` CLI पहिल्यांदा चालवल्यावर `https://app.clawmetry.com/api/install` वर एकच अनामिक "पहिला रन" पिंग पाठवतो. आम्ही हे इन्स्टॉल मोजण्यासाठी (OSS प्रकल्पासाठी आमच्याकडे असलेला एकमात्र मार्केटिंग मेट्रिक) आणि आमचे वापरकर्ते कोणते एजंट फ्रेमवर्क इन्स्टॉल केलेले आहेत हे जाणून घेण्यासाठी वापरतो.
+ClawMetry नवीन मशीनवर पहिल्यांदा `clawmetry` CLI चालवल्यावर
+`https://app.clawmetry.com/api/install` कडे एकच अनामिक "फर्स्ट रन" पिंग पाठवतो. आम्ही
+याचा वापर इन्स्टॉल्स मोजण्यासाठी (एका OSS प्रोजेक्टसाठी आमच्याकडे असलेले
+एकमेव मार्केटिंग मेट्रिक) आणि आमच्या युजर्सनी कोणते एजंट फ्रेमवर्क्स इन्स्टॉल
+केले आहेत हे जाणून घेण्यासाठी करतो.
 
-**प्रति इन्स्टॉल फक्त एक POST**, ज्यात आहे:
+**प्रति इन्स्टॉल फक्त एक POST**, ज्यामध्ये हे असते:
 
 | फील्ड | उदाहरण | का |
 |---|---|---|
-| `install_id` | `~/.clawmetry/install_id` वर साठवलेला यादृच्छिक UUID | डिडप; तुमच्या ईमेल किंवा api_key शी जोडलेला नाही |
-| `version` | `0.12.167` | कोणत्या आवृत्त्या वापरात आहेत |
-| `os` / `os_version` | `Darwin` / `25.3.0` | प्लॅटफॉर्म समर्थन प्राधान्यक्रम |
-| `python` | `3.11.15` | Python आवृत्ती समर्थन मॅट्रिक्स |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | कोणत्या एजंट्ससह आम्ही पुढे एकत्रीकरण करावे |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | मानवी इन्स्टॉल्स CI नॉइजपासून वेगळे करणे |
+| `install_id` | `~/.clawmetry/install_id` वर साठवलेला रँडम UUID | डिडुप; तुमच्या ईमेल किंवा api_key शी लिंक केलेले नाही |
+| `version` | `0.12.167` | कोणत्या व्हर्जन्स प्रत्यक्षात वापरात आहेत |
+| `os` / `os_version` | `Darwin` / `25.3.0` | प्लॅटफॉर्म सपोर्ट प्राधान्यक्रम |
+| `python` | `3.11.15` | Python व्हर्जन सपोर्ट मॅट्रिक्स |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | पुढे आम्ही कोणत्या एजंट्ससोबत इंटिग्रेट करावे |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | मानवी इन्स्टॉल्सना CI आवाजापासून वेगळे करते |
 
-**आम्ही काय पाठवत नाही**: IP (क्लाउड विनंतीमधून सर्व्हर-साइड देश कोड काढतो, नंतर IP टाकून देतो), होस्टनेम, वापरकर्तानाव, वर्कस्पेस पाथ, फाइल सामग्री, तुमचा api_key, तुमचा ईमेल, कोणतीही PII किंवा वर्कस्पेस-विशिष्ट माहिती. वायर पेलोड [`clawmetry/telemetry.py`](clawmetry/telemetry.py) मध्ये ऑडिट करता येतो.
+**आम्ही काय पाठवत नाही**: IP (क्लाउड सर्व्हर-साइडवर रिक्वेस्टवरून
+देश कोड मिळवतो, नंतर IP टाकून देतो), होस्टनेम, युजरनेम, वर्कस्पेस
+पाथ, फाइल कंटेंट्स, तुमची api_key, तुमचा ईमेल, कोणतीही PII किंवा
+वर्कस्पेस-विशिष्ट माहिती. वायर पेलोड [`clawmetry/telemetry.py`](clawmetry/telemetry.py)
+मध्ये ऑडिट करण्यायोग्य आहे.
 
-**ऑप्ट आउट** (यापैकी कोणतेही एक कायमस्वरूपी अक्षम करते):
+**ऑप्ट आउट** (यापैकी कोणतीही एक कायमची अक्षम करते):
 
 ```bash
 export CLAWMETRY_NO_TELEMETRY=1                # per-shell
@@ -374,9 +387,10 @@ export DO_NOT_TRACK=1                          # W3C cross-tool standard
 touch ~/.clawmetry/notelemetry                 # persistent file marker
 ```
 
-येथे नेटवर्क अयशस्वी झाल्यास `clawmetry` चालणे कधीही थांबत नाही — पिंग ३ सेकंदाच्या टाइमआउटसह डेमन थ्रेडवर fire-and-forget आहे.
+नेटवर्क अपयश इथे `clawmetry` चालण्यास कधीही अडथळा आणत नाही — पिंग
+डिमन थ्रेडवर 3 सेकंद टाइमआउटसह फायर-अँड-फर्गेट आहे.
 
-## स्टार इतिहास
+## स्टार हिस्ट्री
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
@@ -386,13 +400,13 @@ touch ~/.clawmetry/notelemetry                 # persistent file marker
  </picture>
 </a>
 
-## परवाना
+## लायसन्स
 
 MIT
 
 ---
 
 <p align="center">
-  <strong>🦞 तुमचा एजंट विचार करताना पाहा</strong><br>
-  <sub><a href="https://github.com/vivekchand">@vivekchand</a> द्वारे बनवलेले · <a href="https://clawmetry.com">clawmetry.com</a> · <a href="https://github.com/openclaw/openclaw">OpenClaw</a> परिसंस्थेचा भाग</sub>
+  <strong>🦞 तुमचा एजंट कसा विचार करतो ते पहा</strong><br>
+  <sub>निर्माता <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · <a href="https://github.com/openclaw/openclaw">OpenClaw</a> इकोसिस्टमचा भाग</sub>
 </p>
