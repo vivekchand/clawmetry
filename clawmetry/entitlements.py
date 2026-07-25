@@ -3284,6 +3284,132 @@ def capacity_headroom_batch(
         return []
 
 
+def capacity_headroom_path(
+    from_tier: str,
+    to_tier: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise capacity-headroom path between two tiers.
+
+    Path-shaped sibling of :func:`capacity_headroom_batch` (which walks
+    every purchasable tier) and headroom-shaped mirror of
+    :func:`capacity_diff_path` / :func:`tier_unlocks_path` /
+    :func:`tier_locks_path` / :func:`preview_path` -- the fifth member of
+    the capacity axis's ``_path`` family. Where the marginal capacity
+    ``_path`` sibling answers "what changes at each rung" and the plural
+    ``_batch`` sibling answers "at every purchasable rung, would my usage
+    fit", this helper answers "at each rung on the way from A to B, given
+    my current usage, what would the per-axis headroom look like" -- the
+    natural walk-through for an upgrade-CTA "watch your headroom recover
+    rung by rung" view.
+
+    Per-rung row shape matches :func:`capacity_headroom_at` exactly
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``) so a UI already rendering a ``capacity_headroom_at``
+    envelope needs zero new shape code to render a row off this path.
+    Per-axis rows within each rung stay byte-identical to
+    :func:`_headroom_row` (``kind`` / ``used`` / ``cap`` / ``remaining``
+    / ``is_unlimited`` / ``at_limit`` / ``over_limit`` / ``pct_used``).
+
+    Walk semantics mirror :func:`capacity_diff_path` /
+    :func:`tier_unlocks_path` / :func:`tier_locks_path` /
+    :func:`preview_path` byte-for-byte (same ``_PURCHASABLE_TIERS``
+    filter, same ``(rank, id)`` / ``(-rank, id)`` sort key, same
+    destination-sibling exclusion), so the rung ``tier`` ids from this
+    helper match the rung ``target`` / ``tier`` ids from the other four
+    path siblings identically -- the five paths line up rung-for-rung.
+    Same-rank siblings strictly between the endpoints are both included;
+    same-rank siblings of the destination are excluded so the path
+    terminates exactly at ``to_tier``.
+
+    Direction semantics (all rows share the same headroom-envelope
+    shape; only the sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the tier
+      above ``from_tier`` toward ``to_tier``; on each higher rung caps
+      loosen so ``remaining`` grows / ``over_limit`` flips off.
+    * ``downgrade`` (descending) -- rows shrink rung by rung; caps
+      tighten so ``remaining`` may go negative and ``over_limit`` may
+      flip on.
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the headroom envelope at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`capacity_diff_path` /
+    :func:`preview_path`: both ids accept any entry in
+    :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`, which is not
+    purchasable -- excluded from the walked intermediate rungs but a
+    valid endpoint via the lateral branch). Unknown ids on either side
+    short-circuit to ``None``.
+
+    Per-axis "None means axis not supplied" posture matches
+    :func:`capacity_headroom_at` /  :func:`capacity_headroom_batch`: an
+    unsupplied axis stays ``None`` on every rung; a supplied axis is
+    echoed on every rung and the cap is walked off the destination
+    rung's static cap.
+
+    Decoupled from the resolved entitlement -- every rung walks the
+    static per-tier caps via :func:`capacity_headroom_at`, so grace vs
+    enforce yields byte-identical rows. Never raises: a walker failure
+    logs a warning and returns ``None`` so an upgrade-walkthrough
+    surface keeps rendering instead of breaking.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            row = capacity_headroom_at(
+                t,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+            return [row] if row is not None else []
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            row = capacity_headroom_at(
+                tid,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+            if row is not None:
+                path.append(row)
+        return path
+    except Exception as exc:
+        logger.warning("entitlements: capacity_headroom_path failed: %s", exc)
+        return None
+
+
 def _capacity_row(from_tier: str, to_tier: str) -> dict:
     """Build one ``capacity_diff``-shape row for an arbitrary ``from -> to`` pair.
 
