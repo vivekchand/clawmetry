@@ -109,6 +109,42 @@ jobs:
             -v --tb=short \
             --junitxml=/tmp/junit-c4-${{ github.run_id }}.xml
 
+      # Post a Markdown fidelity table to the Actions job summary so every
+      # PR reviewer can see at a glance whether C4 ran with real apps or
+      # inline stubs. In stub mode a one-liner call-to-action links to the
+      # tracking issue so the gap is visible without digging into logs.
+      # Tracking: vivekchand/clawmetry#4036 (C4)
+      - name: Write C4 fidelity summary
+        if: always()
+        run: |
+          {
+            echo "## C4 Cross-Repo Handoff: Fidelity Report"
+            echo ""
+            if [ "${{ steps.access.outputs.available }}" = "true" ]; then
+              echo "**Mode: REAL APPS** -- CLOUD_REPO_PAT configured"
+              echo ""
+              echo "| Tier | What was tested |"
+              echo "|------|-----------------|"
+              echo "| T1 | Real clawmetry-landing (run_landing.py) |"
+              echo "| T2 | Real clawmetry-cloud (run_cloud.py) |"
+              echo "| T3 | Real DaemonSim from cloud checkout |"
+              echo "| T4 | Real DaemonSim + AES-256-GCM cache_push |"
+            else
+              echo "**Mode: STUB** -- CLOUD_REPO_PAT not set (fork PR or secret not configured)"
+              echo ""
+              echo "| Tier | What was tested | Full-fidelity equivalent |"
+              echo "|------|-----------------|-------------------------|"
+              echo "| T1 | Inline landing stub | Real app via run_landing.py |"
+              echo "| T2 | Inline cloud stub | Real app via run_cloud.py |"
+              echo "| T3 | InlineDaemonSim | Real DaemonSim from cloud checkout |"
+              echo "| T4 | InlineDaemonSim + cache_push | Real DaemonSim + AES-256-GCM payload |"
+              echo ""
+              echo "> **To upgrade C4 to real-apps mode:** set the \`CLOUD_REPO_PAT\` repository"
+              echo "> secret (Contents read on clawmetry-cloud + clawmetry-landing)."
+              echo "> See [tracking issue #4036](https://github.com/vivekchand/clawmetry/issues/4036)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload JUnit results
         if: always() && steps.access.outputs.available == 'true'
         uses: actions/upload-artifact@v7
