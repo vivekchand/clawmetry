@@ -99,6 +99,21 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           channel / retention / node
                                           marginal steps between two tiers
                                           off one round-trip.
+  GET  /api/entitlement/capacity-headroom-path -- path analogue of
+                                          ``/capacity-headroom-batch``:
+                                          per-rung capacity-headroom envelope
+                                          along an arbitrary ``?from=&to=``
+                                          segment given caller-supplied
+                                          per-axis usage. Headroom-shaped
+                                          mirror of ``/capacity-diff-path``
+                                          / ``/tier-unlocks-path`` /
+                                          ``/tier-locks-path`` /
+                                          ``/preview-path`` -- rungs line
+                                          up rung-for-rung with those four
+                                          siblings so an upgrade-walkthrough
+                                          UI can render "watch your headroom
+                                          recover rung by rung" off ONE
+                                          round-trip.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -922,6 +937,119 @@ def api_entitlement_capacity_headroom_batch():
                 "grace": True,
                 "enforced": False,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-path")
+def api_entitlement_capacity_headroom_path():
+    """``GET /api/entitlement/capacity-headroom-path?from=<id>&to=<id>
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- per-rung
+    capacity-headroom envelope along an arbitrary ``from -> to`` segment,
+    given the caller-supplied per-axis usage.
+
+    Path analogue of ``/capacity-headroom-batch`` (which walks every
+    purchasable tier) and headroom-shaped mirror of
+    ``/capacity-diff-path`` (per-rung marginal capacity transitions),
+    ``/tier-unlocks-path`` (marginal grants per rung),
+    ``/tier-locks-path`` (marginal losses per rung) and
+    ``/preview-path`` (cumulative ``Entitlement.to_dict`` per rung) --
+    the fifth member of the capacity axis's ``_path`` family. Lets an
+    upgrade-walkthrough surface render the "watch your headroom recover
+    rung by rung" view off ONE round-trip without re-deriving per-tier
+    caps in JS.
+
+    Rung walk matches ``/capacity-diff-path`` / ``/preview-path`` /
+    ``/tier-unlocks-path`` / ``/tier-locks-path`` byte-for-byte (same
+    ``_PURCHASABLE_TIERS`` filter + same ``(rank, id)`` /
+    ``(-rank, id)`` sort key + same destination-sibling exclusion), so
+    the rung ids from this endpoint line up rung-for-rung with those
+    four siblings. Same-rank siblings between the endpoints are both
+    included; same-rank siblings of the destination are excluded so the
+    path terminates exactly at ``to``.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_headroom_at row>, ...],
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-headroom-at`` for
+    the same axis inputs byte-for-byte (``tier`` / ``tier_label`` /
+    ``channels`` / ``retention_days`` / ``nodes``, with each per-axis row
+    matching the :func:`entitlements._headroom_row` shape). Identity
+    (``from == to``) returns an empty ``path``. Lateral (same rank,
+    different id) returns a single-row path. ``400`` when ``from=`` or
+    ``to=`` is missing; ``404`` when either id is unknown. ``trial`` IS
+    accepted as an endpoint -- excluded from the walked rungs (not
+    purchasable) but the lateral / identity branch still resolves.
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom-batch``'s posture). A blank, non-int, negative,
+    or ``bool``-in-disguise value on any axis short-circuits that axis
+    to ``None`` on every row -- a stray query string cannot silently
+    blank the whole walk.
+
+    Decoupled from the resolved entitlement -- every rung walks the
+    static per-tier caps via
+    :func:`entitlements.capacity_headroom_at` -- so grace vs enforce
+    yields byte-identical ``path`` payloads. Never 5xxs: a resolver
+    failure short-circuits to ``404`` so an upgrade-walkthrough surface
+    keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        path = _ent.capacity_headroom_path(f, t, **kwargs)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_path: error: %s", exc
+        )
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 
