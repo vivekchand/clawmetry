@@ -114,6 +114,18 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           UI can render "watch your headroom
                                           recover rung by rung" off ONE
                                           round-trip.
+  GET  /api/entitlement/capacity-headroom-path-batch -- batch sibling of
+                                          ``/capacity-headroom-path`` and
+                                          headroom-shaped twin of
+                                          ``/capacity-diff-path-batch``: walk
+                                          the per-rung headroom envelopes from
+                                          ONE ``?from=`` to N candidate
+                                          ``?to=a,b,c`` destinations in ONE
+                                          round-trip. Fan-out shape matches
+                                          ``/capacity-diff-path-batch`` and
+                                          ``/tier-spec-path-batch``; unknown
+                                          destinations bucket into
+                                          ``unknown[]`` instead of 404ing.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -15979,6 +15991,124 @@ def api_entitlement_capacity_diff_path_batch():
     except Exception as exc:
         logger.warning(
             "api_entitlement_capacity_diff_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-path-batch")
+def api_entitlement_capacity_headroom_path_batch():
+    """``GET /api/entitlement/capacity-headroom-path-batch?from=<id>&to=a,b,c
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- batch sibling of
+    ``/api/entitlement/capacity-headroom-path``.
+
+    Where ``/capacity-headroom-path`` walks the rungs between ONE
+    ``(from, to)`` pair, this walks the rungs between ONE ``from`` and N
+    candidate ``to`` tiers in ONE round-trip. Pairs with
+    ``/capacity-headroom-path`` the same way ``/capacity-diff-path-batch``
+    pairs with ``/capacity-diff-path``: scalar -> matrix in one call.
+    Headroom-shaped twin of ``/capacity-diff-path-batch`` (same fan-out
+    shape, per-axis headroom body instead of marginal-transition body).
+
+    Use case: a capacity-only pricing-comparison "from my current rung,
+    here are the 3 tiers I'm considering -- watch my headroom recover rung
+    by rung on the way to each" surface hydrates the per-rung headroom
+    envelopes to every candidate off ONE call instead of N calls to
+    ``/capacity-headroom-path``. Same-rank siblings strictly between the
+    endpoints are included for each per-destination path; same-rank
+    siblings of each destination are excluded so the per-destination path
+    terminates exactly at its own ``to``. Per-destination path lengths can
+    legitimately differ (the rungs walked depend on the destination),
+    matching ``/capacity-diff-path-batch``'s posture.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/capacity-headroom-path?from=<from>&to=<to>&...`` -- pinned by the
+    parity tests so the scalar and batch path accessors cannot drift.
+    Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved). Unknown
+    ids do not 404 the call -- they are echoed in ``unknown[]`` so a
+    partially-bad caller still gets paths back for the valid ids.
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom-path``'s posture). A blank, non-int, negative, or
+    ``bool``-in-disguise value on any axis short-circuits that axis to
+    ``None`` on every row of every destination -- a stray query string
+    cannot silently blank the whole matrix.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<capacity-headroom row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing /
+      empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "tier"``)
+    - **200** with bucketed unknowns for unknown destination ids -- does
+      NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+
+    Decoupled from the resolved entitlement -- every rung walks the static
+    per-tier caps via :func:`entitlements.capacity_headroom_at` -- so grace
+    vs enforce yields byte-identical ``path`` payloads.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        batch = _ent.capacity_headroom_path_batch(f, targets, **kwargs)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_path_batch: error: %s", exc
         )
         return jsonify(
             {
