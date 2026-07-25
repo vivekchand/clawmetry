@@ -1557,6 +1557,35 @@ def _gateway_host_status() -> dict:
         return {}
 
 
+def _gateway_supervisor_mode_env() -> dict:
+    """Read OpenClaw external-supervisor mode from the local environment (#4023).
+
+    ``OPENCLAW_SUPERVISOR_MODE`` is set by the operator when an external lifecycle
+    owner (e.g. OCM) supervises the gateway.  When the gateway is down during a
+    supervised restart handoff, ``_gateway_host_status()`` is not called (it
+    requires a live RPC connection), so the supervisor context is invisible.
+
+    This helper reads the env var unconditionally as a baseline fallback.  When
+    the gateway IS live, ``_gateway_host_status()`` overwrites these keys with
+    the authoritative RPC value.
+
+    Returns ``{"gatewaySupervisorMode": ...}`` (and optionally
+    ``"gatewaySupervisorModeVersion"``) when the env var is set, ``{}`` otherwise.
+    Never raises.
+    """
+    try:
+        mode = os.environ.get("OPENCLAW_SUPERVISOR_MODE")
+        if not mode:
+            return {}
+        result: dict = {"gatewaySupervisorMode": str(mode)}
+        version = os.environ.get("OPENCLAW_SUPERVISOR_MODE_VERSION")
+        if version:
+            result["gatewaySupervisorModeVersion"] = str(version)
+        return result
+    except Exception:
+        return {}
+
+
 def _gateway_presence_roster() -> dict:
     """Who's-online presence roster from the OpenClaw gateway.status RPC (#3884).
 
@@ -1933,6 +1962,11 @@ class OpenClawAdapter(AgentAdapter):
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
             meta.update(_nemoclaw_agents_manifest())
+            # External-supervisor mode env-var fallback (#4023): surface
+            # OPENCLAW_SUPERVISOR_MODE even when the gateway is down (e.g. during
+            # a supervised restart handoff). _gateway_host_status() below will
+            # overwrite with the live RPC value when the gateway is up.
+            meta.update(_gateway_supervisor_mode_env())
             # Gateway plugin health (#3200): per-plugin state (loaded/errored/
             # disabled) added to gateway.status in harness 2026.6.9 (#93395).
             # Only meaningful — and safe to query — when the gateway is live.
