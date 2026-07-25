@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time as _time
 from typing import List, Optional, Set
@@ -24,6 +25,12 @@ from typing import List, Optional, Set
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
+
+# Named OpenClaw profiles write openclaw-{name}-YYYY-MM-DD.log alongside the
+# default-profile openclaw-YYYY-MM-DD.log.  Matching only the date-only form
+# prevents lexicographic sort from mis-selecting a named-profile log as
+# "the current log" and silently dropping default-profile gateway events.
+_DEFAULT_LOG_RE = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
@@ -477,7 +484,10 @@ def _gateway_log_files() -> list:
         if os.path.isdir(entry):
             candidates.append(entry)
     for d in candidates:
-        matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        matches = sorted(
+            m for m in glob.glob(os.path.join(d, "openclaw-*.log"))
+            if _DEFAULT_LOG_RE.search(os.path.basename(m))
+        )
         if matches:
             return matches[-5:]
     return []
@@ -1557,6 +1567,35 @@ def _gateway_host_status() -> dict:
         return {}
 
 
+def _gateway_supervisor_mode_env() -> dict:
+    """Read OpenClaw external-supervisor mode from the local environment (#4023).
+
+    ``OPENCLAW_SUPERVISOR_MODE`` is set by the operator when an external lifecycle
+    owner (e.g. OCM) supervises the gateway.  When the gateway is down during a
+    supervised restart handoff, ``_gateway_host_status()`` is not called (it
+    requires a live RPC connection), so the supervisor context is invisible.
+
+    This helper reads the env var unconditionally as a baseline fallback.  When
+    the gateway IS live, ``_gateway_host_status()`` overwrites these keys with
+    the authoritative RPC value.
+
+    Returns ``{"gatewaySupervisorMode": ...}`` (and optionally
+    ``"gatewaySupervisorModeVersion"``) when the env var is set, ``{}`` otherwise.
+    Never raises.
+    """
+    try:
+        mode = os.environ.get("OPENCLAW_SUPERVISOR_MODE")
+        if not mode:
+            return {}
+        result: dict = {"gatewaySupervisorMode": str(mode)}
+        version = os.environ.get("OPENCLAW_SUPERVISOR_MODE_VERSION")
+        if version:
+            result["gatewaySupervisorModeVersion"] = str(version)
+        return result
+    except Exception:
+        return {}
+
+
 def _gateway_presence_roster() -> dict:
     """Who's-online presence roster from the OpenClaw gateway.status RPC (#3884).
 
@@ -1933,6 +1972,11 @@ class OpenClawAdapter(AgentAdapter):
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
             meta.update(_nemoclaw_agents_manifest())
+            # External-supervisor mode env-var fallback (#4023): surface
+            # OPENCLAW_SUPERVISOR_MODE even when the gateway is down (e.g. during
+            # a supervised restart handoff). _gateway_host_status() below will
+            # overwrite with the live RPC value when the gateway is up.
+            meta.update(_gateway_supervisor_mode_env())
             # Gateway plugin health (#3200): per-plugin state (loaded/errored/
             # disabled) added to gateway.status in harness 2026.6.9 (#93395).
             # Only meaningful — and safe to query — when the gateway is live.
