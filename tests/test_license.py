@@ -616,10 +616,18 @@ def test_activate_then_entitlement_resolves_pro(lic, monkeypatch):
 @pytest.fixture
 def prov(lic, monkeypatch, tmp_path):
     """license module with the pro marker redirected to a temp file + the cloud
-    base pointed at a fake server, and no real pro package present."""
+    base pointed at a fake server, and no real pro package present.
+
+    Note: the parent ``lic`` fixture sets ``CLAWMETRY_OFFLINE=1`` so tests never
+    leak to the real network by accident. Since ``auto_provision_pro`` now
+    honors that flag (early-returns without probing), phone-home tests must
+    opt back OUT explicitly — otherwise every stubbed urlopen would never be
+    reached. Tests that WANT the offline short-circuit stub urlopen to raise
+    on any call (see ``test_auto_provision_offline_env_skips_probe``)."""
     monkeypatch.setattr(lic.L, "_PRO_MARKER_PATH", str(tmp_path / "pro.json"))
     monkeypatch.setenv("CLAWMETRY_INGEST_URL", "https://fake.clawmetry.test")
     monkeypatch.setattr(lic.L, "_pro_installed_version", lambda: None)
+    monkeypatch.delenv("CLAWMETRY_OFFLINE", raising=False)
     return lic
 
 
@@ -722,6 +730,28 @@ def test_auto_provision_idempotent_when_pro_present(prov, monkeypatch):
     assert installed is True
     assert calls["download"] == 1  # re-validates with the server every call
     assert "already installed" in msg
+
+
+@pytest.mark.parametrize("truthy", ["1", "true", "YES"])
+def test_auto_provision_offline_env_skips_probe(prov, monkeypatch, truthy):
+    """CLAWMETRY_OFFLINE (any truthy spelling) short-circuits auto_provision_pro
+    before any HTTP is issued: neither /api/license/entitlement nor
+    /api/license/download is touched. Symmetric with the activate path's
+    offline gate (see ``test_activate_offline_env_skips_phone_home``) so a
+    single env var reliably keeps an air-gapped install off the wire whether
+    the operator connects via cm_ key or activates via signed license."""
+    import urllib.request
+
+    monkeypatch.setenv("CLAWMETRY_OFFLINE", truthy)
+
+    def _no_network(*a, **k):
+        raise AssertionError("network touched in offline mode")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _no_network)
+    installed, msg = prov.L.auto_provision_pro("cm_prouser", node_id="n1")
+    assert installed is False
+    assert "offline mode" in msg
+    assert "CLAWMETRY_OFFLINE" in msg  # tells the operator the way out
 
 
 def test_download_wheel_refuses_non_https(prov):

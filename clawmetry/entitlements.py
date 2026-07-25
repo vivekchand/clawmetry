@@ -3410,6 +3410,139 @@ def capacity_headroom_path(
         return None
 
 
+def capacity_headroom_path_batch(
+    from_tier: str,
+    to_tiers,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Batch sibling of :func:`capacity_headroom_path`: per-rung capacity-
+    headroom envelopes for a caller-supplied subset of destination tiers all
+    walked from a single ``from_tier`` in ONE round-trip.
+
+    Composes :func:`capacity_headroom_path` (scalar single-destination
+    headroom walk) and :func:`capacity_diff_path_batch` (multi-destination
+    capacity-diff path batch) -- same per-rung headroom body as the path
+    helper, same multi-destination axis as the capacity-diff path batch.
+    Fills the ``_path_batch`` slot on the capacity-headroom axis alongside
+    :func:`capacity_headroom` (scalar current), :func:`capacity_headroom_at`
+    (scalar what-if), :func:`capacity_headroom_batch` (per-tier what-if
+    matrix) and :func:`capacity_headroom_path` (scalar path). Lets a
+    capacity-only pricing-comparison "from my current rung, here are the 3
+    tiers I'm considering -- watch my headroom recover rung by rung on the
+    way to each" surface render every rung for every candidate destination
+    off ONE call instead of N calls to :func:`capacity_headroom_path`.
+
+    Per-destination row shape::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_headroom_at row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`capacity_headroom_path` for the same ``(from_tier, to)`` pair --
+    a parity test pins this so the scalar and batch path helpers cannot
+    drift. The walked rungs are destination-specific (the path's rung set
+    depends on ``to``), so per-destination ``path`` lengths can legitimately
+    differ -- this matches :func:`capacity_diff_path_batch`'s posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown ids are echoed in ``unknown[]`` instead of short-
+    circuiting -- a partially-bad caller still gets paths back for the
+    valid ids alongside a list of what was dropped, matching
+    :func:`capacity_diff_path_batch`'s posture. ``trial`` IS accepted as a
+    destination (it is excluded from the walked intermediate rungs the way
+    :func:`capacity_headroom_path` already excludes it, but is a valid
+    endpoint via the lateral / identity branches).
+
+    Per-axis "None means axis not supplied" posture matches
+    :func:`capacity_headroom_path` /  :func:`capacity_headroom_at` /
+    :func:`capacity_headroom_batch`: an unsupplied axis stays ``None`` on
+    every rung of every destination; a supplied axis is echoed on every
+    rung and the cap is walked off each destination rung's static cap.
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404).
+
+    Resolver-independent: delegates per-destination to
+    :func:`capacity_headroom_path`, which walks the static per-tier caps
+    via :func:`capacity_headroom_at` -- so grace vs enforce yields
+    byte-identical rows. Never raises: per-destination failures short-
+    circuit that id into ``unknown[]`` and the rest of the batch keeps
+    building.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    kwargs: dict[str, int] = {}
+    if channels is not None:
+        kwargs["channels"] = channels
+    if retention_days is not None:
+        kwargs["retention_days"] = retention_days
+    if nodes is not None:
+        kwargs["nodes"] = nodes
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = capacity_headroom_path(f, tid, **kwargs)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: capacity_headroom_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def _capacity_row(from_tier: str, to_tier: str) -> dict:
     """Build one ``capacity_diff``-shape row for an arbitrary ``from -> to`` pair.
 

@@ -28,7 +28,7 @@ ClawMetry started as observability for OpenClaw, and now meters your **whole age
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
 
-OpenClaw and NemoClaw are free in the open-source app; the other runtimes light up with ClawMetry Cloud or a self-hosted Pro license. Switch runtimes from the header and every tab — cost, tokens, tools, traces — re-scopes to that runtime.
+OpenClaw and NemoClaw are free in the open-source app; the other runtimes light up with ClawMetry Cloud or a self-hosted Pro license. Switch runtimes from the header and every tab — cost, tokens, tools, traces — re-scopes to that runtime. See **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** for the exact free/paid split, tier matrix, `/api/entitlement` shape, and the `clawmetry license` CLI.
 
 ## What You Get
 
