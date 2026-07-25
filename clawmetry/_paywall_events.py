@@ -405,6 +405,91 @@ class _PaywallEventStore:
             logger.warning("paywall.events: count_matching swallowed: %s", exc)
             return 0
 
+    def last_matching(
+        self,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+    ) -> dict | None:
+        """Return the single most-recent event matching the supplied
+        filters, or ``None`` if nothing matches.
+
+        Same filter semantics as :meth:`recent` / :meth:`count_matching`
+        (``None`` / empty-string means "not supplied", case-sensitive
+        exact match, ``AND`` combined). Equivalent to
+        ``recent(1, **filters)[0]`` when the ring has a match, and to
+        ``None`` when it does not -- but returns a scalar (dict-or-None)
+        instead of a list so a dashboard tile binding "last paywall
+        event of type X" does not need to unwrap a one-element list.
+        Short-circuits on the first newest-first match so the walk is
+        O(k) where k is the distance from the newest row to the first
+        matching row, not O(n).
+
+        Never raises: a filter failure short-circuits to ``None`` instead
+        of propagating.
+        """
+        try:
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
+            with self._lock:
+                snap = list(self._ring)
+            for e in reversed(snap):
+                if filters and not _row_matches_filters(e, filters):
+                    continue
+                return dict(e)
+            return None
+        except Exception as exc:
+            logger.warning("paywall.events: last_matching swallowed: %s", exc)
+            return None
+
+    def first_matching(
+        self,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+    ) -> dict | None:
+        """Return the single oldest event matching the supplied filters,
+        or ``None`` if nothing matches.
+
+        Twin of :meth:`last_matching` for the other end of the ring:
+        same filter contract, same scalar (dict-or-None) return, same
+        short-circuit walk semantics (oldest-first). A dashboard tile
+        rendering "first paywall CTA click of this session" binds this
+        rather than paging the full ring via :meth:`recent` and
+        inspecting the tail.
+
+        Because the ring evicts oldest-first, the "first" match is
+        anchored to what the ring currently holds -- not to the all-time
+        first occurrence, which may have long since been evicted. That
+        matches the rest of this module's semantics (aggregations
+        reflect what's live, not what's been evicted).
+
+        Never raises.
+        """
+        try:
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
+            with self._lock:
+                snap = list(self._ring)
+            for e in snap:
+                if filters and not _row_matches_filters(e, filters):
+                    continue
+                return dict(e)
+            return None
+        except Exception as exc:
+            logger.warning("paywall.events: first_matching swallowed: %s", exc)
+            return None
+
     def reset(self) -> None:
         with self._lock:
             self._ring.clear()
@@ -467,6 +552,48 @@ def count_matching(
     render "showing N of M matches" alongside the filtered event list.
     """
     return _STORE.count_matching(
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+    )
+
+
+def last_matching(
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+) -> dict | None:
+    """Public shim for :meth:`_PaywallEventStore.last_matching`.
+
+    Returns the single most-recent ring row matching the supplied
+    filters, or ``None`` if nothing matches. Scalar counterpart to
+    :func:`recent` -- a dashboard tile binding "last paywall CTA click
+    for feature X" avoids the one-element-list unwrap this way.
+    """
+    return _STORE.last_matching(
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+    )
+
+
+def first_matching(
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+) -> dict | None:
+    """Public shim for :meth:`_PaywallEventStore.first_matching`.
+
+    Returns the single oldest ring row matching the supplied filters,
+    or ``None`` if nothing matches. Anchored to what the ring currently
+    holds -- see :meth:`_PaywallEventStore.first_matching` for the
+    eviction contract.
+    """
+    return _STORE.first_matching(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
     )

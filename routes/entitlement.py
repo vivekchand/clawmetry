@@ -7296,6 +7296,128 @@ def api_paywall_events_recent():
         )
 
 
+@bp_entitlement.route("/api/paywall/events/last")
+def api_paywall_events_last():
+    """``GET /api/paywall/events/last`` -- the single most-recent paywall
+    beacon matching the supplied filters, or ``null`` if none.
+
+    Scalar sibling of ``/api/paywall/events/recent`` for the common case
+    where a dashboard tile only needs "the most recent one" (e.g. "last
+    CTA click for feature X was at 12:03:41"). Avoids the one-element-
+    list unwrap and skips paying the ``dict(e)`` copy cost on every
+    ring entry.
+
+    Same categorical filter query params + semantics as
+    ``/api/paywall/events/recent`` -- ``?event=`` / ``?feature=`` /
+    ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
+    exact match, ``AND`` combined, blank / missing = "not supplied".
+
+    Body shape::
+
+        {
+          "event": {"event": "...", "feature": "...", "harness": "...",
+                    "source": "...", "plan_chosen": "...", "ts": <float>} | null,
+          "matched": <int>,  # rows matching the filters (0 iff event is null)
+          "in_window": <int>,  # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...}
+        }
+
+    ``matched`` uses the same helper as ``/api/paywall/events/recent`` so
+    a UI can render "last of M matches" without a second round-trip.
+
+    Ships in GRACE. Never 5xxs -- on any failure returns the neutral
+    ``event=null`` envelope.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        event_row = _pe.last_matching(**filter_kwargs)
+        matched = _pe.count_matching(**filter_kwargs)
+        summary = _pe.summary()
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "event": event_row,
+                "matched": matched,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_last: error: %s", exc)
+        return jsonify(
+            {
+                "event": None,
+                "matched": 0,
+                "in_window": 0,
+                "filters": {},
+            }
+        )
+
+
+@bp_entitlement.route("/api/paywall/events/first")
+def api_paywall_events_first():
+    """``GET /api/paywall/events/first`` -- the single oldest paywall
+    beacon matching the supplied filters, or ``null`` if none.
+
+    Twin of ``/api/paywall/events/last`` for the other end of the ring:
+    same filter contract, same envelope shape, same never-5xx posture.
+    Anchored to what the ring currently holds -- because the ring evicts
+    oldest-first, "first" means "oldest still resident", not "all-time
+    first". Matches the rest of this module's semantics (aggregations
+    reflect what's live, not what's been evicted).
+
+    A dashboard tile rendering "first paywall CTA click of this session"
+    binds this rather than paging the full ring via
+    ``/api/paywall/events/recent`` and inspecting the tail.
+
+    Body shape is identical to ``/api/paywall/events/last``. Ships in
+    GRACE. Never 5xxs -- on any failure returns the neutral
+    ``event=null`` envelope.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        event_row = _pe.first_matching(**filter_kwargs)
+        matched = _pe.count_matching(**filter_kwargs)
+        summary = _pe.summary()
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "event": event_row,
+                "matched": matched,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_first: error: %s", exc)
+        return jsonify(
+            {
+                "event": None,
+                "matched": 0,
+                "in_window": 0,
+                "filters": {},
+            }
+        )
+
+
 def _route_actor() -> str:
     try:
         for h in ("X-Actor", "X-Forwarded-For"):
