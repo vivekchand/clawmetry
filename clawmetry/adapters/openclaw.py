@@ -462,6 +462,35 @@ def _openshell_sandbox_ocsf_enabled(name: str) -> dict:
         return {}
 
 
+def _read_logging_file_config() -> str:
+    """Read ``logging.file`` from openclaw.json and return the path string.
+
+    openclaw.json can redirect gateway log output to an arbitrary path via
+    ``{"logging": {"file": "/custom/path/openclaw.log"}}``.  Returns the
+    string value when present, empty string otherwise.  Never raises (#4054).
+    """
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        cfg_path = os.path.join(home, "openclaw.json")
+        if not os.path.isfile(cfg_path):
+            alt = os.path.expanduser("~/.clawdbot/openclaw.json")
+            if os.path.isfile(alt):
+                cfg_path = alt
+            else:
+                return ""
+        with open(cfg_path) as _fh:
+            cfg = json.load(_fh)
+        if not isinstance(cfg, dict):
+            return ""
+        logging_cfg = cfg.get("logging")
+        if not isinstance(logging_cfg, dict):
+            return ""
+        log_file = logging_cfg.get("file")
+        return str(log_file) if log_file else ""
+    except Exception:
+        return ""
+
+
 def _gateway_log_files() -> list:
     """Return the newest-5 rotating gateway log files across known candidate dirs.
 
@@ -477,6 +506,15 @@ def _gateway_log_files() -> list:
         "/tmp/openclaw",
         os.path.join(openclaw_dir, "logs"),
     ]
+
+    # If openclaw.json sets logging.file, check that path's parent directory
+    # first so installs with a custom log location are visible (#4054).
+    custom_log_file = _read_logging_file_config()
+    if custom_log_file:
+        custom_dir = os.path.dirname(os.path.abspath(custom_log_file))
+        if custom_dir not in candidates:
+            candidates.insert(0, custom_dir)
+
     # On Windows and on hosts where /tmp/openclaw is unsafe the gateway writes
     # to a user-scoped openclaw-* directory under the OS temp dir instead.
     tmp_base = tempfile.gettempdir()
@@ -490,6 +528,12 @@ def _gateway_log_files() -> list:
         )
         if matches:
             return matches[-5:]
+
+    # Fallback: if logging.file points to a single file that doesn't match the
+    # rotation naming pattern, return it directly so callers still see events.
+    if custom_log_file and os.path.isfile(custom_log_file):
+        return [custom_log_file]
+
     return []
 
 
