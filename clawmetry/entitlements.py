@@ -6400,6 +6400,198 @@ def min_tier_for_all(
         return None
 
 
+def min_tier_for_all_breakdown(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-axis breakdown of :func:`min_tier_for_all` with the binding
+    constraint(s) called out.
+
+    Where :func:`min_tier_for_all` collapses the answer to a single
+    ``min_tier`` id, this helper preserves the per-axis contribution and
+    identifies which axis (or axes, on a tie) is *driving* the required
+    tier. A dashboard surface can then render an honest "you need Pro
+    *because* you have 8 channels (Starter caps at 5)" tooltip off ONE
+    round-trip instead of five ``min_tier_for_*`` calls + a client-side
+    max-by-rank + a comparison against the aggregate floor.
+
+    Same input semantics as :func:`min_tier_for_all` (same five-axis
+    kwargs, same per-axis ``None`` "not supplied" sentinel, same
+    ``retention_days=None means unset, not unlimited`` posture, same
+    never-raise contract).
+
+    Response shape::
+
+        {
+          "min_tier":       "cloud_pro" | None,   # matches min_tier_for_all
+          "min_tier_label": "Pro" | None,
+          "min_tier_rank":  <int> | None,
+          "axes": {
+            "features":       <axis_row> | None,  # None iff axis unsupplied
+            "runtimes":       <axis_row> | None,
+            "channels":       <axis_row> | None,
+            "retention_days": <axis_row> | None,
+            "nodes":          <axis_row> | None,
+          },
+          "binding_axes":  ["features"] | [],     # axis ids whose min_tier
+                                                  # equals the aggregate floor
+        }
+
+    Each ``<axis_row>`` carries ``kind``, ``supplied`` (``True`` -- an
+    unsupplied axis short-circuits to ``None`` at the envelope level),
+    ``min_tier`` (``None`` when the axis collapses to nothing -- empty
+    iterable / non-int / all-unknown tokens), ``min_tier_label``,
+    ``min_tier_rank`` (``-1`` when ``min_tier`` is ``None``), and
+    ``binding`` (``True`` iff this axis' ``min_tier`` matches the
+    aggregate ``min_tier``). Grant axes additionally carry ``items``
+    (the normalised list actually contributing) so the tooltip can name
+    the offender ("channel-adapter *slack* needs Starter"). Capacity
+    axes additionally carry ``value`` (the parsed int, or the raw
+    input if it did not parse) so the tooltip can render the offending
+    number.
+
+    ``binding_axes`` is the list of axis keys (``"features"`` /
+    ``"runtimes"`` / ``"channels"`` / ``"retention_days"`` / ``"nodes"``)
+    whose per-axis ``min_tier`` matches the aggregate floor. On a tie
+    (two axes both resolve to Pro), both are listed in envelope order.
+    When ``min_tier`` is ``None`` -- no constraints, or every supplied
+    axis collapsed -- ``binding_axes`` is the empty list.
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    caps via the singular ``min_tier_for_*`` helpers), so grace vs
+    enforce yields byte-identical output. Never raises: a delegate
+    failure surfaces as the null-floor / empty-axes / empty-binding
+    shape so the pricing UI keeps rendering instead of 500-ing.
+    """
+    empty = {
+        "min_tier": None,
+        "min_tier_label": None,
+        "min_tier_rank": None,
+        "axes": {
+            "features": None,
+            "runtimes": None,
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        },
+        "binding_axes": [],
+    }
+    try:
+        axes: dict = {
+            "features": None,
+            "runtimes": None,
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+        if features is not None:
+            feats = _normalise_csv(features)
+            known = [f for f in feats if f in ALL_FEATURES]
+            axis_min = min_tier_for_features(known) if known else None
+            axes["features"] = {
+                "kind": "features",
+                "supplied": True,
+                "items": known,
+                "min_tier": axis_min,
+                "min_tier_label": tier_label(axis_min) if axis_min else None,
+                "min_tier_rank": tier_rank(axis_min) if axis_min else -1,
+                "binding": False,
+            }
+
+        if runtimes is not None:
+            raw_rts = _normalise_csv(runtimes)
+            seen: set[str] = set()
+            canon_rts: list[str] = []
+            for raw in raw_rts:
+                rt = canonical_runtime(raw)
+                key = rt if rt else raw
+                if key in seen:
+                    continue
+                seen.add(key)
+                if rt and rt in ALL_RUNTIMES:
+                    canon_rts.append(rt)
+            axis_min = min_tier_for_runtimes(canon_rts) if canon_rts else None
+            axes["runtimes"] = {
+                "kind": "runtimes",
+                "supplied": True,
+                "items": canon_rts,
+                "min_tier": axis_min,
+                "min_tier_label": tier_label(axis_min) if axis_min else None,
+                "min_tier_rank": tier_rank(axis_min) if axis_min else -1,
+                "binding": False,
+            }
+
+        def _capacity_row(kind: str, raw, resolver) -> dict:
+            try:
+                n = int(raw)
+                parsed = True
+            except (TypeError, ValueError):
+                n = None
+                parsed = False
+            axis_min = resolver(n) if parsed else None
+            return {
+                "kind": kind,
+                "supplied": True,
+                "value": n if parsed else raw,
+                "min_tier": axis_min,
+                "min_tier_label": tier_label(axis_min) if axis_min else None,
+                "min_tier_rank": tier_rank(axis_min) if axis_min else -1,
+                "binding": False,
+            }
+
+        if channels is not None:
+            axes["channels"] = _capacity_row(
+                "channels", channels, min_tier_for_channel_count
+            )
+        if retention_days is not None:
+            axes["retention_days"] = _capacity_row(
+                "retention_days",
+                retention_days,
+                min_tier_for_retention_window,
+            )
+        if nodes is not None:
+            axes["nodes"] = _capacity_row(
+                "nodes", nodes, min_tier_for_node_count
+            )
+
+        candidate_tiers: list[str] = []
+        for axis in axes.values():
+            if axis and axis["min_tier"]:
+                candidate_tiers.append(axis["min_tier"])
+        if not candidate_tiers:
+            return {
+                "min_tier": None,
+                "min_tier_label": None,
+                "min_tier_rank": None,
+                "axes": axes,
+                "binding_axes": [],
+            }
+
+        floor = max(candidate_tiers, key=tier_rank)
+        floor_rank = tier_rank(floor)
+        binding_axes: list[str] = []
+        for key in ("features", "runtimes", "channels", "retention_days", "nodes"):
+            axis = axes[key]
+            if axis and axis["min_tier"] == floor:
+                axis["binding"] = True
+                binding_axes.append(key)
+        return {
+            "min_tier": floor,
+            "min_tier_label": tier_label(floor),
+            "min_tier_rank": floor_rank,
+            "axes": axes,
+            "binding_axes": binding_axes,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: min_tier_for_all_breakdown failed: %s", exc)
+        return empty
+
+
 def affordable_tiers(
     *,
     features=None,

@@ -58,6 +58,19 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           fleet + otel_export + sso -- what
                                           tier covers everything?" in a single
                                           round-trip.
+  GET  /api/entitlement/required-tier-breakdown -- per-axis breakdown sibling
+                                          of ``/required-tier-batch``: same
+                                          inputs and top-level
+                                          ``required_tier`` field, but
+                                          additionally exposes each axis'
+                                          individual ``min_tier`` and calls
+                                          out which axis (or axes, on a tie)
+                                          is the *binding* constraint driving
+                                          the aggregate floor -- so a paywall
+                                          CTA can render "You need Pro
+                                          *because* you have 8 channels
+                                          (Starter caps at 5)" off ONE
+                                          round-trip.
   GET  /api/entitlement/lock-reason-batch -- per-item plural sibling of
                                           ``/lock-reason``: same CSV +
                                           capacity inputs as
@@ -3305,6 +3318,164 @@ def api_entitlement_required_tier_batch():
                 "current_tier_rank": 0,
                 "upgrade_required": False,
                 "allowed": True,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/required-tier-breakdown")
+def api_entitlement_required_tier_breakdown():
+    """``GET /api/entitlement/required-tier-breakdown?features=a,b&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-axis breakdown sibling of
+    ``/api/entitlement/required-tier-batch``.
+
+    Wraps :func:`entitlements.min_tier_for_all_breakdown`. Where
+    ``/required-tier-batch`` collapses to a single ``required_tier`` id,
+    this endpoint additionally returns each axis' individual ``min_tier``
+    and calls out which axis (or axes, on a tie) is the *binding*
+    constraint driving the aggregate floor -- so a paywall CTA can render
+    "You need Pro *because* you have 8 channels (Starter caps at 5)" off
+    ONE round-trip instead of five ``/required-tier`` calls + a
+    client-side max-by-rank.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation) -- otherwise 400. The three capacity
+    axes accept a single int each; a blank or non-int value contributes
+    nothing to the aggregate floor (the axis row still renders with
+    ``min_tier=null`` so the caller can flag the bad input in a
+    tooltip, matching the never-crash posture of the singular endpoint).
+    ``retention_days=`` mirrors the strict :func:`min_tier_for_all`
+    posture: an unset param is *unset*, NOT *unlimited* -- asking for
+    the unlimited-retention floor is the singular
+    ``/required-tier?retention_days=`` call's job.
+
+    Response body::
+
+        {
+          "features":       [<normalised csv>],
+          "runtimes":       [<normalised csv>],
+          "channels":       <int> | null,
+          "retention_days": <int> | null,
+          "nodes":          <int> | null,
+          "required_tier":       "cloud_pro" | null,
+          "required_tier_label": "Pro" | null,
+          "required_tier_rank":  <int>,      # -1 when required_tier is null
+          "current_tier":        <resolved-tier>,
+          "current_tier_rank":   <int>,
+          "upgrade_required":    <bool>,
+          "axes":         { <axis row per supplied kwarg> | null },
+          "binding_axes": ["features", "channels"]  # ordered; empty on null
+        }
+
+    ``axes`` and ``binding_axes`` come straight from
+    :func:`min_tier_for_all_breakdown`; see that helper's docstring for
+    the row shape. The ``required_tier*`` / ``current_tier*`` /
+    ``upgrade_required`` fields match ``/required-tier-batch`` exactly
+    so a caller migrating from the batch endpoint can adopt the
+    breakdown without reshaping its main paywall payload.
+
+    Never 5xxs: the OSS-fallback shape is returned on any resolver
+    failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (channels_present, channels_ok, channels_n, _) = _parse_capacity_arg(
+            "channels"
+        )
+        (retention_present, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (nodes_present, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_present
+            and not retention_present
+            and not nodes_present
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        breakdown = _ent.min_tier_for_all_breakdown(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+
+        ent = _ent.get_entitlement()
+        required = breakdown.get("min_tier")
+        required_label = breakdown.get("min_tier_label")
+        req_rank = _ent.tier_rank(required) if required else -1
+        cur_rank = _ent.tier_rank(ent.tier)
+
+        return jsonify(
+            {
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+                "axes": breakdown.get("axes")
+                or {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "binding_axes": breakdown.get("binding_axes") or [],
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_required_tier_breakdown: error: %s", exc
+        )
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+                "axes": {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "binding_axes": [],
             }
         )
 
