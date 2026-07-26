@@ -8053,6 +8053,131 @@ def api_license_expiring_within():
     )
 
 
+def _license_tier_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two tier endpoints
+    both need (``tier``, ``has_license``, ``valid``). Lives in the
+    handler layer -- not in :mod:`clawmetry.license` -- because
+    ``has_license`` is an install-state fact rather than a license-payload
+    fact, and both endpoints below need the pair together so a UI cannot
+    catch them disagreeing on ``has_license`` for the same install.
+
+    Never raises: any underlying failure collapses to
+    ``{tier: None, has_license: False, valid: False}`` so callers keep
+    the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        tier = _lic.license_tier()
+    except Exception as exc:
+        logger.debug("_license_tier_snapshot: underlying read failed: %s", exc)
+        return {"tier": None, "has_license": False, "valid": False}
+    if not isinstance(info, dict):
+        return {"tier": None, "has_license": False, "valid": False}
+    return {
+        "tier": tier,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/tier")
+def api_license_tier():
+    """``GET /api/license/tier`` -- scalar view of the installed license's
+    tier claim, for a paywall tile / tier badge that wants ONE string
+    rather than the whole ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "tier": <str|null>,        # normalised (lowercased, stripped) tier
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``tier`` mirrors :func:`clawmetry.license.license_tier`: ``None`` for
+    no license, invalid signature, or expired install -- an expired Pro
+    key deliberately collapses to ``null`` so a paywall tile that keys
+    off this field cannot keep rendering "Pro" for a lapsed customer.
+    A caller who wants ``sub`` / ``nodes`` / ``exp`` alongside should
+    keep hitting ``/api/license/status``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{tier: null, has_license: false, valid: false}`` (the OSS-free
+    branch shape), matching the "never crash on bad input" posture of
+    the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_tier_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_tier: error: %s", exc)
+        return jsonify({"tier": None, "has_license": False, "valid": False})
+
+
+@bp_entitlement.route("/api/license/is-tier")
+def api_license_is_tier():
+    """``GET /api/license/is-tier?tier=<name>`` -- boolean gate for
+    "am I on tier <X> right now?" UIs.
+
+    Query parameters:
+      * ``tier`` (str, required) -- the tier to test against. Compared
+        case-insensitively after strip, matching
+        :func:`clawmetry.license.is_tier`. Missing / empty input degrades
+        to ``is_tier=false`` rather than a 4xx, matching the surrounding
+        endpoints' never-5xx / never-4xx posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_tier": <bool>,
+          "tier": <str|null>,          # currently-installed tier
+          "requested_tier": <str>,     # normalised echo of the query
+          "has_license": <bool>,
+          "valid": <bool>              # signature-valid AND not expired
+        }
+
+    ``is_tier`` is ``True`` iff a license is installed, signature-valid,
+    NOT expired, and its normalised tier byte-equals ``requested_tier``.
+    An expired Pro install returns ``is_tier=false`` even for
+    ``?tier=pro`` on purpose -- the caller wants "am I entitled right
+    now" not "was I ever entitled", and the ``valid`` field carries the
+    "signed but lapsed" signal so a paywall UI can drive both banners
+    off one URL.
+
+    Mirrors :func:`clawmetry.license.is_tier` -- the HTTP shape layers
+    ``tier`` / ``requested_tier`` / ``has_license`` / ``valid`` on top
+    of that bool so a widget never needs a second call to
+    ``/api/license/status`` to render the accompanying "you're on X"
+    copy.
+    """
+    raw = request.args.get("tier", "") or ""
+    try:
+        requested = str(raw).strip().lower()
+    except Exception:
+        requested = ""
+    try:
+        snap = _license_tier_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_tier: error: %s", exc)
+        snap = {"tier": None, "has_license": False, "valid": False}
+    match = bool(
+        requested
+        and snap["valid"]
+        and isinstance(snap["tier"], str)
+        and snap["tier"] == requested
+    )
+    return jsonify(
+        {
+            "is_tier": match,
+            "tier": snap["tier"],
+            "requested_tier": requested,
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

@@ -1055,3 +1055,78 @@ def is_expiring_within(days: int) -> bool:
     if remaining is None:
         return False
     return 0 <= remaining <= threshold
+
+
+def license_tier() -> str | None:
+    """Scalar view onto the installed license's ``tier`` claim -- for a
+    paywall tile / tier badge that wants ONE string rather than the whole
+    :func:`current_license_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface:
+        no license file on disk, an invalid signature (the payload
+        can't be trusted -- an attacker could stuff any tier into an
+        unsigned body), OR a signed payload whose ``tier`` claim is
+        absent / non-string / an empty string after strip.
+      * A lowercased, whitespace-stripped tier string otherwise
+        (typically ``"pro"``, ``"enterprise"``, or ``"trial"``, but the
+        helper is deliberately open-ended so a future tier lands
+        without a code change).
+
+    Casing is normalised so a caller can compare against a hard-coded
+    ``"pro"`` without a ``.lower()`` on every read; the raw claim from
+    :func:`current_license_info` is preserved separately for UIs that
+    want the operator-visible form.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    UI tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_tier underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("valid"):
+        # Invalid-signature / expired branches: current_license_info() may
+        # still surface ``tier`` on the expired branch (the signature was
+        # good at signing time, only the ``exp`` claim has passed), but a
+        # tier scalar for gating paywall UI should refuse expired keys the
+        # same way it refuses unsigned ones -- otherwise a lapsed Pro
+        # customer keeps rendering as "Pro" until they re-activate.
+        return None
+    tier = info.get("tier")
+    if not isinstance(tier, str):
+        return None
+    normalized = tier.strip().lower()
+    return normalized or None
+
+
+def is_tier(tier: str) -> bool:
+    """Boolean gate for "am I on tier <X>?" UIs.
+
+    Returns ``True`` iff a license is installed, signature-valid, NOT
+    expired, and its normalised ``tier`` claim exactly matches ``tier``
+    (case-insensitive, whitespace-stripped). Every other state returns
+    ``False``: no license, invalid signature, expired key, missing/empty
+    ``tier`` claim, or a live tier that simply differs from the request.
+
+    ``tier`` is coerced through ``str()`` and normalised the same way
+    :func:`license_tier` normalises the stored claim, so a caller can
+    pass ``"Pro"``, ``"pro"``, or ``"  PRO "`` and get the same answer.
+    Non-string / empty input collapses to ``False`` (nothing "is tier
+    empty-string"). Never raises; every underlying failure returns
+    ``False`` so a scheduled paywall renderer never crashes on a bad
+    install.
+    """
+    try:
+        requested = str(tier).strip().lower()
+    except Exception:
+        return False
+    if not requested:
+        return False
+    actual = license_tier()
+    if actual is None:
+        return False
+    return actual == requested
