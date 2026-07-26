@@ -96,6 +96,74 @@ def test_status_active_license(app):
     assert data["nodes"] == 5
 
 
+# The three status branches (active / no-license / introspection-error) must
+# share a single shape so a dashboard tile can render every case through one
+# code path. The keys below match :func:`clawmetry.license.current_license_info`
+# with the two branch-adds (``plan`` on non-healthy branches, ``error`` on the
+# error branch) documented in the route's docstring.
+_STATUS_SHAPE_KEYS = {
+    "valid",
+    "status",
+    "tier",
+    "nodes",
+    "sub",
+    "exp",
+    "days_left",
+    "pubkey_fingerprint_sha256",
+    "permissions_safe",
+    "file_mode",
+}
+
+
+def test_status_no_license_carries_full_shape_and_pubkey_fingerprint(app):
+    """The no-license branch used to return only 3 keys, forcing every UI to
+    special-case it. Every branch now populates the same field set — plus the
+    trust anchor so an operator can verify the OSS install before installing
+    any key."""
+    with app.app.test_client() as c:
+        resp = c.get("/api/license/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _STATUS_SHAPE_KEYS - set(data)
+    assert not missing, f"no-license branch missing keys: {missing}"
+    assert data["status"] == "no_license"
+    assert data["valid"] is False
+    assert data["plan"] == "oss"  # legacy consumers
+    # Fingerprint must populate whenever the embedded pubkey parses.
+    expected_fp = app.lic.pubkey_fingerprint()
+    assert data["pubkey_fingerprint_sha256"] == expected_fp
+    assert data["pubkey_fingerprint_sha256"] is not None
+    assert data["permissions_safe"] is True  # no file exists yet
+    assert data["file_mode"] is None
+    for k in ("tier", "nodes", "sub", "exp", "days_left"):
+        assert data[k] is None, f"{k} should be None when no license installed"
+
+
+def test_status_introspection_failure_never_5xx(app, monkeypatch):
+    """A broken install (import / cryptography-lib mismatch) must degrade to
+    the same envelope shape at HTTP 200 rather than 500 — matches the
+    never-crash posture of /api/entitlement, /api/features,
+    /api/license/pubkey."""
+    import clawmetry.license as _lic
+
+    def boom():
+        raise RuntimeError("simulated introspection failure")
+
+    monkeypatch.setattr(_lic, "current_license_info", boom)
+    with app.app.test_client() as c:
+        resp = c.get("/api/license/status")
+    assert resp.status_code == 200, "status must never 5xx on internal error"
+    data = resp.get_json()
+    missing = _STATUS_SHAPE_KEYS - set(data)
+    assert not missing, f"error branch missing keys: {missing}"
+    assert data["status"] == "unknown"
+    assert data["valid"] is False
+    assert data["plan"] == "oss"
+    assert "simulated introspection failure" in data.get("error", "")
+    # Trust anchor still populates when pubkey_fingerprint itself is healthy.
+    assert data["pubkey_fingerprint_sha256"] == _lic.pubkey_fingerprint()
+
+
 # ── /api/license/activate ─────────────────────────────────────────────────────
 
 
@@ -209,6 +277,63 @@ def test_verify_missing_key_body_returns_400(app):
         )
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
+
+
+# Same shape-parity contract as :data:`_STATUS_SHAPE_KEYS`, extended with the
+# dry-run marker that :func:`clawmetry.license.inspect_key` returns.
+_VERIFY_SHAPE_KEYS = _STATUS_SHAPE_KEYS | {"dry_run"}
+
+
+def test_verify_invalid_key_carries_full_shape_and_pubkey_fingerprint(app):
+    """The invalid branch used to return only 3 keys; now it mirrors
+    inspect_key()'s shape so a support-desk UI reading either envelope can
+    render it through one code path — including the trust anchor an operator
+    can use to confirm the paste is failing against the RIGHT public key."""
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({"key": "CLAW1.not.real"}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _VERIFY_SHAPE_KEYS - set(data)
+    assert not missing, f"invalid branch missing keys: {missing}"
+    assert data["valid"] is False
+    assert data["status"] == "invalid"
+    assert data["dry_run"] is True
+    assert data["pubkey_fingerprint_sha256"] == app.lic.pubkey_fingerprint()
+    # inspect_key dry-run contract: on-disk fields are None (nothing was written).
+    assert data["permissions_safe"] is None
+    assert data["file_mode"] is None
+    for k in ("tier", "nodes", "sub", "exp", "days_left"):
+        assert data[k] is None
+
+
+def test_verify_introspection_failure_never_5xx(app, monkeypatch):
+    """A broken inspect_key call must degrade to the same shape at HTTP 200
+    rather than 5xx-ing the paywall/verify card."""
+    import clawmetry.license as _lic
+
+    def boom(_key):
+        raise RuntimeError("simulated inspect failure")
+
+    monkeypatch.setattr(_lic, "inspect_key", boom)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/verify",
+            data=json.dumps({"key": "CLAW1.doesnt.matter"}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _VERIFY_SHAPE_KEYS - set(data)
+    assert not missing, f"error branch missing keys: {missing}"
+    assert data["valid"] is False
+    assert data["status"] == "invalid"
+    assert data["dry_run"] is True
+    assert "simulated inspect failure" in data.get("error", "")
+    assert data["pubkey_fingerprint_sha256"] == _lic.pubkey_fingerprint()
 
 
 # ── /api/license/deactivate ───────────────────────────────────────────────────

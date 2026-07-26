@@ -7091,16 +7091,70 @@ def api_features():
 
 @bp_entitlement.route("/api/license/status")
 def api_license_status():
+    """``GET /api/license/status`` -- current install's license state.
+
+    Shape parity across all three branches: whether the healthy path
+    (:func:`clawmetry.license.current_license_info` returns an active /
+    expired / invalid dict), the no-license path, or the introspection-
+    failure path, the response carries the SAME field set so a UI can
+    render every case through one code path without special-casing which
+    keys are present. Two branch-specific keys layer on top:
+
+      * ``plan`` -- ``"oss"`` on the no-license and error branches so a
+        legacy consumer that grew up when those branches returned only
+        ``{"plan": "oss", ...}`` keeps working.
+      * ``error`` -- populated only on the introspection-failure branch;
+        carries ``str(exc)`` so an operator triaging a mixed deploy can
+        see which import / stat went sideways without tailing daemon logs.
+
+    Never 5xxs. If :func:`clawmetry.license.current_license_info` raises
+    (import failure, corrupt install, cryptography-lib mismatch), the
+    endpoint degrades to the no-license-shape envelope with
+    ``status="unknown"`` at HTTP 200 -- matches the "never crash on bad
+    input" posture of :func:`api_entitlement`, :func:`api_features`, and
+    :func:`api_license_pubkey`, so a dashboard tile bound to this URL never
+    breaks on a partial install.
+
+    Trust anchor: ``pubkey_fingerprint_sha256`` populates on every branch
+    where it can be resolved -- including no-license -- so an operator can
+    verify the OSS trust anchor is intact BEFORE they install a key.
+    """
+
+    def _envelope(status, extras=None):
+        pubkey_fp = None
+        try:
+            from clawmetry import license as _lic
+
+            pubkey_fp = _lic.pubkey_fingerprint()
+        except Exception as exc:
+            logger.debug("api_license_status: pubkey fingerprint failed: %s", exc)
+        payload = {
+            "valid": False,
+            "status": status,
+            "plan": "oss",
+            "tier": None,
+            "nodes": None,
+            "sub": None,
+            "exp": None,
+            "days_left": None,
+            "pubkey_fingerprint_sha256": pubkey_fp,
+            "permissions_safe": True,
+            "file_mode": None,
+        }
+        if extras:
+            payload.update(extras)
+        return payload
+
     try:
         from clawmetry import license as _lic
 
         info = _lic.current_license_info()
         if info is None:
-            return jsonify({"plan": "oss", "status": "no_license", "valid": False})
+            return jsonify(_envelope("no_license"))
         return jsonify(info)
     except Exception as exc:
         logger.warning("api_license_status: error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+        return jsonify(_envelope("unknown", {"error": str(exc)}))
 
 
 @bp_entitlement.route("/api/license/pubkey")
@@ -7327,6 +7381,50 @@ def api_license_activate():
 
 @bp_entitlement.route("/api/license/verify", methods=["POST"])
 def api_license_verify():
+    """``POST /api/license/verify`` -- dry-run key inspection.
+
+    Verifies ``key`` OFFLINE against the embedded Ed25519 trust anchor
+    and returns what it would unlock, without writing anything to disk.
+    Wrapper around :func:`clawmetry.license.inspect_key`.
+
+    Shape parity across all three branches (valid / invalid signature /
+    introspection failure): every branch carries the SAME field set as
+    :func:`clawmetry.license.inspect_key`'s return so a UI can render the
+    verify card through one code path. The invalid + error branches also
+    populate ``pubkey_fingerprint_sha256`` when the fingerprint helper is
+    reachable, so an operator pasting a bogus key still sees the trust
+    anchor their install would have verified against.
+
+    Never 5xxs: introspection failure degrades to the same shape as an
+    invalid signature at HTTP 200, matching the never-crash posture of
+    :func:`api_license_status`.
+    """
+
+    def _dry_run_envelope(status, extras=None):
+        pubkey_fp = None
+        try:
+            from clawmetry import license as _lic
+
+            pubkey_fp = _lic.pubkey_fingerprint()
+        except Exception as exc:
+            logger.debug("api_license_verify: pubkey fingerprint failed: %s", exc)
+        payload = {
+            "valid": False,
+            "status": status,
+            "tier": None,
+            "nodes": None,
+            "sub": None,
+            "exp": None,
+            "days_left": None,
+            "pubkey_fingerprint_sha256": pubkey_fp,
+            "permissions_safe": None,
+            "file_mode": None,
+            "dry_run": True,
+        }
+        if extras:
+            payload.update(extras)
+        return payload
+
     try:
         body = request.get_json(silent=True) or {}
         key = str(body.get("key", "")).strip()
@@ -7336,15 +7434,13 @@ def api_license_verify():
 
         info = _lic.inspect_key(key)
         if info is None:
-            return jsonify(
-                {"valid": False, "status": "invalid", "dry_run": True}
-            )
+            return jsonify(_dry_run_envelope("invalid"))
         info = dict(info)
         info["dry_run"] = True
         return jsonify(info)
     except Exception as exc:
         logger.warning("api_license_verify: error: %s", exc)
-        return jsonify({"valid": False, "status": "invalid", "dry_run": True})
+        return jsonify(_dry_run_envelope("invalid", {"error": str(exc)}))
 
 
 @bp_entitlement.route("/api/license/deactivate", methods=["POST"])
