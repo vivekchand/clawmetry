@@ -122,6 +122,82 @@ def test_error_and_monitored_have_no_opinion(monkeypatch):
         assert h.evaluate(_evt()) is None
 
 
+def test_always_allow_rule_outranks_catchall(monkeypatch):
+    """An action:approve rule beats the catch-all ask rule regardless of
+    list order, and short-circuits with no cloud round-trip."""
+    catchall = ap._compile_policy({"name": "ask-everything", "tool": "exec",
+                                   "pattern_type": "command_regex",
+                                   "pattern": ".*",
+                                   "action": "require_approval"})
+    allow = ap._compile_policy({"name": "always: git ls-files", "tool": "exec",
+                                "pattern_type": "command_regex",
+                                "pattern": r"^git ls-files",
+                                "action": "approve"})
+    # Catch-all FIRST in the list — approve-rule must still win.
+    matched = ap.match_policy([catchall, allow], "Bash",
+                              {"command": "git ls-files | head"})
+    assert matched["name"] == "always: git ls-files"
+
+    def boom(*a, **k):
+        raise AssertionError("auto-approve must not round-trip the cloud")
+
+    monkeypatch.setattr(ap, "_post_approval_request", boom)
+    monkeypatch.setattr(ap, "_poll_decision", boom)
+    result = ap.process_tool_call(
+        api_key="cm_x", node_id="n", session_id="claude_code:s",
+        tool_call_id="t1", tool_name="Bash",
+        args={"command": "git ls-files | head"},
+        policies=[catchall, allow])
+    assert result["decision"] == "approved"
+    assert result["auto"] is True
+
+    # And the hook reports it as an auto-approval.
+    monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
+    monkeypatch.setattr(h, "_load_policies_fast",
+                        lambda k: [catchall, allow])
+    monkeypatch.setattr(ap, "process_tool_call",
+                        lambda **kw: {"decision": "approved", "policy":
+                                      "always: git ls-files", "auto": True})
+    p = h.evaluate(_evt(cmd="git ls-files | head"))
+    assert p["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "Auto-approved" in p["reason"]
+
+
+def test_autonomous_mode_skips_blanket_ask_but_keeps_risk_gates(monkeypatch):
+    """auto/dontAsk/bypassPermissions sessions must not be nagged by the
+    catch-all ask gates — but targeted risk gates still protect them."""
+    catchall = ap._compile_policy({"name": "Ask my phone before shell commands",
+                                   "tool": "exec", "pattern_type": "command_regex",
+                                   "pattern": ".*", "action": "require_approval"})
+    risk = ap._compile_policy(dict(RAW_POLICY))  # rm -rf gate
+    monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
+    monkeypatch.setattr(h, "_load_policies_fast", lambda k: [catchall, risk])
+
+    calls = []
+    monkeypatch.setattr(ap, "process_tool_call", lambda **kw: (
+        calls.append(kw["policies"]),
+        {"decision": "denied", "policy": kw["policies"][0]["name"]})[1])
+
+    # Benign command in auto mode: catch-all filtered out -> no gate at all.
+    evt = _evt(cmd="ls -la")
+    evt["permission_mode"] = "auto"
+    assert h.evaluate(evt) is None
+    assert calls == []
+
+    # Risky command in auto mode: the rm -rf gate still fires.
+    evt = _evt(cmd="rm -rf /tmp/x")
+    evt["permission_mode"] = "bypassPermissions"
+    assert h.evaluate(evt) is not None
+    assert calls and all(p["name"] != "Ask my phone before shell commands"
+                         for p in calls[0])
+
+    # Default mode: catch-all still gates benign commands.
+    calls.clear()
+    evt = _evt(cmd="ls -la")
+    evt["permission_mode"] = "default"
+    assert h.evaluate(evt) is not None
+
+
 def test_engine_exception_fails_open(monkeypatch):
     monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
     monkeypatch.setattr(h, "_load_policies_fast", lambda k: _policies())

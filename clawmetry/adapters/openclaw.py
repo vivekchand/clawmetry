@@ -1,5 +1,4 @@
-"""OpenClawAdapter — thin wrapper around existing dashboard.py helpers.
-
+"""
 This adapter does NOT re-implement OpenClaw session parsing. It delegates
 to the long-standing helpers in ``dashboard.py`` via a late import, the
 same way ``routes/*.py`` modules do. The point of this file is to expose
@@ -26,12 +25,14 @@ from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
-# Gateway log filename patterns (#4055):
-#   default profile : openclaw-YYYY-MM-DD.log
-#   named profiles  : openclaw-{name}-YYYY-MM-DD.log  (e.g. openclaw-work-2026-07-26.log)
-# The optional (.+-)? prefix matches named profiles while the date anchor
-# ensures unrelated files (openclaw-debug.log, etc.) are still excluded.
-_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}\.log$")
+# Gateway log filename patterns (#4055, #4056):
+#   default profile          : openclaw-YYYY-MM-DD.log
+#   named profiles (#4055)   : openclaw-{name}-YYYY-MM-DD.log
+#   rotation archives (#4056): openclaw-YYYY-MM-DD.N.log
+#   named + rotated          : openclaw-{name}-YYYY-MM-DD.N.log
+# (.+-)? matches named profiles; (\.\d+)? matches rotation archives; the date
+# anchor excludes unrelated files (openclaw-debug.log, etc.).
+_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}(\.\d+)?\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
@@ -574,6 +575,10 @@ def _gateway_log_events(count: int = 50) -> list:
     ``level`` and ``msg``; most also carry ``subsystem`` and a timestamp field
     (``time``, ``ts``, or ``timestamp``).
 
+    Falls back to the ``gateway.logs`` WebSocket RPC when no local log files
+    are accessible (remote / containerised gateway with no shared filesystem).
+    Closes #4057.
+
     Returns a list of event dicts, newest-first.  Returns ``[]`` when no log
     file exists, on any parse error, or on non-OpenClaw hosts.  Never raises.
 
@@ -582,7 +587,7 @@ def _gateway_log_events(count: int = 50) -> list:
     try:
         files = _gateway_log_files()
         if not files:
-            return []
+            return _gateway_log_events_rpc(count)
         log_path = files[-1]
         # Read a trailing chunk large enough to hold ``count`` typical lines
         # (~300 bytes each) without loading the full (potentially large) log.
@@ -594,7 +599,7 @@ def _gateway_log_events(count: int = 50) -> list:
                 fh.seek(max(0, size - chunk_size))
                 raw_bytes = fh.read()
         except OSError:
-            return []
+            return _gateway_log_events_rpc(count)
         lines = raw_bytes.decode("utf-8", "replace").splitlines()
         events: list = []
         for raw in reversed(lines):
@@ -609,6 +614,58 @@ def _gateway_log_events(count: int = 50) -> list:
                 continue
             evt: dict = {}
             # Timestamp — accept any common key name.
+            for _ts_key in ("time", "ts", "timestamp"):
+                _ts_val = obj.get(_ts_key)
+                if _ts_val is not None:
+                    evt["ts"] = _ts_val
+                    break
+            for _field, _key in (
+                ("level", "level"),
+                ("msg", "msg"),
+                ("message", "msg"),
+                ("subsystem", "subsystem"),
+            ):
+                _val = obj.get(_field)
+                if _val is not None and _key not in evt:
+                    evt[_key] = _val
+            if evt:
+                events.append(evt)
+            if len(events) >= count:
+                break
+        return events or _gateway_log_events_rpc(count)
+    except Exception:
+        return []
+
+
+def _gateway_log_events_rpc(count: int = 50) -> list:
+    """Return the last ``count`` gateway log events via WebSocket RPC.
+
+    Calls ``gateway.logs`` with ``{"count": count}``; the response payload is
+    expected to carry an ``events`` (or ``lines`` / ``entries`` / ``logs``) list
+    of structured event dicts.  Used as a fallback by ``_gateway_log_events``
+    when no local log files are accessible (remote / containerised gateway).
+    Closes #4057.  Never raises; returns ``[]`` on any failure.
+    """
+    try:
+        rpc = getattr(_d(), "_gw_ws_rpc", None)
+        if rpc is None:
+            return []
+        payload = rpc("gateway.logs", {"count": count})
+        if not isinstance(payload, dict):
+            return []
+        raw_events = None
+        for _key in ("events", "lines", "entries", "logs"):
+            _val = payload.get(_key)
+            if isinstance(_val, list):
+                raw_events = _val
+                break
+        if not raw_events:
+            return []
+        events: list = []
+        for obj in raw_events:
+            if not isinstance(obj, dict):
+                continue
+            evt: dict = {}
             for _ts_key in ("time", "ts", "timestamp"):
                 _ts_val = obj.get(_ts_key)
                 if _ts_val is not None:
