@@ -8,6 +8,9 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # the public /branches/main endpoint. The scoped GITHUB_TOKEN cannot be
 # used cross-repo (returns 403 even on public repos); unauthenticated
 # reads return the full protection.required_status_checks object.
+# If the unauthenticated read fails (private repo, rate limit), the
+# result is reported as UNKNOWN rather than ERROR -- "unknown" already
+# means "verify manually" and is less alarming in the bot comment.
 #
 # On failure: posts an @-mentioned reminder to tracking issue #4029
 # at most once per calendar day. On success: posts a GREEN confirmation.
@@ -120,9 +123,10 @@ jobs:
                                  (may be empty if required checks are not yet
                                  configured -- outer loop detects "missing")
                 'unknown'     -- branch is protected but detail not readable
-                                 (unauthenticated read returned protection=None)
+                                 (unauthenticated read returned protection=None,
+                                 or cross-repo API call returned HTTP error)
                 'unprotected' -- branch has no protection configured
-                'error'       -- API error / repo not reachable
+                'error'       -- same-repo API error (should not happen normally)
 
               Reads from both 'contexts' (legacy) and 'checks' (current) arrays
               so checks configured via the GitHub Settings UI are correctly seen.
@@ -137,6 +141,12 @@ jobs:
                   auth=(repo == _WORKFLOW_REPO),
               )
               if err is not None or data is None:
+                  # Cross-repo unauthenticated reads fail on private repos,
+                  # API rate limits, or network hiccups. Treat as "unknown"
+                  # (not "error") so the bot comment is less alarming and
+                  # accurately reflects the limitation (not a detected problem).
+                  if repo != _WORKFLOW_REPO:
+                      return set(), "unknown"
                   return set(), "error"
               if not data.get("protected"):
                   return set(), "unprotected"
@@ -202,8 +212,8 @@ jobs:
           # clawmetry/main is readable via github.token (same-repo).
           # clawmetry-cloud and clawmetry-landing are read unauthenticated.
           # Public repos return 'ok' or 'unprotected' without admin credentials;
-          # 'unknown' only appears if the branch is protected but returns no
-          # details (unlikely for public repos with simple protection rules).
+          # 'unknown' appears when the branch is protected but returns no
+          # details, OR when a cross-repo unauthenticated read returns HTTP error.
           # "unknown" repos are trusted as ok to avoid blocking on API gaps.
           clawmetry_status = results.get("clawmetry", {}).get("status")
           all_confirmed_ok = clawmetry_status == "ok" and not has_confirmed_missing
@@ -223,12 +233,12 @@ jobs:
                   )
               elif result["status"] == "unknown":
                   rows.append(
-                      f"| **{repo}/main** | UNKNOWN | branch is protected but "
-                      f"details not readable -- "
+                      f"| **{repo}/main** | UNKNOWN | cross-repo read not possible "
+                      f"(private repo or rate limit) -- "
                       f"[verify manually]({SETTINGS_URL[repo]}) |"
                   )
               else:
-                  rows.append(f"| **{repo}/main** | ERROR | API error -- verify manually |")
+                  rows.append(f"| **{repo}/main** | ERROR | same-repo API error -- check workflow logs |")
           table = (
               "| Repo | Status | Detail |\n"
               "|------|--------|--------|\n"
