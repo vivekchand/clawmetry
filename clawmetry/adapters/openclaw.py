@@ -1,4 +1,4 @@
-
+"""
 This adapter does NOT re-implement OpenClaw session parsing. It delegates
 to the long-standing helpers in ``dashboard.py`` via a late import, the
 same way ``routes/*.py`` modules do. The point of this file is to expose
