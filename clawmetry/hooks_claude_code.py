@@ -38,12 +38,10 @@ Deny emits BOTH the modern hookSpecificOutput JSON (stdout) and stderr +
 exit 2 (honored by every Claude Code version). Allow emits the modern JSON
 with exit 0.
 
-TIMEOUT: the installer sets the PreToolUse hook timeout to 900s, above the
-common policy timeouts (presets 60–300s; process_tool_call answers within
-policy.timeout + grace and then applies on_timeout, so the hook practically
-always answers well inside 900s). If a pathological >880s policy ever hits
-the hook timeout, current Claude Code blocks the call — same outcome as the
-default on_timeout: deny.
+TIMEOUT: the installer sets the PreToolUse hook timeout just above the
+7-day max policy window (#4066) — process_tool_call answers within
+policy.timeout + grace and then applies on_timeout, so the hook always
+answers before Claude Code's hook timeout would block the call.
 """
 from __future__ import annotations
 
@@ -61,11 +59,15 @@ _SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
 
 _HOOK_CMD_PRETOOL = "clawmetry hooks run pretooluse"
 _HOOK_CMD_NOTIFICATION = "clawmetry hooks run notification"
+_HOOK_CMD_STOP = "clawmetry hooks run stop"
 # Any command containing this marker is ours (covers the stale-branch
 # spelling `clawmetry hook claude-code` too, so uninstall cleans both).
 _HOOK_CMD_MARKERS = ("clawmetry hooks run", "clawmetry hook claude-code")
 
-_PRETOOL_TIMEOUT_S = 900
+# Must exceed the max policy window (7 days, #4066) + poll grace —
+# Claude Code BLOCKS the call when a hook times out, which would
+# override the policy's own on_timeout choice.
+_PRETOOL_TIMEOUT_S = 605100
 _NOTIFICATION_TIMEOUT_S = 10
 
 
@@ -275,14 +277,21 @@ def main_pretooluse() -> int:
 
 # ── Notification → phone push ─────────────────────────────────────────────
 
-def _push_notify(api_key: str, kind: str, title: str, body: str) -> bool:
-    """Fire-and-forget POST /api/cloud/push/notify. Never raises."""
+def _push_notify(api_key: str, kind: str, title: str, body: str,
+                 extra: "dict | None" = None) -> bool:
+    """Fire-and-forget POST /api/cloud/push/notify. Never raises.
+
+    ``extra`` carries session context (session_id, cwd, node_id) so the
+    cloud can record WHICH terminal is waiting — the inbox's "Needs you
+    at the desk" section (kind=input records, stop/clear clears)."""
     try:
         import urllib.request
+        payload = {"kind": kind, "title": title, "body": body[:400],
+                   "open_url": "/approvals"}
+        payload.update(extra or {})
         req = urllib.request.Request(
             f"{_ingest_url()}/api/cloud/push/notify",
-            data=json.dumps({"kind": kind, "title": title,
-                             "body": body[:400], "open_url": "/cloud"}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json",
                      "Authorization": f"Bearer {api_key}"},
             method="POST",
@@ -291,6 +300,17 @@ def _push_notify(api_key: str, kind: str, title: str, body: str) -> bool:
             return True
     except Exception:
         return False
+
+
+def _session_extra(event: dict) -> dict:
+    sid = (event.get("session_id") or "").strip()
+    extra = {"node_id": _node_id()}
+    if sid:
+        # Cloud rows key on the runtime-prefixed form the daemon uses.
+        extra["session_id"] = sid if ":" in sid else f"claude_code:{sid}"
+    if event.get("cwd"):
+        extra["cwd"] = str(event["cwd"])[:300]
+    return extra
 
 
 def main_notification() -> int:
@@ -307,12 +327,33 @@ def main_notification() -> int:
     if ntype == "permission_prompt":
         # Only reached when the PreToolUse gate had no opinion (no policy
         # matched) and Claude Code raised its own prompt — the phone can't
-        # answer it remotely, but you know to come back to the desk.
+        # answer it remotely, but the inbox shows WHICH terminal is waiting.
         _push_notify(api_key, "input", "Claude Code needs your permission",
-                     message or "A tool call is waiting for your approval.")
+                     message or "A tool call is waiting for your approval.",
+                     _session_extra(event))
     elif ntype == "idle_prompt":
         _push_notify(api_key, "stop", "Claude Code is done — waiting on you",
-                     message or "The agent finished and is waiting for input.")
+                     message or "The agent finished and is waiting for input.",
+                     _session_extra(event))
+    return 0
+
+
+def main_stop() -> int:
+    """Stop hook: bookkeeping only. The turn ended, so whatever native
+    prompt this session had is no longer waiting — clear its desk-attention
+    row. kind=clear sends NO push (a push per assistant turn would be
+    noise); observe-only exit 0 always."""
+    try:
+        raw = sys.stdin.read()
+        event = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return 0
+    api_key = _load_api_key()
+    if not api_key:
+        return 0
+    extra = _session_extra(event)
+    if extra.get("session_id"):
+        _push_notify(api_key, "clear", "", "", extra)
     return 0
 
 
@@ -397,9 +438,20 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
             })
             added.append("Notification")
 
+        # Stop = bookkeeping only (clears the "needs you at the desk" row
+        # for the session; no push) — see main_stop.
+        stop = hooks.setdefault("Stop", [])
+        if not _has_our_hook(stop):
+            stop.append({
+                "hooks": [{"type": "command",
+                           "command": _HOOK_CMD_STOP,
+                           "timeout": _NOTIFICATION_TIMEOUT_S}],
+            })
+            added.append("Stop")
+
         if added:
             _write_settings(path, settings)
-        _write_marker(["PreToolUse", "Notification"])
+        _write_marker(["PreToolUse", "Notification", "Stop"])
         return {"status": "installed" if added else "already_present",
                 "path": path, "added": added, "matcher": matcher,
                 "timeout": _PRETOOL_TIMEOUT_S}
@@ -468,6 +520,8 @@ def cli_main(argv: "list | None" = None) -> int:
             return main_pretooluse()
         if event == "notification":
             return main_notification()
+        if event == "stop":
+            return main_stop()
         sys.stderr.write(f"unknown hook event: {event!r}\n")
         return 1
     if cmd == "install":
@@ -493,5 +547,5 @@ def cli_main(argv: "list | None" = None) -> int:
         return 0
     sys.stderr.write(
         "usage: clawmetry hooks {install [--matcher RE] | uninstall | "
-        "status | run {pretooluse|notification}}\n")
+        "status | run {pretooluse|notification|stop}}\n")
     return 1

@@ -177,7 +177,7 @@ def test_install_idempotent_and_correct_timeouts(monkeypatch, tmp_path):
     sp = str(tmp_path / "settings.json")
     r1 = h.install(settings_path=sp)
     assert r1["status"] == "installed"
-    assert sorted(r1["added"]) == ["Notification", "PreToolUse"]
+    assert sorted(r1["added"]) == ["Notification", "PreToolUse", "Stop"]
     r2 = h.install(settings_path=sp)
     assert r2["status"] == "already_present"
     s = json.load(open(sp))
@@ -185,9 +185,9 @@ def test_install_idempotent_and_correct_timeouts(monkeypatch, tmp_path):
     assert len(pre) == 1, "must not duplicate on re-install"
     hk = pre[0]["hooks"][0]
     assert hk["command"] == "clawmetry hooks run pretooluse"
-    # Load-bearing: must exceed policy timeouts (presets 60-300s) or Claude
-    # Code times the hook out before the human decides.
-    assert hk["timeout"] == 900
+    # Load-bearing: must exceed the 7-day max policy window or Claude
+    # Code times the hook out (= blocks) before the human decides.
+    assert hk["timeout"] == 605100
     assert s["hooks"]["Notification"][0]["hooks"][0]["command"] == \
         "clawmetry hooks run notification"
     marker = json.load(open(str(tmp_path / "marker.json")))
@@ -230,22 +230,42 @@ def test_uninstall_removes_only_ours(monkeypatch, tmp_path):
 def test_notification_permission_prompt_pushes(monkeypatch):
     calls = []
     monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
+    monkeypatch.setattr(h, "_node_id", lambda: "mac")
     monkeypatch.setattr(h, "_push_notify",
-                        lambda k, kind, title, body: calls.append((kind, title, body)))
+                        lambda k, kind, title, body, extra=None:
+                        calls.append((kind, title, body, extra)))
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"hook_event_name": "Notification",
          "notification_type": "permission_prompt",
-         "message": "Claude needs permission to run rm"})))
+         "message": "Claude needs permission to run rm",
+         "session_id": "abc123", "cwd": "/tmp/proj"})))
     assert h.main_notification() == 0
     assert calls and calls[0][0] == "input"
     assert "rm" in calls[0][2]
+    # Session context rides along so the inbox can show WHICH terminal.
+    assert calls[0][3]["session_id"] == "claude_code:abc123"
+    assert calls[0][3]["cwd"] == "/tmp/proj"
+
+
+def test_stop_hook_sends_silent_clear(monkeypatch):
+    calls = []
+    monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
+    monkeypatch.setattr(h, "_node_id", lambda: "mac")
+    monkeypatch.setattr(h, "_push_notify",
+                        lambda k, kind, title, body, extra=None:
+                        calls.append((kind, extra)))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "abc123"})))
+    assert h.main_stop() == 0
+    assert calls == [("clear", {"node_id": "mac",
+                                "session_id": "claude_code:abc123"})]
 
 
 def test_notification_idle_prompt_pushes_stop(monkeypatch):
     calls = []
     monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
     monkeypatch.setattr(h, "_push_notify",
-                        lambda k, kind, title, body: calls.append(kind))
+                        lambda k, kind, title, body, extra=None: calls.append(kind))
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"notification_type": "idle_prompt", "message": "done"})))
     assert h.main_notification() == 0
