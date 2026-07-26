@@ -214,6 +214,104 @@ def test_activate_expired_key(app):
     assert resp.get_json()["ok"] is False
 
 
+# The activate-branch shape-parity contract: every branch of the endpoint
+# (missing-key / healthy-success / healthy-failure / introspection-exception)
+# populates the SAME field set so a UI can bind to ``data.message`` uniformly
+# without checking whether it's the missing-key branch (which used to only
+# populate ``error``) or the exception branch (which used to only populate
+# ``error``). Mirrors the parity contract PR #4047 landed for ``/status`` +
+# ``/verify``.
+_ACTIVATE_SHAPE_KEYS = {"ok", "message", "error"}
+
+
+def test_activate_missing_key_carries_full_shape(app):
+    """The missing-key branch used to return only ``{ok, error}``. It now
+    populates ``message`` too so a UI reading ``data.message`` never sees
+    undefined on the 400 branch."""
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/activate",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    missing = _ACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"missing-key branch missing keys: {missing}"
+    assert data["ok"] is False
+    assert data["message"] == "key is required"
+    # error stays populated for back-compat with pre-parity consumers.
+    assert data["error"] == "key is required"
+
+
+def test_activate_healthy_success_carries_full_shape_error_none(app):
+    """The healthy-success branch used to return ``{ok, message}`` -- it now
+    also populates ``error: None`` for shape parity with the failure branches,
+    so a UI can bind to ``data.error`` uniformly."""
+    tok = app.lic._encode_token(_payload("pro", nodes=2), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/activate",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _ACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"healthy-success branch missing keys: {missing}"
+    assert data["ok"] is True
+    assert "pro" in data["message"].lower()
+    assert data["error"] is None
+
+
+def test_activate_healthy_failure_carries_full_shape(app):
+    """Bad/expired/duplicate key -> 400 with ``ok=False``. The shape
+    still carries ``{ok, message, error}`` so a UI can bind to
+    ``data.error`` for the alert channel and ``data.message`` for the
+    human-readable text."""
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/activate",
+            data=json.dumps({"key": "CLAW1.not.real"}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    missing = _ACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"healthy-failure branch missing keys: {missing}"
+    assert data["ok"] is False
+    assert data["message"]  # some human-readable reason
+    # error mirrors message on the failure branch for back-compat.
+    assert data["error"] == data["message"]
+
+
+def test_activate_introspection_failure_5xx_but_full_shape(app, monkeypatch):
+    """A broken activate call (import failure, corrupt install) still 5xxes --
+    this is a POST mutation and the client legitimately needs to know the
+    write failed -- but the body carries the full ``{ok, message, error}``
+    shape rather than dropping ``message`` like it used to."""
+    import clawmetry.license as _lic
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated activate failure")
+
+    monkeypatch.setattr(_lic, "activate", boom)
+    tok = app.lic._encode_token(_payload("pro", nodes=1), app.priv)
+    with app.app.test_client() as c:
+        resp = c.post(
+            "/api/license/activate",
+            data=json.dumps({"key": tok}),
+            content_type="application/json",
+        )
+    assert resp.status_code == 500
+    data = resp.get_json()
+    missing = _ACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"exception branch missing keys: {missing}"
+    assert data["ok"] is False
+    assert "simulated activate failure" in data["message"]
+    assert "simulated activate failure" in data["error"]
+
+
 # ── /api/license/verify (dry-run) ─────────────────────────────────────────────
 
 
@@ -362,6 +460,89 @@ def test_deactivate_idempotent_when_no_license(app):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["removed"] is False
+
+
+# Same shape-parity contract as :data:`_ACTIVATE_SHAPE_KEYS`, extended with
+# the ``removed`` field that :func:`clawmetry.license.deactivate` returns.
+# Every branch (healthy-noop / healthy-removed / remove-failed /
+# introspection-exception) populates the same key set so a UI can bind to
+# ``data.removed`` without checking whether it's the exception branch (which
+# used to drop the field entirely).
+_DEACTIVATE_SHAPE_KEYS = {"ok", "removed", "message", "error"}
+
+
+def test_deactivate_healthy_noop_carries_full_shape(app):
+    """The idempotent no-op branch used to return ``{ok, removed}``. It now
+    also populates ``{message, error: None}`` for shape parity."""
+    with app.app.test_client() as c:
+        resp = c.post("/api/license/deactivate")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _DEACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"healthy-noop branch missing keys: {missing}"
+    assert data["ok"] is True
+    assert data["removed"] is False
+    assert data["message"]
+    assert data["error"] is None
+
+
+def test_deactivate_healthy_removed_carries_full_shape(app):
+    """The healthy-removed branch used to return ``{ok, removed}``. It now
+    also populates ``{message, error: None}`` for shape parity."""
+    tok = app.lic._encode_token(_payload(), app.priv)
+    app.lic.activate(tok)
+    with app.app.test_client() as c:
+        resp = c.post("/api/license/deactivate")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    missing = _DEACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"healthy-removed branch missing keys: {missing}"
+    assert data["ok"] is True
+    assert data["removed"] is True
+    assert data["message"]
+    assert data["error"] is None
+
+
+def test_deactivate_remove_failed_carries_full_shape(app, monkeypatch):
+    """A disk-error deactivate (``deactivate`` returns ``(False, False)``)
+    still 5xxes -- the client legitimately needs to know disk removal failed --
+    but the body carries the full ``{ok, removed, message, error}`` shape
+    with the pre-parity ``error="remove_failed"`` sentinel preserved."""
+    import clawmetry.license as _lic
+
+    monkeypatch.setattr(_lic, "deactivate", lambda actor="": (False, False))
+    with app.app.test_client() as c:
+        resp = c.post("/api/license/deactivate")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    missing = _DEACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"remove-failed branch missing keys: {missing}"
+    assert data["ok"] is False
+    assert data["removed"] is False
+    assert data["error"] == "remove_failed"  # pre-parity sentinel preserved
+    assert data["message"] == "remove_failed"
+
+
+def test_deactivate_introspection_failure_5xx_but_full_shape(app, monkeypatch):
+    """A broken deactivate call (import failure, corrupt install) still
+    5xxes -- POST mutation, client needs to know -- but the body carries
+    the full shape including ``removed=False`` rather than dropping it."""
+    import clawmetry.license as _lic
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated deactivate failure")
+
+    monkeypatch.setattr(_lic, "deactivate", boom)
+    with app.app.test_client() as c:
+        resp = c.post("/api/license/deactivate")
+    assert resp.status_code == 500
+    data = resp.get_json()
+    missing = _DEACTIVATE_SHAPE_KEYS - set(data)
+    assert not missing, f"exception branch missing keys: {missing}"
+    assert data["ok"] is False
+    assert data["removed"] is False
+    assert "simulated deactivate failure" in data["message"]
+    assert "simulated deactivate failure" in data["error"]
 
 
 # ── /api/license audit producers ──────────────────────────────────────────────

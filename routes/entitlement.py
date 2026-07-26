@@ -8217,21 +8217,53 @@ def _route_actor() -> str:
         return ""
 
 
+def _activate_envelope(ok, message, error=None):
+    """Full-shape envelope for ``/api/license/activate``.
+
+    Every branch (missing-key, healthy-success, healthy-failure,
+    introspection-exception) carries the SAME field set so a UI can
+    render `data.ok` + `data.message` uniformly without special-casing
+    which keys are present. ``error`` is populated on the two failure
+    branches for back-compat with the pre-shape-parity consumers that
+    read `data.error`; healthy branches leave it ``None``. Mirrors the
+    parity contract PR #4047 landed for ``/status`` + ``/verify``.
+    """
+    return {"ok": bool(ok), "message": str(message), "error": error}
+
+
 @bp_entitlement.route("/api/license/activate", methods=["POST"])
 def api_license_activate():
+    """``POST /api/license/activate`` -- install a signed license key.
+
+    Shape parity across all four branches (missing-key / healthy-success /
+    healthy-failure / introspection-exception): every branch populates
+    ``{ok, message, error}`` so a UI can bind to ``data.message`` without
+    checking whether it's the missing-key branch (which used to only
+    populate ``error``) or the exception branch (which used to only
+    populate ``error``). ``error`` is a back-compat alias populated on
+    the two failure branches -- pre-parity consumers reading
+    ``data.error`` keep working unchanged.
+
+    Still 4xx / 5xx on the failure branches -- this is a POST mutation
+    and the client legitimately needs to know the write failed. The
+    healthy-failure branch (bad/expired/duplicate-node key) stays 400;
+    the introspection-exception branch (import failure, corrupt install)
+    stays 500. Only the SHAPE of the failure body changes -- the status
+    codes match what shipped before this PR.
+    """
     try:
         body = request.get_json(silent=True) or {}
         key = str(body.get("key", "")).strip()
         if not key:
-            return jsonify({"ok": False, "error": "key is required"}), 400
+            return jsonify(_activate_envelope(False, "key is required", error="key is required")), 400
         from clawmetry import license as _lic
 
         ok, msg = _lic.activate(key, actor=_route_actor())
         status_code = 200 if ok else 400
-        return jsonify({"ok": ok, "message": msg}), status_code
+        return jsonify(_activate_envelope(ok, msg, error=None if ok else msg)), status_code
     except Exception as exc:
         logger.warning("api_license_activate: error: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify(_activate_envelope(False, str(exc), error=str(exc))), 500
 
 
 @bp_entitlement.route("/api/license/verify", methods=["POST"])
@@ -8298,18 +8330,55 @@ def api_license_verify():
         return jsonify(_dry_run_envelope("invalid", {"error": str(exc)}))
 
 
+def _deactivate_envelope(ok, removed, message="", error=None):
+    """Full-shape envelope for ``/api/license/deactivate``.
+
+    Every branch (healthy-noop, healthy-removed, remove-failed,
+    introspection-exception) carries ``{ok, removed, message, error}``
+    so a UI can bind to ``data.removed`` uniformly without checking
+    whether it's the exception branch (which used to drop the field
+    entirely). ``message`` is populated on every branch; ``error`` is
+    populated only on the two failure branches for back-compat.
+    """
+    return {
+        "ok": bool(ok),
+        "removed": bool(removed),
+        "message": str(message),
+        "error": error,
+    }
+
+
 @bp_entitlement.route("/api/license/deactivate", methods=["POST"])
 def api_license_deactivate():
+    """``POST /api/license/deactivate`` -- remove the on-disk license file.
+
+    Shape parity across all four branches (healthy-noop / healthy-removed /
+    remove-failed / introspection-exception): every branch populates
+    ``{ok, removed, message, error}``. ``removed`` no longer disappears
+    on the exception branch, so a UI can bind to ``data.removed`` without
+    a guard. ``error`` is a back-compat alias populated on the two
+    failure branches -- the pre-parity remove-failed shape already
+    carried ``error="remove_failed"`` and that string is preserved.
+
+    Still 5xx on the two failure branches -- deactivation is a mutation
+    and the client legitimately needs to know disk removal or module
+    import failed. Only the SHAPE of the failure body changes.
+    """
     try:
         from clawmetry import license as _lic
 
         ok, removed = _lic.deactivate(actor=_route_actor())
         if not ok:
-            return jsonify({"ok": False, "removed": False, "error": "remove_failed"}), 500
-        return jsonify({"ok": True, "removed": removed})
+            return jsonify(_deactivate_envelope(
+                False, False, message="remove_failed", error="remove_failed",
+            )), 500
+        message = "license file removed" if removed else "no license file to remove"
+        return jsonify(_deactivate_envelope(True, removed, message=message)), 200
     except Exception as exc:
         logger.warning("api_license_deactivate: error: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify(_deactivate_envelope(
+            False, False, message=str(exc), error=str(exc),
+        )), 500
 
 
 @bp_entitlement.route("/api/entitlement/next-tier-unlocks-at")
