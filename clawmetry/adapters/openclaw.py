@@ -1,4 +1,3 @@
-"""OpenClawAdapter — thin wrapper around existing dashboard.py helpers.
 
 This adapter does NOT re-implement OpenClaw session parsing. It delegates
 to the long-standing helpers in ``dashboard.py`` via a late import, the
@@ -26,12 +25,14 @@ from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
-# Gateway log filename patterns (#4055):
-#   default profile : openclaw-YYYY-MM-DD.log
-#   named profiles  : openclaw-{name}-YYYY-MM-DD.log  (e.g. openclaw-work-2026-07-26.log)
-# The optional (.+-)? prefix matches named profiles while the date anchor
-# ensures unrelated files (openclaw-debug.log, etc.) are still excluded.
-_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}\.log$")
+# Gateway log filename patterns (#4055, #4056):
+#   default profile          : openclaw-YYYY-MM-DD.log
+#   named profiles (#4055)   : openclaw-{name}-YYYY-MM-DD.log
+#   rotation archives (#4056): openclaw-YYYY-MM-DD.N.log
+#   named + rotated          : openclaw-{name}-YYYY-MM-DD.N.log
+# (.+-)? matches named profiles; (\.\d+)? matches rotation archives; the date
+# anchor excludes unrelated files (openclaw-debug.log, etc.).
+_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}(\.\d+)?\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
