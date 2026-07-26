@@ -1,4 +1,4 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:bab48eec552f -->
 > Türkçe translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -11,9 +11,9 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Ajanınızın düşünme sürecini görün.** **14 farklı AI ajan çalışma zamanı** için gerçek zamanlı gözlemlenebilirlik: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex ve 10 tane daha. Tüm ajan filonuz için tek bir kontrol paneli.
+**Ajanınızın düşünmesini izleyin.** **14 AI ajan çalışma zamanı** için gerçek zamanlı gözlemlenebilirlik: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex ve 10 tane daha. Tüm ajan filonuz için tek bir gösterge paneli.
 
-> 🌐 **Bu belgeyi şu dillerde okuyun:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [daha fazlası →](docs/i18n/)
+> 🌐 **Bunu şu dillerde okuyun:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [daha fazlası →](docs/i18n/)
 
 Tek komut. Sıfır yapılandırma. Her şeyi otomatik algılar.
 
@@ -27,24 +27,24 @@ pip install clawmetry && clawmetry
 
 ## 14 ajan çalışma zamanıyla çalışır
 
-ClawMetry, OpenClaw için bir gözlemlenebilirlik aracı olarak başladı; şimdi ise **tüm ajan filonuzu** tek bir kontrol panelinde ölçümlüyor ve makinenizdeki her çalışma zamanını otomatik olarak algılıyor:
+ClawMetry, OpenClaw için bir gözlemlenebilirlik aracı olarak başladı; şimdi ise **tüm ajan filonuzu** tek bir gösterge panelinde ölçümlüyor ve makinenizdeki her çalışma zamanını otomatik olarak algılıyor:
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
 
-OpenClaw ve NemoClaw, açık kaynak uygulamada ücretsizdir; diğer çalışma zamanları ise ClawMetry Cloud veya kendi sunucunuzda barındırılan bir Pro lisansı ile etkinleşir. Çalışma zamanını üst bilgiden değiştirin; maliyet, token, araçlar, izler gibi her sekme o çalışma zamanına göre yeniden kapsamlanır. Tam ücretsiz/ücretli ayrımı, katman matrisi, `/api/entitlement` şeması ve `clawmetry license` CLI'ı için **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** dosyasına bakın.
+OpenClaw ve NemoClaw, açık kaynak uygulamada ücretsizdir; diğer çalışma zamanları ise ClawMetry Cloud veya kendi barındırdığınız bir Pro lisansıyla etkinleşir. Çalışma zamanını başlıktan değiştirin, her sekme (maliyet, token'lar, araçlar, izler) o çalışma zamanına yeniden odaklanır. Tam ücretsiz/ücretli ayrımı, katman matrisi, `/api/entitlement` şeması ve `clawmetry license` CLI'si için **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** dosyasına bakın.
 
 ## Neler Elde Edersiniz
 
 - **Flow** — Mesajların kanallar, beyin, araçlar arasında akışını ve geri dönüşünü gösteren canlı animasyonlu diyagram
 - **Overview** — Sağlık kontrolleri, aktivite ısı haritası, oturum sayıları, model bilgisi
 - **Usage** — Günlük/haftalık/aylık dökümlerle token ve maliyet takibi
-- **Sessions** — Model, token, son aktivite bilgisiyle aktif ajan oturumları
-- **Crons** — Durum, sonraki çalışma zamanı, süre bilgisiyle zamanlanmış işler
+- **Sessions** — Model, token'lar, son aktiviteyle birlikte aktif ajan oturumları
+- **Crons** — Durum, sonraki çalıştırma, süre bilgisiyle zamanlanmış işler
 - **Logs** — Renk kodlu gerçek zamanlı log akışı
-- **Memory** — SOUL.md, MEMORY.md, AGENTS.md, günlük notları göz atma
+- **Memory** — SOUL.md, MEMORY.md, AGENTS.md ve günlük notları görüntüleyin
 - **Transcripts** — Oturum geçmişlerini okumak için sohbet balonu arayüzü
-- **Alerts** — Bütçe limitleri, hata oranı tetikleyicileri, ajan çevrimdışı algılama; Slack, Discord, PagerDuty, Telegram, E-posta'ya yönlendirir
-- **Approvals** — Yıkıcı silme işlemlerini, force push'ları, veritabanı değişikliklerini, sudo'yu, paket kurulumlarını, ağ çağrılarını tek tıkla onay arkasında kapı altına alır
+- **Alerts** — Bütçe sınırları, hata oranı tetikleyicileri, ajan çevrimdışı algılama; Slack, Discord, PagerDuty, Telegram, Email'e yönlendirir
+- **Approvals** — Yıkıcı silmeleri, force push'ları, veritabanı mutasyonlarını, sudo'yu, paket kurulumlarını, ağ çağrılarını tek tıkla onaya bağlayın
 
 ## Ekran Görüntüleri
 
@@ -57,20 +57,38 @@ OpenClaw ve NemoClaw, açık kaynak uygulamada ücretsizdir; diğer çalışma z
 ### ⚡ Flow — Gerçek zamanlı araç çağrısı akışı
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 Tokens — Model ve oturuma göre maliyet dökümü
+### 💰 Tokens — Modele ve oturuma göre maliyet dökümü
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
 ### 🧬 Memory — Çalışma alanı dosya tarayıcısı
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 Security — Duruş ve denetim kaydı
+### 🔐 Security — Duruş ve denetim günlüğü
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 Alerts — Bütçe limitleri, hata oranı tetikleyicileri, Slack / Discord / PagerDuty / E-posta'ya webhook'lar
+### 🚨 Alerts — Bütçe sınırları, hata oranı tetikleyicileri, Slack / Discord / PagerDuty / Email'e webhook'lar
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals — Riskli araç çağrılarını manuel onay arkasında kapı altına alın; politika destekli koruma kuralları
+### ✋ Approvals — Riskli araç çağrılarını manuel onaya bağlayın; politika destekli koruma kuralları
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+
+**Claude Code için çalıştırma öncesi engelleme** — tek bir komut, eşleşen araç
+çağrılarını *çalışmadan önce* duraklatan ve kararınızı bekleyen bir PreToolUse
+hook'u kurar (telefonunuzdan tek dokunuşla, [bulut push bildirimleri](https://app.clawmetry.com/push)
+etkinleştirildiğinde):
+
+```bash
+clawmetry hooks install     # ~/.claude/settings.json dosyasına yazar (idempotent)
+clawmetry hooks status      # neyin bağlı olduğunu ve kaç politikanın etkin olduğunu gösterir
+clawmetry hooks uninstall   # yalnızca ClawMetry'nin girdilerini kaldırır
+```
+
+Bir ret, yalnızca o tek araç çağrısını engeller; ajan oturumunu korur ve başka
+bir yaklaşım deneyebilir. Telefonunuzdan onaylamak, Claude Code'un kendi izin
+istemini atlar (zaten yanıtlamışsınızdır). Eşleşmeyen araçlar yaklaşık 40ms'ye
+mal olur ve Claude Code'un normal izin akışına düşer. Ayrıca Claude Code'un
+kendisi sizi beklerken de telefonunuza push bildirimi alırsınız (`permission_prompt` /
+`idle_prompt` bildirimleri).
 
 ## Kurulum
 
@@ -85,15 +103,16 @@ pip install clawmetry
 clawmetry
 ```
 
-**Kaynak koddan:**
+**Kaynaktan:**
 ```bash
 git clone https://github.com/vivekchand/clawmetry.git
 cd clawmetry && pip install flask && python3 dashboard.py
 ```
 
-## v2 Ön Yüz Geliştirme
+## v2 Frontend Geliştirme
 
-v2 React uygulaması `frontend/` dizininde yer alır ve Flask sunucusu v2 etkinken başlatıldığında `/v2` adresinde sunulur.
+v2 React uygulaması `frontend/` dizininde bulunur ve Flask sunucusu v2
+etkinleştirilerek başlatıldığında `/v2` adresinde sunulur.
 
 Geliştirme yaparken iki terminal kullanın:
 
@@ -103,16 +122,18 @@ CLAWMETRY_V2=1 python3 dashboard.py
 ```
 
 ```bash
-# Terminal 2: :5173 üzerinde Vite geliştirme sunucusu
+# Terminal 2: :5173 üzerinde Vite dev sunucusu
 cd frontend
 nvm use
 npm ci
 npm run dev
 ```
 
-`http://localhost:5173/v2/` adresini açın. Vite, `/api` isteklerini `http://localhost:8900` adresine yönlendirir, böylece React uygulaması ekstra CORS ayarına gerek kalmadan yerel Flask sunucusuyla konuşabilir.
+`http://localhost:5173/v2/` adresini açın. Vite, `/api` isteklerini
+`http://localhost:8900` adresine yönlendirir, böylece React uygulaması
+ekstra CORS ayarı yapmadan yerel Flask sunucusuyla konuşabilir.
 
-Python paketiyle birlikte gönderilen paketi (bundle) oluşturmak için:
+Python paketiyle birlikte gönderilecek paketi oluşturmak için:
 
 ```bash
 cd frontend
@@ -123,50 +144,50 @@ npm run build
 
 ## Çalışma Zamanı / Ajan Uyumluluğu
 
-ClawMetry yalnızca OpenClaw değil, birçok AI ajan çalışma zamanını gözlemler. OpenClaw dışındaki her çalışma zamanı, kendi yerel oturum biçimini ClawMetry'nin birleşik şekillerine dönüştüren özel bir okuyucu bağdaştırıcısı (adapter) ile gelir; arka plan servisi (daemon) bunları çalışma zamanı etiketiyle aynı DuckDB deposuna + bulut anlık görüntüsüne alır ve Session replay sekmesi birden fazla çalışma zamanı bulunduğunda bir **çalışma zamanı değiştirici** gösterir. Tam matris + çalışma zamanı ekleme kılavuzu için [`docs/compatibility.md`](docs/compatibility.md) dosyasına, OpenClaw ailesi girişi için [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) dosyasına bakın.
+ClawMetry, sadece OpenClaw'ı değil, birçok AI ajan çalışma zamanını gözlemler. OpenClaw dışındaki her çalışma zamanı, kendi yerel oturum biçimini ClawMetry'nin birleşik şekillerine çeviren özel bir okuyucu adaptörüyle gelir; daemon bunları aynı DuckDB deposuna + bulut anlık görüntüsüne, çalışma zamanı etiketiyle birlikte alır ve birden fazla çalışma zamanı mevcut olduğunda Session replay sekmesi bir **çalışma zamanı değiştirici** gösterir. Tam matris ve çalışma zamanı ekleme kılavuzu için [`docs/compatibility.md`](docs/compatibility.md) dosyasına, OpenClaw ailesi hakkında bir giriş için [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) dosyasına bakın.
 
 | Çalışma Zamanı / Ajan | Durum | Notlar |
 |---|---|---|
-| **OpenClaw** | Yerel (Native) | Referans çalışma zamanı, otomatik algılanır |
-| **PicoClaw** | Beta bağdaştırıcı | Düz `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Dökümler, model, araç çağrıları. |
-| **NanoClaw** | Beta bağdaştırıcı | Oturum başına SQLite (`data/v2-sessions`). Dökümler + mesaj sayıları. |
-| **Hermes** | Beta bağdaştırıcı | SQLite `~/.hermes/state.db`. Dökümler, model, token/maliyet. |
-| **Claude Code** | Beta bağdaştırıcı | JSONL `~/.claude/projects/.../<id>.jsonl`. Dökümler, model, araç çağrıları + düşünme, token kullanımı. |
-| **Codex** | Beta bağdaştırıcı | Rollout JSONL `~/.codex/sessions/...`. Dökümler, model, araç çağrıları, token kullanımı. |
-| **Cursor** | Beta bağdaştırıcı | SQLite `state.vscdb`. Sohbet/composer dökümleri, model. |
-| **Aider** | Beta bağdaştırıcı | Proje başına `.aider.chat.history.md`. Dökümler, model, token sayıları. |
-| **Goose** | Beta bağdaştırıcı | SQLite `~/.local/share/goose`. Dökümler, model, araç çağrıları, token toplamları. |
-| **opencode** | Beta bağdaştırıcı | SQLite `~/.local/share/opencode`. Dökümler, model, araç çağrıları, token + maliyet. |
-| **Qwen Code** | Beta bağdaştırıcı | JSONL `~/.qwen/projects/.../chats`. Dökümler, model, araç çağrıları, token kullanımı. |
-| **Pi** | Beta bağdaştırıcı | JSONL `~/.pi/agent/sessions`. Dökümler, model, araç çağrıları, token + maliyet. |
-| **Deep Agents** | Beta bağdaştırıcı | SQLite `~/.deepagents/.state/sessions.db`. Dökümler, model, araç çağrıları, token + maliyet. |
+| **OpenClaw** | Yerel | Referans çalışma zamanı, otomatik algılanır |
+| **PicoClaw** | Beta adaptör | Düz `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Dökümler, model, araç çağrıları. |
+| **NanoClaw** | Beta adaptör | Oturum başına SQLite (`data/v2-sessions`). Dökümler + mesaj sayıları. |
+| **Hermes** | Beta adaptör | SQLite `~/.hermes/state.db`. Dökümler, model, token'lar/maliyet. |
+| **Claude Code** | Beta adaptör | JSONL `~/.claude/projects/.../<id>.jsonl`. Dökümler, model, araç çağrıları + düşünme, token kullanımı. |
+| **Codex** | Beta adaptör | Rollout JSONL `~/.codex/sessions/...`. Dökümler, model, araç çağrıları, token kullanımı. |
+| **Cursor** | Beta adaptör | SQLite `state.vscdb`. Chat/composer dökümleri, model. |
+| **Aider** | Beta adaptör | Proje başına `.aider.chat.history.md`. Dökümler, model, token sayıları. |
+| **Goose** | Beta adaptör | SQLite `~/.local/share/goose`. Dökümler, model, araç çağrıları, token toplamları. |
+| **opencode** | Beta adaptör | SQLite `~/.local/share/opencode`. Dökümler, model, araç çağrıları, token'lar + maliyet. |
+| **Qwen Code** | Beta adaptör | JSONL `~/.qwen/projects/.../chats`. Dökümler, model, araç çağrıları, token kullanımı. |
+| **Pi** | Beta adaptör | JSONL `~/.pi/agent/sessions`. Dökümler, model, araç çağrıları, token'lar + maliyet. |
+| **Deep Agents** | Beta adaptör | SQLite `~/.deepagents/.state/sessions.db`. Dökümler, model, araç çağrıları, token'lar + maliyet. |
 
-"Beta bağdaştırıcı", ClawMetry'nin o çalışma zamanının gerçek disk üzerindeki biçimi için bir okuyucu sunduğu anlamına gelir; her biri gerçek bir makinede gerçek bir kurulum üzerinde inşa edilip doğrulanmıştır (bkz. `tests/fixtures/runtimes/<rt>/`). Bağdaştırıcılar salt okunurdur; her biri çalışma zamanının diskte gerçekte ne sakladığı konusunda dürüsttür (örn. PicoClaw/NanoClaw/Cursor token maliyetini diske yazmaz). Bir düğümde birden fazla çalışma zamanı çalıştığında, çalışma zamanı değiştirici temiz bir derinlemesine inceleme için oturumlar görünümünü tek birine daraltır.
+"Beta adaptör", ClawMetry'nin o çalışma zamanının gerçek disk üzerindeki biçimi için bir okuyucu sunduğu anlamına gelir; her biri gerçek bir makinedeki gerçek bir kurulum karşısında oluşturulmuş ve doğrulanmıştır (bkz. `tests/fixtures/runtimes/<rt>/`). Adaptörler salt okunurdur; her biri kendi çalışma zamanının diskte gerçekte ne sakladığı konusunda dürüsttür (örn. PicoClaw/NanoClaw/Cursor token maliyetini diske yazmaz). Bir düğümde birden fazla çalışma zamanı çalıştığında, çalışma zamanı değiştirici oturumlar görünümünü temiz bir derinlemesine inceleme için tek bir çalışma zamanına odaklar.
 
 ## Herhangi bir SDK ajanını izleyin — döngü dışı maliyet atfı
 
-Yukarıdaki çalışma zamanlarının hepsi oturumları diske yazar. Sizin kendi **üretim ajanınız** ise, yani OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B veya sade bir `httpx` döngüsü üzerine kurduğunuz ajan, bunu yapmaz. ClawMetry'nin sıfır yapılandırmalı interceptor'ı, `httpx`/`requests` üzerinde monkey-patching yaparak yine de bu ajanın LLM çağrılarını (maliyet, token, gecikme, hatalar) yakalar:
+Yukarıdaki çalışma zamanlarının tümü oturumları diske yazar. Sizin kendi **üretim ajanınız** ise -OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B veya sade bir `httpx` döngüsü üzerine kurduğunuz- bunu yapmaz. ClawMetry'nin sıfır yapılandırmalı interceptor'ı, `httpx`/`requests`'i monkey-patch ederek LLM çağrılarını (maliyet, token'lar, gecikme, hatalar) yine de yakalar:
 
 ```python
 import clawmetry.track            # interceptor'ı etkinleştir
 clawmetry.track.set_source("support-agent")   # bu ürünü adlandır
 
-# ...ajanınız normal şekilde çalışır; artık her LLM çağrısı izlenip atfediliyor.
+# ...ajanınız normal şekilde çalışır; her LLM çağrısı artık izlenir + atfedilir.
 ```
 
-`set_source()` (veya `CLAWMETRY_SOURCE=support-agent` ortam değişkeni), her çağrıyı **adlandırılmış bir kaynak** ile etiketler; böylece çalıştırdığınız her ürün, kontrol panelindeki Overview sekmesinin **🔌 Döngü dışı kaynaklar** kartında kendi başına, maliyeti atfedilebilir bir satır olarak görünür: ajan başına çağrılar, sağlayıcılar, gecikme, hata oranı. Kaynak ayarlanmadıysa? Çağrılar yine izlenir; kart sadece gizli kalır.
+`set_source()` (veya `CLAWMETRY_SOURCE=support-agent` ortam değişkeni), her çağrıyı **adlandırılmış bir kaynak** ile etiketler; böylece çalıştırdığınız her ürün, gösterge panelinin Overview sekmesindeki **🔌 Döngü dışı kaynaklar** kartında kendi başına, maliyet atfedilebilir bir satır olarak görünür — her ajan için çağrılar, sağlayıcılar, gecikme, hata oranı. Kaynak ayarlanmadıysa? Çağrılar yine de izlenir; kart sadece gizli kalır.
 
 ```bash
 CLAWMETRY_SOURCE=billing-agent python my_agent.py
 ```
 
-Bu, çalışma zamanı bağdaştırıcılarının beslediği aynı veri katmanıdır (DuckDB → bulut anlık görüntüsü), bu yüzden döngü dışı kaynaklar da diğer her şey gibi uçtan uca şifrelenerek buluta senkronize edilir.
+Bu, çalışma zamanı adaptörlerinin beslediği aynı veri katmanıdır (DuckDB → bulut anlık görüntüsü), bu yüzden döngü dışı kaynaklar diğer her şey gibi buluta senkronize olur, uçtan uca şifrelenmiş olarak.
 
-## OpenTelemetry — satıcıdan bağımsız, izlerinizi (traces) istediğiniz yere gönderin
+## OpenTelemetry — sağlayıcıdan bağımsız, izlerinizi istediğiniz yere gönderin
 
-ClawMetry, **GenAI semantik kurallarını** kullanarak her iki yönde de **OpenTelemetry** konuşur; böylece ajan izleriniz asla tek bir araca kilitlenmez.
+ClawMetry her iki yönde de **OpenTelemetry** konuşur, **GenAI anlamsal sözleşmelerini** kullanarak, böylece ajan izleriniz asla tek bir araca kilitlenmez.
 
-Her oturumu; LLM çağrıları, araçlar, alt ajanlar, tokenlar, maliyet dahil; OTLP/HTTP GenAI span'leri olarak herhangi bir koleksiyoncuya (Datadog, Grafana, Honeycomb veya kendi OTel Collector'ınıza) **dışa aktarın**:
+Her oturumu -LLM çağrıları, araçlar, alt ajanlar, token'lar, maliyet- herhangi bir toplayıcıya (Datadog, Grafana, Honeycomb veya kendi OTel Collector'ınız) OTLP/HTTP GenAI izleri olarak **dışa aktarın**:
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -174,72 +195,72 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-Kimlik doğrulama başlıkları ve yoklama (poll) aralığı isteğe bağlı ortam değişkenleridir:
+Yetkilendirme başlıkları ve yoklama aralığı isteğe bağlı ortam değişkenleridir:
 
 ```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # ekstra HTTP başlıkları
+CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # ek HTTP başlıkları
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # saniye (varsayılan 60)
 ```
 
-**İçe aktarma (Ingest)** — yerleşik OTLP alıcısı, başka herhangi bir yerden gelen izleri ve metrikleri `/v1/traces` ve `/v1/metrics` adreslerinde kabul eder (protobuf ile içe aktarma için `pip install clawmetry[otel]`).
+**İçe aktarma** — yerleşik OTLP alıcısı, başka herhangi bir yerden gelen izleri ve metrikleri `/v1/traces` ve `/v1/metrics` adreslerinde kabul eder (protobuf içe aktarımı için `pip install clawmetry[otel]`).
 
-Hem sıfır yapılandırmalı, yerel öncelikli ClawMetry kontrol panelini **hem de** verinizi ekibinizin zaten kullandığı herhangi bir arka uçta elde edersiniz; kilitlenme yok, kurulacak ikinci bir ajan yok.
+Hem sıfır yapılandırmalı, yerel öncelikli ClawMetry gösterge panelini **hem de** verilerinizi ekibinizin zaten çalıştırdığı herhangi bir arka uçta elde edersiniz — kilitlenme yok, kurulacak ikinci bir ajan yok.
 
 ## Yapılandırma
 
-Çoğu kişinin herhangi bir yapılandırmaya ihtiyacı yoktur. ClawMetry çalışma alanınızı, loglarınızı, oturumlarınızı ve cron'larınızı otomatik olarak algılar.
+Çoğu kişinin herhangi bir yapılandırmaya ihtiyacı yoktur. ClawMetry çalışma alanınızı, günlüklerinizi, oturumlarınızı ve zamanlanmış işlerinizi otomatik olarak algılar.
 
 Özelleştirmeniz gerekiyorsa:
 
 ```bash
 clawmetry --port 9000              # Özel port (varsayılan: 8900)
-clawmetry --host 127.0.0.1         # Yalnızca localhost'a bağlan
+clawmetry --host 127.0.0.1         # Sadece yerel makineye bağla
 clawmetry --workspace ~/mybot      # Özel çalışma alanı yolu
-clawmetry --name "Alice"           # Flow görselleştirmesindeki adınız
+clawmetry --name "Alice"           # Flow görselleştirmesinde adınız
 ```
 
 Tüm seçenekler: `clawmetry --help`
 
 ## Desteklenen Kanallar
 
-ClawMetry, yapılandırdığınız her OpenClaw kanalı için canlı aktivite gösterir. Yalnızca `openclaw.json` dosyanızda gerçekten kurulmuş olan kanallar Flow diyagramında görünür; yapılandırılmamış olanlar otomatik olarak gizlenir.
+ClawMetry, yapılandırdığınız her OpenClaw kanalı için canlı aktivite gösterir. Yalnızca `openclaw.json` dosyanızda gerçekten kurulu olan kanallar Flow diyagramında görünür; yapılandırılmamış olanlar otomatik olarak gizlenir.
 
-Flow'daki herhangi bir kanal düğümüne tıklayarak gelen/giden mesaj sayılarıyla canlı bir sohbet balonu görünümü görebilirsiniz.
+Flow'daki herhangi bir kanal düğümüne tıklayarak gelen/giden mesaj sayılarıyla birlikte canlı bir sohbet balonu görünümü görebilirsiniz.
 
-| Kanal | Durum | Canlı Açılır Pencere | Notlar |
+| Kanal | Durum | Canlı Popup | Notlar |
 |---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ Tam | ✅ | Mesajlar, istatistikler, 10 sn yenileme |
+| 📱 **Telegram** | ✅ Tam | ✅ | Mesajlar, istatistikler, 10sn yenileme |
 | 💬 **iMessage** | ✅ Tam | ✅ | `~/Library/Messages/chat.db` dosyasını doğrudan okur |
 | 💚 **WhatsApp** | ✅ Tam | ✅ | WhatsApp Web (Baileys) üzerinden |
 | 🔵 **Signal** | ✅ Tam | ✅ | signal-cli üzerinden |
-| 🟣 **Discord** | ✅ Tam | ✅ | Sunucu (guild) + kanal algılama |
+| 🟣 **Discord** | ✅ Tam | ✅ | Sunucu + kanal algılama |
 | 🟪 **Slack** | ✅ Tam | ✅ | Çalışma alanı + kanal algılama |
 | 🌐 **Webchat** | ✅ Tam | ✅ | Yerleşik web arayüzü oturumları |
 | 📡 **IRC** | ✅ Tam | ✅ | Terminal tarzı balon arayüzü |
 | 🍏 **BlueBubbles** | ✅ Tam | ✅ | BlueBubbles REST API üzerinden iMessage |
 | 🔵 **Google Chat** | ✅ Tam | ✅ | Chat API webhook'ları üzerinden |
 | 🟣 **MS Teams** | ✅ Tam | ✅ | Teams bot eklentisi üzerinden |
-| 🔷 **Mattermost** | ✅ Tam | ✅ | Kendi sunucunuzda barındırılan takım sohbeti |
-| 🟩 **Matrix** | ✅ Tam | ✅ | Merkezi olmayan, E2EE desteği |
+| 🔷 **Mattermost** | ✅ Tam | ✅ | Kendi barındırılan takım sohbeti |
+| 🟩 **Matrix** | ✅ Tam | ✅ | Merkeziyetsiz, E2EE desteği |
 | 🟢 **LINE** | ✅ Tam | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ Tam | ✅ | Merkezi olmayan NIP-04 DM'ler |
+| ⚡ **Nostr** | ✅ Tam | ✅ | Merkeziyetsiz NIP-04 DM'ler |
 | 🟣 **Twitch** | ✅ Tam | ✅ | IRC bağlantısı üzerinden sohbet |
 | 🔷 **Feishu/Lark** | ✅ Tam | ✅ | WebSocket olay aboneliği |
 | 🔵 **Zalo** | ✅ Tam | ✅ | Zalo Bot API |
 
-> **Otomatik algılama:** ClawMetry, `~/.openclaw/openclaw.json` dosyanızı okur ve yalnızca gerçekten yapılandırdığınız kanalları render eder. Manuel kurulum gerekmez.
+> **Otomatik algılama:** ClawMetry, `~/.openclaw/openclaw.json` dosyanızı okur ve yalnızca gerçekten yapılandırdığınız kanalları oluşturur. Manuel kurulum gerekmez.
 
 ## Docker ile Dağıtım
 
-ClawMetry'yi bir konteyner içinde çalıştırmak mı istiyorsunuz? Sorun değil! 🐳
+ClawMetry'yi bir konteynerde çalıştırmak mı istiyorsunuz? Sorun değil! 🐳
 
 **Docker ile hızlı başlangıç:**
 
 ```bash
-# İmajı oluşturun
+# İmajı oluştur
 docker build -t clawmetry .
 
-# Varsayılan ayarlarla çalıştırın
+# Varsayılan ayarlarla çalıştır
 docker run -p 8900:8900 clawmetry
 
 # Veya ajanınızın veri dizinini bağlayın (gösterilen: OpenClaw'ın ~/.openclaw'ı)
@@ -264,33 +285,33 @@ services:
     restart: unless-stopped
 ```
 
-> **Not:** Docker içinde çalıştırırken, ClawMetry'nin kurulumunuzu otomatik algılayabilmesi için ajanınızın veri + log dizinlerini (örn. `~/.openclaw`, `~/.claude`, `~/.codex`) bağlayın.
+> **Not:** Docker'da çalıştırırken, ClawMetry'nin kurulumunuzu otomatik algılayabilmesi için ajanınızın veri + günlük dizinlerini (örn. `~/.openclaw`, `~/.claude`, `~/.codex`) bağlayın.
 
 ## Gereksinimler
 
 - Python 3.8+
-- Flask (pip ile otomatik olarak kurulur)
+- Flask (pip ile otomatik kurulur)
 - Aynı makinede bir AI ajan çalışma zamanı: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi veya Deep Agents (veya Docker için bağlanmış birimler)
 - Linux veya macOS
 
 ## NemoClaw / OpenShell Desteği
 
-ClawMetry, OpenClaw ajanlarını sandbox'lanmış OpenShell konteynerleri içinde çalıştıran NVIDIA'nın kurumsal güvenlik sarmalayıcısı olan [NemoClaw](https://github.com/NVIDIA/NemoClaw)'u otomatik olarak algılar.
+ClawMetry, ajanları sandbox'lanmış OpenShell konteynerleri içinde çalıştıran NVIDIA'nın kurumsal güvenlik sarmalayıcısı [NemoClaw](https://github.com/NVIDIA/NemoClaw)'ı otomatik olarak algılar.
 
-Çoğu durumda ekstra yapılandırma gerekmez. Sync arka plan servisi, oturum dosyalarının ana makinede `~/.openclaw/` içinde mi yoksa bir OpenShell konteyneri içinde mi bulunduğunu otomatik olarak keşfeder.
+Çoğu durumda ek yapılandırma gerekmez. Sync daemon, oturum dosyalarının ana makinedeki `~/.openclaw/` içinde mi yoksa bir OpenShell konteyneri içinde mi olduğunu otomatik olarak keşfeder.
 
 ### Nasıl çalışır
 
 ClawMetry, NemoClaw'ı iki şekilde algılar:
 
-1. **İkili (binary) algılama** — `nemoclaw` CLI'ını kontrol eder ve sandbox bilgisini almak için `nemoclaw status` komutunu çalıştırır
-2. **Konteyner algılama** — çalışan Docker konteynerlerini `openshell`, `nemoclaw` veya `ghcr.io/nvidia/` imajları için tarar, ardından oturumları birim bağlantıları (volume mounts) veya `docker cp` üzerinden okur
+1. **İkili algılama** — `nemoclaw` CLI'sini kontrol eder ve sandbox bilgisini almak için `nemoclaw status` çalıştırır
+2. **Konteyner algılama** — çalışan Docker konteynerlerini `openshell`, `nemoclaw` veya `ghcr.io/nvidia/` imajları için tarar, ardından oturumları birim bağlantıları veya `docker cp` üzerinden okur
 
-NemoClaw konteynerlerinden senkronize edilen oturum dosyaları, bulut kontrol panelinde `runtime=nemoclaw` ve `container_id` meta verisiyle etiketlenir; böylece bunları standart OpenClaw oturumlarından bir bakışta ayırt edebilirsiniz.
+NemoClaw konteynerlerinden senkronize edilen oturum dosyaları, bulut gösterge panelinde `runtime=nemoclaw` ve `container_id` meta verisiyle etiketlenir; böylece bunları standart OpenClaw oturumlarından ilk bakışta ayırt edebilirsiniz.
 
-### Önerilen kurulum: ANA MAKİNE üzerinde sync arka plan servisi
+### Önerilen kurulum: HOST üzerinde sync daemon
 
-En iyi deneyim için, ClawMetry'nin sync arka plan servisini sandbox içinde değil, **ana makinede** çalıştırın. Bu, NemoClaw ağ politikası kısıtlamalarından kaçınmanızı sağlar.
+En iyi deneyim için ClawMetry'nin sync daemon'ını sandbox içinde değil, **ana makinede** çalıştırın. Bu, NemoClaw ağ politikası kısıtlamalarından kaçınmanızı sağlar.
 
 ```bash
 # Ana makinede (sandbox'ın dışında)
@@ -299,11 +320,11 @@ clawmetry connect
 clawmetry sync
 ```
 
-Sync arka plan servisi, çalışan herhangi bir OpenShell konteyneri içindeki oturumları otomatik olarak bulur.
+Sync daemon, çalışan herhangi bir OpenShell konteyneri içindeki oturumları otomatik olarak bulacaktır.
 
 ### İsteğe bağlı: açık sandbox adı
 
-Otomatik algılama çalışmazsa, ClawMetry'yi doğru sandbox'a yönlendirin:
+Otomatik algılama işe yaramazsa, ClawMetry'yi doğru sandbox'a yönlendirin:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
@@ -312,7 +333,7 @@ clawmetry sync
 
 ### Sandbox içinde çalıştırma (ileri düzey)
 
-Sync arka plan servisini **OpenShell sandbox'ının içinde** çalıştırmanız gerekiyorsa, ClawMetry ingest API'sine erişebilmesi için NemoClaw ağ politikanıza şu egress kuralını ekleyin:
+Sync daemon'ı OpenShell sandbox'ının **içinde** çalıştırmanız gerekiyorsa, ClawMetry ingest API'sine erişebilmesi için NemoClaw ağ politikanıza şu giden trafik kuralını ekleyin:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -331,19 +352,19 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 ### Portlar ve uç noktalar
 
-| Uç Nokta | Port | Protokol | Gerekli mi |
+| Uç Nokta | Port | Protokol | Gerekli |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | Evet (sync arka plan servisi → bulut) |
-| `localhost:8900` | 8900 | HTTP | Evet (yerel kontrol paneli arayüzü) |
-| Docker soketi (`/var/run/docker.sock`) | — | Unix soketi | Konteyner oturumu keşfi için |
+| `ingest.clawmetry.com` | 443 | HTTPS | Evet (sync daemon → bulut) |
+| `localhost:8900` | 8900 | HTTP | Evet (yerel gösterge paneli arayüzü) |
+| Docker soketi (`/var/run/docker.sock`) | — | Unix soketi | Konteyner oturum keşfi için |
 
-Sync arka plan servisi yalnızca `ingest.clawmetry.com` adresine giden HTTPS çağrıları yapar. Hiçbir gelen port gerekmez.
+Sync daemon yalnızca `ingest.clawmetry.com` adresine giden HTTPS çağrıları yapar. Gelen port gerekmez.
 
 ---
 
 ## Bulut Dağıtımı
 
-SSH tünelleri, ters proxy ve Docker için **[Bulut Test Kılavuzu](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)**'na bakın.
+SSH tünelleri, ters proxy ve Docker için **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** dosyasına bakın.
 
 ## Test
 
@@ -353,30 +374,39 @@ Bu proje BrowserStack ile test edilmiştir.
 
 ## Telemetri
 
-ClawMetry, `clawmetry` CLI'ını yeni bir makinede ilk kez çalıştırdığınızda `https://app.clawmetry.com/api/install` adresine tek bir anonim "ilk çalıştırma" pingi gönderir. Bunu kurulumları saymak (bir OSS projesi için sahip olduğumuz tek pazarlama metriği) ve kullanıcılarımızın hangi ajan çerçevelerini kurduğunu öğrenmek için kullanıyoruz.
+ClawMetry, `clawmetry` CLI'sini yeni bir makinede ilk çalıştırdığınızda
+`https://app.clawmetry.com/api/install` adresine tek bir anonim "ilk çalıştırma"
+pingi gönderir. Bunu kurulumları saymak için (açık kaynak bir proje için sahip
+olduğumuz tek pazarlama metriği) ve kullanıcılarımızın hangi ajan
+çerçevelerini kurduğunu öğrenmek için kullanıyoruz.
 
 **Kurulum başına tam olarak bir POST**, şunları içerir:
 
 | Alan | Örnek | Neden |
 |---|---|---|
-| `install_id` | `~/.clawmetry/install_id` konumunda saklanan rastgele UUID | tekrar önleme (dedup); e-postanız veya api_key'inizle ilişkilendirilmez |
+| `install_id` | `~/.clawmetry/install_id` dosyasında saklanan rastgele UUID | tekrarı önleme; e-postanıza veya api_key'inize bağlı değil |
 | `version` | `0.12.167` | hangi sürümlerin kullanımda olduğu |
 | `os` / `os_version` | `Darwin` / `25.3.0` | platform desteği öncelikleri |
-| `python` | `3.11.15` | Python sürümü destek matrisi |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | sırada hangi ajanlarla entegre olmamız gerektiği |
+| `python` | `3.11.15` | Python sürüm destek matrisi |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | bundan sonra hangi ajanlarla entegre olmamız gerektiği |
 | `is_ci` / `ci_provider` | `true` / `github_actions` | insan kurulumlarını CI gürültüsünden ayırma |
 
-**Göndermediğimiz şeyler**: IP (bulut, sunucu tarafında istekten ülke kodunu türetir, ardından IP'yi atar), ana bilgisayar adı (hostname), kullanıcı adı, çalışma alanı yolu, dosya içerikleri, api_key'iniz, e-postanız, kişisel olarak tanımlanabilir veya çalışma alanına özgü herhangi bir şey. Aktarım (wire) yükü [`clawmetry/telemetry.py`](clawmetry/telemetry.py) dosyasında denetlenebilir.
+**Göndermediğimiz şeyler**: IP (bulut, ülke kodunu istekten sunucu tarafında
+türetir, ardından IP'yi atar), ana bilgisayar adı, kullanıcı adı, çalışma
+alanı yolu, dosya içerikleri, api_key'iniz, e-postanız, kişisel veya çalışma
+alanına özgü herhangi bir şey. Tel üzerindeki yük,
+[`clawmetry/telemetry.py`](clawmetry/telemetry.py) dosyasında denetlenebilir.
 
-**Devre dışı bırakma** (aşağıdakilerden herhangi biri kalıcı olarak devre dışı bırakır):
+**Devre dışı bırakma** (bunlardan herhangi biri kalıcı olarak devre dışı bırakır):
 
 ```bash
-export CLAWMETRY_NO_TELEMETRY=1                # kabuk (shell) başına
-export DO_NOT_TRACK=1                          # araçlar arası W3C standardı
-touch ~/.clawmetry/notelemetry                 # kalıcı dosya işaretçisi
+export CLAWMETRY_NO_TELEMETRY=1                # kabuk başına
+export DO_NOT_TRACK=1                          # W3C çapraz araç standardı
+touch ~/.clawmetry/notelemetry                 # kalıcı dosya işareti
 ```
 
-Buradaki bir ağ hatası `clawmetry`'nin çalışmasını asla engellemez; ping, arka plan (daemon) iş parçacığında 3 sn zaman aşımıyla ateşle-ve-unut (fire-and-forget) şeklindedir.
+Buradaki bir ağ hatası `clawmetry`'nin çalışmasını asla engellemez; ping,
+arka plan iş parçacığında 3 saniyelik zaman aşımıyla gönder-ve-unut şeklindedir.
 
 ## Yıldız Geçmişi
 
@@ -395,6 +425,6 @@ MIT
 ---
 
 <p align="center">
-  <strong>🦞 Ajanınızın düşünme sürecini görün</strong><br>
-  <sub>Geliştiren: <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ekosisteminin bir parçasıdır</sub>
+  <strong>🦞 Ajanınızın düşünmesini izleyin</strong><br>
+  <sub>Geliştiren: <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ekosisteminin bir parçası</sub>
 </p>
