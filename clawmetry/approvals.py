@@ -331,6 +331,13 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
 
     Tool-name match is exact (case-insensitive); command/args matches are
     regex .search() so partial matches count.
+
+    ``action: approve`` (always-allow) rules are evaluated FIRST regardless
+    of list order: a user's explicit "always allow `git ls-files`" must
+    outrank the catch-all "ask before shell commands" rule that would
+    otherwise pause it (Pushary-style remember-my-choice, cloud #1783).
+    They are narrow, user-authored rules; authoring a broad one is an
+    explicit choice, same as any allowlist.
     """
     cmd = _extract_command(tool_name, args)
     args_str = ""
@@ -338,7 +345,9 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
         args_str = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
     except Exception:
         pass
-    for p in policies:
+    ordered = ([p for p in policies if (p.get("action") or "") == "approve"] +
+               [p for p in policies if (p.get("action") or "") != "approve"])
+    for p in ordered:
         # Harness-agnostic tool match: a policy authored for ``exec`` matches a
         # ``Bash`` / ``shell`` toolCall (see _canonical_tool). Falls back to a
         # plain case-insensitive compare when neither side maps to a category.
@@ -796,6 +805,44 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
              f"cmd={cmd_preview!r} session={session_id}")
 
     approval_id = uuid.uuid4().hex
+
+    if (policy.get("action") or "") == "approve":
+        # Always-allow rule (Pushary-style remember-my-choice, created by
+        # the inbox's "Approve & always allow"): short-circuit approved —
+        # no cloud round-trip, no human wait, no kill. Best-effort audit
+        # row so the decision trail shows WHY it sailed through.
+        try:
+            import hashlib as _hl
+            from clawmetry import local_store as _lsm
+            _lsm.get_store().ingest_approval({
+                "id": approval_id,
+                "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
+                "requestor_session_id": session_id,
+                "action": f"{tool_name}: {cmd_preview}",
+                "args": args,
+                "status": "auto_approved",
+                "decision_reason": (f"always-allow rule '{policy['name']}' "
+                                    "matched"),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+        except Exception as _aae:
+            log.debug("auto-approve persist failed: %s", _aae)
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.auto_approved", actor="policy", target=tool_name,
+                result="approved", source="approvals",
+                metadata={"approval_id": approval_id,
+                          "policy": policy["name"],
+                          "session_id": session_id,
+                          "command": cmd_preview})
+        except Exception:
+            pass
+        result = {"decision": "approved", "policy": policy["name"],
+                  "killed": False, "approval_id": approval_id, "auto": True}
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
 
     if (policy.get("action") or "") == "monitor":
         # Dry-run mode: record what WOULD have paused so the audit feed shows

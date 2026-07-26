@@ -239,6 +239,11 @@ def evaluate(event: dict) -> "dict | None":
                 "raise this policy's timeout in the Approvals tab."
             )
         if decision == "approved":
+            if (result or {}).get("auto"):
+                return _allow_payload(
+                    f"Auto-approved by always-allow rule '{pol}' — no human "
+                    "round-trip needed."
+                )
             return _allow_payload(
                 f"Approved by the human via ClawMetry approvals "
                 f"(policy '{pol}')."
