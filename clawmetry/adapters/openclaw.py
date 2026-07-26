@@ -28,9 +28,12 @@ logger = logging.getLogger("clawmetry.adapters.openclaw")
 
 # Named OpenClaw profiles write openclaw-{name}-YYYY-MM-DD.log alongside the
 # default-profile openclaw-YYYY-MM-DD.log.  Matching only the date-only form
-# prevents lexicographic sort from mis-selecting a named-profile log as
-# "the current log" and silently dropping default-profile gateway events.
-_DEFAULT_LOG_RE = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
+# (plus an optional .N rotation suffix) prevents lexicographic sort from
+# mis-selecting a named-profile log as "the current log" and silently dropping
+# default-profile gateway events.  The (\.\d+)? group also matches rotation
+# archives like openclaw-YYYY-MM-DD.1.log so the newest-5 window includes
+# rotated history within the current day (closes #4056).
+_DEFAULT_LOG_RE = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}(\.\d+)?\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
