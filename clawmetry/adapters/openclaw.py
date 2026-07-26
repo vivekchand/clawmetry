@@ -1408,10 +1408,11 @@ def _gateway_plugin_health() -> dict:
 
     As of harness 2026.7.21 (#3883), the shared plugin-SDK monitor introduces a
     ``phase`` field per plugin entry (``"admission"``, ``"claim-identity"``,
-    ``"adoption-handoff"``, ``"pruning"``) so a plugin stuck mid-admission is
-    distinguishable from a healthy ``"loaded"`` one.  Per-step detail flags
-    (``admission``, ``claim_identity``, ``adoption_handoff``, ``pruning``) are
-    forwarded when present.
+    ``"adoption-handoff"``, ``"pruning"``, ``"polling"``, ``"shutdown"``) so a
+    plugin stuck mid-admission is distinguishable from a healthy ``"loaded"``
+    one.  Per-step detail flags (``admission``, ``claim_identity``,
+    ``adoption_handoff``, ``pruning``, ``polling``, ``shutdown``) are forwarded
+    when present (#4058).
 
     Returns a dict with keys when any plugin data is present:
     - ``"gatewayPluginHealth"`` — the raw list of plugin entries.
@@ -1453,7 +1454,7 @@ def _gateway_plugin_health() -> dict:
                 plugin["phase"] = str(phase).lower()
                 phase_summary[plugin["phase"]] = phase_summary.get(plugin["phase"], 0) + 1
             # Per-step lifecycle detail flags (forwarded when present)
-            for detail_key in ("admission", "claim_identity", "adoption_handoff", "pruning"):
+            for detail_key in ("admission", "claim_identity", "adoption_handoff", "pruning", "polling", "shutdown"):
                 val = entry.get(detail_key)
                 if val is not None:
                     plugin[detail_key] = val
