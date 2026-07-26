@@ -672,15 +672,6 @@ def api_update_check_status():
     return jsonify(result)
 
 
-@bp_update_check.route("/api/update-check/check-now", methods=["POST"])
-def api_update_check_now():
-    """Trigger an immediate update check."""
-    result = _check_for_update()
-    if result is None:
-        return jsonify({"ok": False, "error": "Failed to check for updates"}), 500
-    return jsonify({"ok": True, "result": result})
-
-
 @bp_update_check.route("/api/update-check/dismiss", methods=["POST"])
 def api_update_check_dismiss():
     """Dismiss the current update notification."""
@@ -689,33 +680,3 @@ def api_update_check_dismiss():
     if version:
         _set_update_check_config({"dismissed_version": version})
     return jsonify({"ok": True})
-
-
-@bp_update_check.route("/api/update-check/history", methods=["GET"])
-def api_update_check_history():
-    """Get update check history."""
-    limit = request.args.get("limit", 10, type=int)
-    try:
-        with _get_fleet_db_lock():
-            db = _get_fleet_db()
-            rows = db.execute(
-                """SELECT current_version, latest_version, update_available,
-                           changelog_url, check_at
-                   FROM update_check_history
-                   ORDER BY check_at DESC LIMIT ?""",
-                (limit,),
-            ).fetchall()
-            db.close()
-
-        history = []
-        for row in rows:
-            history.append({
-                "current": row["current_version"],
-                "latest": row["latest_version"],
-                "update_available": bool(row["update_available"]),
-                "changelog_url": row["changelog_url"] or "",
-                "checked_at": row["check_at"],
-            })
-        return jsonify({"history": history})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
