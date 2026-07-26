@@ -218,17 +218,33 @@ def evaluate(event: dict) -> "dict | None":
         )
         decision = (result or {}).get("decision") or ""
         pol = (result or {}).get("policy") or "policy"
-        # on_timeout mapping leaves raw "deny"/"approve" strings — accept both.
-        if decision in ("denied", "deny"):
+        # process_tool_call returns "denied"/"approved" for HUMAN decisions
+        # but the raw on_timeout strings "deny"/"approve" when the window
+        # lapsed — the distinction matters: telling the model (and the log)
+        # "the human declined" when nobody answered erodes trust in the
+        # whole gate (live confusion, 2026-07-26).
+        if decision == "denied":
             return _deny_payload(
                 f"Denied via ClawMetry approvals (policy '{pol}'). The human "
                 "declined this specific call — pick a different approach or "
                 "ask them what they'd prefer."
             )
-        if decision in ("approved", "approve"):
+        if decision == "deny":
+            return _deny_payload(
+                f"ClawMetry approval timed out with no decision (policy "
+                f"'{pol}', on_timeout: deny). The human never saw or didn't "
+                "reach it in time — worth asking them directly, or they can "
+                "raise this policy's timeout in the Approvals tab."
+            )
+        if decision == "approved":
             return _allow_payload(
                 f"Approved by the human via ClawMetry approvals "
                 f"(policy '{pol}')."
+            )
+        if decision == "approve":
+            return _allow_payload(
+                f"ClawMetry approval timed out (policy '{pol}', on_timeout: "
+                "approve) — proceeding per the policy's timeout action."
             )
         # monitored / no_policy / error / anything unexpected → no opinion
         return None

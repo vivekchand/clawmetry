@@ -102,6 +102,20 @@ def test_on_timeout_raw_strings_map_correctly(monkeypatch):
     assert h.evaluate(_evt())["decision"] == "approve"
 
 
+def test_timeout_deny_is_not_blamed_on_the_human(monkeypatch):
+    """A lapsed window must read as a timeout, not 'the human declined' —
+    live confusion 2026-07-26: user never saw the request, agent was told
+    a human said no."""
+    _wire(monkeypatch, "deny")
+    reason = h.evaluate(_evt())["reason"]
+    assert "timed out" in reason
+    assert "declined" not in reason
+    _wire(monkeypatch, "denied")
+    reason = h.evaluate(_evt())["reason"]
+    assert "declined" in reason
+    assert "timed out" not in reason
+
+
 def test_error_and_monitored_have_no_opinion(monkeypatch):
     for decision in ("error", "monitored", "no_policy"):
         _wire(monkeypatch, decision)
