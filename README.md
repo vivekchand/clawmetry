@@ -69,6 +69,24 @@ OpenClaw and NemoClaw are free in the open-source app; the other runtimes light 
 ### ✋ Approvals — Gate risky tool calls behind manual sign-off; policy-backed protection rules
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
+**Pre-execution blocking for Claude Code** — one command installs a
+PreToolUse hook that pauses matching tool calls *before* they run and waits
+for your decision (one tap from your phone with
+[cloud push notifications](https://app.clawmetry.com/push) enabled):
+
+```bash
+clawmetry hooks install     # writes ~/.claude/settings.json (idempotent)
+clawmetry hooks status      # what's wired + how many policies are active
+clawmetry hooks uninstall   # removes only ClawMetry's entries
+```
+
+A deny blocks just that one tool call — the agent keeps its session and can
+try another approach. Approving on your phone skips Claude Code's own
+permission prompt (you already answered). Unmatched tools cost ~40ms and
+fall through to Claude Code's normal permission flow. You also get a phone
+push when Claude Code itself is waiting on you (`permission_prompt` /
+`idle_prompt` notifications).
+
 ## Install
 
 **One-liner (recommended):**

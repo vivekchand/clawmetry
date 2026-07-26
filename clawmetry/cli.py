@@ -5223,6 +5223,13 @@ def _cmd_verify_integrity(args) -> None:
 
 def main() -> None:
     import argparse
+    # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
+    # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
+    # Code tool call, and a policy-miss must cost ~40ms, not a third of a
+    # second. Handled entirely in hooks_claude_code (stdlib-only imports).
+    if len(sys.argv) > 1 and sys.argv[1] == "hooks":
+        from clawmetry.hooks_claude_code import cli_main as _hooks_cli
+        raise SystemExit(_hooks_cli(sys.argv[2:]))
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
@@ -5933,6 +5940,15 @@ def main() -> None:
     )
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
+    # `hooks` is absent from this tuple ON PURPOSE: it's intercepted by the
+    # fast path at the top of main() before the dashboard import. The parser
+    # entry below exists only so `clawmetry --help`-style discovery shows it.
+    p_hooks = sub.add_parser(
+        "hooks",
+        help="Claude Code approval hooks: install | uninstall | status | "
+             "run {pretooluse|notification} (pre-execution gate + phone push)")
+    p_hooks.add_argument("hooks_cmd", nargs="*")
+
     _subcmds = (
         "onboard",
         "setup",

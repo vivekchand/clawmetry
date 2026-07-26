@@ -575,6 +575,38 @@ def _session_runtime(session_id: str) -> str:
         return "openclaw"
 
 
+_hooks_marker_cache: tuple = (0.0, frozenset())
+_HOOKS_MARKER_TTL_S = 10.0
+_HOOKS_MARKER_PATH = Path.home() / ".clawmetry" / "hooks_installed.json"
+
+
+def _hook_covered_runtimes() -> frozenset:
+    """Runtimes whose tool calls are pre-execution gated by an installed
+    agent hook (written by ``clawmetry hooks install``, see
+    hooks_claude_code.py). The reactive watcher skips these sessions — the
+    hook already paused the call BEFORE execution, and a phone-denied tool
+    call must not ALSO get its session killed by the detect-after path.
+
+    TTL-cached: watch_iteration runs every ~2s and this must not stat/parse
+    JSON on every pass. Marker keys are runtime names ("claude_code")."""
+    global _hooks_marker_cache
+    now = time.time()
+    if now - _hooks_marker_cache[0] < _HOOKS_MARKER_TTL_S:
+        return _hooks_marker_cache[1]
+    covered: frozenset = frozenset()
+    try:
+        if _HOOKS_MARKER_PATH.exists():
+            data = json.loads(_HOOKS_MARKER_PATH.read_text())
+            covered = frozenset(
+                rt for rt, meta in data.items()
+                if isinstance(meta, dict)
+                and "PreToolUse" in (meta.get("events") or []))
+    except Exception:
+        covered = frozenset()
+    _hooks_marker_cache = (now, covered)
+    return covered
+
+
 def _session_cwd_hint(session_id: str) -> str:
     """Best-effort working-directory hint for cwd-resolved runtimes
     (codex/goose/opencode/aider). Family adapters store the agent's cwd in
@@ -715,7 +747,8 @@ def _kill_session(session_id: Optional[str]) -> bool:
 
 def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                        tool_call_id: str, tool_name: str, args: dict,
-                       policies: Optional[list[dict]] = None) -> dict:
+                       policies: Optional[list[dict]] = None,
+                       kill_on_deny: bool = True) -> dict:
     """Check a fresh toolCall against active policies and (if matched) request
     a cloud-mediated approval.
 
@@ -724,6 +757,11 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     ``simulated`` approval row (dry-run) and returns immediately.
     Returns: {decision: approved|denied|timeout|monitored|no_policy|error,
               policy: <name or None>, killed: bool}
+
+    ``kill_on_deny=False`` is the pre-execution hook path (hooks_claude_code):
+    the hook blocks the ONE denied tool call via the hook protocol, so
+    killing the whole session on deny would be double punishment — the
+    Pushary-style contract is "deny this call, agent continues".
     """
     if policies is None:
         policies = load_policies()
@@ -838,7 +876,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         if decision in ("timeout", "expired"):
             decision = policy["on_timeout"]
         killed = False
-        if decision == "denied":
+        if decision == "denied" and kill_on_deny:
             killed = _kill_session(session_id)
         # Mirror the resolution into the row so subsequent polls / the
         # audit feed see the final status. update_approval_decision is
@@ -889,7 +927,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         # Apply on_timeout
         decision = policy["on_timeout"]
     killed = False
-    if decision == "denied":
+    if decision == "denied" and kill_on_deny:
         killed = _kill_session(session_id)
     # Mirror the resolution into DuckDB so the approval leaves the cloud
     # pending queue (the next cache_push won't re-surface it as pending).
@@ -1276,6 +1314,15 @@ def watch_iteration(api_key: str, node_id: str,
             if eid:
                 seen[eid] = ca
             sid = row.get("session_id") or ""
+            # Runtimes whose tool calls are pre-execution gated by an
+            # installed hook (hooks_claude_code) are skipped here: the hook
+            # already paused/denied the call BEFORE it ran, so the reactive
+            # detect-and-kill path firing seconds later would double-punish
+            # (phone-denied one call → watcher kills the whole session).
+            # Row is already in `seen`, so the watermark still advances.
+            if _hook_covered_runtimes() and \
+                    _session_runtime(sid) in _hook_covered_runtimes():
+                continue
             for tool_call_id, tool_name, args in _extract_tool_blocks(row):
                 if not tool_name:
                     # No tool name → no policy can match. Skip rather than
