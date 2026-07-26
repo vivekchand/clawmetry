@@ -981,3 +981,65 @@ def current_license_info() -> dict | None:
     except Exception as exc:
         logger.warning("license: info read failed: %s", exc)
         return None
+
+
+def days_until_expiry() -> int | None:
+    """Scalar view onto the installed license's ``exp`` claim -- for renewal
+    banners / countdown badges that want ONE number rather than the whole
+    :func:`current_license_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to count down against:
+        no license file, an invalid signature, or a valid license whose
+        payload carries no ``exp`` claim (perpetual license).
+      * A signed integer number of days otherwise. Zero on the day of
+        expiry, negative once the license has expired -- a renewal UI can
+        distinguish "expires today" from "expired 3 days ago" by sign
+        without a second call to :func:`current_license_info`.
+
+    Days are floor-divided from seconds (``(exp - now) // 86400``), matching
+    the ``days_left`` field already surfaced by
+    :func:`current_license_info` / :func:`inspect_key` so the scalar
+    endpoint and the full-envelope endpoint never disagree at the day
+    boundary.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    UI tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: days_until_expiry underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    days = info.get("days_left")
+    return days if isinstance(days, int) else None
+
+
+def is_expiring_within(days: int) -> bool:
+    """Boolean gate for "should I show a renewal warning?" UIs.
+
+    Returns ``True`` iff a license is installed AND its ``exp`` claim is
+    within ``days`` days of now AND it has NOT already expired. An
+    already-expired license returns ``False`` on purpose -- the caller
+    wants to distinguish "renewal window" (warn) from "already expired"
+    (a different, louder banner driven off :func:`current_license_info`'s
+    ``status`` field). Perpetual licenses (no ``exp`` claim) and the
+    no-license path both return ``False``: nothing to warn about.
+
+    ``days`` is coerced through ``int()``; negative or non-numeric input
+    collapses to ``False`` (nothing "expires within -5 days"). Never
+    raises; every underlying failure returns ``False`` so a scheduled
+    reminder job never crashes on a bad install.
+    """
+    try:
+        threshold = int(days)
+    except (TypeError, ValueError):
+        return False
+    if threshold < 0:
+        return False
+    remaining = days_until_expiry()
+    if remaining is None:
+        return False
+    return 0 <= remaining <= threshold

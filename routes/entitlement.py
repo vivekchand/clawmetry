@@ -7123,6 +7123,143 @@ def api_license_pubkey():
         )
 
 
+def _license_expiry_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two expiry endpoints
+    both need (``days_left``, ``has_license``, ``expired``). Lives in the
+    handler layer -- not in :mod:`clawmetry.license` -- because
+    ``has_license`` is an install-state fact rather than a license-payload
+    fact, and both endpoints below need the pair together.
+
+    Never raises: any underlying failure collapses to
+    ``{days_left: None, has_license: False, expired: False}`` so callers
+    keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+    except Exception as exc:
+        logger.debug("_license_expiry_snapshot: underlying read failed: %s", exc)
+        return {"days_left": None, "has_license": False, "expired": False}
+    if not isinstance(info, dict):
+        return {"days_left": None, "has_license": False, "expired": False}
+    days = info.get("days_left")
+    days_left = days if isinstance(days, int) else None
+    status = info.get("status")
+    return {
+        "days_left": days_left,
+        "has_license": True,
+        "expired": status == "expired",
+    }
+
+
+@bp_entitlement.route("/api/license/days-until-expiry")
+def api_license_days_until_expiry():
+    """``GET /api/license/days-until-expiry`` -- scalar countdown for a
+    renewal banner / days-left badge that wants ONE number rather than the
+    whole ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "days_left": <int|null>,   # None if no license OR no exp claim
+          "has_license": <bool>,     # is a license file installed at all?
+          "expired": <bool>          # True iff days_left < 0
+        }
+
+    ``days_left`` sign matches :func:`clawmetry.license.days_until_expiry`:
+    zero on the day of expiry, negative once expired, ``null`` for no
+    license or perpetual (no-exp) key. A dashboard tile can bind directly
+    off this URL without parsing the full license envelope; a caller who
+    also wants ``tier``/``sub``/``pubkey_fingerprint_sha256`` should keep
+    hitting ``/api/license/status``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{days_left: null, has_license: false, expired: false}`` (the
+    OSS-free branch shape), matching the "never crash on bad input"
+    posture of the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_expiry_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_days_until_expiry: error: %s", exc)
+        return jsonify({"days_left": None, "has_license": False, "expired": False})
+
+
+@bp_entitlement.route("/api/license/expiring-within")
+def api_license_expiring_within():
+    """``GET /api/license/expiring-within?days=<N>`` -- boolean gate for
+    "should I show a renewal warning right now?" UIs.
+
+    Query parameters:
+      * ``days`` (int, required) -- the renewal-window threshold. Negative
+        or non-numeric input degrades to ``expiring_within=false`` (nothing
+        expires within -5 days) rather than a 4xx, matching the surrounding
+        endpoints' never-5xx / never-4xx posture. Defaults to ``30`` when
+        omitted so a bare hit still returns a sensible answer.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "expiring_within": <bool>,
+          "days_left": <int|null>,
+          "threshold_days": <int>,
+          "has_license": <bool>,
+          "expired": <bool>
+        }
+
+    ``expiring_within`` is ``True`` iff a license is installed AND its
+    ``exp`` claim is between 0 and ``threshold_days`` inclusive. An
+    already-expired license returns ``expiring_within=false`` on purpose
+    -- the caller wants "warn about upcoming renewal" separate from "loud
+    banner about an expired install", and the ``expired`` field carries
+    the latter signal so both banners can drive off one URL.
+
+    Mirrors :func:`clawmetry.license.is_expiring_within` -- the HTTP shape
+    layers ``days_left`` / ``threshold_days`` / ``has_license`` /
+    ``expired`` on top of that bool so a paywall widget never needs a
+    second call to ``/api/license/status`` to render the accompanying
+    "expires in N days" copy.
+    """
+    raw = request.args.get("days", "30")
+    try:
+        threshold = int(raw)
+    except (TypeError, ValueError):
+        # Bad input degrades to false -- nothing "expires within garbage".
+        snap = _license_expiry_snapshot()
+        return jsonify(
+            {
+                "expiring_within": False,
+                "days_left": snap["days_left"],
+                "threshold_days": 0,
+                "has_license": snap["has_license"],
+                "expired": snap["expired"],
+            }
+        )
+    if threshold < 0:
+        threshold = 0
+    try:
+        snap = _license_expiry_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_expiring_within: error: %s", exc)
+        snap = {"days_left": None, "has_license": False, "expired": False}
+    days_left = snap["days_left"]
+    within = (
+        snap["has_license"]
+        and isinstance(days_left, int)
+        and 0 <= days_left <= threshold
+    )
+    return jsonify(
+        {
+            "expiring_within": bool(within),
+            "days_left": days_left,
+            "threshold_days": threshold,
+            "has_license": snap["has_license"],
+            "expired": snap["expired"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
