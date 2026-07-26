@@ -3,11 +3,12 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # Audits whether required E2E status checks are configured on main for
 # ALL 3 repos: clawmetry, clawmetry-cloud, clawmetry-landing.
 #
-# clawmetry/main protection is read with github.token (same-repo).
-# For clawmetry-cloud and clawmetry-landing: unauthenticated reads via
-# the public /branches/main endpoint. The scoped GITHUB_TOKEN cannot be
-# used cross-repo (returns 403 even on public repos); unauthenticated
-# reads return the full protection.required_status_checks object.
+# clawmetry/main protection is read with github.token (same-repo,
+# authenticated). For clawmetry-cloud and clawmetry-landing: these are
+# private repos -- GITHUB_TOKEN cannot read them cross-repo (returns 403)
+# and unauthenticated reads return 404. Both are reported as "unknown"
+# (can't verify) rather than "error" (broken). The health check gate
+# decision is based only on the clawmetry/main result (same-repo readable).
 #
 # On failure: posts an @-mentioned reminder to tracking issue #4029
 # at most once per calendar day. On success: posts a GREEN confirmation.
@@ -51,10 +52,11 @@ jobs:
           OWNER = "vivekchand"
           TRACKING_ISSUE = 4029
           MARKER = "<!-- c6-health-check -->"
-          # Repo this workflow runs in. Cross-repo reads must NOT send the
-          # scoped GITHUB_TOKEN: Actions tokens are repo-scoped and return 403
-          # for other repos even when the target repo is public. Public repos
-          # allow unauthenticated reads; we use those for cloud/landing.
+          # Repo this workflow runs in. GITHUB_TOKEN is repo-scoped: it can
+          # read clawmetry (same-repo) but returns 403 for other repos.
+          # Private repos also return 404 for unauthenticated reads.
+          # We only send the token to _WORKFLOW_REPO; others are tried
+          # unauthenticated and reported as "unknown" when unreachable.
           _WORKFLOW_REPO = os.environ.get("GITHUB_REPOSITORY", "").split("/")[-1]
 
           HEADERS = {
@@ -67,7 +69,7 @@ jobs:
           # This list must stay in sync with REQUIRED_CHECKS in
           # scripts/apply_required_status_checks.py.
           # clawmetry reads with github.token; others use unauthenticated
-          # reads so the scoped token does not cause cross-repo 403s.
+          # reads (public repos only -- private repos return "unknown").
           ALL_CHECKS = {
               "clawmetry": [
                   "OSS golden path (wheel + OpenClaw + 9 tabs)",
@@ -119,24 +121,30 @@ jobs:
                 'ok'          -- read succeeded, contexts is the full set
                                  (may be empty if required checks are not yet
                                  configured -- outer loop detects "missing")
-                'unknown'     -- branch is protected but detail not readable
-                                 (unauthenticated read returned protection=None)
+                'unknown'     -- cannot verify: 4xx from API (private or
+                                 inaccessible repo) or branch is protected
+                                 but details not readable (protection=None)
                 'unprotected' -- branch has no protection configured
-                'error'       -- API error / repo not reachable
+                'error'       -- unexpected failure (5xx or network error)
 
               Reads from both 'contexts' (legacy) and 'checks' (current) arrays
               so checks configured via the GitHub Settings UI are correctly seen.
-              Settings UI writes to 'checks' only; reading only 'contexts' causes
-              false C6-missing reports after admin configuration via the UI.
               """
-              # Authenticated reads only for the workflow's own repo.
-              # GITHUB_TOKEN is scoped to _WORKFLOW_REPO; sending it to other
-              # repos returns 403. Public repos support unauthenticated reads.
+              # Only send GITHUB_TOKEN to the workflow's own repo (same-repo).
+              # Sending it to other repos returns 403/404 even when those repos
+              # are public -- the scoped token is rejected cross-repo.
+              # Private repos (clawmetry-cloud, clawmetry-landing) also return
+              # 404 for unauthenticated reads. Both cases map to "unknown"
+              # (can't verify), not "error" (something broke in the workflow).
               data, err = api_get(
                   f"/repos/{OWNER}/{repo}/branches/main",
                   auth=(repo == _WORKFLOW_REPO),
               )
               if err is not None or data is None:
+                  # 4xx = private/inaccessible (expected for cross-repo reads).
+                  # 5xx or network error = genuine unexpected failure.
+                  if isinstance(err, int) and 400 <= err < 500:
+                      return set(), "unknown"
                   return set(), "error"
               if not data.get("protected"):
                   return set(), "unprotected"
@@ -196,15 +204,15 @@ jobs:
           )
 
           # Determine overall state.
+          # "confirmed missing" = we CAN read the repo and checks are absent.
+          # "unknown" = private/inaccessible; treated as non-blocking here
+          # because the PAT-based apply run configures cloud/landing too.
           has_confirmed_missing = any(
               r["status"] in ("missing", "unprotected") for r in results.values()
           )
           # clawmetry/main is readable via github.token (same-repo).
-          # clawmetry-cloud and clawmetry-landing are read unauthenticated.
-          # Public repos return 'ok' or 'unprotected' without admin credentials;
-          # 'unknown' only appears if the branch is protected but returns no
-          # details (unlikely for public repos with simple protection rules).
-          # "unknown" repos are trusted as ok to avoid blocking on API gaps.
+          # clawmetry-cloud and clawmetry-landing are private; their
+          # "unknown" status is expected and does not block the gate.
           clawmetry_status = results.get("clawmetry", {}).get("status")
           all_confirmed_ok = clawmetry_status == "ok" and not has_confirmed_missing
 
@@ -223,16 +231,16 @@ jobs:
                   )
               elif result["status"] == "unknown":
                   rows.append(
-                      f"| **{repo}/main** | UNKNOWN | branch is protected but "
-                      f"details not readable -- "
+                      f"| **{repo}/main** | UNKNOWN | cannot verify cross-repo "
+                      f"(private repo or GITHUB_TOKEN scope limit) -- "
                       f"[verify manually]({SETTINGS_URL[repo]}) |"
                   )
               else:
                   rows.append(f"| **{repo}/main** | ERROR | API error -- verify manually |")
           table = (
               "| Repo | Status | Detail |\n"
-              "|------|--------|--------|\n"
-              + "\n".join(rows)
+              "|------|--------|--------|"
+              + "\n" + "\n".join(rows)
           )
 
           if all_confirmed_ok:
@@ -241,9 +249,9 @@ jobs:
                   f"**C6 health check {today_utc}: clawmetry/main confirmed GREEN -- C6 closed.**\n\n"
                   f"{table}\n\n"
                   "clawmetry/main: all 4 required checks confirmed present. "
-                  "clawmetry-cloud and clawmetry-landing: protection details not readable "
-                  "cross-repo (expected with github.token -- they were configured by the "
-                  "same apply-required-checks run).\n\n"
+                  "clawmetry-cloud and clawmetry-landing: cannot verify cross-repo "
+                  "(private repos -- GITHUB_TOKEN scope limit is expected; "
+                  "they were configured by the same apply-required-checks run).\n\n"
                   "C6 is now GREEN. The 7-criterion stop-condition countdown starts today "
                   "(all 7 criteria must hold green for 7 consecutive days). "
                   "Disable the cron at https://claude.ai/code/scheduled."
@@ -252,7 +260,7 @@ jobs:
               total_missing = sum(len(r["missing"]) for r in results.values())
               unknown_repos = [r for r, v in results.items() if v["status"] == "unknown"]
               unknown_note = (
-                  f" ({len(unknown_repos)} repo(s) not readable cross-repo -- verify manually)"
+                  f" ({len(unknown_repos)} private repo(s) not readable cross-repo -- verify manually)"
                   if unknown_repos else ""
               )
               if total_missing:
