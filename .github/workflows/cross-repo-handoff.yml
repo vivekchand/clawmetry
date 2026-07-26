@@ -113,7 +113,7 @@ jobs:
       # PR reviewer can see at a glance whether C4 ran with real apps or
       # inline stubs. In stub mode a one-liner call-to-action links to the
       # tracking issue so the gap is visible without digging into logs.
-      # Tracking: vivekchand/clawmetry#4036 (C4)
+      # Tracking: vivekchand/clawmetry#3970 (C4)
       - name: Write C4 fidelity summary
         if: always()
         run: |
@@ -124,7 +124,7 @@ jobs:
               echo "**Mode: REAL APPS** -- CLOUD_REPO_PAT configured"
               echo ""
               echo "| Tier | What was tested |"
-              echo "|------|-----------------|"
+              echo "|------|------------------|"
               echo "| T1 | Real clawmetry-landing (run_landing.py) |"
               echo "| T2 | Real clawmetry-cloud (run_cloud.py) |"
               echo "| T3 | Real DaemonSim from cloud checkout |"
@@ -141,7 +141,7 @@ jobs:
               echo ""
               echo "> **To upgrade C4 to real-apps mode:** set the \`CLOUD_REPO_PAT\` repository"
               echo "> secret (Contents read on clawmetry-cloud + clawmetry-landing)."
-              echo "> See [tracking issue #4036](https://github.com/vivekchand/clawmetry/issues/4036)."
+              echo "> See [tracking issue #3970](https://github.com/vivekchand/clawmetry/issues/3970)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -10,7 +10,7 @@ name: OSS Golden Path (C1)
 # Budget: 12 minutes wall-clock (raised from 8; Playwright chromium download
 # ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s;
 # C5 33-tab Playwright sweep adds ~90 s on top of the C1 9-tab sweep).
-# Tracking: vivekchand/clawmetry#1646 (C1), #3666 (C5), #4036 (E2E epic)
+# Tracking: vivekchand/clawmetry#1646 (C1), #3666 (C5), #3970 (E2E epic)
 
 on:
   pull_request:
@@ -146,7 +146,7 @@ jobs:
       # crash (e.g. ImportError on a broken branch) caused conftest.py to
       # launch a second server from source, which also crashed, producing
       # confusing ERROR-at-setup failures instead of a clear "server never
-      # started" message. (Tracking: vivekchand/clawmetry#4036)
+      # started" message. (Tracking: vivekchand/clawmetry#3970)
       - name: Start dashboard from installed wheel
         run: |
           OPENCLAW_GATEWAY_TOKEN=ci-golden-token \
@@ -214,7 +214,7 @@ jobs:
       # post-auth overlay sweep that is the direct fix for the user-reported
       # gateway-token bug (2026-05-17). Previously, ANY C1 failure caused C5
       # to be skipped, meaning auth regressions on broken branches were never
-      # caught. (Tracking: vivekchand/clawmetry#4036)
+      # caught. (Tracking: vivekchand/clawmetry#3970)
       - name: Restart dashboard (clean state for C5 sweep)
         if: always()
         run: |
