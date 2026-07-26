@@ -26,11 +26,12 @@ from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
-# Named OpenClaw profiles write openclaw-{name}-YYYY-MM-DD.log alongside the
-# default-profile openclaw-YYYY-MM-DD.log.  Matching only the date-only form
-# prevents lexicographic sort from mis-selecting a named-profile log as
-# "the current log" and silently dropping default-profile gateway events.
-_DEFAULT_LOG_RE = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
+# Gateway log filename patterns (#4055):
+#   default profile : openclaw-YYYY-MM-DD.log
+#   named profiles  : openclaw-{name}-YYYY-MM-DD.log  (e.g. openclaw-work-2026-07-26.log)
+# The optional (.+-)? prefix matches named profiles while the date anchor
+# ensures unrelated files (openclaw-debug.log, etc.) are still excluded.
+_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
