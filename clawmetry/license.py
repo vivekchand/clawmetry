@@ -667,6 +667,13 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
         and the node continues on the free runtimes.
       * Idempotent — skips the download when clawmetry-pro is already current.
       * The wheel is fetched only from our own HTTPS /api/license/download.
+      * ``CLAWMETRY_OFFLINE=1`` skips the entitlement probe AND the wheel
+        download — no outbound network is touched. Symmetric with
+        :func:`_download_and_install_pro` (the signed-license path); without
+        this, the module docstring's "air-gapped install" claim was only
+        half-true, since ``clawmetry connect`` and the sync-daemon watchers
+        would still phone home to ``/api/license/entitlement`` and pull the
+        closed-source wheel behind the operator's back.
 
     Returns (installed, status_message). ``installed`` is True only when the
     pro wheel is now present (newly installed or already there for an entitled
@@ -675,6 +682,11 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
         key = (api_key or "").strip()
         if not key.startswith("cm_"):
             return False, ""
+        if _offline_mode():
+            return False, (
+                "offline mode: skipping clawmetry-pro auto-provision "
+                "(unset CLAWMETRY_OFFLINE to fetch the pro wheel)"
+            )
         base = _cloud_base()
         headers = {"X-Api-Key": key}
         # 1) Probe entitlement WITHOUT downloading the wheel.

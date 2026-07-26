@@ -95,10 +95,13 @@
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.approval_timeout">Approval timeout</label>
           <select id="rule-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
             <option value="30" data-i18n="approvals.timeout_30s">30 seconds</option>
-            <option value="60" selected data-i18n="approvals.timeout_1m">1 minute</option>
+            <option value="60" data-i18n="approvals.timeout_1m">1 minute</option>
             <option value="120" data-i18n="approvals.timeout_2m">2 minutes</option>
             <option value="300" data-i18n="approvals.timeout_5m">5 minutes</option>
             <option value="600" data-i18n="approvals.timeout_10m">10 minutes</option>
+            <option value="3600" data-i18n="approvals.timeout_1h">1 hour</option>
+            <option value="86400" data-i18n="approvals.timeout_24h">24 hours</option>
+            <option value="604800" selected data-i18n="approvals.timeout_7d">7 days</option>
           </select>
         </div>
         <div>
@@ -234,35 +237,35 @@
   var PRESETS = [
     {key:'rm_rf', name:'Block destructive deletes', icon:'🗑',
      desc:'Stops rm -rf, shred, unlink on important paths',
-     tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:604800, on_timeout:'deny',
      color:'#ef4444'},
     {key:'force_push', name:'Block force pushes', icon:'⚠️',
      desc:'Requires approval before git push --force',
-     tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:300, on_timeout:'deny',
+     tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:604800, on_timeout:'deny',
      color:'#f59e0b'},
     {key:'db_mutation', name:'Block database mutations', icon:'🗃',
      desc:'Catches DROP TABLE, TRUNCATE, DELETE without WHERE',
-     tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:120, on_timeout:'deny',
+     tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:604800, on_timeout:'deny',
      color:'#f97316'},
     {key:'sudo', name:'Block sudo / root commands', icon:'🔒',
      desc:'Prevents privilege escalation via sudo or su',
-     tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:604800, on_timeout:'deny',
      color:'#dc2626'},
     {key:'secrets', name:'Protect secrets & credentials', icon:'🔑',
      desc:'Blocks access to .env, credentials, private keys',
-     tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:60, on_timeout:'deny',
+     tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:604800, on_timeout:'deny',
      color:'#8b5cf6'},
     {key:'pkg_install', name:'Block package installs', icon:'📦',
      desc:'Requires approval for pip install, npm install, apt install',
-     tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:120, on_timeout:'deny',
+     tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:604800, on_timeout:'deny',
      color:'#6366f1'},
     {key:'network', name:'Block outbound network calls', icon:'🌐',
      desc:'Catches curl, wget, fetch to external URLs',
-     tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:604800, on_timeout:'deny',
      color:'#0ea5e9'},
     {key:'sys_config', name:'Block system config changes', icon:'⚙️',
      desc:'Prevents writes to /etc, systemctl, crontab edits',
-     tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:604800, on_timeout:'deny',
      color:'#64748b'}
   ];
 

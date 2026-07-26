@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import sys
 import os
@@ -2033,6 +2032,23 @@ def _status_snapshot(args) -> dict:
       on import. Shape: ``{"discovered": [{"name", "value", "importable",
       "error"}], "importable_count": int, "broken_count": int}``. Empty
       ``discovered`` on installs with no plugins registered.
+    * ``license``: state of the self-hosted Pro/Enterprise license key at
+      ``~/.clawmetry/license.key`` — the same envelope
+      ``clawmetry license status --json`` emits, folded into the composite
+      snapshot so an operator can answer *"is my node on Pro?"* in one
+      command. Shape:
+      ``{"installed": bool, "valid": bool, "status": str,
+        "tier": str | null, "nodes": int | null, "sub": str | null,
+        "days_left": int | null,
+        "pubkey_fingerprint_sha256": str | null,
+        "permissions_safe": bool | null, "file_mode": str | null}``.
+      ``installed`` distinguishes *no license file yet* (status ``"none"``,
+      all other fields ``null``) from *file present but broken* (status
+      ``"invalid"`` / ``"expired"``). Complements
+      ``runtimes.plan`` (cloud entitlement mirror) and
+      ``extensions.discovered`` (whether the paid wheel imports): the
+      three together triage every "why isn't Pro on this box?" question
+      without a second command.
 
     Best-effort throughout: every helper is wrapped so a broken corner (e.g.
     an unreadable config file, an unavailable network) degrades to ``null``
@@ -2063,6 +2079,18 @@ def _status_snapshot(args) -> dict:
             "discovered": [],
             "importable_count": 0,
             "broken_count": 0,
+        },
+        "license": {
+            "installed": False,
+            "valid": False,
+            "status": "none",
+            "tier": None,
+            "nodes": None,
+            "sub": None,
+            "days_left": None,
+            "pubkey_fingerprint_sha256": None,
+            "permissions_safe": None,
+            "file_mode": None,
         },
     }
 
@@ -2237,6 +2265,43 @@ def _status_snapshot(args) -> dict:
             "importable_count": sum(1 for r in rows if r.get("importable")),
             "broken_count": sum(1 for r in rows if not r.get("importable")),
         }
+    except Exception:
+        pass
+
+    # License — self-hosted Pro/Enterprise key at ``~/.clawmetry/license.key``.
+    # Sibling of the ``extensions`` block above: extensions answer "would the
+    # paid wheel import?", this block answers "is a valid signed key on
+    # disk?". The two orthogonally cover the two failure modes an operator
+    # hits when Pro doesn't turn on — a broken wheel install vs. a
+    # missing / expired / tampered license file — so folding both into
+    # ``status --json`` collapses "why isn't Pro on this box?" from a
+    # multi-command dance to one jq pipeline. ``current_license_info``
+    # returns ``None`` when no file is on disk (fresh install / OSS mode)
+    # and a fully-populated dict on every file-exists branch (active /
+    # expired / signature-invalid). Never raises — a broken corner keeps
+    # the default ``status: "none"`` shape.
+    try:
+        from clawmetry.license import current_license_info as _license_info
+        info = _license_info()
+        if info is None:
+            # File not on disk yet — leave the default ``installed=False``
+            # / ``status="none"`` shape from ``snap`` initialisation intact
+            # so a script never sees ``null`` on a field it does not need
+            # to special-case.
+            pass
+        else:
+            snap["license"] = {
+                "installed": True,
+                "valid": bool(info.get("valid")),
+                "status": str(info.get("status") or "unknown"),
+                "tier": info.get("tier"),
+                "nodes": info.get("nodes"),
+                "sub": info.get("sub"),
+                "days_left": info.get("days_left"),
+                "pubkey_fingerprint_sha256": info.get("pubkey_fingerprint_sha256"),
+                "permissions_safe": info.get("permissions_safe"),
+                "file_mode": info.get("file_mode"),
+            }
     except Exception:
         pass
 
@@ -2417,6 +2482,28 @@ def _cmd_status(args) -> None:
                     print(f"    ❌ {_name}  — {_err}")
             if _bad:
                 print(f"    → {_bad} plugin(s) will NOT load on daemon start; {_ok} will.")
+    except Exception:
+        pass
+
+    # License — one-line summary when a self-hosted key is on disk. Silent
+    # when there is no key file (fresh OSS install), matching the extensions
+    # block's silence-on-empty policy so the human snapshot doesn't grow a
+    # section that carries no information for the default operator. Points
+    # to ``clawmetry license`` for the full envelope; this line is a triage
+    # hint, not a replacement.
+    try:
+        from clawmetry.license import current_license_info as _lic_info
+        _lic = _lic_info()
+        if _lic is not None:
+            print()
+            if _lic.get("valid"):
+                _tier = str(_lic.get("tier") or "pro").capitalize()
+                _days = _lic.get("days_left")
+                _days_txt = f", expires in {_days}d" if isinstance(_days, int) else ""
+                print(f"  License:     ✅ {_tier} (self-hosted{_days_txt})")
+            else:
+                _status = str(_lic.get("status") or "invalid")
+                print(f"  License:     ⚠️  {_status}  (run `clawmetry license` for details)")
     except Exception:
         pass
 
@@ -4568,6 +4655,185 @@ def _cmd_retention(args) -> None:
     print(f"  {override_env_name}: {env_display}")
 
 
+def _cmd_bundle(args) -> None:
+    """clawmetry bundle — cheapest tier admitting a mixed 5-axis constraint bundle.
+
+    Aggregate CLI sibling of :func:`_cmd_runtimes` / :func:`_cmd_features` /
+    :func:`_cmd_channels` / :func:`_cmd_nodes` / :func:`_cmd_retention`: each
+    of those answers ONE axis in isolation ("which runtimes does my tier
+    unlock?", "how many concurrent channels?"), this one folds a mixed
+    bundle across all five axes into ONE ``required_tier`` answer + the
+    full ``affordable_tiers`` ladder that would qualify.
+
+    Wraps :func:`clawmetry.entitlements.min_tier_for_all` (and
+    :func:`affordable_tiers`) -- the same helpers ``/api/entitlement/
+    required-tier`` and ``/api/entitlement/affordable-tiers`` consume --
+    so the CLI, the JSON API, and any dashboard pricing tooltip cannot
+    drift on the required-tier answer.
+
+    Args:
+      --features CSV       -- comma-separated feature ids (matches ``/required-tier?features=``)
+      --runtimes CSV       -- comma-separated runtime ids (matches ``/required-tier?runtimes=``)
+      --channels N         -- concurrent-channel count
+      --retention-days N   -- desired retention window in days
+      --nodes N            -- registered-node count
+      --tier <perspective> -- resolve from a hypothetical perspective tier
+                              (delegates to :func:`min_tier_for_all_at` /
+                              :func:`affordable_tiers_at`; the answer is
+                              perspective-independent by design, matching
+                              the ``_at`` family's parity guarantee, but
+                              the perspective is echoed on the payload so
+                              a pricing tooltip's "if I were on X" copy
+                              round-trips)
+      --json               -- emit the payload as JSON (jq-friendly)
+
+    Never raises. A poisoned resolver / helper collapses to the OSS-free
+    "no constraints" fallback shape (``required_tier=None``,
+    ``affordable_tiers=[]``, ``error`` populated on the JSON payload) so
+    a wrapper script always sees a parseable response -- matches the
+    never-crash contract documented on :func:`get_entitlement`.
+
+    Output:
+      default -- header block (tier / enforcement / perspective) + the
+                 constraint bundle echoed back + ``Required tier`` line
+                 + affordable-tiers table (id, label, status).
+      --json  -- ``{tier, grace, enforced, perspective, constraints:
+                 {features, runtimes, channels, retention_days, nodes},
+                 required_tier, required_tier_label, required_tier_rank,
+                 affordable_tiers:[...], error?: str}``
+    """
+    import json as _json
+
+    from clawmetry import entitlements as _ent
+
+    def _csv(raw):
+        if raw is None:
+            return []
+        parts = [p.strip().lower() for p in str(raw).split(",")]
+        return [p for p in parts if p]
+
+    def _int_or_none(raw):
+        if raw is None or raw == "":
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    features = _csv(getattr(args, "features", None))
+    runtimes = _csv(getattr(args, "runtimes", None))
+    channels = _int_or_none(getattr(args, "channels", None))
+    retention_days = _int_or_none(getattr(args, "retention_days", None))
+    nodes = _int_or_none(getattr(args, "nodes", None))
+    perspective_raw = getattr(args, "perspective", None)
+    perspective = (perspective_raw or "").strip().lower() or None
+
+    try:
+        ent = _ent.get_entitlement()
+        tier = ent.tier
+        grace = bool(ent.grace)
+        enforced = _ent.is_enforced()
+    except Exception as exc:
+        print(f"⚠️  entitlement resolution failed: {exc}", file=sys.stderr)
+        tier, grace, enforced = "oss", True, False
+
+    perspective_unknown = False
+    if perspective is not None and perspective not in _ent._TIER_ORDER:
+        perspective_unknown = True
+
+    kwargs = dict(
+        features=features or None,
+        runtimes=runtimes or None,
+        channels=channels,
+        retention_days=retention_days,
+        nodes=nodes,
+    )
+
+    required_tier: str | None = None
+    ladder: list[dict] = []
+    resolve_error: str | None = None
+    if not perspective_unknown:
+        try:
+            if perspective:
+                required_tier = _ent.min_tier_for_all_at(perspective, **kwargs)
+                ladder_raw = _ent.affordable_tiers_at(perspective, **kwargs)
+            else:
+                required_tier = _ent.min_tier_for_all(**kwargs)
+                ladder_raw = _ent.affordable_tiers(**kwargs)
+            ladder = list(ladder_raw) if ladder_raw else []
+        except Exception as exc:
+            resolve_error = str(exc)
+
+    required_tier_label = _ent.tier_label(required_tier) if required_tier else None
+    required_tier_rank = _ent.tier_rank(required_tier) if required_tier else None
+
+    payload: dict = {
+        "tier": tier,
+        "grace": grace,
+        "enforced": enforced,
+        "perspective": perspective,
+        "constraints": {
+            "features": features,
+            "runtimes": runtimes,
+            "channels": channels,
+            "retention_days": retention_days,
+            "nodes": nodes,
+        },
+        "required_tier": required_tier,
+        "required_tier_label": required_tier_label,
+        "required_tier_rank": required_tier_rank,
+        "affordable_tiers": ladder,
+    }
+    if perspective_unknown:
+        payload["error"] = f"unknown perspective tier: {perspective_raw}"
+    elif resolve_error:
+        payload["error"] = resolve_error
+
+    if getattr(args, "as_json", False):
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode_line = "off (grace)" if not enforced else "on"
+    print("ClawMetry Bundle\n" + "─" * 40)
+    print(f"  Tier:            {tier}")
+    print(f"  Enforcement:     {mode_line}")
+    if perspective:
+        note = " (unknown -- ignored)" if perspective_unknown else ""
+        print(f"  Perspective:     {perspective}{note}")
+    print()
+    print("  Constraints")
+    feat_line = ", ".join(features) if features else "(none)"
+    rt_line = ", ".join(runtimes) if runtimes else "(none)"
+    ch_line = str(channels) if channels is not None else "(unset)"
+    rd_line = str(retention_days) if retention_days is not None else "(unset)"
+    nd_line = str(nodes) if nodes is not None else "(unset)"
+    print(f"    Features:      {feat_line}")
+    print(f"    Runtimes:      {rt_line}")
+    print(f"    Channels:      {ch_line}")
+    print(f"    Retention (d): {rd_line}")
+    print(f"    Nodes:         {nd_line}")
+    print()
+    if payload.get("error"):
+        print(f"  ⚠️  {payload['error']}")
+        return
+    if required_tier is None:
+        print("  Required tier:   (no constraints supplied)")
+        return
+    label = required_tier_label or required_tier
+    print(f"  Required tier:   {required_tier}  ({label})")
+
+    if not ladder:
+        return
+    print()
+    print(f"  {'ID':<20} {'Label':<24} Status")
+    print("  " + "─" * 56)
+    for row in ladder:
+        rid = str(row.get("tier", ""))
+        rlabel = str(row.get("tier_label", rid))
+        status = "★ minimum" if row.get("is_minimum") else "  qualifies"
+        print(f"  {rid:<20} {rlabel:<24} {status}")
+
+
 def _cmd_diagnose(args) -> None:
     """clawmetry diagnose — surface the entitlement resolver inputs.
 
@@ -4957,6 +5223,13 @@ def _cmd_verify_integrity(args) -> None:
 
 def main() -> None:
     import argparse
+    # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
+    # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
+    # Code tool call, and a policy-miss must cost ~40ms, not a third of a
+    # second. Handled entirely in hooks_claude_code (stdlib-only imports).
+    if len(sys.argv) > 1 and sys.argv[1] == "hooks":
+        from clawmetry.hooks_claude_code import cli_main as _hooks_cli
+        raise SystemExit(_hooks_cli(sys.argv[2:]))
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
@@ -4993,6 +5266,25 @@ def main() -> None:
     if _otel_ep:
         os.environ["CLAWMETRY_OTEL_EXPORT_ENDPOINT"] = _otel_ep
         print(f"OpenTelemetry export ON → {_otel_ep} (GenAI semconv)", flush=True)
+    # Short-circuit --version before loading dashboard + DuckDB.
+    # dashboard.py calls get_store() at module level when CLAWMETRY_ROLE=dashboard is
+    # set; on some Linux runners duckdb init SIGSEGVs in that path. --version never
+    # needs the store so we read __version__ directly and return immediately.
+    if "--version" in sys.argv:
+        try:
+            import importlib.util as _ilu
+            _spec = _ilu.find_spec("dashboard")
+            if _spec and _spec.origin:
+                import re as _re
+                _src = open(_spec.origin, encoding="utf-8", errors="replace").read(50000)
+                _m = _re.search(r'__version__\s*=\s*"(.+?)"', _src)
+                _v = _m.group(1) if _m else "unknown"
+            else:
+                _v = "unknown"
+        except Exception:
+            _v = "unknown"
+        print(f"clawmetry {_v}")
+        return
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
     # DuckDB writer — only the sync daemon writes. Set before the import or a
@@ -5531,6 +5823,58 @@ def main() -> None:
         ),
     )
 
+    # bundle — cheapest tier admitting a mixed 5-axis constraint bundle.
+    # Aggregate CLI sibling of `clawmetry {runtimes,features,channels,
+    # nodes,retention}` (each folds ONE axis); this folds a mixed bundle
+    # across ALL five axes into ONE required_tier + affordable-tiers
+    # ladder. Wraps `min_tier_for_all` / `affordable_tiers` so CLI, HTTP
+    # (`/api/entitlement/required-tier` + `/affordable-tiers`), and the
+    # dashboard pricing tooltip cannot drift on the fold answer.
+    p_bundle = sub.add_parser(
+        "bundle",
+        help=(
+            "Cheapest tier admitting a mixed features/runtimes/channels/"
+            "retention/nodes bundle"
+        ),
+    )
+    p_bundle.add_argument(
+        "--features", metavar="CSV", default=None,
+        help="Comma-separated feature ids (e.g. anomaly_detection,cost_optimizer)",
+    )
+    p_bundle.add_argument(
+        "--runtimes", metavar="CSV", default=None,
+        help="Comma-separated runtime ids (e.g. claude_code,cursor)",
+    )
+    p_bundle.add_argument(
+        "--channels", metavar="N", default=None,
+        help="Concurrent-channel count (capacity axis)",
+    )
+    p_bundle.add_argument(
+        "--retention-days", dest="retention_days", metavar="N", default=None,
+        help="Desired retention window in days (capacity axis)",
+    )
+    p_bundle.add_argument(
+        "--nodes", metavar="N", default=None,
+        help="Registered-node count (capacity axis)",
+    )
+    p_bundle.add_argument(
+        "--tier", dest="perspective", metavar="TIER", default=None,
+        help=(
+            "Resolve from a hypothetical perspective tier (delegates to "
+            "min_tier_for_all_at / affordable_tiers_at; the perspective is "
+            "echoed on the payload but does not shape the answer)"
+        ),
+    )
+    p_bundle.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help=(
+            "Emit {tier, grace, enforced, perspective, constraints, "
+            "required_tier, affordable_tiers:[...], error?: str} JSON "
+            "(jq-friendly). Mirrors /api/entitlement/required-tier + "
+            "/affordable-tiers on the shared keys."
+        ),
+    )
+
     # extensions — surface loaded / failed entry-point plugins and event hooks
     # from the shell so an operator can answer "did clawmetry-pro actually
     # load on this node?" without curl'ing /api/extensions or tailing daemon
@@ -5596,6 +5940,15 @@ def main() -> None:
     )
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
+    # `hooks` is absent from this tuple ON PURPOSE: it's intercepted by the
+    # fast path at the top of main() before the dashboard import. The parser
+    # entry below exists only so `clawmetry --help`-style discovery shows it.
+    p_hooks = sub.add_parser(
+        "hooks",
+        help="Claude Code approval hooks: install | uninstall | status | "
+             "run {pretooluse|notification} (pre-execution gate + phone push)")
+    p_hooks.add_argument("hooks_cmd", nargs="*")
+
     _subcmds = (
         "onboard",
         "setup",
@@ -5618,6 +5971,7 @@ def main() -> None:
         "channels",
         "nodes",
         "retention",
+        "bundle",
         "extensions",
         "diagnose",
         "verify-integrity",
@@ -5669,6 +6023,8 @@ def main() -> None:
             _cmd_nodes(args)
         elif args.cmd == "retention":
             _cmd_retention(args)
+        elif args.cmd == "bundle":
+            _cmd_bundle(args)
         elif args.cmd == "extensions":
             _cmd_extensions(args)
         elif args.cmd == "diagnose":

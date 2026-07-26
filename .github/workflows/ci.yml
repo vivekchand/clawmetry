@@ -224,6 +224,7 @@ jobs:
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
+            tests/test_hooks_claude_code.py \
             -q
 
   # ── Entitlement API test suite (~2700 hermetic tests) ─────────────────────────

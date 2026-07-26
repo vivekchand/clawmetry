@@ -1,5 +1,4 @@
-"""OpenClawAdapter — thin wrapper around existing dashboard.py helpers.
-
+"""
 This adapter does NOT re-implement OpenClaw session parsing. It delegates
 to the long-standing helpers in ``dashboard.py`` via a late import, the
 same way ``routes/*.py`` modules do. The point of this file is to expose
@@ -17,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time as _time
 from typing import List, Optional, Set
@@ -24,6 +24,15 @@ from typing import List, Optional, Set
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
+
+# Gateway log filename patterns (#4055, #4056):
+#   default profile          : openclaw-YYYY-MM-DD.log
+#   named profiles (#4055)   : openclaw-{name}-YYYY-MM-DD.log
+#   rotation archives (#4056): openclaw-YYYY-MM-DD.N.log
+#   named + rotated          : openclaw-{name}-YYYY-MM-DD.N.log
+# (.+-)? matches named profiles; (\.\d+)? matches rotation archives; the date
+# anchor excludes unrelated files (openclaw-debug.log, etc.).
+_DEFAULT_LOG_RE = re.compile(r"openclaw-(.+-)?\d{4}-\d{2}-\d{2}(\.\d+)?\.log$")
 
 # NeMo Guardrails compact tool-catalog injects these three meta-tool names into
 # the JSONL transcript when NEMOCLAW_TOOL_CATALOG is active. They are guardrail
@@ -455,6 +464,35 @@ def _openshell_sandbox_ocsf_enabled(name: str) -> dict:
         return {}
 
 
+def _read_logging_file_config() -> str:
+    """Read ``logging.file`` from openclaw.json and return the path string.
+
+    openclaw.json can redirect gateway log output to an arbitrary path via
+    ``{"logging": {"file": "/custom/path/openclaw.log"}}``.  Returns the
+    string value when present, empty string otherwise.  Never raises (#4054).
+    """
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        cfg_path = os.path.join(home, "openclaw.json")
+        if not os.path.isfile(cfg_path):
+            alt = os.path.expanduser("~/.clawdbot/openclaw.json")
+            if os.path.isfile(alt):
+                cfg_path = alt
+            else:
+                return ""
+        with open(cfg_path) as _fh:
+            cfg = json.load(_fh)
+        if not isinstance(cfg, dict):
+            return ""
+        logging_cfg = cfg.get("logging")
+        if not isinstance(logging_cfg, dict):
+            return ""
+        log_file = logging_cfg.get("file")
+        return str(log_file) if log_file else ""
+    except Exception:
+        return ""
+
+
 def _gateway_log_files() -> list:
     """Return the newest-5 rotating gateway log files across known candidate dirs.
 
@@ -470,6 +508,15 @@ def _gateway_log_files() -> list:
         "/tmp/openclaw",
         os.path.join(openclaw_dir, "logs"),
     ]
+
+    # If openclaw.json sets logging.file, check that path's parent directory
+    # first so installs with a custom log location are visible (#4054).
+    custom_log_file = _read_logging_file_config()
+    if custom_log_file:
+        custom_dir = os.path.dirname(os.path.abspath(custom_log_file))
+        if custom_dir not in candidates:
+            candidates.insert(0, custom_dir)
+
     # On Windows and on hosts where /tmp/openclaw is unsafe the gateway writes
     # to a user-scoped openclaw-* directory under the OS temp dir instead.
     tmp_base = tempfile.gettempdir()
@@ -477,9 +524,18 @@ def _gateway_log_files() -> list:
         if os.path.isdir(entry):
             candidates.append(entry)
     for d in candidates:
-        matches = sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        matches = sorted(
+            m for m in glob.glob(os.path.join(d, "openclaw-*.log"))
+            if _DEFAULT_LOG_RE.search(os.path.basename(m))
+        )
         if matches:
             return matches[-5:]
+
+    # Fallback: if logging.file points to a single file that doesn't match the
+    # rotation naming pattern, return it directly so callers still see events.
+    if custom_log_file and os.path.isfile(custom_log_file):
+        return [custom_log_file]
+
     return []
 
 
@@ -509,6 +565,128 @@ def _gateway_log_meta() -> dict:
         return result
     except Exception:
         return {}
+
+
+def _gateway_log_events(count: int = 50) -> list:
+    """Return the last ``count`` structured events from the gateway log file.
+
+    The gateway writes line-delimited JSON to rotating ``openclaw-*.log`` files
+    (same paths as ``_gateway_log_files()``).  Each line carries at minimum
+    ``level`` and ``msg``; most also carry ``subsystem`` and a timestamp field
+    (``time``, ``ts``, or ``timestamp``).
+
+    Falls back to the ``gateway.logs`` WebSocket RPC when no local log files
+    are accessible (remote / containerised gateway with no shared filesystem).
+    Closes #4057.
+
+    Returns a list of event dicts, newest-first.  Returns ``[]`` when no log
+    file exists, on any parse error, or on non-OpenClaw hosts.  Never raises.
+
+    Closes #3991.
+    """
+    try:
+        files = _gateway_log_files()
+        if not files:
+            return _gateway_log_events_rpc(count)
+        log_path = files[-1]
+        # Read a trailing chunk large enough to hold ``count`` typical lines
+        # (~300 bytes each) without loading the full (potentially large) log.
+        chunk_size = max(8192, count * 300)
+        try:
+            with open(log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - chunk_size))
+                raw_bytes = fh.read()
+        except OSError:
+            return _gateway_log_events_rpc(count)
+        lines = raw_bytes.decode("utf-8", "replace").splitlines()
+        events: list = []
+        for raw in reversed(lines):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            evt: dict = {}
+            # Timestamp — accept any common key name.
+            for _ts_key in ("time", "ts", "timestamp"):
+                _ts_val = obj.get(_ts_key)
+                if _ts_val is not None:
+                    evt["ts"] = _ts_val
+                    break
+            for _field, _key in (
+                ("level", "level"),
+                ("msg", "msg"),
+                ("message", "msg"),
+                ("subsystem", "subsystem"),
+            ):
+                _val = obj.get(_field)
+                if _val is not None and _key not in evt:
+                    evt[_key] = _val
+            if evt:
+                events.append(evt)
+            if len(events) >= count:
+                break
+        return events or _gateway_log_events_rpc(count)
+    except Exception:
+        return []
+
+
+def _gateway_log_events_rpc(count: int = 50) -> list:
+    """Return the last ``count`` gateway log events via WebSocket RPC.
+
+    Calls ``gateway.logs`` with ``{"count": count}``; the response payload is
+    expected to carry an ``events`` (or ``lines`` / ``entries`` / ``logs``) list
+    of structured event dicts.  Used as a fallback by ``_gateway_log_events``
+    when no local log files are accessible (remote / containerised gateway).
+    Closes #4057.  Never raises; returns ``[]`` on any failure.
+    """
+    try:
+        rpc = getattr(_d(), "_gw_ws_rpc", None)
+        if rpc is None:
+            return []
+        payload = rpc("gateway.logs", {"count": count})
+        if not isinstance(payload, dict):
+            return []
+        raw_events = None
+        for _key in ("events", "lines", "entries", "logs"):
+            _val = payload.get(_key)
+            if isinstance(_val, list):
+                raw_events = _val
+                break
+        if not raw_events:
+            return []
+        events: list = []
+        for obj in raw_events:
+            if not isinstance(obj, dict):
+                continue
+            evt: dict = {}
+            for _ts_key in ("time", "ts", "timestamp"):
+                _ts_val = obj.get(_ts_key)
+                if _ts_val is not None:
+                    evt["ts"] = _ts_val
+                    break
+            for _field, _key in (
+                ("level", "level"),
+                ("msg", "msg"),
+                ("message", "msg"),
+                ("subsystem", "subsystem"),
+            ):
+                _val = obj.get(_field)
+                if _val is not None and _key not in evt:
+                    evt[_key] = _val
+            if evt:
+                events.append(evt)
+            if len(events) >= count:
+                break
+        return events
+    except Exception:
+        return []
 
 
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
@@ -692,6 +870,8 @@ def _sandbox_inference_configs() -> list:
                 or (entry.get("runtime") or {}).get("kind")
                 or ""
             )
+            # Read sandboxGpuProof before entry is reassigned (gap #3994).
+            raw_gpu_proof = entry.get("sandboxGpuProof")
             base_url = _MANAGED_URL
             if provider == "openai-api":
                 provider_key = "openai"
@@ -726,6 +906,8 @@ def _sandbox_inference_configs() -> list:
                 entry.update(_sandbox_egress_denied_count(name))
                 if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                     entry["sandboxRuntimeKind"] = json_runtime_kind
+                if isinstance(raw_gpu_proof, dict):
+                    entry["sandboxGpuProof"] = raw_gpu_proof
                 out.append(entry)
                 continue
             elif provider in ("minimax", "minimax-api"):
@@ -753,6 +935,8 @@ def _sandbox_inference_configs() -> list:
             entry.update(_sandbox_egress_denied_count(name))
             if json_runtime_kind and "sandboxRuntimeKind" not in entry:
                 entry["sandboxRuntimeKind"] = json_runtime_kind
+            if isinstance(raw_gpu_proof, dict):
+                entry["sandboxGpuProof"] = raw_gpu_proof
             out.append(entry)
         except Exception:
             continue
@@ -1326,10 +1510,11 @@ def _gateway_plugin_health() -> dict:
 
     As of harness 2026.7.21 (#3883), the shared plugin-SDK monitor introduces a
     ``phase`` field per plugin entry (``"admission"``, ``"claim-identity"``,
-    ``"adoption-handoff"``, ``"pruning"``) so a plugin stuck mid-admission is
-    distinguishable from a healthy ``"loaded"`` one.  Per-step detail flags
-    (``admission``, ``claim_identity``, ``adoption_handoff``, ``pruning``) are
-    forwarded when present.
+    ``"adoption-handoff"``, ``"pruning"``, ``"polling"``, ``"shutdown"``) so a
+    plugin stuck mid-admission is distinguishable from a healthy ``"loaded"``
+    one.  Per-step detail flags (``admission``, ``claim_identity``,
+    ``adoption_handoff``, ``pruning``, ``polling``, ``shutdown``) are forwarded
+    when present (#4058).
 
     Returns a dict with keys when any plugin data is present:
     - ``"gatewayPluginHealth"`` — the raw list of plugin entries.
@@ -1371,7 +1556,7 @@ def _gateway_plugin_health() -> dict:
                 plugin["phase"] = str(phase).lower()
                 phase_summary[plugin["phase"]] = phase_summary.get(plugin["phase"], 0) + 1
             # Per-step lifecycle detail flags (forwarded when present)
-            for detail_key in ("admission", "claim_identity", "adoption_handoff", "pruning"):
+            for detail_key in ("admission", "claim_identity", "adoption_handoff", "pruning", "polling", "shutdown"):
                 val = entry.get(detail_key)
                 if val is not None:
                     plugin[detail_key] = val
@@ -1480,6 +1665,35 @@ def _gateway_host_status() -> dict:
         )
         if supervisor_mode_version:
             result["gatewaySupervisorModeVersion"] = str(supervisor_mode_version)
+        return result
+    except Exception:
+        return {}
+
+
+def _gateway_supervisor_mode_env() -> dict:
+    """Read OpenClaw external-supervisor mode from the local environment (#4023).
+
+    ``OPENCLAW_SUPERVISOR_MODE`` is set by the operator when an external lifecycle
+    owner (e.g. OCM) supervises the gateway.  When the gateway is down during a
+    supervised restart handoff, ``_gateway_host_status()`` is not called (it
+    requires a live RPC connection), so the supervisor context is invisible.
+
+    This helper reads the env var unconditionally as a baseline fallback.  When
+    the gateway IS live, ``_gateway_host_status()`` overwrites these keys with
+    the authoritative RPC value.
+
+    Returns ``{"gatewaySupervisorMode": ...}`` (and optionally
+    ``"gatewaySupervisorModeVersion"``) when the env var is set, ``{}`` otherwise.
+    Never raises.
+    """
+    try:
+        mode = os.environ.get("OPENCLAW_SUPERVISOR_MODE")
+        if not mode:
+            return {}
+        result: dict = {"gatewaySupervisorMode": str(mode)}
+        version = os.environ.get("OPENCLAW_SUPERVISOR_MODE_VERSION")
+        if version:
+            result["gatewaySupervisorModeVersion"] = str(version)
         return result
     except Exception:
         return {}
@@ -1755,6 +1969,43 @@ def _gateway_trusted_proxy_devices() -> dict:
         }
     except Exception:
         return {}
+
+
+def _workshop_approval_config() -> dict:
+    """Read Skill Workshop approval-policy from openclaw.json (#3992).
+
+    Surfaces ``skills.workshop.approvalPolicy`` in the adapter's detect()
+    metadata so cloud-synced fleet views can show whether agent-initiated
+    skill apply/reject/quarantine actions are gated by human approval.
+
+    Returns ``{"workshopApprovalPolicy": <value>}`` when the key is present,
+    ``{}`` otherwise. Never raises.
+    """
+    try:
+        import json as _json
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        cfg_path = os.path.join(home, "openclaw.json")
+        if not os.path.isfile(cfg_path):
+            alt = os.path.expanduser("~/.clawdbot/openclaw.json")
+            if os.path.isfile(alt):
+                cfg_path = alt
+            else:
+                return {}
+        with open(cfg_path) as fh:
+            cfg = _json.load(fh)
+        if not isinstance(cfg, dict):
+            return {}
+        workshop = (cfg.get("skills") or {}).get("workshop")
+        if not isinstance(workshop, dict):
+            return {}
+        policy = workshop.get("approvalPolicy")
+        if policy is None:
+            return {}
+        return {"workshopApprovalPolicy": str(policy)}
+    except Exception:
+        return {}
+
+
 class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
@@ -1824,6 +2075,11 @@ class OpenClawAdapter(AgentAdapter):
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
             meta.update(_nemoclaw_agents_manifest())
+            # External-supervisor mode env-var fallback (#4023): surface
+            # OPENCLAW_SUPERVISOR_MODE even when the gateway is down (e.g. during
+            # a supervised restart handoff). _gateway_host_status() below will
+            # overwrite with the live RPC value when the gateway is up.
+            meta.update(_gateway_supervisor_mode_env())
             # Gateway plugin health (#3200): per-plugin state (loaded/errored/
             # disabled) added to gateway.status in harness 2026.6.9 (#93395).
             # Only meaningful — and safe to query — when the gateway is live.
@@ -1871,6 +2127,14 @@ class OpenClawAdapter(AgentAdapter):
             _gw_log = _gateway_log_meta()
             if _gw_log:
                 meta.update(_gw_log)
+            _gw_events = _gateway_log_events()
+            if _gw_events:
+                meta["gatewayLogEvents"] = _gw_events
+            # Skill Workshop approval-policy (#3992): surfaces
+            # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
+            # fleet views know whether autonomous skill actions are gated by
+            # human approval.  Returns {} on installs without the key.
+            meta.update(_workshop_approval_config())
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,

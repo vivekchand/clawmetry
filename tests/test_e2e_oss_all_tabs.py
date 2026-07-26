@@ -62,9 +62,30 @@ def _overlay_page(_shared_chromium):
     page = ctx.new_page()
     # One page load for the entire tab suite.
     page.goto(BASE_URL + "/", wait_until="domcontentloaded", timeout=15000)
-    # Let auth-bootstrap.js fetch /api/auth/check and gw-setup.js fetch
-    # /api/gw/config settle before any tab test checks for overlays.
-    page.wait_for_timeout(2000)
+    # Poll up to 8s for the auth overlay to disappear (replaces fixed 2s wait).
+    # A fixed wait races /api/auth/check on cold CI runners: the overlay can
+    # still be visible when switchTab() runs, causing every tab silently to
+    # land on overview with the overlay present -- the root symptom of the
+    # 2026-05-17 user report. Matches the approach in visual-diff.mjs.
+    try:
+        page.wait_for_function(
+            """() => {
+                for (const id of ['login-overlay', 'gw-setup-overlay',
+                                  'auth-overlay', 'setup-overlay']) {
+                    const el = document.getElementById(id);
+                    if (!el) continue;
+                    const cs = getComputedStyle(el);
+                    if (cs.display !== 'none' && cs.visibility !== 'hidden') return false;
+                }
+                return true;
+            }""",
+            timeout=8000,
+            polling=200,
+        )
+    except Exception:
+        # Overlay still visible after 8s -- the tab tests will report it with
+        # descriptive messages; no silent fallthrough to wrong-tab screenshots.
+        pass
     yield page
     ctx.close()
 

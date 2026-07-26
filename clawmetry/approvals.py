@@ -95,6 +95,18 @@ POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 # the API.
 _POLL_INTERVAL_SEC = 3.0
 
+
+def _poll_interval(waited_s: float) -> float:
+    """Adaptive decision-poll cadence for long approval windows (7-day
+    default, #4066): snappy while the human is likely mid-tap, gentle for
+    the long tail — a week at 3s would be ~200k requests per approval.
+    3s for the first 2 min, 15s until the first hour, then 60s."""
+    if waited_s < 120:
+        return _POLL_INTERVAL_SEC
+    if waited_s < 3600:
+        return 15.0
+    return 60.0
+
 # Track in-flight approvals so we don't re-request on a watcher restart that
 # replays the same toolCall row. Keyed by tool_call_id (or composite when
 # missing — `f"{session_id}:{ts}"`).
@@ -189,7 +201,7 @@ def _compile_policy(p: dict) -> Optional[dict]:
             "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
             "args_regex": re.compile(args_re) if args_re else None,
             "action": (p.get("action") or "require_approval").strip(),
-            "timeout": int(p.get("timeout") or 60),
+            "timeout": int(p.get("timeout") or 604800),  # default 7d (#4066)
             "on_timeout": (p.get("on_timeout") or "deny").strip(),
         }
     except re.error as re_err:
@@ -319,6 +331,13 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
 
     Tool-name match is exact (case-insensitive); command/args matches are
     regex .search() so partial matches count.
+
+    ``action: approve`` (always-allow) rules are evaluated FIRST regardless
+    of list order: a user's explicit "always allow `git ls-files`" must
+    outrank the catch-all "ask before shell commands" rule that would
+    otherwise pause it (Pushary-style remember-my-choice, cloud #1783).
+    They are narrow, user-authored rules; authoring a broad one is an
+    explicit choice, same as any allowlist.
     """
     cmd = _extract_command(tool_name, args)
     args_str = ""
@@ -326,7 +345,9 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
         args_str = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
     except Exception:
         pass
-    for p in policies:
+    ordered = ([p for p in policies if (p.get("action") or "") == "approve"] +
+               [p for p in policies if (p.get("action") or "") != "approve"])
+    for p in ordered:
         # Harness-agnostic tool match: a policy authored for ``exec`` matches a
         # ``Bash`` / ``shell`` toolCall (see _canonical_tool). Falls back to a
         # plain case-insensitive compare when neither side maps to a category.
@@ -471,7 +492,8 @@ def _poll_decision_local(approval_id: str, timeout_s: int) -> str:
     ``/api/approvals/<approval_id>/decide`` (routes/policy.py) which flips
     the row's ``status`` via ``update_approval_decision``. No network, no
     cloud auth — the whole loop stays inside the box."""
-    deadline = time.time() + timeout_s + 5  # 5 s grace past policy expiry
+    start = time.time()
+    deadline = start + timeout_s + 5  # 5 s grace past policy expiry
     last_status = "pending"
     try:
         from clawmetry import local_store as _lsm
@@ -502,7 +524,7 @@ def _poll_decision_local(approval_id: str, timeout_s: int) -> str:
                     return last_status
         except Exception as e:
             log.debug("approvals(local): poll error (will retry): %s", e)
-        time.sleep(_POLL_INTERVAL_SEC)
+        time.sleep(_poll_interval(time.time() - start))
     return last_status if last_status != "pending" else "timeout"
 
 
@@ -537,7 +559,8 @@ def _local_blocking_enabled(api_key: Optional[str]) -> bool:
 def _poll_decision(api_key: str, approval_id: str, timeout_s: int) -> str:
     """Poll cloud for the decision. Returns one of: approved/denied/timeout/error."""
     import urllib.request
-    deadline = time.time() + timeout_s + 5  # 5 s grace past policy expiry
+    start = time.time()
+    deadline = start + timeout_s + 5  # 5 s grace past policy expiry
     last_status = "pending"
     while time.time() < deadline:
         try:
@@ -554,7 +577,7 @@ def _poll_decision(api_key: str, approval_id: str, timeout_s: int) -> str:
                     return last_status
         except Exception as e:
             log.debug(f"poll error (will retry): {e}")
-        time.sleep(_POLL_INTERVAL_SEC)
+        time.sleep(_poll_interval(time.time() - start))
     return last_status if last_status != "pending" else "timeout"
 
 
@@ -573,6 +596,38 @@ def _session_runtime(session_id: str) -> str:
         if i > 0:
             return sid[:i].lower()
         return "openclaw"
+
+
+_hooks_marker_cache: tuple = (0.0, frozenset())
+_HOOKS_MARKER_TTL_S = 10.0
+_HOOKS_MARKER_PATH = Path.home() / ".clawmetry" / "hooks_installed.json"
+
+
+def _hook_covered_runtimes() -> frozenset:
+    """Runtimes whose tool calls are pre-execution gated by an installed
+    agent hook (written by ``clawmetry hooks install``, see
+    hooks_claude_code.py). The reactive watcher skips these sessions — the
+    hook already paused the call BEFORE execution, and a phone-denied tool
+    call must not ALSO get its session killed by the detect-after path.
+
+    TTL-cached: watch_iteration runs every ~2s and this must not stat/parse
+    JSON on every pass. Marker keys are runtime names ("claude_code")."""
+    global _hooks_marker_cache
+    now = time.time()
+    if now - _hooks_marker_cache[0] < _HOOKS_MARKER_TTL_S:
+        return _hooks_marker_cache[1]
+    covered: frozenset = frozenset()
+    try:
+        if _HOOKS_MARKER_PATH.exists():
+            data = json.loads(_HOOKS_MARKER_PATH.read_text())
+            covered = frozenset(
+                rt for rt, meta in data.items()
+                if isinstance(meta, dict)
+                and "PreToolUse" in (meta.get("events") or []))
+    except Exception:
+        covered = frozenset()
+    _hooks_marker_cache = (now, covered)
+    return covered
 
 
 def _session_cwd_hint(session_id: str) -> str:
@@ -715,7 +770,8 @@ def _kill_session(session_id: Optional[str]) -> bool:
 
 def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                        tool_call_id: str, tool_name: str, args: dict,
-                       policies: Optional[list[dict]] = None) -> dict:
+                       policies: Optional[list[dict]] = None,
+                       kill_on_deny: bool = True) -> dict:
     """Check a fresh toolCall against active policies and (if matched) request
     a cloud-mediated approval.
 
@@ -724,6 +780,11 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     ``simulated`` approval row (dry-run) and returns immediately.
     Returns: {decision: approved|denied|timeout|monitored|no_policy|error,
               policy: <name or None>, killed: bool}
+
+    ``kill_on_deny=False`` is the pre-execution hook path (hooks_claude_code):
+    the hook blocks the ONE denied tool call via the hook protocol, so
+    killing the whole session on deny would be double punishment — the
+    Pushary-style contract is "deny this call, agent continues".
     """
     if policies is None:
         policies = load_policies()
@@ -744,6 +805,44 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
              f"cmd={cmd_preview!r} session={session_id}")
 
     approval_id = uuid.uuid4().hex
+
+    if (policy.get("action") or "") == "approve":
+        # Always-allow rule (Pushary-style remember-my-choice, created by
+        # the inbox's "Approve & always allow"): short-circuit approved —
+        # no cloud round-trip, no human wait, no kill. Best-effort audit
+        # row so the decision trail shows WHY it sailed through.
+        try:
+            import hashlib as _hl
+            from clawmetry import local_store as _lsm
+            _lsm.get_store().ingest_approval({
+                "id": approval_id,
+                "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
+                "requestor_session_id": session_id,
+                "action": f"{tool_name}: {cmd_preview}",
+                "args": args,
+                "status": "auto_approved",
+                "decision_reason": (f"always-allow rule '{policy['name']}' "
+                                    "matched"),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+        except Exception as _aae:
+            log.debug("auto-approve persist failed: %s", _aae)
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "approval.auto_approved", actor="policy", target=tool_name,
+                result="approved", source="approvals",
+                metadata={"approval_id": approval_id,
+                          "policy": policy["name"],
+                          "session_id": session_id,
+                          "command": cmd_preview})
+        except Exception:
+            pass
+        result = {"decision": "approved", "policy": policy["name"],
+                  "killed": False, "approval_id": approval_id, "auto": True}
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
 
     if (policy.get("action") or "") == "monitor":
         # Dry-run mode: record what WOULD have paused so the audit feed shows
@@ -838,7 +937,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         if decision in ("timeout", "expired"):
             decision = policy["on_timeout"]
         killed = False
-        if decision == "denied":
+        if decision == "denied" and kill_on_deny:
             killed = _kill_session(session_id)
         # Mirror the resolution into the row so subsequent polls / the
         # audit feed see the final status. update_approval_decision is
@@ -889,7 +988,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         # Apply on_timeout
         decision = policy["on_timeout"]
     killed = False
-    if decision == "denied":
+    if decision == "denied" and kill_on_deny:
         killed = _kill_session(session_id)
     # Mirror the resolution into DuckDB so the approval leaves the cloud
     # pending queue (the next cache_push won't re-surface it as pending).
@@ -1276,6 +1375,15 @@ def watch_iteration(api_key: str, node_id: str,
             if eid:
                 seen[eid] = ca
             sid = row.get("session_id") or ""
+            # Runtimes whose tool calls are pre-execution gated by an
+            # installed hook (hooks_claude_code) are skipped here: the hook
+            # already paused/denied the call BEFORE it ran, so the reactive
+            # detect-and-kill path firing seconds later would double-punish
+            # (phone-denied one call → watcher kills the whole session).
+            # Row is already in `seen`, so the watermark still advances.
+            if _hook_covered_runtimes() and \
+                    _session_runtime(sid) in _hook_covered_runtimes():
+                continue
             for tool_call_id, tool_name, args in _extract_tool_blocks(row):
                 if not tool_name:
                     # No tool name → no policy can match. Skip rather than
