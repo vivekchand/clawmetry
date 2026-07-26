@@ -77,6 +77,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `CONTRIBUTING.md` | Contribution guidelines |
 | `SECURITY.md` | Security posture |
 | `CLOUD_EXTENSION_DESIGN.md` | Cloud feature design |
+| `docs/ENTITLEMENTS.md` | Open-core split: FREE runtimes/features, paid tiers, GRACE mode, `/api/entitlement` shape, `clawmetry license` CLI |
 
 ## How it works
 The **sync daemon** (`clawmetry/sync.py`) ingests these sources into the local **DuckDB** store; the Flask app reads DuckDB (via `routes/local_query.py`) to serve the UI:

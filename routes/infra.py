@@ -26,6 +26,7 @@ mechanical move — zero behaviour change.
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -69,10 +70,11 @@ def resolve_gateway_log_path():
     # don't depend on glob's stat behaviour, then pick the most recent by
     # mtime — falling back to filename order if mtime can't be read.
     tmp_dir = "/tmp/openclaw"
+    _default_log_re = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
     try:
         names = [
             n for n in os.listdir(tmp_dir)
-            if n.startswith("openclaw-") and n.endswith(".log")
+            if _default_log_re.search(n)
         ]
     except Exception:
         names = []

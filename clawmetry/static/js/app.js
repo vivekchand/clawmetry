@@ -4781,6 +4781,15 @@ function renderBrainFilterChips(sources) {
 function renderBrainTypeChips(events) {
   var container = document.getElementById('brain-type-chips');
   if (!container || !events) return;
+  // Scope the counts to the header's runtime selection, exactly like the
+  // list (renderBrainStream) and chart (renderBrainChart) do. Node-wide
+  // counts over a runtime-scoped list read as a bug: a ?runtime=cursor tab
+  // showed "AGENT (84)" chips over a 1-row stream because the 84 were
+  // another runtime's events (live-hit 2026-07-25).
+  var _tcRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
+  if (_tcRt && _tcRt !== 'all' && typeof _cmRuntimeOf === 'function') {
+    events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _tcRt; });
+  }
   var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7'};
   var typeCounts = {};
   events.forEach(function(ev) { typeCounts[ev.type] = (typeCounts[ev.type]||0) + 1; });

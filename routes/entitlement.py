@@ -58,6 +58,19 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           fleet + otel_export + sso -- what
                                           tier covers everything?" in a single
                                           round-trip.
+  GET  /api/entitlement/required-tier-breakdown -- per-axis breakdown sibling
+                                          of ``/required-tier-batch``: same
+                                          inputs and top-level
+                                          ``required_tier`` field, but
+                                          additionally exposes each axis'
+                                          individual ``min_tier`` and calls
+                                          out which axis (or axes, on a tie)
+                                          is the *binding* constraint driving
+                                          the aggregate floor -- so a paywall
+                                          CTA can render "You need Pro
+                                          *because* you have 8 channels
+                                          (Starter caps at 5)" off ONE
+                                          round-trip.
   GET  /api/entitlement/lock-reason-batch -- per-item plural sibling of
                                           ``/lock-reason``: same CSV +
                                           capacity inputs as
@@ -99,6 +112,33 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           channel / retention / node
                                           marginal steps between two tiers
                                           off one round-trip.
+  GET  /api/entitlement/capacity-headroom-path -- path analogue of
+                                          ``/capacity-headroom-batch``:
+                                          per-rung capacity-headroom envelope
+                                          along an arbitrary ``?from=&to=``
+                                          segment given caller-supplied
+                                          per-axis usage. Headroom-shaped
+                                          mirror of ``/capacity-diff-path``
+                                          / ``/tier-unlocks-path`` /
+                                          ``/tier-locks-path`` /
+                                          ``/preview-path`` -- rungs line
+                                          up rung-for-rung with those four
+                                          siblings so an upgrade-walkthrough
+                                          UI can render "watch your headroom
+                                          recover rung by rung" off ONE
+                                          round-trip.
+  GET  /api/entitlement/capacity-headroom-path-batch -- batch sibling of
+                                          ``/capacity-headroom-path`` and
+                                          headroom-shaped twin of
+                                          ``/capacity-diff-path-batch``: walk
+                                          the per-rung headroom envelopes from
+                                          ONE ``?from=`` to N candidate
+                                          ``?to=a,b,c`` destinations in ONE
+                                          round-trip. Fan-out shape matches
+                                          ``/capacity-diff-path-batch`` and
+                                          ``/tier-spec-path-batch``; unknown
+                                          destinations bucket into
+                                          ``unknown[]`` instead of 404ing.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -699,6 +739,342 @@ def api_entitlement_capacity_diff():
                 "retention_days": None,
                 "node_limit": None,
             }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom")
+def api_entitlement_capacity_headroom():
+    """``GET /api/entitlement/capacity-headroom?channels=<int>&retention_days=<int>&nodes=<int>``
+    -- per-axis "how much room is left" against the resolved entitlement's
+    capacity caps.
+
+    Resolver-pinned companion to
+    ``/api/entitlement/tiers-for-capacity-batch`` (which is decoupled from
+    the resolver and returns the full pricing ladder): given caller-
+    supplied *current usage* on any of the three capacity axes, returns one
+    row per supplied axis describing how close to (or past) the current
+    tier's cap the caller is. A quota gauge or a "you're at 4/5 channels
+    on Starter" badge reads off this single primitive without re-deriving
+    per-tier caps client-side.
+
+    Envelope shape::
+
+        {
+          "tier":           "<resolved>",
+          "tier_label":     "<human>",
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` (matches :func:`clawmetry.entitlements._headroom_row`
+    byte-for-byte)::
+
+        {
+          "kind":         "channels" | "retention_days" | "nodes",
+          "used":         <int>,
+          "cap":          <int> | None,
+          "remaining":    <int> | None,
+          "is_unlimited": <bool>,
+          "at_limit":     <bool>,
+          "over_limit":   <bool>,
+          "pct_used":     <float> | None,
+        }
+
+    Per-axis ``None`` means "axis not supplied" (matches
+    ``/tiers-for-capacity-batch``'s "None means unset, not unlimited"
+    posture). A blank, non-int, negative, or ``bool``-in-disguise
+    (``?channels=true``) value on any axis short-circuits that axis to
+    ``None`` -- a stray query string cannot silently blank a gauge; the
+    caller opts in per-axis by supplying a real int.
+
+    In grace mode :meth:`Entitlement.channel_limit` returns ``None``
+    (unlimited), so every axis collapses to the unlimited-side row shape
+    and the gauge renders "unlimited / N used" instead of a bogus
+    percentage while the grace window is still open.
+
+    Never 5xxs: on a resolver failure the neutral envelope shape
+    (``tier=oss``, every axis ``None``) is returned so a paywall tile
+    keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        return jsonify(_ent.capacity_headroom(**kwargs))
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_headroom: error: %s", exc)
+        try:
+            from clawmetry import entitlements as _ent
+
+            return jsonify(
+                {
+                    "tier": _ent.TIER_OSS,
+                    "tier_label": _ent.tier_label(_ent.TIER_OSS),
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                }
+            )
+        except Exception:
+            return jsonify(
+                {
+                    "tier": "oss",
+                    "tier_label": "OSS",
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                }
+            )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-at")
+def api_entitlement_capacity_headroom_at():
+    """``GET /api/entitlement/capacity-headroom-at?tier=<perspective>&channels=<int>&retention_days=<int>&nodes=<int>``
+    -- hypothetical-perspective sibling of
+    ``/api/entitlement/capacity-headroom``: per-axis headroom against a
+    caller-supplied ``tier``'s static caps rather than the resolved
+    entitlement.
+
+    Fills the ``_at`` slot on the capacity-headroom axis alongside
+    ``/tiers-for-channel-count-at`` / ``/tiers-for-retention-window-at``
+    / ``/tiers-for-node-count-at``, so a pricing-page "what would my
+    usage look like on tier X?" walk-through can call every ``_at``
+    endpoint uniformly.
+
+    Response shape mirrors ``/api/entitlement/capacity-headroom``
+    byte-for-byte; the ``tier`` echo carries the perspective. Returns
+    ``{"error": "unknown tier"}`` + HTTP 404 for an empty / unknown
+    ``?tier=`` (matches ``/tier-diff-at`` / ``/tiers-for-batch-at``).
+
+    Decoupled from the resolved entitlement (walks the static per-tier
+    caps), so grace vs enforce yields byte-identical rows. Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        perspective = (request.args.get("tier") or "").strip().lower()
+        if not perspective:
+            return jsonify({"error": "unknown tier"}), 404
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        row = _ent.capacity_headroom_at(perspective, **kwargs)
+        if row is None:
+            return jsonify({"error": "unknown tier"}), 404
+        return jsonify(row)
+    except Exception as exc:
+        logger.warning("api_entitlement_capacity_headroom_at: error: %s", exc)
+        return jsonify({"error": "capacity-headroom-at failed"}), 500
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-batch")
+def api_entitlement_capacity_headroom_batch():
+    """``GET /api/entitlement/capacity-headroom-batch?channels=<int>
+    &retention_days=<int>&nodes=<int>`` -- per-tier headroom envelope for
+    every purchasable tier in one pass, given the caller-supplied per-axis
+    usage.
+
+    Plural sibling of ``/api/entitlement/capacity-headroom-at``: where the
+    singular ``_at`` endpoint returns one hypothetical tier's per-axis
+    envelope, the batch returns the same envelope for every entry in
+    :data:`entitlements._PURCHASABLE_TIERS` so a pricing-page "at each
+    tier, would my usage fit?" table can render every rung off **one**
+    round-trip instead of N calls to ``/capacity-headroom-at``.
+
+    Fills the ``_batch`` slot on the capacity-headroom axis alongside
+    ``/capacity-diff-batch`` (per-tier per-axis transition triples against
+    the resolved entitlement) and the per-axis
+    ``/tiers-for-channel-count-batch`` / ``/tiers-for-retention-window-batch``
+    / ``/tiers-for-node-count-batch`` families.
+
+    Response shape::
+
+        {
+          "tiers":             [<row>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-headroom-at`` for
+    the same axis inputs byte-for-byte
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``, with each per-axis row matching the
+    :func:`entitlements._headroom_row` shape). Rows are sorted by tier
+    rank ascending with ``id`` as a stable tiebreaker -- byte-stable
+    against ``/capacity-diff-batch`` / ``/tier-unlocks-batch`` /
+    ``/tier-locks-batch`` / ``/preview-batch`` so a pricing table lines
+    up rung-for-rung without client-side re-sort. The trial tier is
+    excluded (mirrors the other ``*-batch`` siblings -- not purchasable).
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom`` and ``/tiers-for-capacity-batch``'s posture).
+    A blank, non-int, negative, or ``bool``-in-disguise value on any
+    axis short-circuits that axis to ``None`` on every row -- a stray
+    query string cannot silently blank the whole ladder.
+
+    Decoupled from the resolved entitlement -- every row walks the
+    static per-tier caps -- so grace vs enforce yields byte-identical
+    ``tiers`` payloads. The envelope's ``current_tier`` / ``grace`` /
+    ``enforced`` still track the live resolver so the UI can highlight
+    the caller's current rung on the ladder.
+
+    Never 5xxs: on a resolver failure the empty-tiers grace envelope is
+    returned so a pricing table falls back to an empty list instead of
+    500-ing.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        rows = _ent.capacity_headroom_batch(**kwargs)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/capacity-headroom-path")
+def api_entitlement_capacity_headroom_path():
+    """``GET /api/entitlement/capacity-headroom-path?from=<id>&to=<id>
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- per-rung
+    capacity-headroom envelope along an arbitrary ``from -> to`` segment,
+    given the caller-supplied per-axis usage.
+
+    Path analogue of ``/capacity-headroom-batch`` (which walks every
+    purchasable tier) and headroom-shaped mirror of
+    ``/capacity-diff-path`` (per-rung marginal capacity transitions),
+    ``/tier-unlocks-path`` (marginal grants per rung),
+    ``/tier-locks-path`` (marginal losses per rung) and
+    ``/preview-path`` (cumulative ``Entitlement.to_dict`` per rung) --
+    the fifth member of the capacity axis's ``_path`` family. Lets an
+    upgrade-walkthrough surface render the "watch your headroom recover
+    rung by rung" view off ONE round-trip without re-deriving per-tier
+    caps in JS.
+
+    Rung walk matches ``/capacity-diff-path`` / ``/preview-path`` /
+    ``/tier-unlocks-path`` / ``/tier-locks-path`` byte-for-byte (same
+    ``_PURCHASABLE_TIERS`` filter + same ``(rank, id)`` /
+    ``(-rank, id)`` sort key + same destination-sibling exclusion), so
+    the rung ids from this endpoint line up rung-for-rung with those
+    four siblings. Same-rank siblings between the endpoints are both
+    included; same-rank siblings of the destination are excluded so the
+    path terminates exactly at ``to``.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_headroom_at row>, ...],
+        }
+
+    Each ``<row>`` matches ``/api/entitlement/capacity-headroom-at`` for
+    the same axis inputs byte-for-byte (``tier`` / ``tier_label`` /
+    ``channels`` / ``retention_days`` / ``nodes``, with each per-axis row
+    matching the :func:`entitlements._headroom_row` shape). Identity
+    (``from == to``) returns an empty ``path``. Lateral (same rank,
+    different id) returns a single-row path. ``400`` when ``from=`` or
+    ``to=`` is missing; ``404`` when either id is unknown. ``trial`` IS
+    accepted as an endpoint -- excluded from the walked rungs (not
+    purchasable) but the lateral / identity branch still resolves.
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom-batch``'s posture). A blank, non-int, negative,
+    or ``bool``-in-disguise value on any axis short-circuits that axis
+    to ``None`` on every row -- a stray query string cannot silently
+    blank the whole walk.
+
+    Decoupled from the resolved entitlement -- every rung walks the
+    static per-tier caps via
+    :func:`entitlements.capacity_headroom_at` -- so grace vs enforce
+    yields byte-identical ``path`` payloads. Never 5xxs: a resolver
+    failure short-circuits to ``404`` so an upgrade-walkthrough surface
+    keeps rendering instead of breaking.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    t = (request.args.get("to") or "").strip().lower()
+    if not f or not t:
+        return jsonify({"error": "missing from or to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        path = _ent.capacity_headroom_path(f, t, **kwargs)
+        if path is None:
+            return (
+                jsonify({"error": "unknown tier", "from": f, "to": t}),
+                404,
+            )
+        from_rank = _ent.tier_rank(f)
+        to_rank = _ent.tier_rank(t)
+        if f == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": from_rank,
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_path: error: %s", exc
+        )
+        return (
+            jsonify({"error": "unknown tier", "from": f, "to": t}),
+            404,
         )
 
 
@@ -3305,6 +3681,164 @@ def api_entitlement_required_tier_batch():
                 "current_tier_rank": 0,
                 "upgrade_required": False,
                 "allowed": True,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/required-tier-breakdown")
+def api_entitlement_required_tier_breakdown():
+    """``GET /api/entitlement/required-tier-breakdown?features=a,b&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-axis breakdown sibling of
+    ``/api/entitlement/required-tier-batch``.
+
+    Wraps :func:`entitlements.min_tier_for_all_breakdown`. Where
+    ``/required-tier-batch`` collapses to a single ``required_tier`` id,
+    this endpoint additionally returns each axis' individual ``min_tier``
+    and calls out which axis (or axes, on a tie) is the *binding*
+    constraint driving the aggregate floor -- so a paywall CTA can render
+    "You need Pro *because* you have 8 channels (Starter caps at 5)" off
+    ONE round-trip instead of five ``/required-tier`` calls + a
+    client-side max-by-rank.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation) -- otherwise 400. The three capacity
+    axes accept a single int each; a blank or non-int value contributes
+    nothing to the aggregate floor (the axis row still renders with
+    ``min_tier=null`` so the caller can flag the bad input in a
+    tooltip, matching the never-crash posture of the singular endpoint).
+    ``retention_days=`` mirrors the strict :func:`min_tier_for_all`
+    posture: an unset param is *unset*, NOT *unlimited* -- asking for
+    the unlimited-retention floor is the singular
+    ``/required-tier?retention_days=`` call's job.
+
+    Response body::
+
+        {
+          "features":       [<normalised csv>],
+          "runtimes":       [<normalised csv>],
+          "channels":       <int> | null,
+          "retention_days": <int> | null,
+          "nodes":          <int> | null,
+          "required_tier":       "cloud_pro" | null,
+          "required_tier_label": "Pro" | null,
+          "required_tier_rank":  <int>,      # -1 when required_tier is null
+          "current_tier":        <resolved-tier>,
+          "current_tier_rank":   <int>,
+          "upgrade_required":    <bool>,
+          "axes":         { <axis row per supplied kwarg> | null },
+          "binding_axes": ["features", "channels"]  # ordered; empty on null
+        }
+
+    ``axes`` and ``binding_axes`` come straight from
+    :func:`min_tier_for_all_breakdown`; see that helper's docstring for
+    the row shape. The ``required_tier*`` / ``current_tier*`` /
+    ``upgrade_required`` fields match ``/required-tier-batch`` exactly
+    so a caller migrating from the batch endpoint can adopt the
+    breakdown without reshaping its main paywall payload.
+
+    Never 5xxs: the OSS-fallback shape is returned on any resolver
+    failure.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (channels_present, channels_ok, channels_n, _) = _parse_capacity_arg(
+            "channels"
+        )
+        (retention_present, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (nodes_present, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_present
+            and not retention_present
+            and not nodes_present
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        breakdown = _ent.min_tier_for_all_breakdown(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+
+        ent = _ent.get_entitlement()
+        required = breakdown.get("min_tier")
+        required_label = breakdown.get("min_tier_label")
+        req_rank = _ent.tier_rank(required) if required else -1
+        cur_rank = _ent.tier_rank(ent.tier)
+
+        return jsonify(
+            {
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+                "axes": breakdown.get("axes")
+                or {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "binding_axes": breakdown.get("binding_axes") or [],
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_required_tier_breakdown: error: %s", exc
+        )
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else None,
+                "retention_days": retention_n if retention_ok else None,
+                "nodes": nodes_n if nodes_ok else None,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "upgrade_required": False,
+                "axes": {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "binding_axes": [],
             }
         )
 
@@ -7209,21 +7743,55 @@ def api_paywall_events_summary():
     """``GET /api/paywall/events/summary`` -- rolling in-process aggregate
     of client-side ``POST /api/paywall/event`` beacons.
 
+    Optional filter query params narrow the aggregation to rows whose
+    corresponding field matches the supplied value exactly (case-
+    sensitive, ``AND``-combined). Same names + semantics as
+    ``/api/paywall/events/recent`` so a dashboard tile can bind one
+    filter set to both endpoints without translation::
+
+      ?event=<paywall_view|paywall_cta_click|...>
+      ?feature=<feature-key>
+      ?harness=<harness-key>
+      ?source=<source-key>
+      ?plan_chosen=<plan-code>
+
+    Optional time-window params further restrict to rows whose ``ts``
+    falls in the half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank (= "unbounded on that side").
+    A non-numeric, NaN, or negative bound collapses to "not supplied"
+    so an operator typo cannot silently drop every row.
+
     Body shape::
 
         {
           "total": <int>,        # all-time recorded events (survives eviction)
-          "in_window": <int>,    # currently in the ring
+          "in_window": <int>,    # currently in the ring, unfiltered
           "dropped": <int>,      # events evicted by ring rotation
           "capacity": <int>,     # ring size (CLAWMETRY_PAYWALL_EVENT_CAPACITY)
           "first_ts": <float|null>,  # epoch seconds of first-ever event
           "last_ts":  <float|null>,  # epoch seconds of most-recent event
-          "by_event": {"<name>": <int>, ...},        # in-window
+          "by_event": {"<name>": <int>, ...},        # in-window, post-filter
           "by_feature": {"<key>":  <int>, ...},
           "by_harness": {"<key>":  <int>, ...},
           "by_source":  {"<key>":  <int>, ...},
-          "by_plan_chosen": {"<plan>": <int>, ...}
+          "by_plan_chosen": {"<plan>": <int>, ...},
+          "filters": {"<key>": "<value>", ...},      # echo of applied categorical filters
+          "matched": <int>,                          # rows the by_* aggregate covers
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                     # echo of resolved bounds
         }
+
+    Process-lifetime counters (``total``, ``dropped``, ``first_ts``,
+    ``last_ts``, ``capacity``) and ``in_window`` are NEVER filtered --
+    they describe the ring itself, not the subset the caller cares about,
+    so a filtered dashboard tile can still see churn / evictions in
+    context. The ``by_*`` breakdowns and ``matched`` count reflect the
+    filtered subset (categorical + time-window). On a fully-unfiltered
+    request ``matched`` byte-equals ``in_window``.
 
     Ships in GRACE -- no entitlement gate, no capacity accounting. Grace-
     mode read of a grace-mode write.
@@ -7234,7 +7802,16 @@ def api_paywall_events_summary():
     try:
         from clawmetry import _paywall_events as _pe
 
-        return jsonify(_pe.summary())
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        # ``since`` / ``until`` share the same "blank means not supplied"
+        # posture as the categorical filters; the store layer does the
+        # numeric coercion + NaN / negative guarding.
+        for key in ("since", "until"):
+            filter_kwargs[key] = request.args.get(key, "") or None
+        return jsonify(_pe.summary(**filter_kwargs))
     except Exception as exc:
         logger.warning("api_paywall_events_summary: error: %s", exc)
         return jsonify(
@@ -7250,6 +7827,9 @@ def api_paywall_events_summary():
                 "by_harness": {},
                 "by_source": {},
                 "by_plan_chosen": {},
+                "filters": {},
+                "matched": 0,
+                "time_window": {"since": None, "until": None},
             }
         )
 
@@ -7278,6 +7858,15 @@ def api_paywall_events_recent():
     an empty field via this API. Filter mismatches never fail the request:
     they simply return an empty ``events`` list and ``matched=0``.
 
+    Optional time-window params restrict to rows whose ``ts`` falls in the
+    half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank. Bad bounds (non-numeric, NaN,
+    negative) collapse to "not supplied".
+
     Body shape::
 
         {
@@ -7287,14 +7876,16 @@ def api_paywall_events_recent():
             ...
           ],
           "count": <int>,          # events actually returned (post-filter, post-limit)
-          "matched": <int>,        # rows matching the filters, pre-limit (>= count)
+          "matched": <int>,        # rows matching the filters + window, pre-limit (>= count)
           "limit": <int>,          # the resolved (post-clamp) limit
           "in_window": <int>,      # size of the underlying ring right now
-          "filters": {"<key>": "<value>", ...}   # echo of applied filters (blank ones omitted)
+          "filters": {"<key>": "<value>", ...},  # echo of applied categorical filters
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
         }
 
     ``matched`` lets a UI render "showing N of M matches" without a second
-    round-trip. On an unfiltered request ``matched`` byte-equals
+    round-trip. On a fully-unfiltered request ``matched`` byte-equals
     ``in_window``.
 
     Ships in GRACE. Never 5xxs -- on any failure returns an empty envelope.
@@ -7315,12 +7906,19 @@ def api_paywall_events_recent():
             key: request.args.get(key, "") or None
             for key in ("event", "feature", "harness", "source", "plan_chosen")
         }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
         # `_pe.recent` / `count_matching` treat empty / whitespace strings as
         # "not supplied" so the query-string echo below is the canonical
-        # applied-filter set.
-        events = _pe.recent(limit_val, **filter_kwargs)
-        matched = _pe.count_matching(**filter_kwargs)
-        summary = _pe.summary()
+        # applied-filter set. Time bounds go through their own numeric
+        # coercion in the store, so we ask the store what it actually
+        # resolved to (via `summary(**window_kwargs)["time_window"]`)
+        # rather than echoing the raw string.
+        events = _pe.recent(limit_val, **filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
         applied_filters = {
             key: value.strip()
             for key, value in filter_kwargs.items()
@@ -7334,6 +7932,9 @@ def api_paywall_events_recent():
                 "limit": limit_val,
                 "in_window": summary.get("in_window", 0),
                 "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
             }
         )
     except Exception as exc:
@@ -7346,6 +7947,260 @@ def api_paywall_events_recent():
                 "limit": 0,
                 "in_window": 0,
                 "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+        )
+
+
+@bp_entitlement.route("/api/paywall/events/last")
+def api_paywall_events_last():
+    """``GET /api/paywall/events/last`` -- the single most-recent paywall
+    beacon matching the supplied filters, or ``null`` if none.
+
+    Scalar sibling of ``/api/paywall/events/recent`` for the common case
+    where a dashboard tile only needs "the most recent one" (e.g. "last
+    CTA click for feature X was at 12:03:41"). Avoids the one-element-
+    list unwrap and skips paying the ``dict(e)`` copy cost on every
+    ring entry.
+
+    Same categorical filter query params + semantics as
+    ``/api/paywall/events/recent`` -- ``?event=`` / ``?feature=`` /
+    ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
+    exact match, ``AND`` combined, blank / missing = "not supplied".
+
+    Optional time-window params restrict to rows whose ``ts`` falls in
+    the half-open ``[since, until)`` epoch-seconds interval::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Either bound may be omitted or blank. Bad bounds (non-numeric, NaN,
+    negative) collapse to "not supplied" -- matching the semantics of
+    ``/api/paywall/events/recent`` so a caller can rebind the same
+    window pair without translation.
+
+    Body shape::
+
+        {
+          "event": {"event": "...", "feature": "...", "harness": "...",
+                    "source": "...", "plan_chosen": "...", "ts": <float>} | null,
+          "matched": <int>,  # rows matching the filters + window (0 iff event is null)
+          "in_window": <int>,  # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...},
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
+        }
+
+    ``matched`` uses the same helper as ``/api/paywall/events/recent`` so
+    a UI can render "last of M matches" without a second round-trip.
+    ``time_window`` is always present so the top-level key set stays
+    stable regardless of whether time bounds were supplied.
+
+    Ships in GRACE. Never 5xxs -- on any failure returns the neutral
+    ``event=null`` envelope (still carrying ``time_window``).
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        event_row = _pe.last_matching(**filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "event": event_row,
+                "matched": matched,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_last: error: %s", exc)
+        return jsonify(
+            {
+                "event": None,
+                "matched": 0,
+                "in_window": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+        )
+
+
+@bp_entitlement.route("/api/paywall/events/first")
+def api_paywall_events_first():
+    """``GET /api/paywall/events/first`` -- the single oldest paywall
+    beacon matching the supplied filters, or ``null`` if none.
+
+    Twin of ``/api/paywall/events/last`` for the other end of the ring:
+    same filter contract, same envelope shape, same never-5xx posture.
+    Anchored to what the ring currently holds -- because the ring evicts
+    oldest-first, "first" means "oldest still resident", not "all-time
+    first". Matches the rest of this module's semantics (aggregations
+    reflect what's live, not what's been evicted).
+
+    A dashboard tile rendering "first paywall CTA click of this session"
+    binds this rather than paging the full ring via
+    ``/api/paywall/events/recent`` and inspecting the tail.
+
+    Optional time-window params (``?since=`` / ``?until=``) restrict to
+    rows whose ``ts`` falls in the half-open ``[since, until)`` epoch-
+    seconds interval. With a window supplied, "first" means "oldest
+    resident row in the window" -- rows evicted from the ring cannot be
+    re-surfaced by a wider window. Same coercion contract as
+    ``/api/paywall/events/recent``.
+
+    Body shape is identical to ``/api/paywall/events/last`` and always
+    carries ``time_window``. Ships in GRACE. Never 5xxs -- on any
+    failure returns the neutral ``event=null`` envelope.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        event_row = _pe.first_matching(**filter_kwargs, **window_kwargs)
+        matched = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "event": event_row,
+                "matched": matched,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_first: error: %s", exc)
+        return jsonify(
+            {
+                "event": None,
+                "matched": 0,
+                "in_window": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+        )
+
+
+@bp_entitlement.route("/api/paywall/events/count")
+def api_paywall_events_count():
+    """``GET /api/paywall/events/count`` -- scalar count of ring rows
+    matching the supplied filters + time-window.
+
+    Scalar sibling of ``/api/paywall/events/{summary,recent,first,last}``
+    for the common case where a dashboard tile only needs the number
+    (e.g. "42 CTA clicks in the last hour") and does not want to pay
+    the per-row ``dict(e)`` copy cost of ``/recent`` or the five
+    ``by_*`` aggregations of ``/summary``. A pricing-page widget
+    binding "how many paywall_view beacons in this window?" to a
+    single number reaches for this instead of unwrapping
+    ``summary()['matched']``.
+
+    Same categorical filter query params + semantics as
+    ``/api/paywall/events/recent`` -- ``?event=`` / ``?feature=`` /
+    ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
+    exact match, ``AND`` combined, blank / missing = "not supplied".
+
+    Same time-window params as ``/api/paywall/events/{summary,recent}``::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Half-open ``[since, until)``; either bound may be omitted or blank.
+    Bad bounds (non-numeric, NaN, negative) collapse to "not supplied"
+    so an operator typo cannot silently drop every row.
+
+    Body shape::
+
+        {
+          "count": <int>,      # rows matching filters + window
+          "in_window": <int>,  # size of the underlying ring right now
+          "filters": {"<key>": "<value>", ...},  # echo of applied categorical filters
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                 # echo of resolved bounds
+        }
+
+    ``count`` byte-equals ``/api/paywall/events/recent``'s ``matched``
+    for the same filter + window inputs (both call
+    :func:`_paywall_events.count_matching`), and byte-equals
+    ``/api/paywall/events/summary``'s ``matched`` for the same inputs.
+    On a fully-unfiltered request ``count`` byte-equals ``in_window``.
+
+    Ships in GRACE. Never 5xxs -- on any failure returns the neutral
+    ``count=0`` envelope so a paywall-dashboard tile keeps rendering.
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("event", "feature", "harness", "source", "plan_chosen")
+        }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        # `count_matching` and `summary` treat empty / whitespace strings
+        # as "not supplied" so the query-string echo below is the
+        # canonical applied-filter set. Time bounds go through their
+        # own numeric coercion in the store, so we ask the store what
+        # it actually resolved to (via `summary(**window_kwargs)`)
+        # rather than echoing the raw string.
+        count = _pe.count_matching(**filter_kwargs, **window_kwargs)
+        summary = _pe.summary(**window_kwargs)
+        applied_filters = {
+            key: value.strip()
+            for key, value in filter_kwargs.items()
+            if isinstance(value, str) and value.strip()
+        }
+        return jsonify(
+            {
+                "count": count,
+                "in_window": summary.get("in_window", 0),
+                "filters": applied_filters,
+                "time_window": summary.get(
+                    "time_window", {"since": None, "until": None},
+                ),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_paywall_events_count: error: %s", exc)
+        return jsonify(
+            {
+                "count": 0,
+                "in_window": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
             }
         )
 
@@ -15546,6 +16401,124 @@ def api_entitlement_capacity_diff_path_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/capacity-headroom-path-batch")
+def api_entitlement_capacity_headroom_path_batch():
+    """``GET /api/entitlement/capacity-headroom-path-batch?from=<id>&to=a,b,c
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- batch sibling of
+    ``/api/entitlement/capacity-headroom-path``.
+
+    Where ``/capacity-headroom-path`` walks the rungs between ONE
+    ``(from, to)`` pair, this walks the rungs between ONE ``from`` and N
+    candidate ``to`` tiers in ONE round-trip. Pairs with
+    ``/capacity-headroom-path`` the same way ``/capacity-diff-path-batch``
+    pairs with ``/capacity-diff-path``: scalar -> matrix in one call.
+    Headroom-shaped twin of ``/capacity-diff-path-batch`` (same fan-out
+    shape, per-axis headroom body instead of marginal-transition body).
+
+    Use case: a capacity-only pricing-comparison "from my current rung,
+    here are the 3 tiers I'm considering -- watch my headroom recover rung
+    by rung on the way to each" surface hydrates the per-rung headroom
+    envelopes to every candidate off ONE call instead of N calls to
+    ``/capacity-headroom-path``. Same-rank siblings strictly between the
+    endpoints are included for each per-destination path; same-rank
+    siblings of each destination are excluded so the per-destination path
+    terminates exactly at its own ``to``. Per-destination path lengths can
+    legitimately differ (the rungs walked depend on the destination),
+    matching ``/capacity-diff-path-batch``'s posture.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/capacity-headroom-path?from=<from>&to=<to>&...`` -- pinned by the
+    parity tests so the scalar and batch path accessors cannot drift.
+    Supplied destination ids are normalised (whitespace stripped,
+    lowercased, duplicates dropped, first-seen order preserved). Unknown
+    ids do not 404 the call -- they are echoed in ``unknown[]`` so a
+    partially-bad caller still gets paths back for the valid ids.
+
+    Per-axis ``None`` on every row means "axis not supplied" (matches
+    ``/capacity-headroom-path``'s posture). A blank, non-int, negative, or
+    ``bool``-in-disguise value on any axis short-circuits that axis to
+    ``None`` on every row of every destination -- a stray query string
+    cannot silently blank the whole matrix.
+
+    Response shape::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "tiers": [
+            {
+              "to":        "<tier id>",
+              "to_label":  "...",
+              "to_rank":   <int>,
+              "direction": "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":      [<capacity-headroom row>, ...],
+            },
+            ...
+          ],
+          "unknown":    ["bogus_id", ...],
+        }
+
+    - **400** when ``from=`` is missing / blank, or ``to=`` is missing /
+      empty after normalisation
+    - **404** when ``from`` is unknown (body carries ``which: "tier"``)
+    - **200** with bucketed unknowns for unknown destination ids -- does
+      NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+
+    Decoupled from the resolved entitlement -- every rung walks the static
+    per-tier caps via :func:`entitlements.capacity_headroom_at` -- so grace
+    vs enforce yields byte-identical ``path`` payloads.
+    """
+    f = (request.args.get("from") or "").strip().lower()
+    if not f:
+        return jsonify({"error": "missing from"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if f not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": f}
+                ),
+                404,
+            )
+        targets = _parse_csv_arg("to")
+        if not targets:
+            return jsonify({"error": "supply to=<csv>"}), 400
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        batch = _ent.capacity_headroom_path_batch(f, targets, **kwargs)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "from": f,
+                "from_label": _ent.tier_label(f),
+                "from_rank": _ent.tier_rank(f),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_capacity_headroom_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "from": f,
+                "from_label": None,
+                "from_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tier-unlocks-path-batch")
 def api_entitlement_tier_unlocks_path_batch():
     """``GET /api/entitlement/tier-unlocks-path-batch?from=<id>&to=a,b,c``
@@ -21230,6 +22203,227 @@ def api_entitlement_tiers_for_retention_window_batch():
         )
 
 
+def _tiers_for_capacity_perval_at_body(_ent, tier_in: str, kind: str, rows):
+    """Assemble the response envelope for a
+    ``tiers-for-<capacity-axis>-at-batch`` endpoint.
+
+    Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard per-value tiers-for
+    batch envelope so a pricing-matrix walkthrough surface can render
+    the "from <perspective>" copy off one round-trip, matching how
+    ``/tiers-for-capacity-batch-at`` layers perspective onto the
+    per-axis grant-axis batch. Never raises.
+    """
+    return {
+        "kind": kind,
+        "count": len(rows),
+        "rows": rows,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _tiers_for_capacity_perval_at_fallback(tier_in: str, kind: str) -> dict:
+    """Grace-shape fallback body for the three per-value
+    ``tiers-for-<capacity-axis>-at-batch`` endpoints. Same never-5xx
+    posture as :func:`_tiers_for_capacity_perval_fallback` with the
+    perspective envelope layered on so a caller can still render the
+    "from <perspective>" copy with placeholders on a resolver crash.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-channel-count-at-batch"
+)
+def api_entitlement_tiers_for_channel_count_at_batch():
+    """``GET /api/entitlement/tiers-for-channel-count-at-batch?tier=<perspective>
+    &counts=1,5,10`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/tiers-for-channel-count-batch``.
+
+    Fills the last ``_at_batch`` slot on the channel-count capacity axis
+    alongside ``/tiers-for-channel-count-at`` (singular ``_at``),
+    ``/tiers-for-capacity-batch-at`` (grant-axis batch ``_at``) and
+    ``/tiers-for-features-at-batch`` / ``/tiers-for-runtimes-at-batch``
+    on the grant axes, so a pricing-matrix walkthrough (``?tier=<p>``)
+    can hit every ``_at_batch`` sibling in the ``tiers-for-*`` family
+    with a uniform URL.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the batch is
+    identical to ``/tiers-for-channel-count-batch`` regardless of
+    perspective (parity-pinned by
+    :func:`entitlements.tiers_for_channel_count_at_batch`). Response
+    layers ``perspective_tier`` on top of the batch body so a
+    walkthrough surface renders the "from <perspective>" copy off one
+    round-trip.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tiers_for_channel_count_at_batch(tier_in, values) or []
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "channel_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_channel_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(tier_in, "channel_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-node-count-at-batch"
+)
+def api_entitlement_tiers_for_node_count_at_batch():
+    """``GET /api/entitlement/tiers-for-node-count-at-batch?tier=<perspective>
+    &counts=1,3,5`` -- node-axis twin of
+    ``/api/entitlement/tiers-for-channel-count-at-batch``. Same
+    perspective contract, same never-5xx posture, same perspective-
+    independence guarantee (parity-pinned). Response shape and error
+    paths mirror ``/tiers-for-channel-count-at-batch`` with ``kind``
+    ``"node_count"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "counts", unlimited_ok=False
+    )
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.tiers_for_node_count_at_batch(tier_in, values) or []
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "node_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_node_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(tier_in, "node_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/tiers-for-retention-window-at-batch"
+)
+def api_entitlement_tiers_for_retention_window_at_batch():
+    """``GET /api/entitlement/tiers-for-retention-window-at-batch?tier=<perspective>
+    &days=7,30,unlimited`` -- retention-axis twin of
+    ``/api/entitlement/tiers-for-channel-count-at-batch``.
+
+    Each token may be a finite int or the case-insensitive string
+    ``"unlimited"``; the unlimited row surfaces with ``item=null`` /
+    ``label="unlimited"``. This is the *only* per-value ``_at_batch``
+    on the retention axis that admits the unlimited sentinel --
+    ``/tiers-for-capacity-batch-at`` treats ``retention_days=None`` as
+    *unset*, not *unlimited*.
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier
+    / never-5xx contracts as the two count-axis siblings.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_tiers_for_capacity_batch_csv(
+        "days", unlimited_ok=True
+    )
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = (
+            _ent.tiers_for_retention_window_at_batch(tier_in, values) or []
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_body(
+                _ent, tier_in, "retention_window", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_tiers_for_retention_window_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _tiers_for_capacity_perval_at_fallback(
+                tier_in, "retention_window"
+            )
+        )
+
+
 @bp_entitlement.route("/api/entitlement/tiers-for-features")
 def api_entitlement_tiers_for_features():
     """``GET /api/entitlement/tiers-for-features?features=a,b,c`` --
@@ -23053,6 +24247,240 @@ def api_entitlement_min_tier_for_retention_window_batch():
         )
         return jsonify(
             _min_tier_for_capacity_batch_fallback("retention_window")
+        )
+
+
+def _min_tier_for_capacity_at_batch_body(_ent, tier_in: str, kind: str, rows):
+    """Assemble the response envelope for a
+    ``min-tier-for-<capacity-axis>-at-batch`` endpoint.
+
+    Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard capacity-batch
+    envelope so a pricing-matrix walkthrough surface can render the
+    "from <perspective>" copy off one round-trip, matching how
+    ``/min-tier-for-features-at-batch`` layers perspective onto the
+    grant-axis batches. Never raises.
+    """
+    return {
+        "kind": kind,
+        "count": len(rows),
+        "rows": rows,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _min_tier_for_capacity_at_batch_fallback(tier_in: str, kind: str) -> dict:
+    """Grace-shape fallback body for the three
+    ``min-tier-for-<capacity-axis>-at-batch`` endpoints. Same never-5xx
+    posture as :func:`_min_tier_for_capacity_batch_fallback` with the
+    perspective envelope layered on so a caller can still render the
+    "from <perspective>" copy with placeholders on a resolver crash.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": kind,
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-channel-count-at-batch"
+)
+def api_entitlement_min_tier_for_channel_count_at_batch():
+    """``GET /api/entitlement/min-tier-for-channel-count-at-batch?tier=<perspective>
+    &counts=1,5,10`` -- hypothetical-perspective sibling of
+    ``/api/entitlement/min-tier-for-channel-count-batch``.
+
+    Fills the last ``_at_batch`` slot on the channel-count capacity axis
+    alongside ``/min-tier-for-channel-count-at`` (singular ``_at``) and
+    ``/min-tier-for-features-at-batch`` /
+    ``/min-tier-for-runtimes-at-batch`` on the grant axes, so a
+    pricing-matrix walkthrough (``?tier=<p>``) can hit every
+    ``_at_batch`` sibling in the ``min-tier-for-*`` family with a
+    uniform URL.
+
+    Perspective is validated against :data:`entitlements._TIER_ORDER`
+    (including ``trial``) but does NOT shape rows -- the batch is
+    identical to ``/min-tier-for-channel-count-batch`` regardless of
+    perspective (parity-pinned by
+    :func:`entitlements.min_tier_for_channel_count_at_batch`). Response
+    layers ``perspective_tier`` on top of the batch body so a
+    walkthrough surface renders the "from <perspective>" copy off one
+    round-trip.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_channel_count_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "channel_count")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "channel_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_channel_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(tier_in, "channel_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-node-count-at-batch"
+)
+def api_entitlement_min_tier_for_node_count_at_batch():
+    """``GET /api/entitlement/min-tier-for-node-count-at-batch?tier=<perspective>
+    &counts=1,3,5`` -- node-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at-batch``. Same
+    perspective contract, same never-5xx posture, same perspective-
+    independence guarantee (parity-pinned). Response shape and error
+    paths mirror ``/min-tier-for-channel-count-at-batch`` with ``kind``
+    ``"node_count"`` and per-row ``label="1 node"`` /  ``"5 nodes"``.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_node_count_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "node_count")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "node_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_node_count_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(tier_in, "node_count")
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/min-tier-for-retention-window-at-batch"
+)
+def api_entitlement_min_tier_for_retention_window_at_batch():
+    """``GET /api/entitlement/min-tier-for-retention-window-at-batch?tier=<perspective>
+    &days=7,30,unlimited`` -- retention-axis twin of
+    ``/api/entitlement/min-tier-for-channel-count-at-batch``.
+
+    Each token may be a finite int or the case-insensitive string
+    ``"unlimited"`` (routes to
+    ``min_tier_for_retention_window(None)``); the unlimited row
+    surfaces with ``item=null`` / ``label="unlimited"``. This is the
+    *only* per-axis ``_at_batch`` on the retention axis that admits
+    the unlimited sentinel -- the grant-axis
+    ``/tiers-for-capacity-batch-at`` treats ``retention_days=None`` as
+    *unset*, not *unlimited* (matching ``/min-tier-batch``'s posture).
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier
+    / never-5xx contracts as the two count-axis siblings.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("days", unlimited_ok=True)
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = (
+            _ent.min_tier_for_retention_window_at_batch(tier_in, values) or []
+        )
+        rows = [
+            _capacity_batch_row_to_body(r, "retention_window")
+            for r in helper_rows
+        ]
+        return jsonify(
+            _min_tier_for_capacity_at_batch_body(
+                _ent, tier_in, "retention_window", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_min_tier_for_retention_window_at_batch: "
+            "error: %s",
+            exc,
+        )
+        return jsonify(
+            _min_tier_for_capacity_at_batch_fallback(
+                tier_in, "retention_window"
+            )
         )
 
 
