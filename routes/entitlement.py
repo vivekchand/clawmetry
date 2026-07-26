@@ -139,6 +139,35 @@ is the single source of truth -- handlers never re-derive tier logic here.
                                           ``/tier-spec-path-batch``; unknown
                                           destinations bucket into
                                           ``unknown[]`` instead of 404ing.
+  GET  /api/entitlement/next-tier-capacity-headroom -- scalar "one rung up"
+                                          sibling of ``/capacity-headroom``:
+                                          per-axis headroom envelope for the
+                                          tier immediately above the resolved
+                                          entitlement given caller-supplied
+                                          usage. Envelope shape mirrors
+                                          ``/next-tier-unlocks`` (current-tier
+                                          context + null-at-ceiling), inner
+                                          ``headroom`` matches
+                                          ``/capacity-headroom-at`` byte-for-
+                                          byte. Fills the "next-tier" slot on
+                                          the capacity-headroom axis
+                                          alongside the caps-only
+                                          ``/next-tier-capacity-diff`` and
+                                          the marginal-features
+                                          ``/next-tier-unlocks``.
+  GET  /api/entitlement/previous-tier-capacity-headroom -- downgrade twin of
+                                          ``/next-tier-capacity-headroom``:
+                                          per-axis headroom envelope for the
+                                          tier immediately below the resolved
+                                          entitlement given caller-supplied
+                                          usage. Axes whose inner
+                                          ``over_limit`` flips ``True`` are
+                                          exactly the ones the caller would
+                                          lose headroom on. Envelope shape
+                                          matches
+                                          ``/next-tier-capacity-headroom``
+                                          byte-for-key with ``direction``
+                                          echoing ``"downgrade"``.
   GET  /api/entitlement/preview-batch  -- plural sibling of ``/preview``:
                                          the full ``Entitlement.to_dict``
                                          shape rendered for every purchasable
@@ -872,6 +901,182 @@ def api_entitlement_capacity_headroom_at():
     except Exception as exc:
         logger.warning("api_entitlement_capacity_headroom_at: error: %s", exc)
         return jsonify({"error": "capacity-headroom-at failed"}), 500
+
+
+def _neighbour_tier_headroom_envelope(
+    *, direction: str, headroom: dict | None
+) -> dict:
+    """Shared envelope for ``/next-tier-capacity-headroom`` +
+    ``/previous-tier-capacity-headroom``.
+
+    Wraps the raw :func:`clawmetry.entitlements.capacity_headroom_at` row
+    in the same "current-tier context + null-at-boundary" shape as
+    ``/next-tier-unlocks`` / ``/previous-tier-unlocks`` (see
+    ``api_entitlement_next_tier_unlocks``) so an upgrade / downgrade card
+    can bind against ``headroom`` as the payload with the boundary case
+    surfacing as ``headroom=null`` at HTTP 200 -- callers never have to
+    branch on status code.
+    """
+    from clawmetry import entitlements as _ent
+
+    try:
+        ent = _ent.get_entitlement()
+        return {
+            "current_tier": ent.tier,
+            "current_tier_label": _ent.tier_label(ent.tier),
+            "current_tier_rank": _ent.tier_rank(ent.tier),
+            "direction": direction,
+            "headroom": headroom,
+            "grace": bool(ent.grace),
+            "enforced": _ent.is_enforced(),
+        }
+    except Exception:
+        return {
+            "current_tier": "oss",
+            "current_tier_label": "OSS",
+            "current_tier_rank": 0,
+            "direction": direction,
+            "headroom": None,
+            "grace": True,
+            "enforced": False,
+        }
+
+
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-headroom")
+def api_entitlement_next_tier_capacity_headroom():
+    """``GET /api/entitlement/next-tier-capacity-headroom?channels=<int>
+    &retention_days=<int>&nodes=<int>`` -- per-axis headroom envelope for
+    the tier immediately above the resolved entitlement, given the caller-
+    supplied per-axis usage.
+
+    Scalar "one rung up" sibling of ``/api/entitlement/capacity-headroom``.
+    Composes ``next_purchasable_tier()`` + ``capacity_headroom_at(next)``
+    so an upgrade-CTA card can render "here's what your gauges would look
+    like on <next tier>" off ONE call instead of a resolve + at-tier
+    round-trip. Sits alongside the caps-only
+    ``/api/entitlement/next-tier-capacity-diff`` (which reports cap
+    deltas without folding in current usage) and the marginal-features
+    ``/api/entitlement/next-tier-unlocks``.
+
+    Response shape (matches ``/api/entitlement/next-tier-unlocks``'s
+    envelope byte-for-key so an upgrade-CTA can bind the two off one
+    fetch shape)::
+
+        {
+          "current_tier":       "<resolved tier id>",
+          "current_tier_label": "<human>",
+          "current_tier_rank":  <int>,
+          "direction":          "upgrade",
+          "headroom":           <capacity-headroom-at row> | null,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<capacity-headroom-at row>`` -- when non-null -- matches
+    ``/api/entitlement/capacity-headroom-at`` byte-for-byte (``tier``
+    echoing the next-tier id, per-axis rows in the
+    :func:`entitlements._headroom_row` shape) so an existing
+    ``/capacity-headroom-at`` renderer consumes the ``headroom`` field
+    unchanged.
+
+    ``headroom`` is ``null`` (still HTTP 200) when the resolved
+    entitlement is already on the top rung (no next-purchasable tier),
+    so the CTA can hide itself off ``headroom == null`` instead of
+    branching on status code. Same per-axis "None means axis not
+    supplied" posture as ``/api/entitlement/capacity-headroom`` -- an
+    axis the caller didn't pass stays ``None`` on the inner row. Same
+    bad-arg short-circuit as ``/capacity-headroom`` (blank / non-int /
+    negative axis stays ``None``).
+
+    Decoupled from grace vs enforce on the headroom side --
+    ``capacity_headroom_at`` walks the static per-tier caps, so the
+    inner rows are byte-identical across modes. The "next tier"
+    identity itself still tracks the live resolver, so an operator
+    moving from ``cloud_starter`` to ``cloud_pro`` sees the target
+    flip once activation lands.
+
+    Never 5xxs: on a resolver / delegation failure returns the neutral
+    grace envelope (``current_tier=oss``, ``headroom=null``) so a
+    paywall tile keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        row = _ent.next_tier_capacity_headroom(**kwargs)
+        return jsonify(
+            _neighbour_tier_headroom_envelope(
+                direction="upgrade", headroom=row
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_headroom: error: %s", exc
+        )
+        return jsonify(
+            _neighbour_tier_headroom_envelope(
+                direction="upgrade", headroom=None
+            )
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-headroom")
+def api_entitlement_previous_tier_capacity_headroom():
+    """``GET /api/entitlement/previous-tier-capacity-headroom?channels=<int>
+    &retention_days=<int>&nodes=<int>`` -- per-axis headroom envelope for
+    the tier immediately below the resolved entitlement, given the caller-
+    supplied per-axis usage.
+
+    Downgrade twin of ``/api/entitlement/next-tier-capacity-headroom``.
+    Composes ``previous_purchasable_tier()`` +
+    ``capacity_headroom_at(prev)`` so a downgrade-preview card can show
+    "here's what would break on <prev tier>" -- axes whose inner
+    ``over_limit`` flips ``True`` are exactly the ones the caller would
+    lose headroom on. Sits alongside the caps-only
+    ``/api/entitlement/previous-tier-capacity-diff`` and the marginal-
+    features ``/api/entitlement/previous-tier-unlocks``.
+
+    Envelope shape matches
+    ``/api/entitlement/next-tier-capacity-headroom`` byte-for-key --
+    with ``direction`` echoing ``"downgrade"`` -- so a single renderer
+    can consume both. Inner ``headroom`` (when non-null) matches
+    ``/api/entitlement/capacity-headroom-at`` byte-for-byte.
+
+    ``headroom`` is ``null`` (still HTTP 200) when the resolved
+    entitlement is already on the bottom rung (no previous-purchasable
+    tier) so the downgrade card can hide itself off ``headroom == null``
+    instead of branching on status code. Same per-axis "None means axis
+    not supplied" posture, bad-arg short-circuit, and grace / enforce
+    invariance as ``/api/entitlement/next-tier-capacity-headroom``.
+    Never 5xxs.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        row = _ent.previous_tier_capacity_headroom(**kwargs)
+        return jsonify(
+            _neighbour_tier_headroom_envelope(
+                direction="downgrade", headroom=row
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_headroom: error: %s", exc
+        )
+        return jsonify(
+            _neighbour_tier_headroom_envelope(
+                direction="downgrade", headroom=None
+            )
+        )
 
 
 @bp_entitlement.route("/api/entitlement/capacity-headroom-batch")

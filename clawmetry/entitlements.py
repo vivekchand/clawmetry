@@ -3125,6 +3125,95 @@ def previous_tier_capacity_diff() -> dict | None:
         return None
 
 
+def next_tier_capacity_headroom(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Scalar "one rung up" sibling of :func:`capacity_headroom`.
+
+    Composes :func:`next_purchasable_tier` (the rung immediately above the
+    resolved entitlement) with :func:`capacity_headroom_at` (per-axis
+    headroom against the static per-tier caps) so an upgrade-CTA card can
+    render "here's what your gauges would look like on <next tier>" off
+    ONE call instead of a resolve + at-tier round-trip.
+
+    Fills the "next-tier" slot on the capacity-headroom axis alongside
+    the caps-only :func:`next_tier_capacity_diff` (which reports the cap
+    deltas without folding in current usage). Row shape matches
+    :func:`capacity_headroom_at` byte-for-byte
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``) so any existing capacity-headroom renderer can consume the
+    envelope without reshaping. Same "None means axis not supplied"
+    posture as the singular helpers -- an axis the caller didn't pass
+    stays ``None`` on the envelope.
+
+    Returns ``None`` when the resolved entitlement is already on the
+    top rung (no next-purchasable tier) so the CTA can hide itself
+    instead of rendering a bogus row. Decoupled from grace vs enforce
+    on the headroom side -- :func:`capacity_headroom_at` walks the
+    static caps, so the returned rows are byte-identical across modes.
+    Never raises: any resolver / delegation failure logs a warning and
+    returns ``None``.
+    """
+    try:
+        target = next_purchasable_tier()
+        if target is None:
+            return None
+        return capacity_headroom_at(
+            target,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_capacity_headroom failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_capacity_headroom(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Scalar "one rung down" sibling of :func:`capacity_headroom`.
+
+    Downgrade twin of :func:`next_tier_capacity_headroom`. Composes
+    :func:`previous_purchasable_tier` (the rung immediately below the
+    resolved entitlement) with :func:`capacity_headroom_at` so a
+    downgrade-preview card can show "here's what would break on
+    <prev tier>" -- rows whose ``over_limit`` flips ``True`` are the
+    exact axes the caller would lose headroom on.
+
+    Row shape matches :func:`capacity_headroom_at` byte-for-byte so
+    any existing renderer consumes the envelope unchanged. Returns
+    ``None`` when the resolved entitlement is already on the bottom
+    rung (no previous-purchasable tier) so the preview can hide
+    itself instead of rendering a bogus row. Same grace / enforce
+    invariance and per-axis "None means unsupplied" posture as
+    :func:`next_tier_capacity_headroom`. Never raises.
+    """
+    try:
+        target = previous_purchasable_tier()
+        if target is None:
+            return None
+        return capacity_headroom_at(
+            target,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_capacity_headroom failed: %s", exc
+        )
+        return None
+
+
 def capacity_headroom(
     *,
     channels: int | None = None,
