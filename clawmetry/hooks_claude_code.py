@@ -38,12 +38,10 @@ Deny emits BOTH the modern hookSpecificOutput JSON (stdout) and stderr +
 exit 2 (honored by every Claude Code version). Allow emits the modern JSON
 with exit 0.
 
-TIMEOUT: the installer sets the PreToolUse hook timeout to 900s, above the
-common policy timeouts (presets 60–300s; process_tool_call answers within
-policy.timeout + grace and then applies on_timeout, so the hook practically
-always answers well inside 900s). If a pathological >880s policy ever hits
-the hook timeout, current Claude Code blocks the call — same outcome as the
-default on_timeout: deny.
+TIMEOUT: the installer sets the PreToolUse hook timeout just above the
+7-day max policy window (#4066) — process_tool_call answers within
+policy.timeout + grace and then applies on_timeout, so the hook always
+answers before Claude Code's hook timeout would block the call.
 """
 from __future__ import annotations
 
@@ -65,7 +63,10 @@ _HOOK_CMD_NOTIFICATION = "clawmetry hooks run notification"
 # spelling `clawmetry hook claude-code` too, so uninstall cleans both).
 _HOOK_CMD_MARKERS = ("clawmetry hooks run", "clawmetry hook claude-code")
 
-_PRETOOL_TIMEOUT_S = 900
+# Must exceed the max policy window (7 days, #4066) + poll grace —
+# Claude Code BLOCKS the call when a hook times out, which would
+# override the policy's own on_timeout choice.
+_PRETOOL_TIMEOUT_S = 605100
 _NOTIFICATION_TIMEOUT_S = 10
 
 

@@ -185,9 +185,9 @@ def test_install_idempotent_and_correct_timeouts(monkeypatch, tmp_path):
     assert len(pre) == 1, "must not duplicate on re-install"
     hk = pre[0]["hooks"][0]
     assert hk["command"] == "clawmetry hooks run pretooluse"
-    # Load-bearing: must exceed policy timeouts (presets 60-300s) or Claude
-    # Code times the hook out before the human decides.
-    assert hk["timeout"] == 900
+    # Load-bearing: must exceed the 7-day max policy window or Claude
+    # Code times the hook out (= blocks) before the human decides.
+    assert hk["timeout"] == 605100
     assert s["hooks"]["Notification"][0]["hooks"][0]["command"] == \
         "clawmetry hooks run notification"
     marker = json.load(open(str(tmp_path / "marker.json")))
