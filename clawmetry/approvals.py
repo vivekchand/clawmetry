@@ -95,6 +95,18 @@ POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 # the API.
 _POLL_INTERVAL_SEC = 3.0
 
+
+def _poll_interval(waited_s: float) -> float:
+    """Adaptive decision-poll cadence for long approval windows (7-day
+    default, #4066): snappy while the human is likely mid-tap, gentle for
+    the long tail — a week at 3s would be ~200k requests per approval.
+    3s for the first 2 min, 15s until the first hour, then 60s."""
+    if waited_s < 120:
+        return _POLL_INTERVAL_SEC
+    if waited_s < 3600:
+        return 15.0
+    return 60.0
+
 # Track in-flight approvals so we don't re-request on a watcher restart that
 # replays the same toolCall row. Keyed by tool_call_id (or composite when
 # missing — `f"{session_id}:{ts}"`).
@@ -189,7 +201,7 @@ def _compile_policy(p: dict) -> Optional[dict]:
             "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
             "args_regex": re.compile(args_re) if args_re else None,
             "action": (p.get("action") or "require_approval").strip(),
-            "timeout": int(p.get("timeout") or 60),
+            "timeout": int(p.get("timeout") or 604800),  # default 7d (#4066)
             "on_timeout": (p.get("on_timeout") or "deny").strip(),
         }
     except re.error as re_err:
@@ -471,7 +483,8 @@ def _poll_decision_local(approval_id: str, timeout_s: int) -> str:
     ``/api/approvals/<approval_id>/decide`` (routes/policy.py) which flips
     the row's ``status`` via ``update_approval_decision``. No network, no
     cloud auth — the whole loop stays inside the box."""
-    deadline = time.time() + timeout_s + 5  # 5 s grace past policy expiry
+    start = time.time()
+    deadline = start + timeout_s + 5  # 5 s grace past policy expiry
     last_status = "pending"
     try:
         from clawmetry import local_store as _lsm
@@ -502,7 +515,7 @@ def _poll_decision_local(approval_id: str, timeout_s: int) -> str:
                     return last_status
         except Exception as e:
             log.debug("approvals(local): poll error (will retry): %s", e)
-        time.sleep(_POLL_INTERVAL_SEC)
+        time.sleep(_poll_interval(time.time() - start))
     return last_status if last_status != "pending" else "timeout"
 
 
@@ -537,7 +550,8 @@ def _local_blocking_enabled(api_key: Optional[str]) -> bool:
 def _poll_decision(api_key: str, approval_id: str, timeout_s: int) -> str:
     """Poll cloud for the decision. Returns one of: approved/denied/timeout/error."""
     import urllib.request
-    deadline = time.time() + timeout_s + 5  # 5 s grace past policy expiry
+    start = time.time()
+    deadline = start + timeout_s + 5  # 5 s grace past policy expiry
     last_status = "pending"
     while time.time() < deadline:
         try:
@@ -554,7 +568,7 @@ def _poll_decision(api_key: str, approval_id: str, timeout_s: int) -> str:
                     return last_status
         except Exception as e:
             log.debug(f"poll error (will retry): {e}")
-        time.sleep(_POLL_INTERVAL_SEC)
+        time.sleep(_poll_interval(time.time() - start))
     return last_status if last_status != "pending" else "timeout"
 
 
