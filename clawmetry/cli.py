@@ -2032,6 +2032,23 @@ def _status_snapshot(args) -> dict:
       on import. Shape: ``{"discovered": [{"name", "value", "importable",
       "error"}], "importable_count": int, "broken_count": int}``. Empty
       ``discovered`` on installs with no plugins registered.
+    * ``license``: state of the self-hosted Pro/Enterprise license key at
+      ``~/.clawmetry/license.key`` — the same envelope
+      ``clawmetry license status --json`` emits, folded into the composite
+      snapshot so an operator can answer *"is my node on Pro?"* in one
+      command. Shape:
+      ``{"installed": bool, "valid": bool, "status": str,
+        "tier": str | null, "nodes": int | null, "sub": str | null,
+        "days_left": int | null,
+        "pubkey_fingerprint_sha256": str | null,
+        "permissions_safe": bool | null, "file_mode": str | null}``.
+      ``installed`` distinguishes *no license file yet* (status ``"none"``,
+      all other fields ``null``) from *file present but broken* (status
+      ``"invalid"`` / ``"expired"``). Complements
+      ``runtimes.plan`` (cloud entitlement mirror) and
+      ``extensions.discovered`` (whether the paid wheel imports): the
+      three together triage every "why isn't Pro on this box?" question
+      without a second command.
 
     Best-effort throughout: every helper is wrapped so a broken corner (e.g.
     an unreadable config file, an unavailable network) degrades to ``null``
@@ -2062,6 +2079,18 @@ def _status_snapshot(args) -> dict:
             "discovered": [],
             "importable_count": 0,
             "broken_count": 0,
+        },
+        "license": {
+            "installed": False,
+            "valid": False,
+            "status": "none",
+            "tier": None,
+            "nodes": None,
+            "sub": None,
+            "days_left": None,
+            "pubkey_fingerprint_sha256": None,
+            "permissions_safe": None,
+            "file_mode": None,
         },
     }
 
@@ -2236,6 +2265,43 @@ def _status_snapshot(args) -> dict:
             "importable_count": sum(1 for r in rows if r.get("importable")),
             "broken_count": sum(1 for r in rows if not r.get("importable")),
         }
+    except Exception:
+        pass
+
+    # License — self-hosted Pro/Enterprise key at ``~/.clawmetry/license.key``.
+    # Sibling of the ``extensions`` block above: extensions answer "would the
+    # paid wheel import?", this block answers "is a valid signed key on
+    # disk?". The two orthogonally cover the two failure modes an operator
+    # hits when Pro doesn't turn on — a broken wheel install vs. a
+    # missing / expired / tampered license file — so folding both into
+    # ``status --json`` collapses "why isn't Pro on this box?" from a
+    # multi-command dance to one jq pipeline. ``current_license_info``
+    # returns ``None`` when no file is on disk (fresh install / OSS mode)
+    # and a fully-populated dict on every file-exists branch (active /
+    # expired / signature-invalid). Never raises — a broken corner keeps
+    # the default ``status: "none"`` shape.
+    try:
+        from clawmetry.license import current_license_info as _license_info
+        info = _license_info()
+        if info is None:
+            # File not on disk yet — leave the default ``installed=False``
+            # / ``status="none"`` shape from ``snap`` initialisation intact
+            # so a script never sees ``null`` on a field it does not need
+            # to special-case.
+            pass
+        else:
+            snap["license"] = {
+                "installed": True,
+                "valid": bool(info.get("valid")),
+                "status": str(info.get("status") or "unknown"),
+                "tier": info.get("tier"),
+                "nodes": info.get("nodes"),
+                "sub": info.get("sub"),
+                "days_left": info.get("days_left"),
+                "pubkey_fingerprint_sha256": info.get("pubkey_fingerprint_sha256"),
+                "permissions_safe": info.get("permissions_safe"),
+                "file_mode": info.get("file_mode"),
+            }
     except Exception:
         pass
 
@@ -2416,6 +2482,28 @@ def _cmd_status(args) -> None:
                     print(f"    ❌ {_name}  — {_err}")
             if _bad:
                 print(f"    → {_bad} plugin(s) will NOT load on daemon start; {_ok} will.")
+    except Exception:
+        pass
+
+    # License — one-line summary when a self-hosted key is on disk. Silent
+    # when there is no key file (fresh OSS install), matching the extensions
+    # block's silence-on-empty policy so the human snapshot doesn't grow a
+    # section that carries no information for the default operator. Points
+    # to ``clawmetry license`` for the full envelope; this line is a triage
+    # hint, not a replacement.
+    try:
+        from clawmetry.license import current_license_info as _lic_info
+        _lic = _lic_info()
+        if _lic is not None:
+            print()
+            if _lic.get("valid"):
+                _tier = str(_lic.get("tier") or "pro").capitalize()
+                _days = _lic.get("days_left")
+                _days_txt = f", expires in {_days}d" if isinstance(_days, int) else ""
+                print(f"  License:     ✅ {_tier} (self-hosted{_days_txt})")
+            else:
+                _status = str(_lic.get("status") or "invalid")
+                print(f"  License:     ⚠️  {_status}  (run `clawmetry license` for details)")
     except Exception:
         pass
 
