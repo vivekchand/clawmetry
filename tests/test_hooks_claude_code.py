@@ -163,6 +163,41 @@ def test_always_allow_rule_outranks_catchall(monkeypatch):
     assert "Auto-approved" in p["reason"]
 
 
+def test_autonomous_mode_skips_blanket_ask_but_keeps_risk_gates(monkeypatch):
+    """auto/dontAsk/bypassPermissions sessions must not be nagged by the
+    catch-all ask gates — but targeted risk gates still protect them."""
+    catchall = ap._compile_policy({"name": "Ask my phone before shell commands",
+                                   "tool": "exec", "pattern_type": "command_regex",
+                                   "pattern": ".*", "action": "require_approval"})
+    risk = ap._compile_policy(dict(RAW_POLICY))  # rm -rf gate
+    monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
+    monkeypatch.setattr(h, "_load_policies_fast", lambda k: [catchall, risk])
+
+    calls = []
+    monkeypatch.setattr(ap, "process_tool_call", lambda **kw: (
+        calls.append(kw["policies"]),
+        {"decision": "denied", "policy": kw["policies"][0]["name"]})[1])
+
+    # Benign command in auto mode: catch-all filtered out -> no gate at all.
+    evt = _evt(cmd="ls -la")
+    evt["permission_mode"] = "auto"
+    assert h.evaluate(evt) is None
+    assert calls == []
+
+    # Risky command in auto mode: the rm -rf gate still fires.
+    evt = _evt(cmd="rm -rf /tmp/x")
+    evt["permission_mode"] = "bypassPermissions"
+    assert h.evaluate(evt) is not None
+    assert calls and all(p["name"] != "Ask my phone before shell commands"
+                         for p in calls[0])
+
+    # Default mode: catch-all still gates benign commands.
+    calls.clear()
+    evt = _evt(cmd="ls -la")
+    evt["permission_mode"] = "default"
+    assert h.evaluate(evt) is not None
+
+
 def test_engine_exception_fails_open(monkeypatch):
     monkeypatch.setattr(h, "_load_api_key", lambda: "cm_x")
     monkeypatch.setattr(h, "_load_policies_fast", lambda k: _policies())

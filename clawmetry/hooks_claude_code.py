@@ -157,6 +157,26 @@ def _load_policies_fast(api_key: str) -> list:
 
 # ── PreToolUse gate ───────────────────────────────────────────────────────
 
+# Claude Code session modes where the user explicitly opted into autonomy:
+# blanket "ask my phone" gates must not nag those sessions (user report
+# 2026-07-26: auto-mode sessions were filling the approval inbox).
+# `acceptEdits` is NOT here — it auto-accepts file edits only; shell still
+# prompts natively, so the phone gate mirrors that.
+_AUTONOMOUS_MODES = frozenset({"auto", "dontAsk", "bypassPermissions"})
+
+
+def _is_blanket_ask(p: dict) -> bool:
+    """A catch-all require_approval rule (pattern .* with no narrowing) —
+    the interactive convenience gates, as opposed to targeted RISK gates
+    (rm -rf, force push, sudo, …) which keep protecting even autonomous
+    sessions: yolo mode is exactly when the safety net matters."""
+    if (p.get("action") or "") != "require_approval":
+        return False
+    if p.get("args_regex") is not None or p.get("command_not_regex") is not None:
+        return False
+    pat = getattr(p.get("command_regex"), "pattern", None)
+    return pat in (None, ".*", "^.*", ".+", "^.+")
+
 def _deny_payload(reason: str) -> dict:
     return {
         "hookSpecificOutput": {
@@ -203,6 +223,9 @@ def evaluate(event: dict) -> "dict | None":
 
         from clawmetry import approvals
         policies = _load_policies_fast(api_key)
+        mode = (event.get("permission_mode") or "").strip()
+        if mode in _AUTONOMOUS_MODES:
+            policies = [p for p in policies if not _is_blanket_ask(p)]
         if not policies:
             return None
         if not approvals.match_policy(policies, tool_name, tool_input):
