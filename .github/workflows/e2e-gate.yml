@@ -21,7 +21,7 @@ name: E2E Gate (required)
 #   add "E2E Gate (required)"
 #   (1 check name instead of 4)
 #
-# Tracking: vivekchand/clawmetry#3864 (C6)
+# Tracking: vivekchand/clawmetry#4029 (C6)
 
 on:
   pull_request:
