@@ -6,13 +6,19 @@ name: C6 auto-heal (required-checks application)
 #
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
-#   - if checks already configured (e.g. via Settings UI): exits 0 (C6 green)
+#   - if clawmetry/main checks already configured: exits 0 (C6 green)
 #   - if checks not yet configured: emits ::error:: annotation and exits 1
 #     (red badge acts as a forcing signal until the admin acts)
 #
 # When E2E_ADMIN_PAT IS set:
 #   - runs scripts/apply_required_status_checks.py to configure checks
 #   - writes a post-apply summary
+#
+# Cross-repo reads (clawmetry-cloud, clawmetry-landing):
+#   GITHUB_TOKEN returns 403 for private cross-repo reads. This is expected,
+#   NOT a bug. Those repos are shown as "cannot verify" in the summary and
+#   do NOT affect the ALL_OK gate. Only clawmetry/main (same-repo, readable)
+#   drives the pass/fail decision. Mirrors c6-health.yml read_protection().
 #
 # Fastest close paths (no waiting for this schedule):
 #
@@ -66,20 +72,19 @@ jobs:
             echo "E2E_ADMIN_PAT found -- applying required E2E status checks."
           fi
 
-      # Read-only check: show current required-check state even without a PAT.
-      # Uses GET /repos/{owner}/{repo}/branches/main (public endpoint, no admin
-      # scope needed) to read the current protection.required_status_checks.
-      # Writes a formatted summary to GITHUB_STEP_SUMMARY so the state is
-      # visible directly in the job summary panel without reading log lines.
+      # Read-only audit: verify clawmetry/main has the required E2E status
+      # checks configured. Reads from both 'contexts' (legacy, written by
+      # API/script) AND 'checks' (current, written by GitHub Settings UI).
       #
-      # NOTE: reads BOTH 'contexts' (legacy, written by API/script) AND
-      # 'checks' (current, written by GitHub Settings UI). Previously only
-      # 'contexts' was read, so checks configured via Option A (Settings UI)
-      # appeared as MISSING even though they were correctly configured.
-      # This matches the logic in c6-health.yml and apply_required_status_checks.py.
-      #
-      # Exports checks_ok=true/false to GITHUB_OUTPUT so downstream steps can
-      # skip when the admin has already configured C6 via the Settings UI.
+      # Only clawmetry/main (same-repo) drives ALL_OK. clawmetry-cloud and
+      # clawmetry-landing are private repos -- GITHUB_TOKEN returns 403 for
+      # cross-repo branch-protection reads. Treating them as "missing" was
+      # a false-negative bug: ALL_OK was always false even after the admin
+      # configured clawmetry/main, so the "C6 already configured" step below
+      # could never fire and the schedule produced perpetual red noise.
+      # Fix (mirrors c6-health.yml read_protection()): cross-repo repos are
+      # shown as ":grey_question: cannot verify" in the summary and do NOT
+      # set ALL_OK=false.
       - name: Read current required-check state (read-only)
         id: read-state
         env:
@@ -87,9 +92,15 @@ jobs:
           OWNER: vivekchand
         run: |
           set +e
-          REPOS="clawmetry clawmetry-cloud clawmetry-landing"
 
-          # Expected required checks per repo (from scripts/apply_required_status_checks.py)
+          # clawmetry/main: same-repo, GITHUB_TOKEN can read it -- authoritative.
+          # clawmetry-cloud/clawmetry-landing: private repos, 403 expected --
+          # shown as "cannot verify" but do NOT affect ALL_OK.
+          REPOS_AUTH="clawmetry"
+          REPOS_CROSS="clawmetry-cloud clawmetry-landing"
+
+          # Expected required checks per repo (keep in sync with
+          # scripts/apply_required_status_checks.py and c6-health.yml).
           declare -A EXPECTED
           EXPECTED[clawmetry]="OSS golden path (wheel + OpenClaw + 9 tabs)|Cross-repo handoff (C4)|MOAT Keystone (13-endpoint bar)|E2E Browser Tests (critical subset)"
           EXPECTED[clawmetry-cloud]="Cloud golden-path browser E2E"
@@ -97,7 +108,9 @@ jobs:
 
           ALL_OK=true
           SUMMARY_ROWS=""
-          for REPO in $REPOS; do
+
+          # Authoritative loop: only clawmetry/main drives ALL_OK.
+          for REPO in $REPOS_AUTH; do
             PROTECTION=$(gh api "/repos/${OWNER}/${REPO}/branches/main" 2>/dev/null | \
               python3 -c "
 import json, sys
@@ -117,10 +130,8 @@ except Exception:
             for CHECK in "${EXPECTED_CHECKS[@]}"; do
               if echo "$PROTECTION" | python3 -c \
                 "import json,sys; d=json.load(sys.stdin); exit(0 if $(python3 -c "import json; print(repr('${CHECK}'))" 2>/dev/null || echo "'${CHECK}'") in d else 1)" 2>/dev/null; then
-                STATUS="ok"
                 ICON=":white_check_mark:"
               else
-                STATUS="missing"
                 ICON=":x:"
                 ALL_OK=false
               fi
@@ -128,13 +139,26 @@ except Exception:
             done
           done
 
+          # Cross-repo loop: GITHUB_TOKEN returns 403 for private repos.
+          # Mark as "cannot verify" -- do NOT set ALL_OK=false.
+          for REPO in $REPOS_CROSS; do
+            IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
+            for CHECK in "${EXPECTED_CHECKS[@]}"; do
+              SUMMARY_ROWS="${SUMMARY_ROWS}| ${REPO} | ${CHECK} | :grey_question: cannot verify (cross-repo) |\n"
+            done
+          done
+
           {
             echo "## C6: Required E2E Status Checks"
             echo ""
             if [ "$ALL_OK" = "true" ]; then
-              echo "> :white_check_mark: **All required checks are configured.** C6 is GREEN."
+              echo "> :white_check_mark: **clawmetry/main: all required checks configured.** C6 gate is GREEN."
+              echo ">"
+              echo "> clawmetry-cloud and clawmetry-landing cannot be verified cross-repo (private repos --"
+              echo "> GITHUB_TOKEN scope limit). Use \`bash scripts/close-c6.sh\` or the Settings UI"
+              echo "> to confirm those repos are also covered."
             else
-              echo "> :x: **One or more required checks are not yet enforced on main.**"
+              echo "> :x: **clawmetry/main: one or more required checks are not yet enforced.**"
               echo ">"
               echo "> E2E tests pass but PRs can still merge if they fail -- the checks are not required."
             fi
@@ -166,9 +190,9 @@ except Exception:
               echo "   -- \`confirm=APPLY\`, \`pat_token=<PAT>\` -- closes all 3 repos in one run"
               echo ""
               echo "**Option C -- terminal (zero prerequisites, auto-installs gh CLI on macOS/Ubuntu):**"
-              echo "\`\`\`bash"
+              echo '```bash'
               echo "bash scripts/close-c6.sh"
-              echo "\`\`\`"
+              echo '```'
               echo ""
               echo "**Option D -- store PAT as secret (this workflow heals within 2 hours):**"
               echo "- [Settings > Secrets > New secret](https://github.com/vivekchand/clawmetry/settings/secrets/actions/new)"
@@ -178,17 +202,16 @@ except Exception:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Export for downstream steps: skip error/apply if checks are already set.
+          # Export for downstream steps.
           echo "checks_ok=${ALL_OK}" >> "$GITHUB_OUTPUT"
 
-      # Fires when all required checks are already configured -- e.g. the admin
-      # used Option A (Settings UI) to add them. No PAT or further action needed.
-      # Without this step the workflow would exit 1 every 2 hours even though C6
-      # is already closed, producing perpetual red CI noise post-closure.
+      # Fires when clawmetry/main has all required checks configured.
+      # Previously this step could never fire because ALL_OK was always false
+      # (cross-repo 403 falsely appeared as "missing"). Fixed above.
       - name: C6 already configured (no PAT needed)
         if: steps.read-state.outputs.checks_ok == 'true'
         run: |
-          echo "C6 is GREEN -- all required E2E status checks are configured on main."
+          echo "C6 is GREEN -- all required E2E status checks are configured on clawmetry/main."
           echo "Branch protection is correctly set. E2E_ADMIN_PAT is not needed."
           echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
 
