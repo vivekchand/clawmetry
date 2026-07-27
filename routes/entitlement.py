@@ -8991,6 +8991,95 @@ def api_paywall_events_count():
         )
 
 
+_PAYWALL_DISTINCT_DIMS = ("event", "feature", "harness", "source", "plan_chosen")
+
+
+@bp_entitlement.route("/api/paywall/events/distinct")
+def api_paywall_events_distinct():
+    """``GET /api/paywall/events/distinct`` -- sorted distinct values per
+    categorical dimension currently in the ring.
+
+    Populates filter-dropdown options for the paywall-events dashboard:
+    a UI wanting to render "Filter by feature: [ dropdown ]" needs to
+    know which features have actually fired at least one beacon this
+    session so the dropdown never lists dead options. This endpoint
+    hands back exactly that list for each of the five categorical
+    dimensions in one round-trip.
+
+    Same categorical filter query params + semantics as the sibling
+    paywall-events endpoints -- ``?event=`` / ``?feature=`` /
+    ``?harness=`` / ``?source=`` / ``?plan_chosen=``, case-sensitive
+    exact match, ``AND`` combined, blank / missing = "not supplied".
+    Filters narrow the ring BEFORE the distinct set is computed, so a
+    caller can drive a "further narrow by:" dropdown UX -- passing
+    ``?event=paywall_cta_click`` returns only the features that
+    actually co-occur with CTA clicks in the current ring.
+
+    Same time-window params as ``/api/paywall/events/{summary,recent,count}``::
+
+      ?since=<float-epoch-seconds>
+      ?until=<float-epoch-seconds>
+
+    Half-open ``[since, until)``; either bound may be omitted or blank.
+    Bad bounds (non-numeric, NaN, negative) collapse to "not supplied"
+    so an operator typo cannot silently drop every row.
+
+    Body shape::
+
+        {
+          "distinct": {
+            "event":       [<str>, ...],   # sorted ascending, non-empty only
+            "feature":     [<str>, ...],
+            "harness":     [<str>, ...],
+            "source":      [<str>, ...],
+            "plan_chosen": [<str>, ...],
+          },
+          "in_window": <int>,            # ring size right now, unfiltered
+          "matched":   <int>,            # rows the distinct set covers (post-filter, post-window)
+          "filters":   {"<key>": "<value>", ...},   # echo of applied categorical filters
+          "time_window": {"since": <float|null>, "until": <float|null>}
+                                                    # echo of resolved bounds
+        }
+
+    The per-dimension lists are byte-equal to the sorted keys of
+    ``/api/paywall/events/summary``'s corresponding ``by_*`` dict for
+    the same filter + window inputs -- pinned in the test suite so the
+    two views cannot silently drift. On a fully-unfiltered request
+    ``matched`` byte-equals ``in_window``.
+
+    Ships in GRACE. Never 5xxs -- on any failure returns the neutral
+    empty envelope so a paywall-dashboard dropdown keeps rendering
+    (empty options are correct: the store has nothing to offer).
+    """
+    try:
+        from clawmetry import _paywall_events as _pe
+
+        filter_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in _PAYWALL_DISTINCT_DIMS
+        }
+        window_kwargs = {
+            key: request.args.get(key, "") or None
+            for key in ("since", "until")
+        }
+        # The store treats blank / whitespace strings as "not supplied"
+        # and does its own numeric coercion on the time bounds, so the
+        # response's ``filters`` / ``time_window`` echoes come from the
+        # store's normalised view rather than the raw query string.
+        return jsonify(_pe.distinct_values(**filter_kwargs, **window_kwargs))
+    except Exception as exc:
+        logger.warning("api_paywall_events_distinct: error: %s", exc)
+        return jsonify(
+            {
+                "distinct": {k: [] for k in _PAYWALL_DISTINCT_DIMS},
+                "in_window": 0,
+                "matched": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+        )
+
+
 def _route_actor() -> str:
     try:
         for h in ("X-Actor", "X-Forwarded-For"):

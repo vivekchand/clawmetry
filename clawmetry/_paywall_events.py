@@ -697,6 +697,115 @@ class _PaywallEventStore:
             logger.warning("paywall.events: first_matching swallowed: %s", exc)
             return None
 
+    def distinct_values(
+        self,
+        *,
+        event: str | None = None,
+        feature: str | None = None,
+        harness: str | None = None,
+        source: str | None = None,
+        plan_chosen: str | None = None,
+        since: Any = None,
+        until: Any = None,
+    ) -> dict:
+        """Return the sorted set of distinct non-empty values per
+        categorical dimension currently in the ring (post-filter,
+        post-window).
+
+        Answers "which values would a filter dropdown actually let the
+        operator pick?" without paying for the full ``by_*`` count
+        aggregation :meth:`summary` builds. The five per-dimension lists
+        are exactly the keys of :meth:`summary`'s ``by_*`` dicts for
+        identical filter + window inputs -- pinned in the test suite so
+        the two views cannot silently drift.
+
+        Same filter / window semantics as :meth:`summary` /
+        :meth:`recent` / :meth:`count_matching`: ``None`` or empty-string
+        means "not supplied", case-sensitive exact match on categorical
+        filters, half-open ``[since, until)`` on the time window,
+        ``AND``-combined. Because filters narrow the ring BEFORE the
+        distinct set is computed, a caller can drive a
+        "further narrow by:" dropdown UX -- filter on ``event=X`` and
+        the returned ``feature`` list is only those features that
+        actually co-occur with event ``X`` in the current ring, not the
+        full ring's feature set.
+
+        Empty-string field values are excluded from every returned list
+        (matches :meth:`summary`'s ``by_*`` posture). Each list is
+        sorted ascending (case-sensitive, string-compare) so callers
+        get a stable order across calls independent of ring insertion
+        order.
+
+        Envelope shape::
+
+            {
+              "distinct": {
+                "event":       [<str>, ...],
+                "feature":     [<str>, ...],
+                "harness":     [<str>, ...],
+                "source":      [<str>, ...],
+                "plan_chosen": [<str>, ...],
+              },
+              "in_window": <int>,          # ring size right now, unfiltered
+              "matched":   <int>,          # rows the distinct set was computed over
+              "filters":   {"<key>": "<value>", ...},   # echo of applied categorical filters
+              "time_window": {"since": <float|null>, "until": <float|null>},
+            }
+
+        ``in_window`` is NEVER filtered (matches :meth:`summary` /
+        :meth:`count_matching`) -- it describes the ring itself, so a
+        filtered dashboard tile can still see "0 of 42 rows match the
+        current filter" context. ``matched`` is the post-filter,
+        post-window subset size; on a fully-unfiltered call it byte-
+        equals ``in_window``.
+
+        Never raises: a failure short-circuits to the neutral all-empty
+        envelope so a paywall dashboard tile keeps rendering.
+        """
+        try:
+            filters = _normalise_filters(
+                event=event, feature=feature, harness=harness,
+                source=source, plan_chosen=plan_chosen,
+            )
+            since_ts, until_ts = _normalise_time_bounds(since, until)
+            with self._lock:
+                snap = list(self._ring)
+            has_window = since_ts is not None or until_ts is not None
+
+            distinct: dict[str, set[str]] = {k: set() for k in _FILTER_KEYS}
+            matched = 0
+            for row in snap:
+                if filters and not _row_matches_filters(row, filters):
+                    continue
+                if has_window and not _row_matches_time_window(
+                    row, since_ts, until_ts,
+                ):
+                    continue
+                matched += 1
+                for key in _FILTER_KEYS:
+                    val = row.get(key, "")
+                    if val:
+                        distinct[key].add(val)
+
+            return {
+                "distinct": {k: sorted(distinct[k]) for k in _FILTER_KEYS},
+                "in_window": len(snap),
+                "matched": matched,
+                "filters": dict(filters),
+                "time_window": {"since": since_ts, "until": until_ts},
+            }
+        except Exception as exc:
+            logger.warning(
+                "paywall.events: distinct_values swallowed error: %s", exc,
+            )
+            return {
+                "distinct": {k: [] for k in _FILTER_KEYS},
+                "in_window": 0,
+                "matched": 0,
+                "filters": {},
+                "time_window": {"since": None, "until": None},
+            }
+
     def reset(self) -> None:
         with self._lock:
             self._ring.clear()
@@ -844,6 +953,33 @@ def first_matching(
     :func:`recent` / :func:`summary` / :func:`count_matching`.
     """
     return _STORE.first_matching(
+        event=event, feature=feature, harness=harness,
+        source=source, plan_chosen=plan_chosen,
+        since=since, until=until,
+    )
+
+
+def distinct_values(
+    *,
+    event: str | None = None,
+    feature: str | None = None,
+    harness: str | None = None,
+    source: str | None = None,
+    plan_chosen: str | None = None,
+    since: Any = None,
+    until: Any = None,
+) -> dict:
+    """Public shim for :meth:`_PaywallEventStore.distinct_values`.
+
+    Returns the sorted set of distinct non-empty values per categorical
+    dimension currently in the ring (post-filter, post-window). Same
+    filter + window contract as :func:`summary` / :func:`recent` /
+    :func:`count_matching`; see :meth:`_PaywallEventStore.distinct_values`
+    for the exact response shape. Used by
+    ``GET /api/paywall/events/distinct`` to populate filter-dropdown
+    options for the paywall dashboard.
+    """
+    return _STORE.distinct_values(
         event=event, feature=feature, harness=harness,
         source=source, plan_chosen=plan_chosen,
         since=since, until=until,
