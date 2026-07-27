@@ -3390,6 +3390,130 @@ def api_entitlement_required_tier():
         )
 
 
+def _has_axis_fallback(axis: str, key: str) -> dict:
+    """OSS-free / never-5xx shape for the ``/api/entitlement/has-*``
+    endpoints, matching the never-crash posture of
+    ``/api/entitlement/required-tier`` and ``/api/entitlement/lock-reason``.
+
+    Same 8-key envelope as the happy-path branch so a frontend can bind
+    ``allowed`` off the URL without a branch on the underlying resolver
+    state. ``axis`` is ``"feature"`` or ``"runtime"`` -- the key name of
+    the input arg -- so a single helper serves both sibling endpoints.
+    """
+    return {
+        axis: key,
+        f"has_{axis}": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "upgrade_required": False,
+    }
+
+
+def _has_axis_body(axis: str, resolver_min_tier, resolver_allow) -> dict:
+    """Happy-path body builder for the ``/api/entitlement/has-*``
+    endpoints -- scalar boolean plus the surrounding required-tier
+    envelope so a paywall tile can bind ``has_feature`` /
+    ``has_runtime`` directly off the URL without a follow-up hit to
+    ``/api/entitlement/required-tier``.
+
+    Envelope keys are byte-stable across ``has_feature`` /
+    ``has_runtime`` (parameterised via ``axis``) and match the tier
+    columns on the sibling ``/required-tier`` body so a cross-endpoint
+    consistency invariant (same tier answer for the same key) can be
+    pinned in tests.
+    """
+    from clawmetry import entitlements as _ent
+
+    key = (request.args.get(axis) or "").strip().lower()
+    ent = _ent.get_entitlement()
+    if axis == "feature":
+        has_flag = _ent.has_feature(key)
+        required = _ent.min_tier_for_feature(key) if key else None
+    else:
+        has_flag = _ent.has_runtime(key)
+        required = _ent.min_tier_for_runtime(key) if key else None
+    # `resolver_*` params kept in the signature so tests can monkeypatch
+    # a single seam if the resolver ever grows a second entry point.
+    _ = (resolver_min_tier, resolver_allow)
+    cur_rank = _ent.tier_rank(ent.tier)
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+    return {
+        axis: key,
+        f"has_{axis}": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": ent.tier,
+        "current_tier_rank": cur_rank,
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-feature")
+def api_entitlement_has_feature():
+    """``GET /api/entitlement/has-feature?feature=<id>`` -- boolean-gate
+    scalar sibling of ``/api/entitlement/required-tier?feature=<id>``.
+
+    Returns ONE boolean (``has_feature``) plus the surrounding tier
+    envelope (``current_tier``, ``required_tier``, ``upgrade_required``)
+    so a paywall tile can bind ``allowed`` directly off this URL without
+    parsing the full required-tier body. Grace-safe: while
+    :attr:`Entitlement.grace` is ``True`` (the current rollout state)
+    ``has_feature`` reports ``True`` for every KNOWN feature id, so
+    wiring this into a gate today changes NO current behavior.
+    Unknown / empty / non-string ids collapse to ``has_feature=False``
+    without an HTTP 4xx (the never-crash posture matches the sibling
+    ``/api/entitlement/required-tier`` and ``/api/entitlement/lock-reason``
+    endpoints). Never 5xx.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        return jsonify(
+            _has_axis_body(
+                "feature",
+                _ent.min_tier_for_feature,
+                _ent.has_feature,
+            )
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_feature: error: %s", exc)
+        key = (request.args.get("feature") or "").strip().lower()
+        return jsonify(_has_axis_fallback("feature", key))
+
+
+@bp_entitlement.route("/api/entitlement/has-runtime")
+def api_entitlement_has_runtime():
+    """``GET /api/entitlement/has-runtime?runtime=<id>`` -- runtime-axis
+    mirror of ``/api/entitlement/has-feature``.
+
+    Same 8-key envelope with ``runtime`` / ``has_runtime`` in the
+    axis-specific slots. Grace-safe: ``has_runtime`` reports ``True``
+    for every known runtime id while grace is on; unknown / empty ids
+    collapse to ``False``. Never 5xx.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        return jsonify(
+            _has_axis_body(
+                "runtime",
+                _ent.min_tier_for_runtime,
+                _ent.has_runtime,
+            )
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_runtime: error: %s", exc)
+        key = (request.args.get("runtime") or "").strip().lower()
+        return jsonify(_has_axis_fallback("runtime", key))
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:

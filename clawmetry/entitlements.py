@@ -5321,6 +5321,79 @@ def min_tier_for_runtime(runtime: str) -> str | None:
     return None
 
 
+def has_feature(feature: str) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow ``feature``?
+
+    Thin module-level scalar around
+    :meth:`Entitlement.allows_feature` on the resolved entitlement, so a
+    caller can bind ONE boolean into an ``if``/JSX conditional without
+    walking the ``ent.features`` frozenset or parsing the surrounding
+    ``/api/entitlement/required-tier`` envelope. Sibling of
+    :func:`min_tier_for_feature` on the same axis: that one answers
+    "cheapest tier that would unlock this"; this one answers "does the
+    resolved entitlement grant it right now?".
+
+    Grace semantics: :meth:`Entitlement.allows_feature` returns ``True``
+    for every feature while ``ent.grace`` is ``True`` (the current
+    rollout state -- see the module-level "Rollout: GRACE vs ENFORCE"
+    docstring), so wiring this into a paywall gate today changes NO
+    current behavior. Enforcement flips on when :func:`is_enforced`
+    returns ``True`` and the resolver stops setting ``grace``. For a
+    forward-looking "would this be locked once enforcement is on?" gate,
+    compare :func:`min_tier_for_feature` against
+    :attr:`Entitlement.tier` explicitly -- this scalar deliberately
+    reflects the LIVE grant so a UI wired off it doesn't render locks
+    before the enforce date.
+
+    Unknown / non-string / empty ids collapse to ``False`` -- we do NOT
+    inherit the grace-mode "everything allowed" answer for junk input,
+    else a typo like ``has_feature("Fleet")`` (uppercase F, dropped by
+    the strip-lower) would silently render as granted in grace and
+    quietly flip to denied on enforcement. The strict validity gate
+    catches the typo at the callsite.
+
+    Never raises: any resolver blowup collapses to ``False`` so a
+    caller can bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        f = (feature or "").strip().lower()
+        if not f or f not in ALL_FEATURES:
+            return False
+        return bool(get_entitlement().allows_feature(f))
+    except Exception as exc:
+        logger.warning("entitlements: has_feature(%r) failed: %s", feature, exc)
+        return False
+
+
+def has_runtime(runtime: str) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow ``runtime``?
+
+    Runtime-axis mirror of :func:`has_feature`, wrapping
+    :meth:`Entitlement.allows_runtime` on the resolved entitlement.
+    Same grace pass-through semantics -- ``True`` for every known
+    runtime while ``ent.grace`` is ``True`` -- so wiring this in
+    changes NO current behavior; post-enforcement it returns ``True``
+    iff ``runtime`` is in :data:`FREE_RUNTIMES` OR the resolved tier
+    grants it AND the license is not expired.
+
+    Unknown / non-string / empty ids collapse to ``False`` for the
+    same typo-catches-at-callsite reason as :func:`has_feature`
+    (``has_runtime("ClaudeCode")`` would silently render as granted in
+    grace under an unconditional pass-through; the strict validity
+    gate flips it to a loud ``False`` at the callsite).
+
+    Never raises: any resolver blowup collapses to ``False``.
+    """
+    try:
+        rt = (runtime or "").strip().lower()
+        if not rt or rt not in ALL_RUNTIMES:
+            return False
+        return bool(get_entitlement().allows_runtime(rt))
+    except Exception as exc:
+        logger.warning("entitlements: has_runtime(%r) failed: %s", runtime, exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
