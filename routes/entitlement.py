@@ -8420,6 +8420,83 @@ def api_license_is_perpetual():
         return jsonify({"perpetual": False, "has_license": False, "has_exp": False})
 
 
+@bp_entitlement.route("/api/license/pro-installed")
+def api_license_pro_installed():
+    """``GET /api/license/pro-installed`` -- scalar gate for "is the paid
+    wheel actually importable right now?".
+
+    Payload:
+
+      * ``installed`` -- ``True`` iff Python can currently import
+        ``clawmetry-pro``. Complements ``/api/license/tier`` (which reads
+        the license *claim*): a healthy Pro node needs both a signed
+        Pro-tier license AND the wheel on-disk, and splitting them lets
+        an operator diagnose "activated but wheel missing"
+        (``CLAWMETRY_OFFLINE=1`` install, air-gapped node, failed
+        download) apart from "wheel installed but licence expired"
+        (paid feature stops unlocking on renewal lapse).
+      * ``version`` -- the ``importlib.metadata`` version string when
+        installed, else ``None``. A UI can render ``vX.Y.Z`` next to a
+        green "Pro installed" badge without a second call.
+
+    Wrapper around :func:`clawmetry.license.pro_installed` /
+    :func:`clawmetry.license.pro_installed_version`.
+
+    Never 5xxs. Any underlying introspection failure degrades to
+    ``{"installed": False, "version": None}`` at HTTP 200, matching the
+    never-crash posture of the paired scalar license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        version = _lic.pro_installed_version()
+        return jsonify(
+            {
+                "installed": bool(version),
+                "version": version,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_pro_installed: error: %s", exc)
+        return jsonify({"installed": False, "version": None})
+
+
+@bp_entitlement.route("/api/license/pro-installation")
+def api_license_pro_installation():
+    """``GET /api/license/pro-installation`` -- combined install-state view
+    for the ``clawmetry-pro`` wheel.
+
+    Payload -- the same envelope
+    :func:`clawmetry.license.pro_installation_info` returns:
+
+      * ``installed`` -- ``True`` iff ``clawmetry-pro`` is currently
+        importable.
+      * ``version`` -- live ``importlib.metadata`` version string when
+        installed, else ``None``.
+      * ``marker`` -- ``~/.clawmetry/pro_installed.json`` sidecar written
+        at provision time (``installed_at`` unix seconds, ``source``,
+        ``node_id``, and the ``version`` recorded at write time). ``{}``
+        when the marker file is missing / unreadable.
+
+    Live version and marker can disagree in normal operation (marker
+    present but wheel was pip-uninstalled; wheel present but marker
+    never written on a pre-marker install), and that disagreement is
+    exactly what an operator debugging a paywall glitch needs to see, so
+    both are surfaced side-by-side rather than collapsed into a single
+    boolean.
+
+    Never 5xxs. Any underlying introspection failure degrades to
+    ``{"installed": False, "version": None, "marker": {}}`` at HTTP 200.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        return jsonify(_lic.pro_installation_info())
+    except Exception as exc:
+        logger.warning("api_license_pro_installation: error: %s", exc)
+        return jsonify({"installed": False, "version": None, "marker": {}})
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

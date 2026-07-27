@@ -1191,3 +1191,85 @@ def is_perpetual() -> bool:
     except Exception as exc:
         logger.warning("license: is_perpetual failed: %s", exc)
         return False
+
+
+def pro_installed_version() -> str | None:
+    """Public alias for :func:`_pro_installed_version` -- the on-disk
+    ``clawmetry-pro`` package version, or ``None`` if the paid wheel is
+    not importable.
+
+    Kept as a thin wrapper so external callers (routes, CLI, dashboards)
+    can bind to a stable public name without reaching into the underscore
+    helper. The underlying reader is idempotent (pure ``importlib.metadata``
+    lookup) and never raises; this wrapper preserves both properties.
+    """
+    try:
+        return _pro_installed_version()
+    except Exception as exc:
+        logger.debug("license: pro_installed_version wrapper failed: %s", exc)
+        return None
+
+
+def pro_installed() -> bool:
+    """Scalar gate for "is the paid wheel actually importable right now?"
+
+    Returns ``True`` iff :func:`pro_installed_version` returns a non-empty
+    version string. Every other state -- wheel never provisioned, wheel
+    unpacked but ``importlib.metadata`` can't see it, transient
+    introspection failure -- collapses to ``False`` so a paywall renderer
+    or a health tile bound to this helper never crashes on a partial
+    install.
+
+    Complements :func:`is_tier` / :func:`license_tier` (which read the
+    license *claim*): a healthy Pro install must have both a signed
+    Pro-tier claim AND the wheel on-disk. Splitting the two lets an
+    operator diagnose "activated but wheel missing" (download failed,
+    ``CLAWMETRY_OFFLINE=1`` on a fresh install, air-gapped node) from
+    "wheel installed but license expired" (paid feature stops unlocking
+    on renewal lapse).
+
+    Never raises.
+    """
+    return bool(pro_installed_version())
+
+
+def pro_installation_info() -> dict:
+    """Operator-facing description of the ``clawmetry-pro`` install state.
+
+    Combines the two independent facts a paywall / install-health UI
+    typically wants together:
+
+    * ``installed`` / ``version`` -- can Python actually import
+      ``clawmetry-pro`` right now? (Live ``importlib.metadata`` probe.)
+    * ``marker`` -- the ``~/.clawmetry/pro_installed.json`` sidecar written
+      by :func:`_write_pro_marker` at provision time
+      (``installed_at`` unix seconds, ``source``, ``node_id``, the
+      ``version`` recorded at write time). ``{}`` when the marker file is
+      missing or unreadable.
+
+    The two can disagree in normal operation (marker present but wheel
+    was pip-uninstalled; wheel present but marker never written on a
+    pre-marker install), and that disagreement is exactly what an
+    operator debugging a paywall glitch needs to see, so both are
+    surfaced side-by-side rather than collapsed.
+
+    Never raises -- any underlying failure degrades to
+    ``{installed: False, version: None, marker: {}}`` so a UI bound to
+    this helper never breaks on a partial install."""
+    try:
+        version = pro_installed_version()
+    except Exception as exc:
+        logger.debug("license: pro_installation_info version read failed: %s", exc)
+        version = None
+    try:
+        marker = _read_pro_marker()
+    except Exception as exc:
+        logger.debug("license: pro_installation_info marker read failed: %s", exc)
+        marker = {}
+    if not isinstance(marker, dict):
+        marker = {}
+    return {
+        "installed": bool(version),
+        "version": version,
+        "marker": marker,
+    }
