@@ -1275,6 +1275,7 @@ def pro_installation_info() -> dict:
     }
 
 
+
 def license_nodes() -> int | None:
     """Scalar view onto the installed license's ``nodes`` claim -- the paid
     node-coverage count -- for a fleet/capacity tile that wants ONE integer
@@ -1349,3 +1350,72 @@ def is_within_node_limit(nodes: int) -> bool:
     if limit is None:
         return False
     return requested <= limit
+
+
+def has_license() -> bool:
+    """True iff a license file exists on disk at :data:`LICENSE_PATH`.
+
+    The bare install-state gate: answers "does this operator have ANY
+    license file at all?" without caring whether the signature verifies,
+    whether the ``exp`` claim is in the past, or whether the payload
+    tier/nodes are anything reasonable. A dashboard that wants to render
+    a subtly-different empty state for "Free (never activated)" vs
+    "Free (license expired / broken)" binds to this scalar; a paywall
+    tile that only cares about entitlement should use
+    :func:`is_license_valid` instead.
+
+    Complements :func:`license_tier` / :func:`is_tier`, which both
+    collapse to ``None`` / ``False`` on the invalid-signature and
+    expired branches -- callers wanting to distinguish "has a broken
+    file" from "has nothing" need this presence gate as a separate
+    signal.
+
+    Never raises. Any underlying filesystem failure (perms, race with
+    a concurrent ``deactivate``) collapses to ``False`` so a paywall
+    renderer bound to this scalar never crashes on a partial install.
+    """
+    try:
+        return os.path.isfile(LICENSE_PATH)
+    except Exception as exc:
+        logger.debug("license: has_license failed: %s", exc)
+        return False
+
+
+def is_license_valid() -> bool:
+    """True iff a license is installed, signature-valid, AND not expired.
+
+    The single boolean gate every paywall tile actually wants: "is this
+    node entitled right now?". Pairs with :func:`has_license` -- the
+    presence gate answers "does a file exist?", this one answers "is
+    the file trustworthy AND live?". A UI wanting to distinguish "no
+    license" from "broken license" from "lapsed license" from "live
+    license" reads both scalars together (plus :func:`is_expired` /
+    :func:`current_license_info().status` for the specific broken /
+    lapsed reason).
+
+    Returns ``False`` on every one of:
+
+    * No license file on disk (:func:`has_license` is ``False``).
+    * File exists but signature does not verify (an attacker could
+      stuff any tier/nodes/exp into an unsigned body, so we treat the
+      whole install as untrusted).
+    * File exists, signature verifies, but ``exp`` is in the past.
+
+    Returns ``True`` iff the ``current_license_info().valid`` flag is
+    truthy for the installed file -- which is the same source of truth
+    :func:`license_tier` / :func:`is_tier` / :func:`license_nodes`
+    already use to gate their entitlement scalars, so a UI binding all
+    four sees a consistent snapshot.
+
+    Never raises. Any underlying introspection failure collapses to
+    ``False`` so a scheduled paywall renderer never crashes on a bad
+    install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.warning("license: is_license_valid failed: %s", exc)
+        return False
+    if not isinstance(info, dict):
+        return False
+    return bool(info.get("valid"))
