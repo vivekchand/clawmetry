@@ -104,6 +104,7 @@ from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
 from routes.overview import bp_overview
+from routes.trial import bp_trial
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
@@ -11709,6 +11710,7 @@ def detect_config(args=None):
         app.register_blueprint(bp_runtime_ingest)
     app.register_blueprint(bp_otlp_traces)
     app.register_blueprint(bp_overview)
+    app.register_blueprint(bp_trial)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)

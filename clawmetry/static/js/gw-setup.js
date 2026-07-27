@@ -163,13 +163,113 @@ async function _gwApplyRuntimeDetection() {
   }
 }
 
-// Placeholder until the local-trial endpoint lands (task: local trial).
-// Falls back to the existing cloud sign-up path so the button is never dead.
+// ── Local trial activation ─────────────────────────────────────────────
+// Email + OTP, then everything continues locally: the cloud mints a signed
+// 7-day trial key, /api/trial/activate writes it to this install, and the
+// entitlement flips without the user ever leaving this dashboard. Uses the
+// existing /api/cloud-cta/send-otp proxy for the code email. Google/GitHub
+// sign-in stays available via the existing cloud modal (accounts are
+// trial-by-default there, so that path unlocks too).
+
+function _gwTrialErr(msg) {
+  var e = document.getElementById('gw-trial-error');
+  if (e) { e.textContent = msg || ''; e.style.display = msg ? '' : 'none'; }
+}
+
 function gwStartTrial() {
-  if (typeof openCloudModal === 'function') {
-    document.getElementById('gw-setup-overlay').style.display = 'none';
-    openCloudModal();
-  }
+  var cta = document.getElementById('gw-detected-cta');
+  if (!cta) return;
+  cta.innerHTML =
+    '<div style="text-align:left;">' +
+      '<p style="color:var(--text-muted,#888); font-size:12px; margin:0 0 8px; line-height:1.5;">' +
+        'Enter your email to start your 7-day free trial. Your data stays on this machine.' +
+      '</p>' +
+      '<input id="gw-trial-email" type="email" placeholder="you@company.com" ' +
+        'style="width:100%; padding:10px 12px; border:1px solid var(--border-primary,#444); border-radius:8px; background:var(--bg-primary,#111); color:var(--text-primary,#fff); font-size:13px; box-sizing:border-box; outline:none; margin-bottom:8px;" ' +
+        'onkeydown="if(event.key===\'Enter\')gwTrialSendCode()">' +
+      '<div id="gw-trial-error" style="display:none; color:#ff4444; font-size:12px; margin-bottom:8px;"></div>' +
+      '<button id="gw-trial-send-btn" onclick="gwTrialSendCode()" style="width:100%; padding:11px; border:none; border-radius:8px; background:var(--bg-accent,#0f6fff); color:#fff; font-size:14px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">Email me a code</button>' +
+      '<p style="color:var(--text-faint,#555); font-size:11px; margin:10px 0 0; text-align:center;">' +
+        'Prefer <a href="#" onclick="if(typeof openCloudModal===\'function\'){document.getElementById(\'gw-setup-overlay\').style.display=\'none\';openCloudModal();}return false;" style="color:var(--text-muted,#888);">Google or GitHub sign-in</a>?' +
+      '</p>' +
+    '</div>';
+  setTimeout(function () { var el = document.getElementById('gw-trial-email'); if (el) el.focus(); }, 50);
+}
+
+var _gwTrialEmail = '';
+function gwTrialSendCode() {
+  var emailEl = document.getElementById('gw-trial-email');
+  var email = (emailEl && emailEl.value || '').trim();
+  if (!email || email.indexOf('@') < 0) { _gwTrialErr('Enter a valid email.'); return; }
+  _gwTrialErr('');
+  _gwTrialEmail = email;
+  var btn = document.getElementById('gw-trial-send-btn');
+  if (btn) { btn.textContent = 'Sending code'; btn.disabled = true; }
+  fetch('/api/cloud-cta/send-otp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email }),
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (d.ok === false) {
+      _gwTrialErr(d.error || 'Could not send the code. Try again.');
+      if (btn) { btn.textContent = 'Email me a code'; btn.disabled = false; }
+      return;
+    }
+    _gwTrialCodeStep();
+  }).catch(function () {
+    _gwTrialErr('Network error. Try again.');
+    if (btn) { btn.textContent = 'Email me a code'; btn.disabled = false; }
+  });
+}
+
+function _gwTrialCodeStep() {
+  var cta = document.getElementById('gw-detected-cta');
+  if (!cta) return;
+  cta.innerHTML =
+    '<div style="text-align:left;">' +
+      '<p style="color:var(--text-muted,#888); font-size:12px; margin:0 0 8px; line-height:1.5;">' +
+        'We emailed a 6-digit code to <span style="color:var(--text-primary,#fff);">' + _gwTrialEmail + '</span>.' +
+      '</p>' +
+      '<input id="gw-trial-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456" ' +
+        'style="width:100%; padding:10px 12px; border:1px solid var(--border-primary,#444); border-radius:8px; background:var(--bg-primary,#111); color:var(--text-primary,#fff); font-size:16px; letter-spacing:6px; text-align:center; font-family:monospace; box-sizing:border-box; outline:none; margin-bottom:8px;" ' +
+        'onkeydown="if(event.key===\'Enter\')gwTrialActivate()">' +
+      '<div id="gw-trial-error" style="display:none; color:#ff4444; font-size:12px; margin-bottom:8px;"></div>' +
+      '<button id="gw-trial-activate-btn" onclick="gwTrialActivate()" style="width:100%; padding:11px; border:none; border-radius:8px; background:var(--bg-accent,#0f6fff); color:#fff; font-size:14px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">Activate trial</button>' +
+      '<p style="color:var(--text-faint,#555); font-size:11px; margin:8px 0 0; text-align:center;">' +
+        '<a href="#" onclick="gwStartTrial();return false;" style="color:var(--text-muted,#888);">Use a different email</a>' +
+      '</p>' +
+    '</div>';
+  setTimeout(function () { var el = document.getElementById('gw-trial-code'); if (el) el.focus(); }, 50);
+}
+
+function gwTrialActivate() {
+  var codeEl = document.getElementById('gw-trial-code');
+  var code = (codeEl && codeEl.value || '').replace(/\s/g, '');
+  if (code.length !== 6) { _gwTrialErr('Enter the 6-digit code from your email.'); return; }
+  _gwTrialErr('');
+  var btn = document.getElementById('gw-trial-activate-btn');
+  if (btn) { btn.textContent = 'Activating'; btn.disabled = true; }
+  fetch('/api/trial/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: _gwTrialEmail, code: code }),
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) {
+      _gwTrialErr(d.error || 'Activation failed. Try again.');
+      if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
+      return;
+    }
+    var cta = document.getElementById('gw-detected-cta');
+    if (cta) {
+      cta.innerHTML =
+        '<p style="color:#4ade80; font-size:13px; font-weight:600; margin:0 0 4px; text-align:center;">Trial active</p>' +
+        '<p style="color:var(--text-muted,#888); font-size:12px; margin:0; text-align:center;">Your agent runtimes are now being watched. Reloading&hellip;</p>';
+    }
+    setTimeout(function () { location.reload(); }, 1200);
+  }).catch(function () {
+    _gwTrialErr('Network error. Try again.');
+    if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
+  });
 }
 
 function _isCloudModalOpen() {
