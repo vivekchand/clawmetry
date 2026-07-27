@@ -235,6 +235,13 @@ def parse_license(token: str):
         elif tier_in == "starter":
             # Self-hosted Starter keys ($90/node/yr) issued by the cloud.
             tier = _ent.TIER_CLOUD_STARTER
+        elif tier_in == "trial":
+            # Local-trial keys (7 days, minted by /api/license/trial after
+            # email verification). MUST map to TIER_TRIAL explicitly: the
+            # forward-compat fallback below coerces unknown tiers to Pro,
+            # which would silently turn every time-boxed trial into a full
+            # Pro entitlement.
+            tier = _ent.TIER_TRIAL
         else:
             # Unknown tiers still default to Pro (forward compatibility).
             tier = _ent.TIER_PRO
