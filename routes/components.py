@@ -756,43 +756,38 @@ def api_component_runtime():
             items.append({"label": "Uptime", "value": up, "status": "ok"})
     except Exception:
         pass
-    # Memory
+    # Memory — portable (`free` is Linux-only; absent on macOS and Windows).
     try:
-        mem = (
-            subprocess.check_output(["free", "-h"], timeout=5)
-            .decode()
-            .strip()
-            .split("\n")
-        )
-        if len(mem) >= 2:
-            parts = mem[1].split()
-            used, total = parts[2], parts[1]
-            items.append(
-                {"label": "Memory", "value": f"{used} / {total}", "status": "ok"}
-            )
+        from helpers.system import memory_usage
+
+        mu = memory_usage()
+        if mu:
+            items.append({
+                "label": "Memory",
+                "value": (
+                    f"{round(mu['used_mb'] / 1024, 1)}G / "
+                    f"{round(mu['total_mb'] / 1024, 1)}G"
+                ),
+                "status": "ok",
+            })
     except Exception:
         pass
-    # Disk
+    # Disk — portable (`df` does not exist on Windows).
     try:
-        df = (
-            subprocess.check_output(["df", "-h", "/"], timeout=5)
-            .decode()
-            .strip()
-            .split("\n")
-        )
-        if len(df) >= 2:
-            parts = df[1].split()
-            items.append(
-                {
-                    "label": "Disk /",
-                    "value": f"{parts[2]} / {parts[1]} ({parts[4]} used)",
-                    "status": "critical"
-                    if int(parts[4].replace("%", "")) > 90
-                    else "warning"
-                    if int(parts[4].replace("%", "")) > 80
-                    else "ok",
-                }
-            )
+        from helpers.system import disk_usage
+
+        du = disk_usage()
+        if du:
+            pct = int(round(du["pct"]))
+            items.append({
+                "label": f"Disk {du['mount']}",
+                "value": f"{du['used_gb']}G / {du['total_gb']}G ({pct}% used)",
+                "status": "critical"
+                if pct > 90
+                else "warning"
+                if pct > 80
+                else "ok",
+            })
     except Exception:
         pass
     # Node.js
@@ -814,19 +809,16 @@ def api_component_machine():
     items.append({"label": "Hostname", "value": socket.gethostname(), "status": "ok"})
     # IP
     items.append({"label": "IP", "value": _d.get_local_ip(), "status": "ok"})
-    # CPU
+    # CPU — /proc/cpuinfo is Linux-only; helpers.system falls back to the
+    # Windows registry / macOS sysctl / platform.processor().
     try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("model name"):
-                    items.append(
-                        {
-                            "label": "CPU",
-                            "value": line.split(":")[1].strip(),
-                            "status": "ok",
-                        }
-                    )
-                    break
+        from helpers.system import cpu_model
+
+        items.append({
+            "label": "CPU",
+            "value": cpu_model() or "unknown",
+            "status": "ok",
+        })
     except Exception:
         items.append(
             {"label": "CPU", "value": platform.processor() or "unknown", "status": "ok"}
@@ -835,19 +827,35 @@ def api_component_machine():
     items.append(
         {"label": "CPU Cores", "value": str(os.cpu_count() or "?"), "status": "ok"}
     )
-    # Load average
+    # Load average — os.getloadavg() raises AttributeError on Windows, which
+    # dropped this row entirely. Report CPU utilisation there instead.
     try:
-        load = os.getloadavg()
+        from helpers.system import cpu_percent, load_average
+
         cores = os.cpu_count() or 1
-        load_str = f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}"
-        status = (
-            "critical"
-            if load[0] > cores * 2
-            else "warning"
-            if load[0] > cores
-            else "ok"
-        )
-        items.append({"label": "Load (1/5/15m)", "value": load_str, "status": status})
+        load = load_average()
+        if load:
+            items.append({
+                "label": "Load (1/5/15m)",
+                "value": f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}",
+                "status": "critical"
+                if load[0] > cores * 2
+                else "warning"
+                if load[0] > cores
+                else "ok",
+            })
+        else:
+            cp = cpu_percent()
+            if cp is not None:
+                items.append({
+                    "label": "CPU Usage",
+                    "value": f"{cp}%",
+                    "status": "critical"
+                    if cp > 90
+                    else "warning"
+                    if cp > 75
+                    else "ok",
+                })
     except Exception:
         pass
     # GPU

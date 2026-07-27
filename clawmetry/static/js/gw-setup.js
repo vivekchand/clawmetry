@@ -42,11 +42,134 @@ async function checkGwConfig() {
       // open cloud modal — the two share the same backdrop and confuse the
       // user. Defer until the cloud modal closes.
       if (_isCloudModalOpen()) return;
+      await _gwApplyRuntimeDetection();
       document.getElementById('gw-setup-overlay').style.display = 'flex';
     } else {
       updateGwStatus(true, d.url);
     }
   } catch(e) {}
+}
+
+// ── Runtime-aware setup ────────────────────────────────────────────────
+// ClawMetry watches 14 runtimes but this wizard used to demand an OpenClaw
+// gateway token unconditionally. On a machine running only Claude Code that
+// is a dead end: the user has no gateway, no token, and no way past the
+// modal. Worse on Windows, where the "how to find your token" hint printed a
+// POSIX pipeline that cannot run there. Detection now decides what this step
+// asks for. The backend already existed at
+// /api/entitlement/runtime-detection; nothing was consuming it.
+
+function _gwIsWindows() {
+  try {
+    var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (/win/i.test(p)) return true;
+    return /Windows/i.test(navigator.userAgent || '');
+  } catch (e) { return false; }
+}
+
+function gwShowOpenClawBlock() {
+  var b = document.getElementById('gw-openclaw-block');
+  var t = document.getElementById('gw-openclaw-toggle');
+  if (b) b.style.display = '';
+  if (t) t.style.display = 'none';
+}
+
+function _gwRuntimeRow(p) {
+  var badge = !p.allowed
+    ? '<span style="font-size:10px; padding:2px 7px; border-radius:99px; background:rgba(255,180,0,0.14); color:#ffb400; white-space:nowrap;">needs ' + (p.required_tier_label || 'an upgrade') + '</span>'
+    : '<span style="font-size:10px; padding:2px 7px; border-radius:99px; background:rgba(74,222,128,0.14); color:#4ade80; white-space:nowrap;">watching</span>';
+  return '' +
+    '<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 12px; margin-bottom:6px; border:1px solid var(--border-primary,#333); border-radius:8px; background:var(--bg-primary,#111);">' +
+      '<span style="display:flex; align-items:center; gap:8px; min-width:0;">' +
+        '<span style="color:#4ade80; font-size:13px;">&#10003;</span>' +
+        '<span style="color:var(--text-primary,#fff); font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (p.label || p.id) + '</span>' +
+      '</span>' + badge +
+    '</div>';
+}
+
+async function _gwApplyRuntimeDetection() {
+  var sub = document.getElementById('gw-setup-sub');
+  var block = document.getElementById('gw-detected-block');
+  var list = document.getElementById('gw-detected-list');
+  var cta = document.getElementById('gw-detected-cta');
+  var ocBlock = document.getElementById('gw-openclaw-block');
+  var ocToggle = document.getElementById('gw-openclaw-toggle');
+  var overlay = document.getElementById('gw-setup-overlay');
+  var closeBtn = document.getElementById('gw-setup-close');
+
+  // Windows has no `cat`, so swap the token hint for a PowerShell one.
+  if (_gwIsWindows()) {
+    var hint = document.getElementById('gw-hint-local');
+    if (hint) {
+      hint.textContent =
+        '(Get-Content ~/.openclaw/openclaw.json | ConvertFrom-Json).gateway.auth.token';
+    }
+  }
+
+  var det = null;
+  try {
+    var r = await fetch('/api/entitlement/runtime-detection');
+    det = await r.json();
+  } catch (e) { return; }
+  if (!det || !det.probes) return;
+
+  var found = det.probes.filter(function (p) { return p.found; });
+  var selfHosted = det.probes.filter(function (p) {
+    return (p.id === 'openclaw' || p.id === 'nemoclaw') && p.found;
+  });
+
+  // OpenClaw is here: the token step is the right ask, so keep it as-is.
+  if (selfHosted.length) return;
+
+  // No OpenClaw on this machine. The token form must not be the mandatory
+  // first step, and the modal must be dismissible.
+  if (ocBlock) ocBlock.style.display = 'none';
+  if (ocToggle) ocToggle.style.display = '';
+  if (overlay) overlay.dataset.mandatory = 'false';
+  if (closeBtn) closeBtn.style.display = '';
+
+  if (!found.length) {
+    // Nothing detected. Stay runtime neutral rather than naming one runtime
+    // the user may never have heard of.
+    if (sub) sub.textContent = 'No AI agent runtimes found on this machine yet. Start one and ClawMetry picks it up automatically.';
+    return;
+  }
+
+  var names = found.map(function (p) { return p.label; });
+  if (sub) {
+    sub.textContent = names.length === 1
+      ? 'ClawMetry found ' + names[0] + ' on this machine.'
+      : 'ClawMetry found ' + names.length + ' agent runtimes on this machine.';
+  }
+  if (list) list.innerHTML = found.map(_gwRuntimeRow).join('');
+  if (block) block.style.display = '';
+
+  var locked = found.filter(function (p) { return !p.allowed; });
+  if (cta) {
+    if (locked.length) {
+      var tier = det.actionable_tier_label || 'Starter';
+      cta.innerHTML =
+        '<p style="color:var(--text-muted,#888); font-size:12px; margin:0 0 10px; text-align:left; line-height:1.5;">' +
+          'Watching ' + locked.map(function (p) { return p.label; }).join(', ') +
+          ' is part of ' + tier + '. Start a free trial to turn it on now.' +
+        '</p>' +
+        '<button id="gw-trial-btn" onclick="gwStartTrial()" style="width:100%; padding:12px; border:none; border-radius:8px; background:var(--bg-accent,#0f6fff); color:#fff; font-size:15px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">Start free trial</button>';
+    } else {
+      cta.innerHTML =
+        '<p style="color:var(--text-muted,#888); font-size:12px; margin:0; text-align:left;">' +
+          'These are watched on your current plan. Data appears as your agents run.' +
+        '</p>';
+    }
+  }
+}
+
+// Placeholder until the local-trial endpoint lands (task: local trial).
+// Falls back to the existing cloud sign-up path so the button is never dead.
+function gwStartTrial() {
+  if (typeof openCloudModal === 'function') {
+    document.getElementById('gw-setup-overlay').style.display = 'none';
+    openCloudModal();
+  }
 }
 
 function _isCloudModalOpen() {

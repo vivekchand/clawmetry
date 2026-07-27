@@ -3900,12 +3900,23 @@ def _encode_cwd_for_claude_projects(cwd: str) -> str:
     """Reproduce Claude Code's project-dir naming convention.
 
     Claude Code derives the ``~/.claude/projects/<dir>`` slug by replacing
-    both ``/`` and ``.`` with ``-`` in the agent's CWD. So
+    every path-structural character in the agent's CWD with ``-``. So
     ``/Users/vivek/.openclaw/workspace`` → ``-Users-vivek--openclaw-workspace``
     (the leading ``-`` comes from the absolute path's leading ``/``; the
     consecutive ``--`` comes from ``/.`` collapsing).
+
+    Windows paths use ``\\`` as the separator and carry a drive-letter
+    ``:``; both collapse to ``-`` the same way, so ``C:\\Users\\Vivek`` →
+    ``C--Users-Vivek``. Handling only ``/`` and ``.`` (the pre-2026-07
+    behaviour) left every Windows install constructing a path that can
+    never exist on disk, so Claude Code sessions silently never synced
+    there — the caller's ``~/.claude/projects/*`` scan fallback was doing
+    all the work, and it only fires when a session id is already known.
     """
-    return (cwd or "").replace("/", "-").replace(".", "-")
+    out = cwd or ""
+    for _ch in ("/", "\\", ":", "."):
+        out = out.replace(_ch, "-")
+    return out
 
 
 def _looks_like_openclaw_process(proc) -> bool:

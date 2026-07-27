@@ -276,6 +276,29 @@ def test_encode_cwd_matches_claude_code_convention():
     assert enc("/srv/app.dir/work") == "-srv-app-dir-work"
 
 
+def test_encode_cwd_handles_windows_paths():
+    """Windows CWDs must collapse ``\\`` and the drive-letter ``:`` too.
+
+    Ground truth: on a Windows host with CWD ``C:\\Users\\Vivek``, Claude
+    Code writes to ``~/.claude/projects/C--Users-Vivek/``. Encoding only
+    ``/`` and ``.`` returned the CWD unchanged, so the constructed path
+    never existed and Claude Code sessions never synced on Windows.
+    """
+    from clawmetry import sync as sync_mod
+    enc = sync_mod._encode_cwd_for_claude_projects
+
+    assert enc(r"C:\Users\Vivek") == "C--Users-Vivek"
+    # Nested workspace, and a dot-dir mid-path.
+    assert (
+        enc(r"C:\Users\Vivek\.openclaw\workspace")
+        == "C--Users-Vivek--openclaw-workspace"
+    )
+    # Non-C drive letters get the same treatment.
+    assert enc(r"D:\work\repo") == "D--work-repo"
+    # UNC share: the leading double backslash collapses to "--".
+    assert enc(r"\\server\share\proj") == "--server-share-proj"
+
+
 def test_translate_handles_lines_without_timestamp(sync_with_isolated_store):
     """Lines lacking ``timestamp`` are silently dropped — the events
     table indexes on ts so storing NULL would corrupt the read path."""

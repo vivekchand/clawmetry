@@ -12474,13 +12474,26 @@ DASHBOARD_HTML = r"""
     <button id="gw-setup-close" onclick="document.getElementById('gw-setup-overlay').style.display='none'" style="display:none; position:absolute; top:12px; right:16px; background:none; border:none; color:var(--text-muted, #888); font-size:22px; cursor:pointer; padding:4px 8px; line-height:1;">✕</button>
     <img src="/static/img/logo.svg" style="width:64px;height:64px;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
     <h2 style="color:var(--text-primary, #fff); margin:0 0 8px; font-size:24px; font-weight:700;">ClawMetry Setup</h2>
-    <p style="color:var(--text-muted, #888); margin:0 0 24px; font-size:14px;">Enter your OpenClaw gateway token to connect.</p>
-    <input id="gw-token-input" type="password" placeholder="Paste your gateway token" 
+    <p id="gw-setup-sub" style="color:var(--text-muted, #888); margin:0 0 24px; font-size:14px;">Looking for AI agents on this machine.</p>
+
+    <!-- Runtime detection panel. Populated by gw-setup.js from
+         /api/entitlement/runtime-detection. ClawMetry watches 14 runtimes,
+         so the setup step must not assume OpenClaw: a machine running only
+         Claude Code used to get an OpenClaw token wall it could never
+         satisfy (and a POSIX shell command on Windows). -->
+    <div id="gw-detected-block" style="display:none; text-align:left; margin:0 0 20px;">
+      <div style="font-weight:600; color:var(--text-secondary, #aaa); font-size:12px; text-transform:uppercase; letter-spacing:0.04em; margin:0 0 10px;">Found on this machine</div>
+      <div id="gw-detected-list"></div>
+      <div id="gw-detected-cta" style="margin-top:16px;"></div>
+    </div>
+
+    <div id="gw-openclaw-block">
+    <input id="gw-token-input" type="password" placeholder="Paste your gateway token"
       style="width:100%; padding:12px 16px; border:1px solid var(--border-primary, #444); border-radius:8px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:14px; font-family:monospace; box-sizing:border-box; outline:none; margin-bottom:8px;"
       onkeydown="if(event.key==='Enter')gwSetupConnect()">
     <div id="gw-setup-hint" style="color:var(--text-muted, #888); font-size:12px; margin:0 0 4px; text-align:left;">
       <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:6px 0 4px;">Local install (pip / brew / install.sh)</div>
-      <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">cat ~/.openclaw/openclaw.json | python3 -c "import json,sys;print(json.load(sys.stdin)['gateway']['auth']['token'])"</code>
+      <code id="gw-hint-local" style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">cat ~/.openclaw/openclaw.json | python3 -c "import json,sys;print(json.load(sys.stdin)['gateway']['auth']['token'])"</code>
       <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Docker install</div>
       <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">docker exec $(docker ps -q) env | grep TOKEN</code>
       <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Remote / Docker / reverse-proxy</div>
@@ -12494,6 +12507,14 @@ DASHBOARD_HTML = r"""
       Connect
     </button>
     <p style="color:var(--text-faint, #555); font-size:11px; margin:16px 0 0;">Token is stored locally on this ClawMetry instance.</p>
+    </div><!-- /gw-openclaw-block -->
+
+    <!-- Shown instead of the token form when OpenClaw is not on this
+         machine. Keeps the gateway path one click away without making it
+         the mandatory first step. -->
+    <div id="gw-openclaw-toggle" style="display:none; margin-top:4px;">
+      <a href="#" onclick="gwShowOpenClawBlock();return false;" style="color:var(--text-muted, #888); font-size:12px; text-decoration:underline; cursor:pointer;">I run an OpenClaw gateway, let me paste a token</a>
+    </div>
   </div>
 </div>
 

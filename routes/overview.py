@@ -37,6 +37,65 @@ from clawmetry.config import is_local_store_read_enabled
 bp_overview = Blueprint('overview', __name__)
 
 
+def _system_rows() -> list:
+    """Disk / RAM / Load rows for the dashboard's system panel.
+
+    Shape is ``[[label, value, colour], ...]`` — unchanged from the legacy
+    inline blocks this replaces (there were two near-identical copies, one
+    per overview handler).
+
+    Previously each row shelled out to ``df -h /`` / ``free -h`` or read
+    ``/proc/loadavg``. None of those exist on Windows, and every row was
+    wrapped in a bare ``except``, so Windows silently rendered "--" for
+    Disk, RAM *and* Load on the primary dashboard. ``helpers.system`` now
+    provides stdlib-only equivalents that work on all three platforms.
+    """
+    from helpers.system import (
+        cpu_percent, disk_usage, load_average, memory_usage, uptime_pretty,
+    )
+
+    rows = []
+
+    du = disk_usage()
+    if du:
+        pct = int(round(du["pct"]))
+        colour = "green" if pct < 80 else ("yellow" if pct < 90 else "red")
+        rows.append([
+            f"Disk {du['mount']}",
+            f"{du['used_gb']}G / {du['total_gb']}G ({pct}%)",
+            colour,
+        ])
+    else:
+        rows.append(["Disk", "--", ""])
+
+    mu = memory_usage()
+    if mu:
+        rows.append([
+            "RAM",
+            f"{round(mu['used_mb'] / 1024, 1)}G / {round(mu['total_mb'] / 1024, 1)}G",
+            "",
+        ])
+    else:
+        rows.append(["RAM", "--", ""])
+
+    # Windows has no load-average concept. Rather than render a permanent
+    # "--", fall back to instantaneous CPU utilisation, which is the metric
+    # a Windows user actually expects in that slot.
+    la = load_average()
+    if la:
+        rows.append(["Load", " ".join(f"{v:.2f}" for v in la[:3]), ""])
+    else:
+        cp = cpu_percent()
+        # cpu_percent() is non-blocking and returns None until it has two
+        # samples to diff, so the row populates on the next dashboard poll.
+        rows.append(["CPU", f"{cp}%" if cp is not None else "--", ""])
+
+    up = uptime_pretty()
+    rows.append(["Uptime", up.replace("up ", "") if up != "unknown" else "--", ""])
+
+    return rows
+
+
 # Default OpenClaw heartbeat cadence (30 min). Surfaced in /api/overview's
 # `heartbeat` block so the dashboard can compare to actual gap.
 _HEARTBEAT_EXPECTED_SECONDS = 1800
@@ -976,48 +1035,8 @@ def _try_local_store_overview():
         mem_files = []
     total_size = sum(f.get("size", 0) for f in mem_files)
 
-    # System info — copied verbatim from the legacy handler so the response
-    # shape matches byte-for-byte. Each subprocess has a 2s timeout so a slow
-    # df/free/uptime can't hang the request thread.
-    system = []
-    try:
-        disk = (
-            _sub.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip().split("\n")[-1].split()
-        )
-        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
-        disk_color = "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
-        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
-    except Exception:
-        system.append(["Disk /", "--", ""])
-
-    try:
-        mem = (
-            _sub.run(["free", "-h"], capture_output=True, text=True, timeout=2)
-            .stdout.strip().split("\n")[1].split()
-        )
-        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
-    except Exception:
-        system.append(["RAM", "--", ""])
-
-    try:
-        load = open("/proc/loadavg").read().split()[:3]
-        system.append(["Load", " ".join(load), ""])
-    except Exception:
-        system.append(["Load", "--", ""])
-
-    try:
-        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
-        from helpers.system import uptime_pretty
-
-        uptime = uptime_pretty()
-        system.append([
-            "Uptime",
-            uptime.replace("up ", "") if uptime != "unknown" else "--",
-            "",
-        ])
-    except Exception:
-        system.append(["Uptime", "--", ""])
+    # System info — portable across Linux/macOS/Windows via helpers.system.
+    system = _system_rows()
 
     if _sys.platform != "win32":
         try:
@@ -1142,55 +1161,8 @@ def api_overview():
     mem_files = _d._get_memory_files()
     total_size = sum(f["size"] for f in mem_files)
 
-    # System info
-    system = []
-    # 2s timeout on every subprocess: on slow/NFS-backed volumes df/free/uptime
-    # can hang the request thread indefinitely, and /api/overview is on the
-    # dashboard's hot path (fires every refresh). Better to show "--" than hang.
-    try:
-        disk = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[-1]
-            .split()
-        )
-        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
-        disk_color = (
-            "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
-        )
-        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
-    except Exception:
-        system.append(["Disk /", "--", ""])
-
-    try:
-        mem = (
-            subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[1]
-            .split()
-        )
-        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
-    except Exception:
-        system.append(["RAM", "--", ""])
-
-    try:
-        load = open("/proc/loadavg").read().split()[:3]
-        system.append(["Load", " ".join(load), ""])
-    except Exception:
-        system.append(["Load", "--", ""])
-
-    try:
-        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
-        from helpers.system import uptime_pretty
-
-        uptime = uptime_pretty()
-        system.append([
-            "Uptime",
-            uptime.replace("up ", "") if uptime != "unknown" else "--",
-            "",
-        ])
-    except Exception:
-        system.append(["Uptime", "--", ""])
+    # System info — portable across Linux/macOS/Windows via helpers.system.
+    system = _system_rows()
 
     if sys.platform != "win32":
         try:
@@ -1226,13 +1198,10 @@ def api_overview():
         infra["runtime"] = "Runtime"
 
     try:
-        disk_info = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[-1]
-            .split()
-        )
-        infra["storage"] = f"{disk_info[1]} root"
+        from helpers.system import disk_usage as _du
+
+        _d_info = _du()
+        infra["storage"] = f"{_d_info['total_gb']}G {_d_info['mount']}" if _d_info else "Disk"
     except Exception:
         infra["storage"] = "Disk"
 

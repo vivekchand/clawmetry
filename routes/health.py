@@ -1760,16 +1760,17 @@ def api_health():
 
     # 3. Memory usage (RSS of this process + overall)
     try:
-        import resource
+        # `resource` is POSIX-only and `free` is Linux-only, so this whole
+        # memory check silently vanished on Windows. helpers.system covers
+        # all three platforms with stdlib calls.
+        from helpers.system import memory_usage
 
-        rss_mb = (
-            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        )  # KB -> MB on Linux
-        mem = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=2)
-        mem_parts = mem.stdout.strip().split("\n")[1].split()
-        used_mb = int(mem_parts[2])
-        total_mb = int(mem_parts[1])
-        pct = (used_mb / total_mb) * 100
+        mu = memory_usage()
+        if not mu:
+            raise RuntimeError("memory usage unavailable")
+        used_mb = mu["used_mb"]
+        total_mb = mu["total_mb"]
+        pct = mu["pct"]
         if pct > 90:
             checks.append(
                 {
