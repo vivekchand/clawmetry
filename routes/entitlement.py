@@ -8760,6 +8760,143 @@ def api_license_valid():
         return jsonify({"valid": False, "present": False, "status": None})
 
 
+def _license_subject_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two subject endpoints
+    both need (``subject``, ``has_license``, ``valid``). Lives in the
+    handler layer -- not in :mod:`clawmetry.license` -- because
+    ``has_license`` is an install-state fact rather than a license-payload
+    fact, and both endpoints below need the pair together so a UI cannot
+    catch them disagreeing on ``has_license`` for the same install.
+
+    Never raises: any underlying failure collapses to
+    ``{subject: None, has_license: False, valid: False}`` so callers keep
+    the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        subject = _lic.license_subject()
+    except Exception as exc:
+        logger.debug("_license_subject_snapshot: underlying read failed: %s", exc)
+        return {"subject": None, "has_license": False, "valid": False}
+    if not isinstance(info, dict):
+        return {"subject": None, "has_license": False, "valid": False}
+    return {
+        "subject": subject,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/subject")
+def api_license_subject():
+    """``GET /api/license/subject`` -- scalar view of the installed license's
+    ``sub`` claim (the customer identifier -- typically an account id or a
+    contact email), for a "Licensed to <X>" badge / support-context tile
+    that wants ONE string rather than the whole ``/api/license/status``
+    envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "subject": <str|null>,     # customer identifier (None if untrusted)
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``subject`` mirrors :func:`clawmetry.license.license_subject`: ``None``
+    for no license, invalid signature, or expired install -- an expired
+    Pro key deliberately collapses to ``null`` so a support tile that keys
+    off this field cannot keep rendering the paid customer on a lapsed
+    install. A caller who wants the raw ``sub`` claim even on an expired
+    key (support: "who was this key issued to?") should keep hitting
+    ``/api/license/status``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{subject: null, has_license: false, valid: false}`` (the OSS-free
+    branch shape), matching the "never crash on bad input" posture of
+    the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_subject_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_subject: error: %s", exc)
+        return jsonify({"subject": None, "has_license": False, "valid": False})
+
+
+@bp_entitlement.route("/api/license/is-subject")
+def api_license_is_subject():
+    """``GET /api/license/is-subject?subject=<value>`` -- boolean gate for
+    "is this license issued to subject <X> right now?" UIs.
+
+    Query parameters:
+      * ``subject`` (str, required) -- the subject to test against.
+        Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_subject`. Missing / empty input
+        degrades to ``is_subject=false`` rather than a 4xx, matching the
+        surrounding endpoints' never-5xx / never-4xx posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_subject": <bool>,
+          "subject": <str|null>,          # currently-active subject claim
+          "requested_subject": <str>,     # normalised echo of the query
+          "has_license": <bool>,
+          "valid": <bool>                 # signature-valid AND not expired
+        }
+
+    ``is_subject`` is ``True`` iff a license is installed, signature-
+    valid, NOT expired, its ``sub`` claim resolves to a non-empty string,
+    AND ``requested_subject`` matches that string case-insensitively. An
+    expired Pro install returns ``is_subject=false`` on purpose -- the
+    caller wants "is this key still bound to <X>?" not "was it ever", and
+    the ``valid`` field carries the "signed but lapsed" signal so a
+    multi-tenant dispatcher can drive both branches off one URL.
+
+    Mirrors :func:`clawmetry.license.is_subject` -- the HTTP shape layers
+    ``subject`` / ``requested_subject`` / ``has_license`` / ``valid`` on
+    top of that bool so an audit widget never needs a second call to
+    ``/api/license/status`` to render the accompanying "Licensed to X"
+    copy.
+    """
+    raw = request.args.get("subject", "") or ""
+    requested = raw.strip()
+    if not requested:
+        snap = _license_subject_snapshot()
+        return jsonify(
+            {
+                "is_subject": False,
+                "subject": snap["subject"],
+                "requested_subject": "",
+                "has_license": snap["has_license"],
+                "valid": snap["valid"],
+            }
+        )
+    try:
+        snap = _license_subject_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_subject: error: %s", exc)
+        snap = {"subject": None, "has_license": False, "valid": False}
+    actual = snap["subject"]
+    matches = (
+        snap["has_license"]
+        and snap["valid"]
+        and isinstance(actual, str)
+        and actual.lower() == requested.lower()
+    )
+    return jsonify(
+        {
+            "is_subject": bool(matches),
+            "subject": actual,
+            "requested_subject": requested,
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

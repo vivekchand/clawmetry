@@ -1419,3 +1419,90 @@ def is_license_valid() -> bool:
     if not isinstance(info, dict):
         return False
     return bool(info.get("valid"))
+
+
+def license_subject() -> str | None:
+    """Scalar view onto the installed license's ``sub`` claim -- the customer
+    identifier the license was issued to (typically an account id or a
+    contact email) -- for a "Licensed to <X>" badge / support-context tile
+    that wants ONE string rather than the whole :func:`current_license_info`
+    envelope.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface:
+        no license file on disk, an invalid signature (the payload can't
+        be trusted -- an attacker could stuff any ``sub`` string into an
+        unsigned body and impersonate a real customer), an expired license
+        (a lapsed customer must not keep rendering as the account holder
+        for gating / audit purposes), OR a signed payload whose ``sub``
+        claim is absent / non-string / an empty string after strip.
+      * The stripped subject string otherwise -- the operator-visible
+        identifier bound to the current license.
+
+    Casing is preserved: subjects are typically email addresses / account
+    ids where case can matter for exact-match comparisons, so a UI badge
+    renders the customer-facing form verbatim. :func:`is_subject` handles
+    case-insensitive matching on top for callers that want it.
+
+    Mirrors the "refuse expired keys" posture already used by
+    :func:`license_tier` / :func:`license_nodes`, so a support tile bound
+    to this scalar cannot keep rendering the paid customer on a lapsed
+    install. A caller who wants the CLAIM even on an expired key (support:
+    "who was this key issued to?") should keep reading
+    :func:`current_license_info` directly and pull ``sub`` there.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    dashboard tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_subject underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("valid"):
+        # invalid-signature and expired branches both collapse to None on
+        # purpose -- see docstring for the support-tile rationale.
+        return None
+    sub = info.get("sub")
+    if not isinstance(sub, str):
+        return None
+    stripped = sub.strip()
+    return stripped or None
+
+
+def is_subject(subject: str) -> bool:
+    """Boolean gate for "is this license issued to subject <X>?" UIs.
+
+    Returns ``True`` iff a license is installed, signature-valid, NOT
+    expired, its ``sub`` claim resolves to a non-empty string, AND that
+    string matches ``subject`` (case-insensitive, whitespace-stripped on
+    both sides). Every other state returns ``False``: no license, invalid
+    signature, expired key, missing/empty ``sub`` claim, or a live
+    subject that simply differs from the request.
+
+    ``subject`` is coerced through ``str()`` and normalised the same way
+    the stored claim is normalised, so a caller can pass ``"acct_test"``,
+    ``"  acct_test "``, or ``"ACCT_TEST"`` and get the same answer.
+    Non-string / empty input collapses to ``False`` (nothing "is subject
+    empty-string"). Never raises; every underlying failure returns
+    ``False`` so a scheduled paywall / audit check never crashes on a
+    bad install.
+
+    Pairs with :func:`license_subject` the way :func:`is_tier` pairs
+    with :func:`license_tier` -- the scalar reports the raw string for a
+    badge tile, this bool answers the yes/no question a multi-tenant
+    dispatcher or a license-transfer detector needs without the caller
+    having to normalise the string themselves.
+    """
+    try:
+        requested = str(subject).strip().lower()
+    except Exception:
+        return False
+    if not requested:
+        return False
+    actual = license_subject()
+    if actual is None:
+        return False
+    return actual.lower() == requested
