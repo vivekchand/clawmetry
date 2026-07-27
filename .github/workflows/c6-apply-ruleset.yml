@@ -1,8 +1,7 @@
 name: Apply E2E required checks via Rulesets API (C6)
 
-# Uses POST /repos/{owner}/{repo}/rulesets with administration:write
-# GITHUB_TOKEN to upsert a ruleset that enforces the 4 required E2E
-# status checks on clawmetry/main.
+# Uses POST /repos/{owner}/{repo}/rulesets to upsert a ruleset that
+# enforces the 4 required E2E status checks on clawmetry/main.
 #
 # WHY RULESETS INSTEAD OF BRANCH PROTECTION:
 #   Branch protection requires an admin PAT -- GITHUB_TOKEN cannot write it.
@@ -18,6 +17,11 @@ name: Apply E2E required checks via Rulesets API (C6)
 # On 403 (token lacks ruleset-write rights): logs clear instructions
 # and exits 1 so the PR gate shows red and the admin knows to act.
 #
+# NOTE: administration:write is NOT listed in the permissions block because
+# requesting it at the workflow level causes GitHub to kill the run with 0
+# jobs on personal repos (plan-level restriction). The Python script handles
+# the 403 runtime error gracefully instead.
+#
 # Tracking: vivekchand/clawmetry#3952 (C6)
 
 on:
@@ -27,7 +31,6 @@ on:
 
 permissions:
   contents: read
-  administration: write
   issues: write
 
 jobs:
