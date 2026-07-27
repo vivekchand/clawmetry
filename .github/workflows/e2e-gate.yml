@@ -1,0 +1,266 @@
+name: E2E Gate (required)
+
+# Aggregates the 4 required OSS E2E checks into one required status check.
+# The owner adds ONE check name to branch protection instead of four:
+#   "E2E Gate (required)"
+#
+# Polls the Check Runs API every 30s until all required checks complete.
+# Fails immediately if any required check fails (fast-fail).
+# Passes only when all 4 required checks have a success conclusion.
+# Times out after 8 min (conservative -- E2E wall-clock max is 12 min).
+#
+# Required checks aggregated (keep in sync with REQUIRED_CHECKS in
+# scripts/apply_required_status_checks.py):
+#   - OSS golden path (wheel + OpenClaw + 9 tabs)
+#   - Cross-repo handoff (C4)
+#   - MOAT Keystone (13-endpoint bar)
+#   - E2E Browser Tests (critical subset)
+#
+# To close C6 after this PR merges:
+#   GitHub Settings > Branches > main > Required status checks:
+#   add "E2E Gate (required)"
+#   (1 check name instead of 4)
+#
+# Tracking: vivekchand/clawmetry#3864 (C6)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+
+jobs:
+  e2e-gate:
+    name: E2E Gate (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Wait for required E2E checks and verify they passed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          COMMIT_SHA = os.environ["COMMIT_SHA"].strip()
+          REPO = os.environ["REPO"]
+          POLL_INTERVAL = 30   # seconds between checks
+          MAX_WAIT = 480       # 8 minutes; E2E wall-clock max is ~12 min but
+                               # most checks finish within 5 min (cache hit)
+
+          # Keep in sync with REQUIRED_CHECKS in
+          # scripts/apply_required_status_checks.py and c6-schedule-heal.yml.
+          REQUIRED_NAMES = [
+              "OSS golden path (wheel + OpenClaw + 9 tabs)",
+              "Cross-repo handoff (C4)",
+              "MOAT Keystone (13-endpoint bar)",
+              "E2E Browser Tests (critical subset)",
+          ]
+
+          # Conclusions that count as passing (GitHub treats skipped/neutral
+          # as non-blocking in most workflows; we accept them here too).
+          PASSING = {"success", "skipped", "neutral"}
+
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "clawmetry-e2e-gate/1.0",
+          }
+
+          def list_check_runs(sha):
+              """Fetch all check runs for sha, handling pagination."""
+              url = (
+                  f"https://api.github.com/repos/{REPO}/commits/{sha}"
+                  "/check-runs?per_page=100"
+              )
+              runs = []
+              while url:
+                  req = urllib.request.Request(url, headers=HEADERS)
+                  try:
+                      with urllib.request.urlopen(req) as r:
+                          data = json.loads(r.read())
+                          runs.extend(data.get("check_runs", []))
+                          link = r.headers.get("Link", "")
+                          url = None
+                          for part in link.split(","):
+                              part = part.strip()
+                              if 'rel="next"' in part:
+                                  url = (
+                                      part.split(";")[0]
+                                      .strip()
+                                      .lstrip("<")
+                                      .rstrip(">")
+                                  )
+                  except urllib.error.HTTPError as exc:
+                      print(f"  warn: check-runs API {exc.code}: {exc.read()[:200]}")
+                      return []
+              return runs
+
+          def best_run_by_name(runs):
+              """For each check name, pick the most informative run.
+
+              Priority: completed > in_progress > queued.
+              Among completed runs, prefer the most recent (highest id).
+              """
+              by_name = {}
+              for run in runs:
+                  name = run.get("name", "")
+                  if name not in REQUIRED_NAMES:
+                      continue
+                  existing = by_name.get(name)
+                  if existing is None:
+                      by_name[name] = run
+                      continue
+                  # completed beats anything else
+                  if (
+                      run.get("status") == "completed"
+                      and existing.get("status") != "completed"
+                  ):
+                      by_name[name] = run
+                  elif (
+                      run.get("status") == "completed"
+                      and existing.get("status") == "completed"
+                      and run.get("id", 0) > existing.get("id", 0)
+                  ):
+                      by_name[name] = run
+              return by_name
+
+          print(
+              f"E2E Gate: waiting for {len(REQUIRED_NAMES)} required checks"
+              f" on {COMMIT_SHA[:12]}"
+          )
+          for name in REQUIRED_NAMES:
+              print(f"  - {name!r}")
+          print()
+
+          start = time.monotonic()
+          last_status = {}
+
+          while True:
+              elapsed = int(time.monotonic() - start)
+
+              try:
+                  runs = list_check_runs(COMMIT_SHA)
+              except Exception as exc:
+                  print(f"  [{elapsed}s] warn: fetch failed: {exc}")
+                  time.sleep(POLL_INTERVAL)
+                  continue
+
+              by_name = best_run_by_name(runs)
+
+              # Report status changes since last poll.
+              for name in REQUIRED_NAMES:
+                  run = by_name.get(name)
+                  if run is None:
+                      new_s = "not started"
+                  elif run["status"] != "completed":
+                      new_s = run["status"]
+                  else:
+                      new_s = f"completed/{run.get('conclusion', '?')}"
+                  if last_status.get(name) != new_s:
+                      print(f"  [{elapsed}s] {name!r}: {new_s}")
+                      last_status[name] = new_s
+
+              # Fail fast on any failed check.
+              failed = [
+                  name for name in REQUIRED_NAMES
+                  if (
+                      (r := by_name.get(name)) is not None
+                      and r.get("status") == "completed"
+                      and r.get("conclusion") not in PASSING
+                  )
+              ]
+              if failed:
+                  print()
+                  print("FAIL: one or more required E2E checks did not pass:")
+                  for name in failed:
+                      run = by_name[name]
+                      conc = run.get("conclusion", "?")
+                      url = run.get("html_url", "")
+                      print(f"  - {name!r}: {conc}")
+                      if url:
+                          print(f"    {url}")
+                  sys.exit(1)
+
+              # Pass when all required checks have a passing conclusion.
+              passed = [
+                  name for name in REQUIRED_NAMES
+                  if (
+                      (r := by_name.get(name)) is not None
+                      and r.get("status") == "completed"
+                      and r.get("conclusion") in PASSING
+                  )
+              ]
+              if len(passed) == len(REQUIRED_NAMES):
+                  print()
+                  print(
+                      f"PASS: all {len(REQUIRED_NAMES)} required E2E checks"
+                      " passed for this commit."
+                  )
+                  sys.exit(0)
+
+              if elapsed >= MAX_WAIT:
+                  pending = [
+                      n for n in REQUIRED_NAMES
+                      if n not in passed
+                      and n not in failed
+                  ]
+                  print()
+                  print(f"FAIL: timed out after {MAX_WAIT}s.")
+                  print("Checks that did not complete in time:")
+                  for name in pending:
+                      run = by_name.get(name)
+                      status = run["status"] if run else "not started"
+                      print(f"  - {name!r}: {status}")
+                  print(
+                      "If E2E is consistently slower than 8 min, raise"
+                      " MAX_WAIT in the workflow."
+                  )
+                  sys.exit(1)
+
+              pending_count = len(REQUIRED_NAMES) - len(passed) - len(failed)
+              print(
+                  f"  [{elapsed}s] {len(passed)}/{len(REQUIRED_NAMES)} passed,"
+                  f" {pending_count} pending -- polling in {POLL_INTERVAL}s"
+              )
+              time.sleep(POLL_INTERVAL)
+          PYEOF
+
+      - name: Write job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          {
+            echo "## E2E Gate"
+            echo ""
+            echo "Checked commit: \`${COMMIT_SHA:0:12}\`"
+            echo ""
+            echo "Required checks:"
+            echo "- \`OSS golden path (wheel + OpenClaw + 9 tabs)\`"
+            echo "- \`Cross-repo handoff (C4)\`"
+            echo "- \`MOAT Keystone (13-endpoint bar)\`"
+            echo "- \`E2E Browser Tests (critical subset)\`"
+            echo ""
+            echo "To enforce this gate, add **E2E Gate (required)** to branch protection:"
+            echo "[Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches)"
+            echo "This single check replaces the need to add all 4 individual check names."
+          } >> "$GITHUB_STEP_SUMMARY"
