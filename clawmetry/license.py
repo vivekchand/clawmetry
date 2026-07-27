@@ -1513,3 +1513,87 @@ def is_subject(subject: str) -> bool:
     if actual is None:
         return False
     return actual.lower() == requested
+
+
+def license_permissions_safe() -> bool | None:
+    """Scalar view onto the installed license file's on-disk permission
+    hygiene -- for a security-posture tile that wants ONE tri-state
+    rather than the whole :func:`current_license_info` envelope.
+
+    The license key is a bearer secret: anyone holding the file can
+    present it to the offline verifier. On POSIX the file must not be
+    group/world readable; a 0o644 (default umask) key file is a
+    silently-leaked bearer credential.
+
+    Returns:
+      * ``None`` when there is no license file on disk -- nothing to
+        check, and a UI tile bound to this scalar should render as
+        "not applicable" rather than "safe" (a Free install has no
+        credential to protect).
+      * ``True`` when the file exists AND has no group/world mode bits
+        set (POSIX), OR when running on Windows where POSIX mode bits
+        do not apply and the default ACL restricts the file to the
+        owning user.
+      * ``False`` when the file exists on POSIX AND has any of the
+        group/other bits set (``0o077``) -- exactly the state a
+        "tighten file permissions" affordance should highlight.
+
+    Deliberately orthogonal to signature validity: a tampered or expired
+    license file still has meaningful hygiene state (in fact, MORE
+    urgent to surface -- a loose-permission key file may indicate the
+    same corruption that broke the signature). So the return value
+    depends only on existence + POSIX mode, never on the payload
+    branches that :func:`license_tier` / :func:`license_subject` gate
+    themselves on.
+
+    Never raises. Any exception under the hood degrades to ``None`` so
+    a scheduled security-posture check never crashes on a bad install.
+    """
+    try:
+        if not os.path.isfile(LICENSE_PATH):
+            return None
+        return _file_permissions_safe(LICENSE_PATH)
+    except Exception as exc:
+        logger.debug("license: license_permissions_safe read failed: %s", exc)
+        return None
+
+
+def license_file_mode() -> str | None:
+    """Scalar view onto the installed license file's POSIX mode -- for a
+    security-posture / debug tile that wants the raw octal (e.g.
+    ``"0644"``) rather than the whole :func:`current_license_info`
+    envelope.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to surface: no
+        license file on disk, OR running on Windows where POSIX mode
+        bits do not apply.
+      * A four-character octal string like ``"0600"`` (safe),
+        ``"0644"`` (world-readable), or ``"0666"`` (world-writable)
+        otherwise. Format is stable and matches ``chmod`` -- the same
+        digits an operator would pass to ``chmod 0600 <path>`` to fix
+        an unsafe key file.
+
+    Deliberately orthogonal to signature validity: the on-disk mode is
+    a file-hygiene fact, not a license-payload fact, so the return
+    value depends only on existence + platform, never on the payload
+    branches that :func:`license_tier` / :func:`license_subject` gate
+    themselves on. Pairs with :func:`license_permissions_safe` the way
+    :func:`license_nodes` pairs with :func:`is_within_node_limit` --
+    this scalar surfaces the raw mode for a debug row, that bool
+    answers the yes/no question a security tile needs without the
+    caller having to parse octal themselves.
+
+    Never raises. Any exception under the hood degrades to ``None`` so
+    a scheduled hygiene check never crashes on a stat() failure.
+    """
+    try:
+        if os.name != "posix":
+            return None
+        if not os.path.isfile(LICENSE_PATH):
+            return None
+        mode = os.stat(LICENSE_PATH).st_mode & 0o777
+        return f"{mode:04o}"
+    except Exception as exc:
+        logger.debug("license: license_file_mode read failed: %s", exc)
+        return None

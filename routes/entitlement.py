@@ -8897,6 +8897,143 @@ def api_license_is_subject():
     )
 
 
+def _license_permissions_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two permission-hygiene
+    endpoints both need (``permissions_safe``, ``file_mode``,
+    ``has_license``). Lives in the handler layer -- not in
+    :mod:`clawmetry.license` -- because ``has_license`` is an install-state
+    fact rather than a license-payload fact, and both endpoints below need
+    the trio together so a UI cannot catch them disagreeing on
+    ``has_license`` for the same install.
+
+    Deliberately independent of signature validity: the on-disk mode is a
+    file-hygiene fact, not a license-payload fact, so a tampered or expired
+    key file still surfaces its real ``file_mode`` here -- exactly the
+    state a "tighten file permissions" affordance needs to render.
+
+    Never raises: any underlying failure collapses to
+    ``{permissions_safe: None, file_mode: None, has_license: False}`` so
+    callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        has = _lic.has_license() if hasattr(_lic, "has_license") else os.path.isfile(
+            _lic.LICENSE_PATH
+        )
+        perms = _lic.license_permissions_safe()
+        mode = _lic.license_file_mode()
+    except Exception as exc:
+        logger.debug("_license_permissions_snapshot: underlying read failed: %s", exc)
+        return {"permissions_safe": None, "file_mode": None, "has_license": False}
+    return {
+        "permissions_safe": perms,
+        "file_mode": mode,
+        "has_license": bool(has),
+    }
+
+
+@bp_entitlement.route("/api/license/permissions-safe")
+def api_license_permissions_safe():
+    """``GET /api/license/permissions-safe`` -- tri-state scalar of the
+    installed license file's on-disk permission hygiene, for a
+    security-posture tile that wants ONE field rather than the whole
+    ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "permissions_safe": <bool|null>,   # None = no license file
+          "file_mode": <str|null>,           # e.g. "0600"; null on Windows
+          "has_license": <bool>              # is a license file installed?
+        }
+
+    ``permissions_safe`` mirrors
+    :func:`clawmetry.license.license_permissions_safe`:
+
+      * ``null`` when there is no license file (Free install -- nothing to
+        protect).
+      * ``true`` when the file exists AND has no group/world mode bits set
+        (POSIX), OR when running on Windows where POSIX mode bits do not
+        apply.
+      * ``false`` when the file exists on POSIX AND has any of the
+        group/other bits set -- exactly the state a "tighten file
+        permissions" affordance should highlight.
+
+    Deliberately orthogonal to signature validity: a tampered or expired
+    license file still surfaces its real ``permissions_safe`` here, so a
+    security-posture tile can render the hygiene banner even when the
+    payload branches (``tier`` / ``sub`` / ``nodes``) have collapsed to
+    ``null`` under the "refuse untrusted claims" posture used elsewhere.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{permissions_safe: null, file_mode: null, has_license: false}`` (the
+    OSS-free branch shape), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_permissions_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_permissions_safe: error: %s", exc)
+        return jsonify(
+            {"permissions_safe": None, "file_mode": None, "has_license": False}
+        )
+
+
+@bp_entitlement.route("/api/license/file-mode")
+def api_license_file_mode():
+    """``GET /api/license/file-mode`` -- scalar view of the installed
+    license file's POSIX mode, for a debug row / operator-hint tile that
+    wants the raw octal (e.g. ``"0644"``) rather than the whole
+    ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "file_mode": <str|null>,           # e.g. "0600"; null on Windows
+          "permissions_safe": <bool|null>,   # None = no license file
+          "has_license": <bool>              # is a license file installed?
+        }
+
+    ``file_mode`` mirrors :func:`clawmetry.license.license_file_mode`:
+
+      * ``null`` when there is nothing meaningful to surface (no license
+        file on disk, OR running on Windows where POSIX mode bits do not
+        apply).
+      * A four-character octal string like ``"0600"`` (safe), ``"0644"``
+        (world-readable), or ``"0666"`` (world-writable) otherwise --
+        stable format matching ``chmod`` so an operator can copy-paste
+        the digits into a ``chmod 0600 <path>`` fix.
+
+    Pairs with ``/api/license/permissions-safe`` the way
+    ``/api/license/nodes`` pairs with ``/api/license/within-node-limit``
+    -- this endpoint surfaces the raw octal for a debug row, that endpoint
+    answers the yes/no question a security tile needs without the caller
+    having to parse octal themselves. The two endpoints share
+    :func:`_license_permissions_snapshot` so a UI binding both sees a
+    consistent snapshot.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{file_mode: null, permissions_safe: null, has_license: false}``.
+    """
+    try:
+        snap = _license_permissions_snapshot()
+        return jsonify(
+            {
+                "file_mode": snap["file_mode"],
+                "permissions_safe": snap["permissions_safe"],
+                "has_license": snap["has_license"],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_file_mode: error: %s", exc)
+        return jsonify(
+            {"file_mode": None, "permissions_safe": None, "has_license": False}
+        )
+
+
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
