@@ -8643,6 +8643,123 @@ def api_license_within_node_limit():
         }
     )
 
+
+def _license_presence_snapshot() -> dict:
+    """Shared one-shot read for the two install-state gate endpoints below.
+
+    Reads :func:`clawmetry.license.has_license` and
+    :func:`clawmetry.license.current_license_info` together so the paired
+    ``/api/license/present`` and ``/api/license/valid`` endpoints can't
+    disagree on ``present`` / ``status`` for the same install -- a UI that
+    binds both in the same tile always sees a consistent snapshot.
+
+    Returned dict::
+
+        {
+          "present": <bool>,              # is a license file on disk at all?
+          "valid": <bool>,                # signature-valid AND not expired
+          "status": <str|null>,           # "active"/"expired"/"invalid"/None
+        }
+
+    Never raises. Any introspection failure (import error, corrupt install,
+    cryptography-lib mismatch) collapses to
+    ``{present: False, valid: False, status: None}`` so the endpoint stack
+    never 5xxs, matching the OSS-free posture of the surrounding license
+    endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        present = bool(_lic.has_license())
+        info = _lic.current_license_info() if present else None
+    except Exception as exc:
+        logger.debug("_license_presence_snapshot: error: %s", exc)
+        return {"present": False, "valid": False, "status": None}
+    status = info.get("status") if isinstance(info, dict) else None
+    valid = bool(isinstance(info, dict) and info.get("valid"))
+    return {
+        "present": present,
+        "valid": valid,
+        "status": status,
+    }
+
+
+@bp_entitlement.route("/api/license/present")
+def api_license_present():
+    """``GET /api/license/present`` -- bare install-state gate for
+    "does this operator have ANY license file at all?".
+
+    Response shape (always HTTP 200)::
+
+        {
+          "present": <bool>,       # is a license file on disk at LICENSE_PATH?
+          "valid": <bool>,          # signature-valid AND not expired
+          "status": <str|null>     # "active"/"expired"/"invalid"/None
+        }
+
+    ``present`` mirrors :func:`clawmetry.license.has_license`: ``True`` iff
+    a file exists at :data:`~clawmetry.license.LICENSE_PATH`, regardless of
+    whether it verifies or whether ``exp`` is in the past. That's the
+    signal a dashboard uses to render a subtly-different empty state for
+    "Free (never activated)" vs "Free (license expired / broken)" -- an
+    entitlement gate wanting "is this node currently entitled?" should
+    bind ``/api/license/valid`` instead.
+
+    ``valid`` / ``status`` are surfaced alongside so a UI can drive the
+    "you have a file but it's not trustworthy" banner off the same
+    request without a second call to ``/api/license/status``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{present: false, valid: false, status: null}`` (the OSS-free branch
+    shape), matching the "never crash on bad input" posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_presence_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_present: error: %s", exc)
+        return jsonify({"present": False, "valid": False, "status": None})
+
+
+@bp_entitlement.route("/api/license/valid")
+def api_license_valid():
+    """``GET /api/license/valid`` -- top-level entitlement gate for
+    "is this node currently entitled?".
+
+    Response shape (always HTTP 200)::
+
+        {
+          "valid": <bool>,          # signature-valid AND not expired
+          "present": <bool>,       # is a license file on disk at all?
+          "status": <str|null>     # "active"/"expired"/"invalid"/None
+        }
+
+    ``valid`` mirrors :func:`clawmetry.license.is_license_valid`: ``True``
+    iff a license is installed, its signature verifies, and its ``exp``
+    claim is not in the past. Every "not entitled" reason -- no file,
+    forged signature, lapsed key -- collapses to ``valid=False`` so a
+    paywall tile can bind directly to this scalar without threading the
+    full ``/api/license/status`` envelope through.
+
+    ``present`` and ``status`` are surfaced alongside so a UI can render
+    the accompanying "you have a broken file" or "your key expired" copy
+    from the same request. An expired install returns
+    ``{valid: false, present: true, status: "expired"}``; an invalid
+    signature returns ``{valid: false, present: true, status: "invalid"}``;
+    an OSS-free node returns ``{valid: false, present: false, status: null}``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{valid: false, present: false, status: null}`` (the OSS-free branch
+    shape), matching the "never crash on bad input" posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_presence_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_valid: error: %s", exc)
+        return jsonify({"valid": False, "present": False, "status": None})
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
