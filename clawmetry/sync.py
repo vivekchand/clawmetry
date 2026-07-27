@@ -14833,7 +14833,13 @@ def _build_tool_stats():
         _session_channels = {}
         _sessions_json = os.path.join(session_dir, "sessions.json")
         try:
-            with open(_sessions_json) as _sjf:
+            # encoding is explicit: text-mode open() without it uses the
+            # locale codec, which is cp1252 on Windows. sessions.json carries
+            # user-authored session titles (emoji are routine), so the default
+            # raised UnicodeDecodeError there and this whole channel-info
+            # preload was skipped. The sibling JSONL readers avoid it by
+            # opening "rb"; this one is text.
+            with open(_sessions_json, encoding="utf-8") as _sjf:
                 _sj = json.load(_sjf)
             for _sk, _sv in _sj.items():
                 _sf = os.path.basename(_sv.get("sessionFile", ""))

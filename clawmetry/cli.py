@@ -108,8 +108,16 @@ def _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM) -> None:
         return
 
     print()
-    result = subprocess.run(["bash", script_path], check=False)
-    if result.returncode == 0:
+    # The preset helper is a .sh script. Windows has no bash on PATH by
+    # default, and Popen raises FileNotFoundError rather than returning a
+    # non-zero code, which would abort onboarding instead of falling through
+    # to the "run this manually" hint below.
+    try:
+        result = subprocess.run(["bash", script_path], check=False)
+    except (FileNotFoundError, OSError):
+        print(f"  {DIM('bash was not found on PATH.')}")
+        result = None
+    if result is not None and result.returncode == 0:
         print()
         return
 
@@ -1374,8 +1382,16 @@ def _start_subprocess() -> None:
     import subprocess
     import shutil
 
+    import os as _os
+
     sync_script = str(__import__("pathlib").Path(__file__).parent / "sync.py")
-    log_file = str(__import__("pathlib").Path.home() / ".clawmetry" / "sync.log")
+    log_path = __import__("pathlib").Path.home() / ".clawmetry" / "sync.log"
+    # A fresh install may not have ~/.clawmetry yet; open(..., "a") would raise.
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    log_file = str(log_path)
 
     # Use setsid if available — ensures daemon survives kubectl exec session end
     cmd = (
@@ -1383,14 +1399,32 @@ def _start_subprocess() -> None:
         if shutil.which("setsid")
         else [sys.executable, sync_script]
     )
-    proc = subprocess.Popen(
-        cmd,
-        stdout=open(log_file, "a"),
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+
+    spawn_kwargs = {"stdin": subprocess.DEVNULL, "close_fds": True}
+    if _os.name == "nt":
+        # start_new_session is POSIX-only and silently no-ops on Windows, which
+        # left the daemon inside the launching console's process group: closing
+        # that window delivered CTRL_CLOSE_EVENT and killed the daemon with it.
+        # DETACHED_PROCESS cuts it loose from the console, and a new process
+        # group stops Ctrl+C in the parent terminal from propagating.
+        spawn_kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        spawn_kwargs["start_new_session"] = True
+
+    # The child inherits a duplicate of this handle, so closing ours right
+    # after the spawn is correct and avoids leaking it for the CLI's lifetime.
+    log_fh = open(log_file, "a")
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log_fh, stderr=subprocess.STDOUT, **spawn_kwargs
+        )
+    finally:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
     print(f"✅  Sync daemon started (pid {proc.pid})")
 
 

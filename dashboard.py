@@ -17861,7 +17861,17 @@ Examples:
 Docs: https://docs.clawmetry.com
 """
 
-PID_FILE = "/tmp/clawmetry.pid"
+# Windows has no /tmp, so the literal path resolved to C:\tmp and every read
+# failed into the bare except below — _read_pid() always returned None, which
+# is what silently disabled the stale-instance reclaim at startup (two dev
+# servers could then bind the same port and requests would land on whichever
+# Windows picked). tempfile.gettempdir() honours %TEMP% there; POSIX keeps the
+# exact path it has always used so existing pid files stay discoverable.
+PID_FILE = (
+    os.path.join(_tempfile.gettempdir(), "clawmetry.pid")
+    if os.name == "nt"
+    else "/tmp/clawmetry.pid"
+)
 LAUNCHD_LABEL = "com.clawmetry.dashboard"
 LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
 SYSTEMD_SERVICE = os.path.expanduser(

@@ -80,6 +80,18 @@ def _detect_host_hardware():
                         break
             except Exception:
                 pass
+            # `wmic` is deprecated and is ABSENT from Windows 11 24H2+, where
+            # the calls above raise FileNotFoundError and leave cpu/ram unknown.
+            # helpers.system reads the registry / GlobalMemoryStatusEx instead,
+            # which needs no external binary. Kept as a fallback rather than a
+            # replacement so older hosts kept their existing behaviour.
+            try:
+                if not cpu or cpu == "Unknown CPU":
+                    from helpers.system import cpu_model as _cpu_model
+
+                    cpu = _cpu_model() or cpu
+            except Exception:
+                pass
             try:
                 mem = _sp.run(
                     ["wmic", "computersystem", "get", "TotalPhysicalMemory", "/value"],
@@ -89,6 +101,15 @@ def _detect_host_hardware():
                     if line.startswith("TotalPhysicalMemory="):
                         ram_gb = round(int(line.split("=", 1)[1].strip()) / (1024 ** 3))
                         break
+            except Exception:
+                pass
+            try:
+                if not ram_gb:
+                    from helpers.system import memory_usage as _mem
+
+                    _mu = _mem()
+                    if _mu:
+                        ram_gb = round(_mu["total_mb"] / 1024)
             except Exception:
                 pass
     except Exception:
