@@ -8177,6 +8177,124 @@ def api_license_expiring_within():
     )
 
 
+def _license_gate_snapshot() -> dict:
+    """Shared one-shot read of the installed-license state for the boolean-gate
+    endpoints below.
+
+    Reads :func:`clawmetry.license.current_license_info` ONCE so the paired
+    ``/api/license/is-expired`` and ``/api/license/is-perpetual`` endpoints
+    can't disagree on ``has_license`` / ``status`` for the same key -- a UI
+    that binds both in the same tile always sees a consistent snapshot.
+
+    Never raises. Any introspection failure (import error, corrupt install,
+    cryptography-lib mismatch) collapses to the no-license shape so the
+    endpoint stack never 5xxs; the "expired" / "perpetual" gates degrade to
+    ``False`` on that branch, matching the module-level scalar helpers'
+    OSS-free posture.
+    """
+    info = None
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+    except Exception as exc:
+        logger.debug("_license_gate_snapshot: error: %s", exc)
+        info = None
+    has_license = info is not None
+    status = info.get("status") if info else None
+    exp = info.get("exp") if info else None
+    return {
+        "has_license": has_license,
+        "status": status,
+        "has_exp": bool(has_license and exp is not None),
+        # An "invalid-signature" branch collapses ``exp`` to ``None`` on
+        # purpose (we don't trust an unsigned body) -- rule it out here so a
+        # forged file can't masquerade as "perpetual" via the gate endpoint.
+        "expired": bool(has_license and status == "expired"),
+        "perpetual": bool(has_license and status != "invalid" and exp is None),
+    }
+
+
+@bp_entitlement.route("/api/license/is-expired")
+def api_license_is_expired():
+    """``GET /api/license/is-expired`` -- boolean gate for "already past the
+    ``exp`` claim".
+
+    Payload:
+
+      * ``expired`` -- ``True`` iff an installed, signature-valid license
+        carries an ``exp`` claim in the past. ``False`` for every other state
+        (no license, invalid signature, perpetual key, active / future ``exp``)
+        so a paywall tile can bind directly to this scalar without threading
+        the full ``/api/license/status`` envelope through.
+      * ``has_license`` -- ``True`` iff a license file is on disk and
+        introspection succeeded, mirroring the ``/api/license/status`` "does a
+        file exist" branch so a UI can distinguish "expired" from "never had
+        one" without a second request.
+      * ``status`` -- passes through ``current_license_info().status``
+        (``"active"`` / ``"expired"`` / ``"invalid"`` / ``None``) so a shared
+        renderer can decide whether to show the loud "expired" banner (from
+        the boolean gate) or the quieter "invalid signature" warning
+        (``status == "invalid"``) alongside it.
+
+    Never 5xxs. Underlying introspection failure degrades to
+    ``{"expired": False, "has_license": False, "status": null}`` at HTTP 200,
+    matching the never-crash posture of ``/api/license/status`` and the
+    surrounding entitlement gate endpoints.
+    """
+    try:
+        snap = _license_gate_snapshot()
+        return jsonify(
+            {
+                "expired": snap["expired"],
+                "has_license": snap["has_license"],
+                "status": snap["status"],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_is_expired: error: %s", exc)
+        return jsonify({"expired": False, "has_license": False, "status": None})
+
+
+@bp_entitlement.route("/api/license/is-perpetual")
+def api_license_is_perpetual():
+    """``GET /api/license/is-perpetual`` -- boolean gate for "lifetime key,
+    no renewal needed".
+
+    Payload:
+
+      * ``perpetual`` -- ``True`` iff an installed, signature-valid license
+        carries NO ``exp`` claim. A UI reading this can hide the renewal
+        counter and render a "Lifetime" badge instead of "Expires in
+        N days". ``False`` for every other state -- no license, invalid
+        signature (we refuse to infer "perpetual" from an untrusted body),
+        and any signed key with an ``exp`` claim.
+      * ``has_license`` -- ``True`` iff a license file is on disk and
+        introspection succeeded, mirroring ``/api/license/is-expired`` so the
+        paired endpoints agree on this key.
+      * ``has_exp`` -- ``True`` iff the installed license carries an ``exp``
+        claim (regardless of active-vs-expired). The complement of
+        ``perpetual`` on the "signature-valid, on-disk" subset -- a UI
+        showing an expiry-date tile can hide it when ``has_exp == False``.
+
+    Never 5xxs. Underlying introspection failure degrades to
+    ``{"perpetual": False, "has_license": False, "has_exp": False}`` at HTTP
+    200.
+    """
+    try:
+        snap = _license_gate_snapshot()
+        return jsonify(
+            {
+                "perpetual": snap["perpetual"],
+                "has_license": snap["has_license"],
+                "has_exp": snap["has_exp"],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_is_perpetual: error: %s", exc)
+        return jsonify({"perpetual": False, "has_license": False, "has_exp": False})
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

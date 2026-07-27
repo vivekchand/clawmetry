@@ -1055,3 +1055,64 @@ def is_expiring_within(days: int) -> bool:
     if remaining is None:
         return False
     return 0 <= remaining <= threshold
+
+
+def is_expired() -> bool:
+    """True iff an installed, signature-valid license has an ``exp`` claim in
+    the past.
+
+    The boolean "already expired" gate that pairs with ``is_expiring_within``
+    (renewal-window warning) and complements the loud red banner a UI might
+    render off ``current_license_info().status == "expired"``: bind a paywall
+    tile directly to this scalar without threading the full license envelope
+    into the component.
+
+    Returns ``False`` for every state that is not "installed, signed, past
+    ``exp``": no license file, invalid signature (an attacker could stuff any
+    ``exp`` into an unsigned body, so we refuse to trust it), perpetual /
+    no-``exp`` keys, and active / future-``exp`` keys.
+
+    Never raises. Any underlying introspection failure (import error,
+    corrupt install, cryptography-lib mismatch) collapses to ``False`` so a
+    caller can bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        info = current_license_info()
+        if not info:
+            return False
+        return info.get("status") == "expired"
+    except Exception as exc:
+        logger.warning("license: is_expired failed: %s", exc)
+        return False
+
+
+def is_perpetual() -> bool:
+    """True iff an installed, signature-valid license carries no ``exp`` claim.
+
+    A "lifetime" key never expires, so a paywall UI wants to hide the renewal
+    counter and render a "Lifetime" badge instead of "Expires in N days".
+    This scalar answers that gate directly without the caller having to check
+    ``current_license_info()["exp"] is None`` AND rule out the invalid /
+    no-license branches (both of which also collapse ``exp`` to ``None`` but
+    aren't perpetual -- they're *no trustworthy license at all*).
+
+    Returns ``False`` for: no license file, invalid signature (untrusted body
+    -- we don't infer "perpetual" from an unsigned payload), and any signed
+    key that carries an ``exp`` claim regardless of active-vs-expired.
+
+    Never raises. Any underlying introspection failure collapses to ``False``.
+    """
+    try:
+        info = current_license_info()
+        if not info:
+            return False
+        # The invalid-signature branch of ``current_license_info`` collapses
+        # ``exp`` to ``None`` on purpose (we don't trust an unsigned body), so
+        # a naive ``exp is None`` check would misfire and label a *forged*
+        # license as "perpetual". Rule the invalid branch out explicitly.
+        if info.get("status") == "invalid":
+            return False
+        return info.get("exp") is None
+    except Exception as exc:
+        logger.warning("license: is_perpetual failed: %s", exc)
+        return False
