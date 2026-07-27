@@ -14,17 +14,14 @@ name: Apply E2E required checks via Rulesets API (C6)
 #
 # Idempotent: upserts by name so repeated runs are safe.
 # Runs on every push to main so the ruleset self-heals if deleted.
-# On any API error: emits a ::notice:: and exits 0 -- CI always stays green
-# regardless of API outcome. The verify + comment steps only run when
-# created=true, so a graceful failure leaves no side effects.
+# On 403 (token lacks ruleset-write rights): emits a ::notice:: and
+# exits 0 -- a 403 is expected on this personal-repo plan and is
+# handled by apply-required-checks.yml's notification to #3970.
 #
-# NOTE: administration:write is now included in the permissions block.
-# It was previously omitted because an older GitHub version rejected all
-# workflow runs that requested it (conclusion: failure, total_jobs: 0).
-# GitHub expanded GITHUB_TOKEN capabilities in 2024 -- administration:write
-# is now a valid Actions permission that grants the Rulesets API access
-# needed to enforce required status checks without an admin PAT.
-# If the API still returns 403, the handler exits 0 so CI stays green.
+# NOTE: administration:write is NOT listed in the permissions block because
+# requesting it at the workflow level causes GitHub to kill the run with 0
+# jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
+# The Python script handles the 403 runtime error gracefully instead.
 #
 # Tracking: vivekchand/clawmetry#3970 (C6)
 
@@ -36,7 +33,6 @@ on:
 permissions:
   contents: read
   issues: write
-  administration: write
 
 jobs:
   apply-ruleset:
@@ -96,28 +92,29 @@ jobs:
                   raw = exc.read().decode(errors="replace")
                   return None, (exc.code, raw)
 
-          def graceful_skip(reason, code=None):
-              """Print a ::notice:: and exit 0. CI always stays green."""
-              detail = f" (HTTP {code})" if code else ""
-              print(
-                  f"::notice title=C6 Rulesets API skipped::"
-                  f"{reason}{detail} -- "
-                  "Close C6 via Settings UI or apply-required-checks.yml (confirm=APPLY + PAT). "
-                  "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
-              )
-              set_output("created", "false")
-              sys.exit(0)
-
           # Fetch existing rulesets to check for an upsert target.
           rulesets, err = api("GET", f"/repos/{OWNER}/{REPO}/rulesets")
           if err:
               code, body = err
-              # Any API error on the read step: exit gracefully.
-              # 403 = no ruleset-management rights (expected without admin PAT).
-              # 404 = rulesets not available on this repo/plan.
-              # Other 4xx/5xx = unexpected; exit 0 so CI stays green and the
-              # c6-health.yml daily check keeps notifying about the gap.
-              graceful_skip(f"GET /rulesets returned non-success", code=code)
+              if code == 403:
+                  # 403 is expected on personal repos where the plan does not
+                  # grant GITHUB_TOKEN ruleset-management rights. This is NOT
+                  # an error -- exit 0 so CI stays green. The admin has clear
+                  # close-C6 instructions from apply-required-checks.yml.
+                  print(
+                      "::notice title=C6 Rulesets API unavailable::"
+                      "GITHUB_TOKEN returned 403 on GET /rulesets. "
+                      "Expected on this personal-repo plan. "
+                      "Close C6 via the Settings UI (60 s) or "
+                      "apply-required-checks.yml (confirm=APPLY + PAT). "
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                  )
+                  set_output("created", "false")
+                  sys.exit(0)
+              else:
+                  print(f"::error::GET /rulesets failed: {code} {body[:400]}")
+                  set_output("created", "false")
+                  sys.exit(1)
 
           existing_id = None
           for rs in (rulesets or []):
@@ -165,8 +162,20 @@ jobs:
 
           if err:
               code, body = err
-              # Any write error: exit gracefully so CI stays green.
-              graceful_skip(f"{verb} ruleset returned non-success", code=code)
+              if code == 403:
+                  print(
+                      f"::notice title=C6 Rulesets API unavailable::"
+                      f"{verb} ruleset returned 403 -- "
+                      "GITHUB_TOKEN cannot manage rulesets on this plan/repo. "
+                      "Use the PAT workflow or GitHub Settings UI instead. "
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                  )
+                  set_output("created", "false")
+                  sys.exit(0)
+              else:
+                  print(f"::error::{verb} ruleset failed: {code} {body[:400]}")
+                  set_output("created", "false")
+                  sys.exit(1)
 
           rs_id = (result or {}).get("id", "?")
           rs_url = (result or {}).get("html_url", "")
@@ -180,7 +189,7 @@ jobs:
           PYEOF
 
       # Only verify if the upsert step actually created/updated a ruleset.
-      # Skipped when upsert exits 0 due to any API error.
+      # Skipped when upsert exits 0 due to 403 (no ruleset to verify).
       - name: Verify ruleset is active
         if: success() && steps.upsert.outputs.created == 'true'
         env:
@@ -259,8 +268,8 @@ jobs:
           PYEOF
 
       # Only post the success comment if a ruleset was actually created/updated.
-      # Skipped on any API error (created=false) and on re-runs where already posted.
-      - name: Comment on tracking issues on first-success
+      # Skipped on 403 (no ruleset created) and on re-runs where already posted.
+      - name: Comment on tracking issue on first-success
         if: success() && steps.upsert.outputs.created == 'true' && github.event_name == 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -270,8 +279,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           REPO = "clawmetry"
-          # Post to both tracking issues so the notification reaches either inbox.
-          TRACKING_ISSUES = [3970, 4029]
+          TRACKING_ISSUE = 3970
           MARKER = "<!-- c6-ruleset-applied -->"
           RUN_URL = (
               f"https://github.com/{OWNER}/{REPO}/actions/runs/"
@@ -285,26 +293,39 @@ jobs:
               "User-Agent": "clawmetry-c6-ruleset/1.0",
           }
 
-          def get_comments(issue):
+          def get_comments():
               req = urllib.request.Request(
                   f"https://api.github.com/repos/{OWNER}/clawmetry"
-                  f"/issues/{issue}/comments?per_page=20",
+                  f"/issues/{TRACKING_ISSUE}/comments?per_page=20",
                   headers=HEADERS,
               )
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
 
-          def post_comment(issue, body):
+          def post_comment(body):
               data = json.dumps({"body": body}).encode()
               req = urllib.request.Request(
                   f"https://api.github.com/repos/{OWNER}/clawmetry"
-                  f"/issues/{issue}/comments",
+                  f"/issues/{TRACKING_ISSUE}/comments",
                   data=data,
                   headers=HEADERS,
                   method="POST",
               )
               with urllib.request.urlopen(req) as r:
                   return json.loads(r.read())
+
+          try:
+              comments = get_comments()
+          except Exception:
+              comments = []
+
+          # Only post once -- skip if already posted.
+          already = any(
+              MARKER in (c.get("body") or "") for c in comments
+          )
+          if already:
+              print("C6-applied comment already posted. Skipping.")
+              sys.exit(0)
 
           body = (
               f"{MARKER}\n"
@@ -324,16 +345,6 @@ jobs:
               "have their required checks (C6-cloud and C6-landing) -- those still "
               "need the admin PAT or GitHub Settings UI for cross-repo rulesets."
           )
-
-          for issue in TRACKING_ISSUES:
-              try:
-                  comments = get_comments(issue)
-                  already = any(MARKER in (c.get("body") or "") for c in comments)
-                  if already:
-                      print(f"C6-applied comment already posted on #{issue}. Skipping.")
-                      continue
-                  result = post_comment(issue, body)
-                  print(f"Posted on #{issue}: {result['html_url']}")
-              except Exception as exc:
-                  print(f"::warning::Could not post comment on #{issue}: {exc}")
+          result = post_comment(body)
+          print(f"Posted: {result['html_url']}")
           PYEOF
