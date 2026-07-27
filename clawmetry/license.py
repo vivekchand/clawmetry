@@ -1273,3 +1273,79 @@ def pro_installation_info() -> dict:
         "version": version,
         "marker": marker,
     }
+
+
+def license_nodes() -> int | None:
+    """Scalar view onto the installed license's ``nodes`` claim -- the paid
+    node-coverage count -- for a fleet/capacity tile that wants ONE integer
+    rather than the whole :func:`current_license_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface:
+        no license file on disk, an invalid signature (the payload can't
+        be trusted -- an attacker could stuff any ``nodes`` count into an
+        unsigned body), an expired license (a lapsed customer must not
+        keep rendering as "5 nodes covered"), OR a signed payload whose
+        ``nodes`` claim is absent / non-numeric / less than 1.
+      * A positive integer otherwise -- the covered node count.
+
+    Mirrors the "refuse expired keys" posture already used by
+    :func:`license_tier`, so a fleet capacity tile bound to this scalar
+    cannot keep rendering the paid coverage on a lapsed install. A caller
+    who wants the CLAIM even on an expired key (support: "how many nodes
+    was this key SUPPOSED to cover?") should keep reading
+    :func:`current_license_info` directly and pull ``nodes`` there.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    dashboard tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_nodes underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("valid"):
+        # invalid-signature and expired branches both collapse to None on
+        # purpose -- see docstring for the fleet-tile rationale.
+        return None
+    nodes = info.get("nodes")
+    try:
+        n = int(nodes)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 else None
+
+
+def is_within_node_limit(nodes: int) -> bool:
+    """Boolean gate for "does connecting the Nth node fit under my license?"
+
+    Returns ``True`` iff a license is installed, signature-valid, NOT
+    expired, its ``nodes`` claim resolves to a positive integer, AND the
+    caller's ``nodes`` value is between 1 and that limit inclusive. Every
+    other state returns ``False``: no license, invalid signature, expired
+    key, missing/non-numeric ``nodes`` claim, ``nodes<=0``, or a live limit
+    that simply does not cover the caller's count.
+
+    ``nodes`` is coerced through ``int()``; non-numeric input, zero, or a
+    negative count collapses to ``False`` (a fleet of "connect -5 nodes"
+    never fits any coverage). Never raises; every underlying failure
+    returns ``False`` so a scheduled fleet-capacity check never crashes
+    on a bad install.
+
+    Pairs with :func:`license_nodes` the way :func:`is_expiring_within`
+    pairs with :func:`days_until_expiry` -- the scalar reports the raw
+    number for tiles, this bool answers the yes/no question a gate needs
+    without the caller having to compare against the limit themselves.
+    """
+    try:
+        requested = int(nodes)
+    except (TypeError, ValueError):
+        return False
+    if requested < 1:
+        return False
+    limit = license_nodes()
+    if limit is None:
+        return False
+    return requested <= limit

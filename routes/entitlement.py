@@ -8497,6 +8497,152 @@ def api_license_pro_installation():
         return jsonify({"installed": False, "version": None, "marker": {}})
 
 
+def _license_nodes_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two node-limit endpoints
+    both need (``nodes``, ``has_license``, ``valid``). Lives in the handler
+    layer -- not in :mod:`clawmetry.license` -- because ``has_license`` is
+    an install-state fact rather than a license-payload fact, and both
+    endpoints below need the pair together so a UI cannot catch them
+    disagreeing on ``has_license`` for the same install.
+
+    Never raises: any underlying failure collapses to
+    ``{nodes: None, has_license: False, valid: False}`` so callers keep the
+    "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        nodes = _lic.license_nodes()
+    except Exception as exc:
+        logger.debug("_license_nodes_snapshot: underlying read failed: %s", exc)
+        return {"nodes": None, "has_license": False, "valid": False}
+    if not isinstance(info, dict):
+        return {"nodes": None, "has_license": False, "valid": False}
+    return {
+        "nodes": nodes,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/nodes")
+def api_license_nodes():
+    """``GET /api/license/nodes`` -- scalar view of the installed license's
+    node-coverage count, for a fleet-capacity tile that wants ONE integer
+    rather than the whole ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "nodes": <int|null>,       # covered node count (None if untrusted)
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``nodes`` mirrors :func:`clawmetry.license.license_nodes`: ``None`` for
+    no license, invalid signature, or expired install -- an expired Pro key
+    deliberately collapses to ``null`` so a fleet-capacity tile that keys
+    off this field cannot keep rendering the paid coverage on a lapsed
+    customer. A caller who wants the raw ``nodes`` claim even on an expired
+    key (support: "how many nodes was this SUPPOSED to cover?") should keep
+    hitting ``/api/license/status``.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{nodes: null, has_license: false, valid: false}`` (the OSS-free
+    branch shape), matching the "never crash on bad input" posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_nodes_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_nodes: error: %s", exc)
+        return jsonify({"nodes": None, "has_license": False, "valid": False})
+
+
+@bp_entitlement.route("/api/license/within-node-limit")
+def api_license_within_node_limit():
+    """``GET /api/license/within-node-limit?nodes=<N>`` -- boolean gate for
+    "does a fleet of N nodes fit under the installed license?" UIs.
+
+    Query parameters:
+      * ``nodes`` (int, required) -- the fleet size to test against.
+        Non-numeric or missing input degrades to ``within_limit=false``
+        rather than a 4xx, matching the surrounding endpoints' never-5xx /
+        never-4xx posture. Values below 1 also collapse to ``false`` (a
+        fleet of "connect zero nodes" is meaningless).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "within_limit": <bool>,
+          "nodes": <int|null>,           # currently-covered node count
+          "requested_nodes": <int>,      # normalised echo of the query
+          "has_license": <bool>,
+          "valid": <bool>                # signature-valid AND not expired
+        }
+
+    ``within_limit`` is ``True`` iff a license is installed, signature-
+    valid, NOT expired, its ``nodes`` claim resolves to a positive
+    integer, AND ``requested_nodes`` is between 1 and that limit
+    inclusive. An expired Pro install returns ``within_limit=false`` on
+    purpose -- the caller wants "am I entitled right now" not "was I ever
+    entitled", and the ``valid`` field carries the "signed but lapsed"
+    signal so a paywall UI can drive both banners off one URL.
+
+    Mirrors :func:`clawmetry.license.is_within_node_limit` -- the HTTP
+    shape layers ``nodes`` / ``requested_nodes`` / ``has_license`` /
+    ``valid`` on top of that bool so a fleet widget never needs a second
+    call to ``/api/license/status`` to render the accompanying "N of M
+    nodes covered" copy.
+    """
+    raw = request.args.get("nodes", "")
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        snap = _license_nodes_snapshot()
+        return jsonify(
+            {
+                "within_limit": False,
+                "nodes": snap["nodes"],
+                "requested_nodes": 0,
+                "has_license": snap["has_license"],
+                "valid": snap["valid"],
+            }
+        )
+    if requested < 1:
+        snap = _license_nodes_snapshot()
+        return jsonify(
+            {
+                "within_limit": False,
+                "nodes": snap["nodes"],
+                "requested_nodes": max(requested, 0),
+                "has_license": snap["has_license"],
+                "valid": snap["valid"],
+            }
+        )
+    try:
+        snap = _license_nodes_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_within_node_limit: error: %s", exc)
+        snap = {"nodes": None, "has_license": False, "valid": False}
+    limit = snap["nodes"]
+    within = (
+        snap["has_license"]
+        and snap["valid"]
+        and isinstance(limit, int)
+        and 1 <= requested <= limit
+    )
+    return jsonify(
+        {
+            "within_limit": bool(within),
+            "nodes": limit,
+            "requested_nodes": requested,
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
