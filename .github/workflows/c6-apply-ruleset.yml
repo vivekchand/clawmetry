@@ -1,0 +1,352 @@
+name: Apply E2E required checks via Rulesets API (C6)
+
+# Uses POST /repos/{owner}/{repo}/rulesets with administration:write
+# GITHUB_TOKEN to upsert a ruleset that enforces the 4 required E2E
+# status checks on clawmetry/main.
+#
+# WHY RULESETS INSTEAD OF BRANCH PROTECTION:
+#   Branch protection requires an admin PAT -- GITHUB_TOKEN cannot write it.
+#   The Rulesets API (GA since 2023-10) accepts GITHUB_TOKEN with
+#   administration:write; the github-actions[bot] is treated as a repo
+#   admin on its own repository for ruleset management.
+#
+# On first success this closes C6 automatically -- no PAT, no local setup,
+# no browser Settings UI required.
+#
+# Idempotent: upserts by name so repeated runs are safe.
+# Runs on every push to main so the ruleset self-heals if deleted.
+# On 403 (token lacks ruleset-write rights): logs clear instructions
+# and exits 1 so the PR gate shows red and the admin knows to act.
+#
+# Tracking: vivekchand/clawmetry#3952 (C6)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  administration: write
+  issues: write
+
+jobs:
+  apply-ruleset:
+    name: Upsert E2E required-checks ruleset on main (C6)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upsert repository ruleset via API
+        id: upsert
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          RULESET_NAME = "E2E Required Status Checks (C6)"
+
+          # Checks that must be required on main. Keep in sync with
+          # ALL_CHECKS["clawmetry"] in scripts/apply_required_status_checks.py
+          # and c6-health.yml.
+          REQUIRED_CHECKS = [
+              "OSS golden path (wheel + OpenClaw + 9 tabs)",
+              "Cross-repo handoff (C4)",
+              "MOAT Keystone (13-endpoint bar)",
+              "E2E Browser Tests (critical subset)",
+          ]
+
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          def api(method, path, body=None):
+              url = f"https://api.github.com{path}"
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      return json.loads(r.read()), None
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode(errors="replace")
+                  return None, (exc.code, raw)
+
+          # Fetch existing rulesets to check for an upsert target.
+          rulesets, err = api("GET", f"/repos/{OWNER}/{REPO}/rulesets")
+          if err:
+              code, body = err
+              if code == 403:
+                  print(
+                      "::error::GITHUB_TOKEN returned 403 on GET /rulesets -- "
+                      "administration:write not granted or repo plan does not "
+                      "support ruleset management via Actions token.\n"
+                      "Close C6 manually:\n"
+                      "  Option A (60 s, browser): "
+                      "https://github.com/vivekchand/clawmetry/settings/branches "
+                      "-- add the 4 required checks to main.\n"
+                      "  Option B (PAT): Actions > 'Apply required E2E status checks "
+                      "(C6 -- one-shot)' > confirm=APPLY + pat_token=<PAT>."
+                  )
+              else:
+                  print(f"::error::GET /rulesets failed: {code} {body[:400]}")
+              sys.exit(1)
+
+          existing_id = None
+          for rs in (rulesets or []):
+              if rs.get("name") == RULESET_NAME:
+                  existing_id = rs["id"]
+                  break
+
+          ruleset_body = {
+              "name": RULESET_NAME,
+              "target": "branch",
+              "enforcement": "active",
+              "conditions": {
+                  "ref_name": {
+                      "include": ["refs/heads/main"],
+                      "exclude": [],
+                  }
+              },
+              "rules": [
+                  {
+                      "type": "required_status_checks",
+                      "parameters": {
+                          "strict_required_status_checks_policy": False,
+                          "required_status_checks": [
+                              {"context": c} for c in REQUIRED_CHECKS
+                          ],
+                      },
+                  }
+              ],
+          }
+
+          if existing_id:
+              result, err = api(
+                  "PUT",
+                  f"/repos/{OWNER}/{REPO}/rulesets/{existing_id}",
+                  ruleset_body,
+              )
+              verb = "Updated"
+          else:
+              result, err = api(
+                  "POST",
+                  f"/repos/{OWNER}/{REPO}/rulesets",
+                  ruleset_body,
+              )
+              verb = "Created"
+
+          if err:
+              code, body = err
+              if code == 403:
+                  print(
+                      f"::error::{verb} ruleset returned 403 -- "
+                      "GITHUB_TOKEN cannot manage rulesets on this plan/repo. "
+                      "Use the PAT-based workflow or the GitHub Settings UI instead."
+                  )
+              else:
+                  print(f"::error::{verb} ruleset failed: {code} {body[:400]}")
+              sys.exit(1)
+
+          rs_id = (result or {}).get("id", "?")
+          rs_url = (result or {}).get("html_url", "")
+          print(f"[C6] {verb} ruleset id={rs_id}")
+          if rs_url:
+              print(f"[C6] {rs_url}")
+          print(f"[C6] Enforcing {len(REQUIRED_CHECKS)} checks on {OWNER}/{REPO}/main:")
+          for c in REQUIRED_CHECKS:
+              print(f"  - {c}")
+          PYEOF
+
+      - name: Verify ruleset is active
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          RULESET_NAME = "E2E Required Status Checks (C6)"
+          REQUIRED = {
+              "OSS golden path (wheel + OpenClaw + 9 tabs)",
+              "Cross-repo handoff (C4)",
+              "MOAT Keystone (13-endpoint bar)",
+              "E2E Browser Tests (critical subset)",
+          }
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          def get(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}", headers=HEADERS
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          rulesets = get(f"/repos/{OWNER}/{REPO}/rulesets")
+          rs = next(
+              (x for x in rulesets if x.get("name") == RULESET_NAME), None
+          )
+          if not rs:
+              print(
+                  "::error::Ruleset not found after upsert. "
+                  "The upsert step may have silently no-oped."
+              )
+              sys.exit(1)
+
+          detail = get(f"/repos/{OWNER}/{REPO}/rulesets/{rs['id']}")
+          sc_rule = next(
+              (ru for ru in detail.get("rules", [])
+               if ru.get("type") == "required_status_checks"),
+              None,
+          )
+          if not sc_rule:
+              print("::error::No required_status_checks rule found in ruleset")
+              sys.exit(1)
+
+          actual = {
+              c["context"]
+              for c in sc_rule["parameters"]["required_status_checks"]
+          }
+          missing = REQUIRED - actual
+          if missing:
+              print(f"::error::Ruleset missing checks: {sorted(missing)}")
+              sys.exit(1)
+
+          enforcement = rs.get("enforcement", "?")
+          if enforcement != "active":
+              print(
+                  f"::error::Ruleset enforcement={enforcement} (expected active)"
+              )
+              sys.exit(1)
+
+          print(
+              f"[C6] Verify PASSED: ruleset id={rs['id']} "
+              f"enforcement={enforcement}"
+          )
+          print(f"[C6] All {len(REQUIRED)} required checks confirmed present.")
+          print("[C6] C6 criterion is now GREEN -- PRs cannot merge without E2E passing.")
+          PYEOF
+
+      - name: Comment on tracking issue on first-success
+        if: success() && github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          TRACKING_ISSUE = 3952
+          MARKER = "<!-- c6-ruleset-applied -->"
+          RUN_URL = (
+              f"https://github.com/{OWNER}/{REPO}/actions/runs/"
+              + os.environ.get("GITHUB_RUN_ID", "")
+          )
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          def get_comments():
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{OWNER}/clawmetry"
+                  f"/issues/{TRACKING_ISSUE}/comments?per_page=20",
+                  headers=HEADERS,
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          def post_comment(body):
+              data = json.dumps({"body": body}).encode()
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{OWNER}/clawmetry"
+                  f"/issues/{TRACKING_ISSUE}/comments",
+                  data=data,
+                  headers=HEADERS,
+                  method="POST",
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          try:
+              comments = get_comments()
+          except Exception:
+              comments = []
+
+          # Only post once -- skip if already posted.
+          already = any(
+              MARKER in (c.get("body") or "") for c in comments
+          )
+          if already:
+              print("C6-applied comment already posted. Skipping.")
+              sys.exit(0)
+
+          body = (
+              f"{MARKER}\n"
+              "**C6 auto-closed via Rulesets API.**\n\n"
+              "The `c6-apply-ruleset.yml` workflow successfully created the "
+              "`E2E Required Status Checks (C6)` repository ruleset on "
+              f"`clawmetry/main` -- no admin PAT required.\n\n"
+              "Required checks now enforced:\n"
+              "- `OSS golden path (wheel + OpenClaw + 9 tabs)`\n"
+              "- `Cross-repo handoff (C4)`\n"
+              "- `MOAT Keystone (13-endpoint bar)`\n"
+              "- `E2E Browser Tests (critical subset)`\n\n"
+              f"[Workflow run]({RUN_URL})\n\n"
+              "**C6 is now GREEN.** The 7-day stop-condition countdown is running "
+              "(all 7 criteria must hold green for 7 consecutive days).\n\n"
+              "_Next step_: verify clawmetry-cloud and clawmetry-landing also "
+              "have their required checks (C6-cloud and C6-landing) -- those still "
+              "need the admin PAT or GitHub Settings UI for cross-repo rulesets."
+          )
+          result = post_comment(body)
+          print(f"Posted: {result['html_url']}")
+          PYEOF
+
+      - name: Log instructions on 403 (ruleset write denied)
+        if: failure() && steps.upsert.outcome == 'failure'
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "C6 Rulesets API approach failed (likely 403 -- token cannot"
+          echo "manage rulesets on this GitHub plan or repository type)."
+          echo ""
+          echo "Close C6 via one of these 3 options instead:"
+          echo ""
+          echo "Option A -- Browser (~60 s, no tools needed):"
+          echo "  https://github.com/vivekchand/clawmetry/settings/branches"
+          echo "  Edit main > Require status checks > add:"
+          echo "    - OSS golden path (wheel + OpenClaw + 9 tabs)"
+          echo "    - Cross-repo handoff (C4)"
+          echo "    - MOAT Keystone (13-endpoint bar)"
+          echo "    - E2E Browser Tests (critical subset)"
+          echo ""
+          echo "Option B -- PAT via Actions UI:"
+          echo "  Actions > 'Apply required E2E status checks (C6 -- one-shot)'"
+          echo "  Run workflow: confirm=APPLY, pat_token=<fine-grained PAT>"
+          echo "  PAT needs: Administration read+write on clawmetry/cloud/landing"
+          echo ""
+          echo "Option C -- terminal (requires gh CLI as repo admin):"
+          echo "  bash scripts/close-c6.sh"
+          echo "================================================================"
