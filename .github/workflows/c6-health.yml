@@ -10,17 +10,17 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # (can't verify) rather than "error" (broken). The health check gate
 # decision is based only on the clawmetry/main result (same-repo readable).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #4029
+# On failure: posts an @-mentioned reminder to tracking issue #3864
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
-# To close C6:
+# To close C6 (any of these paths -- all take under 2 minutes):
 #   1. Actions > "Apply required E2E status checks (C6 -- one-shot)" >
 #      confirm=APPLY, pat_token=<fine-grained PAT with Administration
 #      read+write on clawmetry, clawmetry-cloud, clawmetry-landing>
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#4029
+# Tracking: vivekchand/clawmetry#3864
 
 on:
   schedule:
@@ -50,7 +50,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 4029
+          TRACKING_ISSUE = 3864
           MARKER = "<!-- c6-health-check -->"
           # Repo this workflow runs in. GITHUB_TOKEN is repo-scoped: it can
           # read clawmetry (same-repo) but returns 403 for other repos.
@@ -66,16 +66,12 @@ jobs:
           }
 
           # All 3 repos and their required checks.
-          # This list must stay in sync with REQUIRED_CHECKS in
-          # scripts/apply_required_status_checks.py.
-          # clawmetry reads with github.token; others use unauthenticated
-          # reads (public repos only -- private repos return "unknown").
+          # Keep in sync with REQUIRED_CHECKS in scripts/apply_required_status_checks.py.
+          # "E2E Gate (required)" is the aggregator job from e2e-gate.yml (PR #4111,
+          # merged 2026-07-27); it polls the 4 underlying OSS E2E workflows.
           ALL_CHECKS = {
               "clawmetry": [
-                  "OSS golden path (wheel + OpenClaw + 9 tabs)",
-                  "Cross-repo handoff (C4)",
-                  "MOAT Keystone (13-endpoint bar)",
-                  "E2E Browser Tests (critical subset)",
+                  "E2E Gate (required)",
               ],
               "clawmetry-cloud": [
                   "Cloud golden-path browser E2E",
@@ -130,34 +126,21 @@ jobs:
               Reads from both 'contexts' (legacy) and 'checks' (current) arrays
               so checks configured via the GitHub Settings UI are correctly seen.
               """
-              # Only send GITHUB_TOKEN to the workflow's own repo (same-repo).
-              # Sending it to other repos returns 403/404 even when those repos
-              # are public -- the scoped token is rejected cross-repo.
-              # Private repos (clawmetry-cloud, clawmetry-landing) also return
-              # 404 for unauthenticated reads. Both cases map to "unknown"
-              # (can't verify), not "error" (something broke in the workflow).
               data, err = api_get(
                   f"/repos/{OWNER}/{repo}/branches/main",
                   auth=(repo == _WORKFLOW_REPO),
               )
               if err is not None or data is None:
-                  # 4xx = private/inaccessible (expected for cross-repo reads).
-                  # 5xx or network error = genuine unexpected failure.
                   if isinstance(err, int) and 400 <= err < 500:
                       return set(), "unknown"
                   return set(), "error"
               if not data.get("protected"):
                   return set(), "unprotected"
-              # "protection" key present in response = token can read details.
-              # Returns None when cross-repo read limits apply (public repos,
-              # different owner scope). Empty contexts in a readable dict is
-              # definitive: branch is protected but no required checks yet.
               prot = data.get("protection")
               if prot is None:
                   return set(), "unknown"
               rsc = (prot.get("required_status_checks") or {})
               contexts = set(rsc.get("contexts") or [])
-              # Also extract from 'checks' array (Settings UI writes here, not 'contexts').
               for item in (rsc.get("checks") or []):
                   if isinstance(item, dict) and item.get("context"):
                       contexts.add(item["context"])
@@ -204,15 +187,9 @@ jobs:
           )
 
           # Determine overall state.
-          # "confirmed missing" = we CAN read the repo and checks are absent.
-          # "unknown" = private/inaccessible; treated as non-blocking here
-          # because the PAT-based apply run configures cloud/landing too.
           has_confirmed_missing = any(
               r["status"] in ("missing", "unprotected") for r in results.values()
           )
-          # clawmetry/main is readable via github.token (same-repo).
-          # clawmetry-cloud and clawmetry-landing are private; their
-          # "unknown" status is expected and does not block the gate.
           clawmetry_status = results.get("clawmetry", {}).get("status")
           all_confirmed_ok = clawmetry_status == "ok" and not has_confirmed_missing
 
@@ -239,16 +216,15 @@ jobs:
                   rows.append(f"| **{repo}/main** | ERROR | API error -- verify manually |")
           table = (
               "| Repo | Status | Detail |\n"
-              "|------|--------|--------|"
-              + "\n" + "\n".join(rows)
-          )
+              "|------|--------|--------|")
+          table += "\n" + "\n".join(rows)
 
           if all_confirmed_ok:
               body = (
                   f"{MARKER}\n"
                   f"**C6 health check {today_utc}: clawmetry/main confirmed GREEN -- C6 closed.**\n\n"
                   f"{table}\n\n"
-                  "clawmetry/main: all 4 required checks confirmed present. "
+                  "clawmetry/main: `E2E Gate (required)` confirmed present. "
                   "clawmetry-cloud and clawmetry-landing: cannot verify cross-repo "
                   "(private repos -- GITHUB_TOKEN scope limit is expected; "
                   "they were configured by the same apply-required-checks run).\n\n"
@@ -273,13 +249,10 @@ jobs:
                   f"@{OWNER} **C6 health check {today_utc} (day {prev_check_count + 1}): {summary}.**\n\n"
                   f"{table}\n\n"
                   "**Fastest close -- no PAT, no tools, ~60 s in any browser:**\n\n"
-                  "Add the check names in GitHub Settings UI (GitHub autocompletes from recent CI runs):\n\n"
+                  "Add the check name in GitHub Settings UI (GitHub autocompletes from recent CI runs):\n\n"
                   "1. [clawmetry Settings > Branches](https://github.com/vivekchand/clawmetry/settings/branches)"
                   " -- edit main, enable \"Require status checks\", add:\n"
-                  "   - `OSS golden path (wheel + OpenClaw + 9 tabs)`\n"
-                  "   - `Cross-repo handoff (C4)`\n"
-                  "   - `MOAT Keystone (13-endpoint bar)`\n"
-                  "   - `E2E Browser Tests (critical subset)`\n"
+                  "   - `E2E Gate (required)`\n"
                   "2. [clawmetry-cloud Settings > Branches](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
                   " -- add `Cloud golden-path browser E2E`\n"
                   "3. [clawmetry-landing Settings > Branches](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
@@ -295,7 +268,5 @@ jobs:
 
           result_obj = post_comment(body)
           print(f"Posted: {result_obj['html_url']}")
-          # Exit 1 when clawmetry has confirmed missing/unprotected checks.
-          # Exit 0 when clawmetry is ok (or when cross-repo reads are unknown).
           sys.exit(1 if has_confirmed_missing else 0)
           PYEOF

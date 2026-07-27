@@ -36,17 +36,17 @@ any non-ghs_ token:
 
 Primary repo behaviour (clawmetry):
   When GITHUB_REPOSITORY=vivekchand/clawmetry and using a PAT, the script
-  applies ALL 6 required checks across all 3 repos in one run. This means
+  applies ALL 3 required checks across all 3 repos in one run. This means
   you only need to trigger the apply-required-checks.yml workflow ONCE -- on
   the clawmetry repo -- to close C6 everywhere.
 
   When using GITHUB_TOKEN (read-only push path), only the current repo's
   checks are verified to avoid cross-repo 403s.
 
-When run locally (GITHUB_REPOSITORY not set), the script applies all 6
+When run locally (GITHUB_REPOSITORY not set), the script applies all 3
 checks and requires a token with cross-repo admin access.
 
-Tracking: vivekchand/clawmetry#4029 (C6)
+Tracking: vivekchand/clawmetry#3864 (C6)
 """
 from __future__ import annotations
 
@@ -60,12 +60,11 @@ OWNER = "vivekchand"
 
 # Each tuple: (repo, exact job name as it appears in the workflow's `name:` field)
 #
-# Job names verified against workflow files 2026-06-11:
-#   clawmetry/.github/workflows/oss-golden-path.yml      -> "OSS golden path (wheel + OpenClaw + 9 tabs)"
-#   clawmetry/.github/workflows/cross-repo-handoff.yml   -> "Cross-repo handoff (C4)"
-#   clawmetry/.github/workflows/ci.yml (moat-keystone)   -> "MOAT Keystone (13-endpoint bar)"
-#   clawmetry/.github/workflows/ci.yml (e2e-critical)    -> "E2E Browser Tests (critical subset)"
-#   clawmetry-cloud/.github/workflows/e2e.yml            -> "Cloud golden-path browser E2E"
+# Job names verified against workflow files 2026-07-27:
+#   clawmetry/.github/workflows/e2e-gate.yml              -> "E2E Gate (required)"
+#     (aggregates OSS golden path + Cross-repo handoff + MOAT Keystone +
+#      E2E Browser Tests into one status check; PR #4111, merged 2026-07-27)
+#   clawmetry-cloud/.github/workflows/e2e.yml             -> "Cloud golden-path browser E2E"
 #   clawmetry-landing/.github/workflows/landing-golden-path.yml -> "Landing golden path (C3)"
 #
 # visual-diff (pr-screenshots.yml) is intentionally excluded: that workflow has
@@ -73,20 +72,22 @@ OWNER = "vivekchand"
 # a required check would permanently stall non-UI PRs on "Expected -- Waiting
 # for status to be reported."
 REQUIRED_CHECKS: list[tuple[str, str]] = [
-    ("clawmetry",         "OSS golden path (wheel + OpenClaw + 9 tabs)"),
-    ("clawmetry",         "Cross-repo handoff (C4)"),
-    # docs/MOAT_BAR.md Section 5, AC#1: keystone_e2e --no-drive blocks merge.
-    # ci.yml `moat-keystone` job runs on every PR; job name must match exactly.
-    ("clawmetry",         "MOAT Keystone (13-endpoint bar)"),
-    # ci.yml `e2e-critical` job: 32-tab auth-overlay sweep (C5 gate).
-    # Without this, a PR breaking tabs 10-32 fails CI but remains mergeable.
-    ("clawmetry",         "E2E Browser Tests (critical subset)"),
+    # Single aggregator replacing the 4 individual OSS E2E checks.
+    # Requires .github/workflows/e2e-gate.yml (PR #4111, merged 2026-07-27).
+    # One branch-protection entry closes C6 for clawmetry instead of four.
+    ("clawmetry",         "E2E Gate (required)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
 ]
 
 # Checks previously added as required that must be actively removed.
 DEPRECATED_CHECKS: list[tuple[str, str]] = [
+    # Replaced by "E2E Gate (required)" aggregator (PR #4111, 2026-07-27).
+    # Remove these individual checks if present so branch protection stays clean.
+    ("clawmetry", "OSS golden path (wheel + OpenClaw + 9 tabs)"),
+    ("clawmetry", "Cross-repo handoff (C4)"),
+    ("clawmetry", "MOAT Keystone (13-endpoint bar)"),
+    ("clawmetry", "E2E Browser Tests (critical subset)"),
     # Added in error before 2026-06-02: pr-screenshots.yml has a paths: filter
     # so visual-diff only fires on UI-touching PRs. As a required check it
     # permanently stalls non-UI PRs waiting for a status that never arrives.
@@ -311,7 +312,7 @@ def _checks_to_apply() -> list[tuple[str, str]]:
     """Return the REQUIRED_CHECKS to apply for the current context (PAT path).
 
     clawmetry is the primary E2E hub. When running from here with a PAT that
-    has Administration (read+write) on all 3 repos, we apply all 6 required
+    has Administration (read+write) on all 3 repos, we apply all 3 required
     checks in a single run -- matching the dry-run preview in
     apply-required-checks.yml which already says 'apply to all 3 repos'.
 
@@ -398,7 +399,7 @@ def main() -> None:
                 "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
                 "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
                 "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
-                "  Tracking: vivekchand/clawmetry#4029 (C6)"
+                "  Tracking: vivekchand/clawmetry#3864 (C6)"
             )
         # Read-only path: GITHUB_TOKEN cannot write branch protection rules.
         # Scope verification to the current repo only to avoid cross-repo 403s.
@@ -411,10 +412,7 @@ def main() -> None:
         print("  GitHub Settings UI autocompletes check names from recent CI runs.")
         print("  1. github.com/vivekchand/clawmetry/settings/branches > Edit main >")
         print("     Require status checks > add:")
-        print("       OSS golden path (wheel + OpenClaw + 9 tabs)")
-        print("       Cross-repo handoff (C4)")
-        print("       MOAT Keystone (13-endpoint bar)")
-        print("       E2E Browser Tests (critical subset)")
+        print("       E2E Gate (required)")
         print("  2. github.com/vivekchand/clawmetry-cloud/settings/branches > add:")
         print("       Cloud golden-path browser E2E")
         print("  3. github.com/vivekchand/clawmetry-landing/settings/branches > add:")
