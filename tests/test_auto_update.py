@@ -449,3 +449,26 @@ def test_entitled_plan_respects_optout_and_never_disables(monkeypatch):
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     state["auto_update"] = True
     S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is True
+
+
+def test_update_respawn_relaunch_env_forces_utf8(monkeypatch, tmp_path):
+    """The relaunched process writes stdout to the log FILE, so without
+    PYTHONIOENCODING the Windows locale codec (cp1252) kills the startup
+    banner with UnicodeEncodeError right after a perfect install (live-hit
+    on the 0.12.579 unattended run)."""
+    from clawmetry import update_respawn as ur
+
+    monkeypatch.setattr(ur, "_wait_for_pid_exit", lambda pid, timeout_secs=90.0: True)
+
+    class _Proc:
+        returncode = 0
+
+    captured = {}
+    monkeypatch.setattr(ur.subprocess, "run", lambda cmd, **k: _Proc())
+    monkeypatch.setattr(ur.subprocess, "Popen",
+                        lambda cmd, **k: captured.update(k))
+    rc = ur.main(["1234", "0.12.99", str(tmp_path / "r.log"), "clawmetry.exe"])
+    assert rc == 0
+    env = captured.get("env") or {}
+    assert env.get("PYTHONIOENCODING") == "utf-8"
+    assert env.get("PYTHONUTF8") == "1"

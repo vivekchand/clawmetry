@@ -116,8 +116,18 @@ def main(argv=None) -> int:
          f"relaunching: {relaunch_cmd}")
     # Relaunch EITHER WAY: a failed install must still bring the service back
     # on the old version rather than leaving the machine with nothing running.
+    #
+    # PYTHONIOENCODING / PYTHONUTF8 are load-bearing: the relaunched process
+    # writes stdout to THIS LOG FILE (not a console), so Python picks the
+    # locale codec — cp1252 on Windows — and the startup banner's arrows and
+    # emoji die with UnicodeEncodeError, killing the freshly updated
+    # dashboard right after a perfect install (live-hit on the 0.12.579
+    # unattended run, 2026-07-28; same encoding class as the #3791 CLI bug).
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": log,
-              "close_fds": True}
+              "close_fds": True, "env": env}
     if os.name == "nt":
         kwargs["creationflags"] = _DETACHED
     else:
