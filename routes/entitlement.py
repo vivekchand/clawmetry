@@ -9198,6 +9198,183 @@ def api_license_age_days():
         )
 
 
+def _license_expires_snapshot() -> dict:
+    """Shared helper: read once, derive the quartet the two ``exp``-derived
+    endpoints both need (``expires_at``, ``days_until_expiry``,
+    ``has_license``, ``valid``). Lives in the handler layer -- not in
+    :mod:`clawmetry.license` -- because ``has_license`` is an install-state
+    fact rather than a license-payload fact, and both endpoints below need
+    the pair together so a UI cannot catch them disagreeing on
+    ``has_license`` for the same install.
+
+    Deliberately lenient on expiry, matching the ``license_expires_at`` /
+    ``days_until_expiry`` posture: a signed-but-lapsed key still surfaces
+    its real ``expires_at`` (with a negative ``days_until_expiry``) so a
+    support/audit tile can render "expired 12 days ago" without special-
+    casing the expired branch. The ``valid`` field independently carries
+    the "signature-valid AND not expired" signal for callers that DO want
+    to hide the row on lapsed keys.
+
+    Never raises: any underlying failure collapses to
+    ``{expires_at: None, days_until_expiry: None, has_license: False,
+    valid: False}`` so callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        expires = _lic.license_expires_at()
+        days = _lic.days_until_expiry()
+    except Exception as exc:
+        logger.debug("_license_expires_snapshot: underlying read failed: %s", exc)
+        return {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(info, dict):
+        return {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "expires_at": expires,
+        "days_until_expiry": days,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/expires-at")
+def api_license_expires_at():
+    """``GET /api/license/expires-at`` -- scalar view of the installed
+    license's ``exp`` claim (epoch seconds), for a "license expires:
+    <date>" row that wants ONE integer rather than the whole
+    ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "expires_at": <int|null>,          # epoch; None if untrusted / perpetual
+          "days_until_expiry": <int|null>,   # signed days remaining
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``expires_at`` mirrors :func:`clawmetry.license.license_expires_at`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), OR when the signed payload has
+        no ``exp`` claim (perpetual license -- distinguish from
+        no-license via ``has_license``).
+      * A positive epoch integer otherwise, unmodified from the signed
+        payload.
+
+    Deliberately lenient on expiry, unlike ``/api/license/tier`` and
+    ``/api/license/nodes``: a signed-but-lapsed key still surfaces its
+    real ``expires_at`` so a support tile can render "expired 12 days
+    ago" on an expired key. The ``valid`` field independently carries
+    the "signature-valid AND not expired" signal for callers that DO
+    want to hide the row on lapsed keys.
+
+    Pairs with ``/api/license/days-until-expiry`` -- this endpoint
+    surfaces the raw epoch for an audit row, that endpoint answers the
+    caller-friendly "how many days left" without the caller having to do
+    the arithmetic. The two endpoints share :func:`_license_expires_snapshot`
+    so a UI binding both sees a consistent snapshot.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{expires_at: null, days_until_expiry: null, has_license: false,
+    valid: false}`` (the OSS-free branch shape), matching the never-crash
+    posture of the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_expires_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_expires_at: error: %s", exc)
+        return jsonify(
+            {
+                "expires_at": None,
+                "days_until_expiry": None,
+                "has_license": False,
+                "valid": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/is-expiring-at")
+def api_license_is_expiring_at():
+    """``GET /api/license/is-expiring-at?epoch=<int>`` -- predicate
+    matching the operator-supplied epoch against the installed license's
+    ``exp`` claim, for a "we noticed your key expires <date>" tile that
+    binds a specific ``exp`` value and wants to detect renewal (the on-
+    disk key no longer matches the value it was rendered with).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_expiring_at": <bool>,          # exact match; else false
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp for comparison
+          "has_license": <bool>,
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``is_expiring_at`` mirrors :func:`clawmetry.license.is_expiring_at`:
+
+      * ``false`` when there is no license file, on the invalid-signature
+        branch, on the expired branch (a predicate that fired ``true`` on
+        a lapsed key would push callers to gate renewal UI on a value
+        that no longer implies entitlement), on the perpetual-license
+        branch (no ``exp`` to compare), OR when ``epoch`` doesn't parse
+        as an integer.
+      * ``true`` iff the installed key is signature-valid, not expired,
+        carries an ``exp`` claim, AND that claim equals the supplied
+        ``epoch`` exactly.
+
+    Deliberately strict on validity, unlike the sibling
+    ``/api/license/expires-at`` endpoint (which is lenient on expiry so a
+    support tile can render "expired 12 days ago"). See the docstring on
+    :func:`clawmetry.license.is_expiring_at` for the rationale.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to
+        ``is_expiring_at=false`` with ``requested_epoch=null`` so a
+        caller cannot silently mis-gate on a typo. HTTP status is 200
+        either way -- the "bad input" signal is the ``false`` result,
+        not a 4xx, matching the never-crash posture of the surrounding
+        license endpoints.
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    snap = _license_expires_snapshot()
+    try:
+        from clawmetry import license as _lic
+
+        matched = _lic.is_expiring_at(requested) if requested is not None else False
+    except Exception as exc:
+        logger.warning("api_license_is_expiring_at: error: %s", exc)
+        matched = False
+    return jsonify(
+        {
+            "is_expiring_at": bool(matched),
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

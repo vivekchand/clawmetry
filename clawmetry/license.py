@@ -1071,6 +1071,99 @@ def is_expiring_within(days: int) -> bool:
     return 0 <= remaining <= threshold
 
 
+def license_expires_at() -> int | None:
+    """Scalar view onto the installed license's ``exp`` claim -- the epoch
+    timestamp the key expires at -- for a "license expires: <date>" row
+    that wants ONE integer rather than the whole
+    :func:`current_license_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to surface: no license
+        file on disk, an invalid signature (the payload can't be trusted
+        -- an attacker could stuff any ``exp`` into an unsigned body), OR
+        a signed payload whose ``exp`` claim is absent / non-numeric
+        (perpetual license). A caller distinguishes "perpetual" from "no
+        license" via :func:`is_perpetual` + :func:`has_license`.
+      * A positive epoch integer otherwise -- the exact timestamp carried
+        by the signed payload, unmodified.
+
+    Deliberately lenient on expiry, mirroring :func:`license_issued_at`:
+    an expired-but-signature-valid key still carries a meaningful ``exp``
+    (support scenario: "when did this lapsed key expire?") and callers
+    would otherwise have to fall back to ``/api/license/status``. The
+    :func:`is_expired` / :func:`days_until_expiry` helpers independently
+    carry the "past-expiry" signal for callers that DO want to hide the
+    row on lapsed keys.
+
+    Pairs with :func:`days_until_expiry` the way :func:`license_issued_at`
+    pairs with :func:`license_age_days` -- this scalar surfaces the raw
+    epoch for an audit row, that one answers the caller-friendly "how
+    many days left" without either side having to do the arithmetic. The
+    two are floor-divided from the same ``exp`` so they never disagree at
+    the day boundary.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    UI tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_expires_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if info.get("status") == "invalid":
+        # Invalid-signature branch: payload cannot be trusted, refuse to
+        # surface any payload-derived claim (mirrors the issued_at scalar).
+        # Expired-but-signed keys still carry a meaningful ``exp`` so we
+        # do NOT refuse them here.
+        return None
+    exp = info.get("exp")
+    return int(exp) if isinstance(exp, (int, float)) else None
+
+
+def is_expiring_at(epoch: int) -> bool:
+    """Boolean gate for "does the installed license expire at THIS exact
+    epoch?" UIs -- e.g. a "we noticed your key expires <date>" tile that
+    binds a specific ``exp`` value and wants to detect renewal (the on-
+    disk key no longer matches the value it was rendered with).
+
+    Returns ``True`` iff a license is installed, signature-valid, NOT
+    expired, carries an ``exp`` claim, AND that claim matches ``epoch``
+    exactly. Perpetual licenses (no ``exp``) and the no-license path both
+    return ``False``: nothing to compare against.
+
+    ``epoch`` is coerced through ``int()``; a non-numeric value collapses
+    to ``False`` so a caller cannot silently mis-gate on a typo. Never
+    raises; every underlying failure returns ``False`` so a scheduled
+    reminder job never crashes on a bad install.
+
+    Deliberately strict on validity, unlike the underlying
+    :func:`license_expires_at` scalar (which is lenient on expiry so a
+    support tile can render "expired 12 days ago"). A predicate that
+    fired ``True`` on an already-lapsed key would push callers to gate
+    renewal UI on a value that no longer implies the customer is
+    entitled.
+    """
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return False
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: is_expiring_at underlying read failed: %s", exc)
+        return False
+    if not isinstance(info, dict):
+        return False
+    if not info.get("valid"):
+        return False
+    exp = info.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False
+    return int(exp) == wanted
+
+
 def license_tier() -> str | None:
     """Scalar view onto the installed license's ``tier`` claim -- for a
     paywall tile / tier badge that wants ONE string rather than the whole
