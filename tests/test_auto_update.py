@@ -269,6 +269,17 @@ def test_respawn_cmdline_console_script_vs_module(monkeypatch, tmp_path):
     monkeypatch.setattr(_sys, "argv", ["dashboard.py", "--port", "8900"])
     assert uc._respawn_cmdline() == [_sys.executable, "dashboard.py", "--port", "8900"], \
         "module runs must relaunch via the interpreter"
+    # Windows console-script quirk: inside a clawmetry.exe process argv[0]
+    # is the EXTENSIONLESS launcher path. Revert-proof for the Errno 2
+    # relaunch failure on the first live unattended update (2026-07-28):
+    # a perfect install died at the relaunch because the fallback built
+    # `python ...\Scripts\clawmetry`, a file that does not exist.
+    import os as _os
+    if _os.name == "nt":
+        stem = str(exe)[:-4]
+        monkeypatch.setattr(_sys, "argv", [stem, "--port", "8900"])
+        assert uc._respawn_cmdline() == [str(exe), "--port", "8900"], \
+            "extensionless console-script argv0 must relaunch via the .exe"
 
 
 def test_update_lock_serializes_concurrent_updaters(monkeypatch, tmp_path):

@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: Windows relaunch uses the .exe when argv0 is the extensionless launcher (#4154) (2026-07-28)
+- **Why:** the first live unattended update detected and installed in ten seconds, then the dashboard relaunch died with Errno 2: console-script argv0 on Windows is the extensionless launcher path, so the fallback built a python invocation of a file that does not exist.
+- **What:** _respawn_cmdline probes argv0 plus .exe. With this the full loop (detect, install, relaunch) is hands-free on Windows.
+- **Verified:** revert-proof test on the Windows runner; this release IS the third live proof run, executed by the shipped 0.12.577 helper on the affected machine.
+
 ### Fix: Windows auto-update installs out-of-process, and failed attempts are visible (#4146) (2026-07-28)
 - **Why:** the first live unattended-update run failed silently. Measured in isolation on the affected machine: Windows denies even RENAMING the running clawmetry.exe (WinError 32), so the pre-rename that in-process pip relied on never protected anything, every attempt failed into a 30-minute backoff, and the failures were recorded nowhere a human could see.
 - **What:** on Windows the updater now runs NO in-process pip: a detached stdlib-only helper (clawmetry.update_respawn) waits for the process to exit, installs the target with one retry, and relaunches the exact command line even when the install fails. Every attempt (started/handoff/installed/failed plus pip's error tail) is persisted and served as last_attempt in /api/update-check/status. Status wording: runtimes are "watching (local)"; "syncing" is reserved for the explicit Cloud sync line; the hardcoded OpenClaw line is detection-gated.

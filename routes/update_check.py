@@ -114,10 +114,21 @@ def _restart_plan(role: str, platform: str, supervised: bool) -> str:
 def _respawn_cmdline() -> list:
     """The exact command line to relaunch THIS process. Console-script
     installs relaunch via the (freshly pip-rewritten) launcher exe; module
-    runs relaunch via the interpreter + argv."""
+    runs relaunch via the interpreter + argv.
+
+    Windows console-script quirk (live-hit on the FIRST otherwise-successful
+    unattended update, 2026-07-28): inside a process launched via
+    ``Scripts/clawmetry.exe``, ``sys.argv[0]`` is the EXTENSIONLESS
+    ``...\\Scripts\\clawmetry`` — no ``.exe`` suffix — so the suffix check
+    alone missed it, the fallback built ``python ...\\Scripts\\clawmetry``
+    (a file that does not exist on Windows), and the relaunch died with
+    Errno 2 after a perfect install. Probe ``argv0 + '.exe'`` too.
+    """
     argv0 = sys.argv[0] or ""
     if argv0.lower().endswith(".exe") and os.path.exists(argv0):
         return [argv0] + sys.argv[1:]
+    if os.name == "nt" and argv0 and os.path.exists(argv0 + ".exe"):
+        return [argv0 + ".exe"] + sys.argv[1:]
     return [sys.executable] + sys.argv
 
 

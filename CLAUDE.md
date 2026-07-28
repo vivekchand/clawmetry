@@ -48,17 +48,17 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 ### Package (`clawmetry/`)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `cli.py` | ~3,700 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
-| `sync.py` | ~18,900 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
-| `local_store.py` | ~11,200 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
-| `local_server.py` | ~200 | Daemon-hosted localhost query server (`/__local_query__/<method>`) so the dashboard/sync read DuckDB without grabbing the writer lock |
-| `proxy.py` | ~2,600 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
-| `interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
-| `providers_pricing.py` | ~390 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
-| `config.py` | ~200 | Configuration dataclass |
-| `extensions.py` | ~230 | Plugin/hook system |
-| `track.py` | ~60 | Zero-config interceptor shorthand |
-| `providers/` | — | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
+| `clawmetry/cli.py` | ~6,100 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
+| `clawmetry/sync.py` | ~20,200 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
+| `clawmetry/local_store.py` | ~12,000 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
+| `clawmetry/local_server.py` | ~200 | Daemon-hosted localhost query server (`/__local_query__/<method>`) so the dashboard/sync read DuckDB without grabbing the writer lock |
+| `clawmetry/proxy.py` | ~2,700 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
+| `clawmetry/interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
+| `clawmetry/providers_pricing.py` | ~430 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
+| `clawmetry/config.py` | ~200 | Configuration dataclass |
+| `clawmetry/extensions.py` | ~300 | Plugin/hook system |
+| `clawmetry/track.py` | ~60 | Zero-config interceptor shorthand |
+| `clawmetry/providers/` | — | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
 
 ### Config & Build
 | File | Purpose |
@@ -147,7 +147,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.565` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.577` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR
