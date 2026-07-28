@@ -1,7 +1,7 @@
 name: Apply E2E required checks via Rulesets API (C6)
 
 # Uses POST /repos/{owner}/{repo}/rulesets to upsert a ruleset that
-# enforces the 4 required E2E status checks on clawmetry/main.
+# enforces the required E2E status check on clawmetry/main.
 #
 # WHY RULESETS INSTEAD OF BRANCH PROTECTION:
 #   Branch protection requires an admin PAT -- GITHUB_TOKEN cannot write it.
@@ -16,14 +16,14 @@ name: Apply E2E required checks via Rulesets API (C6)
 # Runs on every push to main so the ruleset self-heals if deleted.
 # On 403 (token lacks ruleset-write rights): emits a ::notice:: and
 # exits 0 -- a 403 is expected on this personal-repo plan and is
-# handled by apply-required-checks.yml's notification to #3970.
+# handled by apply-required-checks.yml's notification to #4029.
 #
 # NOTE: administration:write is NOT listed in the permissions block because
 # requesting it at the workflow level causes GitHub to kill the run with 0
 # jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
 # The Python script handles the 403 runtime error gracefully instead.
 #
-# Tracking: vivekchand/clawmetry#3970 (C6)
+# Tracking: vivekchand/clawmetry#4029 (C6)
 
 on:
   push:
@@ -56,14 +56,12 @@ jobs:
           REPO = "clawmetry"
           RULESET_NAME = "E2E Required Status Checks (C6)"
 
-          # Checks that must be required on main. Keep in sync with
-          # ALL_CHECKS["clawmetry"] in scripts/apply_required_status_checks.py
-          # and c6-health.yml.
+          # Single aggregator check -- PR #4111 (merged 2026-07-27) replaced the
+          # 4 individual OSS E2E checks with one "E2E Gate (required)" job in
+          # e2e-gate.yml. Keep in sync with apply_required_status_checks.py and
+          # c6-health.yml. One branch-protection entry closes C6 for clawmetry.
           REQUIRED_CHECKS = [
-              "OSS golden path (wheel + OpenClaw + 9 tabs)",
-              "Cross-repo handoff (C4)",
-              "MOAT Keystone (13-endpoint bar)",
-              "E2E Browser Tests (critical subset)",
+              "E2E Gate (required)",
           ]
 
           HEADERS = {
@@ -107,7 +105,7 @@ jobs:
                       "Expected on this personal-repo plan. "
                       "Close C6 via the Settings UI (60 s) or "
                       "apply-required-checks.yml (confirm=APPLY + PAT). "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
                   )
                   set_output("created", "false")
                   sys.exit(0)
@@ -168,7 +166,7 @@ jobs:
                       f"{verb} ruleset returned 403 -- "
                       "GITHUB_TOKEN cannot manage rulesets on this plan/repo. "
                       "Use the PAT workflow or GitHub Settings UI instead. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
                   )
                   set_output("created", "false")
                   sys.exit(0)
@@ -203,10 +201,7 @@ jobs:
           REPO = "clawmetry"
           RULESET_NAME = "E2E Required Status Checks (C6)"
           REQUIRED = {
-              "OSS golden path (wheel + OpenClaw + 9 tabs)",
-              "Cross-repo handoff (C4)",
-              "MOAT Keystone (13-endpoint bar)",
-              "E2E Browser Tests (critical subset)",
+              "E2E Gate (required)",
           }
           HEADERS = {
               "Authorization": f"Bearer {TOKEN}",
@@ -279,7 +274,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           REPO = "clawmetry"
-          TRACKING_ISSUE = 3970
+          TRACKING_ISSUE = 4029
           MARKER = "<!-- c6-ruleset-applied -->"
           RUN_URL = (
               f"https://github.com/{OWNER}/{REPO}/actions/runs/"
@@ -334,10 +329,8 @@ jobs:
               "`E2E Required Status Checks (C6)` repository ruleset on "
               f"`clawmetry/main` -- no admin PAT required.\n\n"
               "Required checks now enforced:\n"
-              "- `OSS golden path (wheel + OpenClaw + 9 tabs)`\n"
-              "- `Cross-repo handoff (C4)`\n"
-              "- `MOAT Keystone (13-endpoint bar)`\n"
-              "- `E2E Browser Tests (critical subset)`\n\n"
+              "- `E2E Gate (required)` (aggregates OSS golden path, cross-repo handoff, "
+              "MOAT keystone, E2E browser tests -- PR #4111)\n\n"
               f"[Workflow run]({RUN_URL})\n\n"
               "**C6 is now GREEN.** The 7-day stop-condition countdown is running "
               "(all 7 criteria must hold green for 7 consecutive days).\n\n"
