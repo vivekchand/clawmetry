@@ -42,7 +42,13 @@ async function checkGwConfig() {
       // open cloud modal — the two share the same backdrop and confuse the
       // user. Defer until the cloud modal closes.
       if (_isCloudModalOpen()) return;
-      await _gwApplyRuntimeDetection();
+      var show = await _gwApplyRuntimeDetection();
+      // Nothing left to set up (no OpenClaw gateway on this machine and
+      // every detected runtime is already watched, e.g. right after a trial
+      // activation): popping the modal on every load is pure friction —
+      // the user reported it reappearing after they had already finished
+      // the trial flow (2026-07-28).
+      if (show === false) return;
       document.getElementById('gw-setup-overlay').style.display = 'flex';
     } else {
       updateGwStatus(true, d.url);
@@ -110,8 +116,8 @@ async function _gwApplyRuntimeDetection() {
   try {
     var r = await fetch('/api/entitlement/runtime-detection');
     det = await r.json();
-  } catch (e) { return; }
-  if (!det || !det.probes) return;
+  } catch (e) { return true; }
+  if (!det || !det.probes) return true;
 
   var found = det.probes.filter(function (p) { return p.found; });
   var selfHosted = det.probes.filter(function (p) {
@@ -119,7 +125,7 @@ async function _gwApplyRuntimeDetection() {
   });
 
   // OpenClaw is here: the token step is the right ask, so keep it as-is.
-  if (selfHosted.length) return;
+  if (selfHosted.length) return true;
 
   // No OpenClaw on this machine. The token form must not be the mandatory
   // first step, and the modal must be dismissible.
@@ -132,7 +138,7 @@ async function _gwApplyRuntimeDetection() {
     // Nothing detected. Stay runtime neutral rather than naming one runtime
     // the user may never have heard of.
     if (sub) sub.textContent = 'No AI agent runtimes found on this machine yet. Start one and ClawMetry picks it up automatically.';
-    return;
+    return true;
   }
 
   var names = found.map(function (p) { return p.label; });
@@ -145,22 +151,22 @@ async function _gwApplyRuntimeDetection() {
   if (block) block.style.display = '';
 
   var locked = found.filter(function (p) { return !p.allowed; });
-  if (cta) {
-    if (locked.length) {
-      var tier = det.actionable_tier_label || 'Starter';
-      cta.innerHTML =
-        '<p style="color:var(--text-muted,#888); font-size:12px; margin:0 0 10px; text-align:left; line-height:1.5;">' +
-          'Watching ' + locked.map(function (p) { return p.label; }).join(', ') +
-          ' is part of ' + tier + '. Start a free trial to turn it on now.' +
-        '</p>' +
-        '<button id="gw-trial-btn" onclick="gwStartTrial()" style="width:100%; padding:12px; border:none; border-radius:8px; background:var(--bg-accent,#0f6fff); color:#fff; font-size:15px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">Start free trial</button>';
-    } else {
-      cta.innerHTML =
-        '<p style="color:var(--text-muted,#888); font-size:12px; margin:0; text-align:left;">' +
-          'These are watched on your current plan. Data appears as your agents run.' +
-        '</p>';
-    }
+  if (!locked.length) {
+    // Everything detected is already watched (e.g. the trial just
+    // activated). There is NOTHING for this modal to ask — suppress it
+    // instead of greeting the user with a setup step on every load.
+    return false;
   }
+  if (cta) {
+    var tier = det.actionable_tier_label || 'Starter';
+    cta.innerHTML =
+      '<p style="color:var(--text-muted,#888); font-size:12px; margin:0 0 10px; text-align:left; line-height:1.5;">' +
+        'Watching ' + locked.map(function (p) { return p.label; }).join(', ') +
+        ' is part of ' + tier + '. Start a free trial to turn it on now.' +
+      '</p>' +
+      '<button id="gw-trial-btn" onclick="gwStartTrial()" style="width:100%; padding:12px; border:none; border-radius:8px; background:var(--bg-accent,#0f6fff); color:#fff; font-size:15px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">Start free trial</button>';
+  }
+  return true;
 }
 
 // ── Local trial activation ─────────────────────────────────────────────

@@ -775,6 +775,20 @@ def api_auth_check():
     # needsSetup:true when the token was correctly injected via env.
     gateway_token = _d.GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
     if not gateway_token:
+        # needsSetup drives app.js bootDashboard() into a MANDATORY setup
+        # modal (close button hidden). That is only a sensible ask when an
+        # OpenClaw install exists whose token could actually be pasted. On a
+        # machine running only Claude Code / Cursor / etc. there is no
+        # gateway and never will be — the mandatory modal was an unclosable
+        # dead end on every page load (founder live-hit 2026-07-28, after
+        # trial activation). No OpenClaw -> open localhost mode, same as the
+        # dashboard's actual serving behaviour.
+        try:
+            openclaw_present = bool(_d._detect_openclaw_install())
+        except Exception:
+            openclaw_present = False
+        if not openclaw_present:
+            return jsonify({"authRequired": False, "valid": True, "needsSetup": False})
         return jsonify({"authRequired": True, "valid": False, "needsSetup": True})
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:

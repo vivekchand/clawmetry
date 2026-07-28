@@ -1,0 +1,130 @@
+"""clawmetry/update_respawn.py — Windows out-of-process updater.
+
+Why this exists: on Windows, pip cannot replace ``Scripts/clawmetry.exe``
+while any process is running it, and — measured on a real Windows 10 box,
+2026-07-28 — even RENAMING the running launcher fails with WinError 32, so
+the pre-rename trick in ``perform_self_update`` silently does nothing there
+and every in-process auto-update dies with
+``WinError 32 ... clawmetry.exe``. The only reliable order on Windows is:
+
+  1. this helper is spawned DETACHED by the process that wants to update,
+  2. the parent exits (its locks vanish with it),
+  3. the helper waits for the parent pid to terminate,
+  4. the helper runs ``pip install --upgrade clawmetry==<target>``,
+  5. the helper relaunches the parent's exact command line, detached,
+  6. output goes to ``~/.clawmetry/restart.log``.
+
+The helper deliberately runs the OLD wheel's copy of this module (it is
+spawned before pip runs) and therefore keeps zero non-stdlib imports and no
+imports from the rest of clawmetry.
+
+Usage (spawned by routes/update_check.py, not humans):
+
+    python -m clawmetry.update_respawn <parent_pid> <target_version> \
+        <log_path> <relaunch_cmd...>
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+
+_DETACHED = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+
+
+def _wait_for_pid_exit(pid: int, timeout_secs: float = 60.0) -> bool:
+    """Block until ``pid`` is gone (True) or the timeout passes (False)."""
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            SYNCHRONIZE = 0x00100000
+            h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+            if not h:
+                return True  # already gone
+            try:
+                # WAIT_OBJECT_0 == 0 means the process terminated.
+                rc = ctypes.windll.kernel32.WaitForSingleObject(
+                    h, int(timeout_secs * 1000)
+                )
+                return rc == 0
+            finally:
+                ctypes.windll.kernel32.CloseHandle(h)
+        except Exception:
+            pass
+    # POSIX / fallback: poll for existence.
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        try:
+            os.kill(int(pid), 0)
+        except OSError:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) < 4:
+        print("usage: update_respawn <parent_pid> <target> <log> <cmd...>")
+        return 2
+    parent_pid, target, log_path = argv[0], argv[1], argv[2]
+    relaunch_cmd = argv[3:]
+    try:
+        int(parent_pid)
+    except (TypeError, ValueError):
+        print(f"update_respawn: invalid parent pid {parent_pid!r}")
+        return 2
+
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    except Exception:
+        pass
+    log = open(log_path, "ab", buffering=0)
+
+    def _say(msg: str) -> None:
+        try:
+            log.write((time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n").encode())
+        except Exception:
+            pass
+
+    _say(f"[update-respawn] waiting for parent pid {parent_pid} to exit")
+    if not _wait_for_pid_exit(int(parent_pid), timeout_secs=90.0):
+        _say("[update-respawn] parent did not exit in 90s; aborting (no relaunch, "
+             "the still-running parent keeps serving)")
+        return 1
+
+    spec = f"clawmetry=={target}" if target and target != "latest" else "clawmetry"
+    _say(f"[update-respawn] parent gone; pip install --upgrade {spec}")
+    ok = False
+    for attempt in (1, 2):
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             "--no-cache-dir", spec],
+            stdout=log, stderr=log, timeout=300,
+        )
+        if proc.returncode == 0:
+            ok = True
+            break
+        _say(f"[update-respawn] pip attempt {attempt} failed "
+             f"(exit {proc.returncode}); retrying in 10s")
+        time.sleep(10)
+
+    _say(f"[update-respawn] install {'succeeded' if ok else 'FAILED'}; "
+         f"relaunching: {relaunch_cmd}")
+    # Relaunch EITHER WAY: a failed install must still bring the service back
+    # on the old version rather than leaving the machine with nothing running.
+    kwargs = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": log,
+              "close_fds": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = _DETACHED
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(relaunch_cmd, **kwargs)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

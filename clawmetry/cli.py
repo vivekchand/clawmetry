@@ -2440,17 +2440,34 @@ def _cmd_status(args) -> None:
     # the cloud on a Trial/Pro account — so we read the daemon's plan cache.
     try:
         print()
-        # Is this node's account entitled? (daemon mirrors the cloud plan here.)
+        # Is this node entitled? Resolve through clawmetry.entitlements — the
+        # SAME source the dashboard and gate use (license.key first, cloud
+        # plan cache second). Reading only cloud_plan.json here made status
+        # contradict itself on a self-hosted trial: "License: Trial" in the
+        # header while this gate said "FREE plan, NOT syncing" because the
+        # user's OLD cloud account was trial_expired (founder live-hit
+        # 2026-07-28).
         _entitled = False
         _plan = ""
         try:
-            import json as _j2
-            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
-            if _cp.is_file():
-                _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
-                _entitled = _plan not in ("", "cloud_free", "free")
+            from clawmetry import entitlements as _ent_st
+            _e = _ent_st.get_entitlement(force=True)
+            # is_paid / expired are properties — calling them raised and the
+            # fallback silently reported the stale cloud plan ("FREE plan")
+            # under a valid trial key (founder live-hit 2026-07-28, twice).
+            _entitled = bool(_e.is_paid and not _e.expired)
+            _plan = _e.tier or ""
         except Exception:
-            pass
+            # Fallback: the old cloud-plan cache read (entitlements missing
+            # on a very old install).
+            try:
+                import json as _j2
+                _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+                if _cp.is_file():
+                    _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+                    _entitled = _plan not in ("", "cloud_free", "free")
+            except Exception:
+                pass
         _prover = None
         try:
             from clawmetry.license import _pro_installed_version as _pv
@@ -2464,18 +2481,30 @@ def _cmd_status(args) -> None:
         except Exception:
             _det = []
         print("  Runtimes:")
-        print("    🦞 OpenClaw            ✅ syncing  (free)")
+        # OpenClaw line is DETECTION-GATED: this used to print
+        # "OpenClaw syncing" unconditionally, telling a machine with no
+        # OpenClaw install that OpenClaw was detected and syncing (founder
+        # live-hit 2026-07-28). Wording: "watching (local)" is the local
+        # DuckDB ingest that renders the dashboard; "syncing" is reserved
+        # for the separate Cloud sync line above — one word per concept.
+        try:
+            import dashboard as _dash_det
+            _oc_present = bool(_dash_det._detect_openclaw_install())
+        except Exception:
+            _oc_present = False
+        if _oc_present:
+            print("    🦞 OpenClaw            ✅ watching (local)  (free)")
         try:
             from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
             _nemo = _NCA().detect()
             if _nemo.detected:
-                print("    ⚡ NemoClaw            ✅ syncing  (free)")
+                print("    ⚡ NemoClaw            ✅ watching (local)  (free)")
         except Exception:
             pass
         for _r in _det:
             _n = int(_r.get("sessionCount") or 0)
             _nm = _r.get("displayName") or _r.get("name") or "runtime"
-            _state = "✅ syncing" if _entitled else "○ detected, NOT syncing"
+            _state = "✅ watching (local)" if _entitled else "○ detected, NOT watched"
             print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
         if not _prover:
             print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")
@@ -2486,9 +2515,12 @@ def _cmd_status(args) -> None:
                 print("      → paid runtimes need a Trial/Pro account. The daemon auto-downloads the")
                 print("        runtime pack on start once entitled — link your account in the dashboard.")
         elif _det and not _entitled:
-            print(f"    clawmetry-pro {_prover} installed and detecting the above — but your account")
-            print(f"      is on the FREE plan ({_plan or 'free'}), so paid runtimes are NOT synced to")
-            print("      the cloud. Link to a Trial/Pro account (the dashboard prompts you) to sync them.")
+            print(f"    clawmetry-pro {_prover} installed and detecting the above — but this node")
+            print(f"      has no active Trial/Pro entitlement ({_plan or 'free'}), so paid runtimes")
+            print("      are not watched. Start the free trial from the dashboard to turn them on.")
+        elif _det and _entitled:
+            _lbl = {"trial": "Trial"}.get((_plan or "").lower(), _plan or "entitled")
+            print(f"    clawmetry-pro {_prover} watching the above locally ({_lbl} plan).")
         elif _prover and not _det:
             print(f"    clawmetry-pro {_prover} installed — no other runtimes found on this machine yet.")
     except Exception:
