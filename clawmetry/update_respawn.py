@@ -99,25 +99,51 @@ def main(argv=None) -> int:
     spec = f"clawmetry=={target}" if target and target != "latest" else "clawmetry"
     _say(f"[update-respawn] parent gone; pip install --upgrade {spec}")
     ok = False
-    for attempt in (1, 2):
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade",
-             "--no-cache-dir", spec],
-            stdout=log, stderr=log, timeout=300,
-        )
-        if proc.returncode == 0:
-            ok = True
-            break
-        _say(f"[update-respawn] pip attempt {attempt} failed "
-             f"(exit {proc.returncode}); retrying in 10s")
-        time.sleep(10)
+    try:
+        # Retry ladder sized for the two real failure modes seen live
+        # (2026-07-28): the PyPI simple-index propagation lag (the JSON API
+        # advertises a release 1-3 minutes before pip can install it) and a
+        # sibling process briefly holding the launcher exe. 10s+10s was too
+        # short for either.
+        for attempt, wait in ((1, 20), (2, 60), (3, 120)):
+            proc = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade",
+                 "--no-cache-dir", spec],
+                stdout=log, stderr=log, timeout=300,
+            )
+            if proc.returncode == 0:
+                ok = True
+                break
+            _say(f"[update-respawn] pip attempt {attempt} failed "
+                 f"(exit {proc.returncode}); retrying in {wait}s")
+            time.sleep(wait)
+    finally:
+        # Release the cross-process update lock the PARENT was holding when
+        # it handed off (see routes/update_check.py): the lock now rides
+        # through the handoff so a sibling process cannot start a concurrent
+        # pip while this helper works — the exact race that bricked
+        # site-packages metadata on the 0.12.580 run.
+        try:
+            os.remove(os.path.expanduser("~/.clawmetry/update-in-progress.lock"))
+        except OSError:
+            pass
 
     _say(f"[update-respawn] install {'succeeded' if ok else 'FAILED'}; "
          f"relaunching: {relaunch_cmd}")
     # Relaunch EITHER WAY: a failed install must still bring the service back
     # on the old version rather than leaving the machine with nothing running.
+    #
+    # PYTHONIOENCODING / PYTHONUTF8 are load-bearing: the relaunched process
+    # writes stdout to THIS LOG FILE (not a console), so Python picks the
+    # locale codec — cp1252 on Windows — and the startup banner's arrows and
+    # emoji die with UnicodeEncodeError, killing the freshly updated
+    # dashboard right after a perfect install (live-hit on the 0.12.579
+    # unattended run, 2026-07-28; same encoding class as the #3791 CLI bug).
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": log,
-              "close_fds": True}
+              "close_fds": True, "env": env}
     if os.name == "nt":
         kwargs["creationflags"] = _DETACHED
     else:

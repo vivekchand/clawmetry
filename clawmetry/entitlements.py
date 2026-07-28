@@ -576,7 +576,15 @@ class Entitlement:
         return remaining <= threshold
 
     def allows_runtime(self, runtime: str) -> bool:
-        if self.grace:
+        # Grace-mode permissiveness exists so the enforce-day rollout cannot
+        # break installs that never opted into anything. An EXPIRED paid
+        # entitlement is the opposite case: the user took a trial (or let a
+        # license lapse) and the deal is that it stops working — otherwise a
+        # 7-day trial is a permanent unlock while grace lasts (founder
+        # directive 2026-07-28: "it should stop working after the trial
+        # period"). Free runtimes/features stay allowed either way via the
+        # membership checks below.
+        if self.grace and not self.expired:
             return True
         return self.entitled_runtime(runtime)
 
@@ -589,7 +597,10 @@ class Entitlement:
         return rt in self.runtimes
 
     def allows_feature(self, feature: str) -> bool:
-        if self.grace:
+        # See allows_runtime: grace never covers an EXPIRED paid entitlement,
+        # or a trial would outlive its own expiry for as long as the grace
+        # rollout lasts.
+        if self.grace and not self.expired:
             return True
         if feature in FREE_FEATURES:
             return True

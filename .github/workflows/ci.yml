@@ -393,6 +393,7 @@ jobs:
     name: E2E Browser Tests (critical subset)
     needs: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 12
 
     steps:
       - uses: actions/checkout@v7

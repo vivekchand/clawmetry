@@ -7,7 +7,10 @@ name: E2E Gate (required)
 # Polls the Check Runs API every 30s until all required checks complete.
 # Fails immediately if any required check fails (fast-fail).
 # Passes only when all 4 required checks have a success conclusion.
-# Times out after 8 min (conservative -- E2E wall-clock max is 12 min).
+# Times out after 15 min (oss-golden-path budget is 12 min -- on a cold
+# runner Playwright download alone takes ~4.5 min, then C1+C5 sweeps add
+# ~5 min; the previous 8-min limit caused premature timeout before the
+# underlying check could pass).
 #
 # Required checks aggregated (keep in sync with REQUIRED_CHECKS in
 # scripts/apply_required_status_checks.py):
@@ -41,7 +44,7 @@ jobs:
   e2e-gate:
     name: E2E Gate (required)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
 
     steps:
       - name: Wait for required E2E checks and verify they passed
@@ -62,8 +65,11 @@ jobs:
           COMMIT_SHA = os.environ["COMMIT_SHA"].strip()
           REPO = os.environ["REPO"]
           POLL_INTERVAL = 30   # seconds between checks
-          MAX_WAIT = 480       # 8 minutes; E2E wall-clock max is ~12 min but
-                               # most checks finish within 5 min (cache hit)
+          MAX_WAIT = 900       # 15 minutes -- oss-golden-path runs for up to
+                               # 12 min on cold runners (4.5 min Playwright
+                               # download + C1 9-tab sweep + C5 33-tab sweep).
+                               # The prior 8-min limit timed out before the
+                               # slowest underlying check could complete.
 
           # Keep in sync with REQUIRED_CHECKS in
           # scripts/apply_required_status_checks.py and c6-schedule-heal.yml.

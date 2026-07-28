@@ -98,6 +98,20 @@
   // ── Tier resolution ───────────────────────────────────────────────────────
 
   async function resolveTier() {
+    // Self-hosted entitlement FIRST (founder 2026-07-28: alerts must work
+    // without a cloud signup). A local Trial/Pro license entitles the tab;
+    // rules then live in the LOCAL store and fire via the local evaluator.
+    // Only when the local entitlement is free do we consult the cloud
+    // account (the original flow).
+    try {
+      const ent = await fetch('/api/entitlement').then(r => r.json());
+      if (ent && ent.is_paid && !ent.expired) {
+        alertsState.localMode = true;
+        const days = ent.days_until_expiry;
+        return { tier: ent.tier === 'trial' ? 'trial' : 'pro',
+                 trialDaysLeft: (days === null || days === undefined) ? null : days };
+      }
+    } catch (e) { /* fall through to the cloud path */ }
     try {
       const status = await fetch('/api/cloud-cta/status').then(r => r.json());
       if (!status.connected) return { tier: 'none' };
@@ -137,7 +151,8 @@
     }
 
     try {
-      const data = await fetch('/api/cloud-proxy/api/alerts').then(r => r.json());
+      const data = await fetch(alertsState.localMode
+        ? '/api/alerts/rules' : '/api/cloud-proxy/api/alerts').then(r => r.json());
       // Cache hit returns an E2E-encrypted ``rules_blob`` ({rules:[...]}) that
       // only the browser can decrypt; cache miss returns plaintext
       // ``{alerts:[]}``. Reading data.alerts alone meant a saved rule (which
@@ -148,6 +163,19 @@
         serverRules = await alertsDecryptRulesBlob(data.rules_blob);
       } else {
         serverRules = data.alerts || data.rules || [];
+      }
+      if (alertsState.localMode) {
+        // Local rows speak the local schema (type/threshold/channels);
+        // normalise onto the fields the renderer reads.
+        serverRules = (serverRules || []).map(function (r) {
+          return Object.assign({}, r, {
+            alert_type: r.alert_type || r.type,
+            name: r.name || r.type,
+            threshold_value: (r.threshold_value !== undefined && r.threshold_value !== null)
+              ? r.threshold_value : r.threshold,
+            channel_ids: r.channel_ids || r.channels || [],
+          });
+        });
       }
       // Preserve optimistic ``pending-`` rules until the cloud cache catches
       // up (the daemon cache_push lags the write by ~2 heartbeats). Without
@@ -167,7 +195,9 @@
     // the same local /api/alerts/history the nav badge uses when cloud has
     // nothing (or errors), so the two stay consistent.
     try {
-      const hist = await fetch('/api/cloud-proxy/api/alerts/history?limit=20')
+      const hist = await fetch(alertsState.localMode
+        ? '/api/alerts/history?limit=20'
+        : '/api/cloud-proxy/api/alerts/history?limit=20')
         .then(r => r.json());
       alertsState.history = hist.history || [];
     } catch {
@@ -454,7 +484,8 @@
       }
       let resp;
       if (isExample && newEnabled) {
-        resp = await fetch('/api/cloud-proxy/api/alerts', {
+        resp = await fetch(alertsState.localMode
+          ? '/api/alerts/rules' : '/api/cloud-proxy/api/alerts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -468,7 +499,8 @@
           }),
         });
       } else {
-        resp = await fetch('/api/cloud-proxy/api/alerts/' + ruleId, {
+        resp = await fetch((alertsState.localMode
+          ? '/api/alerts/rules/' : '/api/cloud-proxy/api/alerts/') + ruleId, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: newEnabled }),
@@ -663,9 +695,10 @@
     };
 
     const isEdit = !!alertsState.editorRule;
-    const url = isEdit
-      ? '/api/cloud-proxy/api/alerts/' + alertsState.editorRule.id
-      : '/api/cloud-proxy/api/alerts';
+    const url = alertsState.localMode
+      ? (isEdit ? '/api/alerts/rules/' + alertsState.editorRule.id : '/api/alerts/rules')
+      : (isEdit ? '/api/cloud-proxy/api/alerts/' + alertsState.editorRule.id
+                : '/api/cloud-proxy/api/alerts');
     const method = isEdit ? 'PUT' : 'POST';
 
     const resp = await fetch(url, {

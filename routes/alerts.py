@@ -664,6 +664,25 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
+        # Self-hosted bridge (founder 2026-07-28: "alerts should work in the
+        # self-hosted setup"): the Alerts tab speaks the cloud vocabulary
+        # (alert_type / threshold_value / channel_ids). A locally-entitled
+        # install (self-hosted Trial/Pro key) saves those rules HERE instead
+        # of at the cloud; map the fields onto the local schema. Cloud-vocab
+        # types without a local evaluator equivalent land on "anomaly" so
+        # the rule persists and renders; evaluator parity is tracked
+        # separately.
+        _cloud_type = (data.get("alert_type") or "").strip()
+        if _cloud_type and not rtype:
+            _CLOUD_TO_LOCAL = {
+                "cost_daily": "threshold", "session_cost": "threshold",
+                "token_velocity": "token_spike", "agent_offline": "agent_down",
+            }
+            rtype = _CLOUD_TO_LOCAL.get(_cloud_type, "anomaly")
+            if not threshold:
+                threshold = data.get("threshold_value", 0)
+            if data.get("channel_ids") and channels == ["banner"]:
+                channels = list(data.get("channel_ids") or []) or ["banner"]
         if rtype not in ("threshold", "spike", "token_spike", "anomaly",
                          "agent_down", "unproductive_burn"):
             return jsonify({"error": "Invalid alert type"}), 400

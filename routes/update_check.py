@@ -718,7 +718,13 @@ def _maybe_auto_update(current, target, latest=None):
         _pending_update_target["version"] = str(target)
         _record_update_attempt(target, "handoff",
                                "out-of-process helper armed; process exits")
-        _release_update_lock()
+        # The lock is NOT released here: it rides through the handoff and the
+        # HELPER deletes it when its pip run finishes. Releasing before the
+        # handoff let the daemon's and dashboard's helpers pip CONCURRENTLY
+        # (live-hit on the 0.12.580 run, 2026-07-28: one helper's uninstall
+        # raced the other's install, WinError 32 + a metadata-bricked
+        # site-packages with ~lawmetry corpses). The 15-minute staleness
+        # window still breaks the lock if a helper dies before cleanup.
         _schedule_windows_respawn()
         return
     try:

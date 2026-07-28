@@ -449,3 +449,72 @@ def test_entitled_plan_respects_optout_and_never_disables(monkeypatch):
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     state["auto_update"] = True
     S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is True
+
+
+def test_update_respawn_relaunch_env_forces_utf8(monkeypatch, tmp_path):
+    """The relaunched process writes stdout to the log FILE, so without
+    PYTHONIOENCODING the Windows locale codec (cp1252) kills the startup
+    banner with UnicodeEncodeError right after a perfect install (live-hit
+    on the 0.12.579 unattended run)."""
+    from clawmetry import update_respawn as ur
+
+    monkeypatch.setattr(ur, "_wait_for_pid_exit", lambda pid, timeout_secs=90.0: True)
+
+    class _Proc:
+        returncode = 0
+
+    captured = {}
+    monkeypatch.setattr(ur.subprocess, "run", lambda cmd, **k: _Proc())
+    monkeypatch.setattr(ur.subprocess, "Popen",
+                        lambda cmd, **k: captured.update(k))
+    rc = ur.main(["1234", "0.12.99", str(tmp_path / "r.log"), "clawmetry.exe"])
+    assert rc == 0
+    env = captured.get("env") or {}
+    assert env.get("PYTHONIOENCODING") == "utf-8"
+    assert env.get("PYTHONUTF8") == "1"
+
+
+def test_windows_handoff_keeps_update_lock(monkeypatch, tmp_path):
+    """The lock must ride THROUGH the handoff: releasing it before the helper
+    runs let sibling helpers pip concurrently and brick site-packages
+    metadata (live-hit on the 0.12.580 run)."""
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    uc._process_role = "daemon"
+    monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "respawn")
+    monkeypatch.setattr(uc, "_schedule_windows_respawn", lambda *a, **k: None)
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    monkeypatch.setattr(uc, "_record_update_attempt", lambda *a, **k: None)
+    monkeypatch.setattr(uc, "_UPDATE_LOCK_PATH", str(tmp_path / "u.lock"))
+    released = []
+    monkeypatch.setattr(uc, "_release_update_lock", lambda: released.append(1))
+    calls = []
+    _mock_self_update(monkeypatch, calls)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
+    assert released == [], "handoff must NOT release the lock; the helper does"
+    import os as _os
+    assert _os.path.exists(str(tmp_path / "u.lock")), "lock file must persist through handoff"
+
+
+def test_update_respawn_helper_releases_lock(monkeypatch, tmp_path):
+    """The helper deletes the inherited cross-process lock when pip finishes,
+    success or failure."""
+    from clawmetry import update_respawn as ur
+
+    lockdir = tmp_path / ".clawmetry"
+    lockdir.mkdir()
+    lock = lockdir / "update-in-progress.lock"
+    lock.write_text("held")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(ur, "_wait_for_pid_exit", lambda pid, timeout_secs=90.0: True)
+    monkeypatch.setattr(ur.time, "sleep", lambda s: None)
+
+    class _Fail:
+        returncode = 1
+
+    monkeypatch.setattr(ur.subprocess, "run", lambda cmd, **k: _Fail())
+    monkeypatch.setattr(ur.subprocess, "Popen", lambda cmd, **k: None)
+    ur.main(["1234", "0.12.99", str(tmp_path / "r.log"), "x.exe"])
+    assert not lock.exists(), "helper must release the lock even on pip failure"
