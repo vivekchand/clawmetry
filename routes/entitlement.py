@@ -9198,6 +9198,152 @@ def api_license_age_days():
         )
 
 
+def _license_state_snapshot() -> dict:
+    """Shared one-shot read for the paired ``/api/license/state`` and
+    ``/api/license/is-state`` endpoints below.
+
+    Reads :func:`clawmetry.license.license_state` and
+    :func:`clawmetry.license.current_license_info` ONCE so a UI binding
+    both endpoints in the same tile can't catch them disagreeing on
+    ``state`` / ``has_license`` / ``valid`` for the same install --
+    mirrors the ``_license_tier_snapshot`` / ``_license_issued_snapshot``
+    pattern used by the tier + issued-at endpoint pairs.
+
+    Never raises. Any introspection failure collapses to the OSS-free
+    branch shape (``state="no_license"``, ``has_license=False``,
+    ``valid=False``) so the endpoint stack never 5xxs -- same posture as
+    the surrounding license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        state = _lic.license_state()
+        info = _lic.current_license_info()
+    except Exception as exc:
+        logger.debug("_license_state_snapshot: underlying read failed: %s", exc)
+        return {"state": "no_license", "has_license": False, "valid": False}
+    if not isinstance(state, str):
+        state = "no_license"
+    if info is None:
+        return {"state": state, "has_license": False, "valid": False}
+    if not isinstance(info, dict):
+        return {"state": state, "has_license": False, "valid": False}
+    return {
+        "state": state,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/state")
+def api_license_state():
+    """``GET /api/license/state`` -- scalar view of the installed license's
+    high-level lifecycle state, for a status badge / audit row that wants
+    ONE string rather than the whole ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "state": "<active|expired|invalid|no_license>",
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``state`` mirrors :func:`clawmetry.license.license_state` exactly:
+
+      * ``"active"``   -- signature-valid AND not expired.
+      * ``"expired"``  -- signature-valid but past its ``exp`` claim.
+      * ``"invalid"``  -- file exists but signature is bogus.
+      * ``"no_license"`` -- no license file on disk (OSS-free).
+
+    Unlike ``/api/license/tier`` / ``/api/license/subject`` / ``/api/license/nodes``
+    (which surface ``null`` on the invalid / expired / no-license branches),
+    this endpoint always carries a non-null string -- "no license" is a
+    real answer here, not a missing answer, so a UI switch can bind
+    directly on ``data.state`` without a null branch.
+
+    A caller who wants ``tier`` / ``sub`` / ``exp`` / ``nodes`` alongside
+    should keep hitting ``/api/license/status``; this endpoint deliberately
+    strips those to keep a lightweight status-badge tile cheap.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{state: "no_license", has_license: false, valid: false}`` (the
+    OSS-free branch shape), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_state_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_state: error: %s", exc)
+        return jsonify(
+            {"state": "no_license", "has_license": False, "valid": False}
+        )
+
+
+@bp_entitlement.route("/api/license/is-state")
+def api_license_is_state():
+    """``GET /api/license/is-state?state=<name>`` -- boolean gate for
+    "is the installed license in state <X> right now?" UIs.
+
+    Query parameters:
+      * ``state`` (str, required) -- the state to test against. One of
+        ``"active"``, ``"expired"``, ``"invalid"``, ``"no_license"``.
+        Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_state`. Missing / empty / unknown
+        input degrades to ``is_state=false`` rather than a 4xx, matching
+        the surrounding endpoints' never-5xx / never-4xx posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_state": <bool>,
+          "state": "<active|expired|invalid|no_license>",  # currently-installed
+          "requested_state": <str>,                        # normalised echo of query
+          "has_license": <bool>,
+          "valid": <bool>                                  # signature-valid AND not expired
+        }
+
+    ``is_state`` is ``True`` iff the currently-installed state
+    byte-equals ``requested_state`` (after both are lower/stripped) AND
+    the requested value is one of the four canonical states -- a typo
+    like ``?state=actiev`` returns ``is_state=false`` so a caller cannot
+    silently mis-gate on a mis-spelled state name.
+
+    Mirrors :func:`clawmetry.license.is_state` -- the HTTP shape layers
+    ``state`` / ``requested_state`` / ``has_license`` / ``valid`` on top
+    of that bool so a widget never needs a second call to
+    ``/api/license/state`` (or ``/api/license/status``) to render the
+    accompanying "you're in state <X>" copy.
+    """
+    from clawmetry.license import LICENSE_STATES
+
+    raw = request.args.get("state", "") or ""
+    try:
+        requested = str(raw).strip().lower()
+    except Exception:
+        requested = ""
+    try:
+        snap = _license_state_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_state: error: %s", exc)
+        snap = {"state": "no_license", "has_license": False, "valid": False}
+    match = bool(
+        requested
+        and requested in LICENSE_STATES
+        and isinstance(snap["state"], str)
+        and snap["state"] == requested
+    )
+    return jsonify(
+        {
+            "is_state": match,
+            "state": snap["state"],
+            "requested_state": requested,
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

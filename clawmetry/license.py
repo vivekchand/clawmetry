@@ -1690,3 +1690,91 @@ def license_age_days() -> int | None:
         logger.debug("license: license_age_days arithmetic failed: %s", exc)
         return None
     return age if age >= 0 else 0
+
+
+# Canonical set of values :func:`license_state` may return. Kept in a frozenset
+# so a caller (`if state in LICENSE_STATES: ...`) never accidentally accepts a
+# typo like ``"actiev"`` as a valid state, and so :func:`is_state` can normalise
+# / validate its input against the same source of truth the getter uses.
+LICENSE_STATES = frozenset({"active", "expired", "invalid", "no_license"})
+
+
+def license_state() -> str:
+    """Scalar view onto the installed license's high-level lifecycle state --
+    for a status badge / audit row that wants ONE string rather than the
+    whole :func:`current_license_info` envelope.
+
+    Returns one of :data:`LICENSE_STATES` -- never ``None``. Unlike the
+    tier / nodes / subject scalars, "no license installed" is a real answer
+    here (``"no_license"``), not a missing answer, so callers can bind a
+    switch without a ``None`` branch:
+
+      * ``"active"``   -- signature-valid AND not expired.
+      * ``"expired"``  -- signature-valid but past its ``exp`` claim.
+      * ``"invalid"``  -- file exists but signature is bogus (bit-flip,
+        tamper, key rotated server-side, wrong-environment key).
+      * ``"no_license"`` -- no license file on disk (the OSS-free branch).
+
+    Mirrors the ``status`` field carried by :func:`current_license_info`
+    exactly for the three file-exists branches, and adds ``"no_license"``
+    for the None-info branch so the caller never has to translate
+    ``current_license_info() is None`` themselves. On any introspection
+    failure (import error, corrupt install, cryptography-lib mismatch) the
+    helper degrades to ``"no_license"`` -- same fallback as
+    :func:`has_license` -- so a UI tile bound to this helper never breaks
+    on a partial install.
+
+    Never raises. Pairs with :func:`is_state` the way :func:`license_tier`
+    pairs with :func:`is_tier`: this getter surfaces the string for a
+    display row, that matcher answers the "am I in state <X> right now?"
+    gate without the caller having to string-compare themselves.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_state underlying read failed: %s", exc)
+        return "no_license"
+    if info is None:
+        return "no_license"
+    if not isinstance(info, dict):
+        return "no_license"
+    status = info.get("status")
+    if isinstance(status, str) and status in LICENSE_STATES:
+        return status
+    # Defensive: an unexpected status string (future refactor, downstream
+    # patch) must never leak through as a bogus state -- collapse to
+    # ``"invalid"`` since the file exists but we cannot classify it.
+    return "invalid"
+
+
+def is_state(state: str) -> bool:
+    """Boolean gate for "is the installed license in state <X> right now?"
+
+    Compares :func:`license_state` case-insensitively (after strip) to the
+    supplied ``state``. Missing / empty / non-string input degrades to
+    ``False`` -- matches the never-raise posture of :func:`is_tier` /
+    :func:`is_subject` / :func:`is_within_node_limit`.
+
+    Only values in :data:`LICENSE_STATES` can ever return ``True``; a
+    typo like ``"actiev"`` collapses to ``False`` so a caller cannot
+    silently mis-gate on a mis-spelled state name. Callers wanting to
+    validate their input up-front can ``if requested in LICENSE_STATES:``
+    against the same source of truth.
+
+    Never raises. Any underlying failure of :func:`license_state`
+    collapses this to ``False`` -- a UI tile bound to this gate stays
+    "unclaimed" rather than falsely asserting an entitlement it can't
+    verify.
+    """
+    try:
+        requested = str(state).strip().lower() if state is not None else ""
+    except Exception:
+        return False
+    if not requested or requested not in LICENSE_STATES:
+        return False
+    try:
+        current = license_state()
+    except Exception as exc:
+        logger.debug("license: is_state underlying read failed: %s", exc)
+        return False
+    return current == requested
