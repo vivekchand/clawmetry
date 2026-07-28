@@ -87,6 +87,10 @@ def test_dashboard_worker_fast_by_default(monkeypatch):
     uc = _uc()
     uc._process_role = "dashboard"
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(uc, "_get_update_check_config",
                         lambda: {"enabled": True, "check_on_startup": False,
                                  "check_daily": True, "auto_update": True})
@@ -119,6 +123,10 @@ def test_dashboard_worker_keeps_daily_cadence_when_opted_out(monkeypatch):
     uc = _uc()
     uc._process_role = "dashboard"
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(uc, "_get_update_check_config",
                         lambda: {"enabled": True, "check_on_startup": False,
                                  "check_daily": True, "auto_update": False})
@@ -191,6 +199,10 @@ def test_sync_daemon_starts_checker_with_daemon_role():
 
 def _gate(monkeypatch, uc, supervised, platform="darwin", kill=None):
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     if kill is None:
         monkeypatch.delenv("CLAWMETRY_AUTOUPDATE_EXEC_RESTART", raising=False)
     else:
@@ -267,6 +279,10 @@ def test_status_endpoint_reports_updater_posture(monkeypatch):
     uc = _uc()
     uc._process_role = "daemon"
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("CLAWMETRY_UPDATE_CHECK_SECS", raising=False)
     monkeypatch.delenv("CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS", raising=False)
     monkeypatch.setattr(uc, "_get_update_check_config",

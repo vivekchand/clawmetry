@@ -28,6 +28,10 @@ def _as_daemon(uc, monkeypatch):
     pip), which is covered by its own dedicated tests below.
     """
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
     monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exit")
@@ -227,6 +231,10 @@ def test_dashboard_role_default_on_installs(monkeypatch):
     update_available=true.)"""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     assert uc._process_role == "dashboard"  # reload resets the role
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     monkeypatch.setattr(uc, "_dashboard_supervised", lambda: False)
@@ -305,6 +313,10 @@ def test_dashboard_fast_loop_gating(monkeypatch):
     """The dashboard polls on the fast cadence iff auto-update is on."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     assert uc._process_role == "dashboard"
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     assert uc._fast_loop_active() is True, \
@@ -324,6 +336,10 @@ def test_unsupervised_daemon_execs_in_place(monkeypatch):
     process image in place instead (POSIX plan)."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: False)
     monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exec")
@@ -359,6 +375,10 @@ def test_windows_hands_off_to_out_of_process_helper(monkeypatch):
     process exits."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
     monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "respawn")
@@ -429,6 +449,10 @@ def test_entitled_plan_enables_auto_update(monkeypatch):
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: dict(state))
     monkeypatch.setattr(uc, "_set_update_check_config", lambda upd: state.update(upd))
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     # free / inactive → unchanged
     S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is False
     S._sync_auto_update_with_plan(None);         assert state["auto_update"] is False
@@ -447,6 +471,10 @@ def test_entitled_plan_respects_optout_and_never_disables(monkeypatch):
     S._sync_auto_update_with_plan("cloud_pro");  assert state["auto_update"] is False  # opt-out
     # never auto-DISABLES a user's manual choice on downgrade
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     state["auto_update"] = True
     S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is True
 
@@ -480,6 +508,10 @@ def test_windows_handoff_keeps_update_lock(monkeypatch, tmp_path):
     metadata (live-hit on the 0.12.580 run)."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
     monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "respawn")
@@ -518,3 +550,38 @@ def test_update_respawn_helper_releases_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(ur.subprocess, "Popen", lambda cmd, **k: None)
     ur.main(["1234", "0.12.99", str(tmp_path / "r.log"), "x.exe"])
     assert not lock.exists(), "helper must release the lock even on pip failure"
+
+
+# ── CI runners never self-update ─────────────────────────────────────────────
+# The visual-diff harness death (2026-07-29, #4181/#4182): whenever a
+# [RELEASE] had just published, the PR-branch dashboard saw the newer wheel
+# ~60s after boot, pip-updated, and exec-restarted mid-screenshot-sweep.
+# An ephemeral CI runner must render the code it was started with.
+
+
+def test_ci_env_implicitly_disables_auto_update(monkeypatch):
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    monkeypatch.setenv("CI", "true")
+    assert uc._env_auto_update_disabled() is True
+
+
+def test_explicit_opt_in_beats_ci_env(monkeypatch):
+    uc = _uc()
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "1")
+    assert uc._env_auto_update_disabled() is False
+
+
+def test_user_machine_stays_enabled_without_ci(monkeypatch):
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    assert uc._env_auto_update_disabled() is False
+
+
+def test_kill_switch_still_wins_everywhere(monkeypatch):
+    uc = _uc()
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "0")
+    assert uc._env_auto_update_disabled() is True

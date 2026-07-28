@@ -41,9 +41,26 @@ CHANGELOG_URL = "https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md"
 
 def _env_auto_update_disabled():
     """Kill switch: ``CLAWMETRY_AUTO_UPDATE=0`` disables unattended upgrades
-    regardless of the stored config (fleet operators / CI / debugging)."""
+    regardless of the stored config (fleet operators / CI / debugging).
+
+    CI runners are implicitly disabled: an ephemeral runner must render the
+    code it was started with, never swap itself for the newest wheel mid-job.
+    The visual-diff harness proved why — whenever a [RELEASE] had just
+    published, the PR-branch dashboard (versioned one release behind) saw the
+    newer wheel on PyPI ~60s after boot, pip-updated, and exec-restarted in
+    the middle of the screenshot sweep; every subsequent page logged
+    ``base=200 head=0`` and the job failed. The failure rate tracked release
+    cadence, and the flywheel releases constantly (diagnosed 2026-07-29 after
+    three consecutive kills on #4181/#4182). ``CI`` is set by GitHub Actions,
+    GitLab, CircleCI, Travis, and Azure; explicit ``CLAWMETRY_AUTO_UPDATE=1``
+    re-arms it for anyone who genuinely wants in-CI self-update."""
     val = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
-    return val in ("0", "false", "no", "off")
+    if val in ("1", "true", "yes", "on"):
+        return False
+    if val in ("0", "false", "no", "off"):
+        return True
+    ci = os.environ.get("CI", "").strip().lower()
+    return ci not in ("", "0", "false")
 
 
 def _daemon_supervised():
@@ -668,7 +685,7 @@ def _maybe_auto_update(current, target, latest=None):
     if _auto_update_in_progress:
         return
     if _env_auto_update_disabled():
-        log.info("auto-update: disabled via CLAWMETRY_AUTO_UPDATE env")
+        log.info("auto-update: disabled (CLAWMETRY_AUTO_UPDATE=0 or CI env)")
         return
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):
