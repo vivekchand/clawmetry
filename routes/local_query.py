@@ -548,6 +548,12 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
+    # in the DASHBOARD process when /api/inventory composes locally; without
+    # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
+    # came back empty, and every roster row showed 0 conversations / $0 even
+    # though the store had real sessions (live-hit 2026-07-29).
+    "query_model_rollup",
     "query_sessions",
     "query_sessions_table",
     "query_aggregates",

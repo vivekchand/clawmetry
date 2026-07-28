@@ -12729,16 +12729,28 @@ def _build_agent_inventory(
         det_by_name = {d.get("name"): d for d in det if isinstance(d, dict) and d.get("name")}
         meta = agent_meta if isinstance(agent_meta, dict) else {}
 
-        # OpenClaw is the default bucket: present whenever it has data, even
-        # though _detect_family_runtimes never returns it (family-only).
-        oc_present = "openclaw" in rs
-
         agents = []
         for rt, summ in rs.items():
             if not isinstance(summ, dict):
                 continue
             d = det_by_name.get(rt) or {}
             is_otlp = bool(summ.get("otlp"))
+            # Substance = the runtime actually recorded work. The daily-rollup
+            # table keeps zero-token day rows for buckets that only ever logged
+            # plumbing (the daemon's own ``clawmetry`` bucket, the ``openclaw``
+            # default bucket on OpenClaw-less machines), and those keys ride
+            # into runtime_summary via the 7d/30d window union. A row with no
+            # substance AND no detection is a phantom — founder report: the
+            # roster showed "OpenClaw / detected" on a machine with no OpenClaw
+            # installed (~/.openclaw holds only ClawMetry's own db files).
+            substance = bool(
+                summ.get("sessions") or summ.get("turns")
+                or summ.get("tokens")
+                or float(summ.get("cost_usd") or 0.0)
+                or summ.get("tokens_7d") or summ.get("tokens_30d")
+                or float(summ.get("cost_7d_usd") or 0.0)
+                or float(summ.get("cost_30d_usd") or 0.0)
+            )
             label = (
                 # OTLP apps carry their own humanized 'My App (OTel)' label;
                 # they have no _INV_RT_LABELS / detected-runtime entry.
@@ -12748,7 +12760,12 @@ def _build_agent_inventory(
                 or rt
             )
             if rt == "openclaw":
-                detected = bool(oc_present)
+                # OpenClaw is the default session bucket and family detection
+                # never returns it — so its "detected" signal is either the
+                # adapter registry (dashboard-local roster) or real recorded
+                # work. NEVER unconditional: that painted "OpenClaw detected"
+                # on machines that have no OpenClaw at all.
+                detected = ("openclaw" in det_by_name) or substance
             elif is_otlp:
                 # An OTLP app is "detected" iff it has emitted spans (it has, or
                 # it wouldn't be in runtime_summary). It is not a local process
@@ -12756,6 +12773,8 @@ def _build_agent_inventory(
                 detected = True
             else:
                 detected = rt in det_by_name
+            if not detected and not substance:
+                continue
             mrow = meta.get(rt) or {}
             agents.append({
                 "agentKey": rt,

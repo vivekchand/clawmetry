@@ -311,3 +311,85 @@ def test_snapshot_emits_both_inventory_keys():
     # The node-wide strip carries the honest cross-runtime tool/eval slices.
     assert "nodeWideToolGroups" in src
     assert "nodeWideEval" in src
+
+
+# ── Phantom-row gate (founder report: "detected openclaw -- but no openclaw
+#    installed"): a runtime whose summary carries ZERO substance (the
+#    daily-rollup table keeps zero-token day rows) and which no adapter
+#    detected must not get a roster row, and openclaw's "detected" flag must
+#    never be unconditional. ────────────────────────────────────────────────
+
+
+def _zero_summ():
+    """A runtime_summary row exactly as the 7d/30d window union produces it
+    for a bucket that only ever logged zero-token day rows."""
+    return {
+        "sessions": 0, "turns": 0, "tokens": 0, "cost_usd": 0.0,
+        "cost_24h_usd": 0.0, "tokens_24h": 0,
+        "tokens_7d": 0, "cost_7d_usd": 0.0,
+        "tokens_30d": 0, "cost_30d_usd": 0.0,
+        "primary_model": "", "total_turns": 0, "models": [],
+        "switch_count": 0,
+    }
+
+
+def test_zero_substance_undetected_runtimes_get_no_row():
+    import clawmetry.sync as sync
+    rs = {
+        "openclaw": _zero_summ(),        # phantom: zero work, not installed
+        "clawmetry": _zero_summ(),       # daemon self-telemetry bucket
+        "claude_code": dict(_zero_summ(), sessions=3, turns=12,
+                            tokens=609357, cost_usd=128.73),
+    }
+    node_wide, by_rt = sync._build_agent_inventory(
+        rs, {}, {}, {}, {},
+        detected_runtimes=[{"name": "claude_code", "displayName": "Claude Code",
+                            "detected": True}],
+        agent_meta={}, node_id="n",
+    )
+    keys = {r["agentKey"] for r in node_wide["agents"]}
+    # The old code kept every runtime_summary key and hard-coded
+    # openclaw detected=True — this is the revert trap.
+    assert keys == {"claude_code"}, keys
+    assert "openclaw" not in by_rt
+    assert "clawmetry" not in by_rt
+    cc = node_wide["agents"][0]
+    assert cc["sessions"] == 3
+    assert cc["detected"] is True
+
+
+def test_openclaw_with_real_work_keeps_its_row_and_detected_flag():
+    import clawmetry.sync as sync
+    rs = {"openclaw": dict(_zero_summ(), sessions=2, tokens=1000,
+                           cost_usd=0.5)}
+    node_wide, _ = sync._build_agent_inventory(
+        rs, {}, {}, {}, {}, detected_runtimes=[], agent_meta={}, node_id="n",
+    )
+    assert node_wide["total"] == 1
+    assert node_wide["agents"][0]["agentKey"] == "openclaw"
+    assert node_wide["agents"][0]["detected"] is True
+
+
+def test_detected_but_idle_runtime_keeps_its_row():
+    """A freshly-installed runtime with no ingested work yet must still show
+    (the 'daemon not ingesting yet' honesty case) — the substance gate only
+    drops rows that are BOTH undetected and workless."""
+    import clawmetry.sync as sync
+    rs = {"codex": _zero_summ()}
+    node_wide, _ = sync._build_agent_inventory(
+        rs, {}, {}, {}, {},
+        detected_runtimes=[{"name": "codex", "displayName": "Codex",
+                            "detected": True}],
+        agent_meta={}, node_id="n",
+    )
+    assert node_wide["total"] == 1
+    assert node_wide["agents"][0]["agentKey"] == "codex"
+
+
+def test_query_model_rollup_is_daemon_proxyable():
+    """/api/inventory composes runtime_summary in the DASHBOARD process; the
+    numbers all come from LocalStore.query_model_rollup, which therefore MUST
+    be reachable through the daemon proxy. When it fell off the allowlist the
+    roster showed 0 conversations for every runtime (live-hit 2026-07-29)."""
+    import routes.local_query as lq
+    assert "query_model_rollup" in lq._DAEMON_METHODS
