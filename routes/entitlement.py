@@ -9674,6 +9674,104 @@ def api_license_is_expiring_at():
     )
 
 
+@bp_entitlement.route("/api/license/days-until-expiry-at")
+def api_license_days_until_expiry_at():
+    """``GET /api/license/days-until-expiry-at?epoch=<int>`` -- scalar
+    countdown evaluated at an operator-supplied perspective epoch, for a
+    scheduled-audit / retrospective tile that wants to answer "how many
+    days until (or past) expiry was <date>?" without the caller having
+    to compute ``(exp - epoch) // 86400`` at the call site.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "days_left": <int|null>,           # signed days from epoch to exp
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``days_left`` mirrors :func:`clawmetry.license.days_until_expiry_at`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), on the perpetual-license branch
+        (no ``exp`` to count against), OR when ``epoch`` doesn't parse
+        as an integer.
+      * A signed integer number of days otherwise. Zero when ``epoch``
+        falls on the day of expiry; negative when ``epoch`` is after
+        ``exp`` (support scenario: "how many days past expiry was
+        <date>?"); positive when ``epoch`` is before ``exp``.
+
+    Deliberately lenient on expiry, mirroring
+    ``/api/license/days-until-expiry`` and ``/api/license/expires-at``: a
+    signed-but-lapsed key still surfaces its real ``days_left`` (with a
+    negative sign when ``epoch`` is after ``exp``) so a support/audit
+    tile can render "would have been expired 12 days ago as of last
+    Friday" without special-casing the expired branch. The ``valid``
+    field independently carries the "signature-valid AND not expired"
+    signal for callers that DO want to hide the row on lapsed keys.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to ``days_left=null`` with
+        ``requested_epoch=null`` so a caller cannot silently miscount on
+        a typo. HTTP status is 200 either way -- the "bad input" signal
+        is the ``null`` result, not a 4xx, matching the never-crash
+        posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/is-expiring-at`` -- both share the
+    perspective-epoch input pattern and the
+    :func:`_license_expires_snapshot` reader, so a UI binding both
+    endpoints for the same install cannot catch them disagreeing on
+    ``expires_at`` / ``has_license`` / ``valid``. Together they let a
+    dashboard render "on <date>, the license would have been N days
+    from expiry -- an exact match against a specific ``exp`` value?"
+    from two orthogonal one-shot GETs.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{days_left: null, requested_epoch: null, expires_at: null,
+    has_license: false, valid: false}`` (the OSS-free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_expires_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_days_until_expiry_at: snapshot error: %s", exc)
+        snap = {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    days_left: int | None
+    if requested is None:
+        days_left = None
+    else:
+        try:
+            from clawmetry import license as _lic
+
+            days_left = _lic.days_until_expiry_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_days_until_expiry_at: derive error: %s", exc)
+            days_left = None
+    return jsonify(
+        {
+            "days_left": days_left,
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
