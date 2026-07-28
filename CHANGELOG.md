@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: Windows auto-update installs out-of-process, and failed attempts are visible (#4146) (2026-07-28)
+- **Why:** the first live unattended-update run failed silently. Measured in isolation on the affected machine: Windows denies even RENAMING the running clawmetry.exe (WinError 32), so the pre-rename that in-process pip relied on never protected anything, every attempt failed into a 30-minute backoff, and the failures were recorded nowhere a human could see.
+- **What:** on Windows the updater now runs NO in-process pip: a detached stdlib-only helper (clawmetry.update_respawn) waits for the process to exit, installs the target with one retry, and relaunches the exact command line even when the install fails. Every attempt (started/handoff/installed/failed plus pip's error tail) is persisted and served as last_attempt in /api/update-check/status. Status wording: runtimes are "watching (local)"; "syncing" is reserved for the explicit Cloud sync line; the hardcoded OpenClaw line is detection-gated.
+- **Verified:** helper chain live on the affected machine (wait, real pip, relaunch proof file); 39 update-suite tests green; this release is the second live proof run for the five-minute unattended bar.
+
 ### Fix: trial hotfixes, the properties bug, the unclosable modal, honest status copy (#4140) (2026-07-28)
 - **Why:** three follow-ups found live minutes after 0.12.575: Entitlement.is_paid/.expired are properties and the new license-override code called them as methods (silently reverting status to "FREE plan" under a valid trial key); /api/auth/check returned needsSetup on machines with no OpenClaw, which app.js renders as a mandatory close-button-hidden modal on every load; and status copy framed cloud sync as the goal of a local trial.
 - **What:** property access fixed in the sync gate and status; needsSetup now fires only when an OpenClaw install is actually present; status says "watching ... locally (Trial plan)". Tests now build REAL Entitlement objects instead of shape-alike doubles, so the property/method class of bug goes red in CI.
