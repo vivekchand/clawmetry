@@ -9371,6 +9371,7 @@ def api_license_age_days():
         )
 
 
+
 def _license_state_snapshot() -> dict:
     """Shared one-shot read for the paired ``/api/license/state`` and
     ``/api/license/is-state`` endpoints below.
@@ -9511,6 +9512,335 @@ def api_license_is_state():
             "is_state": match,
             "state": snap["state"],
             "requested_state": requested,
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+def _license_pubkey_fingerprint_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two pubkey-fingerprint
+    endpoints both need (``pubkey_fingerprint_sha256``,
+    ``pubkey_fingerprint_short``, ``valid``). Lives in the handler layer so a
+    UI binding both endpoints cannot catch them disagreeing on the trust
+    anchor for the same install.
+
+    ``valid`` here means the EMBEDDED PUBKEY parses -- distinct from
+    ``/api/license/valid`` (signature-valid + not expired). A tampered
+    ``_PUBLIC_KEY_PEM`` collapses ``valid`` to ``False`` even without any
+    license file installed, exactly matching the trust-anchor semantic a
+    supply-chain / attestation tile needs.
+
+    Never raises: any underlying failure collapses to
+    ``{pubkey_fingerprint_sha256: None, pubkey_fingerprint_short: None,
+    valid: False}`` so callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        fp = _lic.pubkey_fingerprint()
+    except Exception as exc:
+        logger.debug(
+            "_license_pubkey_fingerprint_snapshot: underlying read failed: %s",
+            exc,
+        )
+        return {
+            "pubkey_fingerprint_sha256": None,
+            "pubkey_fingerprint_short": None,
+            "valid": False,
+        }
+    short = fp[:16] if isinstance(fp, str) and fp else None
+    return {
+        "pubkey_fingerprint_sha256": fp if isinstance(fp, str) and fp else None,
+        "pubkey_fingerprint_short": short,
+        "valid": bool(fp) and isinstance(fp, str),
+    }
+
+
+@bp_entitlement.route("/api/license/pubkey-fingerprint")
+def api_license_pubkey_fingerprint():
+    """``GET /api/license/pubkey-fingerprint`` -- scalar view of the embedded
+    Ed25519 verification key's SHA-256 fingerprint, for a trust-anchor
+    attestation tile that wants ONE string rather than the whole
+    ``/api/license/pubkey`` envelope (algorithm, format, PEM body, ...).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "pubkey_fingerprint_sha256": <str|null>,   # 64-char lowercase hex
+          "pubkey_fingerprint_short":  <str|null>,   # first 16 chars
+          "valid": <bool>                            # embedded PEM parses?
+        }
+
+    Independent of any installed license file: this endpoint answers
+    "which trust anchor is THIS install verifying against?" so an
+    operator can compare the value to the canonical fingerprint published
+    at ``https://clawmetry.com/security`` and detect that ``_PUBLIC_KEY_PEM``
+    hasn't been swapped for an attacker-controlled key. A dashboard tile
+    that only needs the fingerprint string should bind here rather than to
+    ``/api/license/pubkey``; the two share :func:`pubkey_fingerprint` so
+    they never disagree.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{pubkey_fingerprint_sha256: null, pubkey_fingerprint_short: null,
+    valid: false}`` matching the never-crash posture of the surrounding
+    license endpoints.
+    """
+    try:
+        return jsonify(_license_pubkey_fingerprint_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_pubkey_fingerprint: error: %s", exc)
+        return jsonify(
+            {
+                "pubkey_fingerprint_sha256": None,
+                "pubkey_fingerprint_short": None,
+                "valid": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/is-pubkey-fingerprint")
+def api_license_is_pubkey_fingerprint():
+    """``GET /api/license/is-pubkey-fingerprint?fp=<hex>`` -- boolean gate
+    for "is this install verifying against pubkey <FP> right now?" UIs.
+
+    Query parameters:
+      * ``fp`` (str, required) -- the fingerprint to test against. Compared
+        under the same tolerant normalisation as
+        :func:`clawmetry.license.is_pubkey_fingerprint`: whitespace
+        stripped, lowercased, ``:`` separators removed, either the full
+        64-char hex OR the 16-char short-form accepted. Missing / empty
+        input degrades to ``is_pubkey_fingerprint=false`` rather than a
+        4xx, matching the surrounding endpoints' never-5xx / never-4xx
+        posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_pubkey_fingerprint": <bool>,
+          "pubkey_fingerprint_sha256": <str|null>,   # currently-active fp
+          "pubkey_fingerprint_short":  <str|null>,   # first 16 chars
+          "requested_fp": <str>,                     # normalised echo
+          "valid": <bool>                            # embedded PEM parses?
+        }
+
+    ``is_pubkey_fingerprint`` is ``True`` iff the embedded PEM parses AND
+    the normalised request matches (full or short form). A typo like
+    ``?fp=abcxyz`` collapses to ``False`` (non-hex rejected up-front) so a
+    caller cannot silently mis-gate on a bad string.
+
+    Mirrors :func:`clawmetry.license.is_pubkey_fingerprint` -- the HTTP
+    shape layers ``pubkey_fingerprint_sha256`` /
+    ``pubkey_fingerprint_short`` / ``requested_fp`` / ``valid`` on top of
+    that bool so a supply-chain audit widget never needs a second call to
+    ``/api/license/pubkey-fingerprint`` to render the accompanying
+    "expected <X>" copy.
+    """
+    raw = request.args.get("fp", "") or ""
+    try:
+        requested = raw.strip().lower().replace(":", "")
+    except Exception:
+        requested = ""
+    try:
+        snap = _license_pubkey_fingerprint_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_pubkey_fingerprint: error: %s", exc)
+        snap = {
+            "pubkey_fingerprint_sha256": None,
+            "pubkey_fingerprint_short": None,
+            "valid": False,
+        }
+    actual = snap["pubkey_fingerprint_sha256"]
+    matches = False
+    if requested and isinstance(actual, str) and actual:
+        if all(c in "0123456789abcdef" for c in requested):
+            actual_norm = actual.strip().lower()
+            if len(requested) == 64:
+                matches = actual_norm == requested
+            elif len(requested) == 16:
+                matches = actual_norm.startswith(requested)
+    return jsonify(
+        {
+            "is_pubkey_fingerprint": bool(matches),
+            "pubkey_fingerprint_sha256": snap["pubkey_fingerprint_sha256"],
+            "pubkey_fingerprint_short": snap["pubkey_fingerprint_short"],
+            "requested_fp": requested,
+            "valid": snap["valid"],
+        }
+    )
+
+
+def _license_expires_snapshot() -> dict:
+    """Shared helper: read once, derive the quartet the two ``exp``-derived
+    endpoints both need (``expires_at``, ``days_until_expiry``,
+    ``has_license``, ``valid``). Lives in the handler layer -- not in
+    :mod:`clawmetry.license` -- because ``has_license`` is an install-state
+    fact rather than a license-payload fact, and both endpoints below need
+    the pair together so a UI cannot catch them disagreeing on
+    ``has_license`` for the same install.
+
+    Deliberately lenient on expiry, matching the ``license_expires_at`` /
+    ``days_until_expiry`` posture: a signed-but-lapsed key still surfaces
+    its real ``expires_at`` (with a negative ``days_until_expiry``) so a
+    support/audit tile can render "expired 12 days ago" without special-
+    casing the expired branch. The ``valid`` field independently carries
+    the "signature-valid AND not expired" signal for callers that DO want
+    to hide the row on lapsed keys.
+
+    Never raises: any underlying failure collapses to
+    ``{expires_at: None, days_until_expiry: None, has_license: False,
+    valid: False}`` so callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        expires = _lic.license_expires_at()
+        days = _lic.days_until_expiry()
+    except Exception as exc:
+        logger.debug("_license_expires_snapshot: underlying read failed: %s", exc)
+        return {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(info, dict):
+        return {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "expires_at": expires,
+        "days_until_expiry": days,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/expires-at")
+def api_license_expires_at():
+    """``GET /api/license/expires-at`` -- scalar view of the installed
+    license's ``exp`` claim (epoch seconds), for a "license expires:
+    <date>" row that wants ONE integer rather than the whole
+    ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "expires_at": <int|null>,          # epoch; None if untrusted / perpetual
+          "days_until_expiry": <int|null>,   # signed days remaining
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``expires_at`` mirrors :func:`clawmetry.license.license_expires_at`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), OR when the signed payload has
+        no ``exp`` claim (perpetual license -- distinguish from
+        no-license via ``has_license``).
+      * A positive epoch integer otherwise, unmodified from the signed
+        payload.
+
+    Deliberately lenient on expiry, unlike ``/api/license/tier`` and
+    ``/api/license/nodes``: a signed-but-lapsed key still surfaces its
+    real ``expires_at`` so a support tile can render "expired 12 days
+    ago" on an expired key. The ``valid`` field independently carries
+    the "signature-valid AND not expired" signal for callers that DO
+    want to hide the row on lapsed keys.
+
+    Pairs with ``/api/license/days-until-expiry`` -- this endpoint
+    surfaces the raw epoch for an audit row, that endpoint answers the
+    caller-friendly "how many days left" without the caller having to do
+    the arithmetic. The two endpoints share :func:`_license_expires_snapshot`
+    so a UI binding both sees a consistent snapshot.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{expires_at: null, days_until_expiry: null, has_license: false,
+    valid: false}`` (the OSS-free branch shape), matching the never-crash
+    posture of the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_expires_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_expires_at: error: %s", exc)
+        return jsonify(
+            {
+                "expires_at": None,
+                "days_until_expiry": None,
+                "has_license": False,
+                "valid": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/is-expiring-at")
+def api_license_is_expiring_at():
+    """``GET /api/license/is-expiring-at?epoch=<int>`` -- predicate
+    matching the operator-supplied epoch against the installed license's
+    ``exp`` claim, for a "we noticed your key expires <date>" tile that
+    binds a specific ``exp`` value and wants to detect renewal (the on-
+    disk key no longer matches the value it was rendered with).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_expiring_at": <bool>,          # exact match; else false
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp for comparison
+          "has_license": <bool>,
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``is_expiring_at`` mirrors :func:`clawmetry.license.is_expiring_at`:
+
+      * ``false`` when there is no license file, on the invalid-signature
+        branch, on the expired branch (a predicate that fired ``true`` on
+        a lapsed key would push callers to gate renewal UI on a value
+        that no longer implies entitlement), on the perpetual-license
+        branch (no ``exp`` to compare), OR when ``epoch`` doesn't parse
+        as an integer.
+      * ``true`` iff the installed key is signature-valid, not expired,
+        carries an ``exp`` claim, AND that claim equals the supplied
+        ``epoch`` exactly.
+
+    Deliberately strict on validity, unlike the sibling
+    ``/api/license/expires-at`` endpoint (which is lenient on expiry so a
+    support tile can render "expired 12 days ago"). See the docstring on
+    :func:`clawmetry.license.is_expiring_at` for the rationale.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to
+        ``is_expiring_at=false`` with ``requested_epoch=null`` so a
+        caller cannot silently mis-gate on a typo. HTTP status is 200
+        either way -- the "bad input" signal is the ``false`` result,
+        not a 4xx, matching the never-crash posture of the surrounding
+        license endpoints.
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    snap = _license_expires_snapshot()
+    try:
+        from clawmetry import license as _lic
+
+        matched = _lic.is_expiring_at(requested) if requested is not None else False
+    except Exception as exc:
+        logger.warning("api_license_is_expiring_at: error: %s", exc)
+        matched = False
+    return jsonify(
+        {
+            "is_expiring_at": bool(matched),
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
             "has_license": snap["has_license"],
             "valid": snap["valid"],
         }
