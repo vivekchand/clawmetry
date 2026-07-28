@@ -2452,7 +2452,10 @@ def _cmd_status(args) -> None:
         try:
             from clawmetry import entitlements as _ent_st
             _e = _ent_st.get_entitlement(force=True)
-            _entitled = bool(_e.is_paid() and not _e.expired())
+            # is_paid / expired are properties — calling them raised and the
+            # fallback silently reported the stale cloud plan ("FREE plan")
+            # under a valid trial key (founder live-hit 2026-07-28, twice).
+            _entitled = bool(_e.is_paid and not _e.expired)
             _plan = _e.tier or ""
         except Exception:
             # Fallback: the old cloud-plan cache read (entitlements missing
@@ -2489,7 +2492,7 @@ def _cmd_status(args) -> None:
         for _r in _det:
             _n = int(_r.get("sessionCount") or 0)
             _nm = _r.get("displayName") or _r.get("name") or "runtime"
-            _state = "✅ syncing" if _entitled else "○ detected, NOT syncing"
+            _state = "✅ watching" if _entitled else "○ detected, NOT watched"
             print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
         if not _prover:
             print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")
@@ -2500,9 +2503,12 @@ def _cmd_status(args) -> None:
                 print("      → paid runtimes need a Trial/Pro account. The daemon auto-downloads the")
                 print("        runtime pack on start once entitled — link your account in the dashboard.")
         elif _det and not _entitled:
-            print(f"    clawmetry-pro {_prover} installed and detecting the above — but your account")
-            print(f"      is on the FREE plan ({_plan or 'free'}), so paid runtimes are NOT synced to")
-            print("      the cloud. Link to a Trial/Pro account (the dashboard prompts you) to sync them.")
+            print(f"    clawmetry-pro {_prover} installed and detecting the above — but this node")
+            print(f"      has no active Trial/Pro entitlement ({_plan or 'free'}), so paid runtimes")
+            print("      are not watched. Start the free trial from the dashboard to turn them on.")
+        elif _det and _entitled:
+            _lbl = {"trial": "Trial"}.get((_plan or "").lower(), _plan or "entitled")
+            print(f"    clawmetry-pro {_prover} watching the above locally ({_lbl} plan).")
         elif _prover and not _det:
             print(f"    clawmetry-pro {_prover} installed — no other runtimes found on this machine yet.")
     except Exception:

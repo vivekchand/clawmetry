@@ -31,11 +31,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _ent(source="license", paid=True, expired=False):
-    return SimpleNamespace(
-        source=source,
-        is_paid=lambda: paid,
-        expired=lambda: expired,
-    )
+    """A REAL Entitlement, not a shape-alike double.
+
+    The first version of these tests used a SimpleNamespace with is_paid /
+    expired as LAMBDAS — but on the real class they are PROPERTIES, so the
+    production code calling ``ent.is_paid()`` raised TypeError while the
+    tests stayed green. The bug shipped and the founder hit it live twice
+    (status said "FREE plan" under a valid trial key). Doubles must match
+    the real contract; the cheapest way is to not use a double at all.
+    """
+    import time as _t
+
+    from clawmetry import entitlements as E
+
+    tier = E.TIER_TRIAL if paid else E.TIER_OSS
+    expiry = (_t.time() - 3600) if expired else (_t.time() + 6 * 86400)
+    return E._build(tier, source, expiry=expiry)
 
 
 @pytest.fixture
@@ -155,6 +166,33 @@ def test_trial_activation_calls_ensure_daemon(monkeypatch, tmp_path):
 def _read(rel):
     with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
         return fh.read()
+
+
+def test_auth_check_no_openclaw_is_not_needs_setup(monkeypatch):
+    """/api/auth/check must not demand gateway setup on a machine with no
+    OpenClaw: needsSetup drives app.js into a MANDATORY (uncloseable) modal,
+    and without an OpenClaw install there is no token that could ever be
+    pasted. Revert-proof for the unclosable-popup live-hit (2026-07-28)."""
+    import dashboard as _d
+    from flask import Flask
+
+    from routes.meta import bp_auth
+
+    app = Flask(__name__)
+    app.register_blueprint(bp_auth)
+    monkeypatch.setattr(_d, "GATEWAY_TOKEN", "", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+
+    monkeypatch.setattr(_d, "_detect_openclaw_install", lambda: False)
+    r = app.test_client().get("/api/auth/check").get_json()
+    assert r["needsSetup"] is False, \
+        "no OpenClaw on the machine: the mandatory setup modal must not fire"
+    assert r["authRequired"] is False
+
+    monkeypatch.setattr(_d, "_detect_openclaw_install", lambda: True)
+    r = app.test_client().get("/api/auth/check").get_json()
+    assert r["needsSetup"] is True, \
+        "OpenClaw present without a token still needs the setup step"
 
 
 def test_gw_setup_suppresses_modal_when_all_watched():

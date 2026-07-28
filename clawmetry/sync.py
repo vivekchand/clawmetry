@@ -1365,7 +1365,11 @@ def _sync_allowed() -> bool:
         from clawmetry import entitlements as _ent
 
         ent = _ent.get_entitlement()
-        if ent.source == "license" and ent.is_paid() and not ent.expired():
+        # is_paid / expired are PROPERTIES, not methods. Calling them raised
+        # TypeError, the except swallowed it, and the override silently never
+        # fired — the exact bug class the tests missed because their doubles
+        # used callables (fixed: tests now build REAL Entitlement objects).
+        if ent.source == "license" and ent.is_paid and not ent.expired:
             return True
     except Exception:
         pass
