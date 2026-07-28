@@ -1164,6 +1164,81 @@ def is_expiring_at(epoch: int) -> bool:
     return int(exp) == wanted
 
 
+def days_until_expiry_at(epoch: int) -> int | None:
+    """Scalar view of "how many days from ``epoch`` until the installed
+    license's ``exp`` claim?" for a perspective-epoch audit tile that
+    wants to answer "was the license in the renewal window on <date>?"
+    without the caller having to compute ``(exp - epoch) // 86400`` at
+    every call site.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to compute against: no
+        license file on disk, an invalid signature (the payload can't be
+        trusted -- an attacker could stuff any ``exp`` into an unsigned
+        body), a signed payload whose ``exp`` claim is absent
+        (perpetual license -- nothing to count down to), OR a non-numeric
+        / bool ``epoch`` argument.
+      * A signed integer number of days otherwise. Zero when ``epoch``
+        falls on the day of expiry; negative when ``epoch`` is after
+        ``exp`` (support scenario: "how many days past expiry was
+        <date>?"); positive when ``epoch`` is before ``exp``. A caller
+        distinguishes "expires that day" from "expired 3 days before
+        then" by sign without a second call to
+        :func:`current_license_info`.
+
+    Days are floor-divided from seconds ``(exp - epoch) // 86400``,
+    matching how :func:`days_until_expiry` derives its "now" counterpart
+    from the same claim so the two scalars never disagree at the day
+    boundary when ``epoch`` equals the current time.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``None`` rather than a spurious "days
+    until epoch 1" number. A non-numeric value collapses to ``None`` so
+    a caller cannot silently miscount on a typo.
+
+    Deliberately lenient on expiry, mirroring :func:`days_until_expiry`:
+    an expired-but-signature-valid key still carries a meaningful ``exp``
+    (support scenario: "when did this lapsed key expire, evaluated as
+    of last Friday?") and callers would otherwise have to fall back to
+    ``current_license_info``. The :func:`is_expired` /
+    :func:`is_expiring_at` helpers independently carry the "past-expiry"
+    / "exact-match" signals for callers that DO want to hide the row on
+    lapsed keys.
+
+    Pairs with :func:`license_expires_at` the way
+    :func:`days_until_expiry` pairs with :func:`license_expires_at`:
+    both derive from the same ``exp`` claim so they cannot disagree at
+    the day boundary. The perspective-epoch flavour lets a scheduled
+    audit tile answer "would we have warned yesterday? last week?"
+    without having to snapshot the license state at those times.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    scheduled audit job never crashes on a bad install.
+    """
+    if isinstance(epoch, bool):
+        # ``bool`` is a subclass of ``int``; refuse it explicitly so a
+        # caller that passes ``True`` doesn't silently ask "days until
+        # epoch 1?" and get a very negative number back.
+        return None
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        exp = license_expires_at()
+    except Exception as exc:
+        logger.debug("license: days_until_expiry_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(exp, int):
+        return None
+    try:
+        return (exp - wanted) // 86400
+    except Exception as exc:
+        logger.debug("license: days_until_expiry_at arithmetic failed: %s", exc)
+        return None
+
+
 def license_tier() -> str | None:
     """Scalar view onto the installed license's ``tier`` claim -- for a
     paywall tile / tier badge that wants ONE string rather than the whole
