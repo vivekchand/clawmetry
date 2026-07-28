@@ -1289,6 +1289,103 @@ def pro_installation_info() -> dict:
     }
 
 
+def pro_installed_at() -> int | None:
+    """Scalar view onto the ``installed_at`` field of the ``clawmetry-pro``
+    provisioning marker (``~/.clawmetry/pro_installed.json``) -- the epoch
+    timestamp the paid wheel was first laid down on this node -- for a
+    "pro installed: <date>" row that wants ONE integer rather than the
+    whole :func:`pro_installation_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to surface: the marker
+        file is missing (wheel was never provisioned OR was provisioned by
+        a pre-marker version of ClawMetry), the marker exists but has no
+        ``installed_at`` key, or the value carried by the marker is
+        non-numeric / negative.
+      * A positive epoch integer otherwise -- the exact timestamp written
+        by :func:`_write_pro_marker` at provision time.
+
+    Deliberately independent of ``importlib.metadata`` -- an operator can
+    have the marker on disk (wheel was provisioned yesterday) even when
+    Python cannot currently import ``clawmetry-pro`` (wheel was pip-
+    uninstalled since). That disagreement is exactly what a paywall-
+    debugging tile wants to see, so this scalar answers "when was the
+    marker last written?" without collapsing to :func:`pro_installed`.
+
+    Pairs with :func:`pro_install_age_days` the way
+    :func:`license_issued_at` pairs with :func:`license_age_days`: this
+    getter surfaces the raw epoch for a debug row, that helper answers the
+    "how old" derived integer without the caller having to compute
+    ``(now - installed_at) // 86400`` themselves.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    UI tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        marker = _read_pro_marker()
+    except Exception as exc:
+        logger.debug("license: pro_installed_at marker read failed: %s", exc)
+        return None
+    if not isinstance(marker, dict):
+        return None
+    installed_at = marker.get("installed_at")
+    if not isinstance(installed_at, (int, float)):
+        return None
+    if isinstance(installed_at, bool):
+        # ``bool`` is a subclass of ``int``; refuse it explicitly so a
+        # marker that somehow contains ``{"installed_at": true}`` collapses
+        # to ``None`` rather than surfacing as epoch 1.
+        return None
+    if installed_at <= 0:
+        return None
+    return int(installed_at)
+
+
+def pro_install_age_days() -> int | None:
+    """Scalar view onto how long ago the ``clawmetry-pro`` wheel was
+    provisioned on this node -- days since the ``installed_at`` field of
+    the provisioning marker -- for a support/audit tile that wants ONE
+    integer rather than computing ``(now - installed_at) // 86400`` at
+    every call site.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to derive: no marker
+        file, a marker with no ``installed_at`` key, or a marker whose
+        ``installed_at`` value is non-numeric / non-positive.
+      * A non-negative integer number of days otherwise. Zero on the day
+        of provisioning; grows monotonically thereafter.
+
+    Days are floor-divided from seconds ``(now - installed_at) // 86400``,
+    matching how :func:`license_age_days` derives its counterpart from the
+    signed ``iat`` claim so the two scalars never disagree at the day
+    boundary. Clamped to ``max(0, ...)`` to guard against clock skew (an
+    ``installed_at`` in the future would otherwise render as a negative
+    age and break ``f"{age} days old"`` formatting).
+
+    Pairs with :func:`pro_installed_at` the way :func:`license_age_days`
+    pairs with :func:`license_issued_at`: raw epoch for the debug row,
+    derived integer for the display tile, both reading the same marker so
+    a UI binding both cannot catch them disagreeing on the same install.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    scheduled audit tile never crashes on a bad install.
+    """
+    import time as _t
+
+    try:
+        installed = pro_installed_at()
+    except Exception as exc:
+        logger.debug("license: pro_install_age_days underlying read failed: %s", exc)
+        return None
+    if not isinstance(installed, int):
+        return None
+    try:
+        age = int((_t.time() - installed) // 86400)
+    except Exception as exc:
+        logger.debug("license: pro_install_age_days arithmetic failed: %s", exc)
+        return None
+    return age if age >= 0 else 0
+
 
 def license_nodes() -> int | None:
     """Scalar view onto the installed license's ``nodes`` claim -- the paid

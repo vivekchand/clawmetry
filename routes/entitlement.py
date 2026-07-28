@@ -8497,6 +8497,179 @@ def api_license_pro_installation():
         return jsonify({"installed": False, "version": None, "marker": {}})
 
 
+def _pro_install_snapshot() -> dict:
+    """Shared helper: read once, derive the quartet the two ``installed_at``-
+    derived endpoints both need (``installed_at``, ``age_days``,
+    ``marker_present``, ``installed``). Lives in the handler layer -- not
+    in :mod:`clawmetry.license` -- because ``marker_present`` /
+    ``installed`` are install-state facts rather than marker-payload
+    facts, and both endpoints below need them together so a UI cannot
+    catch them disagreeing on the same install.
+
+    ``installed_at`` mirrors :func:`clawmetry.license.pro_installed_at` --
+    the raw epoch surfaced by the marker, unmodified. ``age_days`` mirrors
+    :func:`clawmetry.license.pro_install_age_days` -- floor-divided from
+    seconds, clamped to ``max(0, ...)`` so a clock-skewed
+    ``installed_at`` in the future never renders as a negative age.
+
+    ``marker_present`` is deliberately independent of ``installed``: an
+    operator can have the marker on disk (wheel was provisioned
+    yesterday) even when Python cannot currently import
+    ``clawmetry-pro`` (wheel was pip-uninstalled since), and the paywall-
+    debug tile that binds these endpoints wants to see that disagreement
+    rather than have it collapsed into a single boolean.
+
+    Never raises: any underlying failure collapses to
+    ``{installed_at: None, age_days: None, marker_present: False,
+    installed: False}`` so callers keep the "no marker" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        installed_at = _lic.pro_installed_at()
+        age = _lic.pro_install_age_days()
+        installed = _lic.pro_installed()
+    except Exception as exc:
+        logger.debug("_pro_install_snapshot: underlying read failed: %s", exc)
+        return {
+            "installed_at": None,
+            "age_days": None,
+            "marker_present": False,
+            "installed": False,
+        }
+    marker_present = installed_at is not None
+    return {
+        "installed_at": installed_at,
+        "age_days": age,
+        "marker_present": marker_present,
+        "installed": bool(installed),
+    }
+
+
+@bp_entitlement.route("/api/license/pro-installed-at")
+def api_license_pro_installed_at():
+    """``GET /api/license/pro-installed-at`` -- scalar view of the
+    ``installed_at`` field of the ``clawmetry-pro`` provisioning marker
+    (``~/.clawmetry/pro_installed.json``), for a "pro installed:
+    <date>" row that wants ONE integer rather than the whole
+    ``/api/license/pro-installation`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "installed_at": <int|null>,    # epoch seconds; None if no marker
+          "age_days": <int|null>,        # days since provisioning
+          "marker_present": <bool>,      # is the marker file readable?
+          "installed": <bool>            # can Python import clawmetry-pro right now?
+        }
+
+    ``installed_at`` mirrors :func:`clawmetry.license.pro_installed_at`:
+
+      * ``null`` when the marker is missing (wheel was never provisioned
+        OR was provisioned by a pre-marker version of ClawMetry), when
+        the marker exists but has no ``installed_at`` key, or when the
+        value carried by the marker is non-numeric / non-positive.
+      * A positive epoch integer otherwise, unmodified from what
+        :func:`clawmetry.license._write_pro_marker` wrote at provision
+        time.
+
+    Deliberately independent of ``installed``: an operator can have the
+    marker on disk yet Python cannot currently import ``clawmetry-pro``
+    (wheel was pip-uninstalled since), and that disagreement is exactly
+    what a paywall-debugging tile needs to see rather than collapsing
+    both facts into one boolean. The ``installed`` field on this
+    envelope surfaces the live ``importlib.metadata`` probe so a caller
+    binding a single endpoint gets both facts side-by-side.
+
+    Pairs with ``/api/license/pro-install-age-days`` -- this endpoint
+    surfaces the raw epoch for a debug row, that endpoint answers the
+    "how old" gate without the caller having to do the arithmetic. The
+    two endpoints share :func:`_pro_install_snapshot` so a UI binding
+    both sees a consistent snapshot.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{installed_at: null, age_days: null, marker_present: false,
+    installed: false}`` (the "no marker" branch shape), matching the
+    never-crash posture of the surrounding license endpoints.
+    """
+    try:
+        return jsonify(_pro_install_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_pro_installed_at: error: %s", exc)
+        return jsonify(
+            {
+                "installed_at": None,
+                "age_days": None,
+                "marker_present": False,
+                "installed": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/pro-install-age-days")
+def api_license_pro_install_age_days():
+    """``GET /api/license/pro-install-age-days`` -- scalar view of how
+    long ago the ``clawmetry-pro`` wheel was provisioned (days since the
+    marker's ``installed_at``), for a support/audit tile that wants ONE
+    integer rather than computing ``(now - installed_at) // 86400`` at
+    the call site.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "age_days": <int|null>,        # days since provisioning
+          "installed_at": <int|null>,    # epoch seconds
+          "marker_present": <bool>,      # is the marker file readable?
+          "installed": <bool>            # can Python import clawmetry-pro right now?
+        }
+
+    ``age_days`` mirrors :func:`clawmetry.license.pro_install_age_days`:
+
+      * ``null`` when the marker is missing, has no ``installed_at``
+        key, or carries a non-numeric / non-positive value.
+      * A non-negative integer otherwise -- zero on the day of
+        provisioning, growing monotonically thereafter. Clamped to
+        ``max(0, ...)`` so a clock-skewed ``installed_at`` in the future
+        never renders as a negative age.
+
+    Days are floor-divided from seconds ``(now - installed_at) // 86400``,
+    matching how ``/api/license/age-days`` derives its counterpart from
+    the signed ``iat`` claim so the two scalars never disagree at the
+    day boundary.
+
+    Deliberately independent of ``installed`` (see
+    ``/api/license/pro-installed-at``): a marker on disk with the wheel
+    since uninstalled still surfaces its real ``age_days``. The
+    ``installed`` field independently carries the live-importability
+    signal for callers that DO want to hide the row on a broken
+    install.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{age_days: null, installed_at: null, marker_present: false,
+    installed: false}``.
+    """
+    try:
+        snap = _pro_install_snapshot()
+        return jsonify(
+            {
+                "age_days": snap["age_days"],
+                "installed_at": snap["installed_at"],
+                "marker_present": snap["marker_present"],
+                "installed": snap["installed"],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_pro_install_age_days: error: %s", exc)
+        return jsonify(
+            {
+                "age_days": None,
+                "installed_at": None,
+                "marker_present": False,
+                "installed": False,
+            }
+        )
+
+
 def _license_nodes_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two node-limit endpoints
     both need (``nodes``, ``has_license``, ``valid``). Lives in the handler
