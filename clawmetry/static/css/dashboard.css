@@ -89,7 +89,7 @@
   /* Force the per-turn summary onto its own row, full-width, indented past
      the time column so it visually attaches to the event above. */
   .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
-  .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; -webkit-line-clamp:unset; display:block; }
   .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
@@ -105,6 +105,10 @@
   .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
   .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
   .brain-detail { color:var(--text-secondary); flex:1; min-width:0; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
+  /* The server now sends the FULL event body (no 200-char strip). Keep the
+     collapsed feed scannable by line-clamping unexpanded rows; a click
+     expands to the complete text (rule above unclamps). */
+  .brain-event:not(.expanded) .brain-detail { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
   /* Plumbing rows (QUEUE-OPERATION) when revealed via toggle:
      visibly de-emphasized so they don't compete with real content. */
   .brain-event.brain-plumbing { opacity:0.55; font-size:11px; padding:2px 0; }

@@ -493,10 +493,23 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
         detail = _extract_brain_detail(r)
         evt_type = (r.get("event_type") or "").upper()
+        if evt_type == "THINKING" and not str(detail).strip():
+            # Claude Code (and siblings) persist extended thinking as an
+            # ENCRYPTED signature block — the text itself is never written to
+            # the transcript (live-verified: 633/633 thinking blocks on a real
+            # machine were signature-only). Label the row honestly instead of
+            # rendering an empty line that reads as a truncation bug.
+            detail = "(thinking encrypted by the runtime; no text stored)"
         row = {
             "time":       r.get("ts", ""),
             "type":       evt_type,
-            "detail":     str(detail)[:200],
+            # FULL detail — no serve-time cap. The founder hit MESSAGE rows cut
+            # at exactly 200 chars mid-word ("the full log should be visible
+            # without stripping anything"). Size is already bounded upstream:
+            # tool-result bodies are capped at ingest (64 KB) and message/
+            # thinking text is whatever the model actually wrote. Collapsed
+            # rows are line-clamped client-side; click expands to everything.
+            "detail":     str(detail),
             "src":        (r.get("session_id") or r.get("agent_id") or "")[:32],
             "sessionId":  r.get("session_id") or "",
             "agentId":    r.get("agent_id") or "main",
@@ -1011,7 +1024,7 @@ def api_brain_history():
                                 "source": source_id,
                                 "sourceLabel": source_label,
                                 "type": "RESULT",
-                                "detail": text[:300],
+                                "detail": text,
                                 "color": color,
                             }
                         )
@@ -1035,7 +1048,7 @@ def api_brain_history():
                                 "source": source_id,
                                 "sourceLabel": source_label,
                                 "type": "USER",
-                                "detail": text[:300],
+                                "detail": text,
                                 "color": color,
                                 "taskType": _classify_task_type(text),
                             }
@@ -1057,7 +1070,7 @@ def api_brain_history():
                                         "source": source_id,
                                         "sourceLabel": source_label,
                                         "type": "THINK",
-                                        "detail": thinking_text[:300],
+                                        "detail": thinking_text,
                                         "color": color,
                                     }
                                 )
@@ -1073,7 +1086,7 @@ def api_brain_history():
                                         "source": source_id,
                                         "sourceLabel": source_label,
                                         "type": "AGENT",
-                                        "detail": text[:300],
+                                        "detail": text,
                                         "color": color,
                                         "taskType": _classify_task_type(text),
                                     }
@@ -1727,27 +1740,27 @@ def api_brain_stream():
         return "TOOL"
 
     def extract_detail(tn, inp):
+        # FULL detail — no truncation (matches the brain-history copy; the
+        # founder asked for the full log with nothing stripped).
         tn = tn.lower()
         if not isinstance(inp, dict):
-            return str(inp)[:300]
+            return str(inp)
         if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
-            return (inp.get("command") or inp.get("action") or "")[:300]
+            return inp.get("command") or inp.get("action") or ""
         if "read" in tn:
-            return (inp.get("path") or inp.get("file_path") or "")[:300]
+            return inp.get("path") or inp.get("file_path") or ""
         if "write" in tn or "edit" in tn:
-            return (inp.get("path") or inp.get("file_path") or "")[:300]
+            return inp.get("path") or inp.get("file_path") or ""
         if "browser" in tn:
-            return (inp.get("url") or inp.get("targetUrl") or inp.get("action") or "")[
-                :300
-            ]
+            return inp.get("url") or inp.get("targetUrl") or inp.get("action") or ""
         if tn == "message":
-            return (inp.get("message") or inp.get("target") or "")[:300]
+            return inp.get("message") or inp.get("target") or ""
         if "search" in tn or "fetch" in tn:
-            return (inp.get("query") or inp.get("url") or "")[:300]
+            return inp.get("query") or inp.get("url") or ""
         if "subagent" in tn or "spawn" in tn:
-            return (inp.get("label") or str(inp.get("message", "")))[:300]
+            return inp.get("label") or str(inp.get("message", ""))
         vals = list(inp.values())
-        return (str(vals[0]) if vals else "")[:300]
+        return str(vals[0]) if vals else ""
 
     def _parse_jsonl_event(obj, source_id, source_label, color):
         """Parse a JSONL line into a brain event dict, or return None."""
@@ -1778,7 +1791,7 @@ def api_brain_stream():
                             "source": source_id,
                             "sourceLabel": source_label,
                             "type": "THINK",
-                            "detail": thinking_text[:300],
+                            "detail": thinking_text,
                             "color": color,
                         }
                 if btype == "text":
@@ -1789,7 +1802,7 @@ def api_brain_stream():
                             "source": source_id,
                             "sourceLabel": source_label,
                             "type": "AGENT",
-                            "detail": text[:300],
+                            "detail": text,
                             "color": color,
                             "taskType": _classify_task_type(text),
                         }
@@ -1827,7 +1840,7 @@ def api_brain_stream():
                     "source": source_id,
                     "sourceLabel": source_label,
                     "type": "USER",
-                    "detail": text[:300],
+                    "detail": text,
                     "color": color,
                     "taskType": _classify_task_type(text),
                 }
@@ -1921,7 +1934,7 @@ def api_brain_stream():
                                 tool_kw = m.group(1).lower()
                                 rest = m.group(2).strip()
                                 ev_type = tool_to_type(tool_kw)
-                                detail = rest.split("\n")[0][:300]
+                                detail = rest.split("\n")[0]
                                 events.append(
                                     {
                                         "time": ts,
