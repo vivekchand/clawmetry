@@ -79,14 +79,49 @@ def test_daemon_worker_checks_every_interval(monkeypatch):
     assert all(w == uc._update_check_interval_secs() for w in ev.waits[1:]), ev.waits
 
 
-def test_dashboard_worker_keeps_daily_cadence(monkeypatch):
-    """The dashboard role must NOT inherit the fast loop (it only shows the
-    banner; per-minute PyPI polls belong to the installing daemon only)."""
+def test_dashboard_worker_fast_by_default(monkeypatch):
+    """Since the 2026-07-28 founder directive the DASHBOARD is an installing
+    role too: with auto-update on (the default) it polls on the fast
+    cadence, because a local-only install (no daemon) has no other process
+    that could ever install the release."""
     uc = _uc()
     uc._process_role = "dashboard"
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     monkeypatch.setattr(uc, "_get_update_check_config",
                         lambda: {"enabled": True, "check_on_startup": False,
-                                 "check_daily": True})
+                                 "check_daily": True, "auto_update": True})
+    checks = []
+    monkeypatch.setattr(uc, "_check_for_update", lambda: checks.append(1))
+
+    class _Ev:
+        def __init__(self, ticks):
+            self.ticks = ticks
+            self.waits = []
+
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            self.ticks -= 1
+            return self.ticks < 0
+
+        def is_set(self):
+            return self.ticks < 0
+
+    ev = _Ev(ticks=4)
+    uc._update_check_worker(ev)
+    assert all(w == uc._update_check_interval_secs() for w in ev.waits[1:]), ev.waits
+    assert len(checks) == 3, "default-on dashboard must check on the fast cadence"
+
+
+def test_dashboard_worker_keeps_daily_cadence_when_opted_out(monkeypatch):
+    """With auto-update explicitly off, the dashboard keeps the gentle
+    banner-only cadence (no per-minute PyPI polls from a non-installing
+    process)."""
+    uc = _uc()
+    uc._process_role = "dashboard"
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    monkeypatch.setattr(uc, "_get_update_check_config",
+                        lambda: {"enabled": True, "check_on_startup": False,
+                                 "check_daily": True, "auto_update": False})
     checks = []
     monkeypatch.setattr(uc, "_check_for_update", lambda: checks.append(1))
 

@@ -10,6 +10,8 @@ tests are about the *gating*, not the pip/restart mechanics.
 from __future__ import annotations
 
 import importlib
+import os
+import time
 
 
 def _uc():
@@ -208,49 +210,142 @@ def test_env_kill_switch_blocks_auto_update(monkeypatch):
     assert calls == [], "CLAWMETRY_AUTO_UPDATE=0 must hard-disable auto-update"
 
 
-def test_dashboard_role_requires_explicit_opt_in(monkeypatch):
-    """The default-on policy is daemon-only: a dashboard process (often a
-    foreground terminal) must not pip-install + exit on the DEFAULT."""
+def test_dashboard_role_default_on_installs(monkeypatch):
+    """REGRESSION GUARD for the 2026-07-28 founder directive: a release must
+    reach EVERY install within minutes, so the dashboard role acts on the
+    default-on policy too. (Fails on the old daemon-only rail, which left
+    every local-only install — no daemon — permanently stale: the founder's
+    Windows demo box sat a full release behind with the banner reporting
+    update_available=true.)"""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     assert uc._process_role == "dashboard"  # reload resets the role
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
-    calls = []
-    _mock_self_update(monkeypatch, calls)
-    # Default True but NOT explicitly stored → dashboard must not act.
-    monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: False)
+    monkeypatch.setattr(uc, "_dashboard_supervised", lambda: False)
+    scheduled = []
+    monkeypatch.setattr(uc, "_schedule_exec_restart", lambda: scheduled.append("exec"))
+    monkeypatch.setattr(uc, "_schedule_windows_respawn", lambda: scheduled.append("respawn"))
+    calls, restarts = [], []
+    _mock_self_update(monkeypatch, calls, restarts=restarts)
     uc._maybe_auto_update("0.12.1", "0.12.2")
-    assert calls == [], "dashboard role must ignore the default-on policy"
-    # Explicit user opt-in → dashboard acts (pre-existing behaviour kept).
-    monkeypatch.setattr(uc, "_auto_update_explicitly_set", lambda: True)
-    uc._maybe_auto_update("0.12.1", "0.12.2")
-    assert calls == ["auto"], "explicit opt-in must still work in the dashboard"
+    assert calls == ["auto"], "dashboard role must install on the default-on policy"
+    # Unsupervised process must not exit-and-die: it restarts in place.
+    assert restarts == [False]
+    assert scheduled in (["exec"], ["respawn"])  # POSIX vs Windows runner
 
 
-def test_unsupervised_daemon_defers_restart(monkeypatch):
-    """A daemon with no launchd/systemd supervisor installs the new wheel but
-    must NOT exit (nothing would respawn it → ingest stops)."""
+def test_restart_plan_matrix():
+    """Every role/platform/supervision combination actively restarts."""
+    uc = _uc()
+    # Windows: always the detached respawn (no supervisor, no usable execv).
+    assert uc._restart_plan("daemon", "win32", False) == "respawn"
+    assert uc._restart_plan("dashboard", "win32", True) == "respawn"
+    # POSIX supervised: exit and let launchd/systemd respawn.
+    assert uc._restart_plan("daemon", "darwin", True) == "exit"
+    assert uc._restart_plan("dashboard", "linux", True) == "exit"
+    # POSIX unsupervised: in-place re-exec.
+    assert uc._restart_plan("daemon", "linux", False) == "exec"
+    assert uc._restart_plan("dashboard", "darwin", False) == "exec"
+
+
+def test_respawn_cmdline_console_script_vs_module(monkeypatch, tmp_path):
+    uc = _uc()
+    import sys as _sys
+    exe = tmp_path / "clawmetry.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(_sys, "argv", [str(exe), "--port", "8900"])
+    assert uc._respawn_cmdline() == [str(exe), "--port", "8900"], \
+        "console-script installs must relaunch via the launcher exe"
+    monkeypatch.setattr(_sys, "argv", ["dashboard.py", "--port", "8900"])
+    assert uc._respawn_cmdline() == [_sys.executable, "dashboard.py", "--port", "8900"], \
+        "module runs must relaunch via the interpreter"
+
+
+def test_update_lock_serializes_concurrent_updaters(monkeypatch, tmp_path):
+    """Daemon + dashboard both run the fast loop now; only one may pip at a
+    time in a shared environment."""
+    uc = _uc()
+    lock = tmp_path / "update.lock"
+    monkeypatch.setattr(uc, "_UPDATE_LOCK_PATH", str(lock))
+    assert uc._acquire_update_lock() is True
+    assert uc._acquire_update_lock() is False, "second acquire must skip"
+    uc._release_update_lock()
+    assert uc._acquire_update_lock() is True, "released lock must reacquire"
+    # Stale lock (crashed updater) is broken rather than wedging the fleet.
+    uc._release_update_lock()
+    lock.write_text("999 0")
+    old = time.time() - uc._UPDATE_LOCK_STALE_SECS - 60
+    os.utime(lock, (old, old))
+    assert uc._acquire_update_lock() is True, "stale lock must be broken"
+    uc._release_update_lock()
+
+
+def test_dashboard_fast_loop_gating(monkeypatch):
+    """The dashboard polls on the fast cadence iff auto-update is on."""
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    assert uc._process_role == "dashboard"
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    assert uc._fast_loop_active() is True, \
+        "default-on dashboard must poll on the install cadence"
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": False})
+    assert uc._fast_loop_active() is False, "opted-out dashboard keeps the banner cadence"
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "0")
+    assert uc._fast_loop_active() is False, "kill switch wins"
+    uc._process_role = "daemon"
+    assert uc._fast_loop_active() is True, "daemon always polls fast"
+
+
+def test_unsupervised_daemon_execs_in_place(monkeypatch):
+    """A daemon with no launchd/systemd supervisor installs the new wheel and
+    must NOT exit (nothing would respawn it → ingest stops); it re-execs the
+    process image in place instead (POSIX plan)."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: False)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exec")
+    scheduled = []
+    monkeypatch.setattr(uc, "_schedule_exec_restart", lambda: scheduled.append("exec"))
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls, restarts = [], []
     _mock_self_update(monkeypatch, calls, restarts=restarts)
     uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"]
-    assert restarts == [False], "unsupervised daemon must defer the restart"
+    assert restarts == [False], "unsupervised daemon must not exit-to-restart"
+    assert scheduled == ["exec"], "unsupervised daemon must re-exec onto the new wheel"
 
 
 def test_supervised_daemon_restarts(monkeypatch):
     uc = _uc()
     _as_daemon(uc, monkeypatch)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exit")
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     calls, restarts = [], []
     _mock_self_update(monkeypatch, calls, restarts=restarts)
     uc._maybe_auto_update("0.12.1", "0.12.2")
     assert calls == ["auto"]
     assert restarts == [True], "supervised daemon restarts to apply the wheel"
+
+
+def test_windows_always_respawns(monkeypatch):
+    """Windows has no supervisor: even a 'supervised-looking' process must use
+    the detached respawn, never exit-and-die."""
+    uc = _uc()
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    uc._process_role = "daemon"
+    monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "respawn")
+    scheduled = []
+    monkeypatch.setattr(uc, "_schedule_windows_respawn", lambda: scheduled.append("respawn"))
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    calls, restarts = [], []
+    _mock_self_update(monkeypatch, calls, restarts=restarts)
+    uc._maybe_auto_update("0.12.1", "0.12.2")
+    assert calls == ["auto"]
+    assert restarts == [False]
+    assert scheduled == ["respawn"]
 
 
 def test_entitled_plan_enables_auto_update(monkeypatch):

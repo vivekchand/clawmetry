@@ -29,10 +29,11 @@ _update_check_stop_event = threading.Event()
 
 # Which process this checker runs in: "dashboard" (default) or "daemon" (the
 # supervised sync daemon, set via start_update_check_thread(role="daemon")).
-# Default-on auto-update applies ONLY to the daemon role — the always-on,
-# launchd/systemd-supervised process where a restart is safe and invisible.
-# A dashboard process (often a foreground terminal) auto-installs only when
-# the user EXPLICITLY opted in via the settings toggle.
+# Default-on auto-update applies to EVERY role since the 2026-07-28 founder
+# directive (a release must reach every install on every OS within minutes);
+# the roles differ only in HOW the process restarts onto the new wheel — see
+# _restart_plan (supervised exit-and-respawn / POSIX in-place re-exec /
+# Windows detached respawn). CLAWMETRY_AUTO_UPDATE=0 is the kill switch.
 _process_role = "dashboard"
 
 CHANGELOG_URL = "https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md"
@@ -43,22 +44,6 @@ def _env_auto_update_disabled():
     regardless of the stored config (fleet operators / CI / debugging)."""
     val = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
     return val in ("0", "false", "no", "off")
-
-
-def _auto_update_explicitly_set():
-    """True when an ``auto_update`` row exists in the config table — i.e. a
-    user (or the entitled-plan sync) chose a value, as opposed to the
-    built-in default."""
-    try:
-        with _get_fleet_db_lock():
-            db = _get_fleet_db()
-            row = db.execute(
-                "SELECT value FROM update_check_config WHERE key='auto_update'"
-            ).fetchone()
-            db.close()
-        return row is not None
-    except Exception:
-        return False
 
 
 def _daemon_supervised():
@@ -78,6 +63,162 @@ def _daemon_supervised():
     except Exception:
         pass
     return False
+
+
+def _dashboard_supervised():
+    """Same probe for the DASHBOARD process: is a launchd plist / systemd user
+    unit present that would respawn it after an exit-to-restart? A foreground
+    ``clawmetry`` in a terminal has neither, and Windows never does."""
+    try:
+        from pathlib import Path
+        if sys.platform == "darwin":
+            return (Path.home() / "Library" / "LaunchAgents"
+                    / "com.clawmetry.dashboard.plist").exists()
+        if sys.platform.startswith("linux"):
+            unit = (Path.home() / ".config" / "systemd" / "user"
+                    / "clawmetry-dashboard.service")
+            return unit.exists() or bool(os.environ.get("INVOCATION_ID"))
+    except Exception:
+        pass
+    return False
+
+
+def _restart_plan(role: str, platform: str, supervised: bool) -> str:
+    """Pure decision: how does THIS process get onto the new wheel?
+
+    Returns one of:
+      * ``"exit"``    — install with restart=True; the process exits and the
+                        supervisor (launchd/systemd) respawns it on the new
+                        wheel. Only valid when supervised.
+      * ``"exec"``    — install with restart=False, then re-exec the same
+                        process image in place (POSIX, unsupervised). The
+                        terminal/parent sees nothing change.
+      * ``"respawn"`` — install with restart=False, then hand a detached
+                        helper the exact command line and exit; the helper
+                        relaunches it a few seconds later (Windows, which has
+                        neither a supervisor nor usable execv semantics).
+
+    Every branch actively restarts. The old behaviour — Windows and
+    unsupervised dashboards deferring "until the next manual start" — is
+    exactly how a node that nobody restarts stays months stale. The env kill
+    switches (CLAWMETRY_AUTO_UPDATE=0 / CLAWMETRY_NO_EXEC_RESTART=1) remain
+    the opt-outs; this function only picks the mechanism.
+    """
+    if platform.startswith("win"):
+        return "respawn"
+    if supervised:
+        return "exit"
+    return "exec"
+
+
+def _respawn_cmdline() -> list:
+    """The exact command line to relaunch THIS process. Console-script
+    installs relaunch via the (freshly pip-rewritten) launcher exe; module
+    runs relaunch via the interpreter + argv."""
+    argv0 = sys.argv[0] or ""
+    if argv0.lower().endswith(".exe") and os.path.exists(argv0):
+        return [argv0] + sys.argv[1:]
+    return [sys.executable] + sys.argv
+
+
+def _schedule_windows_respawn(delay_secs: float = 5.0) -> None:
+    """Windows self-restart: spawn a tiny detached helper that waits for this
+    process to exit (freeing the port), relaunches the exact command line
+    detached, then exit this process.
+
+    Windows has no launchd/systemd to respawn us and ``os.execv`` there does
+    not replace the process (it forks a sibling and returns the console to
+    the shell), so the only reliable way onto the new wheel is a delayed
+    detached relaunch. Console-script installs relaunch via the (freshly
+    pip-rewritten) ``clawmetry.exe``; module runs relaunch via
+    ``sys.executable`` + argv. The relaunched process is detached from the
+    original console, so its output goes to ``~/.clawmetry/restart.log``
+    rather than the (possibly long-gone) terminal.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        log.info("auto-update: windows respawn suppressed under pytest")
+        return
+    def _respawn():
+        try:
+            import subprocess
+            flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            cmd = _respawn_cmdline()
+            log_dir = os.path.expanduser("~/.clawmetry")
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except Exception:
+                pass
+            log_path = os.path.join(log_dir, "restart.log")
+            helper_src = (
+                "import subprocess,sys,time\n"
+                "time.sleep(float(sys.argv[1]))\n"
+                "out=open(sys.argv[2],'ab',buffering=0)\n"
+                "subprocess.Popen(sys.argv[3:],creationflags=0x208,"
+                "close_fds=True,stdin=subprocess.DEVNULL,stdout=out,stderr=out)\n"
+            )
+            subprocess.Popen(
+                [sys.executable, "-c", helper_src, str(delay_secs), log_path] + cmd,
+                creationflags=flags, close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            log.info("auto-update: windows respawn armed (delay=%.0fs) cmd=%s",
+                     delay_secs, cmd)
+            os._exit(0)
+        except Exception as exc:
+            global _auto_update_in_progress
+            _auto_update_in_progress = False
+            log.warning("auto-update: windows respawn failed (%s); new version "
+                        "applies on next manual start", exc)
+    t = threading.Timer(2.0, _respawn)
+    t.daemon = True
+    t.start()
+
+
+# Cross-process guard: on a standard install BOTH the daemon and the dashboard
+# now run the fast install loop, and two concurrent `pip install` runs in one
+# environment can corrupt each other. First process to grab the lock updates;
+# the other skips its cycle (its next check sees current==latest, and the
+# updater's restart already bounces the sibling service where one exists).
+_UPDATE_LOCK_PATH = os.path.expanduser("~/.clawmetry/update-in-progress.lock")
+_UPDATE_LOCK_STALE_SECS = 900  # a crashed updater must not wedge the fleet
+
+
+def _acquire_update_lock() -> bool:
+    """Atomically create the lock file. False when another live update holds
+    it; a stale lock (older than _UPDATE_LOCK_STALE_SECS) is broken."""
+    try:
+        os.makedirs(os.path.dirname(_UPDATE_LOCK_PATH), exist_ok=True)
+    except Exception:
+        pass
+    for _attempt in (1, 2):
+        try:
+            fd = os.open(_UPDATE_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"{os.getpid()} {time.time()}".encode())
+            finally:
+                os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                age = time.time() - os.path.getmtime(_UPDATE_LOCK_PATH)
+                if age > _UPDATE_LOCK_STALE_SECS:
+                    os.remove(_UPDATE_LOCK_PATH)
+                    continue  # retry the O_EXCL create once
+            except OSError:
+                pass
+            return False
+        except Exception:
+            # Filesystem weirdness must never block updates entirely.
+            return True
+    return False
+
+
+def _release_update_lock() -> None:
+    try:
+        os.remove(_UPDATE_LOCK_PATH)
+    except Exception:
+        pass
 
 
 def _live_current_version() -> str:
@@ -451,9 +592,17 @@ def _schedule_exec_restart(delay_secs: float = 2.0) -> None:
     (clawmetry/update_guard.py) still protects against a crash-looping
     wheel. Not used on Windows (execv semantics differ) — there the
     install stays deferred to the next manual start."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # A test that reaches this path must never replace the pytest
+        # process image two seconds later. Tests monkeypatch this function
+        # to assert scheduling; this guard is the belt for the ones that
+        # forget (the pre-change code armed a REAL execv timer from
+        # test_unsupervised_daemon_defers_restart).
+        log.info("auto-update: exec restart suppressed under pytest")
+        return
     def _reexec():
         try:
-            log.info("auto-update: re-exec restart (unsupervised daemon) "
+            log.info("auto-update: re-exec restart (unsupervised process) "
                      "argv=%s", sys.argv)
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as exc:  # pragma: no cover — post-exec unreachable
@@ -486,11 +635,15 @@ def _maybe_auto_update(current, target, latest=None):
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):
         return
-    # The default-on policy applies only to the supervised sync daemon. A
-    # dashboard process (frequently a foreground terminal session) must not
-    # pip-install + exit underneath the user unless they explicitly opted in.
-    if _process_role != "daemon" and not _auto_update_explicitly_set():
-        return
+    # Default-on now covers EVERY role on EVERY OS. The old rail — only the
+    # supervised daemon acts on the default — meant a local-only install
+    # (dashboard, no daemon) NEVER self-updated: the founder's own Windows
+    # demo box sat on 0.12.573 for a full release cycle with the banner
+    # politely reporting update_available=true (2026-07-28). The safety
+    # concern behind the old rail ("don't pip-install + exit underneath a
+    # foreground user") is addressed by _restart_plan: unsupervised
+    # processes re-exec in place (POSIX) or detach-respawn (Windows), they
+    # do not exit-and-die. CLAWMETRY_AUTO_UPDATE=0 remains the kill switch.
     if not target or not _version_gt(target, current):
         return
     # Failed-install backoff: with the 60s check loop, a target whose pip
@@ -499,23 +652,21 @@ def _maybe_auto_update(current, target, latest=None):
     _retry_at = _failed_update_attempts.get(str(target))
     if _retry_at is not None and time.monotonic() < _retry_at:
         return
-    # An UNSUPERVISED daemon (no launchd plist / systemd unit — containers,
-    # kubectl-exec wrappers, a manual `python -m clawmetry.sync`) installs
-    # the wheel with restart=False, then re-execs its own process image so
-    # the new build actually starts running (previously it kept the old
-    # wheel in memory indefinitely — a containerized node stayed stale until
-    # someone bounced the pod by hand). Windows keeps the old
-    # install-and-defer behavior; the env kill switch restores it anywhere.
-    restart = True
-    exec_restart = False
-    if _process_role == "daemon" and not _daemon_supervised():
-        restart = False
-        exec_restart = (not sys.platform.startswith("win")
-                        and not _exec_restart_disabled())
+    supervised = (_daemon_supervised() if _process_role == "daemon"
+                  else _dashboard_supervised())
+    plan = _restart_plan(_process_role, sys.platform, supervised)
+    if plan == "exec" and _exec_restart_disabled():
+        plan = "defer"
+    restart = plan == "exit"
+    # Two fast loops (daemon + dashboard) share one environment; only one may
+    # pip at a time. The loser skips — its next 60s check sees current==latest.
+    if not _acquire_update_lock():
+        log.info("auto-update: another process is updating this install; skipping cycle")
+        return
     _auto_update_in_progress = True
     log.info("auto-update: upgrading clawmetry v%s -> v%s (latest available v%s, "
-             "restart=%s, exec_restart=%s)",
-             current, target, latest or target, restart, exec_restart)
+             "role=%s, plan=%s)",
+             current, target, latest or target, _process_role, plan)
     try:
         from routes.meta import perform_self_update
         payload, _status = perform_self_update(
@@ -532,16 +683,37 @@ def _maybe_auto_update(current, target, latest=None):
                     None,
                 )
             _auto_update_in_progress = False  # allow retry; no restart was scheduled
+            _release_update_lock()
             return
         _failed_update_attempts.pop(str(target), None)
-        if exec_restart:
+        _release_update_lock()
+        if plan == "exec":
             _schedule_exec_restart()
+        elif plan == "respawn":
+            _schedule_windows_respawn()
+        elif plan == "defer":
+            log.info("auto-update: installed v%s; restart deferred "
+                     "(CLAWMETRY_NO_EXEC_RESTART set)", target)
     except Exception as exc:
         log.warning("auto-update: error during upgrade: %s", exc)
         _failed_update_attempts[str(target)] = (
             time.monotonic() + _autoupdate_retry_secs()
         )
         _auto_update_in_progress = False
+        _release_update_lock()
+
+
+def _fast_loop_active() -> bool:
+    """Should this process poll PyPI on the fast (install) cadence?
+
+    Daemon: always. Dashboard: whenever auto-update is effectively on —
+    which is the default. With the kill switch (CLAWMETRY_AUTO_UPDATE=0) or
+    a stored auto_update=false, the dashboard drops to the banner-only
+    daily cadence."""
+    if _process_role == "daemon":
+        return True
+    return (not _env_auto_update_disabled()
+            and _get_update_check_config().get("auto_update", True))
 
 
 def _update_check_worker(stop_event):
@@ -553,10 +725,16 @@ def _update_check_worker(stop_event):
     schedule (founder call 2026-07-10; the screenshot trigger was a hosted
     feature telling a user their node would update "within about two days").
 
-    DASHBOARD role: unchanged gentle cadence — startup check + one banner
-    check per day after 9AM. The dashboard only shows the banner; the
-    daemon is the process that installs, and on the standard install its
-    fast loop keeps the shared check-history fresh for the banner anyway.
+    DASHBOARD role: same fast loop whenever auto-update is effectively on.
+    A local-only install (no sync daemon — every Windows box before
+    `clawmetry connect`, and any `pip install clawmetry && clawmetry`) has
+    no other process that could install, so the old daily-9AM banner cadence
+    meant those nodes were never on the current release (the founder's
+    Windows demo machine stayed a full release behind with the banner
+    dutifully reporting update_available=true, 2026-07-28). The bar is: a
+    release reaches EVERY install, on every OS, within minutes. When
+    auto-update is off (CLAWMETRY_AUTO_UPDATE=0 or stored config), the
+    dashboard keeps the gentle banner-only cadence.
     """
     # Initial check on startup (after a boot-settle delay; interruptible).
     if stop_event.wait(60):
@@ -566,31 +744,28 @@ def _update_check_worker(stop_event):
     if config.get("check_on_startup", True):
         _check_for_update()
 
-    if _process_role == "daemon":
-        while not stop_event.is_set():
+    last_check_day = None
+    while not stop_event.is_set():
+        if _fast_loop_active():
             if stop_event.wait(_update_check_interval_secs()):
                 return
             config = _get_update_check_config()
             if config.get("enabled", True):
                 _check_for_update()
-        return
+            continue
 
-    # Dashboard role: daily banner checks
-    last_check_day = None
-    while not stop_event.is_set():
+        # Banner-only cadence (auto-update explicitly off): one check per
+        # day after 9AM local, re-evaluating hourly (config can flip the
+        # fast loop back on without a restart).
         now = datetime.now(timezone.utc)
         current_day = now.date()
-
         config = _get_update_check_config()
         if config.get("check_daily", True) and config.get("enabled", True):
-            if last_check_day != current_day:
-                # Check around 9 AM local time
-                if now.hour >= 9:
-                    _check_for_update()
-                    last_check_day = current_day
-
-        # Check every hour
-        stop_event.wait(3600)
+            if last_check_day != current_day and now.hour >= 9:
+                _check_for_update()
+                last_check_day = current_day
+        if stop_event.wait(3600):
+            return
 
 
 def start_update_check_thread(role=None):
