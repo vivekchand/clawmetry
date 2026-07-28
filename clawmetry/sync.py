@@ -1345,8 +1345,31 @@ def _sync_allowed() -> bool:
     """Gate for large blob uploads. Heartbeats + approvals/alerts polls
     bypass this — they MUST keep firing so we detect the upgrade (or, for
     KiloClaw-provisioned accounts, the moment the user clicks "View
-    Observability" and the cloud flips reason='intent_pending' off)."""
-    return _TRIAL_STATE.get("sync_allowed", True)
+    Observability" and the cloud flips reason='intent_pending' off).
+
+    A valid SELF-HOSTED license overrides a cloud "paused" verdict. The
+    cloud's ``sync_allowed=False`` reflects the CLOUD ACCOUNT's plan, but
+    this flag also gates LOCAL DuckDB ingest (sync_family_runtimes and
+    every other sync_* function), so a node whose old cloud account said
+    ``trial_expired`` refused to ingest Claude Code into its OWN local
+    store even while holding a freshly activated local trial key — the
+    entitlement resolver said Trial, the daemon said paused, and the
+    Activity tab stayed empty (founder live-hit 2026-07-28). The signed
+    key IS the entitlement (Ed25519, verified offline, license-first in
+    the resolution order); the cloud remains free to refuse uploads
+    server-side for its own capacity reasons.
+    """
+    if _TRIAL_STATE.get("sync_allowed", True):
+        return True
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        if ent.source == "license" and ent.is_paid() and not ent.expired():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def get_machine_id() -> str:
@@ -17559,7 +17582,23 @@ def run_daemon() -> None:
     except Exception as _ext_e:
         log.warning("extensions load_plugins failed: %s", _ext_e)
 
-    config = load_config()
+    try:
+        config = load_config()
+    except FileNotFoundError:
+        # LOCAL-ONLY mode: no ~/.clawmetry/config.json means the user never
+        # ran `clawmetry connect` — which must not stop the daemon from
+        # ingesting into the LOCAL store. Before this fallback, a machine on
+        # a self-hosted trial (Claude Code detected, license active, no
+        # cloud account) crash-looped with "Run: clawmetry connect", so the
+        # product the trial unlocked could never show data (founder
+        # live-hit 2026-07-28). Config stays IN MEMORY only: writing a
+        # config.json here would make `clawmetry status` (which keys
+        # "Connected" off the file's existence) lie about cloud sync.
+        import socket as _sock
+
+        config = {"api_key": "", "node_id": _sock.gethostname() or "local"}
+        log.info("local-only mode: no cloud config — ingesting to the local "
+                 "store only (run `clawmetry connect` to add cloud sync)")
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
     if not nid:

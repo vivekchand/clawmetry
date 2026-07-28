@@ -2440,17 +2440,31 @@ def _cmd_status(args) -> None:
     # the cloud on a Trial/Pro account — so we read the daemon's plan cache.
     try:
         print()
-        # Is this node's account entitled? (daemon mirrors the cloud plan here.)
+        # Is this node entitled? Resolve through clawmetry.entitlements — the
+        # SAME source the dashboard and gate use (license.key first, cloud
+        # plan cache second). Reading only cloud_plan.json here made status
+        # contradict itself on a self-hosted trial: "License: Trial" in the
+        # header while this gate said "FREE plan, NOT syncing" because the
+        # user's OLD cloud account was trial_expired (founder live-hit
+        # 2026-07-28).
         _entitled = False
         _plan = ""
         try:
-            import json as _j2
-            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
-            if _cp.is_file():
-                _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
-                _entitled = _plan not in ("", "cloud_free", "free")
+            from clawmetry import entitlements as _ent_st
+            _e = _ent_st.get_entitlement(force=True)
+            _entitled = bool(_e.is_paid() and not _e.expired())
+            _plan = _e.tier or ""
         except Exception:
-            pass
+            # Fallback: the old cloud-plan cache read (entitlements missing
+            # on a very old install).
+            try:
+                import json as _j2
+                _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+                if _cp.is_file():
+                    _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+                    _entitled = _plan not in ("", "cloud_free", "free")
+            except Exception:
+                pass
         _prover = None
         try:
             from clawmetry.license import _pro_installed_version as _pv

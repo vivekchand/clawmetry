@@ -31,12 +31,54 @@ key, and no network.
 """
 
 import json
+import os
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 
 from flask import Blueprint, jsonify, request
 
 bp_trial = Blueprint("trial", __name__)
+
+
+def _ensure_local_daemon() -> None:
+    """Best-effort: spawn the sync daemon detached so ingestion starts now.
+
+    Safe to call when a daemon is already running — run_daemon() checks the
+    pid lock and exits immediately. Detach semantics mirror the CLI's
+    _start_subprocess: POSIX gets start_new_session, Windows gets
+    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP so the daemon survives the
+    dashboard (and its console) exiting. Never raises.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        # Tests assert the spawn via monkeypatched Popen; never launch a
+        # real daemon out of the test runner's sandbox.
+        return
+    try:
+        log_dir = os.path.expanduser("~/.clawmetry")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except Exception:
+            pass
+        log_fh = open(os.path.join(log_dir, "sync.log"), "a")
+        kwargs = {"stdin": subprocess.DEVNULL, "stdout": log_fh,
+                  "stderr": subprocess.STDOUT, "close_fds": True}
+        if os.name == "nt":
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen([sys.executable, "-m", "clawmetry.sync"], **kwargs)
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+    except Exception:
+        # A missed spawn must never fail the activation; the daemon also
+        # starts on the next `clawmetry` launch / connect.
+        pass
 
 # The trial-mint endpoint lives on the license server (same app that hosts
 # /api/license/activate). clawmetry.license._cloud_base honours
@@ -96,6 +138,15 @@ def api_trial_activate():
     ok, msg = _lic.activate(key, actor="local-trial")
     if not ok:
         return jsonify({"ok": False, "error": msg}), 502
+
+    # The trial is only real to the user when their runtime's data actually
+    # shows up. Ingestion is the sync daemon's job, and a local-only install
+    # has never started one — so activation without this spawn left the
+    # Activity tab empty ("we don't seem to have started trial of pro",
+    # founder live-hit 2026-07-28, 3 detected Claude Code sessions, zero
+    # ingested). run_daemon() itself exits if another instance already holds
+    # the pid lock, so the spawn is idempotent.
+    _ensure_local_daemon()
 
     try:
         from clawmetry import entitlements as _ent

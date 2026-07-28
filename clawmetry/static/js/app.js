@@ -859,6 +859,18 @@ async function checkAgentPresence() {
   try {
     var data = await fetch('/api/agent-presence').then(function(r){return r.json();});
     var noAgent = !!(data && data.no_agent === true);
+    // Detected runtimes that are ALL entitled (e.g. Claude Code right after
+    // a trial activation) are being watched — telling that user to "Install
+    // OpenClaw or NVIDIA NemoClaw to start seeing data" is wrong twice over
+    // (they have an agent, and it IS covered). Treat as agent-present:
+    // suppress this banner and let the data arrive. (Founder live-hit
+    // 2026-07-28: trial active, 3 Claude Code sessions detected, banner
+    // still pitched installing a second agent.)
+    var _detected = (data && data.detected_runtimes) || [];
+    if (noAgent && _detected.length > 0 &&
+        _detected.every(function(r){ return r && r.entitled; })) {
+      noAgent = false;
+    }
     if (noAgent) {
       // No OpenClaw, no NemoClaw, no local data — show the persistent
       // empty-state banner and hide the first-heartbeat one so we don't
