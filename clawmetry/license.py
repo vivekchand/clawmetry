@@ -898,6 +898,8 @@ def inspect_key(key: str) -> dict | None:
         tier_in = str(payload.get("tier", "pro")).strip().lower()
         # Mirror parse_license: known tiers render as-is, unknown -> pro.
         tier = tier_in if tier_in in ("enterprise", "starter") else "pro"
+        iat = payload.get("iat")
+        issued_at = int(iat) if isinstance(iat, (int, float)) else None
         return {
             "valid": not expired,
             "status": "expired" if expired else "active",
@@ -905,6 +907,7 @@ def inspect_key(key: str) -> dict | None:
             "nodes": int(payload.get("nodes", 1) or 1),
             "sub": str(payload.get("sub", "")),
             "exp": exp,
+            "issued_at": issued_at,
             "days_left": days_left,
             # Trust-anchor identity is payload-independent — same value as
             # current_license_info() populates on every file-exists branch, so
@@ -974,6 +977,7 @@ def current_license_info() -> dict | None:
                 "nodes": None,
                 "sub": None,
                 "exp": None,
+                "issued_at": None,
                 "days_left": None,
                 "pubkey_fingerprint_sha256": pubkey_fp,
                 "permissions_safe": perms_safe,
@@ -985,6 +989,8 @@ def current_license_info() -> dict | None:
         if isinstance(exp, (int, float)):
             days_left = int((exp - _t.time()) // 86400)
             expired = _t.time() > exp
+        iat = payload.get("iat")
+        issued_at = int(iat) if isinstance(iat, (int, float)) else None
         return {
             "valid": not expired,
             "status": "expired" if expired else "active",
@@ -992,6 +998,7 @@ def current_license_info() -> dict | None:
             "nodes": payload.get("nodes", 1),
             "sub": payload.get("sub", ""),
             "exp": exp,
+            "issued_at": issued_at,
             "days_left": days_left,
             "pubkey_fingerprint_sha256": pubkey_fp,
             "permissions_safe": perms_safe,
@@ -1597,3 +1604,89 @@ def license_file_mode() -> str | None:
     except Exception as exc:
         logger.debug("license: license_file_mode read failed: %s", exc)
         return None
+
+
+def license_issued_at() -> int | None:
+    """Scalar view onto the installed license's ``iat`` claim -- the epoch
+    timestamp the key was signed at -- for a "license issued: <date>" row
+    that wants ONE integer rather than the whole
+    :func:`current_license_info` envelope.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface: no license
+        file on disk, an invalid signature (the payload can't be trusted --
+        an attacker could stuff any ``iat`` into an unsigned body), OR a
+        signed payload whose ``iat`` claim is absent / non-numeric.
+      * A positive epoch integer otherwise -- the exact timestamp carried
+        by the signed payload, unmodified.
+
+    Deliberately lenient on expiry, unlike :func:`license_tier` /
+    :func:`license_nodes` / :func:`license_subject`: an expired but
+    signature-valid key still carries a meaningful ``iat`` (support
+    scenario: "how old is this lapsed key?") and callers would otherwise
+    have to fall back to ``/api/license/status``. Mirrors the "works on
+    expired keys" posture of :func:`days_until_expiry`, which continues to
+    return signed integer days past expiry so a UI can render "expired 12
+    days ago" without special-casing.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    UI tile bound to this helper never breaks on a partial install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_issued_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if info.get("status") == "invalid":
+        # Invalid-signature branch: payload cannot be trusted, refuse to
+        # surface any payload-derived claim (mirrors the tier / nodes /
+        # subject scalars). Expired-but-signed keys still carry a
+        # meaningful ``iat`` so we do NOT refuse them here.
+        return None
+    issued = info.get("issued_at")
+    return int(issued) if isinstance(issued, int) else None
+
+
+def license_age_days() -> int | None:
+    """Scalar view onto the installed license's age -- days since the
+    ``iat`` claim -- for a support/audit tile that wants ONE integer
+    rather than computing ``(now - iat) // 86400`` at every call site.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to derive: no license
+        file, an invalid signature, or a signed payload whose ``iat``
+        claim is absent / non-numeric.
+      * A non-negative integer number of days otherwise. Zero on the day
+        of issuance; grows monotonically thereafter.
+
+    Days are floor-divided from seconds (``(now - iat) // 86400``),
+    matching how :func:`days_until_expiry` derives its counterpart from
+    ``(exp - now)`` so the two scalars never disagree at the day
+    boundary. Clamped to ``max(0, ...)`` to guard against clock skew
+    (``iat`` in the future would otherwise render as a negative age).
+
+    Pairs with :func:`license_issued_at` the way :func:`days_until_expiry`
+    pairs with the raw ``exp`` claim on :func:`current_license_info` --
+    the raw scalar surfaces the epoch, this one surfaces the caller-
+    friendly derived integer without either side having to do the arithmetic.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    scheduled audit tile never crashes on a bad install.
+    """
+    import time as _t
+
+    try:
+        issued = license_issued_at()
+    except Exception as exc:
+        logger.debug("license: license_age_days underlying read failed: %s", exc)
+        return None
+    if not isinstance(issued, int):
+        return None
+    try:
+        age = int((_t.time() - issued) // 86400)
+    except Exception as exc:
+        logger.debug("license: license_age_days arithmetic failed: %s", exc)
+        return None
+    return age if age >= 0 else 0

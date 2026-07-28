@@ -9032,6 +9032,170 @@ def api_license_file_mode():
         )
 
 
+def _license_issued_snapshot() -> dict:
+    """Shared helper: read once, derive the quartet the two ``iat``-derived
+    endpoints both need (``issued_at``, ``age_days``, ``has_license``,
+    ``valid``). Lives in the handler layer -- not in
+    :mod:`clawmetry.license` -- because ``has_license`` is an install-state
+    fact rather than a license-payload fact, and both endpoints below need
+    the pair together so a UI cannot catch them disagreeing on
+    ``has_license`` for the same install.
+
+    Deliberately lenient on expiry, matching the ``license_issued_at`` /
+    ``license_age_days`` posture: a signed-but-lapsed key still surfaces
+    its real ``issued_at`` / ``age_days`` so a support/audit tile can
+    render "issued 800 days ago" without special-casing the expired
+    branch. The ``valid`` field independently carries the "signature-valid
+    AND not expired" signal for callers that DO want to hide the row on
+    lapsed keys.
+
+    Never raises: any underlying failure collapses to
+    ``{issued_at: None, age_days: None, has_license: False, valid: False}``
+    so callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        info = _lic.current_license_info()
+        issued = _lic.license_issued_at()
+        age = _lic.license_age_days()
+    except Exception as exc:
+        logger.debug("_license_issued_snapshot: underlying read failed: %s", exc)
+        return {
+            "issued_at": None,
+            "age_days": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(info, dict):
+        return {
+            "issued_at": None,
+            "age_days": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "issued_at": issued,
+        "age_days": age,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/issued-at")
+def api_license_issued_at():
+    """``GET /api/license/issued-at`` -- scalar view of the installed
+    license's ``iat`` claim (epoch seconds), for a "license issued: <date>"
+    row that wants ONE integer rather than the whole
+    ``/api/license/status`` envelope.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "issued_at": <int|null>,   # epoch seconds; None if untrusted
+          "age_days": <int|null>,    # days since issuance
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``issued_at`` mirrors :func:`clawmetry.license.license_issued_at`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``iat`` into an unsigned body), OR when the signed payload has
+        no ``iat`` claim.
+      * A positive epoch integer otherwise, unmodified from the signed
+        payload.
+
+    Deliberately lenient on expiry, unlike ``/api/license/nodes`` and
+    ``/api/license/tier``: a signed-but-lapsed key still surfaces its
+    real ``issued_at`` so a support tile can render "issued 800 days ago"
+    on an expired key. The ``valid`` field independently carries the
+    "signature-valid AND not expired" signal for callers that DO want to
+    hide the row on lapsed keys.
+
+    Pairs with ``/api/license/age-days`` -- this endpoint surfaces the
+    raw epoch for a debug row, that endpoint answers the "how old" gate a
+    UI tile needs without the caller having to do the arithmetic. The two
+    endpoints share :func:`_license_issued_snapshot` so a UI binding both
+    sees a consistent snapshot.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{issued_at: null, age_days: null, has_license: false, valid: false}``
+    (the OSS-free branch shape), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    try:
+        return jsonify(_license_issued_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_issued_at: error: %s", exc)
+        return jsonify(
+            {
+                "issued_at": None,
+                "age_days": None,
+                "has_license": False,
+                "valid": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/age-days")
+def api_license_age_days():
+    """``GET /api/license/age-days`` -- scalar view of the installed
+    license's age (days since the ``iat`` claim), for a support/audit
+    tile that wants ONE integer rather than computing
+    ``(now - iat) // 86400`` at the call site.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "age_days": <int|null>,    # days since issuance; None if untrusted
+          "issued_at": <int|null>,   # epoch seconds
+          "has_license": <bool>,     # is a license file installed at all?
+          "valid": <bool>            # signature-valid AND not expired
+        }
+
+    ``age_days`` mirrors :func:`clawmetry.license.license_age_days`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch, or when the signed payload has no ``iat`` claim.
+      * A non-negative integer otherwise -- zero on the day of issuance,
+        growing monotonically thereafter. Clamped to ``max(0, ...)`` so a
+        clock-skew ``iat`` in the future never renders as a negative age.
+
+    Days are floor-divided from seconds ``(now - iat) // 86400``,
+    matching how ``/api/license/days-until-expiry`` derives its
+    counterpart from ``(exp - now)`` so the two scalars never disagree at
+    the day boundary.
+
+    Deliberately lenient on expiry (see ``/api/license/issued-at``): a
+    signed-but-lapsed key still surfaces its real ``age_days``. The
+    ``valid`` field independently carries the "signature-valid AND not
+    expired" signal for callers that want to hide the row on lapsed keys.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{age_days: null, issued_at: null, has_license: false, valid: false}``.
+    """
+    try:
+        snap = _license_issued_snapshot()
+        return jsonify(
+            {
+                "age_days": snap["age_days"],
+                "issued_at": snap["issued_at"],
+                "has_license": snap["has_license"],
+                "valid": snap["valid"],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_age_days: error: %s", exc)
+        return jsonify(
+            {
+                "age_days": None,
+                "issued_at": None,
+                "has_license": False,
+                "valid": False,
+            }
+        )
 
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
