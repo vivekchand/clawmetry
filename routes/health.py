@@ -581,7 +581,7 @@ def compute_gateway_health(
           "uptime_seconds": int | null,
           "rss_mb": float | null,
           "cpu_pct": float | null,
-          "status": "healthy" | "warning" | "critical" | "not_running",
+          "status": "healthy" | "warning" | "critical" | "not_running" | "externally_supervised",
           "memory_threshold_mb": 900,
         }
     """
@@ -600,6 +600,8 @@ def compute_gateway_health(
         except Exception:
             pid = None
     if pid is None:
+        if os.environ.get("OPENCLAW_SUPERVISOR_MODE") == "external":
+            payload["status"] = "externally_supervised"
         return payload
 
     vitals = None

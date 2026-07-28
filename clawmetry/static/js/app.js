@@ -12775,6 +12775,8 @@ async function loadSystemHealth() {
         gwDot = '🟡'; gwLabel = 'Warning'; gwColor = '#f59e0b';
       } else if (gwStatus === 'healthy') {
         gwDot = '🟢'; gwLabel = 'Healthy'; gwColor = 'var(--text-success,#22c55e)';
+      } else if (gwStatus === 'externally_supervised') {
+        gwDot = '🟡'; gwLabel = 'Supervised pause'; gwColor = '#f59e0b';
       } else {
         gwDot = '⚫'; gwLabel = 'Not running'; gwColor = 'var(--text-muted)';
       }
