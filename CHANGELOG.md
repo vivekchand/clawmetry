@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: the Notifications channel manager works self-hosted (#4178) (2026-07-29)
+- **Why:** the Notifications tab (the delivery-destination manager Alerts and Approvals use) hard-locked behind a cloud signup and only recognized cloud accounts, so enabled alert rules said "no channels" with no way to add one - even on a validly entitled self-hosted trial.
+- **What:** local-first tier resolution; a local channel adapter over /api/alert-channels so Slack, Telegram, and PagerDuty connect, edit, test, and deliver entirely from this machine (telegram keys newly accepted; the local test endpoint gains telegram and pagerduty targets); Alerts reads its channel chips from the same local config. Email and Phone honestly remain cloud-only.
+- **Verified:** live on the affected machine: no signup lock, five channel cards, plan trial; a telegram config saved locally and the local test attempted real delivery. Guard tests pin the adapter and the local-first resolution.
+
 ### Feat: alerts and approvals fully work self-hosted, gated by the real trial lifecycle (#4172, #4173, #4171) (2026-07-28)
 - **Why:** the Alerts tab only recognized cloud accounts, so a machine holding a valid self-hosted trial key got a "Sign up for ClawMetry Cloud" modal selling it the trial it already had; and in grace mode an EXPIRED trial remained a permanent unlock because the permissive branch ran before any expiry check. Founder directive: alerts and approvals must work self-hosted, stop at trial expiry, and continue on a fully paid key.
 - **What:** the Alerts tab resolves the LOCAL entitlement first and, when entitled, reads and writes rules through the local routes (cloud vocabulary accepted and mapped); Approvals was already local and properly gated. Grace mode now never covers an expired entitlement, so the whole paid surface (alerts, approvals, paid runtime watch) dies when the trial lapses and lives indefinitely on a paid key, while never-entitled installs keep full grace. Also carries #4171: the Windows update lock rides through the helper handoff (no more concurrent sibling pips) with a propagation-sized retry ladder.
