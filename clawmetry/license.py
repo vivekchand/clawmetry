@@ -1649,6 +1649,60 @@ def license_issued_at() -> int | None:
     return int(issued) if isinstance(issued, int) else None
 
 
+def is_pubkey_fingerprint(fp: str) -> bool:
+    """Boolean gate for "is this install verifying against pubkey <FP>?" UIs.
+
+    Returns ``True`` iff :func:`pubkey_fingerprint` resolves to a non-empty
+    SHA-256 hex string AND ``fp`` matches it under a tolerant normalisation:
+
+      * whitespace stripped on both sides,
+      * lowercased (SHA-256 hex is case-insensitive),
+      * ``:`` separators removed -- many display formats print
+        fingerprints as ``ab:cd:ef:...`` and an operator comparing a
+        pasted string against the canonical one should not have to strip
+        colons themselves,
+      * short-form (16-char, matching :func:`pubkey_info`'s
+        ``fingerprint_short``) also matches if it is a prefix of the
+        full digest, so a UI can accept either the full digest or the
+        short-form printed on ``/api/license/pubkey``.
+
+    Every other state returns ``False``: unparseable embedded PEM
+    (fingerprint helper collapses to ``None``), non-string / empty input,
+    or a normalised digest that simply differs from the trust anchor.
+    Never raises; every underlying failure returns ``False`` so a
+    scheduled trust-anchor audit never crashes on a bad install.
+
+    Pairs with :func:`pubkey_fingerprint` the way :func:`is_subject`
+    pairs with :func:`license_subject` -- the scalar reports the raw
+    hex digest for a badge tile, this bool answers the yes/no question
+    a supply-chain / trust-anchor audit needs without the caller having
+    to normalise the string themselves.
+    """
+    try:
+        requested = str(fp).strip().lower().replace(":", "")
+    except Exception:
+        return False
+    if not requested:
+        return False
+    # Only hex is valid -- reject accidental non-hex input up-front so
+    # ``is_pubkey_fingerprint("not a fingerprint")`` collapses to ``False``
+    # instead of doing a full comparison against the real digest.
+    if not all(c in "0123456789abcdef" for c in requested):
+        return False
+    try:
+        actual = pubkey_fingerprint()
+    except Exception:
+        return False
+    if not isinstance(actual, str) or not actual:
+        return False
+    actual_norm = actual.strip().lower()
+    if len(requested) == 64:
+        return actual_norm == requested
+    if len(requested) == 16:
+        return actual_norm.startswith(requested)
+    return False
+
+
 def license_age_days() -> int | None:
     """Scalar view onto the installed license's age -- days since the
     ``iat`` claim -- for a support/audit tile that wants ONE integer

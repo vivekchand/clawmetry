@@ -9344,6 +9344,158 @@ def api_license_is_state():
     )
 
 
+def _license_pubkey_fingerprint_snapshot() -> dict:
+    """Shared helper: read once, derive the trio the two pubkey-fingerprint
+    endpoints both need (``pubkey_fingerprint_sha256``,
+    ``pubkey_fingerprint_short``, ``valid``). Lives in the handler layer so a
+    UI binding both endpoints cannot catch them disagreeing on the trust
+    anchor for the same install.
+
+    ``valid`` here means the EMBEDDED PUBKEY parses -- distinct from
+    ``/api/license/valid`` (signature-valid + not expired). A tampered
+    ``_PUBLIC_KEY_PEM`` collapses ``valid`` to ``False`` even without any
+    license file installed, exactly matching the trust-anchor semantic a
+    supply-chain / attestation tile needs.
+
+    Never raises: any underlying failure collapses to
+    ``{pubkey_fingerprint_sha256: None, pubkey_fingerprint_short: None,
+    valid: False}`` so callers keep the "OSS-free" branch shape.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        fp = _lic.pubkey_fingerprint()
+    except Exception as exc:
+        logger.debug(
+            "_license_pubkey_fingerprint_snapshot: underlying read failed: %s",
+            exc,
+        )
+        return {
+            "pubkey_fingerprint_sha256": None,
+            "pubkey_fingerprint_short": None,
+            "valid": False,
+        }
+    short = fp[:16] if isinstance(fp, str) and fp else None
+    return {
+        "pubkey_fingerprint_sha256": fp if isinstance(fp, str) and fp else None,
+        "pubkey_fingerprint_short": short,
+        "valid": bool(fp) and isinstance(fp, str),
+    }
+
+
+@bp_entitlement.route("/api/license/pubkey-fingerprint")
+def api_license_pubkey_fingerprint():
+    """``GET /api/license/pubkey-fingerprint`` -- scalar view of the embedded
+    Ed25519 verification key's SHA-256 fingerprint, for a trust-anchor
+    attestation tile that wants ONE string rather than the whole
+    ``/api/license/pubkey`` envelope (algorithm, format, PEM body, ...).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "pubkey_fingerprint_sha256": <str|null>,   # 64-char lowercase hex
+          "pubkey_fingerprint_short":  <str|null>,   # first 16 chars
+          "valid": <bool>                            # embedded PEM parses?
+        }
+
+    Independent of any installed license file: this endpoint answers
+    "which trust anchor is THIS install verifying against?" so an
+    operator can compare the value to the canonical fingerprint published
+    at ``https://clawmetry.com/security`` and detect that ``_PUBLIC_KEY_PEM``
+    hasn't been swapped for an attacker-controlled key. A dashboard tile
+    that only needs the fingerprint string should bind here rather than to
+    ``/api/license/pubkey``; the two share :func:`pubkey_fingerprint` so
+    they never disagree.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{pubkey_fingerprint_sha256: null, pubkey_fingerprint_short: null,
+    valid: false}`` matching the never-crash posture of the surrounding
+    license endpoints.
+    """
+    try:
+        return jsonify(_license_pubkey_fingerprint_snapshot())
+    except Exception as exc:
+        logger.warning("api_license_pubkey_fingerprint: error: %s", exc)
+        return jsonify(
+            {
+                "pubkey_fingerprint_sha256": None,
+                "pubkey_fingerprint_short": None,
+                "valid": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/license/is-pubkey-fingerprint")
+def api_license_is_pubkey_fingerprint():
+    """``GET /api/license/is-pubkey-fingerprint?fp=<hex>`` -- boolean gate
+    for "is this install verifying against pubkey <FP> right now?" UIs.
+
+    Query parameters:
+      * ``fp`` (str, required) -- the fingerprint to test against. Compared
+        under the same tolerant normalisation as
+        :func:`clawmetry.license.is_pubkey_fingerprint`: whitespace
+        stripped, lowercased, ``:`` separators removed, either the full
+        64-char hex OR the 16-char short-form accepted. Missing / empty
+        input degrades to ``is_pubkey_fingerprint=false`` rather than a
+        4xx, matching the surrounding endpoints' never-5xx / never-4xx
+        posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_pubkey_fingerprint": <bool>,
+          "pubkey_fingerprint_sha256": <str|null>,   # currently-active fp
+          "pubkey_fingerprint_short":  <str|null>,   # first 16 chars
+          "requested_fp": <str>,                     # normalised echo
+          "valid": <bool>                            # embedded PEM parses?
+        }
+
+    ``is_pubkey_fingerprint`` is ``True`` iff the embedded PEM parses AND
+    the normalised request matches (full or short form). A typo like
+    ``?fp=abcxyz`` collapses to ``False`` (non-hex rejected up-front) so a
+    caller cannot silently mis-gate on a bad string.
+
+    Mirrors :func:`clawmetry.license.is_pubkey_fingerprint` -- the HTTP
+    shape layers ``pubkey_fingerprint_sha256`` /
+    ``pubkey_fingerprint_short`` / ``requested_fp`` / ``valid`` on top of
+    that bool so a supply-chain audit widget never needs a second call to
+    ``/api/license/pubkey-fingerprint`` to render the accompanying
+    "expected <X>" copy.
+    """
+    raw = request.args.get("fp", "") or ""
+    try:
+        requested = raw.strip().lower().replace(":", "")
+    except Exception:
+        requested = ""
+    try:
+        snap = _license_pubkey_fingerprint_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_pubkey_fingerprint: error: %s", exc)
+        snap = {
+            "pubkey_fingerprint_sha256": None,
+            "pubkey_fingerprint_short": None,
+            "valid": False,
+        }
+    actual = snap["pubkey_fingerprint_sha256"]
+    matches = False
+    if requested and isinstance(actual, str) and actual:
+        if all(c in "0123456789abcdef" for c in requested):
+            actual_norm = actual.strip().lower()
+            if len(requested) == 64:
+                matches = actual_norm == requested
+            elif len(requested) == 16:
+                matches = actual_norm.startswith(requested)
+    return jsonify(
+        {
+            "is_pubkey_fingerprint": bool(matches),
+            "pubkey_fingerprint_sha256": snap["pubkey_fingerprint_sha256"],
+            "pubkey_fingerprint_short": snap["pubkey_fingerprint_short"],
+            "requested_fp": requested,
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
