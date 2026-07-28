@@ -8875,6 +8875,27 @@ function _cmPopulateGlobalRuntime(counts) {
   // Visibility gate: zero-count free runtimes render when the switcher is
   // shown but must not summon it by themselves — a plain single-runtime
   // install (openclaw only, nothing locked) keeps its switcher-free header.
+  // Smart default (founder 2026-07-28): when the user has NEVER chosen a
+  // runtime (no stored key, no URL pin) and exactly ONE runtime has sessions,
+  // default to it instead of "All runtimes". A Claude-Code-only machine
+  // showed "OpenClaw 0 sessions / NemoClaw 0 sessions / Claude Code
+  // 3 sessions" and still made the user pick by hand. Multiple non-zero
+  // runtimes (or none) keep the honest "All runtimes" aggregate. One-time:
+  // the pick persists via the same path as a manual selection, so the
+  // user's later choices always win. MUST run BEFORE the visibility gate
+  // below: the single-runtime case is exactly when the switcher hides
+  // itself, which used to early-return past any chance to default.
+  if (_cmRuntimeFilter() === 'all' && _cmRuntimeFilterUrlPin() === null) {
+    var _neverChosen = false;
+    try { _neverChosen = localStorage.getItem('cm-runtime-filter') === null; } catch (e) {}
+    if (_neverChosen) {
+      var _nonzero = observed.filter(function(k) { return (counts[k] || 0) > 0; });
+      if (_nonzero.length === 1 && !otlpApps.length) {
+        _cmSetRuntimeFilter(_nonzero[0]);
+        try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+      }
+    }
+  }
   var gate = observed.filter(function(k) { return counts[k]; }).length +
     otlpApps.length + locked.length;
   if (gate < 2) { wrap.style.display = 'none'; return; }
