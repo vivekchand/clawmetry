@@ -9772,6 +9772,112 @@ def api_license_days_until_expiry_at():
     )
 
 
+@bp_entitlement.route("/api/license/age-days-at")
+def api_license_age_days_at():
+    """``GET /api/license/age-days-at?epoch=<int>`` -- scalar view of the
+    installed license's age evaluated at an operator-supplied perspective
+    epoch, for a scheduled-audit / retrospective tile that wants to
+    answer "how old was the license as of <date>?" without the caller
+    having to snapshot the license state at that time or compute
+    ``(epoch - iat) // 86400`` at the call site.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "age_days": <int|null>,        # signed days from iat to epoch
+          "requested_epoch": <int|null>, # int-coerced input, or null on typo
+          "issued_at": <int|null>,       # current on-disk iat
+          "has_license": <bool>,         # is a license file installed at all?
+          "valid": <bool>                # signature-valid AND not expired
+        }
+
+    ``age_days`` mirrors :func:`clawmetry.license.license_age_days_at`:
+
+      * ``null`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``iat`` into an unsigned body), when the signed payload has no
+        ``iat`` claim, OR when ``epoch`` doesn't parse as an integer.
+      * A signed integer number of days otherwise. Zero when ``epoch``
+        equals the ``iat`` second; positive when ``epoch`` is after
+        ``iat`` (the normal case -- "N days old as of <date>"); negative
+        when ``epoch`` is BEFORE ``iat`` (support scenario: "the operator
+        rolled a machine back to a pre-issuance timestamp -- how far
+        before issuance were we?").
+
+    Deliberately NOT clamped to ``max(0, ...)`` -- unlike the "now"
+    endpoint ``/api/license/age-days``, which clamps because clock-skew
+    is the only way ``iat`` can be in the future when reading against
+    ``time.time()``. Here the caller EXPLICITLY passes a perspective
+    epoch, so a negative result is a real, actionable signal (they asked
+    a question that only makes sense pre-issuance), not clock skew to be
+    hidden. Mirrors the signed-integer posture of
+    ``/api/license/days-until-expiry-at``.
+
+    Deliberately lenient on expiry, mirroring ``/api/license/age-days``
+    and ``/api/license/issued-at``: a signed-but-lapsed key still
+    surfaces its real ``age_days`` at the perspective epoch, so a
+    support tile can render "was 12 days old as of that date" without
+    special-casing the expired branch. The ``valid`` field independently
+    carries the "signature-valid AND not expired" signal for callers
+    that DO want to hide the row on lapsed keys.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to ``age_days=null`` with
+        ``requested_epoch=null`` so a caller cannot silently miscount on
+        a typo. HTTP status is 200 either way -- the "bad input" signal
+        is the ``null`` result, not a 4xx, matching the never-crash
+        posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/issued-at`` and ``/api/license/age-days``
+    -- all three share :func:`_license_issued_snapshot`, so a UI binding
+    any pair of them for the same install cannot catch them disagreeing
+    on ``issued_at`` / ``has_license`` / ``valid``. Together they let a
+    dashboard render "on <date>, the license was N days old, issued at
+    epoch E" from two orthogonal one-shot GETs.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{age_days: null, requested_epoch: null, issued_at: null,
+    has_license: false, valid: false}`` (the OSS-free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_issued_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_age_days_at: snapshot error: %s", exc)
+        snap = {
+            "issued_at": None,
+            "age_days": None,
+            "has_license": False,
+            "valid": False,
+        }
+    age_days: int | None
+    if requested is None:
+        age_days = None
+    else:
+        try:
+            from clawmetry import license as _lic
+
+            age_days = _lic.license_age_days_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_age_days_at: derive error: %s", exc)
+            age_days = None
+    return jsonify(
+        {
+            "age_days": age_days,
+            "requested_epoch": requested,
+            "issued_at": snap["issued_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

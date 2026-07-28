@@ -1914,6 +1914,91 @@ def license_age_days() -> int | None:
     return age if age >= 0 else 0
 
 
+def license_age_days_at(epoch: int) -> int | None:
+    """Scalar view of "how many days from ``iat`` to ``epoch``?" -- the
+    perspective-epoch flavour of :func:`license_age_days`, for a
+    scheduled-audit / retrospective tile that wants to answer "how old
+    was the license as of <date>?" without the caller having to snapshot
+    the license state at that time or compute ``(epoch - iat) // 86400``
+    at every call site.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to derive: no license
+        file on disk, an invalid signature (the payload can't be trusted
+        -- an attacker could stuff any ``iat`` into an unsigned body), a
+        signed payload whose ``iat`` claim is absent / non-numeric, OR a
+        non-numeric / bool ``epoch`` argument.
+      * A signed integer number of days otherwise. Zero when ``epoch``
+        equals the ``iat`` second; positive when ``epoch`` is after
+        ``iat`` (the normal case -- "N days old as of <date>"); negative
+        when ``epoch`` is BEFORE ``iat`` (support scenario: "the operator
+        rolled a machine back to a pre-issuance timestamp -- how far
+        before issuance were we?").
+
+    Deliberately NOT clamped to ``max(0, ...)`` -- unlike the "now"
+    flavour :func:`license_age_days`, which clamps because clock-skew is
+    the only way ``iat`` can be in the future when reading against
+    ``time.time()``. Here the caller EXPLICITLY passes a perspective
+    epoch, so a negative result is a real, actionable signal (they asked
+    a question that only makes sense pre-issuance), not clock skew to be
+    hidden. Mirrors the signed-integer posture of
+    :func:`days_until_expiry_at`, which returns negative days when the
+    perspective epoch is past ``exp``.
+
+    Days are floor-divided from seconds ``(epoch - iat) // 86400``,
+    matching how :func:`license_age_days` derives its "now" counterpart
+    from ``(now - iat)`` so the two scalars never disagree at the day
+    boundary when ``epoch`` equals the current time.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``None`` rather than a spurious "days
+    from iat to epoch 1" number. A non-numeric value collapses to
+    ``None`` so a caller cannot silently miscount on a typo.
+
+    Deliberately lenient on expiry, mirroring :func:`license_age_days`:
+    an expired-but-signature-valid key still carries a meaningful
+    ``iat`` (support scenario: "how old was this lapsed key evaluated
+    as of last Friday?") and callers would otherwise have to fall back
+    to :func:`current_license_info`. The :func:`is_expired` /
+    :func:`is_expiring_at` helpers independently carry the "past-
+    expiry" signals for callers that DO want to hide the row on lapsed
+    keys.
+
+    Pairs with :func:`license_issued_at` the way
+    :func:`days_until_expiry_at` pairs with :func:`license_expires_at`:
+    both derive from the same ``iat`` claim so they cannot disagree at
+    the day boundary. The perspective-epoch flavour lets a scheduled
+    audit tile answer "how old was the key when we shipped that build
+    last Friday?" without having to snapshot the license state at
+    those times.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    scheduled audit job never crashes on a bad install.
+    """
+    if isinstance(epoch, bool):
+        # ``bool`` is a subclass of ``int``; refuse it explicitly so a
+        # caller that passes ``True`` doesn't silently ask "days from
+        # iat to epoch 1?" and get a very negative number back.
+        return None
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        issued = license_issued_at()
+    except Exception as exc:
+        logger.debug("license: license_age_days_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(issued, int):
+        return None
+    try:
+        return (wanted - issued) // 86400
+    except Exception as exc:
+        logger.debug("license: license_age_days_at arithmetic failed: %s", exc)
+        return None
+
+
 # Canonical set of values :func:`license_state` may return. Kept in a frozenset
 # so a caller (`if state in LICENSE_STATES: ...`) never accidentally accepts a
 # typo like ``"actiev"`` as a valid state, and so :func:`is_state` can normalise
