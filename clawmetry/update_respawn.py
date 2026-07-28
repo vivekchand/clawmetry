@@ -99,18 +99,34 @@ def main(argv=None) -> int:
     spec = f"clawmetry=={target}" if target and target != "latest" else "clawmetry"
     _say(f"[update-respawn] parent gone; pip install --upgrade {spec}")
     ok = False
-    for attempt in (1, 2):
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade",
-             "--no-cache-dir", spec],
-            stdout=log, stderr=log, timeout=300,
-        )
-        if proc.returncode == 0:
-            ok = True
-            break
-        _say(f"[update-respawn] pip attempt {attempt} failed "
-             f"(exit {proc.returncode}); retrying in 10s")
-        time.sleep(10)
+    try:
+        # Retry ladder sized for the two real failure modes seen live
+        # (2026-07-28): the PyPI simple-index propagation lag (the JSON API
+        # advertises a release 1-3 minutes before pip can install it) and a
+        # sibling process briefly holding the launcher exe. 10s+10s was too
+        # short for either.
+        for attempt, wait in ((1, 20), (2, 60), (3, 120)):
+            proc = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--upgrade",
+                 "--no-cache-dir", spec],
+                stdout=log, stderr=log, timeout=300,
+            )
+            if proc.returncode == 0:
+                ok = True
+                break
+            _say(f"[update-respawn] pip attempt {attempt} failed "
+                 f"(exit {proc.returncode}); retrying in {wait}s")
+            time.sleep(wait)
+    finally:
+        # Release the cross-process update lock the PARENT was holding when
+        # it handed off (see routes/update_check.py): the lock now rides
+        # through the handoff so a sibling process cannot start a concurrent
+        # pip while this helper works — the exact race that bricked
+        # site-packages metadata on the 0.12.580 run.
+        try:
+            os.remove(os.path.expanduser("~/.clawmetry/update-in-progress.lock"))
+        except OSError:
+            pass
 
     _say(f"[update-respawn] install {'succeeded' if ok else 'FAILED'}; "
          f"relaunching: {relaunch_cmd}")
