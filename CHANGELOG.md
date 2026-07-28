@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feat: the runtime switcher defaults to the one runtime that has sessions (#4164) (2026-07-28)
+- **Why:** a Claude-Code-only machine listed OpenClaw 0 sessions, NemoClaw 0 sessions, Claude Code 3 sessions, and still made the user pick by hand on first visit.
+- **What:** when the user has never chosen a runtime (no stored key, no URL pin) and exactly one runtime has sessions, the switcher defaults to it, persisted through the same path as a manual pick so later choices always win. Multiple non-zero runtimes or none keep the honest All-runtimes aggregate; OTLP apps and URL-pinned tabs are exempt. Runs before the switcher's single-runtime visibility gate, which used to early-return past any chance to default.
+- **Verified:** fresh headless browser against the live machine: clean profile lands on claude_code with no interaction; JS contract test guards the conditions.
+
 ### Fix: Windows relaunch uses the .exe when argv0 is the extensionless launcher (#4154) (2026-07-28)
 - **Why:** the first live unattended update detected and installed in ten seconds, then the dashboard relaunch died with Errno 2: console-script argv0 on Windows is the extensionless launcher path, so the fallback built a python invocation of a file that does not exist.
 - **What:** _respawn_cmdline probes argv0 plus .exe. With this the full loop (detect, install, relaunch) is hands-free on Windows.
