@@ -98,10 +98,41 @@
     rows:    []                   // raw GET response
   };
 
+  // Local (self-hosted) channel adapter: maps the row-based cloud channel
+  // model onto the flat LOCAL /api/alert-channels config. Locally
+  // deliverable: slack, telegram, pagerduty.
+  var LOCAL_KEYS = {
+    slack:     [{ flat: 'slack_webhook_url',     field: 'webhook_url' }],
+    pagerduty: [{ flat: 'pagerduty_routing_key', field: 'routing_key' }],
+    telegram:  [{ flat: 'telegram_bot_token',    field: 'bot_token' },
+                { flat: 'telegram_chat_id',      field: 'chat_id' }]
+  };
+  function _localRows(cfg) {
+    return Object.keys(LOCAL_KEYS).filter(function(k) {
+      return LOCAL_KEYS[k].every(function(m) { return String(cfg[m.flat] || '').trim(); });
+    }).map(function(k) {
+      var config = {};
+      LOCAL_KEYS[k].forEach(function(m) { config[m.field] = cfg[m.flat]; });
+      return { id: k, channel_type: k, name: k, enabled: true, config: config };
+    });
+  }
+
   function _esc(s) { var d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
 
   /* ── Tier resolution (mirrors alerts.js so a Free user is gated identically) ── */
   async function _resolveTier() {
+    // Self-hosted entitlement FIRST (founder 2026-07-28: notifications must
+    // work locally). A local Trial/Pro license unlocks the tab; channels
+    // then live in the LOCAL alert-channels config and deliver from this
+    // machine (Slack / Telegram / PagerDuty are plain outbound HTTP).
+    // Email and Phone genuinely need the cloud and stay marked as such.
+    try {
+      var ent = await fetch('/api/entitlement').then(function(r){return r.json();});
+      if (ent && ent.is_paid && !ent.expired) {
+        state.localMode = true;
+        return ent.tier === 'trial' ? 'trial' : 'pro';
+      }
+    } catch (e) { /* fall through to the cloud path */ }
     try {
       var status = await fetch('/api/cloud-cta/status').then(function(r){return r.json();});
       if (!status || !status.connected) return 'none';
@@ -227,6 +258,14 @@
     var body = channelId
       ? { config: config }
       : { channel_type: ch.key, name: ch.name, enabled: true, config: config };
+    if (state.localMode) {
+      var maps = LOCAL_KEYS[ch.key];
+      if (!maps) { alert(ch.name + ' delivery needs ClawMetry Cloud (email/phone use its providers). Slack, Telegram, and PagerDuty work locally.'); return; }
+      url = '/api/alert-channels';
+      method = 'POST';
+      body = {};
+      maps.forEach(function(m) { body[m.flat] = config[m.field] || ''; });
+    }
 
     try {
       var resp = await fetch(url, {
@@ -252,9 +291,12 @@
     var orig = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '…'; btn.disabled = true; }
     try {
-      var resp = await fetch('/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId) + '/test', {
+      var resp = await fetch(state.localMode
+        ? '/api/alert-channels/test'
+        : '/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId) + '/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: state.localMode ? JSON.stringify({ target: channelId }) : undefined,
       });
       var d = await resp.json().catch(function(){return{};});
       if (resp.ok) {
@@ -273,7 +315,15 @@
     if (!channelId) return;
     if (!confirm('Disconnect this channel? Alert rules using it will fall back to other channels.')) return;
     try {
-      var resp = await fetch('/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId), { method: 'DELETE' });
+      var resp;
+      if (state.localMode) {
+        var clear = {};
+        (LOCAL_KEYS[channelId] || []).forEach(function(m) { clear[m.flat] = ''; });
+        resp = await fetch('/api/alert-channels', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clear) });
+      } else {
+        resp = await fetch('/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId), { method: 'DELETE' });
+      }
       if (!resp.ok) {
         var d = await resp.json().catch(function(){return{};});
         alert((d && (d.message || d.error)) || ('Delete failed: HTTP ' + resp.status));
@@ -340,7 +390,9 @@
     if (grid)   grid.style.display = 'grid';
 
     try {
-      var data = await fetch('/api/cloud-proxy/api/channels').then(function(r){return r.json();});
+      var resp = state.localMode
+        ? await fetch('/api/alert-channels').then(function(r){return r.json();}).then(function(cfg){return { channels: _localRows(cfg) };})
+        : await fetch('/api/cloud-proxy/api/channels').then(function(r){return r.json();});
       state.rows = (data && data.channels) || [];
     } catch (e) {
       state.rows = [];

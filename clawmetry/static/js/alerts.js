@@ -221,7 +221,15 @@
     renderHistory();
 
     try {
-      const ch = await fetch('/api/cloud-proxy/api/channels').then(r => r.json());
+      const ch = alertsState.localMode
+        ? await fetch('/api/alert-channels').then(r => r.json()).then(cfg => ({
+            channels: [
+              cfg.slack_webhook_url ? { id: 'slack', channel_type: 'slack', name: 'Slack', enabled: true } : null,
+              (cfg.telegram_bot_token && cfg.telegram_chat_id) ? { id: 'telegram', channel_type: 'telegram', name: 'Telegram', enabled: true } : null,
+              cfg.pagerduty_routing_key ? { id: 'pagerduty', channel_type: 'pagerduty', name: 'PagerDuty', enabled: true } : null,
+            ].filter(Boolean),
+          }))
+        : await fetch('/api/cloud-proxy/api/channels').then(r => r.json());
       alertsState.channels = ch.channels || [];
       renderChannelsSummary();
     } catch {

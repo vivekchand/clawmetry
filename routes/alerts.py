@@ -836,6 +836,8 @@ def api_alerts_webhook():
             "slack_webhook_url",
             "discord_webhook_url",
             "pagerduty_routing_key",
+            "telegram_bot_token",
+            "telegram_chat_id",
             "opsgenie_api_key",
             "opsgenie_api_url",
             "cost_spike_alerts",
@@ -938,6 +940,8 @@ def api_alert_channels():
             "slack_webhook_url",
             "discord_webhook_url",
             "pagerduty_routing_key",
+            "telegram_bot_token",
+            "telegram_chat_id",
             "opsgenie_api_key",
             "opsgenie_api_url",
             "cost_spike_alerts",
@@ -986,6 +990,42 @@ def api_alert_channels_test():
         if url:
             _d._send_discord_alert(message, severity=severity, title=title)
             sent.append("discord")
+    # Self-hosted delivery (founder 2026-07-28: notifications must work
+    # locally): Telegram and PagerDuty are plain outbound HTTP, sent
+    # directly from the configured keys so the test proves the LOCAL path.
+    if target in ("all", "telegram"):
+        tok = str(cfg.get("telegram_bot_token", "")).strip()
+        chat = str(cfg.get("telegram_chat_id", "")).strip()
+        if tok and chat:
+            try:
+                import urllib.request as _ur
+                _req = _ur.Request(
+                    f"https://api.telegram.org/bot{tok}/sendMessage",
+                    data=json.dumps({"chat_id": chat,
+                                     "text": title + "\n" + message}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                _ur.urlopen(_req, timeout=10)
+                sent.append("telegram")
+            except Exception:
+                pass
+    if target in ("all", "pagerduty"):
+        rk = str(cfg.get("pagerduty_routing_key", "")).strip()
+        if rk:
+            try:
+                import urllib.request as _ur
+                _req = _ur.Request(
+                    "https://events.pagerduty.com/v2/enqueue",
+                    data=json.dumps({
+                        "routing_key": rk, "event_action": "trigger",
+                        "payload": {"summary": f"{title}: {message}",
+                                    "source": "clawmetry-local",
+                                    "severity": "warning" if severity == "warning" else "critical"},
+                    }).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                _ur.urlopen(_req, timeout=10)
+                sent.append("pagerduty")
+            except Exception:
+                pass
 
     if not sent:
         return jsonify({"ok": False, "error": "No configured webhook URL for selected target"}), 400
