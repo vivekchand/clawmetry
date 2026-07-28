@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: the auto-update relaunch gets a UTF-8 stdout (#4168) (2026-07-28)
+- **Why:** the 0.12.579 unattended run proved detect + install + relaunch, and the freshly relaunched dashboard then died printing its own startup banner: its stdout is the updater helper's log file, not a console, so Python picked cp1252 and the banner's arrows and emoji raised UnicodeEncodeError.
+- **What:** the helper exports PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 into the relaunch environment.
+- **Verified:** guard test asserts both vars on the relaunch; overlay confirmed live on the affected machine.
+
 ### Feat: the runtime switcher defaults to the one runtime that has sessions (#4164) (2026-07-28)
 - **Why:** a Claude-Code-only machine listed OpenClaw 0 sessions, NemoClaw 0 sessions, Claude Code 3 sessions, and still made the user pick by hand on first visit.
 - **What:** when the user has never chosen a runtime (no stored key, no URL pin) and exactly one runtime has sessions, the switcher defaults to it, persisted through the same path as a manual pick so later choices always win. Multiple non-zero runtimes or none keep the honest All-runtimes aggregate; OTLP apps and URL-pinned tabs are exempt. Runs before the switcher's single-runtime visibility gate, which used to early-return past any chance to default.
