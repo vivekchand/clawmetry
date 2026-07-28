@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feat: alerts and approvals fully work self-hosted, gated by the real trial lifecycle (#4172, #4173, #4171) (2026-07-28)
+- **Why:** the Alerts tab only recognized cloud accounts, so a machine holding a valid self-hosted trial key got a "Sign up for ClawMetry Cloud" modal selling it the trial it already had; and in grace mode an EXPIRED trial remained a permanent unlock because the permissive branch ran before any expiry check. Founder directive: alerts and approvals must work self-hosted, stop at trial expiry, and continue on a fully paid key.
+- **What:** the Alerts tab resolves the LOCAL entitlement first and, when entitled, reads and writes rules through the local routes (cloud vocabulary accepted and mapped); Approvals was already local and properly gated. Grace mode now never covers an expired entitlement, so the whole paid surface (alerts, approvals, paid runtime watch) dies when the trial lapses and lives indefinitely on a paid key, while never-entitled installs keep full grace. Also carries #4171: the Windows update lock rides through the helper handoff (no more concurrent sibling pips) with a propagation-sized retry ladder.
+- **Verified:** live on the founder's machine: Alerts tab with no signup modal and a cost_daily rule saved locally; full lifecycle pinned through the real @gate decorators over a real key file (active trial 200 / expired trial 402 / paid 200 / no-license grace intact), revert-proof red on the old gates.
+
 ### Fix: the auto-update relaunch gets a UTF-8 stdout (#4168) (2026-07-28)
 - **Why:** the 0.12.579 unattended run proved detect + install + relaunch, and the freshly relaunched dashboard then died printing its own startup banner: its stdout is the updater helper's log file, not a console, so Python picked cp1252 and the banner's arrows and emoji raised UnicodeEncodeError.
 - **What:** the helper exports PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 into the relaunch environment.
