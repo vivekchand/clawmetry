@@ -2481,18 +2481,30 @@ def _cmd_status(args) -> None:
         except Exception:
             _det = []
         print("  Runtimes:")
-        print("    🦞 OpenClaw            ✅ syncing  (free)")
+        # OpenClaw line is DETECTION-GATED: this used to print
+        # "OpenClaw syncing" unconditionally, telling a machine with no
+        # OpenClaw install that OpenClaw was detected and syncing (founder
+        # live-hit 2026-07-28). Wording: "watching (local)" is the local
+        # DuckDB ingest that renders the dashboard; "syncing" is reserved
+        # for the separate Cloud sync line above — one word per concept.
+        try:
+            import dashboard as _dash_det
+            _oc_present = bool(_dash_det._detect_openclaw_install())
+        except Exception:
+            _oc_present = False
+        if _oc_present:
+            print("    🦞 OpenClaw            ✅ watching (local)  (free)")
         try:
             from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
             _nemo = _NCA().detect()
             if _nemo.detected:
-                print("    ⚡ NemoClaw            ✅ syncing  (free)")
+                print("    ⚡ NemoClaw            ✅ watching (local)  (free)")
         except Exception:
             pass
         for _r in _det:
             _n = int(_r.get("sessionCount") or 0)
             _nm = _r.get("displayName") or _r.get("name") or "runtime"
-            _state = "✅ watching" if _entitled else "○ detected, NOT watched"
+            _state = "✅ watching (local)" if _entitled else "○ detected, NOT watched"
             print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
         if not _prover:
             print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")

@@ -20,10 +20,18 @@ def _uc():
 
 
 def _as_daemon(uc, monkeypatch):
-    """Run the checker as the supervised sync daemon (the default-on role)."""
+    """Run the checker as the supervised sync daemon (the default-on role).
+
+    Pins the restart plan to the supervised-POSIX "exit" path so these
+    gating tests behave identically on every CI OS — on a Windows runner
+    the real plan would be "respawn" (out-of-process helper, no in-process
+    pip), which is covered by its own dedicated tests below.
+    """
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     uc._process_role = "daemon"
     monkeypatch.setattr(uc, "_daemon_supervised", lambda: True)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exit")
+    monkeypatch.setattr(uc, "_record_update_attempt", lambda *a, **k: None)
 
 
 def _mock_self_update(monkeypatch, calls, ok=True, restarts=None):
@@ -222,6 +230,8 @@ def test_dashboard_role_default_on_installs(monkeypatch):
     assert uc._process_role == "dashboard"  # reload resets the role
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
     monkeypatch.setattr(uc, "_dashboard_supervised", lambda: False)
+    monkeypatch.setattr(uc, "_restart_plan", lambda r, p, s: "exec")
+    monkeypatch.setattr(uc, "_record_update_attempt", lambda *a, **k: None)
     scheduled = []
     monkeypatch.setattr(uc, "_schedule_exec_restart", lambda: scheduled.append("exec"))
     monkeypatch.setattr(uc, "_schedule_windows_respawn", lambda: scheduled.append("respawn"))
@@ -231,7 +241,7 @@ def test_dashboard_role_default_on_installs(monkeypatch):
     assert calls == ["auto"], "dashboard role must install on the default-on policy"
     # Unsupervised process must not exit-and-die: it restarts in place.
     assert restarts == [False]
-    assert scheduled in (["exec"], ["respawn"])  # POSIX vs Windows runner
+    assert scheduled == ["exec"]
 
 
 def test_restart_plan_matrix():
@@ -329,9 +339,13 @@ def test_supervised_daemon_restarts(monkeypatch):
     assert restarts == [True], "supervised daemon restarts to apply the wheel"
 
 
-def test_windows_always_respawns(monkeypatch):
-    """Windows has no supervisor: even a 'supervised-looking' process must use
-    the detached respawn, never exit-and-die."""
+def test_windows_hands_off_to_out_of_process_helper(monkeypatch):
+    """Windows must NOT run pip in-process: while any process runs
+    Scripts/clawmetry.exe, pip's overwrite AND the pre-rename both fail with
+    WinError 32 (measured live 2026-07-28), so every in-process attempt died
+    into a silent 30-minute backoff. The respawn plan stashes the target and
+    hands everything to clawmetry.update_respawn, which installs AFTER this
+    process exits."""
     uc = _uc()
     monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
     uc._process_role = "daemon"
@@ -340,12 +354,61 @@ def test_windows_always_respawns(monkeypatch):
     scheduled = []
     monkeypatch.setattr(uc, "_schedule_windows_respawn", lambda: scheduled.append("respawn"))
     monkeypatch.setattr(uc, "_get_update_check_config", lambda: {"auto_update": True})
+    monkeypatch.setattr(uc, "_record_update_attempt", lambda *a, **k: None)
     calls, restarts = [], []
     _mock_self_update(monkeypatch, calls, restarts=restarts)
     uc._maybe_auto_update("0.12.1", "0.12.2")
-    assert calls == ["auto"]
-    assert restarts == [False]
-    assert scheduled == ["respawn"]
+    assert calls == [], "Windows must never pip in-process (WinError 32)"
+    assert scheduled == ["respawn"], "the out-of-process helper must be armed"
+    assert uc._pending_update_target.get("version") == "0.12.2", \
+        "the helper's install target must be stashed before handoff"
+
+
+def test_update_respawn_helper_waits_pips_and_relaunches(monkeypatch, tmp_path):
+    """The helper's contract: wait for the parent, pip the target, relaunch
+    the exact command line."""
+    from clawmetry import update_respawn as ur
+
+    events = []
+    monkeypatch.setattr(
+        ur, "_wait_for_pid_exit",
+        lambda pid, timeout_secs=90.0: events.append(("wait", pid)) or True,
+    )
+
+    class _Proc:
+        returncode = 0
+
+    monkeypatch.setattr(ur.subprocess, "run",
+                        lambda cmd, **k: events.append(("pip", cmd)) or _Proc())
+    monkeypatch.setattr(ur.subprocess, "Popen",
+                        lambda cmd, **k: events.append(("relaunch", cmd)))
+    log = tmp_path / "restart.log"
+    rc = ur.main(["1234", "0.12.99", str(log), "clawmetry.exe", "--port", "8900"])
+    assert rc == 0
+    assert [e[0] for e in events] == ["wait", "pip", "relaunch"]
+    pip_cmd = [e for e in events if e[0] == "pip"][0][1]
+    assert "clawmetry==0.12.99" in pip_cmd
+    assert [e for e in events if e[0] == "relaunch"][0][1] == \
+        ["clawmetry.exe", "--port", "8900"]
+
+
+def test_update_respawn_helper_relaunches_even_on_pip_failure(monkeypatch, tmp_path):
+    """A failed install must still bring the service back on the old wheel;
+    a machine left with nothing running is worse than a stale one."""
+    from clawmetry import update_respawn as ur
+
+    monkeypatch.setattr(ur, "_wait_for_pid_exit", lambda pid, timeout_secs=90.0: True)
+    monkeypatch.setattr(ur.time, "sleep", lambda s: None)
+
+    class _Fail:
+        returncode = 1
+
+    relaunched = []
+    monkeypatch.setattr(ur.subprocess, "run", lambda cmd, **k: _Fail())
+    monkeypatch.setattr(ur.subprocess, "Popen", lambda cmd, **k: relaunched.append(cmd))
+    rc = ur.main(["1234", "0.12.99", str(tmp_path / "r.log"), "clawmetry.exe"])
+    assert rc == 1
+    assert relaunched, "failed install must still relaunch the service"
 
 
 def test_entitled_plan_enables_auto_update(monkeypatch):
