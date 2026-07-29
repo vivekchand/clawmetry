@@ -2536,3 +2536,228 @@ def is_state_at(state: str, epoch: int) -> bool:
         logger.debug("license: is_state_at underlying read failed: %s", exc)
         return False
     return current == requested
+
+
+def _license_epoch_batch_keys(epochs):
+    """Shared iterable-of-epochs pre-parser for the ``_at_batch`` license
+    helpers below.
+
+    Yields ``(raw, key, parsed)`` triples where:
+
+      * ``raw`` is the original input token (preserved so callers can
+        identify the offending entry in error rows without a re-scan of
+        their own list).
+      * ``key`` is the normalisation key used for de-dup: ``str(parsed)``
+        for a successfully parsed int, or ``("__bad__", repr(raw))`` for
+        anything ``license_state_at`` / ``is_expired_at`` /
+        :func:`days_until_expiry_at` would refuse. Splitting bad rows
+        into their own key namespace stops a caller supplying ``[True,
+        True]`` from collapsing to a single "bad" row -- each bogus
+        input keeps its own slot so the output length still matches N
+        for a batch that renders one row per input.
+      * ``parsed`` is the coerced ``int`` (only meaningful when the row
+        is well-formed; ``None`` for the bad-input path).
+
+    Rejects ``bool`` explicitly (subclass of ``int`` -- would silently
+    ask "epoch 1?") matching the scalar ``_at`` family's stance, and
+    treats ``None`` / non-numeric strings the same way ``int()`` refuses
+    them: as bad input. Preserves first-seen order of the good rows and
+    of the ordered bad-input entries so the output is byte-stable across
+    calls (the batch tests pin ``list(...) == list(...)`` on the same
+    input).
+    """
+    seen = set()
+    if epochs is None:
+        return
+    try:
+        iterator = iter(epochs)
+    except TypeError:
+        return
+    for raw in iterator:
+        if isinstance(raw, bool):
+            key = ("__bad__", repr(raw), id(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield raw, key, None
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            key = ("__bad__", repr(raw), id(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield raw, key, None
+            continue
+        key = str(parsed)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield raw, key, parsed
+
+
+def license_state_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch license-state ladder for N epochs in
+    ONE round-trip.
+
+    Per-value axis batch sibling of :func:`license_state_at`. Fills the
+    ``_at_batch`` slot on the license-state axis alongside the singular
+    :func:`license_state_at` and the "now" flavour :func:`license_state`,
+    so a scheduled-audit tile that wants to render a per-epoch state
+    timeline ("was the key active at each of these audit dates?") stops
+    fanning out N calls to :func:`license_state_at`.
+
+    Each item in ``epochs`` may be:
+
+      * an int (or int-parseable string) -- a perspective epoch. The
+        emitted row's ``state`` is what :func:`license_state_at` would
+        return for that epoch alone.
+      * ``bool`` (subclass of ``int``) or any non-int-parseable value
+        (``None``, empty string, non-numeric string) -- collapses to a
+        row with ``state="no_license"``, matching the never-mis-gate
+        posture :func:`license_state_at` uses for the same inputs. The
+        raw stringified token surfaces in ``epoch`` so a caller can
+        still identify the offending entry.
+
+    Row shape::
+
+        {
+          "epoch":  <int> | "<raw>",
+          "state":  "active" | "expired" | "invalid" | "no_license",
+        }
+
+    Duplicates by normalised int key (or by ``repr(raw)`` for bad
+    inputs) are dropped preserving first-seen order so the output is
+    byte-stable across calls.
+
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``state="no_license"`` so the
+    batch keeps building. Pairs with :func:`is_expired_at_batch` and
+    :func:`days_until_expiry_at_batch` the way the scalar ``_at``
+    trio pairs at the singular level so a caller can hydrate a whole
+    audit row in three round-trips instead of ``3 * N`` calls.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "state": "no_license"})
+            continue
+        try:
+            state = license_state_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: license_state_at_batch per-row failed: %s", exc
+            )
+            state = "no_license"
+        out.append({"epoch": parsed, "state": state})
+    return out
+
+
+def is_expired_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch "was the license expired?" gate for
+    N epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`is_expired_at`. Fills the
+    ``_at_batch`` slot on the expiry-boolean axis alongside the singular
+    :func:`is_expired_at` and the "now" flavour :func:`is_expired`, so a
+    scheduled-audit tile can hydrate an "was it expired at each of these
+    dates?" column in one call.
+
+    Row shape::
+
+        {
+          "epoch":   <int> | "<raw>",
+          "expired": <bool>,
+        }
+
+    Semantics mirror :func:`is_expired_at` per row: signature-valid with
+    an ``exp`` claim AND ``exp <= epoch`` -> ``True``; every other state
+    (no license, invalid signature, perpetual key, ``exp > epoch``,
+    ``bool`` / non-numeric epoch) -> ``False``. Row shape mirrors
+    :func:`license_state_at_batch` so a caller assembling a timeline can
+    zip the two responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``expired=False`` so the batch
+    keeps building.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "expired": False})
+            continue
+        try:
+            expired = is_expired_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_expired_at_batch per-row failed: %s", exc
+            )
+            expired = False
+        out.append({"epoch": parsed, "expired": bool(expired)})
+    return out
+
+
+def days_until_expiry_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch "days until expiry" scalar for N
+    epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`days_until_expiry_at`. Fills
+    the ``_at_batch`` slot on the days-remaining axis alongside the
+    singular :func:`days_until_expiry_at` and the "now" flavour
+    :func:`days_until_expiry`, so a scheduled-audit tile that wants
+    to plot a countdown across a sequence of perspective dates hydrates
+    the full column in one call.
+
+    Row shape::
+
+        {
+          "epoch": <int> | "<raw>",
+          "days":  <int> | None,
+        }
+
+    Semantics per row mirror :func:`days_until_expiry_at`: a signed
+    integer number of days (positive when ``epoch`` is before ``exp``,
+    zero on the day of, negative when ``epoch`` is after ``exp``);
+    ``None`` for no license, invalid signature, perpetual key (no
+    ``exp`` to count down to), and ``bool`` / non-numeric epochs. Row
+    shape mirrors :func:`license_state_at_batch` /
+    :func:`is_expired_at_batch` so a caller assembling an audit timeline
+    can zip all three responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``days=None`` so the batch keeps
+    building.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "days": None})
+            continue
+        try:
+            days = days_until_expiry_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: days_until_expiry_at_batch per-row failed: %s", exc
+            )
+            days = None
+        out.append(
+            {"epoch": parsed, "days": int(days) if isinstance(days, int) else None}
+        )
+    return out

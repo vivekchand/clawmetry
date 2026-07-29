@@ -10683,6 +10683,258 @@ def api_license_is_state_at():
     )
 
 
+def _parse_license_epochs_csv(param: str = "epochs"):
+    """Shared query-string pre-parser for the three ``/api/license/
+    *-at-batch`` endpoints below.
+
+    Returns ``(raw_tokens, err)``:
+
+      * ``raw_tokens`` -- a list of stripped, non-empty tokens taken
+        from the ``epochs`` query parameter in first-seen order. The
+        underlying batch helpers own de-dup + int-coercion; the caller
+        here only needs to hand them the ordered token list.
+      * ``err`` -- ``"missing"`` when ``?epochs=`` is absent or blank
+        after stripping / commas so the caller can return ``400
+        missing epochs`` uniformly across the trio, ``None`` otherwise.
+
+    Tokens are NOT int-coerced here on purpose: the batch helpers admit
+    "bad" tokens (``bool``, non-numeric string, ``None``) as their own
+    row so callers can identify the offending entry in the response
+    rather than having the 400 hide the whole batch on a single typo.
+    """
+    raw = request.args.get(param)
+    if raw is None:
+        return [], "missing"
+    tokens = [tok.strip() for tok in str(raw).split(",")]
+    tokens = [tok for tok in tokens if tok]
+    if not tokens:
+        return [], "missing"
+    return tokens, None
+
+
+@bp_entitlement.route("/api/license/state-at-batch")
+def api_license_state_at_batch():
+    """``GET /api/license/state-at-batch?epochs=<int>,<int>,...`` --
+    per-value batch sibling of ``/api/license/state-at``.
+
+    Where the singular endpoint folds ONE perspective epoch to ONE
+    license-state string, this preserves per-value rows so a scheduled-
+    audit tile that wants to plot state across a sequence of dates
+    ("was the key active at each of these audit dates?") renders off
+    ONE round-trip instead of N calls to ``/api/license/state-at``.
+    Wraps :func:`clawmetry.license.license_state_at_batch`.
+
+    ``epochs=`` is required. Missing / blank / only-commas -> ``400
+    missing epochs``. Comma-separated tokens are normalised the way the
+    underlying batch helper normalises them: whitespace-stripped, then
+    handed to :func:`clawmetry.license.license_state_at_batch`, which
+    dedupes by parsed int key preserving first-seen order and collapses
+    non-int / ``bool`` / ``None`` tokens to a row with
+    ``state="no_license"`` (never-mis-gate posture matching the scalar
+    endpoint). Never 5xxs: a resolver failure returns the empty-rows
+    envelope with the current-time snapshot fields intact.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "license_state_at",
+          "count": <int>,               # len(rows)
+          "rows":  [
+            {"epoch": <int|"<raw>">, "state": "<active|expired|invalid|no_license>"},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,    # on-disk exp for comparison
+          "has_license": <bool>,
+          "valid":       <bool>         # signature-valid AND not expired NOW
+        }
+
+    Per-row parity with ``/api/license/state-at?epoch=<n>`` is pinned in
+    the test suite so the batch cannot silently drift from the scalar
+    endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_state_at_batch: snapshot error: %s", exc)
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.license_state_at_batch(tokens)
+    except Exception as exc:
+        logger.warning("api_license_state_at_batch: derive error: %s", exc)
+        rows = []
+    return jsonify(
+        {
+            "kind": "license_state_at",
+            "count": len(rows),
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/is-expired-at-batch")
+def api_license_is_expired_at_batch():
+    """``GET /api/license/is-expired-at-batch?epochs=<int>,<int>,...``
+    -- per-value batch sibling of ``/api/license/is-expired-at``.
+
+    Boolean-expiry-axis twin of ``/api/license/state-at-batch``. Where
+    the singular endpoint folds ONE perspective epoch to ONE "was it
+    expired?" bool, this preserves per-value rows so a scheduled audit
+    can hydrate an "was it expired at each of these dates?" column in
+    one call. Wraps :func:`clawmetry.license.is_expired_at_batch`.
+
+    Row shape mirrors ``/api/license/state-at-batch`` per-row so a
+    caller assembling a timeline can zip the two responses index-for-
+    index. Same query-string posture: ``epochs=`` required (missing /
+    blank / only-commas -> ``400``), comma-separated tokens deduped by
+    parsed int key preserving first-seen order, non-int / ``bool`` /
+    ``None`` tokens collapse to ``expired=false``. Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "is_expired_at",
+          "count": <int>,
+          "rows":  [
+            {"epoch": <int|"<raw>">, "expired": <bool>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Per-row parity with ``/api/license/is-expired-at?epoch=<n>`` is
+    pinned in the test suite so the batch cannot silently drift from the
+    scalar endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_expired_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.is_expired_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_expired_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "is_expired_at",
+            "count": len(rows),
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/days-until-expiry-at-batch")
+def api_license_days_until_expiry_at_batch():
+    """``GET /api/license/days-until-expiry-at-batch?epochs=<int>,<int>,...``
+    -- per-value batch sibling of ``/api/license/days-until-expiry-at``.
+
+    Days-remaining axis twin of ``/api/license/state-at-batch`` /
+    ``/api/license/is-expired-at-batch``. Where the singular endpoint
+    folds ONE perspective epoch to ONE signed day-count, this preserves
+    per-value rows so a scheduled audit can plot a countdown across a
+    sequence of perspective dates in one call. Wraps
+    :func:`clawmetry.license.days_until_expiry_at_batch`.
+
+    Row shape mirrors the other two ``_at_batch`` license endpoints so a
+    caller assembling an audit timeline can zip all three responses
+    index-for-index. Same query-string posture: ``epochs=`` required
+    (missing / blank / only-commas -> ``400``), comma-separated tokens
+    deduped by parsed int key preserving first-seen order, non-int /
+    ``bool`` / ``None`` tokens collapse to ``days=null``. Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "days_until_expiry_at",
+          "count": <int>,
+          "rows":  [
+            {"epoch": <int|"<raw>">, "days": <int|null>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Per-row parity with ``/api/license/days-until-expiry-at?epoch=<n>``
+    is pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_days_until_expiry_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.days_until_expiry_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_days_until_expiry_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "days_until_expiry_at",
+            "count": len(rows),
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
