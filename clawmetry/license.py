@@ -2822,6 +2822,7 @@ def days_until_expiry_at_batch(epochs) -> list[dict]:
     return out
 
 
+
 def license_age_days_at_batch(epochs) -> list[dict]:
     """Per-value perspective-epoch "how old was the license?" scalar for
     N epochs in ONE round-trip.
@@ -2899,5 +2900,77 @@ def license_age_days_at_batch(epochs) -> list[dict]:
             days = None
         out.append(
             {"epoch": parsed, "days": int(days) if isinstance(days, int) else None}
+        )
+    return out
+
+
+def pro_install_age_days_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch "how old was the ``clawmetry-pro``
+    install at this epoch?" scalar for N epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`pro_install_age_days_at`. Fills
+    the ``_at_batch`` slot on the pro-install-age axis alongside the
+    singular :func:`pro_install_age_days_at` and the "now" flavour
+    :func:`pro_install_age_days`, so a scheduled-audit tile that wants to
+    plot the install-age across a sequence of perspective dates ("how old
+    was the pro wheel at each of these build timestamps?") hydrates the
+    full column in one call.
+
+    Twin of :func:`license_age_days_at_batch` for the ``installed_at`` axis
+    -- one derives from the signed ``iat`` claim, this one from the
+    on-disk provisioning marker -- so a caller assembling an install +
+    entitlement timeline can zip the two batch responses index-for-index.
+    Callers wanting the "N days old, still valid for M more days" pair for
+    the same sequence of epochs zip this with
+    :func:`days_until_expiry_at_batch`.
+
+    Row shape::
+
+        {
+          "epoch":    <int> | "<raw>",
+          "age_days": <int> | None,
+        }
+
+    Semantics per row mirror :func:`pro_install_age_days_at`: a signed
+    integer number of days (positive when ``epoch`` is after
+    ``installed_at`` -- the normal "N days old as of <date>" case, zero on
+    the day of provisioning, negative when ``epoch`` is BEFORE
+    ``installed_at`` -- the operator asked a pre-install question and the
+    negative is a real signal, not clock skew to be hidden); ``None`` when
+    there is no marker on disk, when the marker has no ``installed_at``
+    key, when ``installed_at`` is non-numeric / non-positive, or for
+    ``bool`` / non-numeric epochs.
+
+    Row shape mirrors :func:`license_age_days_at_batch` so a caller
+    assembling a two-axis age timeline (marker vs signed iat) can zip the
+    two responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``age_days=None`` so the batch keeps
+    building. Deliberately independent of live importability -- a marker
+    on disk yields an age even when Python cannot currently import
+    ``clawmetry-pro`` (wheel was pip-uninstalled since); pair with
+    :func:`pro_installed` for the live-import signal.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "age_days": None})
+            continue
+        try:
+            age = pro_install_age_days_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: pro_install_age_days_at_batch per-row failed: %s", exc
+            )
+            age = None
+        out.append(
+            {"epoch": parsed, "age_days": int(age) if isinstance(age, int) else None}
         )
     return out

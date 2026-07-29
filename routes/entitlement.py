@@ -8780,6 +8780,102 @@ def api_license_pro_install_age_days_at():
     )
 
 
+@bp_entitlement.route("/api/license/pro-install-age-days-at-batch")
+def api_license_pro_install_age_days_at_batch():
+    """``GET /api/license/pro-install-age-days-at-batch?epochs=<int>,<int>,...``
+    -- per-value batch sibling of ``/api/license/pro-install-age-days-at``.
+
+    Pro-install-age axis batch companion to
+    ``/api/license/pro-install-age-days`` (NOW) and
+    ``/api/license/pro-install-age-days-at`` (singular perspective epoch).
+    Where the singular endpoint folds ONE perspective epoch to ONE signed
+    day-count, this preserves per-value rows so a scheduled audit tile
+    that wants to plot install-age across a sequence of perspective dates
+    (build timestamps, release timestamps, "was the wheel present when we
+    shipped that?") hydrates the full column in one call. Wraps
+    :func:`clawmetry.license.pro_install_age_days_at_batch`.
+
+    Twin of ``/api/license/age-days-at-batch`` for the ``installed_at``
+    axis -- one derives from the signed ``iat`` claim, this one from the
+    on-disk provisioning marker -- so a caller assembling an install +
+    entitlement timeline can zip the two batch responses index-for-index.
+
+    Row shape::
+
+        {
+          "epoch":    <int|"<raw>">,
+          "age_days": <int|null>,
+        }
+
+    Query-string posture mirrors the other ``/api/license/*-at-batch``
+    endpoints: ``epochs=`` required (missing / blank / only-commas ->
+    ``400``), comma-separated tokens deduped by parsed int key preserving
+    first-seen order, non-int / ``bool`` / ``None`` tokens collapse to
+    ``age_days=null`` (rather than a 4xx hiding the whole batch on a
+    single typo -- callers can identify the offending entry in the
+    response). Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":            "pro_install_age_days_at",
+          "count":           <int>,
+          "rows":            [
+            {"epoch": <int|"<raw>">, "age_days": <int|null>},
+            ...
+          ],
+          "installed_at":    <int|null>,   # current on-disk marker installed_at
+          "marker_present":  <bool>,       # is the marker file readable?
+          "installed":       <bool>        # can Python import clawmetry-pro right now?
+        }
+
+    Shares :func:`_pro_install_snapshot` with
+    ``/api/license/pro-install-age-days`` /
+    ``/api/license/pro-install-age-days-at`` /
+    ``/api/license/pro-installed-at`` so a UI binding any pair of them for
+    the same install cannot catch them disagreeing on ``installed_at`` /
+    ``marker_present`` / ``installed``.
+
+    Per-row parity with ``/api/license/pro-install-age-days-at?epoch=<n>``
+    is pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _pro_install_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_pro_install_age_days_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "installed_at": None,
+            "age_days": None,
+            "marker_present": False,
+            "installed": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.pro_install_age_days_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_pro_install_age_days_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "pro_install_age_days_at",
+            "count": len(rows),
+            "rows": rows,
+            "installed_at": snap["installed_at"],
+            "marker_present": snap["marker_present"],
+            "installed": snap["installed"],
+        }
+    )
+
+
 def _license_nodes_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two node-limit endpoints
     both need (``nodes``, ``has_license``, ``valid``). Lives in the handler
