@@ -109,19 +109,25 @@ def render_detection_lines(probes: list) -> list:
     found = [p for p in probes if p.get("found")]
     if not found:
         return []
-    lines = ["Detected AI agent runtimes on this machine:"]
-    for p in found:
-        tier = "free" if p.get("free") else "Pro"
-        lines.append(f"  [x] {p['label']}  ({tier})")
+    n = len(found)
+    plural = "runtime" if n == 1 else "runtimes"
+    lines = [f"Detected {n} AI agent {plural} on this machine:"]
+    # Compact grid, 3 per row: ten detections should read as one confident
+    # block of checkmarks, not a ten-line paywall ledger (per-line tier
+    # labels moved into the two summary lines below).
+    cell = max(len(p["label"]) for p in found) + 3
+    for i in range(0, n, 3):
+        row = "".join(f"[x] {p['label']:<{cell}}" for p in found[i : i + 3])
+        lines.append("  " + row.rstrip())
     lines.append("")
     lines.append("Free forever: OpenClaw and NVIDIA NemoClaw.")
     paid = [p for p in found if not p.get("free")]
-    if paid:
-        names = ", ".join(p["label"] for p in paid)
+    if len(paid) == 1:
         lines.append(
-            f"To watch {names}: enter a license key (clawmetry activate <key>,"
+            f"{paid[0]['label']} unlocks with Cloud [2] below or a license key [3] (clawmetry activate <key>)."
         )
+    elif paid:
         lines.append(
-            "purchase at clawmetry.com/pricing) or pick [2] Cloud below to sign up."
+            f"The other {len(paid)} unlock with Cloud [2] below or a license key [3] (clawmetry activate <key>)."
         )
     return lines

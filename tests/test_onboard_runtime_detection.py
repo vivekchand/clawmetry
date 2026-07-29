@@ -86,6 +86,37 @@ def test_render_paid_detected_names_runtime_and_both_paths():
     assert "—" not in joined and "--" not in joined
 
 
+def test_render_grid_compact_no_per_line_tier_labels():
+    """Ten detections read as a 3-per-row checkmark grid; the tier story is
+    told once in the summary lines, not as nine "(Pro)" labels (#4216)."""
+    labels = [
+        "OpenClaw", "Claude Code", "Codex", "Cursor", "Aider",
+        "Goose", "opencode", "Qwen Code", "Hermes", "PicoClaw",
+    ]
+    probes = [
+        {"id": lbl.lower().replace(" ", "_"), "label": lbl,
+         "free": lbl == "OpenClaw", "found": True}
+        for lbl in labels
+    ]
+    lines = render_detection_lines(probes)
+    joined = "\n".join(lines)
+    assert "(Pro)" not in joined and "(free)" not in joined
+    grid = [ln for ln in lines if "[x]" in ln]
+    assert len(grid) == 4  # 3 + 3 + 3 + 1
+    assert grid[0].count("[x]") == 3
+    assert "Detected 10 AI agent runtimes" in lines[0]
+    assert "The other 9 unlock" in joined
+
+
+def test_render_single_paid_runtime_named_in_unlock_line():
+    probes = [
+        {"id": "cursor", "label": "Cursor", "free": False, "found": True},
+    ]
+    joined = "\n".join(render_detection_lines(probes))
+    assert "Cursor unlocks with Cloud" in joined
+    assert "clawmetry activate" in joined
+
+
 def test_render_nothing_detected_is_silent():
     probes = [
         {"id": "openclaw", "label": "OpenClaw", "free": True, "found": False},

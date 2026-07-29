@@ -2968,8 +2968,10 @@ def _cmd_onboard(args) -> None:
         for _i, _line in enumerate(_detect_lines):
             if _i == 0:
                 print(f"  {BOLD(_line)}")
-            elif _line.startswith("  [x]"):
-                print(f"  {GREEN('✓')} {_line[6:]}")
+            elif "[x]" in _line:
+                # Grid rows carry several "[x] Label" cells; the uniform
+                # marker swap keeps the pure renderer's column padding intact.
+                print(f"  {_line.replace('[x]', GREEN('✓'))}")
             else:
                 print(f"  {DIM(_line)}" if _line else "")
     print()
