@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+### Fix: the full event log is visible, nothing stripped (#4181) (2026-07-29)
+- **Why:** every Activity/Brain feed row was cut at exactly 200 characters server-side (300 on the legacy and SSE paths), mid-word, and expanding a row showed the same stub because the server had already thrown the rest away; encrypted-thinking rows rendered as blank lines that read like more truncation.
+- **What:** the local-store fast path, the legacy JSONL path, and the SSE live stream serve the complete detail (bounded upstream by the 64 KB ingest cap on tool-result bodies); collapsed rows line-clamp to three lines client-side and click-to-expand reveals everything; thinking events whose text the runtime never stored get an honest placeholder.
+- **Verified:** live on the reporting machine: max served detail went 200 to 3,622 chars with zero rows at exactly 200; guard tests fail on the old caps.
+
+### Fix: the Agents roster shows real numbers, no phantom OpenClaw (#4182) (2026-07-29)
+- **Why:** on a fresh Windows machine the roster showed "OpenClaw / detected" with no OpenClaw installed and 0 conversations / $0 for every runtime despite real ingested sessions: query_model_rollup was missing from the daemon-proxy allowlist (so every roster number zeroed when the dashboard composed the roster), and the builder kept every zero-substance runtime bucket with OpenClaw hard-coded detected.
+- **What:** query_model_rollup joins the daemon-proxy allowlist; a roster row must be detected or have recorded work (sessions/turns/tokens/cost incl. rolling windows); OpenClaw's detected flag is adapter-or-substance, never unconditional; freshly installed runtimes with no ingest yet still show.
+- **Verified:** live on the reporting machine the roster went from three zero rows to exactly one true row (Claude Code, 3 conversations, real cost, real model); two of the five new tests fail on the old code.
+
+### Fix: CI runners never self-update mid-job (#4183) (2026-07-29)
+- **Why:** the recurring visual-diff "flake" was the auto-updater: its startup check fires 60s after boot, so whenever a release had just published, the PR-branch dashboard in CI pip-updated and exec-restarted itself mid-screenshot-sweep; the failure rate tracked release cadence.
+- **What:** a truthy CI environment variable implicitly disables unattended upgrades (an ephemeral runner must render the code it was started with); CLAWMETRY_AUTO_UPDATE=1 re-arms explicitly, =0 still hard-disables, user machines are unchanged.
+- **Verified:** the first guarded visual-diff run completed all 66 comparisons with zero render-errors where three prior runs died mid-sweep; new tests pin the CI guard, the opt-in override, and kill-switch precedence.
+
 ### Fix: the Notifications channel manager works self-hosted (#4178) (2026-07-29)
 - **Why:** the Notifications tab (the delivery-destination manager Alerts and Approvals use) hard-locked behind a cloud signup and only recognized cloud accounts, so enabled alert rules said "no channels" with no way to add one - even on a validly entitled self-hosted trial.
 - **What:** local-first tier resolution; a local channel adapter over /api/alert-channels so Slack, Telegram, and PagerDuty connect, edit, test, and deliver entirely from this machine (telegram keys newly accepted; the local test endpoint gains telegram and pagerduty targets); Alerts reads its channel chips from the same local config. Email and Phone honestly remain cloud-only.
