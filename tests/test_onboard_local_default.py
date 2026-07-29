@@ -61,6 +61,11 @@ def onboard_env(monkeypatch, tmp_path):
     # The signup-trial helper swallows this -> trial becomes a no-op unless a
     # test overrides urlopen with a fake response.
     monkeypatch.setattr("urllib.request.urlopen", _no_network)
+    # Local-only finish health-checks + starts the real dashboard; stub it
+    # (default: "came up fine") so tests never spawn servers. Tests assert
+    # the printed truth by overriding the return value.
+    monkeypatch.setattr(cli, "_ensure_local_dashboard",
+                        lambda *a, **k: state.__setitem__("dash", state.get("dash", 0) + 1) or True)
     monkeypatch.setattr(cli, "_start_daemon", lambda *a, **k: state.__setitem__("start_daemon", state["start_daemon"] + 1))
     monkeypatch.setattr(cli, "_stop_existing_daemon", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_maybe_apply_nemoclaw_preset", lambda *a, **k: None)
@@ -236,3 +241,88 @@ def test_already_connected_choice_1_reaches_connect(onboard_env, monkeypatch, tm
     cli._cmd_onboard(_args())
     assert state["connect"] == 1
     assert state["instant_register"] == 0
+
+
+# ── local dashboard truth + marker pre-clear (founder report 2026-07-29) ─────
+#
+# Onboard printed http://localhost:8900 while nothing listened, said "your
+# data is syncing to the cloud" on a local-only node, and [1] Sign in was
+# re-asked "keep local-only?" by connect's marker prompt.
+
+
+def test_local_finish_health_checks_dashboard(onboard_env, monkeypatch, capsys):
+    state, marker = onboard_env
+    monkeypatch.setattr("builtins.input", lambda _p="": "3")
+    cli._cmd_onboard(_args())
+    assert state.get("dash") == 1, "local finish must health-check/start the dashboard"
+    out = capsys.readouterr().out
+    assert "http://localhost:8900" in out and "live now" in out
+
+
+def test_local_finish_admits_when_dashboard_is_down(onboard_env, monkeypatch, capsys):
+    state, marker = onboard_env
+    monkeypatch.setattr(cli, "_ensure_local_dashboard", lambda *a, **k: False)
+    monkeypatch.setattr("builtins.input", lambda _p="": "3")
+    cli._cmd_onboard(_args())
+    out = capsys.readouterr().out
+    assert "did not come up" in out, "a dead port must never be presented as a live URL"
+    assert "dashboard.log" in out
+
+
+def test_choice_1_clears_nocloud_marker_before_connect(onboard_env, monkeypatch):
+    """[1] Sign in must not be re-asked 'keep local-only?': the marker is
+    cleared before connect runs (an incomplete sign-in re-writes it)."""
+    state, marker = onboard_env
+    marker.write_text("")
+    seen = {}
+
+    def _connect_records_marker(*a, **k):
+        state["connect"] += 1
+        seen["marker_at_connect"] = marker.exists()
+
+    monkeypatch.setattr(cli, "_cmd_connect", _connect_records_marker)
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
+    cli._cmd_onboard(_args())
+    assert seen["marker_at_connect"] is False
+    assert marker.exists(), "failed sign-in must restore the local-only marker"
+
+
+def test_daemon_mode_line_is_truthful():
+    assert "Nothing leaves this machine" in cli._daemon_mode_line({"local_only": True})
+    line = cli._daemon_mode_line({"api_key": "cm_x", "local_only": False})
+    # Cloud copy only when the nocloud marker is absent too; both variants
+    # are legitimate here depending on the test host's marker state.
+    assert ("syncing to the cloud" in line) or ("Nothing leaves this machine" in line)
+
+
+def test_daemon_mode_line_cloud_when_marker_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr("clawmetry.config.NOCLOUD_MARKER_PATH", str(tmp_path / "nope"))
+    assert "syncing to the cloud" in cli._daemon_mode_line({"api_key": "cm_x"})
+
+
+def test_ensure_local_dashboard_true_when_already_serving(monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: object())
+    spawned = []
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: spawned.append(a))
+    assert cli._ensure_local_dashboard() is True
+    assert spawned == [], "an already-serving port must not spawn anything"
+
+
+def test_ensure_local_dashboard_spawns_then_polls(monkeypatch):
+    """Silent port -> start (subprocess fallback branch) -> poll flips alive."""
+    calls = {"n": 0}
+
+    def _urlopen(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("refused")
+        return object()
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("platform.system", lambda: "OtherOS")
+    spawned = []
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: spawned.append(cmd) or object())
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    assert cli._ensure_local_dashboard(wait_secs=2) is True
+    assert len(spawned) == 1
+    assert "--port" in spawned[0] and "8900" in spawned[0]

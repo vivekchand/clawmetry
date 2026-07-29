@@ -1116,6 +1116,107 @@ def _cmd_connect(args) -> None:
         pass
 
 
+def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
+    """Make ``http://localhost:<port>`` actually serve the dashboard.
+
+    For a local-only install the URL IS the product, and onboard used to
+    print it while nothing listened (founder report 2026-07-29:
+    ERR_CONNECTION_REFUSED straight after "Watching your agents locally") —
+    the sync daemon was the only thing ever started. Any HTTP answer counts
+    as alive (an auth page or 404 still proves a server); when the port is
+    silent, register a KeepAlive launchd job on macOS or fall back to a
+    detached subprocess, then poll within a hard bound (NEVER-HANG: this
+    returns within ~``wait_secs`` no matter what). Returns True only when
+    the port actually answered — callers print the truth either way.
+    """
+    import platform as _plat
+    import subprocess as _sp
+    import time as _t
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    def _alive() -> bool:
+        try:
+            _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+            return True
+        except _ue.HTTPError:
+            return True  # the server answered; status code is irrelevant here
+        except Exception:
+            return False
+
+    if _alive():
+        return True
+
+    exe = os.path.join(os.path.dirname(sys.executable), "clawmetry")
+    cmd = ([exe, "--port", str(port)] if os.path.exists(exe)
+           else [sys.executable, "-m", "clawmetry", "--port", str(port)])
+    log_path = os.path.expanduser("~/.clawmetry/dashboard.log")
+    system = _plat.system()
+    started = False
+
+    if system == "Darwin":
+        try:
+            from pathlib import Path as _P
+
+            label = "com.clawmetry.dashboard"
+            plist_path = _P.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+            _args_xml = "\n".join(f"        <string>{a}</string>" for a in cmd)
+            plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>             <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+{_args_xml}
+    </array>
+    <key>RunAtLoad</key>         <true/>
+    <key>KeepAlive</key>         <true/>
+    <key>StandardOutPath</key>   <string>{log_path}</string>
+    <key>StandardErrorPath</key> <string>{log_path}</string>
+    <key>ThrottleInterval</key>  <integer>30</integer>
+</dict>
+</plist>"""
+            plist_path.parent.mkdir(parents=True, exist_ok=True)
+            plist_path.write_text(plist)
+            uid = os.getuid()
+            r = _sp.run(
+                ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+                capture_output=True, check=False,
+            )
+            if r.returncode != 0:
+                # Already bootstrapped (e.g. re-onboard) — restart it; legacy
+                # load for pre-10.11 launchctl.
+                _sp.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
+                        capture_output=True, check=False)
+                _sp.run(["launchctl", "load", "-w", str(plist_path)],
+                        capture_output=True, check=False)
+            started = True
+        except Exception:
+            started = False
+
+    if not started:
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            log = open(log_path, "ab")
+            kw = {"stdout": log, "stderr": log, "stdin": _sp.DEVNULL}
+            if system == "Windows":
+                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                kw["creationflags"] = 0x00000208
+            else:
+                kw["start_new_session"] = True
+            _sp.Popen(cmd, **kw)
+        except Exception:
+            return False
+
+    deadline = _t.time() + wait_secs
+    while _t.time() < deadline:
+        if _alive():
+            return True
+        _t.sleep(0.5)
+    return _alive()
+
+
 def _start_daemon(config: dict, args) -> None:
     """Start the sync daemon (as background process or system service)."""
 
@@ -1336,8 +1437,24 @@ def _register_launchd(config: dict) -> None:
             capture_output=True,
             check=False,
         )
-    print("  Running in the background. Your data is syncing to the cloud.")
+    print(f"  Running in the background. {_daemon_mode_line(config)}")
     print("  To stop: clawmetry disconnect")
+
+
+def _daemon_mode_line(config: dict) -> str:
+    """Truthful one-liner for daemon registration: a LOCAL-ONLY node must
+    never be told its data is syncing to the cloud (founder report
+    2026-07-29 — this printed right above "Nothing leaves this machine")."""
+    local = bool(isinstance(config, dict) and config.get("local_only"))
+    if not local:
+        try:
+            from clawmetry.config import is_cloud_disabled
+
+            local = is_cloud_disabled()
+        except Exception:
+            pass
+    return ("Nothing leaves this machine." if local
+            else "Your data is syncing to the cloud.")
 
 
 def _register_systemd(config: dict) -> None:
@@ -1410,7 +1527,7 @@ WantedBy={wanted_by}
 
     if _installed:
         _how = "system service" if _is_root else "user service"
-        print(f"  Running in the background as a systemd {_how}. Your data is syncing to the cloud.")
+        print(f"  Running in the background as a systemd {_how}. {_daemon_mode_line(config)}")
         print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
@@ -3020,12 +3137,21 @@ def _cmd_onboard(args) -> None:
             })
         except Exception:
             pass
-        print(f"  Starting local dashboard...")
+        print(f"  Starting background collector...")
         _stop_existing_daemon()
         _start_daemon({"local_only": True}, args)
+        print(f"  Starting local dashboard...")
+        # The URL below is the whole product for a local-only node — verify
+        # the port ANSWERS before promising it (found live 2026-07-29:
+        # onboard printed localhost:8900 while nothing was listening).
+        _dash_up = _ensure_local_dashboard()
         print()
-        print(f"  {GREEN(BOLD('Watching your agents locally.'))}")
-        print(f"     {BOLD('http://localhost:8900')}")
+        if _dash_up:
+            print(f"  {GREEN(BOLD('Watching your agents locally.'))}")
+            print(f"     {BOLD('http://localhost:8900')} {DIM('(live now)')}")
+        else:
+            print(f"  ⚠️  The dashboard did not come up at {BOLD('http://localhost:8900')}.")
+            print(f"     {DIM('Start it yourself:')} {CYAN('clawmetry')}   {DIM('logs: ~/.clawmetry/dashboard.log')}")
         print(f"     {DIM('Nothing leaves this machine. Enable cloud anytime: clawmetry connect')}")
         print()
 
@@ -3171,6 +3297,17 @@ def _cmd_onboard(args) -> None:
             return
 
     import argparse as _ap
+
+    # The user's [1] keypress IS the local-only conversion answer: clear the
+    # nocloud marker so connect goes straight to sign-in instead of
+    # re-asking "keep local-only?" and silently dropping the auth on [2]
+    # (founder report 2026-07-29). An incomplete sign-in below re-writes it.
+    try:
+        from clawmetry.config import NOCLOUD_MARKER_PATH as _nocloud_path
+
+        _os.unlink(_nocloud_path)
+    except Exception:
+        pass
 
     _fake_args = _ap.Namespace(
         key=None, foreground=False, custom_node_id=None,
