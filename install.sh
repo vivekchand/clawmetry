@@ -178,6 +178,8 @@ print(json.loads(r.read())['info']['version'])
 " 2>/dev/null)
   if [ -n "$_CURRENT" ] && [ "$_CURRENT" = "$_LATEST" ] && [ -n "$_existing_pids" ]; then
     echo -e "  ${GREEN}${BOLD}✓ ClawMetry $_CURRENT already up to date${NC}"
+    echo ""
+    echo -e "  ${DIM}↻ Change your setup (local-only ↔ cloud, license key)? Run:${NC} ${GREEN}clawmetry onboard${NC}"
     exit 0
   fi
 fi
@@ -785,7 +787,7 @@ case "${CLAWMETRY_LOCAL_ONLY:-}" in
 esac
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
-  [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
+  [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1) — set up later with:${NC} ${GREEN}clawmetry onboard${NC}"
 elif (exec </dev/tty) 2>/dev/null; then
   "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
@@ -805,3 +807,10 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   esac
   echo ""
 fi
+
+# ── Closing hint ─────────────────────────────────────────────────────────────
+# `clawmetry onboard` is the setup wizard (local-only / cloud / license key)
+# and is always safe to re-run — advertise it on the way out.
+echo ""
+echo -e "  ${DIM}↻ Change your setup anytime (local-only ↔ cloud, license key):${NC} ${GREEN}clawmetry onboard${NC}"
+echo ""
