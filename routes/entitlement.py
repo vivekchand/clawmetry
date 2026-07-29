@@ -10055,6 +10055,141 @@ def api_license_days_until_expiry_at():
     )
 
 
+@bp_entitlement.route("/api/license/expiring-within-at")
+def api_license_expiring_within_at():
+    """``GET /api/license/expiring-within-at?days=<N>&epoch=<int>`` --
+    boolean gate for "would we have shown a renewal warning as of
+    ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/expiring-within``, for a scheduled-audit /
+    retrospective tile that wants to answer "was the license inside the
+    ``days``-day renewal window on <date>?" without having to snapshot
+    the license state at that time.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "expiring_within": <bool>,
+          "days_left": <int|null>,           # signed days from epoch to exp
+          "threshold_days": <int>,           # normalised threshold echo
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired
+        }
+
+    ``expiring_within`` mirrors
+    :func:`clawmetry.license.is_expiring_within_at`:
+
+      * ``true`` iff a license is installed, signature-valid, carries an
+        ``exp`` claim, AND the days from ``epoch`` until ``exp`` fall
+        between 0 and ``threshold_days`` inclusive.
+      * ``false`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), on the perpetual-license branch
+        (no ``exp`` to gate against), on the already-lapsed-at-epoch
+        branch (a caller wants "renewal window" separate from "already
+        expired at that time"), OR when either query argument doesn't
+        parse.
+
+    ``days_left`` is layered on top of the bool so a paywall widget
+    never needs a second call to
+    ``/api/license/days-until-expiry-at`` to render the accompanying
+    "expires in N days as of that date" copy. It mirrors
+    :func:`clawmetry.license.days_until_expiry_at` -- lenient on
+    expiry, so an already-lapsed-at-epoch key still surfaces its real
+    (negative) ``days_left`` even though ``expiring_within`` collapses
+    to ``false``. Callers that want to hide the row on lapsed keys have
+    the ``valid`` signal.
+
+    Query parameters:
+
+      * ``days`` (int, optional) -- the renewal-window threshold.
+        Defaults to ``30``. Negative input clamps to ``0``; non-numeric
+        input collapses to ``expiring_within=false`` with
+        ``threshold_days=0`` rather than a 4xx, matching the surrounding
+        endpoints' never-5xx / never-4xx posture.
+      * ``epoch`` (int, required) -- perspective epoch (Unix seconds).
+        A missing / non-integer value collapses to
+        ``expiring_within=false`` with ``requested_epoch=null`` and
+        ``days_left=null`` so a caller cannot silently mis-gate on a
+        typo.
+
+    Pairs with ``/api/license/days-until-expiry-at`` /
+    ``/api/license/is-expiring-at`` -- all three share the
+    :func:`_license_expires_snapshot` reader so a UI binding any two
+    endpoints for the same install cannot catch them disagreeing on
+    ``expires_at`` / ``has_license`` / ``valid``. Together they let a
+    dashboard render "on <date>, the license would have been N days
+    from expiry -- and would we have warned?" from two orthogonal
+    one-shot GETs.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{expiring_within: false, days_left: null, threshold_days: 0,
+    requested_epoch: null, expires_at: null, has_license: false,
+    valid: false}`` (the OSS-free branch shape).
+    """
+    raw_days = request.args.get("days", "30")
+    try:
+        threshold = int(raw_days)
+        threshold_ok = True
+    except (TypeError, ValueError):
+        threshold = 0
+        threshold_ok = False
+    if threshold < 0:
+        threshold = 0
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_expires_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_expiring_within_at: snapshot error: %s", exc)
+        snap = {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    days_left: int | None
+    within = False
+    if requested is not None and threshold_ok:
+        try:
+            from clawmetry import license as _lic
+
+            days_left = _lic.days_until_expiry_at(requested)
+            within = _lic.is_expiring_within_at(threshold, requested)
+        except Exception as exc:
+            logger.warning("api_license_expiring_within_at: derive error: %s", exc)
+            days_left = None
+            within = False
+    elif requested is not None:
+        # Threshold garbage but epoch parsed: still surface days_left for
+        # the accompanying "expires in N days" copy so the widget can
+        # render even with the gate off. Matches the never-crash posture.
+        try:
+            from clawmetry import license as _lic
+
+            days_left = _lic.days_until_expiry_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_expiring_within_at: derive error: %s", exc)
+            days_left = None
+    else:
+        days_left = None
+    return jsonify(
+        {
+            "expiring_within": bool(within),
+            "days_left": days_left,
+            "threshold_days": threshold,
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/license/age-days-at")
 def api_license_age_days_at():
     """``GET /api/license/age-days-at?epoch=<int>`` -- scalar view of the

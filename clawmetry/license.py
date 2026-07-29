@@ -1239,6 +1239,68 @@ def days_until_expiry_at(epoch: int) -> int | None:
         return None
 
 
+def is_expiring_within_at(days: int, epoch: int) -> bool:
+    """Boolean gate for "would we have shown a renewal warning as of
+    ``epoch``?" -- the perspective-epoch flavour of
+    :func:`is_expiring_within`, for a scheduled-audit / retrospective
+    tile that wants to answer "was the license inside the ``days``-day
+    renewal window on <date>?" without having to snapshot the license
+    state at that time.
+
+    Returns ``True`` iff a license is installed, signature-valid,
+    carries an ``exp`` claim, AND the days from ``epoch`` until ``exp``
+    fall between 0 and ``days`` inclusive. An already-lapsed-at-epoch
+    key returns ``False`` on purpose -- the caller wants to distinguish
+    "renewal window" (warn) from "already expired at that time" (a
+    different, louder banner), and :func:`days_until_expiry_at` /
+    :func:`is_expired_at` independently carry those signals for callers
+    that DO want to distinguish them. Perpetual licenses (no ``exp``
+    claim) and the no-license path both return ``False``: nothing to
+    warn about.
+
+    ``days`` is coerced through ``int()``; negative or non-numeric input
+    collapses to ``False`` (nothing "expires within -5 days"). ``epoch``
+    is coerced through ``int()``; ``bool`` is explicitly refused despite
+    being an ``int`` subclass so a caller that passes ``True`` doesn't
+    silently ask "is this expiring within N days as of epoch 1?" and
+    get an ancient-history answer. A non-numeric ``epoch`` collapses to
+    ``False`` so a caller cannot silently mis-gate on a typo.
+
+    Days are floor-divided from seconds ``(exp - epoch) // 86400``,
+    matching :func:`days_until_expiry_at` so the two helpers cannot
+    disagree at the day boundary for the same install / epoch. When
+    ``epoch`` equals the current time, this predicate must agree with
+    :func:`is_expiring_within` at that day boundary (+/- 1 for the
+    fractional-second drift between the two calls: the bare helper reads
+    ``time.time()`` inside :func:`current_license_info` with sub-second
+    precision, while the perspective helper receives an already-
+    truncated integer).
+
+    Never raises; every underlying failure returns ``False`` so a
+    scheduled audit job never crashes on a bad install.
+    """
+    try:
+        threshold = int(days)
+    except (TypeError, ValueError):
+        return False
+    if threshold < 0:
+        return False
+    if isinstance(epoch, bool):
+        return False
+    try:
+        int(epoch)
+    except (TypeError, ValueError):
+        return False
+    try:
+        remaining = days_until_expiry_at(epoch)
+    except Exception as exc:
+        logger.debug("license: is_expiring_within_at underlying read failed: %s", exc)
+        return False
+    if remaining is None:
+        return False
+    return 0 <= remaining <= threshold
+
+
 def license_tier() -> str | None:
     """Scalar view onto the installed license's ``tier`` claim -- for a
     paywall tile / tier badge that wants ONE string rather than the whole
