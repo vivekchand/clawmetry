@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feature: onboard detection block reads as one confident grid (#4215) (2026-07-29)
+- **Why:** the wizard's runtime-detection list printed a per-line tier label, so a typical dev machine saw nine "(Pro)" tags plus a 3-line license paragraph before the product had shown any value: a paywall ledger as the welcome mat, at the exact conversion moment #3917 was built for.
+- **What:** detections render as a 3-per-row checkmark grid (10 runtimes = 4 lines instead of 10) with the tier story told exactly once in two quiet summary lines pointing at the [2] Cloud / [3] license-key menu options; both unlock paths and the "Free forever" copy survive verbatim; entitlements, pricing, and the menu are untouched.
+- **Verified:** rendered live on a 10-runtime machine with the wizard's exact styling: 12 lines to 7, columns aligned; 9 detection tests (2 new pinning grid shape + singular unlock line) and the 12 entitlement-API detection tests pass.
+
 ### Fix: connect backfills local-only history to the cloud (#4197) (2026-07-29)
 - **Why:** after running local-only on a trial license, Enable Cloud Sync connected the account but the cloud dashboard sat at "No machines connected yet / 0 sessions": the family high-water marks were stamped done during local-only ingest, so the first cloud-connected pass skipped every session.
 - **What:** clawmetry connect clears the family high-water marks after saving the config; the next daemon pass re-ingests every session (idempotent locally) and pushes the full set to the newly connected account, printing "Queued N existing session(s) for cloud backfill". No-op on fresh installs; best-effort so connect never fails on housekeeping.
