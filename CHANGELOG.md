@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: connect backfills local-only history to the cloud (#4197) (2026-07-29)
+- **Why:** after running local-only on a trial license, Enable Cloud Sync connected the account but the cloud dashboard sat at "No machines connected yet / 0 sessions": the family high-water marks were stamped done during local-only ingest, so the first cloud-connected pass skipped every session.
+- **What:** clawmetry connect clears the family high-water marks after saving the config; the next daemon pass re-ingests every session (idempotent locally) and pushes the full set to the newly connected account, printing "Queued N existing session(s) for cloud backfill". No-op on fresh installs; best-effort so connect never fails on housekeeping.
+- **Verified:** the manual equivalent on the reporting machine re-synced 3,948 events to the cloud on the next family pass; wiring and reset behavior are pinned by revert-proof tests.
+
 ### Feature: Notifications sits next to Approvals and Alerts (#4193) (2026-07-29)
 - **Why:** founder request with screenshot: the channel manager was buried in the collapsed Advanced drawer, so the natural journey "Alerts says no channels, where do I add one?" dead-ended two groups away from the tabs that consume it.
 - **What:** the Notifications item rides Tier-1 directly beneath Approvals and Alerts (envelope icon, tooltip naming the four channel types); removed from the Advanced drawer; data-tab id and switchTab('notifications') unchanged so deep links keep working; nav guard tests pin the new eight-item order.
