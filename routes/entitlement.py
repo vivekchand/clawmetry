@@ -10935,6 +10935,94 @@ def api_license_days_until_expiry_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/is-expiring-at-batch")
+def api_license_is_expiring_at_batch():
+    """``GET /api/license/is-expiring-at-batch?epochs=<int>,<int>,...``
+    -- per-value batch sibling of ``/api/license/is-expiring-at``.
+
+    Renewal-detection axis batch companion to
+    ``/api/license/state-at-batch`` /
+    ``/api/license/is-expired-at-batch`` /
+    ``/api/license/days-until-expiry-at-batch``. Where the singular
+    endpoint folds ONE candidate ``exp`` value to ONE "does the on-disk
+    key still expire on that date?" bool, this preserves per-value
+    rows so a renewal-reminder tile that binds several cached ``exp``
+    candidates (e.g. "we warned about <date>; then <date>; then
+    <date>") can detect a renewal on the on-disk key in one call
+    instead of fanning out to the scalar endpoint. Wraps
+    :func:`clawmetry.license.is_expiring_at_batch`.
+
+    Row shape mirrors ``/api/license/is-expired-at-batch`` per-row so
+    a caller assembling a renewal timeline can zip the two responses
+    index-for-index. Same query-string posture: ``epochs=`` required
+    (missing / blank / only-commas -> ``400``), comma-separated tokens
+    deduped by parsed int key preserving first-seen order, non-int /
+    ``bool`` / ``None`` tokens collapse to ``is_expiring=false``.
+    Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "is_expiring_at",
+          "count": <int>,
+          "rows":  [
+            {"epoch": <int|"<raw>">, "is_expiring": <bool>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Deliberately strict on validity, unlike the sibling
+    ``/api/license/days-until-expiry-at-batch`` (which is lenient on
+    expiry so a support tile can render "expired 12 days ago"). See
+    :func:`clawmetry.license.is_expiring_at` for the rationale: a
+    predicate that fired ``true`` on a lapsed key would push callers
+    to gate renewal UI on a value that no longer implies entitlement.
+
+    Per-row parity with ``/api/license/is-expiring-at?epoch=<n>`` is
+    pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_expiring_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.is_expiring_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_expiring_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "is_expiring_at",
+            "count": len(rows),
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

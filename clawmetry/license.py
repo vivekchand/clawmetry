@@ -2708,6 +2708,65 @@ def is_expired_at_batch(epochs) -> list[dict]:
     return out
 
 
+def is_expiring_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch "does the installed key's ``exp``
+    claim equal this epoch?" gate for N epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`is_expiring_at`. Rounds out
+    the expiry axis alongside :func:`license_state_at_batch`,
+    :func:`is_expired_at_batch` and :func:`days_until_expiry_at_batch`:
+    where those three batches answer "was the key active / expired /
+    how many days remaining at each of these dates?", this one answers
+    "does the on-disk ``exp`` still equal each of these values?" so a
+    renewal-reminder tile that binds several cached ``exp`` candidates
+    (e.g. "we warned about <date>; then <date>; then <date>") can
+    detect a renewal on the on-disk key in ONE round-trip instead of
+    fanning out N calls to :func:`is_expiring_at`.
+
+    Row shape::
+
+        {
+          "epoch":        <int> | "<raw>",
+          "is_expiring":  <bool>,
+        }
+
+    Semantics per row mirror :func:`is_expiring_at`: ``True`` iff a
+    license is installed, signature-valid, NOT expired NOW, carries an
+    ``exp`` claim, AND that claim matches ``epoch`` exactly. Every
+    other state (no license, invalid signature, currently-expired key,
+    perpetual key with no ``exp`` to compare, ``bool`` / non-numeric
+    epoch, mismatched ``exp``) -> ``False``. Row shape mirrors
+    :func:`is_expired_at_batch` so a caller assembling a renewal
+    timeline can zip the two responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``is_expiring=False`` so the
+    batch keeps building. Matches the never-mis-gate posture used by
+    :func:`is_expiring_at` -- a bad row cannot silently fire a renewal
+    prompt.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "is_expiring": False})
+            continue
+        try:
+            matched = is_expiring_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_expiring_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append({"epoch": parsed, "is_expiring": bool(matched)})
+    return out
+
+
 def days_until_expiry_at_batch(epochs) -> list[dict]:
     """Per-value perspective-epoch "days until expiry" scalar for N
     epochs in ONE round-trip.
