@@ -137,18 +137,24 @@ def test_status_json_expired_license(lic, capsys):
 
 
 def test_activate_json_missing_key(lic, capsys):
-    """No key argument → non-zero exit, ok=false, usage message on the payload."""
+    """No key argument → non-zero exit, ok=false, usage message on the payload.
+
+    Envelope keys are pinned exactly; the ``message`` text is asserted via
+    ``startswith("Usage:")`` so ``--file`` (and any future alternate input
+    source) can be documented in-line without every consumer test having to
+    track the exact wording. Wrappers scripting off this branch parse
+    ``ok`` and exit code, not the free-text message.
+    """
     import clawmetry.cli as cli
 
     with pytest.raises(SystemExit) as ex:
         cli._cmd_license(_ns(action="activate", key=None))
     assert ex.value.code == 1
     doc = json.loads(capsys.readouterr().out)
-    assert doc == {
-        "action": "activate",
-        "ok": False,
-        "message": "Usage: clawmetry license activate <KEY>",
-    }
+    assert set(doc.keys()) == {"action", "ok", "message"}
+    assert doc["action"] == "activate"
+    assert doc["ok"] is False
+    assert isinstance(doc["message"], str) and doc["message"].startswith("Usage:")
 
 
 def test_activate_json_invalid_key(lic, capsys):
