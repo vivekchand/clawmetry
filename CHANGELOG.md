@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Release fix: republish so the detection grid actually ships (#4218) (2026-07-29)
+- **Why:** the published 0.12.587 wheel was built from a stale checkout: cracking it shows the pre-#4215 runtime_probe (per-line tier labels) and dashboard.py still at 0.12.586, even though the v0.12.587 tag points at the correct merge commit. The FLYWHEEL-documented release race (0.12.453 class): a wheel must be verified, not assumed, before the version is treated as carrying the change.
+- **What:** no code change; this release exists to rebuild from current main so the next published wheel contains #4215.
+- **Verified:** wheel-crack of the new version must show the 3-per-row grid renderer and the [x]-swap styling in cli.py before this entry's version is cited anywhere.
+
 ### Feature: onboard detection block reads as one confident grid (#4215) (2026-07-29)
 - **Why:** the wizard's runtime-detection list printed a per-line tier label, so a typical dev machine saw nine "(Pro)" tags plus a 3-line license paragraph before the product had shown any value: a paywall ledger as the welcome mat, at the exact conversion moment #3917 was built for.
 - **What:** detections render as a 3-per-row checkmark grid (10 runtimes = 4 lines instead of 10) with the tier story told exactly once in two quiet summary lines pointing at the [2] Cloud / [3] license-key menu options; both unlock paths and the "Free forever" copy survive verbatim; entitlements, pricing, and the menu are untouched.
