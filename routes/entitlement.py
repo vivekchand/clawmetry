@@ -10261,6 +10261,293 @@ def api_license_is_expired_at():
     )
 
 
+def _license_state_at_snapshot() -> dict:
+    """Shared one-shot read for the paired ``/api/license/state-at`` and
+    ``/api/license/is-state-at`` endpoints below.
+
+    Reads :func:`clawmetry.license.license_state` (current-time state),
+    :func:`clawmetry.license.current_license_info` (for ``has_license`` /
+    ``valid`` NOW), and :func:`clawmetry.license.license_expires_at`
+    (for the ``expires_at`` field the sibling perspective-epoch tiles
+    all carry) ONCE so a UI binding both endpoints in the same tile
+    can't catch them disagreeing on ``state`` / ``expires_at`` /
+    ``has_license`` / ``valid`` for the same install -- mirrors the
+    ``_license_state_snapshot`` + ``_license_expires_snapshot`` pattern
+    used by the current-time state pair and the ``exp``-derived
+    perspective-epoch trio.
+
+    ``state`` here is the CURRENT-time state (matches
+    :func:`clawmetry.license.license_state`); the perspective-epoch
+    state (``state_at``) is derived per-request by each endpoint via
+    :func:`clawmetry.license.license_state_at` and lives on top of this
+    snapshot -- keeping ``state`` in the shared read guarantees a UI
+    that renders "as of <date> vs now" tiles side-by-side can never
+    catch them disagreeing on the current-time reference.
+
+    Never raises. Any introspection failure collapses to the OSS-free
+    branch shape (``state="no_license"``, ``expires_at=None``,
+    ``has_license=False``, ``valid=False``) so the endpoint stack never
+    5xxs -- same posture as the surrounding license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        state = _lic.license_state()
+        info = _lic.current_license_info()
+        expires = _lic.license_expires_at()
+    except Exception as exc:
+        logger.debug("_license_state_at_snapshot: underlying read failed: %s", exc)
+        return {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(state, str):
+        state = "no_license"
+    if info is None:
+        return {
+            "state": state,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(info, dict):
+        return {
+            "state": state,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "state": state,
+        "expires_at": expires,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/state-at")
+def api_license_state_at():
+    """``GET /api/license/state-at?epoch=<int>`` -- scalar view of the
+    installed license's high-level lifecycle state evaluated as of
+    ``epoch`` -- the perspective-epoch flavour of ``/api/license/state``,
+    for a scheduled-audit / retrospective status badge that wants to
+    answer "would we have shown the expired banner on <date>?" without
+    the caller having to snapshot the license state at that time.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "state_at": "<active|expired|invalid|no_license>",  # evaluated at epoch
+          "requested_epoch": <int|null>,      # int-coerced input, or null on typo
+          "state": "<active|expired|invalid|no_license>",     # current-time state
+          "expires_at": <int|null>,           # on-disk exp for comparison
+          "has_license": <bool>,              # is a license file installed at all?
+          "valid": <bool>                     # signature-valid AND not expired NOW
+        }
+
+    ``state_at`` mirrors :func:`clawmetry.license.license_state_at`
+    exactly:
+
+      * ``"active"``   -- signature-valid AND (perpetual OR ``exp > epoch``).
+      * ``"expired"``  -- signature-valid, carries an ``exp`` claim, AND
+        ``exp <= epoch``. Retrospective on a lapsed key when ``epoch``
+        equals "now"; prospective on an active key when ``epoch`` is in
+        the future beyond ``exp``.
+      * ``"invalid"``  -- file exists but signature is bogus (time-
+        independent).
+      * ``"no_license"`` -- no license file on disk (also time-
+        independent, and the fallback on missing / non-integer ``epoch``
+        so a caller cannot silently mis-gate on a typo).
+
+    Unlike ``/api/license/tier`` / ``/api/license/subject`` /
+    ``/api/license/nodes`` (which surface ``null`` on the invalid /
+    expired / no-license branches), this endpoint always carries a
+    non-null string for ``state_at`` -- "no license" is a real answer
+    here, not a missing answer, so a UI switch can bind directly on
+    ``data.state_at`` without a null branch.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer / bool value collapses to
+        ``state_at="no_license"`` with ``requested_epoch=null`` so a
+        caller cannot silently mis-gate on a typo. HTTP status is 200
+        either way -- the "bad input" signal is ``requested_epoch=null``
+        plus the ``"no_license"`` state, not a 4xx, matching the never-
+        crash posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/is-expired-at`` /
+    ``/api/license/is-expiring-at`` / ``/api/license/days-until-expiry-at``
+    -- all four share the perspective-epoch input pattern and the
+    ``_license_state_at_snapshot`` reader here carries ``expires_at`` /
+    ``has_license`` / ``valid`` on the same shape those three carry, so
+    a UI binding two for the same install cannot catch them
+    disagreeing on the current-time reference fields.
+
+    When ``epoch`` equals "now", the ``state_at`` field must byte-equal
+    ``state`` (both derive from the same signed ``exp`` claim and use
+    the same ``exp <= cutoff`` boundary via :func:`license_state_at` /
+    :func:`license_state`), so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{state_at: "no_license", requested_epoch: <echo>, state:
+    "no_license", expires_at: null, has_license: false, valid: false}``
+    (the OSS-free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_state_at: snapshot error: %s", exc)
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    state_at = "no_license"
+    if requested is not None:
+        try:
+            from clawmetry import license as _lic
+
+            state_at = _lic.license_state_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_state_at: derive error: %s", exc)
+            state_at = "no_license"
+    if not isinstance(state_at, str):
+        state_at = "no_license"
+    return jsonify(
+        {
+            "state_at": state_at,
+            "requested_epoch": requested,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/is-state-at")
+def api_license_is_state_at():
+    """``GET /api/license/is-state-at?state=<name>&epoch=<int>`` --
+    boolean gate for "was the installed license in state <X> evaluated
+    as of ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/is-state``, for a scheduled-audit tile that wants to
+    answer "would we have shown the expired banner on <date>?" without
+    the caller having to snapshot the license state at that time or
+    string-compare themselves.
+
+    Query parameters:
+      * ``state`` (str, required) -- the state to test against. One of
+        ``"active"``, ``"expired"``, ``"invalid"``, ``"no_license"``.
+        Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_state_at`. Missing / empty / unknown
+        input degrades to ``is_state_at=false`` rather than a 4xx.
+      * ``epoch`` (int, required) -- Unix epoch seconds. Missing / non-
+        integer / bool input collapses ``state_at`` to ``"no_license"``
+        and the predicate to ``false`` (unless ``state=no_license`` is
+        also requested, in which case the answer is truthfully ``true``
+        -- the perspective is unusable so the conservative "no
+        entitlement" fallback holds).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_state_at": <bool>,
+          "state_at": "<active|expired|invalid|no_license>",  # evaluated at epoch
+          "requested_state": <str>,          # normalised echo of query
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "state": "<active|expired|invalid|no_license>",     # current-time state
+          "expires_at": <int|null>,
+          "has_license": <bool>,
+          "valid": <bool>                    # signature-valid AND not expired NOW
+        }
+
+    ``is_state_at`` is ``True`` iff the perspective-epoch state
+    byte-equals ``requested_state`` (after both are lower/stripped) AND
+    the requested value is one of the four canonical states -- a typo
+    like ``?state=actiev`` returns ``is_state_at=false`` so a caller
+    cannot silently mis-gate on a mis-spelled state name.
+
+    Mirrors :func:`clawmetry.license.is_state_at` -- the HTTP shape
+    layers ``state_at`` / ``requested_state`` / ``requested_epoch`` /
+    ``state`` / ``expires_at`` / ``has_license`` / ``valid`` on top of
+    that bool so a widget never needs a second call to
+    ``/api/license/state-at`` (or ``/api/license/state``) to render the
+    accompanying "you're in state <X>" copy.
+
+    When ``epoch`` equals "now" and ``state`` is a canonical value, this
+    endpoint must agree with ``/api/license/is-state`` at the boundary
+    for the same install -- both derive from the same signed ``exp``
+    claim via :func:`license_state_at` / :func:`license_state`, so a UI
+    binding both cannot catch them disagreeing at the boundary.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``is_state_at=false``, ``state_at="no_license"``,
+    ``state="no_license"``, ``expires_at=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    from clawmetry.license import LICENSE_STATES
+
+    raw_state = request.args.get("state", "") or ""
+    try:
+        requested_state = str(raw_state).strip().lower()
+    except Exception:
+        requested_state = ""
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested_epoch = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested_epoch = None
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_state_at: snapshot error: %s", exc)
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    state_at = "no_license"
+    if requested_epoch is not None:
+        try:
+            from clawmetry import license as _lic
+
+            state_at = _lic.license_state_at(requested_epoch)
+        except Exception as exc:
+            logger.warning("api_license_is_state_at: derive error: %s", exc)
+            state_at = "no_license"
+    if not isinstance(state_at, str):
+        state_at = "no_license"
+    match = bool(
+        requested_state
+        and requested_state in LICENSE_STATES
+        and state_at == requested_state
+    )
+    return jsonify(
+        {
+            "is_state_at": match,
+            "state_at": state_at,
+            "requested_state": requested_state,
+            "requested_epoch": requested_epoch,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

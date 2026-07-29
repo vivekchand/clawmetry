@@ -2332,3 +2332,145 @@ def is_state(state: str) -> bool:
         logger.debug("license: is_state underlying read failed: %s", exc)
         return False
     return current == requested
+
+
+def license_state_at(epoch: int) -> str:
+    """Perspective-epoch flavour of :func:`license_state` -- "what state
+    would the installed license have reported evaluated as of ``epoch``?"
+    -- for a scheduled-audit / retrospective status tile that wants to
+    answer "would we have shown the expired banner on <date>?" without
+    the caller having to snapshot the license state at that time or
+    compare ``exp`` to a caller-supplied epoch themselves.
+
+    Returns one of :data:`LICENSE_STATES` -- never ``None``. Like
+    :func:`license_state`, "no license installed" is a real answer here
+    (``"no_license"``), not a missing answer, so callers can bind a
+    switch without a ``None`` branch:
+
+      * ``"active"``   -- signature-valid AND (perpetual OR ``exp > epoch``).
+      * ``"expired"``  -- signature-valid, carries an ``exp`` claim, AND
+        ``exp <= epoch``. Retrospective on a lapsed key when ``epoch``
+        equals "now"; prospective on an active key when ``epoch`` is in
+        the future beyond ``exp``.
+      * ``"invalid"``  -- file exists but signature is bogus (time-
+        independent: the classification never changes with epoch, since
+        an unsigned body is untrusted whatever the perspective).
+      * ``"no_license"`` -- no license file on disk (also time-
+        independent). Missing / non-numeric / bool ``epoch`` also
+        degrades to ``"no_license"`` so a UI switch bound to a typo cannot
+        silently mis-render as ``"active"``.
+
+    When ``epoch`` equals "now", this scalar must agree with
+    :func:`license_state` for the same install -- both derive from the
+    same signed ``exp`` claim and use the same ``exp <= cutoff``
+    boundary, so the two scalars cannot disagree. On any other epoch
+    this helper answers the retrospective / prospective question
+    :func:`license_state` cannot -- e.g. "was this key already expired
+    last Friday?" (``"expired"`` even on a key that has since been
+    renewed) or "will this key be expired at our next quarterly audit?"
+    (``"expired"`` on an active key whose ``exp`` falls before the audit
+    date).
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``"no_license"`` back rather than a
+    spurious "was the key expired at epoch 1?" classification. A non-
+    numeric value collapses to ``"no_license"`` so a caller cannot
+    silently mis-gate on a typo -- the conservative fallback since
+    ``"no_license"`` implies no entitlement, matching the never-mis-gate
+    posture of the surrounding ``_at`` family.
+
+    Never raises. Any underlying introspection failure (import error,
+    corrupt install, cryptography-lib mismatch) collapses to
+    ``"no_license"`` -- same fallback as :func:`license_state` -- so a
+    scheduled audit tile bound to this helper never breaks on a partial
+    install.
+
+    Pairs with :func:`is_state_at` the way :func:`license_state` pairs
+    with :func:`is_state`: this getter surfaces the perspective-epoch
+    state string for an audit row, that matcher answers the "was the
+    install in state <X> at <date>?" gate without the caller having to
+    string-compare themselves.
+    """
+    if isinstance(epoch, bool):
+        return "no_license"
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return "no_license"
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_state_at underlying read failed: %s", exc)
+        return "no_license"
+    if info is None:
+        return "no_license"
+    if not isinstance(info, dict):
+        return "no_license"
+    status = info.get("status")
+    if status == "invalid":
+        # Signature-bogus branch: an unsigned body is untrusted whatever
+        # the perspective, so the classification is time-independent.
+        # Mirrors :func:`license_state` -- payload-derived claims never
+        # get to influence the answer here.
+        return "invalid"
+    exp = info.get("exp")
+    if not isinstance(exp, (int, float)):
+        # Perpetual (no ``exp``) signed key -- never expires, so always
+        # ``"active"`` regardless of epoch. Matches how
+        # :func:`current_license_info` sets ``status="active"`` for a
+        # perpetual key at "now".
+        return "active"
+    return "expired" if int(exp) <= wanted else "active"
+
+
+def is_state_at(state: str, epoch: int) -> bool:
+    """Perspective-epoch flavour of :func:`is_state` -- "was the installed
+    license in state <X> evaluated as of ``epoch``?" -- for a scheduled-
+    audit tile that wants to answer "would we have shown the expired
+    banner on <date>?" without the caller having to snapshot the license
+    state at that time.
+
+    Compares :func:`license_state_at` case-insensitively (after strip)
+    to the supplied ``state``. Missing / empty / non-string input
+    degrades to ``False`` -- matches the never-raise posture of
+    :func:`is_state` / :func:`is_expired_at`.
+
+    Only values in :data:`LICENSE_STATES` can ever return ``True``; a
+    typo like ``"actiev"`` collapses to ``False`` so a caller cannot
+    silently mis-gate on a mis-spelled state name. Callers wanting to
+    validate their input up-front can ``if requested in LICENSE_STATES:``
+    against the same source of truth.
+
+    ``epoch`` is coerced through :func:`license_state_at`; ``bool`` and
+    non-numeric epochs are refused there and collapse this predicate to
+    ``False`` (unless the caller also asked ``state="no_license"``, in
+    which case the answer is truthfully ``True``: the perspective is
+    unusable so we cannot claim any richer state -- exactly matching the
+    conservative "no entitlement" fallback of :func:`license_state_at`).
+
+    When ``epoch`` equals "now", this predicate must agree with
+    :func:`is_state` for the same install and the same requested
+    ``state`` -- both derive from the same signed ``exp`` claim and use
+    the same ``<=`` cutoff via :func:`license_state_at` /
+    :func:`license_state`, so the two scalars cannot disagree at the
+    boundary. On any other epoch this helper answers the retrospective /
+    prospective question :func:`is_state` cannot.
+
+    Never raises. Any underlying failure of :func:`license_state_at`
+    collapses this to ``False`` -- a scheduled audit job bound to this
+    gate stays "unclaimed" rather than falsely asserting an entitlement
+    it can't verify.
+    """
+    try:
+        requested = str(state).strip().lower() if state is not None else ""
+    except Exception:
+        return False
+    if not requested or requested not in LICENSE_STATES:
+        return False
+    try:
+        current = license_state_at(epoch)
+    except Exception as exc:
+        logger.debug("license: is_state_at underlying read failed: %s", exc)
+        return False
+    return current == requested
