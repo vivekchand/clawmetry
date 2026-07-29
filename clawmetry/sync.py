@@ -2987,6 +2987,11 @@ _V3_KNOWN_TYPES = frozenset({
     "message",
     "tool_use",
     "tool_use_result",
+    # cloud workspace conflict — all plausible casing variants (#4148)
+    "cloud_workspace_conflict",
+    "cloudWorkspaceConflict",
+    "workspace_conflict",
+    "workspaceConflict",
 })
 
 # Plumbing event types that carry no transcript-visible content. Returning
@@ -3277,6 +3282,38 @@ def _parse_v3_event(
         if raw_is_error and not is_error:
             data["benign_error"] = True
             inner["benign_error"] = True
+
+    elif t in (
+        "cloud_workspace_conflict",
+        "cloudWorkspaceConflict",
+        "workspace_conflict",
+        "workspaceConflict",
+    ):
+        # Cloud workspace conflict marker (#4148): OpenClaw emits this when the
+        # Control UI detects a conflict between the local and cloud workspace.
+        # We store it as workspace.conflict so the transcript view can surface
+        # a visual marker at the right point in the timeline.
+        event_type = "workspace.conflict"
+        paths = (
+            obj.get("conflictedPaths")
+            or obj.get("conflicted_paths")
+            or obj.get("paths")
+            or []
+        )
+        resolution = obj.get("resolution") or obj.get("resolutionAction") or obj.get("resolution_action")
+        staged_ref = obj.get("stagedRef") or obj.get("staged_ref")
+        data.update({
+            "type": "workspace.conflict",
+            "conflictedPaths": paths,
+            "resolution": resolution,
+            "stagedRef": staged_ref,
+            "timestamp": ts,
+        })
+        inner.update({
+            "conflictedPaths": paths,
+            "resolution": resolution,
+            "stagedRef": staged_ref,
+        })
 
     else:
         # Unknown v3 event — log + drop so future schema additions don't
