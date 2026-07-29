@@ -11023,6 +11023,105 @@ def api_license_is_expiring_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/age-days-at-batch")
+def api_license_age_days_at_batch():
+    """``GET /api/license/age-days-at-batch?epochs=<int>,<int>,...`` --
+    per-value batch sibling of ``/api/license/age-days-at``.
+
+    License-age axis batch companion to the ``exp``-derived
+    ``/api/license/days-until-expiry-at-batch``. Where the singular
+    endpoint folds ONE perspective epoch to ONE signed "days from
+    ``iat`` to epoch" scalar, this preserves per-value rows so a
+    scheduled-audit / retrospective tile that wants to plot license
+    age across a sequence of perspective dates (e.g. "how old was the
+    key when we shipped each of these builds?") renders off ONE
+    round-trip instead of N calls to the scalar. Wraps
+    :func:`clawmetry.license.license_age_days_at_batch`.
+
+    Row shape mirrors ``/api/license/days-until-expiry-at-batch``
+    per-row so a caller assembling a full audit timeline can zip the
+    two responses index-for-index -- "N days old and M days
+    remaining" per epoch. Same query-string posture: ``epochs=``
+    required (missing / blank / only-commas -> ``400``), comma-
+    separated tokens deduped by parsed int key preserving first-seen
+    order, non-int / ``bool`` / ``None`` tokens collapse to
+    ``days=null``. Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "license_age_days_at",
+          "count": <int>,
+          "rows":  [
+            {"epoch": <int|"<raw>">, "days": <int|null>},
+            ...
+          ],
+          "issued_at":   <int|null>,        # current on-disk iat
+          "age_days":    <int|null>,        # age NOW (clamped >= 0)
+          "has_license": <bool>,
+          "valid":       <bool>             # signature-valid AND not expired NOW
+        }
+
+    Snapshot fields are drawn from :func:`_license_issued_snapshot`
+    (the ``iat``-derived quartet), matching the singular
+    ``/api/license/age-days-at`` endpoint, so a UI binding both for
+    the same install cannot catch them disagreeing on ``issued_at`` /
+    ``has_license`` / ``valid`` / current-time ``age_days``. Note the
+    snapshot's ``age_days`` is the "now" flavour (clamped to ``>= 0``
+    for clock-skew), whereas per-row ``days`` in ``rows`` is the
+    signed perspective value -- deliberately different by design so
+    the retrospective column can render "N days before issuance" while
+    the header still hides clock-skew.
+
+    Deliberately lenient on expiry, mirroring
+    ``/api/license/age-days-at``: a signed-but-lapsed key still
+    surfaces its real per-row ``days`` and current ``age_days`` so a
+    support/audit tile can render "was 12 days old as of that date"
+    without special-casing the expired branch. The ``valid`` field
+    independently carries the "signature-valid AND not expired"
+    signal for callers that DO want to hide the row on lapsed keys.
+
+    Per-row parity with ``/api/license/age-days-at?epoch=<n>`` is
+    pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_issued_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_age_days_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "issued_at": None,
+            "age_days": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.license_age_days_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_age_days_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "license_age_days_at",
+            "count": len(rows),
+            "rows": rows,
+            "issued_at": snap["issued_at"],
+            "age_days": snap["age_days"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

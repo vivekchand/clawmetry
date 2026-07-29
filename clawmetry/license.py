@@ -2820,3 +2820,84 @@ def days_until_expiry_at_batch(epochs) -> list[dict]:
             {"epoch": parsed, "days": int(days) if isinstance(days, int) else None}
         )
     return out
+
+
+def license_age_days_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch "how old was the license?" scalar for
+    N epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`license_age_days_at`. Fills
+    the ``_at_batch`` slot on the license-age axis alongside the
+    singular :func:`license_age_days_at` and the "now" flavour
+    :func:`license_age_days`, so a scheduled-audit / retrospective tile
+    that wants to plot age across a sequence of perspective dates (e.g.
+    "how old was the key when we shipped each of these builds?")
+    renders off ONE call instead of fanning out N calls to the scalar.
+
+    Pairs on the ``iat``-derived axis the way
+    :func:`days_until_expiry_at_batch` pairs on the ``exp``-derived
+    axis: both walk the same epochs list and derive a signed integer
+    day count against a claim on the on-disk key. A caller assembling
+    an audit timeline can zip the two responses index-for-index to
+    render "on <date>, the license was N days old and had M days
+    remaining".
+
+    Row shape::
+
+        {
+          "epoch": <int> | "<raw>",
+          "days":  <int> | None,
+        }
+
+    Semantics per row mirror :func:`license_age_days_at`: a signed
+    integer number of days (zero when ``epoch == iat``; positive when
+    ``epoch`` is after ``iat`` -- the normal "N days old as of <date>"
+    case; negative when ``epoch`` is BEFORE ``iat`` -- support
+    scenario for pre-issuance perspectives); ``None`` for no license,
+    invalid signature, a signed payload with no ``iat`` claim, and
+    ``bool`` / non-numeric epochs. Row shape mirrors
+    :func:`days_until_expiry_at_batch` so a caller assembling a
+    timeline can zip the two responses index-for-index.
+
+    Deliberately NOT clamped to ``max(0, ...)`` -- unlike the "now"
+    flavour :func:`license_age_days`, which clamps because clock-skew
+    is the only way ``iat`` can be in the future when reading against
+    ``time.time()``. Here the caller EXPLICITLY passes perspective
+    epochs, so a negative row is a real, actionable signal (they asked
+    a question that only makes sense pre-issuance), not clock skew to
+    be hidden.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``days=None`` so the batch keeps
+    building.
+
+    Deliberately lenient on expiry, mirroring :func:`license_age_days_at`:
+    a signed-but-lapsed key still carries a meaningful ``iat`` and
+    callers would otherwise have to fall back to
+    :func:`current_license_info`. The :func:`is_expired` /
+    :func:`is_expiring_at` helpers independently carry the "past-
+    expiry" signals for callers that DO want to hide the row on
+    lapsed keys.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "days": None})
+            continue
+        try:
+            days = license_age_days_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: license_age_days_at_batch per-row failed: %s", exc
+            )
+            days = None
+        out.append(
+            {"epoch": parsed, "days": int(days) if isinstance(days, int) else None}
+        )
+    return out
