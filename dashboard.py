@@ -703,10 +703,16 @@ def _set_budget_config(updates):
 
 
 def _default_alerts_webhook_config():
+    # NOTE: dashboard.py defines this trio (default/load/save) TWICE; the
+    # LATER definitions (~line 9600) win at import time and carry the full
+    # schema (pagerduty/opsgenie/telegram/min_severity). This early copy is
+    # shadowed dead code kept in sync so nobody "fixes" the wrong one again.
     return {
         "webhook_url": "",
         "slack_webhook_url": "",
         "discord_webhook_url": "",
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -9591,6 +9597,13 @@ def _default_alerts_webhook_config():
         "opsgenie_api_key": "",
         # Optional EU host override for OpsGenie ("https://api.eu.opsgenie.com").
         "opsgenie_api_url": "",
+        # Telegram bot delivery (self-hosted Notifications tab). Both keys
+        # required for a send. The /api/alert-channels ROUTE accepted these
+        # since the notifications-local work, but this schema (and the save
+        # allowlist below) silently dropped them — a "saved" Telegram channel
+        # never persisted, so its card stayed on "Connect" forever.
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -9620,6 +9633,7 @@ def _save_alerts_webhook_config(updates):
     allowed = {
         "webhook_url", "slack_webhook_url", "discord_webhook_url",
         "pagerduty_routing_key", "opsgenie_api_key", "opsgenie_api_url",
+        "telegram_bot_token", "telegram_chat_id",
         "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
         "min_severity",
     }

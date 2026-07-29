@@ -393,7 +393,12 @@
       var resp = state.localMode
         ? await fetch('/api/alert-channels').then(function(r){return r.json();}).then(function(cfg){return { channels: _localRows(cfg) };})
         : await fetch('/api/cloud-proxy/api/channels').then(function(r){return r.json();});
-      state.rows = (data && data.channels) || [];
+      // Read the SAME variable the fetch assigned. This line briefly read a
+      // stale `data` name after a refactor: the ReferenceError was swallowed
+      // by the catch below, rows stayed [], and a freshly connected channel
+      // still rendered as "Connect" with the status stuck on "No channels
+      // configured yet" (live-hit 2026-07-29 on a saved Telegram config).
+      state.rows = (resp && resp.channels) || [];
     } catch (e) {
       state.rows = [];
     }

@@ -33,3 +33,35 @@ def test_alerts_tab_reads_local_channels_in_local_mode():
     assert "alertsState.localMode" in src
     assert "'/api/alert-channels'" in src, \
         "alerts channel chips must come from the local config in local mode"
+
+
+def test_channel_loader_reads_the_variable_it_declared():
+    """Regression: the loader assigned the fetch to `resp` but the next line
+    read a stale `data` name. The ReferenceError was swallowed by the
+    surrounding catch, state.rows stayed [], and a freshly connected channel
+    kept rendering as "Connect" with the status stuck on "No channels
+    configured yet" (live-hit 2026-07-29 with a saved Telegram config)."""
+    src = _read("clawmetry/templates/tabs/notifications.html")
+    assert "state.rows = (resp && resp.channels) || [];" in src
+    assert "state.rows = (data && data.channels) || [];" not in src
+
+
+def test_telegram_keys_survive_the_effective_save_load_round_trip(tmp_path, monkeypatch):
+    """Regression: the /api/alert-channels ROUTE allowlisted telegram keys but
+    dashboard._save_alerts_webhook_config (the LATER, winning definition of a
+    duplicated trio) silently dropped them - a "saved" Telegram channel never
+    persisted, its card stayed on "Connect", and the Alerts tab kept saying
+    "no channels" (live-hit 2026-07-29). This exercises the EFFECTIVE
+    functions on the imported module, so a revert of either duplicate fails."""
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_ALERTS_CONFIG_FILE",
+                        str(tmp_path / "alerts_webhook.json"))
+    saved = _d._save_alerts_webhook_config({
+        "telegram_bot_token": "12345:abcde",
+        "telegram_chat_id": "-100999",
+    })
+    assert saved.get("telegram_bot_token") == "12345:abcde"
+    assert saved.get("telegram_chat_id") == "-100999"
+    loaded = _d._load_alerts_webhook_config()
+    assert loaded.get("telegram_bot_token") == "12345:abcde"
+    assert loaded.get("telegram_chat_id") == "-100999"
