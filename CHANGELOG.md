@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feature: Notifications sits next to Approvals and Alerts (#4193) (2026-07-29)
+- **Why:** founder request with screenshot: the channel manager was buried in the collapsed Advanced drawer, so the natural journey "Alerts says no channels, where do I add one?" dead-ended two groups away from the tabs that consume it.
+- **What:** the Notifications item rides Tier-1 directly beneath Approvals and Alerts (envelope icon, tooltip naming the four channel types); removed from the Advanced drawer; data-tab id and switchTab('notifications') unchanged so deep links keep working; nav guard tests pin the new eight-item order.
+- **Verified:** live browser walk on the requesting machine: the sidebar renders with Notifications directly under Alerts and clicking it opens the channel manager ("1 channel configured, plan: trial").
+
 ### Fix: a connected notification channel actually shows as connected (#4188) (2026-07-29)
 - **Why:** the self-hosted Notifications tab unlocked locally, but a channel the user connected never showed as connected: the card stayed on "Connect", the status stuck on "No channels configured yet", and an enabled alert rule kept its "no channels" dead end.
 - **What:** the tab's channel loader read a stale variable name (the swallowed ReferenceError left the row list empty every load); and dashboard.py's duplicated alerts-webhook config trio meant the winning save function silently dropped the telegram keys the API route accepts. Both copies now persist telegram_bot_token / telegram_chat_id and the loader reads the variable it declared.
