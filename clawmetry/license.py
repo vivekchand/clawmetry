@@ -1555,6 +1555,89 @@ def pro_install_age_days() -> int | None:
     return age if age >= 0 else 0
 
 
+def pro_install_age_days_at(epoch: int) -> int | None:
+    """Scalar view of "how many days from ``installed_at`` to ``epoch``?" --
+    the perspective-epoch flavour of :func:`pro_install_age_days`, for a
+    scheduled-audit / retrospective tile that wants to answer "how old
+    was the ``clawmetry-pro`` install as of <date>?" without the caller
+    having to snapshot the marker state at that time or compute
+    ``(epoch - installed_at) // 86400`` at every call site.
+
+    Returns:
+      * ``None`` when there is nothing meaningful to derive: no marker
+        file on disk, a marker with no ``installed_at`` key, a marker
+        whose ``installed_at`` value is non-numeric / non-positive, OR
+        a non-numeric / bool ``epoch`` argument.
+      * A signed integer number of days otherwise. Zero when ``epoch``
+        equals the ``installed_at`` second; positive when ``epoch`` is
+        after ``installed_at`` (the normal case -- "N days old as of
+        <date>"); negative when ``epoch`` is BEFORE ``installed_at``
+        (support scenario: "the operator rolled a machine back to a
+        pre-provisioning timestamp -- how far before install were we?").
+
+    Deliberately NOT clamped to ``max(0, ...)`` -- unlike the "now"
+    flavour :func:`pro_install_age_days`, which clamps because clock-
+    skew is the only way ``installed_at`` can be in the future when
+    reading against ``time.time()``. Here the caller EXPLICITLY passes
+    a perspective epoch, so a negative result is a real, actionable
+    signal (they asked a question that only makes sense pre-install),
+    not clock skew to be hidden. Mirrors the signed-integer posture of
+    :func:`license_age_days_at`, which returns negative days when the
+    perspective epoch is before ``iat``.
+
+    Days are floor-divided from seconds ``(epoch - installed_at) //
+    86400``, matching how :func:`pro_install_age_days` derives its
+    "now" counterpart from ``(now - installed_at)`` so the two scalars
+    never disagree at the day boundary when ``epoch`` equals the
+    current time.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``None`` rather than a spurious "days
+    from installed_at to epoch 1" number. A non-numeric value collapses
+    to ``None`` so a caller cannot silently miscount on a typo.
+
+    Pairs with :func:`pro_installed_at` the way
+    :func:`license_age_days_at` pairs with :func:`license_issued_at`:
+    both derive from the same marker so they cannot disagree at the
+    day boundary. The perspective-epoch flavour lets a scheduled audit
+    tile answer "how old was the pro wheel when we shipped that build
+    last Friday?" without having to snapshot the marker state at those
+    times.
+
+    Independent of live importability -- an operator can have the
+    marker on disk (wheel was provisioned yesterday) even when Python
+    cannot currently import ``clawmetry-pro`` (wheel was pip-
+    uninstalled since), and the age still refers to the marker. Use
+    :func:`pro_installed` alongside this scalar for the live-import
+    signal.
+
+    Never raises. Any exception under the hood degrades to ``None`` so
+    a scheduled audit job never crashes on a bad install.
+    """
+    if isinstance(epoch, bool):
+        # ``bool`` is a subclass of ``int``; refuse it explicitly so a
+        # caller that passes ``True`` doesn't silently ask "days from
+        # installed_at to epoch 1?" and get a very negative number back.
+        return None
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        installed = pro_installed_at()
+    except Exception as exc:
+        logger.debug("license: pro_install_age_days_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(installed, int):
+        return None
+    try:
+        return (wanted - installed) // 86400
+    except Exception as exc:
+        logger.debug("license: pro_install_age_days_at arithmetic failed: %s", exc)
+        return None
+
+
 def license_nodes() -> int | None:
     """Scalar view onto the installed license's ``nodes`` claim -- the paid
     node-coverage count -- for a fleet/capacity tile that wants ONE integer
