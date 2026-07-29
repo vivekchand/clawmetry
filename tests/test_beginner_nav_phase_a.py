@@ -41,11 +41,15 @@ def _ordered_tabs(html: str) -> list:
 def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
-    tier1 = tabs[:7]
+    tier1 = tabs[:8]
+    # Notifications rides Tier-1 directly under its two consumers (Approvals,
+    # Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
+    # nobody could find where to connect a delivery channel, so enabled alert
+    # rules dead-ended at "no channels".
     assert tier1 == [
         "overview", "inventory", "brain", "usage",
-        "transcripts", "approvals", "alerts",
-    ], f"Tier-1 must be the seven beginner items in order, got {tier1}"
+        "transcripts", "approvals", "alerts", "notifications",
+    ], f"Tier-1 must be the eight beginner items in order, got {tier1}"
 
 
 def test_group_header_has_no_data_tab():
@@ -70,9 +74,9 @@ def test_no_tab_lost_in_restructure():
     nav = _nav_block()
     tabs = set(_ordered_tabs(nav))
     expected = {
-        # Tier-1
+        # Tier-1 (notifications promoted from Advanced, founder 2026-07-29)
         "overview", "inventory", "brain", "usage", "transcripts",
-        "approvals", "alerts",
+        "approvals", "alerts", "notifications",
         # Developer drawer. Phase B (UX_AUDIT.md) deliberately moved the
         # session-scoped views (tracing, turn-anatomy, swimlane) OUT of the
         # nav and into the session drill-down - their pages and switchTab ids
@@ -80,7 +84,7 @@ def test_no_tab_lost_in_restructure():
         "flow", "models", "context", "agents",
         "tool-catalog", "context-economics", "harness", "dives",
         # Advanced
-        "crons", "memory", "notifications", "security", "policy", "skills",
+        "crons", "memory", "security", "policy", "skills",
         "selfevolve", "version-impact", "nemoclaw",
     }
     missing = expected - tabs

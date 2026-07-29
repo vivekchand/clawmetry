@@ -12233,6 +12233,14 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+      {# Notifications sits directly under its two consumers (Approvals,
+         Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
+         nobody could find where to connect a delivery channel, so enabled
+         alert rules dead-ended at "no channels". #}
+      <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
+        <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
+        <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
+      </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
          header must not steal the overview highlight from Home). Collapsed by
@@ -12285,9 +12293,6 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
         <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
-        <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live OpenClaw log stream">
         <span class="left-nav-label">Logs</span>
