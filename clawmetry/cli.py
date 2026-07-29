@@ -759,6 +759,33 @@ def _keychain_set(node_id: str, key: str) -> None:
         pass
 
 
+def _reset_family_sync_marks() -> int:
+    """Drop the family-runtime high-water marks so the next daemon pass
+    re-ingests every session and pushes the full set to the cloud.
+
+    Sessions ingested during local-only operation are stamped "done" in
+    ``family_event_high_water``; without this reset, the first pass after
+    ``clawmetry connect`` skips them all and the cloud account never sees
+    the node's history. Local re-ingest is idempotent (PK upserts), so the
+    only cost is one full re-read. Returns the number of session marks
+    cleared (0 when there is nothing to backfill)."""
+    import json as _json
+    state_file = Path.home() / ".clawmetry" / "sync-state.json"
+    try:
+        with open(state_file, encoding="utf-8") as fh:
+            state = _json.load(fh)
+    except (FileNotFoundError, ValueError, OSError):
+        return 0
+    marks = state.pop("family_event_high_water", None)
+    if not marks:
+        return 0
+    tmp = state_file.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        _json.dump(state, fh)
+    os.replace(tmp, state_file)
+    return len(marks)
+
+
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
     # #1937: respect the persistent local-only marker. If the user did
@@ -993,6 +1020,20 @@ def _cmd_connect(args) -> None:
             print("  Re-enabled cloud sync (was local-only)")
     except Exception:
         pass
+
+    # Backfill guarantee: sessions ingested while the node ran local-only are
+    # stamped "done" in the family high-water marks, so the first cloud-
+    # connected pass would skip them all and the cloud dashboard would sit at
+    # 0 sessions forever (founder live-hit 2026-07-29: local said Connected,
+    # cloud said "No machines connected yet"). Clearing the marks makes the
+    # next family pass re-ingest every session (idempotent PK upserts locally)
+    # and push the full set to the newly connected account.
+    try:
+        _cleared = _reset_family_sync_marks()
+        if _cleared:
+            print(f"  Queued {_cleared} existing session(s) for cloud backfill")
+    except Exception:
+        pass  # connect must never fail because of backfill housekeeping
 
     print()
     print(f"  Connected as: {node_id}")
