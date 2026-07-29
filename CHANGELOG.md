@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: a connected notification channel actually shows as connected (#4188) (2026-07-29)
+- **Why:** the self-hosted Notifications tab unlocked locally, but a channel the user connected never showed as connected: the card stayed on "Connect", the status stuck on "No channels configured yet", and an enabled alert rule kept its "no channels" dead end.
+- **What:** the tab's channel loader read a stale variable name (the swallowed ReferenceError left the row list empty every load); and dashboard.py's duplicated alerts-webhook config trio meant the winning save function silently dropped the telegram keys the API route accepts. Both copies now persist telegram_bot_token / telegram_chat_id and the loader reads the variable it declared.
+- **Verified:** live on the reporting machine: saving a Telegram channel echoes the token, persists across reload, the tab renders "1 channel configured, plan: trial" with the Telegram card on Edit + Test, and the Alerts tab shows zero "no channels" chips; the two new tests fail on the un-fixed code.
+
 ### Fix: the full event log is visible, nothing stripped (#4181) (2026-07-29)
 - **Why:** every Activity/Brain feed row was cut at exactly 200 characters server-side (300 on the legacy and SSE paths), mid-word, and expanding a row showed the same stub because the server had already thrown the rest away; encrypted-thinking rows rendered as blank lines that read like more truncation.
 - **What:** the local-store fast path, the legacy JSONL path, and the SSE live stream serve the complete detail (bounded upstream by the 64 KB ingest cap on tool-result bodies); collapsed rows line-clamp to three lines client-side and click-to-expand reveals everything; thinking events whose text the runtime never stored get an honest placeholder.
