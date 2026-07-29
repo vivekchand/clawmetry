@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feature: onboard signs you in first, then hands you a 7-day Pro trial (#4220) (2026-07-29)
+- **Why:** the menu asked a hosting question (local/cloud/key) at the exact moment the user wants to see their agents, and the anonymous instant-register path meant sign-ups with no identity; the founder's spec: authenticate everyone first (Google, GitHub, or email OTP), then unlock every runtime locally through a real trial license key on the same rail Self-Hosted Pro uses.
+- **What:** [1] Sign in / Sign up (default) runs the existing connect auth then calls the cloud's POST /api/license/trial/signup and activates the returned 7-day tier=trial key locally; re-runs reissue the same trial (original expiry, one per email across the CLI and dashboard flows) and an expired trial prints an honest notice. [2] License key forks on "do you have one?" and sends key-less users to clawmetry.com/pricing?deploy=self with the Self-Hosted toggle preselected. [3] Skip for now is the old local-only. EOF/no-TTY/--local/CLAWMETRY_LOCAL_ONLY still never mint an account; anonymous _instant_register is no longer reachable from onboard.
+- **Verified:** 22 onboard tests green including full sign-in→trial→activate wiring against a faked endpoint; menu + detection copy rendered live on a 10-runtime machine; pricing deep-link browser-verified live (data-deployment="self", Buy License CTAs).
+
 ### Release fix: republish so the detection grid actually ships (#4218) (2026-07-29)
 - **Why:** the published 0.12.587 wheel was built from a stale checkout: cracking it shows the pre-#4215 runtime_probe (per-line tier labels) and dashboard.py still at 0.12.586, even though the v0.12.587 tag points at the correct merge commit. The FLYWHEEL-documented release race (0.12.453 class): a wheel must be verified, not assumed, before the version is treated as carrying the change.
 - **What:** no code change; this release exists to rebuild from current main so the next published wheel contains #4215.
