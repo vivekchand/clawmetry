@@ -10051,6 +10051,106 @@ def api_license_age_days_at():
     )
 
 
+@bp_entitlement.route("/api/license/is-expired-at")
+def api_license_is_expired_at():
+    """``GET /api/license/is-expired-at?epoch=<int>`` -- boolean gate
+    for "was the installed license expired evaluated as of ``epoch``?" --
+    the perspective-epoch flavour of ``/api/license/is-expired``, for a
+    scheduled-audit / retrospective tile that wants to answer "would we
+    have shown the expired banner on <date>?" without the caller having
+    to compare ``exp`` against a specific epoch themselves.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_expired_at": <bool>,           # true iff exp <= epoch on a signed key
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp for comparison
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired NOW
+        }
+
+    ``is_expired_at`` mirrors :func:`clawmetry.license.is_expired_at`:
+
+      * ``false`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), on the perpetual-license branch
+        (no ``exp`` to compare against), when ``exp`` is strictly greater
+        than ``epoch`` (the key was not yet expired at that perspective),
+        OR when ``epoch`` doesn't parse as an integer.
+      * ``true`` iff the installed key is signature-valid, carries an
+        ``exp`` claim, AND ``exp <= epoch``.
+
+    Deliberately lenient on expiry NOW, unlike ``/api/license/is-expiring-at``
+    (which refuses lapsed keys because a renewal-window predicate on a
+    lapsed key would push callers to gate the WRONG UI). A retrospective
+    "was this expired on <date>?" tile absolutely should keep firing
+    ``true`` on a lapsed key -- that IS the support scenario -- so
+    ``is_expired_at`` still returns ``true`` on a signed-but-lapsed key
+    when ``epoch`` falls at or after ``exp``. The ``valid`` field
+    independently carries the "signature-valid AND not expired NOW"
+    signal for callers that DO want to gate off the current-state
+    validity.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to
+        ``is_expired_at=false`` with ``requested_epoch=null`` so a
+        caller cannot silently mis-gate on a typo. HTTP status is 200
+        either way -- the "bad input" signal is the ``false`` result,
+        not a 4xx, matching the never-crash posture of the surrounding
+        license endpoints.
+
+    Pairs with ``/api/license/is-expiring-at`` and
+    ``/api/license/days-until-expiry-at`` -- all three share the
+    perspective-epoch input pattern and the
+    :func:`_license_expires_snapshot` reader, so a UI binding any two
+    for the same install cannot catch them disagreeing on
+    ``expires_at`` / ``has_license`` / ``valid``. Together they let a
+    dashboard render "on <date>, the license would have been N days
+    from expiry, matched a specific ``exp`` value, and was expired?"
+    from three orthogonal one-shot GETs.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{is_expired_at: false, requested_epoch: null, expires_at: null,
+    has_license: false, valid: false}`` (the OSS-free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_expires_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_expired_at: snapshot error: %s", exc)
+        snap = {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    matched = False
+    if requested is not None:
+        try:
+            from clawmetry import license as _lic
+
+            matched = _lic.is_expired_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_is_expired_at: derive error: %s", exc)
+            matched = False
+    return jsonify(
+        {
+            "is_expired_at": bool(matched),
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}

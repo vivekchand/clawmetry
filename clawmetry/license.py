@@ -1343,6 +1343,73 @@ def is_expired() -> bool:
         return False
 
 
+
+def is_expired_at(epoch: int) -> bool:
+    """Boolean gate for "was the installed license expired evaluated as of
+    ``epoch``?" -- the perspective-epoch flavour of :func:`is_expired`, for
+    a scheduled-audit tile that wants to answer "would we have shown the
+    expired banner on <date>?" without the caller having to snapshot the
+    license state at that time or compare ``exp`` to a caller-supplied
+    epoch themselves.
+
+    Returns ``True`` iff a license is installed, signature-valid, carries
+    an ``exp`` claim, AND ``exp <= epoch``. Returns ``False`` for every
+    other state: no license file, invalid signature (an attacker could
+    stuff any ``exp`` into an unsigned body, so we refuse to trust it),
+    perpetual / no-``exp`` keys (nothing to compare against), and any
+    ``exp`` value strictly greater than ``epoch``.
+
+    When ``epoch`` equals "now", this predicate must agree with
+    :func:`is_expired` for the same install -- both derive from the same
+    signed ``exp`` claim and use the same ``<=`` cutoff, so the two
+    scalars cannot disagree at the boundary. On any other epoch this
+    helper answers the retrospective question that :func:`is_expired`
+    cannot -- e.g. "was this key already expired last Friday?" (positive
+    signal even on a key that has since been renewed) or "will this key
+    be expired at our next quarterly audit?" (positive signal on an
+    active key whose ``exp`` falls before the audit date).
+
+    Deliberately lenient on expiry NOW, unlike :func:`is_expiring_at`
+    (which refuses lapsed keys because a renewal-window predicate on a
+    lapsed key would push callers to gate the WRONG UI). A retrospective
+    "was this expired on <date>?" tile absolutely should keep firing
+    ``True`` on a lapsed key -- that is the entire support scenario --
+    so the "signature-valid" check here does NOT roll in the "not
+    expired now" clause the sibling :func:`is_expiring_at` uses.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``False`` back rather than a spurious
+    "was the key expired at epoch 1?" answer. A non-numeric value
+    collapses to ``False`` so a caller cannot silently mis-gate on a
+    typo.
+
+    Never raises. Any underlying introspection failure (import error,
+    corrupt install, cryptography-lib mismatch) collapses to ``False``
+    so a scheduled audit job never crashes on a bad install.
+    """
+    if isinstance(epoch, bool):
+        # ``bool`` is a subclass of ``int``; refuse it explicitly so a
+        # caller that passes ``True`` doesn't silently ask "was the key
+        # expired at epoch 1?" and get a positive answer back.
+        return False
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return False
+    try:
+        exp = license_expires_at()
+    except Exception as exc:
+        logger.debug("license: is_expired_at underlying read failed: %s", exc)
+        return False
+    if not isinstance(exp, int):
+        # ``license_expires_at`` returns None for no-license, invalid-
+        # signature, and perpetual branches. Nothing to compare against
+        # in any of those cases.
+        return False
+    return exp <= wanted
+
+
 def is_perpetual() -> bool:
     """True iff an installed, signature-valid license carries no ``exp`` claim.
 
