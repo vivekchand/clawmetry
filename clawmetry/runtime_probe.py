@@ -124,10 +124,10 @@ def render_detection_lines(probes: list) -> list:
     paid = [p for p in found if not p.get("free")]
     if len(paid) == 1:
         lines.append(
-            f"{paid[0]['label']} unlocks with Cloud [2] below or a license key [3] (clawmetry activate <key>)."
+            f"Sign in [1] below for a free 7-day Pro trial that unlocks {paid[0]['label']} too, or paste a license key [2]."
         )
     elif paid:
         lines.append(
-            f"The other {len(paid)} unlock with Cloud [2] below or a license key [3] (clawmetry activate <key>)."
+            f"Sign in [1] below for a free 7-day Pro trial of the other {len(paid)}, or paste a license key [2]."
         )
     return lines

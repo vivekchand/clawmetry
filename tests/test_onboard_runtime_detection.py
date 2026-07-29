@@ -70,7 +70,7 @@ def test_render_free_only_machine_has_no_pro_cta():
 
 def test_render_paid_detected_names_runtime_and_both_paths():
     """The founder's exact ask: show detections, state the free tier,
-    offer the license key AND the cloud signup for the rest."""
+    offer sign-in (trial) AND the license key for the rest."""
     probes = [
         {"id": "claude_code", "label": "Claude Code", "free": False, "found": True},
         {"id": "cursor", "label": "Cursor", "free": False, "found": True},
@@ -80,8 +80,8 @@ def test_render_paid_detected_names_runtime_and_both_paths():
     joined = "\n".join(lines)
     assert "Claude Code" in joined and "Cursor" in joined
     assert "Free forever: OpenClaw and NVIDIA NemoClaw." in joined
-    assert "clawmetry activate" in joined
-    assert "Cloud" in joined
+    assert "Sign in [1]" in joined and "7-day Pro trial" in joined
+    assert "license key [2]" in joined
     # The em-dash/double-dash ban applies to user-facing copy.
     assert "—" not in joined and "--" not in joined
 
@@ -105,7 +105,7 @@ def test_render_grid_compact_no_per_line_tier_labels():
     assert len(grid) == 4  # 3 + 3 + 3 + 1
     assert grid[0].count("[x]") == 3
     assert "Detected 10 AI agent runtimes" in lines[0]
-    assert "The other 9 unlock" in joined
+    assert "trial of the other 9" in joined
 
 
 def test_render_single_paid_runtime_named_in_unlock_line():
@@ -113,8 +113,8 @@ def test_render_single_paid_runtime_named_in_unlock_line():
         {"id": "cursor", "label": "Cursor", "free": False, "found": True},
     ]
     joined = "\n".join(render_detection_lines(probes))
-    assert "Cursor unlocks with Cloud" in joined
-    assert "clawmetry activate" in joined
+    assert "unlocks Cursor too" in joined
+    assert "Sign in [1]" in joined and "license key [2]" in joined
 
 
 def test_render_nothing_detected_is_silent():
