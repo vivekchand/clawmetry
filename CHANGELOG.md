@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: Self-Hosted sign-in never touches the cloud dashboard (#4258) (2026-07-30)
+- **Why:** founder live-run: the Self-Hosted trial sign-in held the data promise (marker kept, 0 nodes synced) but connect's finale ran the cloud ceremony anyway: E2E key prompt + secret printed, then "All done! Opening your dashboard..." launching app.clawmetry.com/cloud with the key in the URL fragment.
+- **What:** keep-local sign-ins say "Verifying your account…", skip the encryption-key ceremony entirely (silent auto-generate), never print the secret or a cloud URL, and end by opening http://localhost:8900. Drive-by: probe-count asserts 14 -> 15 for n8n.
+- **Verified:** 29 onboard/probe tests green.
+
 ### Fix: OTP sign-in is recoverable (#4257) (2026-07-30)
 - **Why:** founder live-hit at the 6-digit-code prompt: a typo'd email or an undelivered code was a dead end (no resend, no change-email, a stray Enter burned one of the 3 attempts, three failures dropped to a raw paste-an-API-key prompt) — the classic OTP abandonment point.
 - **What:** at the code prompt r resends and typing an email IS the typo fix (switches address, fresh code there); blank input never burns an attempt; three wrong codes offer a different-email/resend/stop fork; send failures offer corrected-email retry; invalid emails get one re-prompt, with a hint line printed right after send.
