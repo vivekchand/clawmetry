@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: local-only tells the truth everywhere + Managed-first onboard (#4264, #4265) (2026-07-30)
+- **Why:** founder live-hits on a signed-in Self-Host node: green "Cloud Connected" badge, "Cloud sync: Connected" in status, and "Synced ... (E2E encrypted)" daemon logs — on a machine whose nocloud marker was correctly blocking all egress (cloud showed zero nodes). Separately, the Activity pane parked forever on "Failed to load: timeout" from an SSE connection-slot leak plus a never-retried boot-jank abort.
+- **What:** /api/cloud-cta/status returns {connected, account_linked, local_only} with local-only winning; the badge renders an amber Local-only pill; clawmetry status prints "Local-only (account linked; data stays on this machine)" (+ cloud_sync.local_only in --json); the daemon cycle logs "Ingested locally (local-only, nothing sent)". Activity: switchTab closes pane-scoped SSE streams; one deferred retry heals the timeout error. Onboard: [1] Managed (default; we host, easy for a large fleet, both app.clawmetry.com and localhost:8900) / [2] Self-Host (great for one node, fleet is yours); cloud finale ensures the local dashboard serves; headless/EOF still never creates an account.
+- **Verified:** all four honesty surfaces live-verified on the reporting machine (marker present, zero cloud nodes); Activity settles into a rendered feed with 3 concurrent streams; 20 onboard tests green.
+
 ### Fix: Self-Hosted sign-in never touches the cloud dashboard (#4258) (2026-07-30)
 - **Why:** founder live-run: the Self-Hosted trial sign-in held the data promise (marker kept, 0 nodes synced) but connect's finale ran the cloud ceremony anyway: E2E key prompt + secret printed, then "All done! Opening your dashboard..." launching app.clawmetry.com/cloud with the key in the URL fragment.
 - **What:** keep-local sign-ins say "Verifying your account…", skip the encryption-key ceremony entirely (silent auto-generate), never print the secret or a cloud URL, and end by opening http://localhost:8900. Drive-by: probe-count asserts 14 -> 15 for n8n.
