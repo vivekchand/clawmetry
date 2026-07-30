@@ -269,7 +269,7 @@ print(json.dumps(sorted(set(a) | set(b))))
         run: |
           TODAY=$(date -u +%Y-%m-%d)
           BODY="<!-- c6-daily-ping --> **C6 daily ping ${TODAY}:** clawmetry/main branch protection does not yet require E2E checks. 6/7 criteria green. Fastest close: [Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches) > Required status checks > add \`E2E Gate (required)\` (60 s, no token needed). Or run \`bash scripts/close-c6.sh\` from a terminal."
-          gh issue comment 3864 --repo vivekchand/clawmetry --body "$BODY"
+          gh issue comment 4029 --repo vivekchand/clawmetry --body "$BODY"
 
       - name: Error: E2E_ADMIN_PAT not set
         if: steps.pat-check.outputs.has_pat == 'false' && steps.read-state.outputs.checks_ok != 'true'

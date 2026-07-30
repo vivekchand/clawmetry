@@ -25,9 +25,9 @@ def test_probe_catalogue_covers_all_supported_runtimes():
     """One probe per supported runtime, ids unique, free set exact."""
     ids = [p.id for p in RUNTIME_PROBES]
     assert len(ids) == len(set(ids))
-    assert len(ids) == 14
+    assert len(ids) == 15  # n8n joined 2026-07-30
     assert FREE_RUNTIMES == {"openclaw", "nemoclaw"}
-    for rt in ("claude_code", "cursor", "codex", "qwen_code", "picoclaw"):
+    for rt in ("claude_code", "cursor", "codex", "qwen_code", "picoclaw", "n8n"):
         assert rt in ids
 
 
@@ -130,5 +130,5 @@ def test_probes_never_raise_when_probe_explodes(monkeypatch):
         lambda self: (_ for _ in ()).throw(OSError("boom")),
     )
     results = probe_runtimes()
-    assert len(results) == 14
+    assert len(results) == 15
     assert all(p["found"] is False for p in results)
