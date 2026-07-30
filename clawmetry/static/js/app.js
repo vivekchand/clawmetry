@@ -1206,6 +1206,28 @@ function switchTab(name) {
   _cmCurrentTab = name;
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
+  // ...and CLOSE pane-scoped streams that don't belong to the tab we're
+  // entering. Dwell only gates OPENS: streams from a left pane kept their
+  // connection slots, so Activity->Flow stacked brain-stream (x2: Activity
+  // + Flow's own brain feed) + flow-events on top of the boot-level logs +
+  // health streams — 5 of the browser's 6 per-origin HTTP/1.1 slots — and
+  // every new fetch starved into "Failed to load: timeout" while curl
+  // answered in 30ms (founder live-hit 2026-07-30, 107 stream connections
+  // recorded in one tab). Each pane re-opens its own stream on entry and
+  // every starter guards on readyState, so closing here is idempotent.
+  var _paneSSE = {
+    brain: ['_brainSSE'],
+    flow: ['_flowBrainSse', '_flowSse'],
+  };
+  Object.keys(_paneSSE).forEach(function(pane) {
+    if (pane === name) return;
+    _paneSSE[pane].forEach(function(key) {
+      try {
+        var es = window[key];
+        if (es && typeof es.close === 'function') { es.close(); window[key] = null; }
+      } catch (e) {}
+    });
+  });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   // Phase-1 IA refactor (issue #1659): also clear/set .active on left-nav.
@@ -7144,6 +7166,16 @@ async function loadBrainPage(silent) {
       var stillLoading = /Loading/i.test(el.innerText || '');
       if (!silent || stillLoading) {
         el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadBrainPage()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+      }
+      // Boot-time main-thread jank can abort this fetch at its 20 s cap
+      // while the server answers in <50 ms once the thread clears (founder
+      // live-hit 2026-07-30). The pane then parked on this error FOREVER:
+      // the 5 s poll fallback below is disabled the moment SSE connects,
+      // and the SSE handler appends into a list this error just wiped.
+      // One deferred retry heals it; the manual Retry button stays.
+      if (!window.__bhTimeoutRetried && /timeout/i.test(String(e))) {
+        window.__bhTimeoutRetried = true;
+        setTimeout(function() { try { loadBrainPage(); } catch (_) {} }, 4000);
       }
     }
   }
