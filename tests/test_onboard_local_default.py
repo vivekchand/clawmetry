@@ -278,7 +278,8 @@ def test_already_connected_shows_two_options_and_shared_plans(onboard_env, monke
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     cli._cmd_onboard(_args())
     out = capsys.readouterr().out
-    assert "[1] We host it" in out and "[2] You host it" in out
+    assert "[1] Cloud" in out and "[2] Self-Host" in out
+    assert "We host the dashboard for you" in out
     assert "Plans" in out and "Starter $9/node/mo" in out and "Pro    $19/node/mo" in out
     assert out.count("$9") == 1 and out.count("$19") == 1, "plans stated once, not per option"
     assert "watch OpenClaw + NVIDIA NemoClaw" in out
