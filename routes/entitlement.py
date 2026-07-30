@@ -377,6 +377,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -11443,6 +11444,171 @@ def api_license_expiring_within_at_batch():
             "kind": "expiring_within_at",
             "count": len(rows),
             "threshold_days": threshold,
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+def _parse_license_days_csv(param: str = "days"):
+    """Shared query-string pre-parser for the days-axis batch endpoint
+    below.
+
+    Mirrors :func:`_parse_license_epochs_csv` but on the ``days``
+    axis: returns ``(raw_tokens, err)`` where ``err == "missing"`` when
+    ``?days=`` is absent or blank after stripping / commas so the caller
+    can return ``400 missing days`` uniformly, ``None`` otherwise.
+    Tokens are NOT int-coerced here on purpose: the batch helper admits
+    "bad" tokens (``bool``, non-numeric string, ``None``, negative int)
+    as their own row so callers can identify the offending threshold in
+    the response rather than having the ``400`` hide the whole batch on
+    a single typo.
+    """
+    raw = request.args.get(param)
+    if raw is None:
+        return [], "missing"
+    tokens = [tok.strip() for tok in str(raw).split(",")]
+    tokens = [tok for tok in tokens if tok]
+    if not tokens:
+        return [], "missing"
+    return tokens, None
+
+
+@bp_entitlement.route("/api/license/expiring-within-days-at-batch")
+def api_license_expiring_within_days_at_batch():
+    """``GET /api/license/expiring-within-days-at-batch?days=<int>,<int>,
+    ...&epoch=<int>`` -- days-axis batch sibling of
+    ``/api/license/expiring-within-at``.
+
+    Complement of ``/api/license/expiring-within-at-batch`` on the
+    orthogonal axis: where that endpoint fans a fixed ``days`` threshold
+    across N perspective epochs, this fans N ``days`` thresholds across
+    a SINGLE perspective epoch. The natural shape for a "renewal
+    urgency" tile that wants to fire at multiple thresholds (7 / 14 /
+    30 / 60 days) off ONE hydration rather than 4 calls to
+    ``/api/license/expiring-within-at?days=<d>``. Wraps
+    :func:`clawmetry.license.is_expiring_within_days_at_batch`.
+
+    Query parameters:
+
+      * ``days`` (CSV, required) -- comma-separated renewal-window
+        thresholds. Missing / blank / only-commas -> ``400 missing days``.
+        Tokens are int-coerced by the helper; non-int / ``bool`` /
+        ``None`` / negative tokens collapse to
+        ``expiring_within=false`` per-row (their slot is preserved so
+        the row length still matches N).
+      * ``epoch`` (int, optional) -- the perspective epoch (Unix
+        seconds) applied to EVERY row. Defaults to the current time
+        (matches the singular ``/api/license/expiring-within-at`` on the
+        "as of now" branch). Non-numeric / ``bool`` collapses every row
+        to ``expiring_within=false`` with ``epoch`` echoed back as the
+        raw token, matching the never-4xx / never-5xx posture of the
+        surrounding batch endpoints.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "expiring_within_days_at",
+          "count": <int>,               # len(rows)
+          "epoch": <int>|"<raw>",       # int-coerced epoch (or the
+                                        #   original token if bad)
+          "rows":  [
+            {"days": <int|"<raw>">, "expiring_within": <bool>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Shares the current-time snapshot fields with the sibling
+    ``/api/license/expiring-within-at-batch`` so a UI binding both for
+    the same install cannot catch them disagreeing on ``state`` /
+    ``expires_at`` / ``has_license`` / ``valid``. Never 5xxs: an
+    underlying snapshot / batch failure degrades to the OSS-free
+    fallback shape.
+
+    Deliberately strict on validity, mirroring
+    ``/api/license/expiring-within-at`` and its sibling epochs-axis
+    batch: a predicate that fired ``true`` on a lapsed key would push
+    callers to gate renewal UI on a value that no longer implies
+    entitlement. Per-row parity with ``/api/license/expiring-within-at
+    ?days=<d>&epoch=<n>`` is pinned in the test suite so the batch
+    cannot silently drift from the scalar endpoint.
+    """
+    raw_epoch = request.args.get("epoch")
+    if raw_epoch is None:
+        parsed_epoch = int(time.time())
+        epoch_field: object = parsed_epoch
+        epoch_ok = True
+    else:
+        if isinstance(raw_epoch, bool):
+            parsed_epoch = 0
+            epoch_field = str(raw_epoch)
+            epoch_ok = False
+        else:
+            try:
+                parsed_epoch = int(raw_epoch)
+                epoch_field = parsed_epoch
+                epoch_ok = True
+            except (TypeError, ValueError):
+                parsed_epoch = 0
+                epoch_field = str(raw_epoch)
+                epoch_ok = False
+    tokens, err = _parse_license_days_csv("days")
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_expiring_within_days_at_batch: snapshot error: %s",
+            exc,
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        if epoch_ok:
+            rows = _lic.is_expiring_within_days_at_batch(tokens, parsed_epoch)
+        else:
+            # Bad ``epoch=`` collapses every row to False while preserving
+            # the row slots. Delegate to the same batch helper with a
+            # sentinel bool that the helper refuses -- keeps the dedup /
+            # bad-token bucketing consistent with the "good" path.
+            rows = _lic.is_expiring_within_days_at_batch(tokens, True)
+    except Exception as exc:
+        logger.warning(
+            "api_license_expiring_within_days_at_batch: derive error: %s",
+            exc,
+        )
+        rows = []
+    # Batch helper emits ``is_expiring_within`` per row; rename to
+    # ``expiring_within`` here so the HTTP row field matches the scalar
+    # endpoint's ``/api/license/expiring-within-at`` response shape
+    # (``expiring_within``) and a caller can hydrate a paywall tile off
+    # either endpoint interchangeably.
+    rows = [
+        {
+            "days": row["days"],
+            "expiring_within": bool(row["is_expiring_within"]),
+        }
+        for row in rows
+    ]
+    return jsonify(
+        {
+            "kind": "expiring_within_days_at",
+            "count": len(rows),
+            "epoch": epoch_field,
             "rows": rows,
             "state": snap["state"],
             "expires_at": snap["expires_at"],

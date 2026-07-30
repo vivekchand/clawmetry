@@ -2942,6 +2942,157 @@ def is_expiring_within_at_batch(days: int, epochs) -> list[dict]:
     return out
 
 
+def _license_days_batch_keys(days_list):
+    """Shared iterable-of-``days`` pre-parser for the days-axis batch
+    helpers below.
+
+    Mirrors :func:`_license_epoch_batch_keys` but yields the coerced
+    ``days`` thresholds a caller wants to fan a single perspective epoch
+    across (e.g. "would the renewal banner fire at 7 / 14 / 30 / 60
+    days?"). Preserves per-token slots so a row's ``days`` label matches
+    the input token even when parsing fails, and dedupes by parsed int
+    key preserving first-seen order for byte-stable output.
+
+    Yields ``(raw, key, parsed)`` triples where:
+
+      * ``raw`` is the original input token, preserved so the batch can
+        surface it in the row label without a re-scan.
+      * ``key`` is the normalisation key used for de-dup: ``str(parsed)``
+        for a successfully parsed int, or ``("__bad__", repr(raw),
+        id(raw))`` for anything the scalar
+        :func:`is_expiring_within_at` would refuse -- each bogus input
+        keeps its own slot so the output length still matches N.
+      * ``parsed`` is the coerced ``int`` (only meaningful when the row
+        is well-formed; ``None`` for the bad-input path).
+
+    Rejects ``bool`` explicitly (subclass of ``int`` -- would silently
+    ask "days=1?") matching the scalar's stance, and treats ``None`` /
+    non-numeric strings / negative ints as bad input so a caller cannot
+    silently mis-gate on a typo.
+    """
+    seen = set()
+    if days_list is None:
+        return
+    try:
+        iterator = iter(days_list)
+    except TypeError:
+        return
+    for raw in iterator:
+        if isinstance(raw, bool):
+            key = ("__bad__", repr(raw), id(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield raw, key, None
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            key = ("__bad__", repr(raw), id(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield raw, key, None
+            continue
+        if parsed < 0:
+            key = ("__bad__", repr(raw), id(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield raw, key, None
+            continue
+        key = str(parsed)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield raw, key, parsed
+
+
+def is_expiring_within_days_at_batch(days_list, epoch: int) -> list[dict]:
+    """Per-value renewal-window "would we have shown a renewal warning
+    at ``epoch`` for THIS days threshold?" gate for N thresholds in ONE
+    round-trip.
+
+    Days-axis batch sibling of :func:`is_expiring_within_at`. Where the
+    existing epochs-axis batch :func:`is_expiring_within_at_batch` fans a
+    single ``days`` threshold across N perspective epochs, this fans N
+    ``days`` thresholds across a SINGLE perspective epoch -- the natural
+    shape for a "renewal urgency" tile that wants to fire at multiple
+    thresholds (7 / 14 / 30 / 60 days) off ONE hydration. The two
+    batches are complements on orthogonal axes of the same scalar; a
+    caller wanting a full grid still calls one per epoch (or the scalar
+    N * M times), but the common cases (fixed threshold across dates,
+    fixed date across thresholds) each hit ONE round-trip instead of N.
+
+    ``epoch`` is the perspective epoch (Unix seconds) applied to EVERY
+    row. It is coerced through ``int()``; ``bool`` is explicitly refused
+    (would silently ask "as of epoch 1?"), and a non-numeric ``epoch``
+    collapses every row to ``is_expiring_within=False`` while preserving
+    row slots so the output length still matches N (matches the
+    never-mis-gate posture of the sibling batch on the ``days`` axis
+    when ``epochs`` is bad).
+
+    Row shape::
+
+        {
+          "days":                <int> | "<raw>",
+          "is_expiring_within":  <bool>,
+        }
+
+    Semantics per row mirror :func:`is_expiring_within_at`: ``True`` iff
+    a license is installed, signature-valid, carries an ``exp`` claim,
+    AND the days from ``epoch`` until ``exp`` fall between 0 and
+    ``days`` inclusive. An already-lapsed-at-epoch install collapses
+    every row to ``False`` (negative remaining doesn't sit inside any
+    threshold >= 0; a different, louder ``is_expired_at`` banner
+    covers that state). Perpetual licenses (no ``exp`` claim) and the
+    no-license path both yield ``False`` on every row: nothing to warn
+    about.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``days_list is None`` or non-iterable -- returns ``[]``. Never
+    raises: per-row failures short-circuit to
+    ``is_expiring_within=False`` so the batch keeps building. Matches
+    the never-mis-gate posture used by :func:`is_expiring_within_at` --
+    a bad row cannot silently fire a renewal prompt.
+    """
+    if isinstance(epoch, bool):
+        epoch_ok = False
+        parsed_epoch = 0
+    else:
+        try:
+            parsed_epoch = int(epoch)
+            epoch_ok = True
+        except (TypeError, ValueError):
+            parsed_epoch = 0
+            epoch_ok = False
+    out: list[dict] = []
+    for raw, _key, parsed in _license_days_batch_keys(days_list):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"days": token, "is_expiring_within": False})
+            continue
+        if not epoch_ok:
+            out.append({"days": parsed, "is_expiring_within": False})
+            continue
+        try:
+            matched = is_expiring_within_at(parsed, parsed_epoch)
+        except Exception as exc:
+            logger.debug(
+                "license: is_expiring_within_days_at_batch per-row failed: %s",
+                exc,
+            )
+            matched = False
+        out.append(
+            {"days": parsed, "is_expiring_within": bool(matched)}
+        )
+    return out
+
+
 def days_until_expiry_at_batch(epochs) -> list[dict]:
     """Per-value perspective-epoch "days until expiry" scalar for N
     epochs in ONE round-trip.
