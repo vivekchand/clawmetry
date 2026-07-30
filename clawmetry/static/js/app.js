@@ -7091,15 +7091,22 @@ async function loadBrainPage(silent) {
     var data = await _bhRaw.json();
     if (_bhRange !== _brainRange) return; // stale response for an old range
     // Hosted relay warm-up: the cloud answered "asked your node, poll me
-    // again" — show an honest status and retry a few times (the node
-    // answers within one heartbeat when it is online).
+    // again" — show an honest status and keep polling. Budget: a node
+    // mid-ingest (e.g. a deep runtime backfill) can hold its next heartbeat
+    // for 2-3 minutes, so allow ~5 min (12 quick polls, then 10s apart)
+    // before declaring failure. The old 12-poll (~40s) budget was shorter
+    // than one busy heartbeat and produced false "could not reach your
+    // node" errors while the node was fine (2026-07-30 window RCA).
     if (_bhRange && data && data._source === 'relay_pending') {
       var stEl = document.getElementById('brain-history-banner-status');
-      if (stEl) stEl.textContent = t('brain.window_fetching', null, 'Fetching this window from your node…');
-      if (_brainRangeRetries++ < 12) {
+      var _bhTry = _brainRangeRetries++;
+      if (stEl) stEl.textContent = _bhTry < 12
+        ? t('brain.window_fetching', null, 'Fetching this window from your node…')
+        : t('brain.window_fetching_busy', null, 'Your node is busy syncing — still fetching this window…');
+      if (_bhTry < 36) {
         setTimeout(function() {
           if (_bhRange === _brainRange) loadBrainPage(true);
-        }, Math.max(2000, (data.eta_sec || 3) * 1000));
+        }, _bhTry < 12 ? Math.max(2000, (data.eta_sec || 3) * 1000) : 10000);
       } else {
         var sEl2 = document.getElementById('brain-stream');
         if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not reach your node for this window. Check that the machine is online, then retry.') + '</div>';

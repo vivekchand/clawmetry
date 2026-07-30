@@ -11929,6 +11929,42 @@ def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
     return out
 
 
+# ── Ingest keepalive heartbeat ──────────────────────────────────────────────
+# The cloud relay drains `pending_queries` (Brain time-window fetches,
+# transcript reads, approvals) ONLY when this daemon heart-beats, but the
+# heartbeat fires at the END of a main-loop iteration. A long synchronous
+# ingest pass — e.g. a `runtime_backfill` action raising the claude_code depth
+# from 50 to 465 sessions (~47k events, minutes of work) — therefore starved
+# the heartbeat and every hosted relay read sat on `relay_pending` until the
+# browser gave up ("Could not fetch this window from your node yet",
+# 2026-07-30). Heavy per-item loops call this between items; it re-sends the
+# heartbeat (which drains + answers pending queries as a side effect) at most
+# every _INGEST_KEEPALIVE_SEC.
+
+_INGEST_KEEPALIVE_SEC = 20.0
+_last_ingest_keepalive = 0.0
+
+
+def _ingest_keepalive_heartbeat(config: dict) -> bool:
+    """Throttled mid-ingest heartbeat. Returns True when a heartbeat was
+    actually attempted (test hook). Never raises — a keepalive failure must
+    not break the ingest pass it is protecting."""
+    global _last_ingest_keepalive
+    now = time.time()
+    if now - _last_ingest_keepalive < _INGEST_KEEPALIVE_SEC:
+        return False
+    _last_ingest_keepalive = now
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return False
+        send_heartbeat(config)
+        return True
+    except Exception as e:
+        log.debug("ingest keepalive heartbeat failed (non-fatal): %s", e)
+        return True
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -11982,6 +12018,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 continue
             runtime = adapter.name
             for s in adapter.list_sessions(limit=_effective_family_limit(runtime)):
+                # A deep pass (runtime_backfill) makes this loop run for
+                # minutes; keep the relay responsive between sessions.
+                _ingest_keepalive_heartbeat(config)
                 if runtime == "claude_code" and s.id in openclaw_spawned_claude:
                     continue  # owned by OpenClaw; avoid the double-count
                 ns_id = f"{runtime}:{s.id}"
