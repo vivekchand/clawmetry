@@ -1376,6 +1376,97 @@ def is_tier(tier: str) -> bool:
     return actual == requested
 
 
+def license_tier_at(epoch: int) -> str | None:
+    """Perspective-epoch flavour of :func:`license_tier` -- "what tier
+    would :func:`license_tier` have returned evaluated as of ``epoch``?"
+    -- for a scheduled-audit / retrospective badge that wants to answer
+    "what tier was this node on <date>?" without the caller having to
+    snapshot the license state at that time or compare ``exp`` to a
+    caller-supplied epoch themselves.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface AS OF
+        ``epoch``: no license file on disk, an invalid signature (an
+        attacker could stuff any tier into an unsigned body -- refused
+        for every perspective), a signed key whose ``exp`` claim has
+        already passed at ``epoch`` (retrospective on a lapsed key when
+        ``epoch`` equals "now"; prospective on an active key when
+        ``epoch`` is in the future beyond ``exp``), OR a signed payload
+        whose ``tier`` claim is absent / non-string / empty after strip.
+      * A lowercased, whitespace-stripped tier string otherwise. Casing
+        is normalised the same way :func:`license_tier` normalises it,
+        so a caller comparing against a hard-coded ``"pro"`` gets the
+        same answer whichever helper it binds.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``None`` back rather than a spurious "was
+    the tier X at epoch 1?" classification. A non-numeric value
+    collapses to ``None`` so a caller cannot silently mis-gate on a
+    typo -- the conservative fallback since ``None`` implies no
+    entitlement, matching the never-mis-gate posture of the
+    surrounding ``_at`` family.
+
+    When ``epoch`` equals "now", this scalar must agree with
+    :func:`license_tier` for the same install -- both derive from the
+    same signed ``tier`` claim, refuse the invalid-signature branch,
+    and use the same ``exp <= cutoff`` boundary via
+    :func:`license_state_at` / the current-time ``valid`` classifier,
+    so the two scalars cannot disagree at the boundary. On any other
+    epoch this helper answers the retrospective / prospective question
+    :func:`license_tier` cannot -- e.g. "was this node Pro last
+    Friday?" (``None`` on a key that has since been renewed but was
+    already expired then) or "will this node still be Pro at our next
+    quarterly audit?" (``None`` on an active key whose ``exp`` falls
+    before the audit date).
+
+    Never raises. Any underlying introspection failure (import error,
+    corrupt install, cryptography-lib mismatch) collapses to ``None``
+    -- same fallback as :func:`license_tier` -- so a scheduled audit
+    tile bound to this helper never breaks on a partial install.
+
+    Pairs with the sibling ``_at`` scalars
+    (:func:`license_state_at`, :func:`is_expired_at`,
+    :func:`days_until_expiry_at`, :func:`is_expiring_within_at`) at
+    the row level: for the same ``epoch``, a caller can zip the five
+    responses index-for-index and get the whole entitlement row for
+    one install without the scalars catching each other disagreeing
+    on the perspective-epoch classification.
+    """
+    if isinstance(epoch, bool):
+        return None
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_tier_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    status = info.get("status")
+    if status == "invalid":
+        # Signature-bogus branch: an unsigned body is untrusted whatever
+        # the perspective, so the classification is time-independent.
+        # Mirrors :func:`license_tier` -- payload-derived claims never
+        # get to influence the answer here.
+        return None
+    exp = info.get("exp")
+    if isinstance(exp, (int, float)) and int(exp) <= wanted:
+        # Signed key that has already lapsed AS OF ``epoch`` -- refuse
+        # for the same reason :func:`license_tier` refuses the expired
+        # branch at "now": a lapsed Pro customer must stop rendering
+        # as "Pro" once the perspective epoch is past ``exp``.
+        return None
+    tier = info.get("tier")
+    if not isinstance(tier, str):
+        return None
+    normalized = tier.strip().lower()
+    return normalized or None
+
+
 def is_expired() -> bool:
     """True iff an installed, signature-valid license has an ``exp`` claim in
     the past.
@@ -3437,6 +3528,88 @@ def is_license_valid_at_batch(epochs) -> list[dict]:
             )
             valid = False
         out.append({"epoch": parsed, "is_valid": bool(valid)})
+    return out
+
+
+def license_tier_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch license-tier scalar for N epochs in
+    ONE round-trip.
+
+    Per-value axis batch sibling of :func:`license_tier_at`. Fills the
+    ``_at_batch`` slot on the license-tier axis alongside the singular
+    :func:`license_tier_at` and the "now" flavour :func:`license_tier`,
+    so a scheduled-audit / retrospective tile that wants to plot tier
+    across a sequence of perspective dates ("what tier was this node
+    on each of these audit dates?") renders off ONE call instead of
+    fanning out N calls to the scalar.
+
+    Each item in ``epochs`` may be:
+
+      * an int (or int-parseable string) -- a perspective epoch. The
+        emitted row's ``tier`` is what :func:`license_tier_at` would
+        return for that epoch alone.
+      * ``bool`` (subclass of ``int``) or any non-int-parseable value
+        (``None``, empty string, non-numeric string) -- collapses to a
+        row with ``tier=None``, matching the never-mis-gate posture
+        :func:`license_tier_at` uses for the same inputs. The raw
+        stringified token surfaces in ``epoch`` so a caller can still
+        identify the offending entry.
+
+    Row shape::
+
+        {
+          "epoch": <int> | "<raw>",
+          "tier":  <str> | None,
+        }
+
+    Semantics per row mirror :func:`license_tier_at`: a lowercased,
+    whitespace-stripped tier string when the license is signature-
+    valid, carries a string ``tier`` claim, AND (perpetual OR
+    ``exp > epoch``); ``None`` for no license, invalid signature, an
+    ``exp`` claim that has already lapsed at ``epoch``, a signed
+    payload with a missing / non-string / empty ``tier``, and
+    ``bool`` / non-numeric epochs.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``tier=None`` so the batch keeps
+    building. Matches the never-mis-gate posture used by
+    :func:`license_tier_at` -- a bad row cannot silently claim a tier
+    that would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now", the row's ``tier`` field
+    must byte-equal :func:`license_tier` for the same install -- both
+    derive from the same signed ``tier`` claim via
+    :func:`license_tier_at` / :func:`license_tier`, so a caller
+    binding both cannot catch them disagreeing at the boundary.
+
+    Pairs with :func:`license_state_at_batch` /
+    :func:`is_expired_at_batch` / :func:`days_until_expiry_at_batch`
+    on the row-shape axis: for the same epochs list, a caller can zip
+    the responses index-for-index and hydrate a whole entitlement
+    timeline row for one install in a handful of round-trips instead
+    of ``N * M`` calls to the scalar surface.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "tier": None})
+            continue
+        try:
+            tier = license_tier_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: license_tier_at_batch per-row failed: %s", exc
+            )
+            tier = None
+        out.append(
+            {"epoch": parsed, "tier": tier if isinstance(tier, str) else None}
+        )
     return out
 
 
