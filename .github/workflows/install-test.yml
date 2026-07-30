@@ -15,6 +15,16 @@ jobs:
         run: bash install.sh
       - name: Verify clawmetry binary
         run: clawmetry --version
+      # Ghost-install repair: a pip/uv killed mid-install leaves site-packages
+      # claiming "latest" while the console script is missing, so a plain
+      # --upgrade re-run no-ops and the symlink dangles (seen live 2026-07-30).
+      # The installer must detect the missing entry point and force-reinstall.
+      - name: Simulate ghost install (delete entry point)
+        run: sudo rm /opt/clawmetry/bin/clawmetry
+      - name: Re-run install script (must self-heal)
+        run: bash install.sh
+      - name: Verify clawmetry binary healed
+        run: clawmetry --version
 
   test-macos:
     runs-on: macos-latest
@@ -25,6 +35,13 @@ jobs:
       - name: Add bin to PATH
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Verify clawmetry binary
+        run: clawmetry --version
+      # Same ghost-install repair check as test-linux (macOS install dir).
+      - name: Simulate ghost install (delete entry point)
+        run: rm "$HOME/.clawmetry/bin/clawmetry"
+      - name: Re-run install script (must self-heal)
+        run: bash install.sh
+      - name: Verify clawmetry binary healed
         run: clawmetry --version
 
   test-windows-ps:

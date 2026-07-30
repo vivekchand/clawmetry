@@ -284,12 +284,32 @@ if [ -n "$_CM_CFG_BAK" ] && [ -f "$_CM_CFG_BAK" ]; then
   rm -f "$_CM_CFG_BAK"
 fi
 
+# ── Self-heal: console script missing despite "latest" metadata ─────────────
+# A pip/uv install killed mid-flight (daemon self-update timeout, Ctrl-C'd
+# installer) can leave site-packages claiming the latest version is installed
+# while bin/clawmetry is GONE — the wheel's files land before entry points are
+# generated. The --upgrade installs above then no-op ("already latest") and
+# the symlink below dangles (bash: ~/.local/bin/clawmetry: No such file or
+# directory — seen live 2026-07-30). Force-reinstall regenerates the scripts.
+if [ ! -x "$INSTALL_DIR/bin/clawmetry" ]; then
+  if [ -n "${_UV_BIN:-}" ]; then
+    _step "Repairing clawmetry entry point (force reinstall)" 5 \
+      $USE_SUDO "$_UV_BIN" pip install --python "$INSTALL_DIR/bin/python3" --quiet --force-reinstall --no-deps clawmetry
+  else
+    $USE_SUDO "$INSTALL_DIR/bin/python3" -m ensurepip --upgrade --default-pip >/dev/null 2>&1 || true
+    _step "Repairing clawmetry entry point (force reinstall)" 15 \
+      $USE_SUDO "$INSTALL_DIR/bin/python3" -m pip install --no-cache-dir --force-reinstall --no-deps clawmetry
+  fi
+fi
+
 # Create symlink
 mkdir -p "$BIN_DIR" 2>/dev/null || $USE_SUDO mkdir -p "$BIN_DIR"
 $USE_SUDO ln -sf "$INSTALL_DIR/bin/clawmetry" "$BIN_DIR/clawmetry"
 
 CLAWMETRY_BIN="$BIN_DIR/clawmetry"
-CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
+# -I (isolated) keeps CWD off sys.path — run from a source checkout, the
+# repo's stale egg-info otherwise shadows the venv and misreports the version.
+CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -I -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
 
 # ── Restart launchd jobs (macOS) ─────────────────────────────────────────────
 # After a venv reinstall, the dashboard/sync daemons launched at boot are

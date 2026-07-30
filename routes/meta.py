@@ -445,6 +445,32 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
     # Also clean up any .exe.old stubs from a prior failed attempt first.
     _win_cleanup_old_exe_stubs()
     _exe_orig, _exe_old = _win_rename_exe_before_pip()
+    def _restore_old_install():
+        # Roll the node back to a known-good state after a failed/killed pip.
+        # Windows: restore the renamed exe so the launcher still works. All
+        # platforms: pip-reinstall the old version so the node is never left
+        # with zero working installs. A pip KILLED mid-install (timeout below)
+        # lays down the new wheel's files but never generates the console
+        # scripts — site-packages then claims "latest" while bin/clawmetry is
+        # gone, and every later plain `pip install --upgrade` no-ops on that
+        # metadata (ghost-install, seen live 2026-07-30). --force-reinstall
+        # regenerates the entry points regardless of what metadata claims.
+        if _exe_old is not None:
+            try:
+                if _exe_old.exists() and not _exe_orig.exists():
+                    _exe_old.rename(_exe_orig)
+            except Exception:
+                pass
+        try:
+            _sp.run(
+                [py, "-m", "pip", "install", "--no-cache-dir",
+                 "--force-reinstall", "--no-deps",
+                 f"clawmetry=={old_version}"],
+                timeout=180, capture_output=True, text=True,
+            )
+        except Exception:
+            pass
+
     try:
         proc = _sp.run(
             # --no-cache-dir dodges the uv-cache-stale-after-[RELEASE] race
@@ -457,28 +483,15 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
             # Surface pip's actual last lines so the banner is actionable —
             # the old code swallowed everything into DEVNULL.
             tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-800:]
-            # Windows: restore the renamed exe so the launcher still works,
-            # then pip-reinstall the old version so the node is never left with
-            # zero working installs after a partial uninstall-then-failed-install.
-            if _exe_old is not None:
-                try:
-                    if _exe_old.exists() and not _exe_orig.exists():
-                        _exe_old.rename(_exe_orig)
-                except Exception:
-                    pass
-            try:
-                _sp.run(
-                    [py, "-m", "pip", "install", "--no-cache-dir",
-                     f"clawmetry=={old_version}"],
-                    timeout=180, capture_output=True, text=True,
-                )
-            except Exception:
-                pass
+            _restore_old_install()
             return {"ok": False,
                     "error": f"pip exit {proc.returncode}: {tail or '(no output)'}"}, 500
     except _sp.TimeoutExpired:
+        # The killed pip may have left a scriptless half-install — roll back.
+        _restore_old_install()
         return {"ok": False, "error": "pip install timed out after 180s"}, 500
     except Exception as exc:
+        _restore_old_install()
         return {"ok": False, "error": str(exc)}, 500
     # Re-read new version from pip metadata
     new_version = old_version
