@@ -11314,6 +11314,144 @@ def api_license_is_expiring_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/expiring-within-at-batch")
+def api_license_expiring_within_at_batch():
+    """``GET /api/license/expiring-within-at-batch?days=<int>&epochs=
+    <int>,<int>,...`` -- per-value batch sibling of
+    ``/api/license/expiring-within-at``.
+
+    Renewal-window axis batch companion to the existing ``exp``-derived
+    ``/api/license/*-at-batch`` quartet
+    (``state-at-batch`` / ``is-expired-at-batch`` /
+    ``days-until-expiry-at-batch`` / ``is-expiring-at-batch``). Where
+    the singular endpoint folds ONE perspective epoch to ONE "would we
+    have shown a renewal warning as of that date?" bool, this preserves
+    per-value rows so a scheduled-audit tile that wants to plot the
+    renewal-window banner across a sequence of perspective dates
+    ("would the renewal banner have fired on each of these audit
+    dates?") renders off ONE round-trip instead of N calls to the
+    scalar. Wraps :func:`clawmetry.license.is_expiring_within_at_batch`.
+
+    Row shape mirrors ``/api/license/is-expiring-at-batch`` per-row so
+    a caller assembling a full renewal timeline can zip the batches
+    index-for-index. Same query-string posture on ``epochs=`` as the
+    surrounding quartet: required (missing / blank / only-commas ->
+    ``400 missing epochs``), comma-separated tokens deduped by parsed
+    int key preserving first-seen order, non-int / ``bool`` / ``None``
+    tokens collapse to ``expiring_within=false``. Never 5xxs.
+
+    Query parameters:
+
+      * ``days`` (int, optional) -- the renewal-window threshold applied
+        to EVERY row. Defaults to ``30`` (matches the singular
+        ``/api/license/expiring-within-at`` default). Negative input
+        clamps to ``0``; non-numeric / ``bool`` input collapses to
+        ``expiring_within=false`` on every row with
+        ``threshold_days=0`` rather than a 4xx, matching the surrounding
+        endpoints' never-5xx / never-4xx posture. Callers wanting
+        per-row thresholds should call the scalar N times.
+      * ``epochs`` (CSV, required) -- perspective epochs (Unix seconds).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":          "expiring_within_at",
+          "count":         <int>,               # len(rows)
+          "threshold_days": <int>,              # int-coerced days, clamped >= 0
+          "rows":  [
+            {"epoch": <int|"<raw>">, "expiring_within": <bool>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Deliberately strict on validity, mirroring the singular
+    ``/api/license/expiring-within-at`` and the sibling
+    ``/api/license/is-expiring-at-batch``: a predicate that fired
+    ``true`` on a lapsed key would push callers to gate renewal UI on a
+    value that no longer implies entitlement. See
+    :func:`clawmetry.license.is_expiring_within_at` for the rationale.
+
+    Per-row parity with ``/api/license/expiring-within-at?days=<d>
+    &epoch=<n>`` is pinned in the test suite so the batch cannot
+    silently drift from the scalar endpoint.
+    """
+    raw_days = request.args.get("days", "30")
+    if isinstance(raw_days, bool):
+        threshold = 0
+        threshold_ok = False
+    else:
+        try:
+            threshold = int(raw_days)
+            threshold_ok = True
+        except (TypeError, ValueError):
+            threshold = 0
+            threshold_ok = False
+    if threshold < 0:
+        threshold = 0
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_expiring_within_at_batch: snapshot error: %s",
+            exc,
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        if threshold_ok:
+            rows = _lic.is_expiring_within_at_batch(threshold, tokens)
+        else:
+            # Bad ``days=`` collapses every row to False while preserving
+            # the row slots so the response length still matches the input
+            # (mirrors the singular endpoint's never-4xx posture on a
+            # typo). Delegate to the same batch helper with a sentinel
+            # bool that the helper refuses -- keeps the dedup / bad-token
+            # bucketing consistent with the "good" path.
+            rows = _lic.is_expiring_within_at_batch(True, tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_expiring_within_at_batch: derive error: %s", exc
+        )
+        rows = []
+    # Batch helper emits ``is_expiring_within`` per row; rename to
+    # ``expiring_within`` here so the HTTP row field matches the
+    # scalar endpoint's ``/api/license/expiring-within-at`` response
+    # shape (``expiring_within``) and a caller can hydrate a paywall
+    # tile off either endpoint interchangeably.
+    rows = [
+        {
+            "epoch": row["epoch"],
+            "expiring_within": bool(row["is_expiring_within"]),
+        }
+        for row in rows
+    ]
+    return jsonify(
+        {
+            "kind": "expiring_within_at",
+            "count": len(rows),
+            "threshold_days": threshold,
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/license/age-days-at-batch")
 def api_license_age_days_at_batch():
     """``GET /api/license/age-days-at-batch?epochs=<int>,<int>,...`` --

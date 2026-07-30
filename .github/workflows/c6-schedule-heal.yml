@@ -53,6 +53,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   c6-auto-heal:
@@ -250,6 +251,25 @@ print(json.dumps(sorted(set(a) | set(b))))
           echo "C6 is GREEN -- all required E2E status checks are configured on clawmetry/main."
           echo "Branch protection is correctly set. E2E_ADMIN_PAT is not needed."
           echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+
+      # Daily ping on the tracking issue when C6 is still unclosed.
+      # Runs only on the 10:15 UTC daily schedule (not every 2-hour run)
+      # so the issue thread does not flood with hourly noise.
+      # continue-on-error: true so a GitHub API hiccup does not shadow
+      # the mandatory exit-1 below.
+      - name: Daily ping on tracking issue (C6 still unclosed)
+        if: |
+          github.event_name == 'schedule'
+          && github.event.schedule == '15 10 * * *'
+          && steps.pat-check.outputs.has_pat == 'false'
+          && steps.read-state.outputs.checks_ok != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          BODY="<!-- c6-daily-ping --> **C6 daily ping ${TODAY}:** clawmetry/main branch protection does not yet require E2E checks. 6/7 criteria green. Fastest close: [Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches) > Required status checks > add \`E2E Gate (required)\` (60 s, no token needed). Or run \`bash scripts/close-c6.sh\` from a terminal."
+          gh issue comment 3864 --repo vivekchand/clawmetry --body "$BODY"
 
       - name: Error: E2E_ADMIN_PAT not set
         if: steps.pat-check.outputs.has_pat == 'false' && steps.read-state.outputs.checks_ok != 'true'
