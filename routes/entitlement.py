@@ -8040,6 +8040,84 @@ def api_license_pubkey():
         )
 
 
+@bp_entitlement.route("/api/license/features")
+def api_license_features():
+    """``GET /api/license/features`` -- scalar accessor for the
+    ``features`` claim on the currently-installed license, so an
+    operator entitlement-diagnostic tile, a fleet-node column, or a
+    "features unlocked by your key" chip row can render off ONE cheap
+    endpoint without unpacking the full ``/api/license/status``
+    envelope (or re-implementing the "don't trust an unsigned body"
+    rule client-side).
+
+    Wraps :func:`clawmetry.license.license_features`.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "features":    [<id>, ...] | null,
+          "has_license": <bool>,   # a license file is on disk
+          "valid":       <bool>    # signature-valid AND not expired NOW
+        }
+
+    ``features`` is:
+
+      * ``null``    on OSS-free installs, invalid-signature files, and
+                    signed-but-lapsed keys (a gate binding this endpoint
+                    cannot silently keep granting features on an expired
+                    key)
+      * ``[]``      when the license IS valid but its payload carries no
+                    explicit ``features`` claim -- distinct from ``null``
+                    which means no valid license at all
+      * a sorted, deduplicated, normalised (lower/strip) list of feature
+        ids on a signature-valid, non-expired license
+
+    ``has_license`` + ``valid`` are layered on top so a UI binding this
+    endpoint can distinguish "no key" (``has_license=false``) from
+    "valid key without a features list" (``valid=true, features=[]``)
+    from "expired key" (``has_license=true, valid=false,
+    features=null``) in one round-trip, without a second call to
+    ``/api/license/status``.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. For the resolved feature set actually enforced by gates,
+    read ``/api/entitlement`` (which layers this claim on top of the
+    FREE-tier baseline). This endpoint surfaces the claim exactly as
+    written on the token, so operator diagnostics can distinguish
+    "feature X unlocked because the key claims it" from "feature X
+    unlocked because the tier grants it by default".
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``features=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        feats = _lic.license_features()
+        try:
+            info = _lic.current_license_info()
+        except Exception as exc:
+            logger.debug("api_license_features: info read failed: %s", exc)
+            info = None
+        has_license = isinstance(info, dict)
+        valid = bool(has_license and info.get("valid"))
+        return jsonify(
+            {
+                "features": feats,
+                "has_license": has_license,
+                "valid": valid,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_features: error: %s", exc)
+        return jsonify(
+            {"features": None, "has_license": False, "valid": False}
+        )
+
+
 def _license_expiry_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two expiry endpoints
     both need (``days_left``, ``has_license``, ``expired``). Lives in the
