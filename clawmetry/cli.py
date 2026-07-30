@@ -3289,7 +3289,7 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
-    print(f"    {BOLD('[1] Cloud')}      {DIM('We host the dashboard for you: easy to manage when')}")
+    print(f"    {BOLD('[1] Managed')}    {DIM('We host the dashboard for you: easy to manage when')}")
     print(f"                   {DIM('observing a large fleet of nodes. app.clawmetry.com from')}")
     print(f"                   {DIM('anywhere PLUS http://localhost:8900 on this machine; desk')}")
     print(f"                   {DIM('device at clawmetry.com/device. E2E-encrypted: snapshots')}")
