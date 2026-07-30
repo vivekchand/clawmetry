@@ -10570,6 +10570,106 @@ def api_license_is_expired_at():
     )
 
 
+@bp_entitlement.route("/api/license/is-valid-at")
+def api_license_is_valid_at():
+    """``GET /api/license/is-valid-at?epoch=<int>`` -- boolean gate for
+    "would the installed license have been valid evaluated as of
+    ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/status``'s ``valid`` field, for a scheduled-audit /
+    retrospective paywall tile that wants to answer "would this node
+    have been entitled on <date>?" without the caller having to snapshot
+    the license state at that time or fold the ``exp`` claim against a
+    specific epoch themselves.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_valid_at": <bool>,             # signature-valid AND (perpetual OR exp > epoch)
+          "requested_epoch": <int|null>,     # int-coerced input, or null on typo
+          "expires_at": <int|null>,          # current on-disk exp for comparison
+          "has_license": <bool>,             # is a license file installed at all?
+          "valid": <bool>                    # signature-valid AND not expired NOW
+        }
+
+    ``is_valid_at`` mirrors :func:`clawmetry.license.is_license_valid_at`:
+
+      * ``false`` when there is no license file, on the invalid-signature
+        branch (payload cannot be trusted -- an attacker could stuff any
+        ``exp`` into an unsigned body), when ``exp <= epoch`` (the key
+        was not yet -- or no longer -- entitled at that perspective), OR
+        when ``epoch`` doesn't parse as an integer.
+      * ``true`` iff the installed key is signature-valid AND either
+        carries no ``exp`` claim (perpetual key) OR ``exp > epoch``.
+
+    Perfect complement to ``/api/license/is-expired-at`` on a signature-
+    valid, non-perpetual key (``is_valid_at`` is the strict negation of
+    ``is_expired_at``), but the two DIVERGE on the invalid-signature and
+    no-license branches: both collapse to ``false`` on purpose, because
+    "not expired" on an unsigned body is not the same as "still
+    entitled". A UI wanting to distinguish "no license" / "broken
+    license" / "lapsed at that time" / "valid at that time" reads this
+    endpoint together with ``/api/license/is-expired-at`` and
+    ``/api/license/state-at``.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer value collapses to ``is_valid_at=false``
+        with ``requested_epoch=null`` so a caller cannot silently mis-
+        gate on a typo. HTTP status is 200 either way -- the "bad input"
+        signal is the ``false`` result, not a 4xx, matching the never-
+        crash posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/is-expired-at``,
+    ``/api/license/is-expiring-at``, and
+    ``/api/license/days-until-expiry-at`` -- all four share the
+    perspective-epoch input pattern and the
+    :func:`_license_expires_snapshot` reader, so a UI binding any two
+    for the same install cannot catch them disagreeing on ``expires_at``
+    / ``has_license`` / ``valid``. Together they let a dashboard render
+    "on <date>, the license would have been entitled, N days from
+    expiry, matched a specific ``exp`` value, and not yet expired?" from
+    four orthogonal one-shot GETs.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{is_valid_at: false, requested_epoch: null, expires_at: null,
+    has_license: false, valid: false}`` (the OSS-free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_expires_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_valid_at: snapshot error: %s", exc)
+        snap = {
+            "expires_at": None,
+            "days_until_expiry": None,
+            "has_license": False,
+            "valid": False,
+        }
+    matched = False
+    if requested is not None:
+        try:
+            from clawmetry import license as _lic
+
+            matched = _lic.is_license_valid_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_is_valid_at: derive error: %s", exc)
+            matched = False
+    return jsonify(
+        {
+            "is_valid_at": bool(matched),
+            "requested_epoch": requested,
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 def _license_state_at_snapshot() -> dict:
     """Shared one-shot read for the paired ``/api/license/state-at`` and
     ``/api/license/is-state-at`` endpoints below.
@@ -11141,6 +11241,90 @@ def api_license_is_expired_at_batch():
     return jsonify(
         {
             "kind": "is_expired_at",
+            "count": len(rows),
+            "rows": rows,
+            "state": snap["state"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/is-valid-at-batch")
+def api_license_is_valid_at_batch():
+    """``GET /api/license/is-valid-at-batch?epochs=<int>,<int>,...``
+    -- per-value batch sibling of ``/api/license/is-valid-at``.
+
+    Entitlement-boolean axis batch companion to
+    ``/api/license/state-at-batch`` /
+    ``/api/license/is-expired-at-batch`` /
+    ``/api/license/days-until-expiry-at-batch``. Where the singular
+    endpoint folds ONE perspective epoch to ONE "was this node
+    entitled?" bool, this preserves per-value rows so a scheduled-audit
+    tile can hydrate a "would we have granted Pro on each of these
+    dates?" column in ONE call instead of fanning out N calls to the
+    scalar endpoint. Wraps :func:`clawmetry.license.is_license_valid_at_batch`.
+
+    Row shape mirrors ``/api/license/is-expired-at-batch`` per-row so a
+    caller assembling an entitlement timeline can zip the two responses
+    index-for-index; ``is_valid`` is exactly the complement of the
+    matching ``expired`` field on a signature-valid, non-perpetual key
+    and both collapse to ``false`` together on the no-license /
+    invalid-signature branches. Same query-string posture: ``epochs=``
+    required (missing / blank / only-commas -> ``400``), comma-separated
+    tokens deduped by parsed int key preserving first-seen order,
+    non-int / ``bool`` / ``None`` tokens collapse to ``is_valid=false``.
+    Never 5xxs.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "is_license_valid_at",
+          "count": <int>,
+          "rows":  [
+            {"epoch": <int|"<raw>">, "is_valid": <bool>},
+            ...
+          ],
+          "state":       "<active|expired|invalid|no_license>",  # NOW
+          "expires_at":  <int|null>,
+          "has_license": <bool>,
+          "valid":       <bool>
+        }
+
+    Per-row parity with ``/api/license/is-valid-at?epoch=<n>`` is pinned
+    in the test suite so the batch cannot silently drift from the scalar
+    endpoint. The never-mis-gate posture matches
+    :func:`clawmetry.license.is_license_valid_at`: a bad row cannot
+    silently unlock a Pro feature retroactively.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_state_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_valid_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "state": "no_license",
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.is_license_valid_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_valid_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "is_license_valid_at",
             "count": len(rows),
             "rows": rows,
             "state": snap["state"],
