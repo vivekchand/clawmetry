@@ -119,15 +119,15 @@ def render_detection_lines(probes: list) -> list:
     for i in range(0, n, 3):
         row = "".join(f"[x] {p['label']:<{cell}}" for p in found[i : i + 3])
         lines.append("  " + row.rstrip())
-    lines.append("")
-    lines.append("Free forever: OpenClaw and NVIDIA NemoClaw.")
     paid = [p for p in found if not p.get("free")]
+    if paid:
+        lines.append("")
     if len(paid) == 1:
         lines.append(
-            f"Sign in [1] below for a free 7-day Pro trial that unlocks {paid[0]['label']} too, or paste a license key [2]."
+            f"A free 7-day Pro trial (sign in below) unlocks {paid[0]['label']} too, or paste a license key."
         )
     elif paid:
         lines.append(
-            f"Sign in [1] below for a free 7-day Pro trial of the other {len(paid)}, or paste a license key [2]."
+            f"A free 7-day Pro trial (sign in below) unlocks the other {len(paid)}, or paste a license key."
         )
     return lines
