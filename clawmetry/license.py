@@ -2974,3 +2974,117 @@ def pro_install_age_days_at_batch(epochs) -> list[dict]:
             {"epoch": parsed, "age_days": int(age) if isinstance(age, int) else None}
         )
     return out
+
+
+def license_features() -> list[str] | None:
+    """Scalar accessor for the ``features`` claim on the installed license.
+
+    Thin scalar-shape helper for callers (an operator entitlement-diagnostic
+    tile, a "features unlocked by your key" chip row, a fleet-node column
+    that only needs the string list) that want the features list on its
+    own and don't want to unpack the full :func:`current_license_info`
+    envelope OR re-implement the "don't trust an unsigned body" rule
+    client-side.
+
+    Returns a sorted, deduplicated, normalised (lower-cased, whitespace-
+    stripped) ``list[str]`` of feature ids on a signature-valid,
+    non-expired license. Returns ``None`` in every other branch:
+
+      * no license file on disk (OSS free)
+      * file exists but signature is bogus (an attacker who could edit
+        the payload could otherwise smuggle any ``features`` list into
+        an unsigned body -- we never surface it)
+      * signed-but-lapsed key (a gate binding this helper cannot silently
+        keep granting features on an expired key)
+      * any per-row failure inside the underlying read path
+
+    An empty list (``[]``) means the license IS valid but its payload
+    carries no explicit ``features`` claim (or the claim is present but
+    holds no usable string ids). ``[]`` is deliberately DISTINCT from
+    ``None``:
+
+      * ``[]``   -> "valid license, zero features itemised on the token"
+                    (the tier still grants coverage; the license just
+                    doesn't spell out per-feature entitlement)
+      * ``None`` -> "no valid license at all"
+
+    A caller binding this scalar to a "features unlocked" UI must render
+    both branches -- ``None`` -> "no license", ``[]`` -> "no features
+    itemised" -- without collapsing them, or a valid-key-with-empty-list
+    user will silently get the same "unlicensed" copy as an OSS install.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. For the resolved feature set actually enforced by gates,
+    callers should read :func:`clawmetry.entitlements.get_entitlement`
+    (which layers this claim on top of the FREE-tier baseline). This
+    scalar surfaces the claim exactly as written on the token, so
+    operator diagnostics can distinguish "gate says X is unlocked
+    because the key claims it" from "gate says X is unlocked because
+    the tier grants it by default".
+
+    Mirrors the "refuse expired keys" posture already used by
+    :func:`license_tier` / :func:`license_nodes`: a lapsed key must not
+    keep rendering as "features unlocked". A caller wanting to surface
+    the CLAIM even on an expired key (support: "what features was this
+    key SUPPOSED to grant?") should re-verify the token directly with
+    :func:`verify_token`.
+
+    Never raises. Any exception under the hood degrades to ``None`` so a
+    diagnostic tile bound to this helper never breaks on a partial or
+    corrupt install.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_features underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("valid"):
+        # Invalid-signature and signed-but-lapsed branches both collapse
+        # to None on purpose -- see docstring for the never-mis-gate
+        # rationale. Neither branch may surface a features list.
+        return None
+    # ``current_license_info`` does not surface the ``features`` claim in
+    # its envelope (kept intentionally narrow -- see its docstring), so
+    # re-open the license file and re-verify to pull the field. The
+    # ``valid`` gate above proves the file is on disk AND its signature
+    # verified once this call, so this second read cannot admit an
+    # unsigned body: any tamper between the two reads still fails
+    # ``verify_token``.
+    try:
+        if not os.path.isfile(LICENSE_PATH):
+            return None
+        with open(LICENSE_PATH, "r", encoding="utf-8") as fh:
+            payload = verify_token(fh.read().strip())
+    except Exception as exc:
+        logger.debug(
+            "license: license_features token re-read failed: %s", exc
+        )
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("features")
+    # A missing / non-list ``features`` claim collapses to the empty list
+    # (valid license, zero features itemised) -- distinct from ``None``
+    # which means no valid license at all. See docstring.
+    if not isinstance(raw, (list, tuple)):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            # Ignore non-string entries defensively. An attacker who
+            # can't forge the signature also can't smuggle a non-string
+            # feature id past ``json.loads`` here, but a legit server-
+            # side typo (e.g. an integer feature id) shouldn't blow up
+            # the tile -- skip it and keep going.
+            continue
+        norm = item.strip().lower()
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    out.sort()
+    return out
