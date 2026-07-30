@@ -145,6 +145,67 @@ def _ensure_protection(repo: str, token: str) -> None:
     print(f"  [{repo}] created minimal branch protection on main")
 
 
+def _enable_status_checks_preserving(repo: str, contexts: list, token: str) -> None:
+    """Turn required_status_checks ON inside an EXISTING protection rule.
+
+    The PATCH sub-resource 404s with 'Required status checks not enabled'
+    when main is protected (PR reviews, enforce_admins, ...) but the
+    status-check block was never switched on — the exact state all three
+    repos were in (C6 audit red since #3970). PUT /protection REPLACES the
+    whole rule, so read the current one and re-submit it faithfully with
+    the status-check block added; nothing else may change.
+    """
+    path = f"/repos/{OWNER}/{repo}/branches/main/protection"
+    cur = _api("GET", path, token=token)
+
+    reviews = None
+    rpr = cur.get("required_pull_request_reviews")
+    if rpr:
+        reviews = {
+            "dismiss_stale_reviews": bool(rpr.get("dismiss_stale_reviews")),
+            "require_code_owner_reviews": bool(rpr.get("require_code_owner_reviews")),
+            "required_approving_review_count": int(
+                rpr.get("required_approving_review_count") or 0
+            ),
+        }
+        if rpr.get("require_last_push_approval") is not None:
+            reviews["require_last_push_approval"] = bool(
+                rpr.get("require_last_push_approval")
+            )
+
+    restrictions = None
+    if cur.get("restrictions"):
+        r = cur["restrictions"]
+        restrictions = {
+            "users": [u.get("login") for u in r.get("users", []) if u.get("login")],
+            "teams": [t.get("slug") for t in r.get("teams", []) if t.get("slug")],
+            "apps": [a.get("slug") for a in r.get("apps", []) if a.get("slug")],
+        }
+
+    def _flag(name: str) -> bool:
+        return bool((cur.get(name) or {}).get("enabled"))
+
+    _api(
+        "PUT",
+        path,
+        body={
+            "required_status_checks": {"strict": False, "contexts": contexts},
+            "enforce_admins": _flag("enforce_admins"),
+            "required_pull_request_reviews": reviews,
+            "restrictions": restrictions,
+            "required_linear_history": _flag("required_linear_history"),
+            "allow_force_pushes": _flag("allow_force_pushes"),
+            "allow_deletions": _flag("allow_deletions"),
+            "required_conversation_resolution": _flag(
+                "required_conversation_resolution"
+            ),
+            "lock_branch": _flag("lock_branch"),
+            "allow_fork_syncing": _flag("allow_fork_syncing"),
+        },
+        token=token,
+    )
+
+
 def add_required_check(repo: str, context: str, token: str) -> None:
     """Idempotently add context as a required status check on repo/main."""
     _ensure_protection(repo, token)
@@ -168,7 +229,13 @@ def add_required_check(repo: str, context: str, token: str) -> None:
         return
 
     existing.append(context)
-    _api("PATCH", path, body={"strict": False, "contexts": existing}, token=token)
+    try:
+        _api("PATCH", path, body={"strict": False, "contexts": existing}, token=token)
+    except RuntimeError as exc:
+        if "Required status checks not enabled" not in str(exc):
+            raise
+        _enable_status_checks_preserving(repo, existing, token)
+        print(f"  [{repo}] enabled required status checks on existing protection")
     print(f"  [{repo}] added required check ({len(existing)} total): {context!r}")
 
 

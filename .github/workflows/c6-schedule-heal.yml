@@ -129,6 +129,44 @@ try:
 except Exception:
     print('[]')
 " || echo "[]")
+            # Also gather checks from the Rulesets API.
+            # c6-apply-ruleset.yml enforces required checks via the Rulesets API
+            # when GITHUB_TOKEN has ruleset-write rights, bypassing the admin-PAT
+            # requirement of classic branch protection. Union both sources so a
+            # check configured via EITHER path counts as present.
+            _RULESET_CHECKS=$(_CURR_REPO="${REPO}" python3 - 2>/dev/null <<"RSPY"
+import json, os, subprocess
+OWNER = os.environ.get('OWNER', 'vivekchand')
+REPO  = os.environ.get('_CURR_REPO', 'clawmetry')
+ctx   = set()
+hdrs  = ['--header', 'Accept: application/vnd.github+json']
+try:
+    r = subprocess.run(['gh', 'api', f'/repos/{OWNER}/{REPO}/rulesets'] + hdrs,
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode == 0:
+        for rs in json.loads(r.stdout):
+            if rs.get('enforcement') == 'active':
+                r2 = subprocess.run(
+                    ['gh', 'api', f"/repos/{OWNER}/{REPO}/rulesets/{rs['id']}"] + hdrs,
+                    capture_output=True, text=True, timeout=15)
+                if r2.returncode == 0:
+                    detail = json.loads(r2.stdout)
+                    for rule in (detail.get('rules') or []):
+                        if rule.get('type') == 'required_status_checks':
+                            for c in (rule.get('parameters', {})
+                                       .get('required_status_checks') or []):
+                                if c.get('context'):
+                                    ctx.add(c['context'])
+except Exception:
+    pass
+print(json.dumps(sorted(ctx)))
+RSPY
+)
+            PROTECTION=$(python3 -c "
+import json, sys
+a = json.loads(sys.argv[1]); b = json.loads(sys.argv[2])
+print(json.dumps(sorted(set(a) | set(b))))
+" "$PROTECTION" "${_RULESET_CHECKS:-[]}" 2>/dev/null || echo "$PROTECTION")
             IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
             for CHECK in "${EXPECTED_CHECKS[@]}"; do
               if echo "$PROTECTION" | python3 -c \
