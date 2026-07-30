@@ -29,6 +29,7 @@ from itertools import islice
 
 # Leaf module (typing-only deps) — safe to import at package load, no cycle.
 from clawmetry import error_signal as _error_signal
+from clawmetry import session_titles as _session_titles
 
 
 def _get_openclaw_dir():
@@ -12042,14 +12043,23 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_compress)
                 # Readable title: a raw UUID is unreadable on the dashboard/device.
                 # When the adapter gives no display_name (Claude Code, Codex, ...),
-                # derive a human title from the first real user message.
+                # derive a ChatGPT-style title from the first real user prompt
+                # (founder report 2026-07-30: every Conversations row said
+                # "Untitled session"). _session_titles skips harness plumbing
+                # ("<system-reminder>", the "Caveat:" resume preamble), handles
+                # list-block content, and caches per session so an already-titled
+                # session never re-reads the transcript head. Never raises.
                 _ftitle = (s.display_name or s.title or "").strip()
-                if not _ftitle:
-                    for _e in _events:
-                        _txt = (getattr(_e, "content", "") or getattr(_e, "text", "") or "").strip()
-                        if _txt and not _txt.startswith("<") and len(_txt) > 3:
-                            _ftitle = _txt[:80]
-                            break
+                if not _ftitle or _session_titles.looks_like_session_id(_ftitle, s.id):
+                    _ftitle = _session_titles.title_for_family_session(
+                        runtime, s.id, _events
+                    )
+                # No-clobber: when nothing is derivable pass None so
+                # ingest_session's COALESCE keeps whatever title the row already
+                # has (the legacy s.id fallback used to overwrite real titles
+                # with a UUID on every pass). Sub-agent labels + the cloud row
+                # still want SOMETHING, so they fall back to the raw id.
+                _row_title = _ftitle or None
                 _ftitle = _ftitle or s.id
                 # Compaction count: each auto-compaction silently re-summarises
                 # (and re-bills) the context. A session that compacted N times
@@ -12067,7 +12077,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "session_id": ns_id,
                         "node_id": node_id,
                         "agent_id": "main",
-                        "title": _ftitle,
+                        "title": _row_title,
                         "started_at": started,
                         "last_active_at": ended or started,
                         "ended_at": ended,

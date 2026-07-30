@@ -3646,7 +3646,51 @@ def _try_local_store_transcripts():
             "size": 0,  # unknown from DuckDB; UI shows "—" when 0
             "modified": modified_ms,
         })
+    _fill_family_titles(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
+
+
+def _fill_family_titles(transcripts):
+    """Heal empty titles for family-runtime rows (founder report 2026-07-30:
+    every ``claude_code:UUID`` row showed "Untitled session").
+
+    Their id is not an OpenClaw jsonl basename, so ``_first_user_title``
+    found no file — and the ingest-persisted ``sessions.title`` never
+    reached this endpoint (``query_sessions`` aggregates the events table
+    only). Two steps, both best-effort (never fails the request):
+      1. join titles from the typed ``sessions`` table (where
+         ``sync_family_runtimes`` persists the derived title),
+      2. for ``claude_code:`` rows still untitled, derive from the
+         ``~/.claude/projects`` transcript head (cached head-read).
+    Mutates ``transcripts`` in place; id-like stored titles (bare UUIDs
+    written by the legacy fallback) count as untitled.
+    """
+    try:
+        from clawmetry import session_titles as _st
+
+        missing = [t for t in transcripts if not t.get("title")]
+        if not missing:
+            return
+        stored = {}
+        try:
+            for r in (_ls_call("query_sessions_table", limit=200) or []):
+                sid = r.get("session_id") or ""
+                title = (r.get("title") or "").strip()
+                if sid and title and not _st.looks_like_session_id(title, sid):
+                    stored[sid] = title
+        except Exception:
+            stored = {}
+        for t in missing:
+            sid = t.get("id") or ""
+            title = stored.get(sid, "")
+            if not title and sid.startswith("claude_code:"):
+                title = _st.title_for_family_session(
+                    "claude_code", sid.split(":", 1)[1]
+                )
+            if title:
+                t["title"] = _st.truncate_title(title)
+    except Exception:
+        pass
 
 
 @bp_sessions.route('/api/transcripts')
