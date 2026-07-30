@@ -149,10 +149,10 @@ def test_choice_2_no_key_points_at_selfhosted_pricing(onboard_env, monkeypatch, 
     assert marker.exists() and state["start_daemon"] == 1
 
 
-def test_choice_1_success_activates_signup_trial(onboard_env, monkeypatch, tmp_path, capsys):
-    """Connect success (api_key in config) must fetch the signup trial and
-    activate the returned key locally."""
-    import io
+def test_choice_1_success_skips_local_fallback(onboard_env, monkeypatch, tmp_path):
+    """Connect success (api_key in config) must NOT fall back to local-only.
+    (Trial mint + activation happens inside connect itself now — pinned by
+    test_activate_signup_trial_* below.)"""
     import json as _json
 
     state, marker = onboard_env
@@ -164,6 +164,23 @@ def test_choice_1_success_activates_signup_trial(onboard_env, monkeypatch, tmp_p
             _json.dumps({"api_key": "cm_fresh_signup", "node_id": "n1"}))
 
     monkeypatch.setattr(cli, "_cmd_connect", _connect_writes_config)
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
+    cli._cmd_onboard(_args())
+    assert state["connect"] == 1
+    assert not marker.exists(), "successful sign-in is a cloud setup, not local-only"
+    assert state["start_daemon"] == 0, "connect owns the daemon on this path"
+
+
+def _trial_env(monkeypatch, tmp_path, response: dict):
+    """HOME with a cm_ config + faked trial endpoint + recorded activation."""
+    import io
+    import json as _json
+
+    home = tmp_path / "home2"
+    (home / ".clawmetry").mkdir(parents=True)
+    (home / ".clawmetry" / "config.json").write_text(
+        _json.dumps({"api_key": "cm_fresh_signup", "node_id": "n1"}))
+    monkeypatch.setenv("HOME", str(home))
 
     posted = {}
 
@@ -177,12 +194,7 @@ def test_choice_1_success_activates_signup_trial(onboard_env, monkeypatch, tmp_p
     def _fake_urlopen(req, timeout=0):
         posted["url"] = req.full_url
         posted["body"] = _json.loads(req.data.decode())
-        import time as _t
-        return _FakeResp(_json.dumps({
-            "ok": True, "key": "CLAW1.trial.key", "tier": "trial",
-            "expires_at": int(_t.time()) + 7 * 86400,
-            "reused": False, "expired": False,
-        }).encode())
+        return _FakeResp(_json.dumps(response).encode())
 
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
 
@@ -191,16 +203,36 @@ def test_choice_1_success_activates_signup_trial(onboard_env, monkeypatch, tmp_p
     monkeypatch.setattr(_lic, "activate",
                         lambda key, node_id=None, actor="": activated.__setitem__("key", key) or (True, "ok"))
     monkeypatch.setattr(_lic, "_node_id", lambda: "n1")
+    return posted, activated
 
-    monkeypatch.setattr("builtins.input", lambda _p="": "1")
-    cli._cmd_onboard(_args())
 
+def test_activate_signup_trial_mints_and_activates(monkeypatch, tmp_path, capsys):
+    import time as _t
+
+    posted, activated = _trial_env(monkeypatch, tmp_path, {
+        "ok": True, "key": "CLAW1.trial.key", "tier": "trial",
+        "expires_at": int(_t.time()) + 7 * 86400,
+        "reused": False, "expired": False,
+    })
+    assert cli._activate_signup_trial() is True
     assert posted["url"].endswith("/api/license/trial/signup")
     assert posted["body"] == {"api_key": "cm_fresh_signup"}
     assert activated.get("key") == "CLAW1.trial.key"
+    assert "Pro trial active" in capsys.readouterr().out
+
+
+def test_activate_signup_trial_expired_is_honest(monkeypatch, tmp_path, capsys):
+    import time as _t
+
+    posted, activated = _trial_env(monkeypatch, tmp_path, {
+        "ok": True, "key": "CLAW1.trial.key", "tier": "trial",
+        "expires_at": int(_t.time()) - 86400,
+        "reused": True, "expired": True,
+    })
+    assert cli._activate_signup_trial() is False
+    assert activated == {}, "an expired trial key must never be activated"
     out = capsys.readouterr().out
-    assert "Pro trial active" in out
-    assert not marker.exists(), "successful sign-in is a cloud setup, not local-only"
+    assert "trial has ended" in out and "pricing" in out
 
 
 # ── `clawmetry onboard` always shows the options (founder ask 2026-06-30) ────
