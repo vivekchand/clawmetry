@@ -600,56 +600,95 @@ def _get_api_key_interactive() -> str:
 
     if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", entry):
         print("  ❌  That doesn't look like a valid email.")
-        return getpass.getpass("  API key (cm_…): ").strip()
+        entry = _input("  📧 Try again — your email: ").strip()
+        if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", entry):
+            return getpass.getpass("  API key (cm_…): ").strip()
 
     email = entry.lower()
-    print(f"\n  📨 Sending code to {email}…", end="", flush=True)
-    r = _api_call("/api/auth/email-otp", {"action": "send", "email": email})
-    if r.get("_status") == 503:
-        import time as _time
 
-        retry_after = r.get("retry_after") or 5
-        try:
-            retry_after = max(1, min(int(retry_after), 30))
-        except (TypeError, ValueError):
-            retry_after = 5
-        print(f"\n  ⏳ Server's busy — retrying in {retry_after}s…", flush=True)
-        _time.sleep(retry_after)
-        print(f"  📨 Sending code to {email}…", end="", flush=True)
-        r = _api_call("/api/auth/email-otp", {"action": "send", "email": email})
+    def _send_code(addr):
+        """Send an OTP to ``addr`` with the 503 backoff. Returns the response."""
+        print(f"\n  📨 Sending code to {addr}…", end="", flush=True)
+        rr = _api_call("/api/auth/email-otp", {"action": "send", "email": addr})
+        if rr.get("_status") == 503:
+            import time as _time
+
+            retry_after = rr.get("retry_after") or 5
+            try:
+                retry_after = max(1, min(int(retry_after), 30))
+            except (TypeError, ValueError):
+                retry_after = 5
+            print(f"\n  ⏳ Server's busy — retrying in {retry_after}s…", flush=True)
+            _time.sleep(retry_after)
+            print(f"  📨 Sending code to {addr}…", end="", flush=True)
+            rr = _api_call("/api/auth/email-otp", {"action": "send", "email": addr})
+        return rr
+
+    # OTP loop with RECOVERY: a typo'd email or a code that never arrives must
+    # never force a restart of the whole wizard (founder live-hit 2026-07-30).
+    # At the code prompt: `r` resends, typing a different email switches to it,
+    # blank input never burns an attempt; even three wrong codes offer a way
+    # back before falling to the paste-an-API-key exit.
+    while True:
+        r = _send_code(email)
         if r.get("_status") == 503:
             print(" ❌")
             print("\n  Couldn't reach our servers right now.")
             print("  Please try `clawmetry connect` again in a minute.\n")
             sys.exit(1)
-    if r.get("error"):
-        print(f" ❌  {r['error']}")
-        print("  Visit https://clawmetry.com/connect to get your API key.")
-        return getpass.getpass("  API key (cm_…): ").strip()
-    print(" ✅")
-    print()
+        if r.get("error"):
+            print(f" ❌  {r['error']}")
+            fix = _input("  Type a corrected email to retry, or press Enter to use an API key instead: ").strip()
+            if "@" in fix:
+                email = fix.lower()
+                continue
+            print("  Visit https://clawmetry.com/connect to get your API key.")
+            return getpass.getpass("  API key (cm_…): ").strip()
+        print(" ✅")
+        print("  Typo in the email, or no code arriving? Type r to resend, or just type the right email.")
+        print()
 
-    # Ask for OTP
-    for attempt in range(3):
-        otp = _input("  🔑 Enter the 6-digit code: ").strip()
-        if not otp:
+        wrong = 0
+        switched = False
+        while wrong < 3:
+            otp = _input("  🔑 Enter the 6-digit code (r = resend): ").strip()
+            if not otp:
+                continue  # a stray Enter must not burn an attempt
+            if otp.lower() in ("r", "resend"):
+                rr = _send_code(email)
+                print(" ✅" if not rr.get("error") and rr.get("_status") != 503 else f" ❌  {rr.get('error', 'server busy')}")
+                continue
+            if "@" in otp:
+                # They typed an email at the code prompt: that IS the typo fix.
+                email = otp.lower()
+                switched = True
+                break
+            print("  Verifying…", end="", flush=True)
+            r2 = _api_call(
+                "/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp}
+            )
+            if r2.get("error"):
+                print(f" ❌  {r2['error']}")
+                wrong += 1
+                if wrong < 3:
+                    print("  Try again (r = resend, or type a different email).")
+                continue
+            api_key = r2.get("api_key", "")
+            if api_key.startswith("cm_"):
+                is_new = r2.get("is_new", False)
+                print(f" ✅  {'Account created' if is_new else 'Welcome back'}!")
+                print()
+                return api_key
+            print(" ❌  Server returned an unexpected response.")
+            wrong += 1
+        if switched:
+            continue  # send a code to the corrected address
+        fix = _input("  Still stuck? Type a different email, r to resend, or press Enter to stop: ").strip()
+        if fix.lower() in ("r", "resend"):
             continue
-        print("  Verifying…", end="", flush=True)
-        r2 = _api_call(
-            "/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp}
-        )
-        if r2.get("error"):
-            print(f" ❌  {r2['error']}")
-            if attempt < 2:
-                print("  Try again.")
+        if "@" in fix:
+            email = fix.lower()
             continue
-        api_key = r2.get("api_key", "")
-        if api_key.startswith("cm_"):
-            is_new = r2.get("is_new", False)
-            print(f" ✅  {'Account created' if is_new else 'Welcome back'}!")
-            print()
-            return api_key
-        print(" ❌  Server returned an unexpected response.")
         break
 
     print()
@@ -962,7 +1001,8 @@ def _cmd_connect(args) -> None:
     custom_name = getattr(args, "custom_node_id", None) or ""
     machine_hostname = custom_name or socket.gethostname()
     _existing_node_id = _saved_node_id
-    print("Connecting to ClawMetry Cloud… ", end="", flush=True)
+    print("Verifying your account… " if _keep_local_signin
+          else "Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
         result = validate_key(
             api_key, hostname=machine_hostname, existing_node_id=_existing_node_id
@@ -1002,9 +1042,17 @@ def _cmd_connect(args) -> None:
     _enc_key_arg = getattr(args, "enc_key", None) or ""
     _kc_key = _keychain_get(node_id)  # '' when keyring not installed
 
+    if _keep_local_signin:
+        # No snapshots ever leave on this path — the E2E key ceremony is
+        # noise (and printing a "keep this safe" secret mid-Self-Hosted run
+        # reads like a cloud signup; founder live-hit 2026-07-30).
+        enc_key = _kc_key or _saved_enc_key or generate_encryption_key()
     print()
-    print("🔐 Encryption key protects your data end-to-end.")
-    if _enc_key_arg:
+    if not _keep_local_signin:
+        print("🔐 Encryption key protects your data end-to-end.")
+    if _keep_local_signin:
+        pass  # enc_key already chosen above, silently
+    elif _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
     elif _kc_key:
@@ -1117,7 +1165,9 @@ def _cmd_connect(args) -> None:
         return
 
     # Skip enc key reminder when --enc-key was passed (automated/sandbox use)
-    if not _enc_key_arg:
+    # and on keep-local sign-ins (no snapshot ever leaves; the secret is
+    # cloud-viewer material and printing it reads like a cloud signup).
+    if not _enc_key_arg and not _keep_local_signin:
         print("  Keep this secret key safe (like a password):")
         print(f"  {enc_key}")
         print()
@@ -1142,6 +1192,22 @@ def _cmd_connect(args) -> None:
         print()
     else:
         _start_daemon(config, args)
+
+    if _keep_local_signin:
+        # Self-Hosted stays self-hosted: no cloud dashboard URL, no secret
+        # in a URL fragment, no browser hand-off to app.clawmetry.com
+        # (founder live-hit 2026-07-30: the keep-local run ended by OPENING
+        # the cloud fleet page — a betrayal of "everything stays on your
+        # devices" even though zero data had synced).
+        print()
+        print("  All done! Your dashboard: http://localhost:8900")
+        print()
+        try:
+            import webbrowser
+            webbrowser.open("http://localhost:8900")
+        except Exception:
+            pass
+        return
 
     # Open browser with encryption key in URL fragment (never sent to server)
     # The #key=... fragment stays client-side — true E2E encryption

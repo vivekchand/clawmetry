@@ -1,9 +1,23 @@
 ## [Unreleased]
 
+### Fix: Self-Hosted sign-in never touches the cloud dashboard (#4258) (2026-07-30)
+- **Why:** founder live-run: the Self-Hosted trial sign-in held the data promise (marker kept, 0 nodes synced) but connect's finale ran the cloud ceremony anyway: E2E key prompt + secret printed, then "All done! Opening your dashboard..." launching app.clawmetry.com/cloud with the key in the URL fragment.
+- **What:** keep-local sign-ins say "Verifying your account…", skip the encryption-key ceremony entirely (silent auto-generate), never print the secret or a cloud URL, and end by opening http://localhost:8900. Drive-by: probe-count asserts 14 -> 15 for n8n.
+- **Verified:** 29 onboard/probe tests green.
+
+### Fix: OTP sign-in is recoverable (#4257) (2026-07-30)
+- **Why:** founder live-hit at the 6-digit-code prompt: a typo'd email or an undelivered code was a dead end (no resend, no change-email, a stray Enter burned one of the 3 attempts, three failures dropped to a raw paste-an-API-key prompt) — the classic OTP abandonment point.
+- **What:** at the code prompt r resends and typing an email IS the typo fix (switches address, fresh code there); blank input never burns an attempt; three wrong codes offer a different-email/resend/stop fork; send failures offer corrected-email retry; invalid emails get one re-prompt, with a hint line printed right after send.
+- **Verified:** 5 tests drive the full journeys against a scripted server (typo-fix at code prompt, double resend, blanks-don't-burn, 3-wrong-then-new-email, invalid-email retry).
+
 ### Feature: n8n is the 15th observed runtime (2026-07-30)
 - **Why:** n8n is the largest open-source workflow-automation platform and its AI Agent nodes make it an agent runtime, but it has no per-run token or cost observability of its own (token usage is buried on the model sub-node's run data and never surfaced). Per-step AI cost attribution is exactly what ClawMetry does. Scoped in clawmetry-pro#108; Activepieces was assessed in the same pass and deferred.
 - **What:** OSS side of the chain: `n8n` joins `PAID_RUNTIMES` + labels + aliases-free catalogue, the family adapter specs (`clawmetry_pro.adapters.n8n`), the runtime session-id prefix registries (sync, local_store, app.js), the free-tier presence probe (`~/.n8n`, honors `N8N_USER_FOLDER`), lite detection + recency data paths, the runtime switcher (label, prefix, caps `SESSIONS/EVENTS/COST`), Flow lane, pixel logo sprite (`rt-n8n` + chip) + manifest + brand. The adapter itself (SQLite `~/.n8n/database.sqlite`, WAL-aware read-only, flatted decoder, workflow executions as sessions, node runs as tool calls, AI Agent prompt + model attribution, REST stop-execution kill handler) ships in clawmetry-pro 0.5.0.
 - **Verified:** real n8n 2.32.6 capture (CLI import + execute: success, intentional failure, AI-agent run) drives 37 adapter tests in clawmetry-pro incl. a WAL-visibility regression guard; OSS pin suites green (labels/logos/no-leak/catalogue/entitlements/capability parity, 173 tests). Token-bearing success capture still needs a real model key before COST is advertised as verified.
+### Feature: onboard is a two-option fork with plans stated once (#4249, #4250) (2026-07-30)
+- **Why:** founder redesign: the fork should be purely WHERE it runs (Self-Hosted vs Cloud); sign-in is just how the trial starts on either path, and the per-option tier repetition read like three pricing pages in a terminal.
+- **What:** a Plans block printed once above the menu, tiers stacked (Free $0 watch OpenClaw + NVIDIA NemoClaw forever; Starter $9/node/mo everything in Free + observability for all 14 runtimes; Pro $19/node/mo everything in Starter + governance: alerts, approvals, evals). [1] Self-Hosted (default): have-key -> paste/activate, else "Start your free 7-day Pro trial? [Y/n]" -> connect keep-local mode (new args.keep_local skips the Case-B re-prompt; marker kept, trial minted + activated, dashboard ensured); declined -> free tier. [2] Cloud: full connect with the E2E story in the copy (snapshots sealed on-machine, only you hold the key), fleet dashboard + desk device named. Headless/EOF/--local unchanged: free local, no account.
+- **Verified:** 32 onboard tests green including plans-stated-once and stacked-tier copy pins; full flow rendered live on a 10-runtime machine.
 
 ### Feature: keeping data local still signs you in and activates the trial (#4237) (2026-07-30)
 - **Why:** founder hit it live: [1] Sign in on a nocloud machine fell into connect's "keep local-only?" prompt, and answering keep dropped the auth entirely — no account, no trial key, paid runtimes gated behind a bare pricing link. Identity is what unlocks runtimes; egress is a separate decision.
