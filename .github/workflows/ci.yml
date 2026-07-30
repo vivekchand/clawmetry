@@ -254,6 +254,7 @@ jobs:
             tests/test_required_tier_canonical.py \
             tests/test_tier_catalog.py \
             tests/test_tier_cli.py \
+            tests/test_license_scalar_accessors.py \
             -q
 
   # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────────────────────
