@@ -962,7 +962,8 @@ def _cmd_connect(args) -> None:
     custom_name = getattr(args, "custom_node_id", None) or ""
     machine_hostname = custom_name or socket.gethostname()
     _existing_node_id = _saved_node_id
-    print("Connecting to ClawMetry Cloud… ", end="", flush=True)
+    print("Verifying your account… " if _keep_local_signin
+          else "Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
         result = validate_key(
             api_key, hostname=machine_hostname, existing_node_id=_existing_node_id
@@ -1002,9 +1003,17 @@ def _cmd_connect(args) -> None:
     _enc_key_arg = getattr(args, "enc_key", None) or ""
     _kc_key = _keychain_get(node_id)  # '' when keyring not installed
 
+    if _keep_local_signin:
+        # No snapshots ever leave on this path — the E2E key ceremony is
+        # noise (and printing a "keep this safe" secret mid-Self-Hosted run
+        # reads like a cloud signup; founder live-hit 2026-07-30).
+        enc_key = _kc_key or _saved_enc_key or generate_encryption_key()
     print()
-    print("🔐 Encryption key protects your data end-to-end.")
-    if _enc_key_arg:
+    if not _keep_local_signin:
+        print("🔐 Encryption key protects your data end-to-end.")
+    if _keep_local_signin:
+        pass  # enc_key already chosen above, silently
+    elif _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
     elif _kc_key:
@@ -1117,7 +1126,9 @@ def _cmd_connect(args) -> None:
         return
 
     # Skip enc key reminder when --enc-key was passed (automated/sandbox use)
-    if not _enc_key_arg:
+    # and on keep-local sign-ins (no snapshot ever leaves; the secret is
+    # cloud-viewer material and printing it reads like a cloud signup).
+    if not _enc_key_arg and not _keep_local_signin:
         print("  Keep this secret key safe (like a password):")
         print(f"  {enc_key}")
         print()
@@ -1142,6 +1153,22 @@ def _cmd_connect(args) -> None:
         print()
     else:
         _start_daemon(config, args)
+
+    if _keep_local_signin:
+        # Self-Hosted stays self-hosted: no cloud dashboard URL, no secret
+        # in a URL fragment, no browser hand-off to app.clawmetry.com
+        # (founder live-hit 2026-07-30: the keep-local run ended by OPENING
+        # the cloud fleet page — a betrayal of "everything stays on your
+        # devices" even though zero data had synced).
+        print()
+        print("  All done! Your dashboard: http://localhost:8900")
+        print()
+        try:
+            import webbrowser
+            webbrowser.open("http://localhost:8900")
+        except Exception:
+            pass
+        return
 
     # Open browser with encryption key in URL fragment (never sent to server)
     # The #key=... fragment stays client-side — true E2E encryption
