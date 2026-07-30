@@ -2658,6 +2658,93 @@ def license_state_at_batch(epochs) -> list[dict]:
     return out
 
 
+def is_state_at_batch(state, epochs) -> list[dict]:
+    """Per-value perspective-epoch "was the license in state <X> at each
+    of these epochs?" gate for N epochs in ONE round-trip.
+
+    Shared-threshold sibling of :func:`is_state_at`. Where the singular
+    scalar folds ONE ``(state, epoch)`` pair to ONE bool, this preserves
+    per-value rows for a fixed ``state`` and a sequence of perspective
+    epochs so a scheduled-audit tile that wants to answer "would we have
+    shown the <state> banner on each of these audit dates?" (e.g.
+    "expired on any of my quarterly review dates?") hydrates the whole
+    column in ONE round-trip instead of fanning out N calls to the
+    scalar. Same "shared threshold applied to EVERY row, per-row epoch"
+    shape as :func:`is_expiring_within_at_batch` -- both take one gate
+    parameter plus a batch of epochs.
+
+    ``state`` is compared case-insensitively (after strip) against
+    :data:`LICENSE_STATES`. A typo like ``"actiev"`` -- or ``None`` /
+    empty / non-string -- collapses EVERY row to ``is_state=False``
+    while preserving row slots so the output length still matches N. A
+    caller cannot silently mis-gate on a mis-spelled state name, and
+    the batch matches the "unknown state -> always False" posture of
+    the scalar.
+
+    Row shape::
+
+        {
+          "epoch":     <int> | "<raw>",
+          "is_state":  <bool>,
+        }
+
+    Semantics per row mirror :func:`is_state_at`: ``True`` iff the
+    perspective-epoch state byte-equals the (normalised, canonical)
+    ``state`` requested. Note the ``"no_license"`` branch: for a bad
+    epoch token (``bool`` / non-numeric / ``None``) the scalar
+    collapses ``license_state_at`` to ``"no_license"`` -- so a batch
+    caller asking ``state="no_license"`` truthfully sees ``True`` for
+    those rows, mirroring the conservative "no entitlement" fallback
+    of :func:`license_state_at`; any other requested ``state`` sees
+    ``False``. Row shape mirrors :func:`is_expired_at_batch` /
+    :func:`is_expiring_at_batch` so a caller assembling an audit
+    timeline can zip the responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``is_state=False`` so the batch
+    keeps building. Matches the never-mis-gate posture used by
+    :func:`is_state_at` -- a bad row cannot silently claim a state
+    that would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now" and ``state`` is a canonical
+    value, this predicate must agree with :func:`is_state` for the
+    same install and the same requested ``state`` at that row -- both
+    derive from the same signed ``exp`` claim via
+    :func:`license_state_at` / :func:`license_state`, so a caller
+    binding both the singular and the batch cannot catch them
+    disagreeing at the boundary.
+    """
+    try:
+        requested = str(state).strip().lower() if state is not None else ""
+    except Exception:
+        requested = ""
+    valid_state = bool(requested) and requested in LICENSE_STATES
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            match = bool(valid_state and requested == "no_license")
+            out.append({"epoch": token, "is_state": match})
+            continue
+        if not valid_state:
+            out.append({"epoch": parsed, "is_state": False})
+            continue
+        try:
+            matched = is_state_at(requested, parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_state_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append({"epoch": parsed, "is_state": bool(matched)})
+    return out
+
+
 def is_expired_at_batch(epochs) -> list[dict]:
     """Per-value perspective-epoch "was the license expired?" gate for
     N epochs in ONE round-trip.
