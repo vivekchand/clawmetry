@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feature: keeping data local still signs you in and activates the trial (#4237) (2026-07-30)
+- **Why:** founder hit it live: [1] Sign in on a nocloud machine fell into connect's "keep local-only?" prompt, and answering keep dropped the auth entirely — no account, no trial key, paid runtimes gated behind a bare pricing link. Identity is what unlocks runtimes; egress is a separate decision.
+- **What:** connect's keep-local answer now offers "Sign in anyway to unlock every runtime here with a free 7-day Pro trial license? [Y/n]" — yes runs the normal Google/GitHub/email auth with the nocloud marker kept (cloud enable + backfill skipped, marker re-touched, local dashboard ensured and health-checked); _activate_signup_trial() is module-level and runs at the end of every successful connect, so bare connect sign-ins mint their trial too and onboard no longer double-calls.
+- **Verified:** 31 onboard tests green; trial helper covered directly (mints+activates live key; refuses expired with an honest pricing notice).
+
 ### Fix: local-only onboard actually serves localhost:8900 and says so truthfully (#4224) (2026-07-29)
 - **Why:** founder screenshots: onboard printed "Watching your agents locally / http://localhost:8900" while the port refused connections — only the sync daemon was ever started, no process served the dashboard on a local-only machine; two lines above, "Your data is syncing to the cloud" printed on a node whose promise is that nothing leaves it; and [1] Sign in was re-asked "keep local-only?" by connect's marker prompt, where [2] silently dropped the chosen auth.
 - **What:** _ensure_local_dashboard() health-checks the port, registers a KeepAlive com.clawmetry.dashboard launchd job (or detached-subprocess fallback) when silent, and polls within a hard 12s bound; the URL prints with "(live now)" only when the port answered, else an honest "did not come up: start it yourself: clawmetry, logs: ~/.clawmetry/dashboard.log". Daemon-registration copy is mode-aware (local-only says "Nothing leaves this machine."). Onboard [1] clears the nocloud marker before connect; a failed sign-in restores it.
