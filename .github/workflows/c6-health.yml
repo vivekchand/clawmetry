@@ -161,11 +161,13 @@ jobs:
 
           today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-          # Dedup: skip if THIS health check already posted today.
+          # Fetch recent comments (50 covers 7 days of health checks + cron fires).
           comments, _ = api_get(
               f"/repos/{OWNER}/clawmetry/issues/{TRACKING_ISSUE}"
-              "/comments?per_page=20&sort=updated&direction=desc"
+              "/comments?per_page=50&sort=updated&direction=desc"
           )
+
+          # Dedup: skip if THIS health check already posted today.
           for c in comments or []:
               author = (c.get("user") or {}).get("login", "")
               posted = (c.get("created_at") or "")[:10]
@@ -185,6 +187,28 @@ jobs:
               if (c.get("user") or {}).get("login", "") == "github-actions[bot]"
               and MARKER in c.get("body", "")
           )
+
+          # Count consecutive green days (for stop-condition detection).
+          # Walk prior health-check comments newest-first; stop at the first
+          # non-green day so only an unbroken streak counts.
+          def count_green_streak(comments_list, today):
+              """Return number of consecutive calendar days health-check was GREEN,
+              NOT counting today (caller adds 1 when today is green)."""
+              prior = sorted(
+                  (c for c in (comments_list or [])
+                   if (c.get("user") or {}).get("login", "") == "github-actions[bot]"
+                   and MARKER in c.get("body", "")
+                   and (c.get("created_at") or "")[:10] != today),
+                  key=lambda c: c.get("created_at", ""),
+                  reverse=True,
+              )
+              streak = 0
+              for c in prior:
+                  if "confirmed GREEN" in c.get("body", ""):
+                      streak += 1
+                  else:
+                      break
+              return streak
 
           # Determine overall state.
           has_confirmed_missing = any(
@@ -220,18 +244,57 @@ jobs:
           table += "\n" + "\n".join(rows)
 
           if all_confirmed_ok:
-              body = (
-                  f"{MARKER}\n"
-                  f"**C6 health check {today_utc}: clawmetry/main confirmed GREEN -- C6 closed.**\n\n"
-                  f"{table}\n\n"
-                  "clawmetry/main: `E2E Gate (required)` confirmed present. "
-                  "clawmetry-cloud and clawmetry-landing: cannot verify cross-repo "
-                  "(private repos -- GITHUB_TOKEN scope limit is expected; "
-                  "they were configured by the same apply-required-checks run).\n\n"
-                  "C6 is now GREEN. The 7-criterion stop-condition countdown starts today "
-                  "(all 7 criteria must hold green for 7 consecutive days). "
-                  "Disable the cron at https://claude.ai/code/scheduled."
-              )
+              prior_green = count_green_streak(comments, today_utc)
+              green_streak = prior_green + 1  # today counts
+              stop_condition_met = green_streak >= 7
+
+              if stop_condition_met:
+                  body = (
+                      f"{MARKER}\n"
+                      f"**C6 health check {today_utc}: STOP CONDITION MET -- "
+                      f"all 7 criteria green for {green_streak} consecutive days.**\n\n"
+                      f"{table}\n\n"
+                      "All 7 E2E robustness criteria have been green for 7+ consecutive days. "
+                      "The mandate is fulfilled.\n\n"
+                      "**Action required:** disable the E2E robustness cron at "
+                      "https://claude.ai/code/scheduled"
+                  )
+                  # Tick the C6 checkbox in the issue body if still unchecked.
+                  issue_data, _ = api_get(
+                      f"/repos/{OWNER}/clawmetry/issues/{TRACKING_ISSUE}"
+                  )
+                  if issue_data and "- [ ] **C6" in (issue_data.get("body") or ""):
+                      new_body = (issue_data["body"] or "").replace(
+                          "- [ ] **C6", "- [x] **C6", 1
+                      )
+                      patch_data = json.dumps({"body": new_body}).encode()
+                      patch_req = urllib.request.Request(
+                          f"https://api.github.com/repos/{OWNER}/clawmetry"
+                          f"/issues/{TRACKING_ISSUE}",
+                          data=patch_data,
+                          headers={**HEADERS, "Content-Type": "application/json"},
+                          method="PATCH",
+                      )
+                      try:
+                          with urllib.request.urlopen(patch_req) as r:
+                              print("Checked C6 box in issue body.")
+                      except Exception as exc:
+                          print(f"Warning: could not update issue body: {exc}")
+              else:
+                  body = (
+                      f"{MARKER}\n"
+                      f"**C6 health check {today_utc}: clawmetry/main confirmed GREEN -- "
+                      f"day {green_streak}/7 of stop-condition countdown.**\n\n"
+                      f"{table}\n\n"
+                      "clawmetry/main: `E2E Gate (required)` confirmed present. "
+                      "clawmetry-cloud and clawmetry-landing: cannot verify cross-repo "
+                      "(private repos -- GITHUB_TOKEN scope limit is expected; "
+                      "they were configured by the same apply-required-checks run).\n\n"
+                      f"Day {green_streak}/7: all 7 criteria must hold green for "
+                      "7 consecutive days for the stop-condition to trigger. "
+                      "Stop-condition countdown ends 2026-08-06 if no regression. "
+                      "Disable the cron at https://claude.ai/code/scheduled once done."
+                  )
           else:
               total_missing = sum(len(r["missing"]) for r in results.values())
               unknown_repos = [r for r, v in results.items() if v["status"] == "unknown"]
