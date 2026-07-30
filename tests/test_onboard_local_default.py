@@ -279,9 +279,10 @@ def test_already_connected_shows_two_options_and_shared_plans(onboard_env, monke
     cli._cmd_onboard(_args())
     out = capsys.readouterr().out
     assert "[1] Self-Hosted" in out and "[2] Cloud" in out
-    assert "Plans" in out and "Starter $9/node/mo" in out and "Pro $19/node/mo" in out
+    assert "Plans" in out and "Starter $9/node/mo" in out and "Pro    $19/node/mo" in out
     assert out.count("$9") == 1 and out.count("$19") == 1, "plans stated once, not per option"
     assert "watch OpenClaw + NVIDIA NemoClaw" in out
+    assert "everything in Free +" in out and "everything in Starter +" in out, "tiers must read as stacked"
     assert marker.exists(), "explicit Self-Hosted reconfigures a connected user to local"
 
 
