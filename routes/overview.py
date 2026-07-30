@@ -1680,7 +1680,21 @@ def cloud_cta_status():
     import dashboard as _d
 
     token = _d._read_cloud_token()
-    return jsonify({"connected": bool(token)})
+    # Local-only must WIN over "has a token": a signed-in Self-Hosted node
+    # (account + trial license, nocloud marker kept) is NOT cloud-connected
+    # — the founder saw a green "Cloud Connected" badge on a machine whose
+    # whole promise was "nothing leaves this device" (2026-07-30).
+    try:
+        from clawmetry.config import is_cloud_disabled
+
+        local_only = is_cloud_disabled()
+    except Exception:
+        local_only = False
+    return jsonify({
+        "connected": bool(token) and not local_only,
+        "account_linked": bool(token),
+        "local_only": local_only,
+    })
 
 
 @bp_overview.route(

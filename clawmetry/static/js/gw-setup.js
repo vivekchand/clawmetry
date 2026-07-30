@@ -494,8 +494,27 @@ function cloudVerifyOtp() {
 }
 function _updateCloudStatus() {
   fetch('/api/cloud-cta/status').then(function(r){ return r.json(); }).then(function(d){
-    document.getElementById('cloud-cta-btn').style.display = d.connected ? 'none' : '';
-    document.getElementById('cloud-connected-badge').style.display = d.connected ? '' : 'none';
+    var cta = document.getElementById('cloud-cta-btn');
+    var badge = document.getElementById('cloud-connected-badge');
+    if (d.connected) {
+      cta.style.display = 'none';
+      badge.style.display = '';
+    } else if (d.local_only && d.account_linked) {
+      // Signed-in Self-Hosted: honest amber "Local-only" — NOT the green
+      // cloud badge, and no click-through to app.clawmetry.com (founder
+      // report 2026-07-30: the node syncs nothing by choice).
+      cta.style.display = 'none';
+      badge.style.display = '';
+      badge.innerHTML = '&#9679; Local-only';
+      badge.style.color = '#f59e0b';
+      badge.style.borderColor = 'rgba(245,158,11,0.4)';
+      badge.title = 'Signed in; your data stays on this machine. Enable cloud sync: clawmetry connect';
+      badge.onclick = null;
+      badge.style.cursor = 'default';
+    } else {
+      cta.style.display = '';
+      badge.style.display = 'none';
+    }
   }).catch(function(){
     document.getElementById('cloud-cta-btn').style.display = '';
     document.getElementById('cloud-connected-badge').style.display = 'none';

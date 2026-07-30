@@ -18455,9 +18455,23 @@ def run_daemon() -> None:
                 )
             save_state(state)
             if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
-                log.info(
-                    f"Synced {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
-                )
+                try:
+                    from clawmetry.config import is_cloud_disabled as _icd_cycle
+                    _cycle_local_only = _icd_cycle()
+                except Exception:
+                    _cycle_local_only = False
+                if _cycle_local_only:
+                    # _post() short-circuits every cloud call in local-only
+                    # mode; logging "Synced … E2E encrypted" here made the
+                    # founder believe data was leaving a machine whose whole
+                    # promise was that it never would (2026-07-30).
+                    log.info(
+                        f"Ingested locally (local-only, nothing sent): {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out"
+                    )
+                else:
+                    log.info(
+                        f"Synced {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
+                    )
 
             # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──
             # Reads cached rules + recent events from the local DuckDB and
