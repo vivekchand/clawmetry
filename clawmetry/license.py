@@ -981,3 +981,93 @@ def current_license_info() -> dict | None:
     except Exception as exc:
         logger.warning("license: info read failed: %s", exc)
         return None
+
+
+def license_tier() -> str | None:
+    """Scalar accessor for the ``tier`` claim on the installed license.
+
+    Thin wrapper over :func:`current_license_info` for callers (a status
+    tile, a CLI ``clawmetry status`` row, a fleet-node column) that only
+    need the tier string and don't want to unpack the full envelope.
+
+    Returns the normalised tier string (lower-cased, whitespace-stripped)
+    on a signature-valid, non-expired license. Returns ``None`` in every
+    other branch:
+
+      * no license file on disk (OSS free)
+      * file exists but signature is bogus (``info["valid"] is False``
+        AND ``info["tier"] is None`` -- we never surface tier from an
+        unsigned body)
+      * signed-but-lapsed key (``info["valid"] is False`` -- the ``tier``
+        claim is still readable but the license no longer grants
+        entitlement, so a gate binding this helper cannot silently keep
+        rendering "Pro" on an expired key)
+      * any per-row failure inside :func:`current_license_info`
+
+    Never raises -- matches the ``never surface a paid tier we can't
+    trust`` posture of the surrounding license helpers.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_tier underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("valid"):
+        return None
+    tier = info.get("tier")
+    if not isinstance(tier, str):
+        return None
+    tier = tier.strip().lower()
+    return tier or None
+
+
+def license_expires_at() -> int | None:
+    """Scalar accessor for the ``exp`` claim on the installed license.
+
+    Thin wrapper over :func:`current_license_info` for callers (a renewal
+    banner, a "Pro expires <date>" chip, an operator-audit tile) that
+    only need the raw expiry epoch and don't want to unpack the full
+    envelope OR re-derive ``days_left`` from ``exp`` themselves.
+
+    Returns the ``exp`` claim as an ``int`` (Unix epoch seconds) on any
+    signature-valid license file -- INCLUDING signed-but-lapsed keys, so
+    a support tile can render "expired on <date>" without falling back to
+    :func:`current_license_info` just for that one field. Returns
+    ``None`` in every other branch:
+
+      * no license file on disk (OSS free)
+      * file exists but signature is bogus (``exp`` collapses to
+        ``None`` in :func:`current_license_info` -- we never trust an
+        unsigned body's ``exp``)
+      * perpetual license (payload has no ``exp`` claim -- the license
+        never expires and there is no epoch to return)
+      * non-numeric ``exp`` claim (defensively coerced to ``None`` rather
+        than surfacing a bogus datetime)
+      * any per-row failure inside :func:`current_license_info`
+
+    Deliberately lenient on expiry, matching the ``current_license_info``
+    posture: a signed-but-lapsed key still carries a meaningful ``exp``
+    that a support/audit tile needs. Callers wanting to hide the row on
+    lapsed keys should independently check :func:`license_tier` (which
+    returns ``None`` on lapsed keys) or ``current_license_info()["valid"]``.
+    """
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_expires_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    exp = info.get("exp")
+    if isinstance(exp, bool):  # bool is a subclass of int -- refuse it
+        return None
+    if isinstance(exp, int):
+        return exp
+    if isinstance(exp, float):
+        try:
+            return int(exp)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None

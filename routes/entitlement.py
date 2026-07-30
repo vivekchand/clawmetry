@@ -7123,6 +7123,118 @@ def api_license_pubkey():
         )
 
 
+@bp_entitlement.route("/api/license/tier")
+def api_license_tier():
+    """``GET /api/license/tier`` -- scalar accessor for the ``tier`` claim
+    on the currently-installed license, so a status tile / fleet-node
+    column that only needs the tier string doesn't have to unpack the
+    full ``/api/license/status`` envelope (or worse, re-implement the
+    "don't trust an unsigned body" rule client-side).
+
+    Wraps :func:`clawmetry.license.license_tier`.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "tier":        "<pro|enterprise|starter|...>" | null,
+          "has_license": <bool>,   # a license file is on disk (regardless of validity)
+          "valid":       <bool>    # signature-valid AND not expired NOW
+        }
+
+    ``tier`` is ``null`` on OSS-free installs, invalid-signature files
+    (we never surface tier from an unsigned body), and signed-but-lapsed
+    keys (so a gate binding this endpoint cannot silently keep rendering
+    "Pro" on an expired key). Callers wanting to render "was Pro,
+    expired" copy should read ``valid`` alongside ``has_license`` and
+    hit ``/api/license/status`` for the full envelope.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free branch
+    shape (``tier=null``, ``has_license=false``, ``valid=false``),
+    matching the never-crash posture of the surrounding license
+    endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        tier = _lic.license_tier()
+        try:
+            info = _lic.current_license_info()
+        except Exception as exc:
+            logger.debug("api_license_tier: info read failed: %s", exc)
+            info = None
+        has_license = isinstance(info, dict)
+        valid = bool(has_license and info.get("valid"))
+        return jsonify(
+            {
+                "tier": tier,
+                "has_license": has_license,
+                "valid": valid,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_tier: error: %s", exc)
+        return jsonify({"tier": None, "has_license": False, "valid": False})
+
+
+@bp_entitlement.route("/api/license/expires-at")
+def api_license_expires_at():
+    """``GET /api/license/expires-at`` -- scalar accessor for the ``exp``
+    claim on the currently-installed license, so a renewal banner /
+    "Pro expires <date>" chip / operator-audit tile that only needs the
+    raw expiry epoch doesn't have to unpack the full
+    ``/api/license/status`` envelope.
+
+    Wraps :func:`clawmetry.license.license_expires_at`.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "expires_at":  <int> | null,   # Unix epoch seconds
+          "has_license": <bool>,         # a license file is on disk
+          "valid":       <bool>          # signature-valid AND not expired NOW
+        }
+
+    ``expires_at`` is ``null`` on OSS-free installs, invalid-signature
+    files (we never trust an unsigned body's ``exp``), perpetual keys
+    (payload has no ``exp`` -- the license never expires), and any non-
+    numeric ``exp`` claim.
+
+    Deliberately lenient on expiry, matching
+    :func:`clawmetry.license.license_expires_at`: a signed-but-lapsed
+    key still surfaces its ``exp`` so a support tile can render
+    "expired on <date>" without a second call to
+    ``/api/license/status``. The ``valid`` field independently carries
+    the "signature-valid AND not expired NOW" signal for callers that
+    DO want to hide the row on lapsed keys.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free branch
+    shape (``expires_at=null``, ``has_license=false``, ``valid=false``),
+    matching the never-crash posture of the surrounding license
+    endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        exp = _lic.license_expires_at()
+        try:
+            info = _lic.current_license_info()
+        except Exception as exc:
+            logger.debug("api_license_expires_at: info read failed: %s", exc)
+            info = None
+        has_license = isinstance(info, dict)
+        valid = bool(has_license and info.get("valid"))
+        return jsonify(
+            {
+                "expires_at": exp,
+                "has_license": has_license,
+                "valid": valid,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_expires_at: error: %s", exc)
+        return jsonify({"expires_at": None, "has_license": False, "valid": False})
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
