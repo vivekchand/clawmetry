@@ -12863,6 +12863,30 @@ def _build_agent_inventory(
             a.get("displayName") or "",
         ))
 
+        # Subscription-coverage enrichment (device parity): the desk device
+        # already tells the truth about flat-fee plans ("covered / EXTRA TODAY
+        # $0.00 / Claude Max 20x covers it"); the web roster reads the SAME
+        # daemon-side detection so both surfaces agree. extraCost24hUsd counts
+        # METERED agents only - a subscription is a flat fee already paid, so
+        # its usage adds $0 of marginal spend (same semantics as the cloud
+        # device-summary endpoint). Cached 300s in _build_billing_payload;
+        # best-effort, never raises.
+        account_plan = None
+        extra_24h = 0.0
+        try:
+            _billing = _build_billing_payload(load_config() or {}) or {}
+            account_plan = _billing.get("account_plan")
+            _rt_billing = _billing.get("runtimes") or {}
+            for a in agents:
+                b = _rt_billing.get(a["agentKey"])
+                if isinstance(b, dict) and b.get("mode"):
+                    a["billingMode"] = b.get("mode")
+                    a["billingLabel"] = b.get("label")
+                    if b.get("mode") == "metered":
+                        extra_24h += float(a.get("cost24hUsd") or 0.0)
+        except Exception as _be:
+            log.debug("inventory billing enrichment skipped: %s", _be)
+
         node_wide = {
             "nodeId": node_id,
             "agents": agents,
@@ -12873,6 +12897,11 @@ def _build_agent_inventory(
             # column that would imply a per-agent number it cannot back.
             "nodeWideToolGroups": tool_groups if isinstance(tool_groups, dict) else {},
             "nodeWideEval": eval_summary if isinstance(eval_summary, dict) else {},
+            # Account-level plan ({mode,label,usd_month} or None) + the rolling
+            # 24h spend of METERED agents only - the "extra today" number when
+            # the plan is a subscription (device-parity hero).
+            "accountPlan": account_plan,
+            "extraCost24hUsd": round(extra_24h, 4),
             "total": len(agents),
         }
         by_runtime = {}

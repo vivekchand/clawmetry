@@ -675,8 +675,6 @@
   "history.to": "até",
   "history.token_usage_over_time": "Utilização de Tokens ao Longo do Tempo",
   "i18n.language": "Idioma",
-  "inventory.selected_chip": "selecionado",
-  "inventory.selected_chip_tip": "Mostrado porque este runtime está selecionado no seletor. Sem atividade nas últimas 24h.",
   "inventory.title": "Os seus agentes",
   "inventory.story": "Uma visão clara e imediata de cada agente nesta máquina: o que executa, quanto custa e se está ativo.",
   "inventory.tile_alive": "Ativo",

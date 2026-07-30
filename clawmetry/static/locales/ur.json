@@ -675,8 +675,6 @@
   "history.to": "تک",
   "history.token_usage_over_time": "وقت کے ساتھ ٹوکن کا استعمال",
   "i18n.language": "زبان",
-  "inventory.selected_chip": "منتخب شدہ",
-  "inventory.selected_chip_tip": "یہ اس لیے دکھایا جا رہا ہے کیونکہ یہ رن ٹائم سوئچر میں منتخب ہے۔ پچھلے 24 گھنٹوں میں کوئی سرگرمی نہیں۔",
   "inventory.title": "آپ کے ایجنٹس",
   "inventory.story": "اس مشین کے ہر ایجنٹ کا پُرسکون، ایک نظر کا جائزہ: کیا چلاتا ہے، کتنا خرچ ہوتا ہے، اور کیا وہ فعال ہے۔",
   "inventory.tile_alive": "فعال",

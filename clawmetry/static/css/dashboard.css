@@ -1676,6 +1676,22 @@
 .inv-dot { display: inline-block; width: 9px; height: 9px; border-radius: 999px; margin-right: 7px; vertical-align: middle; }
 .inv-na { color: var(--text-faint); cursor: help; }
 .inv-doing { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+.inv-doing-tok { font-size: 11px; color: var(--text-faint); margin-left: 6px; }
+/* Inactive-agents fold: the toggle row must LOOK clickable (it silently
+   wasn't, founder report 2026-07-30). */
+.inv-fold-toggle td { cursor: pointer; color: var(--text-muted); font-size: 12px; user-select: none; }
+.inv-fold-toggle:hover td { color: var(--text-secondary); background: var(--bg-hover); }
+.inv-fold-caret { display: inline-block; margin-right: 4px; }
+.inv-fold-hint { color: var(--text-faint); }
+/* Subscription-coverage chips, mirroring the desk device (green covered /
+   amber metered). */
+.inv-cov-chip {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 2px 7px; border-radius: 9px; margin-left: 6px; vertical-align: middle; cursor: help;
+}
+.inv-cov-sub { background: rgba(34,197,94,0.14); border: 1px solid rgba(34,197,94,0.4); color: #22c55e; }
+.inv-cov-met { background: rgba(245,158,11,0.14); border: 1px solid rgba(245,158,11,0.4); color: #f59e0b; }
+.inv-tile-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .inv-doing-on { background: rgba(34,197,94,0.14); color: #22c55e; }
 .inv-doing-idle { background: rgba(245,158,11,0.14); color: #f59e0b; }
 .inv-doing-quiet { background: var(--bg-secondary); color: var(--text-muted); }

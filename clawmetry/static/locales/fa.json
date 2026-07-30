@@ -675,8 +675,6 @@
   "history.to": "تا",
   "history.token_usage_over_time": "مصرف توکن در طول زمان",
   "i18n.language": "زبان",
-  "inventory.selected_chip": "انتخاب‌شده",
-  "inventory.selected_chip_tip": "به این دلیل نمایش داده می‌شود که این ران‌تایم در سوئیچر انتخاب شده است. در ۲۴ ساعت گذشته فعالیتی ثبت نشده.",
   "inventory.title": "عامل‌های شما",
   "inventory.story": "نمایی آرام و یک‌نگاهی از تمام عامل‌های روی این دستگاه: چه چیزی اجرا می‌کنند، چه هزینه‌ای دارند و آیا فعال هستند.",
   "inventory.tile_alive": "فعال",

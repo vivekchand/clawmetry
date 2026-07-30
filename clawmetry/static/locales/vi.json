@@ -675,8 +675,6 @@
   "history.to": "đến",
   "history.token_usage_over_time": "Mức dùng token theo thời gian",
   "i18n.language": "Ngôn ngữ",
-  "inventory.selected_chip": "đã chọn",
-  "inventory.selected_chip_tip": "Hiển thị vì runtime này đang được chọn trong bộ chuyển đổi. Không có hoạt động trong 24 giờ qua.",
   "inventory.title": "Các agent của bạn",
   "inventory.story": "Toàn cảnh mọi agent trên máy này trong một cái nhìn: chúng chạy gì, tốn bao nhiêu, và có đang hoạt động không.",
   "inventory.tile_alive": "Đang chạy",

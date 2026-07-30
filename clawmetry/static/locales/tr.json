@@ -675,8 +675,6 @@
   "history.to": "ila",
   "history.token_usage_over_time": "Zaman İçinde Token Kullanımı",
   "i18n.language": "Dil",
-  "inventory.selected_chip": "seçili",
-  "inventory.selected_chip_tip": "Bu çalışma zamanı switcher'da seçili olduğu için gösteriliyor. Son 24 saatte etkinlik yok.",
   "inventory.title": "Ajanlarınız",
   "inventory.story": "Bu makinedeki her ajanın sakin, tek bakışta görünen özeti: ne çalıştırdığı, ne kadara mal olduğu ve aktif olup olmadığı.",
   "inventory.tile_alive": "Aktif",
