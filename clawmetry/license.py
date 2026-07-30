@@ -2767,6 +2767,94 @@ def is_expiring_at_batch(epochs) -> list[dict]:
     return out
 
 
+def is_expiring_within_at_batch(days: int, epochs) -> list[dict]:
+    """Per-value perspective-epoch "would we have shown a renewal warning
+    as of this epoch?" gate for N epochs in ONE round-trip.
+
+    Per-value axis batch sibling of :func:`is_expiring_within_at`. Fills
+    the ``_at_batch`` slot on the renewal-window axis alongside the
+    existing ``exp``-derived batches (:func:`is_expired_at_batch`,
+    :func:`is_expiring_at_batch`, :func:`days_until_expiry_at_batch`) so
+    a scheduled-audit tile that wants to render "would the renewal
+    banner have fired on each of these dates?" across a sequence of
+    perspective epochs hydrates the whole column in ONE call instead of
+    fanning out N calls to :func:`is_expiring_within_at`.
+
+    ``days`` is the renewal-window threshold. It is applied to EVERY
+    row -- callers wanting per-row thresholds should call the singular
+    scalar N times. The threshold is coerced through ``int()`` once at
+    the top of the call, matching the scalar helper. A ``bool`` /
+    non-numeric / negative ``days`` collapses to ``is_expiring_within=
+    False`` on every row (the scalar collapses to ``False`` on the same
+    inputs, so the batch cannot silently diverge from a full N-call
+    fan-out).
+
+    Row shape::
+
+        {
+          "epoch":                <int> | "<raw>",
+          "is_expiring_within":   <bool>,
+        }
+
+    Semantics per row mirror :func:`is_expiring_within_at`: ``True``
+    iff a license is installed, signature-valid, carries an ``exp``
+    claim, AND the days from ``epoch`` until ``exp`` fall between 0 and
+    ``days`` inclusive. An already-lapsed-at-epoch key returns
+    ``False`` on purpose -- the caller wants to distinguish "renewal
+    window" (warn) from "already expired at that time" (a different,
+    louder banner), and :func:`is_expired_at_batch` /
+    :func:`days_until_expiry_at_batch` independently carry those
+    signals index-for-index for callers that DO want to distinguish
+    them. Perpetual licenses (no ``exp`` claim) and the no-license path
+    both yield ``False`` on every row: nothing to warn about.
+
+    Row shape mirrors :func:`is_expired_at_batch` /
+    :func:`is_expiring_at_batch` per-row so a caller assembling a full
+    renewal timeline can zip the batches index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``is_expiring_within=False`` so
+    the batch keeps building. Matches the never-mis-gate posture used
+    by :func:`is_expiring_within_at` -- a bad row cannot silently fire
+    a renewal prompt.
+    """
+    if isinstance(days, bool):
+        threshold_ok = False
+        threshold = 0
+    else:
+        try:
+            threshold = int(days)
+            threshold_ok = threshold >= 0
+        except (TypeError, ValueError):
+            threshold = 0
+            threshold_ok = False
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "is_expiring_within": False})
+            continue
+        if not threshold_ok:
+            out.append({"epoch": parsed, "is_expiring_within": False})
+            continue
+        try:
+            matched = is_expiring_within_at(threshold, parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_expiring_within_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append(
+            {"epoch": parsed, "is_expiring_within": bool(matched)}
+        )
+    return out
+
+
 def days_until_expiry_at_batch(epochs) -> list[dict]:
     """Per-value perspective-epoch "days until expiry" scalar for N
     epochs in ONE round-trip.
