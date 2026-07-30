@@ -40,7 +40,8 @@
     "opencode": "#f59e0b",
     "qwen_code": "#6d5cff",
     "pi": "#4f8ef7",
-    "deepagents": "#2fa87c"
+    "deepagents": "#2fa87c",
+    "n8n": "#ea4b71"
   };
   var FALLBACK_HUE = "#8b97ad";
 

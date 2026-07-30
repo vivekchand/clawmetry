@@ -54,5 +54,9 @@
   "deepagents": {
     "label": "Deep Agents",
     "brand": "#2fa87c"
+  },
+  "n8n": {
+    "label": "n8n",
+    "brand": "#ea4b71"
   }
 }

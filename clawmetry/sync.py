@@ -6161,6 +6161,7 @@ def _runtime_data_paths(rid: str) -> list:
         "aider": [os.path.join(home, ".aider")],
         "picoclaw": [os.path.join(home, ".picoclaw")],
         "nanoclaw": [os.path.join(home, ".nanoclaw")],
+        "n8n": [os.path.join(home, ".n8n", "database.sqlite")],
     }
     return _M.get(rid, [])
 
@@ -6286,6 +6287,7 @@ def _detect_runtimes_lite() -> list:
         "hermes": [os.path.join(home, ".hermes", "state.db")],
         "picoclaw": [os.path.join(home, ".picoclaw")],
         "nanoclaw": [os.path.join(home, ".nanoclaw")],
+        "n8n": [os.path.join(home, ".n8n", "database.sqlite")],
     }
     for rid, paths in _present.items():
         try:
@@ -11412,6 +11414,7 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
     ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
+    ("clawmetry_pro.adapters.n8n", "N8nAdapter"),
 )
 
 
@@ -12480,7 +12483,7 @@ def _build_model_attribution():
 # session-id prefix). Keep in sync with clawmetry/static/js/app.js.
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
-    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
 })
 
 

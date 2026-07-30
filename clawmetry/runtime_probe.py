@@ -74,6 +74,7 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("nanoclaw", "NanoClaw", ("~/.nanoclaw",)),
     RuntimeProbe("pi", "Pi", ("~/.pi/agent/sessions",)),
     RuntimeProbe("deepagents", "DeepAgents", ("~/.deepagents/.state", "~/.deepagents")),
+    RuntimeProbe("n8n", "n8n", ("~/.n8n",), env="N8N_USER_FOLDER"),
 )
 
 

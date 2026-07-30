@@ -44,7 +44,7 @@ def test_family_adapter_specs_target_clawmetry_pro():
     from clawmetry import sync as _s
 
     specs = _s._FAMILY_ADAPTER_SPECS
-    assert len(specs) == 12, f"expected 12 paid adapters, got {len(specs)}"
+    assert len(specs) == 13, f"expected 13 paid adapters, got {len(specs)}"
     for module_name, class_name in specs:
         assert module_name.startswith("clawmetry_pro.adapters."), (
             f"sync._FAMILY_ADAPTER_SPECS still references OSS path: "

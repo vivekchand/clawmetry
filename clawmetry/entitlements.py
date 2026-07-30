@@ -93,6 +93,7 @@ PAID_RUNTIMES = frozenset(
         "nanoclaw",
         "pi",
         "deepagents",
+        "n8n",
     }
 )
 
@@ -114,6 +115,7 @@ RUNTIME_LABELS = {
     "nanoclaw": "NanoClaw",
     "pi": "Pi",
     "deepagents": "Deep Agents",
+    "n8n": "n8n",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
