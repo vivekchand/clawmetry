@@ -1051,6 +1051,13 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
             return {"_cloud_disabled": True, "sync_allowed": False}
     except Exception:
         pass
+    # Opt-in gate: cloud egress requires an explicitly linked account.
+    # A self-hosted node (e.g. license-key onboarding, never connected) has
+    # api_key="" — previously every cycle POSTed X-Api-Key:"" and got a 401
+    # (3 retries each), spamming both ingest and the local log. Default =
+    # nothing leaves the machine until `clawmetry login`/`connect`.
+    if not api_key:
+        return {"_no_account": True, "sync_allowed": False}
     url = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
@@ -7159,6 +7166,10 @@ def send_heartbeat(config: dict) -> bool:
             return False
     except Exception:
         pass
+    # Opt-in gate: no linked account -> no heartbeat (and no payload-build
+    # cost). Mirrors the _post() gate; see cloud_egress_enabled().
+    if not (config or {}).get("api_key"):
+        return False
     global _LAST_HEARTBEAT_RESPONSE
     payload = {
         "node_id": config["node_id"],
@@ -17858,6 +17869,14 @@ def run_daemon() -> None:
             f"(LOCAL-ONLY mode: cloud sync disabled, "
             f"ingesting into local DuckDB only)"
         )
+    elif not config.get("api_key"):
+        # Opt-in gate: no linked account. Say it ONCE here instead of a 401
+        # warning per heartbeat cycle (the pre-2026-07-31 behaviour).
+        log.info(
+            f"Starting sync daemon — node={config['node_id']} "
+            f"(SELF-HOSTED: no cloud account linked, nothing leaves this "
+            f"machine; run `clawmetry login` to enable cloud sync)"
+        )
     else:
         log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
@@ -18599,8 +18618,8 @@ def run_daemon() -> None:
             save_state(state)
             if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
                 try:
-                    from clawmetry.config import is_cloud_disabled as _icd_cycle
-                    _cycle_local_only = _icd_cycle()
+                    from clawmetry.config import cloud_egress_enabled as _cee
+                    _cycle_local_only = not _cee(config)
                 except Exception:
                     _cycle_local_only = False
                 if _cycle_local_only:
@@ -18609,7 +18628,7 @@ def run_daemon() -> None:
                     # founder believe data was leaving a machine whose whole
                     # promise was that it never would (2026-07-30).
                     log.info(
-                        f"Ingested locally (local-only, nothing sent): {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out"
+                        f"Ingested locally (self-hosted, nothing sent): {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out"
                     )
                 else:
                     log.info(

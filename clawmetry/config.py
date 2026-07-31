@@ -111,6 +111,26 @@ def is_cloud_disabled() -> bool:
         return False
 
 
+def cloud_egress_enabled(config: dict = None) -> bool:
+    """Cloud egress is OPT-IN — True only when the user explicitly linked an
+    account AND has not opted out.
+
+    Product rule (founder, 2026-07-31): a default install is SELF-HOSTED —
+    nothing leaves the machine until the user runs `clawmetry login` /
+    `clawmetry connect` (or picks the managed/cloud onboarding path), all of
+    which persist an ``api_key``. Before this, gating was opt-OUT only
+    (the nocloud marker), so a self-hosted node with a license key but no
+    account heart-beat ``X-Api-Key: ""`` to ingest every cycle and logged a
+    wall of 401 warnings (found live on a Windows node, 2026-07-31).
+
+    The nocloud marker / CLAWMETRY_NO_CLOUD still hard-disable egress even
+    when a key exists.
+    """
+    if is_cloud_disabled():
+        return False
+    return bool((config or {}).get("api_key"))
+
+
 def enable_cloud() -> bool:
     """Clear the local-only marker so the daemon resumes cloud sync.
 
