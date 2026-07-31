@@ -1,4 +1,4 @@
-<!-- i18n-src:9a05336fbdc1 -->
+<!-- i18n-src:8252f6b1d31d -->
 > العربية translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -15,65 +15,65 @@
 
 > 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [المزيد ←](docs/i18n/)
 
-أمر واحد. بدون إعدادات. يكتشف كل شيء تلقائيًا.
+أمر واحد. بلا إعدادات. يكتشف كل شيء تلقائيًا.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-يفتح على **http://localhost:8900** وانتهى الأمر.
+يفتح على **http://localhost:8900** وينتهي الأمر.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## يعمل مع 14 بيئة تشغيل وكيل
+## يعمل مع 14 بيئة تشغيل للوكلاء
 
-بدأت ClawMetry كأداة مراقبة لـ OpenClaw، والآن تقيس **أسطول وكلائك بالكامل** في لوحة تحكم واحدة، وتكتشف كل بيئة تشغيل على جهازك تلقائيًا:
+بدأت ClawMetry كأداة مراقبة لـ OpenClaw، والآن تقيس **أسطول وكلائك بالكامل** في لوحة تحكم واحدة، وتكتشف تلقائيًا كل بيئة تشغيل على جهازك:
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n**
 
-OpenClaw وNemoClaw مجانيان في التطبيق مفتوح المصدر؛ بينما تُفعَّل بقية بيئات التشغيل عبر ClawMetry Cloud أو ترخيص Pro مستضاف ذاتيًا. بدّل بيئات التشغيل من الترويسة، وستُعاد كل علامة تبويب — التكلفة، الرموز (tokens)، الأدوات، التتبعات — إلى نطاق تلك البيئة. راجع **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** للاطلاع على التقسيم الدقيق بين المجاني والمدفوع، ومصفوفة الفئات، وشكل `/api/entitlement`، وأداة سطر الأوامر `clawmetry license`.
+OpenClaw وNemoClaw مجانيان في التطبيق مفتوح المصدر؛ أما بقية بيئات التشغيل فتُفعَّل عبر ClawMetry Cloud أو ترخيص Pro ذاتي الاستضافة. بدّل بين بيئات التشغيل من الرأس، وكل تبويب - التكلفة، الرموز، الأدوات، التتبعات - يعيد تحديد نطاقه إلى تلك البيئة. راجع **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** للاطلاع على التقسيم الدقيق بين المجاني والمدفوع، ومصفوفة المستويات، وشكل `/api/entitlement`، وأداة سطر الأوامر `clawmetry license`.
 
-## ماذا ستحصل عليه
+## ما الذي ستحصل عليه
 
-- **التدفق (Flow)** — رسم بياني متحرك حي يوضح تدفق الرسائل عبر القنوات والدماغ والأدوات وعودتها
-- **نظرة عامة (Overview)** — فحوصات الصحة، خريطة حرارية للنشاط، عدد الجلسات، معلومات النموذج
-- **الاستخدام (Usage)** — تتبع الرموز والتكلفة مع تفصيل يومي/أسبوعي/شهري
-- **الجلسات (Sessions)** — جلسات الوكيل النشطة مع النموذج والرموز وآخر نشاط
-- **المهام المجدولة (Crons)** — المهام المجدولة مع الحالة، والتشغيل التالي، والمدة
-- **السجلات (Logs)** — بث سجلات فوري بترميز لوني
-- **الذاكرة (Memory)** — تصفح SOUL.md وMEMORY.md وAGENTS.md والملاحظات اليومية
-- **النصوص الكاملة (Transcripts)** — واجهة فقاعات محادثة لقراءة سجلات الجلسات
-- **التنبيهات (Alerts)** — سقوف الميزانية، محفزات معدل الأخطاء، اكتشاف عدم اتصال الوكيل؛ تُوجَّه إلى Slack وDiscord وPagerDuty وTelegram والبريد الإلكتروني
-- **الموافقات (Approvals)** — حجب عمليات الحذف المدمرة، والدفع القسري (force push)، وتعديلات قواعد البيانات، وsudo، وتثبيت الحزم، والاتصالات الشبكية خلف موافقة بنقرة واحدة
+- **Flow** — رسم بياني متحرك حي يعرض تدفق الرسائل عبر القنوات والدماغ والأدوات والعودة
+- **Overview** — فحوصات صحية، خريطة حرارية للنشاط، عدد الجلسات، معلومات النموذج
+- **Usage** — تتبع الرموز والتكلفة مع تفصيل يومي/أسبوعي/شهري
+- **Sessions** — جلسات الوكيل النشطة مع النموذج والرموز وآخر نشاط
+- **Crons** — المهام المجدولة مع الحالة، التشغيل التالي، المدة
+- **Logs** — بث السجلات الفورية بترميز لوني
+- **Memory** — تصفح SOUL.md، MEMORY.md، AGENTS.md، الملاحظات اليومية
+- **Transcripts** — واجهة فقاعات دردشة لقراءة سجلات الجلسات
+- **Alerts** — حدود ميزانية، محفزات معدل الأخطاء، كشف عدم اتصال الوكيل؛ يوجّه إلى Slack وDiscord وPagerDuty وTelegram والبريد الإلكتروني
+- **Approvals** — حجب عمليات الحذف المدمّرة، الدفع القسري، تعديلات قاعدة البيانات، sudo، تثبيت الحزم، واستدعاءات الشبكة خلف موافقة بنقرة واحدة
 
-## لقطات الشاشة
+## لقطات شاشة
 
-### 🧠 الدماغ (Brain) — بث حي لأحداث الوكيل
+### 🧠 Brain — بث حي لأحداث الوكيل
 ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
-### 📊 نظرة عامة (Overview) — استخدام الرموز وملخص الجلسات
+### 📊 Overview — استخدام الرموز وملخص الجلسات
 ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-### ⚡ التدفق (Flow) — تغذية استدعاءات الأدوات الفورية
+### ⚡ Flow — تغذية استدعاء الأدوات الفورية
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 الرموز (Tokens) — تفصيل التكلفة حسب النموذج والجلسة
+### 💰 Tokens — تفصيل التكلفة حسب النموذج والجلسة
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
-### 🧬 الذاكرة (Memory) — متصفح ملفات مساحة العمل
+### 🧬 Memory — متصفح ملفات مساحة العمل
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 الأمان (Security) — الوضعية الأمنية وسجل التدقيق
+### 🔐 Security — الوضعية الأمنية وسجل التدقيق
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 التنبيهات (Alerts) — سقوف الميزانية، محفزات معدل الأخطاء، ووصلات ويب إلى Slack / Discord / PagerDuty / البريد الإلكتروني
+### 🚨 Alerts — حدود الميزانية، محفزات معدل الأخطاء، ووصلات ويب إلى Slack / Discord / PagerDuty / البريد الإلكتروني
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ الموافقات (Approvals) — حجب استدعاءات الأدوات الخطيرة خلف موافقة يدوية؛ قواعد حماية مدعومة بسياسات
+### ✋ Approvals — حجب استدعاءات الأدوات الخطرة خلف موافقة يدوية؛ قواعد حماية مدعومة بسياسات
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**الحجب قبل التنفيذ لـ Claude Code** — أمر واحد يثبّت
-خطاف PreToolUse يوقف استدعاءات الأدوات المطابقة *قبل* تنفيذها وينتظر
+**الحجب قبل التنفيذ لـ Claude Code** — أمر واحد يثبّت خطاف
+PreToolUse يوقف استدعاءات الأدوات المطابقة *قبل* تشغيلها وينتظر
 قرارك (بنقرة واحدة من هاتفك عند تفعيل
 [إشعارات الدفع السحابية](https://app.clawmetry.com/push)):
 
@@ -83,11 +83,10 @@ clawmetry hooks status      # what's wired + how many policies are active
 clawmetry hooks uninstall   # removes only ClawMetry's entries
 ```
 
-الرفض يحجب استدعاء تلك الأداة فقط — يحتفظ الوكيل بجلسته ويمكنه
-تجربة نهج آخر. الموافقة من هاتفك تتجاوز نافذة إذن Claude Code
-الخاصة (لأنك أجبت بالفعل). الأدوات غير المطابقة تكلف نحو 40 مللي ثانية
-وتمر إلى تدفق إذن Claude Code العادي. تحصل أيضًا على إشعار دفع على
-هاتفك عندما ينتظرك Claude Code نفسه (إشعارات `permission_prompt` /
+الرفض يحجب استدعاء تلك الأداة فقط - يحتفظ الوكيل بجلسته ويمكنه
+تجربة نهج آخر. الموافقة من هاتفك تتخطى موجّه الأذونات الخاص بـ Claude Code
+(أنت أجبت بالفعل). الأدوات غير المطابقة تكلّف حوالي 40 مللي ثانية
+وتمر عبر تدفق الأذونات المعتاد لـ Claude Code. تحصل أيضًا على إشعار دفع على هاتفك عندما ينتظرك Claude Code نفسه (إشعارات `permission_prompt` /
 `idle_prompt`).
 
 ## التثبيت
@@ -111,10 +110,10 @@ cd clawmetry && pip install flask && python3 dashboard.py
 
 ## تطوير الواجهة الأمامية v2
 
-تطبيق React الخاص بالإصدار v2 موجود في `frontend/` ويُقدَّم على
+تطبيق React الخاص بالإصدار v2 موجود في `frontend/` ويُخدَّم على
 `/v2` عند تشغيل خادم Flask مع تفعيل v2.
 
-استخدم طرفيتين (terminals) أثناء التطوير:
+استخدم طرفيتين أثناء التطوير:
 
 ```bash
 # Terminal 1: Flask API/server on :8900
@@ -129,9 +128,9 @@ npm ci
 npm run dev
 ```
 
-افتح `http://localhost:5173/v2/`. يعيد Vite توجيه طلبات `/api` إلى
-`http://localhost:8900`، بحيث يتمكن تطبيق React من التواصل مع خادم
-Flask المحلي دون إعدادات CORS إضافية.
+افتح `http://localhost:5173/v2/`. يقوم Vite بتمرير طلبات `/api` إلى
+`http://localhost:8900`، بحيث يمكن لتطبيق React التواصل مع خادم Flask
+المحلي دون إعداد CORS إضافي.
 
 لبناء الحزمة التي تُشحن مع حزمة Python:
 
@@ -140,34 +139,34 @@ cd frontend
 npm run build
 ```
 
-تُكتب الحزمة الإنتاجية إلى `clawmetry/static/v2/dist/`.
+تُكتب الحزمة الإنتاجية في `clawmetry/static/v2/dist/`.
 
 ## توافق بيئات التشغيل / الوكلاء
 
-تراقب ClawMetry العديد من بيئات تشغيل وكلاء الذكاء الاصطناعي، وليس OpenClaw فقط. كل بيئة تشغيل غير OpenClaw تأتي مزودة بمحول قراءة مخصص يترجم صيغة جلساتها الأصلية إلى الأشكال الموحدة لـ ClawMetry؛ يقوم العفريت (daemon) بإدخالها في نفس مخزن DuckDB ولقطة السحابة، مع وسمها ببيئة التشغيل، وتُظهر علامة تبويب إعادة تشغيل الجلسة **مبدّل بيئة تشغيل** عند وجود أكثر من واحدة. راجع [`docs/compatibility.md`](docs/compatibility.md) للاطلاع على المصفوفة الكاملة + دليل لإضافة بيئات تشغيل جديدة، و[`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) للتمهيد حول عائلة OpenClaw.
+تراقب ClawMetry العديد من بيئات تشغيل وكلاء الذكاء الاصطناعي، وليس فقط OpenClaw. كل بيئة تشغيل غير OpenClaw تأتي مع محوّل قراءة مخصص يترجم صيغة الجلسة الأصلية إلى الأشكال الموحّدة لـ ClawMetry؛ يقوم الخادم الخلفي بإدخالها في نفس مخزن DuckDB + اللقطة السحابية، مع وسم بيئة التشغيل، ويعرض تبويب إعادة تشغيل الجلسة **مبدّل بيئة تشغيل** عند وجود أكثر من واحدة. راجع [`docs/compatibility.md`](docs/compatibility.md) للمصفوفة الكاملة + دليل إضافة بيئات تشغيل، و[`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) لمقدمة عائلة OpenClaw.
 
 | بيئة التشغيل / الوكيل | الحالة | ملاحظات |
 |---|---|---|
-| **OpenClaw** | أصلية | بيئة التشغيل المرجعية، تُكتشف تلقائيًا |
-| **PicoClaw** | محول تجريبي | JSONL مسطّح من `providers.Message` (`~/.picoclaw/workspace/sessions`). نصوص كاملة، النموذج، استدعاءات الأدوات. |
-| **NanoClaw** | محول تجريبي | SQLite لكل جلسة (`data/v2-sessions`). نصوص كاملة + عدد الرسائل. |
-| **Hermes** | محول تجريبي | SQLite في `~/.hermes/state.db`. نصوص كاملة، النموذج، الرموز/التكلفة. |
-| **Claude Code** | محول تجريبي | JSONL في `~/.claude/projects/.../<id>.jsonl`. نصوص كاملة، النموذج، استدعاءات الأدوات + التفكير، استخدام الرموز. |
-| **Codex** | محول تجريبي | JSONL لعمليات التشغيل (rollout) في `~/.codex/sessions/...`. نصوص كاملة، النموذج، استدعاءات الأدوات، استخدام الرموز. |
-| **Cursor** | محول تجريبي | SQLite `state.vscdb`. نصوص الدردشة/المؤلف، النموذج. |
-| **Aider** | محول تجريبي | `.aider.chat.history.md` لكل مشروع. نصوص كاملة، النموذج، عدد الرموز. |
-| **Goose** | محول تجريبي | SQLite في `~/.local/share/goose`. نصوص كاملة، النموذج، استدعاءات الأدوات، إجمالي الرموز. |
-| **opencode** | محول تجريبي | SQLite في `~/.local/share/opencode`. نصوص كاملة، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
-| **Qwen Code** | محول تجريبي | JSONL في `~/.qwen/projects/.../chats`. نصوص كاملة، النموذج، استدعاءات الأدوات، استخدام الرموز. |
-| **Pi** | محول تجريبي | JSONL في `~/.pi/agent/sessions`. نصوص كاملة، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
-| **Deep Agents** | محول تجريبي | SQLite في `~/.deepagents/.state/sessions.db`. نصوص كاملة، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
-| **n8n** | محول تجريبي | SQLite في `~/.n8n/database.sqlite`. عمليات تنفيذ سير العمل، تشغيلات العُقد، مطالبات AI Agent، النموذج + الرموز حيثما يسجلها n8n. |
+| **OpenClaw** | أصلي | بيئة التشغيل المرجعية، تُكتشف تلقائيًا |
+| **PicoClaw** | محوّل تجريبي | JSONL مسطّح لـ `providers.Message` (`~/.picoclaw/workspace/sessions`). نصوص، نموذج، استدعاءات أدوات. |
+| **NanoClaw** | محوّل تجريبي | SQLite لكل جلسة (`data/v2-sessions`). نصوص + عدد الرسائل. |
+| **Hermes** | محوّل تجريبي | SQLite في `~/.hermes/state.db`. نصوص، نموذج، رموز/تكلفة. |
+| **Claude Code** | محوّل تجريبي | JSONL في `~/.claude/projects/.../<id>.jsonl`. نصوص، نموذج، استدعاءات أدوات + تفكير، استخدام الرموز. |
+| **Codex** | محوّل تجريبي | Rollout JSONL في `~/.codex/sessions/...`. نصوص، نموذج، استدعاءات أدوات، استخدام الرموز. |
+| **Cursor** | محوّل تجريبي | SQLite `state.vscdb`. نصوص دردشة/تحرير، نموذج. |
+| **Aider** | محوّل تجريبي | `.aider.chat.history.md` لكل مشروع. نصوص، نموذج، عدد الرموز. |
+| **Goose** | محوّل تجريبي | SQLite في `~/.local/share/goose`. نصوص، نموذج، استدعاءات أدوات، إجمالي الرموز. |
+| **opencode** | محوّل تجريبي | SQLite في `~/.local/share/opencode`. نصوص، نموذج، استدعاءات أدوات، رموز + تكلفة. |
+| **Qwen Code** | محوّل تجريبي | JSONL في `~/.qwen/projects/.../chats`. نصوص، نموذج، استدعاءات أدوات، استخدام الرموز. |
+| **Pi** | محوّل تجريبي | JSONL في `~/.pi/agent/sessions`. نصوص، نموذج، استدعاءات أدوات، رموز + تكلفة. |
+| **Deep Agents** | محوّل تجريبي | SQLite في `~/.deepagents/.state/sessions.db`. نصوص، نموذج، استدعاءات أدوات، رموز + تكلفة. |
+| **n8n** | محوّل تجريبي | SQLite في `~/.n8n/database.sqlite`. تنفيذات سير العمل، تشغيلات العقد، مطالبات وكيل الذكاء الاصطناعي، النموذج + الرموز حيث يسجّلها n8n. |
 
-"محول تجريبي" تعني أن ClawMetry تشحن قارئًا لصيغة القرص الفعلية الخاصة ببيئة التشغيل تلك، وكل واحد منها مبني ومُتحقَّق منه مقابل تثبيت حقيقي على جهاز حقيقي (راجع `tests/fixtures/runtimes/<rt>/`). المحولات للقراءة فقط؛ وكل واحد منها صريح بشأن ما تخزّنه بيئة التشغيل فعليًا (مثلًا PicoClaw/NanoClaw/Cursor لا تكتب تكلفة الرموز على القرص). عند تشغيل عدة بيئات تشغيل على عقدة واحدة، يحصر مبدّل بيئة التشغيل عرض الجلسات في واحدة لتعمّق نظيف.
+"محوّل تجريبي" يعني أن ClawMetry تشحن قارئًا لصيغة القرص الفعلية لبيئة التشغيل تلك، وكل واحد مبني ومُتحقَّق منه مقابل تثبيت حقيقي على جهاز حقيقي (راجع `tests/fixtures/runtimes/<rt>/`). المحوّلات للقراءة فقط؛ وكل واحد منها صادق بشأن ما تخزّنه بيئة التشغيل فعليًا (مثلًا PicoClaw/NanoClaw/Cursor لا تكتب تكلفة الرموز على القرص). عند تشغيل عدة بيئات تشغيل على عقدة واحدة، يقصر مبدّل بيئة التشغيل عرض الجلسات على واحدة للتعمق النظيف.
 
-## تتبّع أي وكيل SDK — إسناد التكلفة خارج الحلقة (out-loop)
+## تتبّع أي وكيل SDK — إسناد التكلفة خارج الحلقة
 
-بيئات التشغيل أعلاه تكتب جميعها الجلسات إلى القرص. أما **وكيل الإنتاج** الخاص بك — الذي بنيته على OpenAI Agents SDK، أو LangChain، أو Vercel AI SDK، أو LlamaIndex، أو E2B، أو حلقة `httpx` عادية — فلا يفعل ذلك. لا يزال محول ClawMetry بدون إعدادات (zero-config) يلتقط استدعاءات LLM الخاصة به (التكلفة، الرموز، زمن الاستجابة، الأخطاء) عبر التصحيح الديناميكي (monkey-patching) لـ `httpx`/`requests`:
+بيئات التشغيل أعلاه جميعها تكتب الجلسات على القرص. وكيلك **الإنتاجي** الخاص - الذي بنيته على OpenAI Agents SDK، أو LangChain، أو Vercel AI SDK، أو LlamaIndex، أو E2B، أو حلقة `httpx` بسيطة - لا يفعل ذلك. المعترض الخالي من الإعدادات في ClawMetry ما زال يلتقط استدعاءات النموذج اللغوي الخاصة به (التكلفة، الرموز، زمن الاستجابة، الأخطاء) عبر تصحيح `httpx`/`requests` أثناء التشغيل:
 
 ```python
 import clawmetry.track            # activate the interceptor
@@ -176,19 +175,19 @@ clawmetry.track.set_source("support-agent")   # name this product
 # ...your agent runs as normal; every LLM call is now tracked + attributed.
 ```
 
-تقوم `set_source()` (أو متغيّر البيئة `CLAWMETRY_SOURCE=support-agent`) بوسم كل استدعاء **بمصدر مسمّى**، بحيث يظهر كل منتج تشغّله كسطر مستقل من الدرجة الأولى قابل لإسناد التكلفة في بطاقة **🔌 المصادر خارج الحلقة** الخاصة بلوحة التحكم في علامة تبويب النظرة العامة — الاستدعاءات، مزودو الخدمة، زمن الاستجابة، معدل الأخطاء لكل وكيل. لم تحدد مصدرًا؟ لا تزال الاستدعاءات تُتتبّع، والبطاقة فقط تبقى مخفية.
+`set_source()` (أو متغير البيئة `CLAWMETRY_SOURCE=support-agent`) يسم كل استدعاء بـ **مصدر مسمّى**، بحيث يظهر كل منتج تشغّله كسطر مستقل قابل لإسناد التكلفة في بطاقة **🔌 المصادر خارج الحلقة** في لوحة التحكم في تبويب Overview - الاستدعاءات، الموفّرون، زمن الاستجابة، معدل الأخطاء لكل وكيل. لم يُحدَّد مصدر؟ ما زالت الاستدعاءات تُتبّع، وتبقى البطاقة مخفية فقط.
 
 ```bash
 CLAWMETRY_SOURCE=billing-agent python my_agent.py
 ```
 
-هذه هي طبقة البيانات نفسها التي تغذيها محولات بيئة التشغيل (DuckDB ← لقطة سحابية)، لذا فإن المصادر خارج الحلقة تُزامَن مع لوحة التحكم السحابية تمامًا مثل أي شيء آخر، مع تشفير من طرف إلى طرف.
+هذه هي نفس طبقة البيانات التي تغذيها محوّلات بيئات التشغيل (DuckDB ← اللقطة السحابية)، لذا تتزامن المصادر خارج الحلقة مع لوحة التحكم السحابية مثل كل شيء آخر، مشفّرة من طرف إلى طرف.
 
-## OpenTelemetry — محايد تجاه المزوّد، أرسل تتبعاتك إلى أي مكان
+## OpenTelemetry — محايد تجاه الموفّر، أرسل تتبعاتك إلى أي مكان
 
-تتحدث ClawMetry بلغة **OpenTelemetry** في كلا الاتجاهين، باستخدام **اصطلاحات GenAI الدلالية**، لذا فإن تتبعات وكيلك لا تُحبَس أبدًا داخل أداة واحدة.
+تتحدث ClawMetry لغة **OpenTelemetry** في كلا الاتجاهين، باستخدام **اصطلاحات GenAI الدلالية**، بحيث لا تُحبس تتبعات وكيلك أبدًا داخل أداة واحدة.
 
-**التصدير**: كل جلسة — استدعاءات LLM، الأدوات، الوكلاء الفرعيون، الرموز، التكلفة — كامتدادات OTLP/HTTP GenAI إلى أي جامع (Datadog، Grafana، Honeycomb، أو جامع OTel الخاص بك):
+**التصدير**: كل جلسة - استدعاءات النموذج اللغوي، الأدوات، الوكلاء الفرعيون، الرموز، التكلفة - كـ نطاقات OTLP/HTTP GenAI إلى أي جامع (Datadog، Grafana، Honeycomb، أو جامع OTel الخاص بك):
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -196,22 +195,22 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-رؤوس المصادقة وفاصل الاستطلاع متغيرات بيئة اختيارية:
+رؤوس المصادقة وفاصل الاستقصاء متغيرات بيئة اختيارية:
 
 ```bash
 CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**الاستيعاب (Ingest)** — يقبل مستقبل OTLP المدمج التتبعات والمقاييس من أي مصدر آخر على `/v1/traces` و`/v1/metrics` (`pip install clawmetry[otel]` لاستيعاب protobuf).
+**الاستيراد** - يستقبل مستقبِل OTLP المدمج التتبعات والمقاييس من أي مصدر آخر على `/v1/traces` و`/v1/metrics` (`pip install clawmetry[otel]` لاستيراد protobuf).
 
-تحصل على لوحة تحكم ClawMetry بدون إعدادات ومحلية أولًا **و** بياناتك في أي نظام خلفي يستخدمه فريقك بالفعل — بدون حبس، وبدون وكيل ثانٍ للتثبيت.
+تحصل على لوحة تحكم ClawMetry الخالية من الإعدادات والمحلية أولًا **و** بياناتك في أي نظام خلفي يستخدمه فريقك بالفعل - بلا قيود، وبلا وكيل ثانٍ للتثبيت.
 
 ## الإعدادات
 
-معظم الناس لا يحتاجون أي إعدادات. تكتشف ClawMetry تلقائيًا مساحة عملك، والسجلات، والجلسات، والمهام المجدولة.
+معظم الناس لا يحتاجون إلى أي إعدادات. تكتشف ClawMetry تلقائيًا مساحة عملك وسجلاتك وجلساتك ومهامك المجدولة.
 
-إذا احتجت للتخصيص:
+إذا احتجت إلى التخصيص:
 
 ```bash
 clawmetry --port 9000              # Custom port (default: 8900)
@@ -224,36 +223,36 @@ clawmetry --name "Alice"           # Your name in Flow visualization
 
 ## القنوات المدعومة
 
-تُظهر ClawMetry النشاط الحي لكل قناة OpenClaw قمت بإعدادها. تظهر في رسم التدفق (Flow) فقط القنوات المُعدّة فعليًا في ملف `openclaw.json` الخاص بك؛ أما القنوات غير المُعدّة فتُخفى تلقائيًا.
+تعرض ClawMetry النشاط الحي لكل قناة OpenClaw قمت بإعدادها. القنوات المُعدَّة فعليًا في `openclaw.json` الخاص بك فقط هي التي تظهر في رسم Flow البياني - القنوات غير المُعدَّة تُخفى تلقائيًا.
 
-انقر على أي عقدة قناة في التدفق لرؤية عرض فقاعات دردشة حي مع عدد الرسائل الواردة والصادرة.
+انقر على أي عقدة قناة في Flow لرؤية عرض فقاعات دردشة حي مع عدّاد الرسائل الواردة/الصادرة.
 
-| القناة | الحالة | نافذة منبثقة حية | ملاحظات |
+| القناة | الحالة | نافذة حية منبثقة | ملاحظات |
 |---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ كاملة | ✅ | رسائل، إحصائيات، تحديث كل 10 ثوانٍ |
-| 💬 **iMessage** | ✅ كاملة | ✅ | تقرأ `~/Library/Messages/chat.db` مباشرة |
-| 💚 **WhatsApp** | ✅ كاملة | ✅ | عبر WhatsApp Web (Baileys) |
-| 🔵 **Signal** | ✅ كاملة | ✅ | عبر signal-cli |
-| 🟣 **Discord** | ✅ كاملة | ✅ | اكتشاف الخادم (guild) + القناة |
-| 🟪 **Slack** | ✅ كاملة | ✅ | اكتشاف مساحة العمل + القناة |
-| 🌐 **Webchat** | ✅ كاملة | ✅ | جلسات واجهة الويب المدمجة |
-| 📡 **IRC** | ✅ كاملة | ✅ | واجهة فقاعات بنمط طرفية (terminal) |
-| 🍏 **BlueBubbles** | ✅ كاملة | ✅ | iMessage عبر واجهة BlueBubbles REST |
-| 🔵 **Google Chat** | ✅ كاملة | ✅ | عبر ويب هوكس Chat API |
-| 🟣 **MS Teams** | ✅ كاملة | ✅ | عبر إضافة بوت Teams |
-| 🔷 **Mattermost** | ✅ كاملة | ✅ | دردشة فريق مستضافة ذاتيًا |
-| 🟩 **Matrix** | ✅ كاملة | ✅ | لامركزية، دعم E2EE |
-| 🟢 **LINE** | ✅ كاملة | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ كاملة | ✅ | رسائل مباشرة لامركزية NIP-04 |
-| 🟣 **Twitch** | ✅ كاملة | ✅ | دردشة عبر اتصال IRC |
-| 🔷 **Feishu/Lark** | ✅ كاملة | ✅ | اشتراك أحداث WebSocket |
-| 🔵 **Zalo** | ✅ كاملة | ✅ | Zalo Bot API |
+| 📱 **Telegram** | ✅ كامل | ✅ | رسائل، إحصائيات، تحديث كل 10 ثوانٍ |
+| 💬 **iMessage** | ✅ كامل | ✅ | يقرأ `~/Library/Messages/chat.db` مباشرة |
+| 💚 **WhatsApp** | ✅ كامل | ✅ | عبر WhatsApp Web (Baileys) |
+| 🔵 **Signal** | ✅ كامل | ✅ | عبر signal-cli |
+| 🟣 **Discord** | ✅ كامل | ✅ | كشف الخوادم + القنوات |
+| 🟪 **Slack** | ✅ كامل | ✅ | كشف مساحة العمل + القنوات |
+| 🌐 **Webchat** | ✅ كامل | ✅ | جلسات واجهة الويب المدمجة |
+| 📡 **IRC** | ✅ كامل | ✅ | واجهة فقاعات بنمط الطرفية |
+| 🍏 **BlueBubbles** | ✅ كامل | ✅ | iMessage عبر واجهة BlueBubbles REST |
+| 🔵 **Google Chat** | ✅ كامل | ✅ | عبر ويب هوكس Chat API |
+| 🟣 **MS Teams** | ✅ كامل | ✅ | عبر إضافة بوت Teams |
+| 🔷 **Mattermost** | ✅ كامل | ✅ | دردشة فريق ذاتية الاستضافة |
+| 🟩 **Matrix** | ✅ كامل | ✅ | لامركزي، دعم E2EE |
+| 🟢 **LINE** | ✅ كامل | ✅ | LINE Messaging API |
+| ⚡ **Nostr** | ✅ كامل | ✅ | رسائل مباشرة لامركزية NIP-04 |
+| 🟣 **Twitch** | ✅ كامل | ✅ | دردشة عبر اتصال IRC |
+| 🔷 **Feishu/Lark** | ✅ كامل | ✅ | اشتراك أحداث WebSocket |
+| 🔵 **Zalo** | ✅ كامل | ✅ | Zalo Bot API |
 
-> **الاكتشاف التلقائي:** تقرأ ClawMetry ملف `~/.openclaw/openclaw.json` الخاص بك ولا تعرض إلا القنوات التي أعددتها فعليًا. لا حاجة لأي إعداد يدوي.
+> **الكشف التلقائي:** تقرأ ClawMetry ملف `~/.openclaw/openclaw.json` الخاص بك وتعرض فقط القنوات التي أعددتها فعليًا. لا حاجة لإعداد يدوي.
 
 ## النشر عبر Docker
 
-تريد تشغيل ClawMetry داخل حاوية؟ لا مشكلة! 🐳
+تريد تشغيل ClawMetry في حاوية؟ لا مشكلة! 🐳
 
 **بداية سريعة مع Docker:**
 
@@ -286,33 +285,33 @@ services:
     restart: unless-stopped
 ```
 
-> **ملاحظة:** عند التشغيل داخل Docker، اربط أدلة بيانات وسجلات وكيلك (مثل `~/.openclaw`، `~/.claude`، `~/.codex`) حتى تتمكن ClawMetry من اكتشاف إعداداتك تلقائيًا.
+> **ملاحظة:** عند التشغيل داخل Docker، اربط أدلة بيانات وسجلات وكيلك (مثل `~/.openclaw`، `~/.claude`، `~/.codex`) حتى تتمكن ClawMetry من اكتشاف إعدادك تلقائيًا.
 
 ## المتطلبات
 
 - Python 3.8+
-- Flask (يُثبّت تلقائيًا عبر pip)
-- بيئة تشغيل وكيل ذكاء اصطناعي على نفس الجهاز: OpenClaw، NVIDIA NemoClaw، Claude Code، Codex، Cursor، Goose، Hermes، opencode، Qwen Code، Aider، NanoClaw، PicoClaw، Pi، Deep Agents، أو n8n (أو مجلدات مربوطة (mounted volumes) لـ Docker)
+- Flask (يُثبَّت تلقائيًا عبر pip)
+- بيئة تشغيل وكيل ذكاء اصطناعي على نفس الجهاز: OpenClaw، NVIDIA NemoClaw، Claude Code، Codex، Cursor، Goose، Hermes، opencode، Qwen Code، Aider، NanoClaw، PicoClaw، Pi، Deep Agents، أو n8n (أو أحجام مثبَّتة لـ Docker)
 - Linux أو macOS
 
 ## دعم NemoClaw / OpenShell
 
-تكتشف ClawMetry تلقائيًا [NemoClaw](https://github.com/NVIDIA/NemoClaw) — غلاف الأمان المؤسسي من NVIDIA لـ OpenClaw الذي يشغّل الوكلاء داخل حاويات OpenShell المعزولة (sandboxed).
+تكتشف ClawMetry تلقائيًا [NemoClaw](https://github.com/NVIDIA/NemoClaw) - غلاف الأمان المؤسسي من NVIDIA لـ OpenClaw الذي يشغّل الوكلاء داخل حاويات OpenShell المعزولة.
 
-لا حاجة لأي إعداد إضافي في معظم الحالات. يكتشف عفريت المزامنة (sync daemon) تلقائيًا ملفات الجلسات سواء كانت موجودة في `~/.openclaw/` على المضيف أو داخل حاوية OpenShell.
+لا حاجة لإعدادات إضافية في معظم الحالات. يكتشف الخادم الخلفي للمزامنة تلقائيًا ملفات الجلسات سواء كانت موجودة في `~/.openclaw/` على المضيف أو داخل حاوية OpenShell.
 
 ### كيف يعمل
 
 تكتشف ClawMetry NemoClaw بطريقتين:
 
-1. **اكتشاف عبر الملف الثنائي** — يتحقق من وجود أداة سطر الأوامر `nemoclaw` ويشغّل `nemoclaw status` للحصول على معلومات الصندوق المعزول (sandbox)
-2. **اكتشاف عبر الحاوية** — يفحص حاويات Docker قيد التشغيل بحثًا عن صور `openshell` أو `nemoclaw` أو `ghcr.io/nvidia/`، ثم يقرأ الجلسات عبر مجلدات مربوطة أو `docker cp`
+1. **كشف عبر الملف التنفيذي** — يتحقق من وجود أداة سطر الأوامر `nemoclaw` ويشغّل `nemoclaw status` للحصول على معلومات الصندوق المعزول
+2. **كشف عبر الحاوية** — يفحص حاويات Docker العاملة بحثًا عن صور `openshell` أو `nemoclaw` أو `ghcr.io/nvidia/`، ثم يقرأ الجلسات عبر أحجام مثبَّتة أو `docker cp`
 
-تُوسَم ملفات الجلسات المُزامنة من حاويات NemoClaw بـ `runtime=nemoclaw` وبيانات وصفية `container_id` في لوحة التحكم السحابية، حتى تتمكن من تمييزها عن جلسات OpenClaw القياسية بنظرة واحدة.
+تُوسَم ملفات الجلسات المُزامَنة من حاويات NemoClaw بـ `runtime=nemoclaw` وبيانات وصفية `container_id` في لوحة التحكم السحابية، بحيث يمكنك تمييزها عن جلسات OpenClaw القياسية بنظرة واحدة.
 
-### الإعداد الموصى به: عفريت المزامنة على المضيف (HOST)
+### الإعداد الموصى به: خادم المزامنة على المضيف
 
-للحصول على أفضل تجربة، شغّل عفريت المزامنة الخاص بـ ClawMetry على **الجهاز المضيف** (وليس داخل الصندوق المعزول). هذا يتجنّب قيود سياسة شبكة NemoClaw.
+للحصول على أفضل تجربة، شغّل خادم المزامنة الخاص بـ ClawMetry على **الجهاز المضيف** (وليس داخل الصندوق المعزول). هذا يتجنب قيود سياسة شبكة NemoClaw.
 
 ```bash
 # On the host (outside the sandbox)
@@ -321,11 +320,11 @@ clawmetry connect
 clawmetry sync
 ```
 
-سيجد عفريت المزامنة تلقائيًا الجلسات داخل أي حاويات OpenShell قيد التشغيل.
+سيجد خادم المزامنة تلقائيًا الجلسات داخل أي حاويات OpenShell عاملة.
 
-### اختياري: اسم صريح للصندوق المعزول
+### اختياري: اسم صندوق معزول صريح
 
-إذا لم يعمل الاكتشاف التلقائي، وجّه ClawMetry إلى الصندوق المعزول الصحيح:
+إذا لم يعمل الكشف التلقائي، وجّه ClawMetry إلى الصندوق المعزول الصحيح:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
@@ -334,7 +333,7 @@ clawmetry sync
 
 ### التشغيل داخل الصندوق المعزول (متقدم)
 
-إذا كان يجب عليك تشغيل عفريت المزامنة **داخل** الصندوق المعزول OpenShell، أضف قاعدة الخروج (egress) هذه إلى سياسة شبكة NemoClaw الخاصة بك حتى يتمكن من الوصول إلى واجهة استيعاب ClawMetry (ingest API):
+إذا كان عليك تشغيل خادم المزامنة **داخل** صندوق OpenShell المعزول، أضف قاعدة الخروج هذه إلى سياسة شبكة NemoClaw الخاصة بك حتى يتمكن من الوصول إلى واجهة استيراد ClawMetry:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -345,7 +344,7 @@ network:
       protocol: https
 ```
 
-طبّقها بواسطة:
+طبّق باستخدام:
 
 ```bash
 nemoclaw policy apply --file nemoclaw-policy.yaml
@@ -355,50 +354,54 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 | نقطة النهاية | المنفذ | البروتوكول | مطلوب |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | نعم (عفريت المزامنة ← السحابة) |
-| `localhost:8900` | 8900 | HTTP | نعم (واجهة لوحة التحكم المحلية) |
-| مقبس Docker (`/var/run/docker.sock`) | — | مقبس Unix | لاكتشاف جلسات الحاوية |
+| `ingest.clawmetry.com` | 443 | HTTPS | نعم (خادم المزامنة ← السحابة) |
+| `localhost:8900` | 8900 | HTTP | نعم (لوحة التحكم المحلية) |
+| مقبس Docker (`/var/run/docker.sock`) | — | مقبس Unix | لاكتشاف جلسات الحاويات |
 
-عفريت المزامنة يجري فقط استدعاءات HTTPS صادرة إلى `ingest.clawmetry.com`. لا تُطلب أي منافذ واردة.
+خادم المزامنة يجري فقط استدعاءات HTTPS صادرة إلى `ingest.clawmetry.com`. لا حاجة لمنافذ واردة.
 
 ---
 
 ## النشر السحابي
 
-راجع **[دليل اختبار السحابة](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** لأنفاق SSH، والوكيل العكسي (reverse proxy)، وDocker.
+راجع **[دليل اختبار السحابة](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** لأنفاق SSH، الوكيل العكسي، وDocker.
 
 ## الاختبار
 
-يُختبر هذا المشروع باستخدام BrowserStack.
+يُختبَر هذا المشروع باستخدام BrowserStack.
 
 [![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
 
-## القياس عن بُعد (Telemetry)
+## القياس عن بُعد
 
-ترسل ClawMetry نبضة "تشغيل أول" مجهولة واحدة إلى
-`https://app.clawmetry.com/api/install` عند أول تشغيل لأداة سطر الأوامر
-`clawmetry` على جهاز جديد. نستخدم هذا لعدّ التثبيتات (المقياس
-التسويقي الوحيد الذي نملكه لمشروع مفتوح المصدر) ولمعرفة أطر عمل
-الوكلاء التي ثبّتها مستخدمونا.
+ترسل ClawMetry إشعارات مجهولة الهوية لدورة حياة التثبيت إلى
+`https://app.clawmetry.com/api/install`: إشعار `install` واحد في المرة
+الأولى التي تشغّل فيها أداة سطر الأوامر `clawmetry` على جهاز جديد، وإشعار
+`update` واحد عند أول تشغيل بعد الترقية إلى إصدار جديد، وإشعار
+`onboarded` واحد عند إكمال خيار الإعداد داخل لوحة التحكم. نستخدم هذا
+لعدّ التثبيتات الحقيقية (أرقام تنزيلات PyPI الخام مصدرها حوالي 98% مرايا وCI
+وإعادة تنزيلات التحديث التلقائي) ولمعرفة أطر الوكلاء
+والإصدارات المستخدمة فعليًا في الواقع.
 
-**عملية POST واحدة بالضبط لكل تثبيت**، تحتوي على:
+**بحد أقصى POST واحد لكل حدث دورة حياة لكل إصدار**، يحتوي على:
 
 | الحقل | مثال | السبب |
 |---|---|---|
-| `install_id` | UUID عشوائي مخزّن في `~/.clawmetry/install_id` | إزالة التكرار؛ غير مرتبط ببريدك الإلكتروني أو api_key |
-| `version` | `0.12.167` | معرفة الإصدارات المنتشرة |
+| `install_id` | UUID عشوائي مخزّن في `~/.clawmetry/install_id` | إزالة التكرار؛ مجهول الهوية حتى تربط مزامنة Cloud صراحةً (نبضة قلب الخادم المصادَق عليها تحمل حينها هذا المعرّف، لربط هذا التثبيت بحسابك) |
+| `event` | `install` / `update` / `onboarded` | تثبيت جديد مقابل ترقية لتثبيت موجود |
+| `version` | `0.12.167` | الإصدارات المستخدمة فعليًا |
 | `os` / `os_version` | `Darwin` / `25.3.0` | أولويات دعم المنصات |
 | `python` | `3.11.15` | مصفوفة دعم إصدارات Python |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | أي وكلاء يجب أن ندمج معهم لاحقًا |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | فصل التثبيتات البشرية عن ضجيج CI |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | الوكلاء التي يجب أن نتكامل معها بعد ذلك |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | فصل التثبيتات البشرية عن ضوضاء CI |
 
-**ما لا نرسله**: عنوان IP (تشتق السحابة رمز البلد من الطلب من جهة
-الخادم، ثم تتجاهل عنوان IP)، اسم المضيف، اسم المستخدم، مسار مساحة
-العمل، محتويات الملفات، api_key الخاص بك، بريدك الإلكتروني، أو أي
-معلومات شخصية أو خاصة بمساحة العمل. الحمولة (payload) المرسلة قابلة
-للتدقيق في [`clawmetry/telemetry.py`](clawmetry/telemetry.py).
+**ما لا نرسله**: عنوان IP (تستنتج السحابة رمز الدولة من جانب الخادم
+من الطلب، ثم تتخلص من عنوان IP)، اسم المضيف، اسم المستخدم، مسار مساحة
+العمل، محتوى الملفات، مفتاح API الخاص بك، بريدك الإلكتروني، أو أي شيء
+شخصي أو خاص بمساحة العمل. حمولة البيانات على الشبكة قابلة للتدقيق في
+[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
 
-**إلغاء الاشتراك** (أي واحد مما يلي يعطّله بشكل دائم):
+**إلغاء الاشتراك** (أي واحد من هذه يعطّله بشكل دائم):
 
 ```bash
 export CLAWMETRY_NO_TELEMETRY=1                # per-shell
@@ -406,10 +409,10 @@ export DO_NOT_TRACK=1                          # W3C cross-tool standard
 touch ~/.clawmetry/notelemetry                 # persistent file marker
 ```
 
-فشل الشبكة هنا لا يمنع أبدًا تشغيل `clawmetry` — النبضة تُرسل بدون
-انتظار (fire-and-forget) في خيط عفريت (daemon thread) بمهلة 3 ثوانٍ.
+فشل الشبكة هنا لا يمنع أبدًا تشغيل `clawmetry` - الإشعار
+يُرسَل دون انتظار على خيط خلفي بمهلة 3 ثوانٍ.
 
-## تاريخ النجوم (Star History)
+## سجل النجوم
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
@@ -427,5 +430,5 @@ MIT
 
 <p align="center">
   <strong>🦞 شاهد وكيلك وهو يفكّر</strong><br>
-  <sub>بُني بواسطة <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · جزء من منظومة <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
+  <sub>بُني بواسطة <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · جزء من نظام <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
 </p>
