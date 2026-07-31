@@ -489,13 +489,13 @@ def test_evals_routes_wear_gate_decorator():
     assert 'from clawmetry._gate import gate' in src, (
         "routes/evals.py must import @gate from clawmetry._gate"
     )
-    # Exactly seven distinct paid endpoints exist today (recent, summary,
-    # rescore, rubric GET+POST, regression-summary, key GET+POST = 8
-    # route entries, one route decorator each). If a ninth is added it
+    # Nine distinct paid endpoints exist today (recent, summary, rescore,
+    # rubric GET+POST, regression-summary, key GET+POST, suites = 9
+    # route entries, one route decorator each). If a tenth is added it
     # should also wear the gate, so this pin should be updated in the
     # same PR that adds it (a mismatch is a signal to inspect).
-    assert src.count('@gate("eval_suite")') == 8, (
-        'routes/evals.py must decorate all eight paid eval routes with '
+    assert src.count('@gate("eval_suite")') == 9, (
+        'routes/evals.py must decorate all nine paid eval routes with '
         '@gate("eval_suite") -- this is the only enforcement point '
         'until the closed-source clawmetry-pro package overrides the '
         'blueprint via the extensions entry point.'
