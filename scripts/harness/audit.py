@@ -193,9 +193,13 @@ def _fingerprint(runtime: str, gap: dict) -> str:
     return "hgap-" + hashlib.sha1(key.encode()).hexdigest()[:10]
 
 
-def _existing_fingerprints() -> set:
+def _existing_fingerprints():
     """Fingerprints of already-filed gaps (from issue bodies), so a daily run
-    never re-files the same gap. Matches the `hgap-<10hex>` token we embed."""
+    never re-files the same gap. Matches the `hgap-<10hex>` token we embed.
+
+    Returns None when the lookup fails so callers can skip filing entirely
+    rather than treating every gap as new (which would re-file duplicates).
+    """
     import re
     try:
         out = subprocess.check_output(
@@ -205,8 +209,9 @@ def _existing_fingerprints() -> set:
         for it in json.loads(out):
             fps.update(re.findall(r"hgap-[0-9a-f]{10}", it.get("body") or ""))
         return fps
-    except Exception:
-        return set()
+    except Exception as exc:
+        print(f"  [warn] fingerprint lookup failed ({exc}); skipping --file-issues to avoid duplicates")
+        return None
 
 
 def _file_issue(runtime: str, gap: dict, fp: str, dry: bool) -> None:
@@ -253,7 +258,14 @@ def main() -> int:
     manifest = _load_manifest()
     clone_base = _clone_dir(manifest)
     caps = _capabilities_enum()
-    existing = _existing_fingerprints() if args.file_issues else set()
+    if args.file_issues:
+        existing = _existing_fingerprints()
+        if existing is None:
+            print("[abort] could not verify existing fingerprints — not filing to avoid duplicates."
+                  " Re-run when the gh API is reachable.")
+            return 1
+    else:
+        existing = set()
     total_gaps = 0
 
     for h in manifest["harnesses"]:
