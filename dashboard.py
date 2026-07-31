@@ -17876,6 +17876,16 @@ Commands:
   status         Show service status, port, and uptime
   uninstall      Remove the background service
 
+Cloud:
+  login                  Log in / sign up for ClawMetry Cloud (email or Google/GitHub)
+  connect                Activate cloud sync with an API key (scripted/advanced)
+  disconnect             Stop cloud sync and remove the account key
+  doctor                 Diagnose cloud connectivity (DNS/proxy/TLS, detects
+                         corporate TLS interception)
+  --turn-on-cloud-sync   Resume cloud sync (keeps your login)
+  --turn-off-cloud-sync  Pause cloud sync — nothing leaves this machine;
+                         the local dashboard keeps working
+
 Options:
   --port <port>        Port to listen on (default: 8900)
   --host <host>        Host to bind to (default: 127.0.0.1)
