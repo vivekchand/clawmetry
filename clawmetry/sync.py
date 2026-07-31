@@ -18752,15 +18752,18 @@ def run_daemon() -> None:
 
             now = time.time()
             if now - last_heartbeat > heartbeat_interval:
-                from clawmetry.config import is_cloud_disabled as _hb_cloud_off
-                if _hb_cloud_off():
-                    # Local-only mode (#3281): there is no cloud to heart-beat.
+                from clawmetry.config import cloud_egress_enabled as _hb_egress
+                if not _hb_egress(config):
+                    # No cloud egress (#3281 local-only, or #4329 self-hosted
+                    # with no linked account): there is no cloud to heart-beat.
                     # Skip the attempt entirely. Otherwise send_heartbeat returns
                     # falsy every cycle, consecutive_hb_failures climbs without
                     # bound, and we log CRITICAL "node appears offline in cloud"
                     # every ~15s -- which the daemon-error tee (PRD #1133) writes
                     # into the capped events table, EVICTING the user's real
-                    # agent events from the Brain feed. Local-only must be silent.
+                    # agent events from the Brain feed. No-egress must be silent
+                    # (found live on the Windows node minutes after 0.12.606:
+                    # the 401 wall was replaced by a CRITICAL wall).
                     consecutive_hb_failures = 0
                     last_heartbeat = now
                     heartbeat_interval = HEARTBEAT_INTERVAL_SLOW

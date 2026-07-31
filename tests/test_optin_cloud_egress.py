@@ -95,3 +95,19 @@ def test_startup_banner_has_selfhosted_branch():
     src = inspect.getsource(cm_sync.run_daemon)
     assert "SELF-HOSTED: no cloud account linked" in src
     assert "clawmetry login" in src
+
+
+def test_heartbeat_watchdog_respects_opt_in_gate():
+    """The liveness watchdog must skip counting when egress is off — a
+    no-account node otherwise logs CRITICAL 'node appears offline' every
+    ~15s, and the daemon-error tee evicts real events from the Brain feed
+    (exact regression shipped in 0.12.606, caught live on a Windows node)."""
+    import inspect
+
+    src = inspect.getsource(cm_sync)
+    idx = src.find("consecutive heartbeat failures — node appears offline")
+    assert idx != -1
+    window = src[max(0, idx - 4000):idx]
+    assert "cloud_egress_enabled" in window, (
+        "heartbeat watchdog no longer gates on cloud_egress_enabled()"
+    )
