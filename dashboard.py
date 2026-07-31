@@ -17876,6 +17876,16 @@ Commands:
   status         Show service status, port, and uptime
   uninstall      Remove the background service
 
+Cloud:
+  login                  Log in / sign up for ClawMetry Cloud (email or Google/GitHub)
+  connect                Activate cloud sync with an API key (scripted/advanced)
+  disconnect             Stop cloud sync and remove the account key
+  doctor                 Diagnose cloud connectivity (DNS/proxy/TLS, detects
+                         corporate TLS interception)
+  --turn-on-cloud-sync   Resume cloud sync (keeps your login)
+  --turn-off-cloud-sync  Pause cloud sync — nothing leaves this machine;
+                         the local dashboard keeps working
+
 Options:
   --port <port>        Port to listen on (default: 8900)
   --host <host>        Host to bind to (default: 127.0.0.1)
@@ -18608,11 +18618,22 @@ def _start_daemon_background():
     import subprocess
     import pathlib as _pl
 
+    spawn_kwargs = {}
+    if os.name == "nt":
+        # start_new_session is POSIX-only and silently no-ops on Windows:
+        # the daemon stayed tied to this console (killed when it closes)
+        # and, when the dashboard itself runs hidden, python.exe popped a
+        # visible console window. Mirror cli.py _start_subprocess.
+        spawn_kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        spawn_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         [sys.executable, "-m", "clawmetry.sync"],
         stdout=open(os.devnull, "w"),
         stderr=open(os.devnull, "w"),
-        start_new_session=True,
+        **spawn_kwargs,
     )
     pid_file = _pl.Path.home() / ".clawmetry" / "sync.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -19106,6 +19127,19 @@ def _init_data_provider():
 
 
 def main():
+    # Enterprise TLS/proxy bootstrap (idempotent; also runs in cli.main).
+    # Covers direct `python3 dashboard.py` runs so telemetry/cloud-proxy
+    # POSTs work behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="dashboard")
+    except Exception:
+        pass
+    try:
+        from clawmetry.winconsole import hide_child_console_windows
+        hide_child_console_windows()
+    except Exception:
+        pass
     # -----------------------------------------------------------------------
     # Build a shared parent parser for options that apply to all subcommands
     # (and to foreground mode when no subcommand is given).

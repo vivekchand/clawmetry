@@ -59,6 +59,11 @@ setup(
         # made cloud users silently miss the relay. Now base install so
         # `pip install clawmetry && clawmetry connect` "just works".
         "websocket-client>=1.6",
+        # OS trust store for TLS (Windows CryptoAPI / macOS Security /
+        # Linux CA dir) — makes corporate TLS-interception root CAs
+        # (Zscaler/Netskope/Palo Alto) "just work" without certifi hacks.
+        # Needs 3.10+; on 3.8/3.9 clawmetry.net falls back to stock trust.
+        'truststore>=0.8; python_version >= "3.10"',
     ],
     extras_require={
         "otel": ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
