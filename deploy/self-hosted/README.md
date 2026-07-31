@@ -51,8 +51,9 @@ re-connecting nodes, then removing the old one and restarting the server.
 
 Each node keeps its own full local dashboard at `localhost:8900` as usual.
 The self-hosted server records every node's heartbeats, sessions, and events
-(SQLite) and serves fleet-level APIs: `/api/selfhosted/nodes`,
-`/api/selfhosted/status`, `/api/export/events`.
+(SQLite) and serves a fleet overview page at `/selfhosted` (admin login:
+node roster, daemon versions, liveness) plus fleet APIs:
+`/api/selfhosted/nodes`, `/api/selfhosted/status`, `/api/export/events`.
 
 ## E2E encryption trade-off
 

@@ -55,8 +55,9 @@ CLAWMETRY_ENDPOINT=https://clawmetry.internal.example clawmetry connect --key cm
 `routes/selfhosted_ingest.py`, the server side of the daemon's sync
 protocol (`/auth`, `/ingest/heartbeat`, `/ingest/events`, `/ingest/cache`,
 relay read-back, approvals) backed by an append-only SQLite store, plus
-fleet endpoints (`/api/selfhosted/nodes`, `/api/selfhosted/status`) and the
-audit export API. Auth is deliberately simple and single-tenant: node
+the `/selfhosted` fleet overview page (admin-gated HTML: node roster,
+daemon versions, liveness), fleet endpoints (`/api/selfhosted/nodes`,
+`/api/selfhosted/status`), and the audit export API. Auth is deliberately simple and single-tenant: node
 tokens (`CLAWMETRY_API_TOKENS`) + one admin Basic-auth user
 (`CLAWMETRY_ADMIN_USER`/`CLAWMETRY_ADMIN_PASSWORD`). Open self-registration
 (`/api/register`) is disabled; heartbeats always answer `plan:

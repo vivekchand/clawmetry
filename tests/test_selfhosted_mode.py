@@ -300,3 +300,33 @@ def test_telemetry_skipped_on_custom_endpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAWMETRY_ENDPOINT", "https://corp.example")
     monkeypatch.setenv("CLAWMETRY_TELEMETRY_URL", "https://tel.corp.example")
     assert tel._resolve_telemetry_url() == "https://tel.corp.example"
+
+
+# ── Fleet page v1 ───────────────────────────────────────────────────────────
+
+
+def test_fleet_page_requires_admin(sh_app):
+    assert sh_app.get("/selfhosted").status_code == 401
+
+
+def test_fleet_page_empty_state(sh_app):
+    r = sh_app.get("/selfhosted", headers={"Authorization": ADMIN_AUTH})
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "No nodes yet" in body
+    assert "clawmetry connect" in body
+
+
+def test_fleet_page_lists_heartbeating_node(sh_app):
+    hb = {"node_id": "fleet-node-1", "platform": "Linux", "version": "0.12.606"}
+    assert (
+        sh_app.post("/ingest/heartbeat", json=hb, headers={"X-Api-Key": TOKEN}).status_code
+        == 200
+    )
+    r = sh_app.get("/selfhosted", headers={"Authorization": ADMIN_AUTH})
+    body = r.get_data(as_text=True)
+    assert "fleet-node-1" in body
+    assert "0.12.606" in body
+    assert "online" in body  # heartbeat just happened -> liveness green
+    # HTML escaping sanity: node ids render inside <code>, not raw script.
+    assert "<script" not in body.lower()

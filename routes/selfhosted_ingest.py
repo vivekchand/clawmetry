@@ -17,6 +17,7 @@ can point a fleet of nodes at a single-tenant server inside a customer VPC:
 * ``POST /api/approvals/request``, ``GET /api/approvals/<id>`` + admin decision
 * ``GET  /api/export/events``        — audit export (JSONL/CSV, time-ranged)
 * ``GET  /api/selfhosted/nodes``, ``GET /api/selfhosted/status``
+* ``GET  /selfhosted``               — fleet overview page (admin-gated HTML)
 
 Storage is a single SQLite database (stdlib, WAL) at
 ``CLAWMETRY_SELF_HOSTED_DB`` (default ``~/.clawmetry/selfhosted.db``):
@@ -783,3 +784,105 @@ def sh_status():
             "ts": _now(),
         }
     )
+
+
+# ── Fleet page (v1) ─────────────────────────────────────────────────────────
+
+_FLEET_PAGE_TMPL = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClawMetry Enterprise: fleet</title>
+<style>
+ body{{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      margin:2rem auto;max-width:64rem;padding:0 1rem;color:#1a1d21;background:#fafbfc}}
+ h1{{font-size:1.3rem}} table{{border-collapse:collapse;width:100%;margin:1rem 0}}
+ th,td{{text-align:left;padding:.45rem .7rem;border-bottom:1px solid #e2e5e9}}
+ th{{font-weight:600;color:#5f6670;font-size:.8rem;text-transform:uppercase}}
+ .ok{{color:#1a7f37}} .stale{{color:#b35900}} .dead{{color:#c0332b}}
+ .muted{{color:#7a828c;font-size:.85rem}}
+ code{{background:#eef0f3;padding:.1rem .35rem;border-radius:4px}}
+ @media (prefers-color-scheme: dark){{
+   body{{color:#e6e8eb;background:#14171a}} th{{color:#9aa3ad}}
+   th,td{{border-color:#2a2f35}} code{{background:#22272d}} .muted{{color:#8b939d}}
+ }}
+</style></head><body>
+<h1>ClawMetry Enterprise fleet</h1>
+<p class="muted">Self-hosted server &middot; E2E blob encryption: <strong>{e2e}</strong>
+ &middot; {node_count} node(s) &middot; {event_count} events stored &middot; generated {ts}</p>
+<table><thead><tr>
+ <th>Node</th><th>Hostname</th><th>Platform</th><th>Daemon</th><th>Last seen</th><th>Status</th>
+</tr></thead><tbody>
+{rows}
+</tbody></table>
+<p class="muted">Each node keeps its full dashboard at its own <code>localhost:8900</code>.
+ APIs: <code>/api/selfhosted/nodes</code>, <code>/api/selfhosted/status</code>,
+ <code>/api/export/events?from=&amp;to=&amp;format=jsonl|csv</code>.</p>
+</body></html>"""
+
+
+def _fleet_row(node, now):
+    from datetime import datetime
+
+    last = str(node["last_seen"] or "")
+    label, cls = "never", "dead"
+    if last:
+        try:
+            seen = datetime.fromisoformat(last)
+            age = (now - seen).total_seconds()
+            if age < 180:
+                label, cls = "online", "ok"
+            elif age < 3600:
+                label, cls = f"{int(age // 60)} min ago", "stale"
+            else:
+                label, cls = f"{int(age // 3600)} h ago", "dead"
+        except Exception:
+            label, cls = last, "muted"
+    import html as _html
+
+    esc = lambda v: _html.escape(str(v or ""))  # noqa: E731
+    return (
+        f"<tr><td><code>{esc(node['node_id'])}</code></td>"
+        f"<td>{esc(node['hostname'])}</td><td>{esc(node['platform'])}</td>"
+        f"<td>{esc(node['version'])}</td><td>{esc(last[:19].replace('T', ' '))}</td>"
+        f"<td class=\"{cls}\">{esc(label)}</td></tr>"
+    )
+
+
+@bp_selfhosted.route("/selfhosted", methods=["GET"])
+def sh_fleet_page():
+    """Minimal fleet overview for the self-hosted server (admin-gated HTML).
+
+    v1 scope: node roster with liveness. Rich per-node views stay on each
+    node's own local dashboard; this page is the at-a-glance fleet answer
+    to "is every agent box alive and current?".
+    """
+    err = _admin_auth_or_401()
+    if err:
+        return err
+    from datetime import datetime, timezone
+
+    with _DB_LOCK:
+        conn = _db()
+        try:
+            nodes = conn.execute(
+                "SELECT * FROM nodes ORDER BY last_seen DESC"
+            ).fetchall()
+            event_count = conn.execute(
+                "SELECT COUNT(*) AS n FROM events"
+            ).fetchone()["n"]
+        finally:
+            conn.close()
+    now = datetime.now(timezone.utc)
+    rows = "\n".join(_fleet_row(n, now) for n in nodes) or (
+        '<tr><td colspan="6" class="muted">No nodes yet. Connect one with: '
+        "<code>CLAWMETRY_ENDPOINT=&lt;this server&gt; clawmetry connect --key cm_...</code>"
+        "</td></tr>"
+    )
+    html = _FLEET_PAGE_TMPL.format(
+        e2e="on" if e2e_enabled() else "off (plaintext inside deployment)",
+        node_count=len(nodes),
+        event_count=event_count,
+        ts=now.strftime("%Y-%m-%d %H:%M UTC"),
+        rows=rows,
+    )
+    return Response(html, mimetype="text/html")
