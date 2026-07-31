@@ -102,6 +102,7 @@ def evaluators_catalogue():
         keys = eval_runner.judge_keys_present()
         enabled = eval_runner.is_enabled()
         judge_ready = bool(enabled and any(keys.values()))
+        last_err = eval_runner.last_judge_error()
         judge_meta = {
             "enabled": enabled,
             "key_present": any(keys.values()),
@@ -110,6 +111,8 @@ def evaluators_catalogue():
                 (eval_runner.load_rubric("default") or {}).get("judge_model")
                 or eval_runner.DEFAULT_RUBRIC["judge_model"]
             ),
+            "last_error": last_err.get("outcome") if last_err.get("outcome") != "ok" else None,
+            "last_error_at": last_err.get("at") if last_err.get("outcome") not in (None, "ok") else None,
         }
     except Exception:
         judge_ready = None

@@ -356,6 +356,62 @@ def test_enabled_by_default_when_env_unset(monkeypatch):
     assert eval_runner.is_enabled() is True
 
 
+# ── Auth-error outcome tracking ────────────────────────────────────────────
+
+
+def test_is_auth_error_detects_httpx_401():
+    from clawmetry.eval_runner import _is_auth_error
+
+    class _FakeResponse:
+        status_code = 401
+
+    class _FakeHTTPStatusError(Exception):
+        response = _FakeResponse()
+
+    assert _is_auth_error(_FakeHTTPStatusError()) is True
+
+
+def test_is_auth_error_detects_urllib_401():
+    from clawmetry.eval_runner import _is_auth_error
+    import urllib.error
+
+    err = urllib.error.HTTPError(url="http://x", code=401, msg="Unauthorized", hdrs=None, fp=None)
+    assert _is_auth_error(err) is True
+
+
+def test_is_auth_error_false_for_non_401():
+    from clawmetry.eval_runner import _is_auth_error
+
+    assert _is_auth_error(RuntimeError("network down")) is False
+
+
+def test_last_judge_error_returns_auth_on_401(monkeypatch):
+    from clawmetry.eval_runner import _record_judge_outcome, last_judge_error, _last_judge_outcome
+
+    _last_judge_outcome.clear()
+    _record_judge_outcome("auth")
+    result = last_judge_error()
+    assert result["outcome"] == "auth"
+    assert "at" in result
+
+
+def test_last_judge_error_cleared_on_ok(monkeypatch):
+    from clawmetry.eval_runner import _record_judge_outcome, last_judge_error, _last_judge_outcome
+
+    _last_judge_outcome.clear()
+    _record_judge_outcome("auth")
+    _record_judge_outcome("ok")
+    result = last_judge_error()
+    assert result["outcome"] == "ok"
+
+
+def test_last_judge_error_empty_before_any_call(monkeypatch):
+    from clawmetry.eval_runner import last_judge_error, _last_judge_outcome
+
+    _last_judge_outcome.clear()
+    assert last_judge_error() == {}
+
+
 # ── Live-API smoke (gated on CI_ANTHROPIC_API_KEY) ─────────────────────────
 
 

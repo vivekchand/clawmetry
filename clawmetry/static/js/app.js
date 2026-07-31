@@ -3621,6 +3621,9 @@ async function loadEvalsJudgeCard() {
   if (!judge.enabled) {
     html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
       t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+  } else if (judge.key_present && judge.last_error === 'auth') {
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">&#9679; ' +
+      t("evals.judge_key_rejected", null, "Your judge key was rejected (401) — re-add it to resume scoring.") + '</div>';
   } else if (judge.key_present) {
     html += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">&#9679; ' +
       t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
@@ -3637,9 +3640,12 @@ async function loadEvalsJudgeCard() {
     (judge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
                        : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
   html += '</div>';
-  if (!judge.key_present && judge.enabled) {
+  if ((!judge.key_present || judge.last_error === 'auth') && judge.enabled) {
+    var ctaLabel = judge.last_error === 'auth'
+      ? t("evals.replace_key_cta", null, "Replace judge API key")
+      : t("evals.add_key_cta", null, "Add a judge API key");
     html += '<div style="margin-top:10px;"><button onclick="openEvalRubricModal()" style="background:#f59e0b;color:#1a1a1a;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">' +
-      t("evals.add_key_cta", null, "Add a judge API key") + '</button></div>';
+      ctaLabel + '</button></div>';
   }
   el.innerHTML = html;
 }

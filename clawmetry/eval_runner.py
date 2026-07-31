@@ -599,6 +599,7 @@ class EvalRunner:
             # NULL score so the scheduler will pick it up again later,
             # and so /api/evals/recent can show "judge unavailable".
             log.warning("evals: judge call failed for %s: %s", session_id, e)
+            _record_judge_outcome("auth" if _is_auth_error(e) else "error")
             return EvalResult(
                 session_id=session_id,
                 score=None,
@@ -610,6 +611,7 @@ class EvalRunner:
                 skip_reason=f"judge error: {type(e).__name__}",
             )
 
+        _record_judge_outcome("ok")
         score, reason = parse_score(reply)
         result = EvalResult(
             session_id=session_id,
@@ -642,6 +644,45 @@ class EvalRunner:
 # Logged once per process when evals are on but no judge key is configured, so
 # we don't repeat the notice on every scheduler tick.
 _NO_KEY_LOGGED = False
+
+# Last known judge call outcome so the UI can distinguish "key present but 401"
+# from "key present and working". In-process only — resets on daemon restart,
+# which is fine: the scheduler retries quickly and re-surfaces the error.
+# Shape: {"outcome": "ok"|"auth"|"error", "at": "<iso-timestamp>"}
+_last_judge_outcome: dict = {}
+_last_judge_outcome_lock = threading.Lock()
+
+
+def _is_auth_error(exc: BaseException) -> bool:
+    """True when exc looks like a 401 Unauthorized from either httpx or urllib."""
+    # httpx.HTTPStatusError
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 401:
+        return True
+    # urllib.error.HTTPError
+    if getattr(exc, "code", None) == 401:
+        return True
+    return False
+
+
+def _record_judge_outcome(outcome: str) -> None:
+    import datetime
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _last_judge_outcome_lock:
+        _last_judge_outcome.clear()
+        _last_judge_outcome.update({"outcome": outcome, "at": ts})
+
+
+def last_judge_error() -> dict:
+    """Return the last known judge call outcome for the UI.
+
+    ``{}`` when no judge call has been attempted since daemon start.
+    Otherwise ``{"outcome": "ok"|"auth"|"error", "at": "<iso-ts>"}``.
+    Never raises.
+    """
+    with _last_judge_outcome_lock:
+        return dict(_last_judge_outcome)
+
 
 # Email PII pattern, redacted before the transcript goes to the third-party
 # judge LLM (the secret redactor in clawmetry/redaction.py handles keys/tokens).
