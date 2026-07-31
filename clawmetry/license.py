@@ -3977,3 +3977,70 @@ def license_features_at_batch(epochs) -> list[dict]:
             feats = None
         out.append({"epoch": parsed, "features": feats})
     return out
+
+
+def has_feature(feature: str) -> bool:
+    """Boolean gate for "is feature ``<X>`` claimed by my installed key?".
+
+    Thin predicate flavour of :func:`license_features` for callers (a
+    paywall banner, a fleet-node column, an operator entitlement-tile)
+    that want a single-bit answer rather than the full list. Fills the
+    ``license_features -> has_feature`` seat that the sibling
+    ``license_tier -> is_tier`` / ``license_subject -> is_subject`` /
+    ``license_state -> is_state`` pairs already occupy on the license
+    axis, so a caller can hit the predicate without list-membership
+    boilerplate ("does the returned list contain X, after normalising
+    my query the same way the accessor normalises the token claims").
+
+    Returns ``True`` iff a license is installed, signature-valid, NOT
+    expired, and its normalised ``features`` claim contains ``feature``
+    (case-insensitive, whitespace-stripped -- the query is coerced
+    through the same lower/strip pipeline the accessor uses on token
+    claims, so ``"Alerts"`` / ``"alerts"`` / ``"  ALERTS "`` all resolve
+    against the same normalised set). Every other state returns
+    ``False``:
+
+      * no license file on disk (OSS free)
+      * file exists but signature is bogus (an attacker who could edit
+        the payload could otherwise smuggle any ``features`` list into
+        an unsigned body -- we never surface it)
+      * signed-but-lapsed key (a gate binding this predicate cannot
+        silently keep granting features on an expired key -- matches
+        :func:`is_tier`'s "not entitled RIGHT NOW" posture)
+      * valid key with no explicit ``features`` claim (nothing claimed
+        -> nothing matches)
+      * valid key whose ``features`` claim omits the queried id
+      * missing / empty / non-string ``feature`` argument (nothing "has
+        feature empty-string")
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This predicate answers *"does the KEY carry this
+    feature id?"*, not *"is this feature enforced right now?"*. For
+    the resolved feature set actually enforced by gates, callers
+    should read :func:`clawmetry.entitlements.get_entitlement` (which
+    layers this claim on top of the FREE-tier baseline). A caller who
+    only wants to distinguish "unlocked because the key claims it"
+    from "unlocked because the tier grants it by default" wants this
+    predicate; a caller who wants "should the gate fire?" wants the
+    resolved entitlement.
+
+    Never raises. Any per-row failure of :func:`license_features` (or
+    any exception thrown by the argument normalisation) degrades to
+    ``False`` so a scheduled paywall renderer never crashes on a bad
+    install.
+    """
+    try:
+        requested = str(feature).strip().lower()
+    except Exception:
+        return False
+    if not requested:
+        return False
+    try:
+        feats = license_features()
+    except Exception as exc:
+        logger.debug("license: has_feature underlying read failed: %s", exc)
+        return False
+    if not isinstance(feats, list):
+        return False
+    return requested in feats

@@ -53,6 +53,14 @@ TIER_PRO = "pro"
 STATUS_LIVE = "live"            # shipped + computed today
 STATUS_PARTIAL = "partial"     # computed, but heuristic / not yet content-grounded
 STATUS_PRO = "pro"             # value comes from the Pro plugin; locked without it
+STATUS_NEEDS_KEY = "needs_key"  # shipped, but idle on THIS box until a judge key is set
+
+# Slugs whose compute path is the LLM-as-judge (clawmetry/eval_runner.py) and so
+# cannot produce a value without a judge API key on the box. Used by
+# catalogue_with_coverage to downgrade their per-box status honestly.
+# faithfulness (Pro) reuses eval_runner._call_judge + the same key, so a
+# registered hook without a key is still idle and must not badge "Live".
+_JUDGE_BACKED_SLUGS = frozenset({"answer-quality", "faithfulness"})
 
 
 # ── The catalogue — single source of truth ──────────────────────────────────────
@@ -306,15 +314,29 @@ def category_counts(entries: list[dict[str, Any]] | None = None) -> dict[str, in
     return out
 
 
-def catalogue_with_coverage(store: Any = None) -> dict[str, Any]:
+def catalogue_with_coverage(
+    store: Any = None,
+    judge_ready: bool | None = None,
+) -> dict[str, Any]:
     """Return the catalogue plus live coverage counts.
 
     ``coverage`` is best-effort: when a DuckDB store is reachable we attach how
     many sessions carry an outcome label and an eval score over the recent
     window. With no store (the cloud container) coverage is omitted and the
     catalogue is still returned — never a blank, never a raise.
+
+    ``judge_ready`` makes the per-box status HONEST for judge-backed entries
+    (answer-quality): when a store is reachable (so we are on the actual box)
+    and ``judge_ready`` is False, those entries report ``needs_key`` instead of
+    ``live`` — the code ships, but nothing is being scored here until a judge
+    API key is configured. ``None`` (or no store) keeps the static status, so
+    the cloud container's keyless env never mislabels a node that has a key.
     """
     cat = catalogue()
+    if store is not None and judge_ready is False:
+        for e in cat:
+            if e["slug"] in _JUDGE_BACKED_SLUGS and e["status"] == STATUS_LIVE:
+                e["status"] = STATUS_NEEDS_KEY
     payload: dict[str, Any] = {
         "evaluators": cat,
         "total": len(cat),

@@ -1,0 +1,95 @@
+name: Windows Enterprise TLS E2E
+# End-to-end proof of the corporate TLS-interception support on a REAL
+# Windows box (the customer environment: Windows 11 + Python 3.13 behind a
+# Zscaler-style re-signing proxy). mitmproxy plays the interception proxy;
+# its root CA goes into the actual Windows certificate store, exactly like
+# an IT-pushed corporate CA.
+#
+# Scenario A: interception, CA trusted nowhere  -> `clawmetry doctor` must
+#             FAIL (exit 1) and print the "TLS interception detected"
+#             guidance with the certmgr.msc walkthrough.
+# Scenario B: CA imported into the Windows Root store -> truststore reads
+#             the OS store, doctor must PASS (exit 0) through the proxy.
+# Scenario C: CA removed from the store, CLAWMETRY_CA_BUNDLE pointed at
+#             the PEM -> doctor must PASS (exit 0).
+on:
+  pull_request:
+    paths:
+      - clawmetry/net.py
+      - clawmetry/doctor.py
+      - clawmetry/winconsole.py
+      - tests/test_enterprise_tls.py
+      - tests/test_winconsole.py
+      - .github/workflows/windows-enterprise-tls.yml
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install clawmetry (this checkout) + test deps
+        shell: pwsh
+        run: |
+          python -m pip install --quiet .
+          # requests: not a package dep, but tests/conftest.py imports it
+          python -m pip install --quiet pytest mitmproxy requests
+          python -c "import truststore; print('truststore OK')"
+
+      - name: Unit tests (py3.13, VERIFY_X509_STRICT default-on)
+        shell: pwsh
+        run: python -m pytest tests/test_enterprise_tls.py tests/test_winconsole.py -q
+
+      - name: Start mitmproxy interception proxy
+        shell: pwsh
+        run: |
+          Start-Process mitmdump -ArgumentList '--listen-port','8080' -WindowStyle Hidden
+          $ca = "$env:USERPROFILE\.mitmproxy\mitmproxy-ca-cert.cer"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $ca); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path $ca)) { throw "mitmproxy CA never generated" }
+          Write-Host "mitmproxy up, CA at $ca"
+
+      - name: "Scenario A: untrusted interception -> doctor detects + fails"
+        shell: pwsh
+        env:
+          HTTPS_PROXY: http://127.0.0.1:8080
+        run: |
+          $out = (clawmetry doctor 2>&1 | Out-String)
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw "doctor must FAIL through an untrusted interception proxy" }
+          if ($out -notmatch 'TLS interception detected') { throw "missing 'TLS interception detected' guidance" }
+          if ($out -notmatch 'certmgr.msc') { throw "missing certmgr.msc walkthrough" }
+          Write-Host "PASS: interception detected, guidance printed, exit=1"
+          # doctor exiting 1 is the ASSERTED behaviour here; without this the
+          # step inherits $LASTEXITCODE from the native command and fails.
+          exit 0
+
+      - name: "Scenario B: CA in Windows Root store -> truststore validates"
+        shell: pwsh
+        env:
+          HTTPS_PROXY: http://127.0.0.1:8080
+        run: |
+          certutil -addstore -f Root "$env:USERPROFILE\.mitmproxy\mitmproxy-ca-cert.cer"
+          $out = (clawmetry doctor 2>&1 | Out-String)
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "doctor must PASS with the corporate CA in the OS store" }
+          Write-Host "PASS: OS trust store honored through interception proxy"
+
+      - name: "Scenario C: CLAWMETRY_CA_BUNDLE fallback"
+        shell: pwsh
+        env:
+          HTTPS_PROXY: http://127.0.0.1:8080
+          CLAWMETRY_CA_BUNDLE: ${{ github.workspace }}\mitm-ca.pem
+        run: |
+          certutil -delstore Root mitmproxy
+          Copy-Item "$env:USERPROFILE\.mitmproxy\mitmproxy-ca-cert.pem" "$env:CLAWMETRY_CA_BUNDLE"
+          $out = (clawmetry doctor 2>&1 | Out-String)
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "doctor must PASS with CLAWMETRY_CA_BUNDLE set" }
+          Write-Host "PASS: custom CA bundle honored"

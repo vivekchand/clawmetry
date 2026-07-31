@@ -1296,6 +1296,7 @@ function switchTab(name) {
   if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'logs') loadLogs();
   if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
@@ -3511,20 +3512,34 @@ async function loadMiniWidgets(overview, usage) {
 async function loadEvaluators() {
   var listEl = document.getElementById('evaluators-list');
   var countEl = document.getElementById('evaluators-count');
-  if (!listEl) return;
+  var stripEl = document.getElementById('evaluators-overview-line');
+  if (!listEl && !stripEl) return;
   var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
   var evs = (data && data.evaluators) || [];
   if (!evs.length) {
-    listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
+    if (listEl) listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
       t("evaluators.empty", null, "Evaluator library unavailable.") + '</div>';
     if (countEl) countEl.textContent = '';
+    if (stripEl) stripEl.textContent = '';
     return;
   }
+  // "Live" is the server's HONEST per-box count: judge-backed evaluators with
+  // no key on this box come back as status 'needs_key', not 'live'.
+  var liveN = (data && typeof data.live === 'number') ? data.live :
+    evs.filter(function(e){ return e.status === 'live'; }).length;
   if (countEl) {
-    var liveN = evs.filter(function(e){ return e.status === 'live'; }).length;
     countEl.textContent = liveN + ' / ' + evs.length + ' ' +
       t("evaluators.live_now", null, "live now");
   }
+  if (stripEl) {
+    var proN = evs.filter(function(e){ return e.tier === 'pro' && e.locked; }).length;
+    var needsKeyN = evs.filter(function(e){ return e.status === 'needs_key'; }).length;
+    var parts = [liveN + ' ' + t("evaluators.live_now", null, "live now")];
+    if (needsKeyN) parts.push(needsKeyN + ' ' + t("evaluators.strip_needs_key", null, "waiting for a judge key"));
+    if (proN) parts.push(proN + ' ' + t("evaluators.strip_with_pro", null, "with Pro"));
+    stripEl.textContent = parts.join(' · ');
+  }
+  if (!listEl) return;
   // Category → chip color + plain label.
   var CAT = {
     quality:     { c: '#8b5cf6', label: t("evaluators.cat_quality", null, "Quality") },
@@ -3541,6 +3556,8 @@ async function loadEvaluators() {
       statusLabel = t("evaluators.status_live", null, "Live"); statusColor = '#22c55e';
     } else if (e.status === 'partial') {
       statusLabel = t("evaluators.status_partial", null, "Early"); statusColor = '#f59e0b';
+    } else if (e.status === 'needs_key') {
+      statusLabel = t("evaluators.status_needs_key", null, "Needs key"); statusColor = '#f59e0b';
     } else {
       statusLabel = t("evaluators.status_soon", null, "With Pro"); statusColor = 'var(--text-muted)';
     }
@@ -3562,9 +3579,181 @@ async function loadEvaluators() {
       html += '<div style="margin-top:8px;font-size:11px;"><a href="/upgrade?source=evaluators" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
         t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
     }
+    if (e.status === 'needs_key') {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="#" onclick="openEvalRubricModal();return false;" style="color:#f59e0b;font-weight:600;text-decoration:none;">' +
+        t("evaluators.set_key", null, "Add a judge API key to turn this on") + ' &rarr;</a></div>';
+    }
     html += '</div>';
   });
   listEl.innerHTML = html;
+}
+
+// ── Evals tab (dedicated home for the eval system) ─────────────────────────
+// Loads: judge status, 24h score summary + 7d regression, the evaluator
+// library grid (shared loadEvaluators), recent scored sessions, golden suites.
+// Every card degrades to an honest message: locked (402), no key, or no data.
+function loadEvalsTab() {
+  loadEvaluators();
+  loadEvalsJudgeCard();
+  loadEvalsTabSummary();
+  loadEvalsRecent();
+  loadEvalsSuites();
+}
+
+function _evalsLockedHtml() {
+  return '<div style="font-size:12px;color:var(--text-muted);">' +
+    t("evals.locked", null, "Session scoring is a Pro feature.") +
+    ' <a href="/upgrade?source=evals-tab" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
+    t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
+}
+
+async function loadEvalsJudgeCard() {
+  var el = document.getElementById('evals-judge-body');
+  if (!el) return;
+  var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
+  var judge = data && data.judge;
+  if (!judge) {
+    el.innerHTML = '<span style="color:var(--text-muted);">' +
+      t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+    return;
+  }
+  var html = '';
+  if (!judge.enabled) {
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
+      t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+  } else if (judge.key_present) {
+    html += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">&#9679; ' +
+      t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
+  } else {
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">&#9679; ' +
+      t("evals.judge_needs_key", null, "Waiting for a judge API key. Nothing is being scored yet.") + '</div>';
+  }
+  html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;">' +
+    t("evals.judge_how", null, "How it works: after a session finishes, a small model reads a redacted copy of the transcript and scores it 0 to 5 against your rubric. It runs on your machine, with your own API key, capped at 100 scores per hour. Your transcripts never go to ClawMetry servers.") +
+    '</div>';
+  html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;">';
+  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(judge.model || 'claude-haiku-4-5') + '</code></span>';
+  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_key", null, "API key") + ':</span> ' +
+    (judge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
+                       : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
+  html += '</div>';
+  if (!judge.key_present && judge.enabled) {
+    html += '<div style="margin-top:10px;"><button onclick="openEvalRubricModal()" style="background:#f59e0b;color:#1a1a1a;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">' +
+      t("evals.add_key_cta", null, "Add a judge API key") + '</button></div>';
+  }
+  el.innerHTML = html;
+}
+
+async function loadEvalsTabSummary() {
+  var avgEl = document.getElementById('evals-tab-avg');
+  var covEl = document.getElementById('evals-tab-coverage');
+  var pctEl = document.getElementById('evals-tab-percentiles');
+  var regEl = document.getElementById('evals-tab-regression');
+  if (!avgEl) return;
+  var r = await fetch('/api/evals/summary?window=24h').catch(function(){return null;});
+  if (r && r.status === 402) { if (covEl) covEl.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  if (!data || !data.scored) {
+    avgEl.textContent = '--';
+    if (covEl) covEl.textContent = t("evals.summary_empty", null, "No sessions scored in the last day.");
+    if (pctEl) pctEl.textContent = '';
+  } else {
+    avgEl.textContent = Number(data.avg_score).toFixed(2) + ' / 5';
+    avgEl.style.color = data.avg_score >= 4 ? '#22c55e' : (data.avg_score >= 3 ? '#f59e0b' : '#ef4444');
+    if (covEl) covEl.textContent = data.scored + ' ' + t("evals.of", null, "of") + ' ' + data.total + ' ' +
+      t("evals.sessions_scored", null, "recent sessions scored");
+    if (pctEl) pctEl.innerHTML = 'p50 <b>' + Number(data.p50).toFixed(2) + '</b><br>p10 <b>' + Number(data.p10).toFixed(2) + '</b>';
+  }
+  if (regEl) {
+    var rr = await fetch('/api/evals/regression-summary?window=7d').then(function(x){return x.status===402?null:x.json();}).catch(function(){return null;});
+    if (rr && rr.tested) {
+      regEl.textContent = t("evals.regression", null, "Regression replay, last 7 days") + ': ' +
+        rr.improved + ' ' + t("evals.improved", null, "improved") + ' · ' +
+        rr.regressed + ' ' + t("evals.regressed", null, "regressed") + ' · ' +
+        rr.same + ' ' + t("evals.same", null, "unchanged");
+    } else {
+      regEl.textContent = '';
+    }
+  }
+}
+
+async function loadEvalsRecent() {
+  var el = document.getElementById('evals-recent-body');
+  if (!el) return;
+  var r = await fetch('/api/evals/recent?limit=20').catch(function(){return null;});
+  if (r && r.status === 402) { el.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  var rows = (data && data.evals) || [];
+  if (!rows.length) {
+    el.innerHTML = '<div style="color:var(--text-muted);">' +
+      t("evals.recent_empty", null, "No scored sessions yet. Once the judge has a key, finished sessions show up here with their score and the judge's one-line reason.") + '</div>';
+    return;
+  }
+  var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<tr style="text-align:left;color:var(--text-muted);">' +
+    '<th style="padding:6px 8px;">' + t("evals.col_session", null, "Session") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_score", null, "Score") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_reason", null, "Judge's reason") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_when", null, "When") + '</th>' +
+    '<th style="padding:6px 8px;"></th></tr>';
+  rows.forEach(function(row) {
+    var sid = String(row.session_id || '');
+    var label = row.title ? row.title : (sid.length > 14 ? sid.slice(0, 14) + '…' : sid);
+    var score = (row.eval_score == null) ? '--' : Number(row.eval_score).toFixed(1);
+    var sc = row.eval_score == null ? 'var(--text-muted)' :
+      (row.eval_score >= 4 ? '#22c55e' : (row.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
+    html += '<tr style="border-top:1px solid var(--border-primary);">';
+    html += '<td style="padding:6px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(sid) + '">' +
+      (row.agent_type ? '<span style="color:var(--text-muted);">' + escHtml(row.agent_type) + '</span> ' : '') + escHtml(label) + '</td>';
+    html += '<td style="padding:6px 8px;font-weight:700;color:' + sc + ';">' + score + '</td>';
+    html += '<td style="padding:6px 8px;color:var(--text-muted);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(row.eval_reason || '') + '">' + escHtml(row.eval_reason || '') + '</td>';
+    html += '<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">' + (row.eval_scored_at ? timeAgo(row.eval_scored_at) : '') + '</td>';
+    html += '<td style="padding:6px 8px;"><button onclick="evalsRescore(\'' + escHtml(sid).replace(/'/g, "\\'") + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
+      t("evals.rescore", null, "Re-score") + '</button></td>';
+    html += '</tr>';
+  });
+  html += '</table></div>';
+  el.innerHTML = html;
+}
+
+async function evalsRescore(sid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), { method: 'POST' });
+    var data = await r.json().catch(function(){return {};});
+    if (r.ok && data.score != null) {
+      if (btn) btn.textContent = Number(data.score).toFixed(1);
+    } else {
+      if (btn) btn.textContent = data.skip_reason || data.error || t("evals.rescore_failed", null, "failed");
+    }
+  } catch (e) {
+    if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
+  }
+  setTimeout(function(){ loadEvalsRecent(); loadEvalsTabSummary(); }, 1500);
+}
+
+async function loadEvalsSuites() {
+  var el = document.getElementById('evals-suites-body');
+  if (!el) return;
+  var r = await fetch('/api/evals/suites').catch(function(){return null;});
+  if (r && r.status === 402) { el.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  var suites = (data && data.suites) || [];
+  var html = '';
+  if (suites.length) {
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+    suites.forEach(function(s) {
+      html += '<span style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:4px 10px;font-family:monospace;font-size:12px;color:var(--text-primary);">' + escHtml(s) + '</span>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="margin-bottom:10px;">' +
+      t("evals.suites_empty", null, "No test suites yet. A suite is a small YAML file of test prompts plus what a good answer looks like; run it before each release to catch a prompt regression before your users do.") + '</div>';
+  }
+  html += '<div style="color:var(--text-muted);">' +
+    t("evals.suites_cli", null, "Suites live in") + ' <code>~/.clawmetry/evals/</code> · ' +
+    t("evals.suites_run", null, "run one with") + ' <code>clawmetry eval --suite &lt;name&gt;</code></div>';
+  el.innerHTML = html;
 }
 
 // Issue #1619 Phase 1 — pull aggregate score for the overview tile.

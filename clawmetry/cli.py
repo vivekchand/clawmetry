@@ -5747,6 +5747,89 @@ def _cmd_verify_integrity(args) -> None:
         raise SystemExit(1)
 
 
+def _cmd_login(args) -> None:
+    """clawmetry login — sign in / sign up for ClawMetry Cloud.
+
+    Friendly front door over the existing machinery: already logged in →
+    show account info (same as `clawmetry account`); otherwise run the
+    interactive connect flow (email OTP or Google/GitHub, incl. the
+    headless paste-code path). `connect` stays for scripted/advanced use.
+    """
+    import json as _json
+
+    cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+    api_key = ""
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            api_key = (_json.load(f) or {}).get("api_key") or ""
+    except Exception:
+        pass
+    if api_key:
+        print("Already logged in — your account:")
+        print()
+        _cmd_account(args)
+        print()
+        print("Not you? `clawmetry disconnect` first, then `clawmetry login`.")
+        return
+    _cmd_connect(args)
+
+
+def _cmd_cloud_toggle(enable: bool) -> int:
+    """--turn-on-cloud-sync / --turn-off-cloud-sync.
+
+    Pure marker flip: the daemon checks ``is_cloud_disabled()`` on every
+    cloud POST, so the switch takes effect within seconds WITHOUT a daemon
+    restart. OFF keeps the account key (unlike `clawmetry disconnect`) —
+    it only stops data egress; the local dashboard keeps working.
+    """
+    import json as _json
+    from clawmetry import config as _cfg
+
+    if enable:
+        removed = _cfg.enable_cloud()
+        env = os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+        if env in ("1", "true", "yes", "on"):
+            print("⚠️  CLAWMETRY_NO_CLOUD=" + env + " is set in the environment.")
+            print("   The marker was removed, but that env var still forces")
+            print("   local-only mode — unset it (and restart the daemon's")
+            print("   service) to actually resume cloud sync.")
+            return 1
+        api_key = ""
+        try:
+            with open(os.path.expanduser("~/.clawmetry/config.json"), "r",
+                      encoding="utf-8") as f:
+                api_key = (_json.load(f) or {}).get("api_key") or ""
+        except Exception:
+            pass
+        if not api_key:
+            print("✅  Cloud sync enabled — but no account is linked yet.")
+            print("    Run `clawmetry login` to sign in / sign up, then the")
+            print("    daemon starts syncing automatically.")
+            return 0
+        print("✅  Cloud sync is ON."
+              + ("  (removed local-only marker)" if removed else "  (was already on)"))
+        print("    The running daemon picks this up within seconds.")
+        print("    Daemon not running? Start it with: clawmetry sync")
+        print("    Dashboard: https://app.clawmetry.com/cloud")
+        return 0
+    # OFF: write the persistent marker (survives updates and restarts).
+    marker = _cfg.NOCLOUD_MARKER_PATH
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("cloud sync disabled via clawmetry --turn-off-cloud-sync\n")
+    except Exception as e:
+        print("❌  Could not write the local-only marker: %s" % e)
+        return 1
+    print("✅  Cloud sync is OFF (local-only mode).")
+    print("    • No data leaves this machine — heartbeats and snapshot")
+    print("      uploads stop within seconds (no restart needed).")
+    print("    • The local dashboard at http://localhost:8900 keeps working.")
+    print("    • Your account login is kept; turn back on any time with:")
+    print("        clawmetry --turn-on-cloud-sync")
+    return 0
+
+
 def main() -> None:
     import argparse
     # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
@@ -5756,6 +5839,22 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "hooks":
         from clawmetry.hooks_claude_code import cli_main as _hooks_cli
         raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # Enterprise TLS/proxy bootstrap — OS trust store (truststore), 3.13
+    # strict-flag relax, CLAWMETRY_CA_BUNDLE, proxy env vars — so every
+    # outbound HTTPS call from the CLI/dashboard (connect, OTP, telemetry,
+    # update check) works behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="cli")
+    except Exception:
+        pass
+    # Cloud-sync toggles — plain flags so a non-engineer can flip sync from
+    # any docs snippet without learning subcommands. Handled before all
+    # parsing (position-independent), exit immediately.
+    if "--turn-on-cloud-sync" in sys.argv:
+        raise SystemExit(_cmd_cloud_toggle(True))
+    if "--turn-off-cloud-sync" in sys.argv:
+        raise SystemExit(_cmd_cloud_toggle(False))
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
@@ -5916,6 +6015,15 @@ def main() -> None:
     )
 
     # connect
+    p_login = sub.add_parser(
+        "login",
+        help="Log in / sign up for ClawMetry Cloud (email or Google/GitHub)",
+    )
+    p_login.add_argument(
+        "--force", action="store_true",
+        help="Offer cloud signup even in local-only mode",
+    )
+
     p_connect = sub.add_parser("connect", help="Activate cloud sync")
     p_connect.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
     p_connect.add_argument(
@@ -6475,6 +6583,21 @@ def main() -> None:
         ),
     )
 
+    # doctor — enterprise network/TLS connectivity diagnostics
+    p_doctor = sub.add_parser(
+        "doctor",
+        help=(
+            "Diagnose cloud connectivity: DNS, TCP, proxy, TLS "
+            "(detects corporate TLS interception), heartbeat POST"
+        ),
+    )
+    p_doctor.add_argument(
+        "--host",
+        dest="doctor_host",
+        default=None,
+        help="Override target (default: ingest.clawmetry.com / CLAWMETRY_INGEST_URL)",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -6511,6 +6634,7 @@ def main() -> None:
         "onboard",
         "setup",
         "account",
+        "login",
         "connect",
         "disconnect",
         "sync",
@@ -6532,6 +6656,7 @@ def main() -> None:
         "bundle",
         "extensions",
         "diagnose",
+        "doctor",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -6545,6 +6670,8 @@ def main() -> None:
             _cmd_onboard(args)
         elif args.cmd == "account":
             _cmd_account(args)
+        elif args.cmd == "login":
+            _cmd_login(args)
         elif args.cmd == "connect":
             _cmd_connect(args)
         elif args.cmd == "disconnect":
@@ -6587,6 +6714,9 @@ def main() -> None:
             _cmd_extensions(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
+        elif args.cmd == "doctor":
+            from clawmetry.doctor import run_doctor
+            sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":

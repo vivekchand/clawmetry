@@ -374,6 +374,24 @@ def _resolve_minimax_base_url() -> str:
     return val or "https://api.minimax.chat/v1"
 
 
+def _resolve_llamacpp_base_url() -> str:
+    """Return the active llama.cpp server base URL from env var or the default.
+
+    LLAMA_CPP_HOST overrides; falls back to the llama.cpp server default port.
+    """
+    val = os.environ.get("LLAMA_CPP_HOST", "").strip()
+    return val or "http://localhost:8080/v1"
+
+
+def _resolve_lmstudio_base_url() -> str:
+    """Return the active LM Studio server base URL from env var or the default.
+
+    LMSTUDIO_HOST overrides; falls back to LM Studio's default port.
+    """
+    val = os.environ.get("LMSTUDIO_HOST", "").strip()
+    return val or "http://localhost:1234/v1"
+
+
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
@@ -914,6 +932,16 @@ def _sandbox_inference_configs() -> list:
                 provider_key = "minimax"
                 primary = f"minimax/{model}" if model else ""
                 base_url = _resolve_minimax_base_url()
+                compat = "openai"
+            elif provider == "llama.cpp":
+                provider_key = "llama-cpp"
+                primary = f"llama-cpp/{model}" if model else ""
+                base_url = _resolve_llamacpp_base_url()
+                compat = "openai"
+            elif provider in ("lmstudio", "lm-studio"):
+                provider_key = "lmstudio"
+                primary = f"lmstudio/{model}" if model else ""
+                base_url = _resolve_lmstudio_base_url()
                 compat = "openai"
             else:
                 provider_key = _MANAGED

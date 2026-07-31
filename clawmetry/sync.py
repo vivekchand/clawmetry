@@ -17698,6 +17698,25 @@ def start_claim_watcher(config: dict):
 
 
 def run_daemon() -> None:
+    # Enterprise TLS/proxy bootstrap FIRST — before any cloud call. Installs
+    # the OS-trust-store (truststore) SSL context + proxy-env opener that
+    # every urlopen in this process (heartbeat, snapshot push, telemetry)
+    # rides on. launchd/systemd/Task Scheduler don't inherit the user's
+    # shell env, so proxy vars are re-read here at daemon start. Never
+    # raises; local DuckDB ingestion is unaffected if this fails.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="daemon")
+    except Exception as _net_e:
+        log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Windows: the daemon runs DETACHED (no console), so unpatched child
+    # processes (pip update check, node --version, disk probes) each flash
+    # a visible cmd window. Patch Popen once so children stay windowless.
+    try:
+        from clawmetry.winconsole import hide_child_console_windows
+        hide_child_console_windows()
+    except Exception:
+        pass
     if not _acquire_pid_lock():
         print(
             "[clawmetry-sync] Another instance is already running. Exiting.", flush=True
