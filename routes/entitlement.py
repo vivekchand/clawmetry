@@ -12132,6 +12132,265 @@ def api_license_tier_at_batch():
     )
 
 
+
+def _license_features_at_snapshot() -> dict:
+    """Shared one-shot read for the paired ``/api/license/features-at``
+    and ``/api/license/features-at-batch`` endpoints below.
+
+    Reads :func:`clawmetry.license.license_features` (current-time
+    features list), :func:`clawmetry.license.current_license_info` (for
+    ``has_license`` / ``valid`` NOW), and
+    :func:`clawmetry.license.license_expires_at` (for the ``expires_at``
+    field the sibling perspective-epoch tiles all carry) ONCE so a UI
+    binding both endpoints in the same tile can't catch them disagreeing
+    on ``features`` / ``expires_at`` / ``has_license`` / ``valid`` for
+    the same install -- mirrors the ``_license_state_at_snapshot``
+    pattern used by the state-derived perspective-epoch trio.
+
+    ``features`` here is the CURRENT-time features list (matches
+    :func:`clawmetry.license.license_features`); the perspective-epoch
+    features list (``features_at``) is derived per-request by each
+    endpoint via :func:`clawmetry.license.license_features_at` and
+    lives on top of this snapshot -- keeping ``features`` in the shared
+    read guarantees a UI that renders "as of <date> vs now" tiles
+    side-by-side can never catch them disagreeing on the current-time
+    reference.
+
+    Never raises. Any introspection failure collapses to the OSS-free
+    branch shape (``features=None``, ``expires_at=None``,
+    ``has_license=False``, ``valid=False``) so the endpoint stack never
+    5xxs -- same posture as the surrounding license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        feats = _lic.license_features()
+        info = _lic.current_license_info()
+        expires = _lic.license_expires_at()
+    except Exception as exc:
+        logger.debug(
+            "_license_features_at_snapshot: underlying read failed: %s", exc
+        )
+        return {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if feats is not None and not isinstance(feats, list):
+        feats = None
+    if info is None or not isinstance(info, dict):
+        return {
+            "features": feats,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "features": feats,
+        "expires_at": expires,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/features-at")
+def api_license_features_at():
+    """``GET /api/license/features-at?epoch=<int>`` -- scalar view of
+    the installed license's ``features`` claim evaluated as of
+    ``epoch`` -- the perspective-epoch flavour of
+    ``/api/license/features``, for a scheduled-audit / retrospective
+    diagnostic tile that wants to answer "which paid features was this
+    node entitled to on <date>?" without the caller having to snapshot
+    the license state at that time or compare ``exp`` to a caller-
+    supplied epoch themselves.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "features_at": [<id>, ...] | null,   # features as of epoch
+          "requested_epoch": <int|null>,       # int-coerced input, or null on typo
+          "features": [<id>, ...] | null,      # current-time features
+          "expires_at": <int|null>,            # on-disk exp for comparison
+          "has_license": <bool>,               # is a license file installed at all?
+          "valid": <bool>                      # signature-valid AND not expired NOW
+        }
+
+    ``features_at`` mirrors :func:`clawmetry.license.license_features_at`:
+
+      * ``null`` on no license, invalid signature, an ``exp`` claim
+        that has already lapsed at ``epoch``, or missing / non-integer
+        / bool ``epoch`` so a caller cannot silently mis-gate on a
+        typo.
+      * ``[]`` on a signature-valid license AS OF ``epoch`` whose
+        payload carries no explicit ``features`` claim. Distinct from
+        ``null``: a UI binding this endpoint must render both branches
+        (``null`` -> "no entitlement at that time", ``[]`` -> "entitled
+        but no features itemised") without collapsing them.
+      * A sorted, deduplicated, normalised (lower/strip) list of
+        feature ids otherwise.
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer / bool value collapses to
+        ``features_at=null`` with ``requested_epoch=null`` so a caller
+        cannot silently mis-gate on a typo. HTTP status is 200 either
+        way -- the "bad input" signal is ``requested_epoch=null`` plus
+        the ``null`` features, not a 4xx, matching the never-crash
+        posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/state-at`` / ``/api/license/tier-at`` /
+    ``/api/license/is-expired-at`` / ``/api/license/days-until-expiry-at``
+    -- all four share the perspective-epoch input pattern and the
+    ``_license_features_at_snapshot`` reader here carries
+    ``expires_at`` / ``has_license`` / ``valid`` on the same shape the
+    state-derived siblings carry, so a UI binding two for the same
+    install cannot catch them disagreeing on the current-time
+    reference fields.
+
+    When ``epoch`` equals "now", the ``features_at`` field must byte-
+    equal ``features`` (both derive from the same signed ``features``
+    claim, refuse the invalid-signature branch, and use the same
+    ``exp <= cutoff`` boundary via :func:`license_features_at` /
+    :func:`license_features`), so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. For the resolved feature set actually enforced by
+    gates, read ``/api/entitlement`` (which layers this claim on top of
+    the FREE-tier baseline). This endpoint surfaces the claim exactly
+    as written on the token with the perspective-epoch validity gate on
+    top.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{features_at: null, requested_epoch: <echo>, features: null,
+    expires_at: null, has_license: false, valid: false}`` (the OSS-
+    free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    try:
+        snap = _license_features_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_features_at: snapshot error: %s", exc)
+        snap = {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    features_at: list | None = None
+    if requested is not None:
+        try:
+            from clawmetry import license as _lic
+
+            features_at = _lic.license_features_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_features_at: derive error: %s", exc)
+            features_at = None
+    if features_at is not None and not isinstance(features_at, list):
+        features_at = None
+    return jsonify(
+        {
+            "features_at": features_at,
+            "requested_epoch": requested,
+            "features": snap["features"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/features-at-batch")
+def api_license_features_at_batch():
+    """``GET /api/license/features-at-batch?epochs=<int>,<int>,...`` --
+    per-value batch sibling of ``/api/license/features-at``.
+
+    Where the singular endpoint folds ONE perspective epoch to ONE
+    features answer, this preserves per-value rows so a scheduled-audit
+    tile that wants to plot the ``features`` claim across a sequence of
+    dates ("which features was this node entitled to on each of these
+    audit dates?") renders off ONE round-trip instead of N calls to
+    ``/api/license/features-at``. Wraps
+    :func:`clawmetry.license.license_features_at_batch`.
+
+    ``epochs=`` is required. Missing / blank / only-commas -> ``400
+    missing epochs``. Comma-separated tokens are normalised the way the
+    underlying batch helper normalises them: whitespace-stripped, then
+    handed to :func:`clawmetry.license.license_features_at_batch`,
+    which dedupes by parsed int key preserving first-seen order and
+    collapses non-int / ``bool`` / ``None`` tokens to a row with
+    ``features=null`` (never-mis-gate posture matching the scalar
+    endpoint). Never 5xxs: a resolver failure returns the empty-rows
+    envelope with the current-time snapshot fields intact.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":  "license_features_at",
+          "count": <int>,               # len(rows)
+          "rows":  [
+            {"epoch": <int|"<raw>">, "features": [<id>, ...]|null},
+            ...
+          ],
+          "features":    [<id>, ...] | null,   # current-time features
+          "expires_at":  <int|null>,           # on-disk exp for comparison
+          "has_license": <bool>,
+          "valid":       <bool>                # signature-valid AND not expired NOW
+        }
+
+    Per-row parity with ``/api/license/features-at?epoch=<n>`` is
+    pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint. Shares :func:`_license_features_at_snapshot`
+    with the scalar endpoint so the current-time reference fields
+    (``features`` / ``expires_at`` / ``has_license`` / ``valid``)
+    cannot disagree between the two for the same install.
+    """
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_features_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_features_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.license_features_at_batch(tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_features_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "license_features_at",
+            "count": len(rows),
+            "rows": rows,
+            "features": snap["features"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+
+
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
 def api_paywall_event():
     body: dict = {}
