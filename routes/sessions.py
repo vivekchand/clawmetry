@@ -3627,6 +3627,19 @@ def _try_local_store_transcripts():
                 )
             except Exception:
                 modified_ms = 0
+        # Session start, for the Conversations time-window filter's overlap
+        # test ([started, modified] vs the picked window). 0 = unknown; the
+        # client falls back to started = modified.
+        started_ms = 0
+        stt = r.get("started_at")
+        if stt:
+            try:
+                started_ms = int(
+                    datetime.fromisoformat(str(stt).replace("Z", "+00:00"))
+                    .timestamp() * 1000
+                )
+            except Exception:
+                started_ms = 0
         # Issue #1718: prefer the SQL-filtered ``message_count`` (renderable-
         # event count, matches the detail modal) over the legacy raw
         # ``event_count``. The OR-fallback keeps callers running against
@@ -3645,6 +3658,7 @@ def _try_local_store_transcripts():
             "messages": int(msg_count or 0),
             "size": 0,  # unknown from DuckDB; UI shows "—" when 0
             "modified": modified_ms,
+            "started": started_ms,
         })
     _fill_family_titles(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}

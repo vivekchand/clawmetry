@@ -14569,6 +14569,82 @@ window.toggleTranscriptPlumbing = function() {
   if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
   loadTranscripts();
 };
+// ── Conversations time-window filter (post-mortem digging) ──────────────
+// null = Live (full recent list). Otherwise {sinceMs, untilMs}: the list is
+// narrowed to conversations ACTIVE inside the window — overlap test on
+// [started||modified, modified] so a session that began before the window
+// and kept running through it still shows. Same UX as the Brain range bar.
+var _transcriptRange = null;
+
+function _txSetRangeActiveBtn(key) {
+  document.querySelectorAll('#tx-range-bar .brain-range-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-range') === String(key));
+  });
+}
+
+function _txUpdateRangeUI() {
+  var banner = document.getElementById('tx-history-banner');
+  var bannerText = document.getElementById('tx-history-banner-text');
+  if (_transcriptRange) {
+    if (banner) banner.style.display = 'flex';
+    if (bannerText) bannerText.textContent = _brainRangeHuman(
+      new Date(_transcriptRange.sinceMs).toISOString(),
+      new Date(_transcriptRange.untilMs).toISOString());
+  } else if (banner) {
+    banner.style.display = 'none';
+  }
+}
+
+function setTranscriptTimeRange(secondsOrLive, el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (custom) custom.style.display = 'none';
+  if (secondsOrLive === 'live') {
+    _transcriptRange = null;
+    _txSetRangeActiveBtn('live');
+    _txUpdateRangeUI();
+    loadTranscripts();
+    return;
+  }
+  var secs = parseInt(secondsOrLive, 10) || 3600;
+  var now = Date.now();
+  _transcriptRange = {sinceMs: now - secs * 1000, untilMs: now};
+  _txSetRangeActiveBtn(secs);
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
+function toggleTranscriptCustomRange(el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (!custom) return;
+  var showing = custom.style.display !== 'none';
+  custom.style.display = showing ? 'none' : 'flex';
+  if (!showing) {
+    var to = document.getElementById('tx-range-to');
+    var from = document.getElementById('tx-range-from');
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    var fmt = function(d) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+             'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    };
+    var now = new Date();
+    if (to && !to.value) to.value = fmt(now);
+    if (from && !from.value) from.value = fmt(new Date(now.getTime() - 24 * 3600 * 1000));
+  }
+}
+
+function applyTranscriptCustomRange() {
+  var from = document.getElementById('tx-range-from');
+  var to = document.getElementById('tx-range-to');
+  if (!from || !from.value || !to || !to.value) return;
+  var s = new Date(from.value), u = new Date(to.value);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _transcriptRange = {sinceMs: s.getTime(), untilMs: u.getTime()};
+  _txSetRangeActiveBtn('custom');
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -14597,6 +14673,21 @@ async function loadTranscripts() {
     if (_rtFilter !== 'all') {
       data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
     }
+    // Time-window filter: keep conversations ACTIVE inside the window.
+    // Overlap test on [started, modified]; when the endpoint doesn't ship
+    // `started` (legacy filesystem path), fall back to started = modified,
+    // i.e. strict last-activity-in-window.
+    var _txWin = _transcriptRange;
+    var _txWinEmpty = false;
+    if (_txWin) {
+      var _preWin = data.transcripts.length;
+      data.transcripts = data.transcripts.filter(function(t) {
+        var mod = t.modified || 0;
+        var start = t.started || mod;
+        return start <= _txWin.untilMs && mod >= _txWin.sinceMs;
+      });
+      _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
+    }
     var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
@@ -14623,7 +14714,9 @@ async function loadTranscripts() {
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = _rtNoTx
+    var emptyMsg = _txWinEmpty
+      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No conversations were active in this window. Try a wider window — or note that only recently synced conversations are listed here.') + '</div>'
+      : _rtNoTx
       ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
