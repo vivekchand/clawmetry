@@ -11811,6 +11811,21 @@ def _extract_usage_cost_split(data: dict) -> dict[str, float]:
 _READ_TOOL_NAMES = frozenset({"read", "readfile", "read_file"})
 
 
+def _iter_family_tool_call_blocks(data: dict) -> Iterable[dict]:
+    """Yield the ``data.tool_calls[*]`` blocks family adapters emit
+    (claude_code / codex / cursor … via clawmetry-pro): each block is
+    ``{id, name, input}``. This is a FOURTH on-the-wire shape the three
+    ``_iter_*`` tool extractors below must all probe — same bug class as
+    the 2026-06-11 ``tool_name`` fix in ``_iter_tool_invocation_names``:
+    without it every family Read/tool path is invisible (found 2026-07-31
+    when `clawmetry waste` returned 0 rows on a Claude-Code-heavy node)."""
+    blocks = data.get("tool_calls")
+    if isinstance(blocks, list):
+        for blk in blocks:
+            if isinstance(blk, dict):
+                yield blk
+
+
 def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
     """Yield ``file_path`` arguments for every Read-like tool invocation
     described by ``data``. Handles all three on-the-wire shapes the
@@ -11839,13 +11854,21 @@ def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
 
     et = (event_type or "").lower()
 
-    # Shape 1: top-level tool.call / toolCall / tool_use event.
-    if et in ("tool.call", "toolcall", "tool_use"):
+    # Shape 1: top-level tool.call / toolCall / tool_use / tool_call event.
+    if et in ("tool.call", "toolcall", "tool_use", "tool_call"):
         name = (data.get("name") or "").lower()
         if name in _READ_TOOL_NAMES:
             p = _path_from_input(data.get("input") or data.get("arguments"))
             if p:
                 yield p
+        # Shape 4: family-adapter ``tool_call`` events carry the actual
+        # blocks under ``data.tool_calls[*]`` ({name, input}) with only a
+        # ``tool_name`` summary at the top level.
+        for blk in _iter_family_tool_call_blocks(data):
+            if (blk.get("name") or "").lower() in _READ_TOOL_NAMES:
+                p = _path_from_input(blk.get("input") or blk.get("arguments"))
+                if p:
+                    yield p
         return
 
     # Shape 2: assistant ``message`` event with ``toolMetas`` projection
@@ -11905,10 +11928,15 @@ def _iter_tool_file_paths(event_type: str | None, data: dict) -> Iterable[str]:
                 return v
         return ""
 
-    if et in ("tool.call", "toolcall", "tool_use"):
+    if et in ("tool.call", "toolcall", "tool_use", "tool_call"):
         p = _path(data.get("input") or data.get("arguments"))
         if p:
             yield p
+        # Family-adapter shape: blocks under ``data.tool_calls[*]``.
+        for blk in _iter_family_tool_call_blocks(data):
+            p = _path(blk.get("input") or blk.get("arguments"))
+            if p:
+                yield p
         return
     for m in (data.get("toolMetas") or []):
         if isinstance(m, dict):
@@ -11950,6 +11978,13 @@ def _iter_tool_invocation_names(event_type: str | None, data: dict) -> Iterable[
                 or data.get("tool_name"))
         if isinstance(name, str) and name:
             yield name
+        # Family-adapter shape: a single event can carry MULTIPLE blocks
+        # under ``data.tool_calls[*]``; ``tool_name`` above only names the
+        # first. Yield the rest so parallel tool calls count.
+        for blk in _iter_family_tool_call_blocks(data):
+            bname = blk.get("name")
+            if isinstance(bname, str) and bname and bname != name:
+                yield bname
         return
 
     # Shape 2: assistant ``message`` event with ``toolMetas`` projection

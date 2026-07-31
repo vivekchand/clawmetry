@@ -813,6 +813,10 @@ _DAEMON_METHODS = frozenset({
     "query_ar_history",
     # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
     "query_backups",
+    # Agent CLI Phase 1 (docs/CLI.md): `clawmetry usage --by team`
+    # reads the per-team rollup through the daemon proxy. Every other method
+    # the agent CLI calls was already allowlisted; guards-in-same-PR rule.
+    "query_usage_by_team",
 })
 
 

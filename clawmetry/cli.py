@@ -5839,6 +5839,20 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "hooks":
         from clawmetry.hooks_claude_code import cli_main as _hooks_cli
         raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # FAST PATH — agent-facing read CLI (`clawmetry sessions|activity|waste|
+    # progress|usage|selfevolve`, see docs/CLI.md + clawmetry/cli_cmds/).
+    # Dispatches BEFORE the dashboard import (~300ms) and before this process
+    # tags itself CLAWMETRY_ROLE=dashboard, so local_store.get_store()
+    # resolves the transport ladder itself: daemon HTTP proxy when the sync
+    # daemon owns the writer, direct read-only DuckDB in single-process
+    # installs. These commands are read-only and never take the writer lock.
+    try:
+        from clawmetry.cli_cmds import AGENT_COMMANDS as _agent_cmds
+    except Exception:
+        _agent_cmds = ()
+    if len(sys.argv) > 1 and sys.argv[1] in _agent_cmds:
+        from clawmetry.cli_cmds import dispatch as _agent_dispatch
+        raise SystemExit(_agent_dispatch(sys.argv[1:]))
     # Enterprise TLS/proxy bootstrap — OS trust store (truststore), 3.13
     # strict-flag relax, CLAWMETRY_CA_BUNDLE, proxy env vars — so every
     # outbound HTTPS call from the CLI/dashboard (connect, OTP, telemetry,
