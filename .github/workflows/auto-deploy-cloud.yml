@@ -48,7 +48,39 @@ jobs:
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: clawmetry-cloud
 
+      # NEVER pin downwards. This job reads __version__ at the TRIGGERING
+      # commit, which on a feature merge is the not-yet-bumped previous
+      # release — and the pin PR it opens can auto-merge MINUTES AFTER a
+      # newer manual pin already deployed, silently rolling prod back.
+      # (Burned 2026-07-31: #1842 pinned 0.12.605 at 13:01Z; the stale
+      # auto/pin-clawmetry-0.12.597 PR #1843 merged at 13:07Z and reverted
+      # the enterprise release off prod.) Belt: exit here when the target
+      # is not strictly newer than cloud main's current pin, and close any
+      # stale open pin PR for this version. Braces: the cloud repo's
+      # pin-no-downgrade CI check red-blocks stale pin PRs at merge time.
+      - name: Skip unless strictly newer than cloud's current pin
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+        run: |
+          V="${{ steps.oss_version.outputs.version }}"
+          CURRENT=$(grep -oE 'clawmetry==[0-9.]+' clawmetry-cloud/Dockerfile | head -1 | cut -d= -f3)
+          echo "target=$V cloud-main-pin=$CURRENT"
+          newer=$(python3 -c "
+          v=tuple(map(int,'$V'.split('.'))); c=tuple(map(int,'$CURRENT'.split('.')))
+          print('yes' if v>c else 'no')")
+          if [ "$newer" != "yes" ]; then
+            echo "Target $V is not newer than the current pin $CURRENT — refusing to pin downwards."
+            BRANCH="auto/pin-clawmetry-$V"
+            PR=$(gh pr list --repo vivekchand/clawmetry-cloud --head "$BRANCH" --state open --json number -q '.[0].number' || true)
+            if [ -n "$PR" ]; then
+              gh pr close "$PR" --repo vivekchand/clawmetry-cloud \
+                --comment "Stale pin: $V <= current main pin $CURRENT. Closed by the no-downgrade guard." || true
+            fi
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Pin clawmetry version in cloud Dockerfile
+        if: env.SKIP != '1'
         run: |
           cd clawmetry-cloud
           sed -i "s/clawmetry==[0-9.]*/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
@@ -57,6 +89,7 @@ jobs:
           echo "Dockerfile:"; grep clawmetry Dockerfile
 
       - name: Commit and open PR
+        if: env.SKIP != '1'
         run: |
           cd clawmetry-cloud
           git config user.email "diya-bot@clawmetry.com"
@@ -96,6 +129,7 @@ jobs:
       # PR with a failing or still-pending check. A failed/!pin-only PR is left
       # open for review rather than force-merged.
       - name: Auto-merge pin PR when cloud CI is green
+        if: env.SKIP != '1'
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
           REPO: vivekchand/clawmetry-cloud
