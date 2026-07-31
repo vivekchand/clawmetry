@@ -21,6 +21,10 @@ those via late ``import dashboard as _d`` inside the functions below —
 the same pattern routes/*.py use.
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
 import json
 import subprocess
 import threading
@@ -66,28 +70,34 @@ def _gw_ws_connect(url=None, token=None):
         ws.recv()
         # Send connect.
         #
-        # Issue #1720: the OpenClaw gateway only honours requested scopes
-        # (``operator.read`` / ``operator.admin``) when the connecting
-        # client identifies itself as ``openclaw-control-ui``. Any other
-        # ``client.id`` (we previously sent ``cli``) gets an OK connect
-        # response with an empty ``auth.scopes`` array, and every
-        # subsequent ``cron.list`` / ``sessions.list`` call fails with
-        # ``INVALID_REQUEST: missing scope: operator.read`` — surfacing as
-        # empty Crons / Sessions tabs in the dashboard. The bundled
-        # control UI is the only client the gateway whitelists for those
-        # scopes, so we mimic its identity for our read-only RPCs.
+        # Issue #1720 history: protocol-3 gateways only honoured requested
+        # scopes when the client identified as ``openclaw-control-ui``, so
+        # this helper used to impersonate it. Protocol-4 gateways
+        # (OpenClaw 2026.5.28+) close that loophole: a control-ui identity
+        # presenting a raw bearer token is REJECTED outright with
+        # ``control-ui-insecure-auth`` (the real control UI authenticates
+        # via device pairing). A rejected handshake made the dashboard
+        # report a perfectly healthy gateway as "not running".
+        #
+        # So connect honestly as ``cli`` (verified ok:true / protocol:4
+        # against a live v4 gateway, 2026-08-01). On gateways that grant
+        # the token no scopes this degrades exactly as before #1720 —
+        # Crons/Sessions tabs empty, connection and unscoped RPCs fine —
+        # which is strictly better than "not running". The durable scope
+        # story on v4 needs a scoped token / pairing integration (tracked
+        # in the follow-up issue referenced by this PR).
         connect_msg = {
             "type": "req",
             "id": "clawmetry-connect",
             "method": "connect",
             "params": {
-                "minProtocol": 3,
-                "maxProtocol": 3,
+                "minProtocol": _GW_MIN_PROTO,
+                "maxProtocol": _GW_MAX_PROTO,
                 "client": {
-                    "id": "openclaw-control-ui",
+                    "id": "cli",
                     "version": _d.__version__,
                     "platform": _d._CURRENT_PLATFORM,
-                    "mode": "webchat",
+                    "mode": "cli",
                     "instanceId": f"clawmetry-{_d._uuid.uuid4().hex[:8]}",
                 },
                 "role": "operator",

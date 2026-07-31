@@ -4,10 +4,14 @@ name: C6 auto-heal (required-checks application)
 # Runs every 2 hours and once daily at 10:15am UTC.
 # Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
 #
+# On push to main: runs in informational mode (exit 0 regardless of state).
+# Reads current branch protection and reports status in the job summary,
+# but never exits 1 -- push CI must never be blocked by this workflow.
+#
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
 #   - if clawmetry/main checks already configured: exits 0 (C6 green)
-#   - if checks not yet configured: emits ::error:: annotation and exits 1
+#   - if checks not yet configured on schedule: emits ::error:: annotation and exits 1
 #     (red badge acts as a forcing signal until the admin acts)
 #
 # When E2E_ADMIN_PAT IS set:
@@ -46,6 +50,8 @@ name: C6 auto-heal (required-checks application)
 # Tracking: vivekchand/clawmetry#4029
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 */2 * * *'   # every 2 hours -- heals within 2h of E2E_ADMIN_PAT being set
     - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
@@ -271,8 +277,13 @@ print(json.dumps(sorted(set(a) | set(b))))
           BODY="<!-- c6-daily-ping --> **C6 daily ping ${TODAY}:** clawmetry/main branch protection does not yet require E2E checks. 6/7 criteria green. Fastest close: [Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches) > Required status checks > add \`E2E Gate (required)\` (60 s, no token needed). Or run \`bash scripts/close-c6.sh\` from a terminal."
           gh issue comment 4029 --repo vivekchand/clawmetry --body "$BODY"
 
+      # Exit 1 only on schedule (never on push -- this workflow is informational on push).
+      # Signals to the admin that E2E_ADMIN_PAT is needed to auto-heal C6.
       - name: Error: E2E_ADMIN_PAT not set
-        if: steps.pat-check.outputs.has_pat == 'false' && steps.read-state.outputs.checks_ok != 'true'
+        if: |
+          steps.pat-check.outputs.has_pat == 'false'
+          && steps.read-state.outputs.checks_ok != 'true'
+          && github.event_name != 'push'
         run: |
           echo "::error::E2E_ADMIN_PAT secret is not set -- C6 (required-status-checks) cannot be applied automatically."
           echo ""

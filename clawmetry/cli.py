@@ -2905,13 +2905,17 @@ def _cmd_status(args) -> None:
             _oc_present = bool(_dash_det._detect_openclaw_install())
         except Exception:
             _oc_present = False
+        # One bullet style for every runtime — no runtime gets a logo (the
+        # 🦞/⚡ prefixes made OpenClaw/NemoClaw look privileged next to the
+        # plain-bullet family rows, and the emoji width broke column
+        # alignment; founder live-hit 2026-07-31).
         if _oc_present:
-            print("    🦞 OpenClaw            ✅ watching (local)  (free)")
+            print(f"    • {'OpenClaw':<18} ✅ watching (local)  (free)")
         try:
             from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
             _nemo = _NCA().detect()
             if _nemo.detected:
-                print("    ⚡ NemoClaw            ✅ watching (local)  (free)")
+                print(f"    • {'NemoClaw':<18} ✅ watching (local)  (free)")
         except Exception:
             pass
         for _r in _det:
@@ -3780,7 +3784,7 @@ def _cmd_proxy(args) -> None:
         config.save()
 
         print()
-        print(f"  {BOLD('🦞 ClawMetry Proxy')}")
+        print(f"  {BOLD('ClawMetry Proxy')}")
         print()
         print(f"  Listening on {CYAN(f'http://{config.host}:{config.port}')}")
         print()
@@ -3905,7 +3909,7 @@ def _cmd_proxy(args) -> None:
         print()
 
     else:
-        print(f"\n  {BOLD('🦞 ClawMetry Proxy')} — enforcement layer for LLM API calls")
+        print(f"\n  {BOLD('ClawMetry Proxy')}: enforcement layer for LLM API calls")
         print()
         print(f"  {BOLD('Commands:')}")
         print("    clawmetry proxy start    Start the proxy server")

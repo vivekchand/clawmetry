@@ -4460,7 +4460,16 @@ function _provenancePillHtml(meta, bodyHtml) {
       ? _channelDisplayName(prov)
       : (prov.charAt(0).toUpperCase() + prov.slice(1));
   }
-  var sender = meta.sender ? String(meta.sender) : '';
+  // meta.sender may be a BLOCK ({id, name, username, is_bot}) — Telegram's
+  // "Conversation info (untrusted metadata)" carries one. String() on it
+  // renders "[object Object]" in the pill (founder screenshot 2026-07-31);
+  // unwrap it the same way _extractChannelInfo does.
+  var senderVal = meta.sender;
+  if (senderVal && typeof senderVal === 'object') {
+    senderVal = senderVal.name || senderVal.username || senderVal.first_name
+      || senderVal.display_name || senderVal.id || '';
+  }
+  var sender = senderVal ? String(senderVal) : '';
   var ts = meta.timestamp;
   var tStr = '';
   if (ts) {
