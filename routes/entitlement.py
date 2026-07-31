@@ -8119,6 +8119,115 @@ def api_license_features():
         )
 
 
+@bp_entitlement.route("/api/license/has-feature")
+def api_license_has_feature():
+    """``GET /api/license/has-feature?feature=<id>`` -- boolean gate for
+    "does the installed key claim feature <X>?" UIs.
+
+    Predicate flavour of :func:`clawmetry.license.license_features` (and
+    its ``/api/license/features`` HTTP counterpart) for a paywall banner
+    / fleet-node column / operator entitlement-tile that wants a single
+    bit rather than the full list. Fills the same seat on the license
+    axis the sibling ``/api/license/is-tier`` / ``/api/license/is-subject``
+    / ``/api/license/is-state`` boolean endpoints occupy, so a caller can
+    hit the predicate without list-membership boilerplate ("fetch the
+    features list, normalise my query the same way the accessor
+    normalises the token claims, then ``in``-check").
+
+    Query parameters:
+      * ``feature`` (str, required) -- the feature id to test against.
+        Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.has_feature`. Missing / empty input
+        degrades to ``has_feature=false`` rather than a 4xx, matching
+        the surrounding endpoints' never-5xx / never-4xx posture.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "has_feature":      <bool>,
+          "feature":          <str>,          # normalised echo of the query
+          "requested_feature":<str>,          # alias for the normalised echo
+          "features":         [<id>, ...] | null,
+          "has_license":      <bool>,         # a license file is on disk
+          "valid":            <bool>          # signature-valid AND not expired
+        }
+
+    ``has_feature`` is ``True`` iff a license is installed, signature-valid,
+    NOT expired, and its normalised ``features`` claim contains the
+    normalised ``feature`` query. An expired Pro install returns
+    ``has_feature=false`` even for a feature the token itemises on
+    purpose -- the caller wants "am I entitled right now" not "was I ever
+    entitled", and the ``valid`` field carries the "signed but lapsed"
+    signal so a paywall UI can drive both banners off one URL.
+
+    The ``features`` / ``has_license`` / ``valid`` fields are layered on
+    top of the bool so a UI binding this endpoint can render "you're on
+    <X>" copy alongside the answer without a second call to
+    ``/api/license/features`` or ``/api/license/status``.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This endpoint answers *"does the KEY carry this feature
+    id?"*, not *"is this feature enforced right now?"*. For the
+    resolved feature set actually enforced by gates, read
+    ``/api/entitlement`` (which layers this claim on top of the
+    FREE-tier baseline). This endpoint surfaces the claim exactly as
+    written on the token so operator diagnostics can distinguish
+    "feature X unlocked because the key claims it" from "feature X
+    unlocked because the tier grants it by default".
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``has_feature=false``, ``features=null``,
+    ``has_license=false``, ``valid=false``), matching the never-crash
+    posture of the surrounding license endpoints.
+    """
+    raw = request.args.get("feature", "") or ""
+    try:
+        requested = str(raw).strip().lower()
+    except Exception:
+        requested = ""
+    try:
+        from clawmetry import license as _lic
+
+        feats = _lic.license_features()
+        try:
+            info = _lic.current_license_info()
+        except Exception as exc:
+            logger.debug(
+                "api_license_has_feature: info read failed: %s", exc
+            )
+            info = None
+        has_license = isinstance(info, dict)
+        valid = bool(has_license and info.get("valid"))
+        match = bool(
+            requested
+            and isinstance(feats, list)
+            and requested in feats
+        )
+        return jsonify(
+            {
+                "has_feature": match,
+                "feature": requested,
+                "requested_feature": requested,
+                "features": feats,
+                "has_license": has_license,
+                "valid": valid,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_license_has_feature: error: %s", exc)
+        return jsonify(
+            {
+                "has_feature": False,
+                "feature": requested,
+                "requested_feature": requested,
+                "features": None,
+                "has_license": False,
+                "valid": False,
+            }
+        )
+
+
 def _license_expiry_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two expiry endpoints
     both need (``days_left``, ``has_license``, ``expired``). Lives in the
