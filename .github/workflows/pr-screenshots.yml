@@ -237,14 +237,22 @@ jobs:
           [ -n "${HEAD_PID:-}" ] && kill "$HEAD_PID" 2>/dev/null || true
           [ -n "${OPENCLAW_GW_PID:-}" ] && kill "$OPENCLAW_GW_PID" 2>/dev/null || true
 
-      # -- 10. Publish PNGs to orphan pr-screenshots branch -------------------
-      # GITHUB_TOKEN is read-only for `pull_request` events from forks (GH
-      # security guardrail -- declared `permissions:` block does not lift
-      # this for forks). Gate publish + comment steps on same-repo PRs to
-      # avoid 403s. Fork PRs still get screenshots as workflow artifact
-      # (step 12 below). See #1552 (JaiCodes77 fork) for the failure that
-      # surfaced this. Follow-up: workflow_run split for fork PRs.
-      - name: Publish screenshots to pr-screenshots branch
+      # -- 10. Publish PNGs to a per-PR branch --------------------------------
+      # Each PR gets its own branch (pr-screenshots-pr-<N>) so there is no
+      # shared-tip race and no fetch is needed before pushing (issue #4326:
+      # the old shared pr-screenshots branch caused 6-7 min fetches per
+      # attempt, exhausting the 20-min timeout before the graceful exit).
+      # Force-push replaces the previous run for the same PR atomically.
+      # Fork PRs still get screenshots as a workflow artifact (step 12 below);
+      # the publish step is gated on same-repo PRs because GITHUB_TOKEN is
+      # read-only for forks. See #1552 (JaiCodes77 fork) for the original
+      # fork guardrail.
+      - name: Set per-PR screenshots branch name
+        if: always()
+        run: |
+          echo "PR_SCREENSHOTS_BRANCH=pr-screenshots-pr-${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+
+      - name: Publish screenshots to per-PR branch
         if: ${{ always() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -252,62 +260,39 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # Publishing is best-effort: screenshots are also uploaded as a
-          # workflow artifact (step 12), so a push race must NEVER fail this
-          # job. We deliberately do not `set -e` here -- every git step is
-          # checked explicitly and any unrecoverable trouble degrades to the
-          # artifact fallback with `exit 0`.
+          # workflow artifact (step 12). No `set -e` -- any trouble exits 0.
           if [ ! -f "${GITHUB_WORKSPACE}/screenshots/manifest.json" ]; then
             echo "no manifest.json -- skipping publish"
             exit 0
           fi
           SHORT_SHA="${HEAD_SHA:0:12}"
-          DEST_DIR="pr/${PR_NUMBER}/${SHORT_SHA}"
+          BRANCH="${PR_SCREENSHOTS_BRANCH:-pr-screenshots-pr-${PR_NUMBER}}"
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          # Stage our PNGs once in a holding dir so we can replay them onto a
-          # freshly-fetched tip on every attempt.
-          PAYLOAD="$(mktemp -d)"
-          mkdir -p "${PAYLOAD}/${DEST_DIR}"
-          cp "${GITHUB_WORKSPACE}/screenshots"/*.png "${PAYLOAD}/${DEST_DIR}/" 2>/dev/null || true
-          cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "${PAYLOAD}/${DEST_DIR}/manifest.json"
-
-          # Concurrent PR builds race to push to the shared pr-screenshots ref.
-          # Each PR writes to its own pr/<N>/<sha>/ subdir, so layering our
-          # files onto the latest tip is always conflict-free. Re-init a clean
-          # checkout each attempt at a CONSISTENT --depth=1 -- mixing fetch
-          # depths on one shallow repo triggers "fatal: shallow file has
-          # changed since we read it", which is what broke the old rebase loop.
-          for attempt in 1 2 3 4 5 6; do
-            PUB_DIR="$(mktemp -d)"
-            cd "$PUB_DIR"
-            git init -q -b pr-screenshots
-            git config user.email "visual-diff-bot@users.noreply.github.com"
-            git config user.name  "visual-diff-bot"
-            if git ls-remote --exit-code --heads "$REMOTE" pr-screenshots >/dev/null 2>&1; then
-              if ! git fetch --depth=1 "$REMOTE" pr-screenshots; then
-                echo "fetch of remote tip failed (attempt ${attempt}/6)"
-                sleep $(( attempt * 3 + RANDOM % 4 )); continue
-              fi
-              git reset --hard FETCH_HEAD >/dev/null 2>&1
-            fi
-            # Lay our per-PR subdir on top of whatever the current tip is.
-            cp -R "${PAYLOAD}/." .
-            git add -A
-            git commit -q -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || {
-              echo "nothing new to publish"; exit 0; }
-            if git push "$REMOTE" "HEAD:pr-screenshots" 2>push.err; then
-              echo "pushed pr-screenshots on attempt ${attempt}"
+          # Per-PR branch: no concurrent writers, no need to fetch the tip.
+          # Start from an empty repo and force-push the new branch each run.
+          PUB_DIR="$(mktemp -d)"
+          cd "$PUB_DIR"
+          git init -q -b "$BRANCH"
+          git config user.email "visual-diff-bot@users.noreply.github.com"
+          git config user.name  "visual-diff-bot"
+          mkdir -p "${SHORT_SHA}"
+          cp "${GITHUB_WORKSPACE}/screenshots"/*.png "${SHORT_SHA}/" 2>/dev/null || true
+          cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "${SHORT_SHA}/manifest.json"
+          git add -A
+          git commit -q -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || {
+            echo "nothing new to publish"; exit 0; }
+          # Retry once for transient network failures only (no fetch needed).
+          for attempt in 1 2; do
+            if git push "$REMOTE" "HEAD:refs/heads/${BRANCH}" --force 2>push.err; then
+              echo "pushed ${BRANCH} on attempt ${attempt}"
               exit 0
             fi
             cat push.err
-            if ! grep -qE "rejected|non-fast-forward|fetch first" push.err; then
-              echo "::warning::pr-screenshots push failed for a non-race reason; screenshots are available as a workflow artifact"
-              exit 0
-            fi
-            echo "race lost (attempt ${attempt}/6) -- re-fetching tip and retrying"
-            sleep $(( attempt * 3 + RANDOM % 4 ))
+            echo "push failed (attempt ${attempt}/2) -- retrying in 5s"
+            sleep 5
           done
-          echo "::warning::pr-screenshots push lost the race after 6 attempts; screenshots are still available as a workflow artifact"
+          echo "::warning::pr-screenshots push failed after 2 attempts; screenshots available as workflow artifact"
           exit 0
 
       # -- 11. Render and post the comment ------------------------------------
@@ -319,6 +304,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OUT_DIR: "${{ github.workspace }}/screenshots"
           ALWAYS_POST: "1"
+          PR_SCREENSHOTS_BRANCH: ${{ env.PR_SCREENSHOTS_BRANCH }}
         run: |
           if [ ! -f "${OUT_DIR}/manifest.json" ]; then
             echo "## Visual diff" > /tmp/visual-diff-body.md

@@ -20,10 +20,18 @@ jobs:
 
       - name: Get OSS version
         id: oss_version
+        # Source of truth is the LATEST PUBLISHED PyPI version, not the
+        # checkout's __version__: release-on-merge publishes the bump to
+        # PyPI without committing it back to dashboard.py, so the file is
+        # permanently one-or-more releases stale. Reading it here was the
+        # root cause of the 2026-07-31 stale-pin rollbacks (with the
+        # no-downgrade guard below, a stale source would instead mean the
+        # pin never advances at all). The Dockerfile installs from PyPI,
+        # so the published version is exactly what a pin means.
         run: |
-          VERSION=$(python3 -c "import re; m=re.search(r'__version__ = \"([^\"]+)\"', open('dashboard.py').read()); print(m.group(1))")
+          VERSION=$(curl -fsSL https://pypi.org/pypi/clawmetry/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "OSS version: $VERSION"
+          echo "Latest published OSS version: $VERSION"
 
       # The cloud Dockerfile does `pip install clawmetry==<version>`, and the
       # cloud PR's CI also installs it to audit routes. On a release commit this
