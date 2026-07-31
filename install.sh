@@ -306,10 +306,25 @@ fi
 mkdir -p "$BIN_DIR" 2>/dev/null || $USE_SUDO mkdir -p "$BIN_DIR"
 $USE_SUDO ln -sf "$INSTALL_DIR/bin/clawmetry" "$BIN_DIR/clawmetry"
 
-CLAWMETRY_BIN="$BIN_DIR/clawmetry"
-# -I (isolated) keeps CWD off sys.path — run from a source checkout, the
-# repo's stale egg-info otherwise shadows the venv and misreports the version.
-CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -I -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
+# Purge pip's interrupted-upgrade leftovers (site-packages/~lawmetry, ~outes,
+# …). A kill mid-upgrade (our own stray-daemon pkill can be the killer) strands
+# these renamed dirs; importlib.metadata then reads the STALE dist-info and the
+# banner below lies about the version (founder saw "0.12.552 installed" on a
+# 0.12.597 machine, 2026-07-30), and entry-point resolution can break.
+find "$INSTALL_DIR"/lib/python*/site-packages -maxdepth 1 -name '~*' -exec $USE_SUDO rm -rf {} + 2>/dev/null || true
+
+# Prefer the venv binary directly: the $BIN_DIR symlink can be missing for a
+# beat mid-upgrade (console-script blink), which crashed onboard with
+# "No such file or directory" (founder, 2026-07-30).
+if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then
+  CLAWMETRY_BIN="$INSTALL_DIR/bin/clawmetry"
+else
+  CLAWMETRY_BIN="$BIN_DIR/clawmetry"
+fi
+# The console script is authoritative for the banner; importlib fallback keeps
+# -I isolation (CWD off sys.path) for source-checkout runs.
+CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
+[ -n "$CLAWMETRY_VERSION" ] || CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -I -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
 
 # ── Restart launchd jobs (macOS) ─────────────────────────────────────────────
 # After a venv reinstall, the dashboard/sync daemons launched at boot are
