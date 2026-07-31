@@ -5815,10 +5815,11 @@ def main() -> None:
     os.environ["CLAWMETRY_ROLE"] = "dashboard"
     from dashboard import main as dashboard_main
 
-    # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
-    # for the privacy contract. Fires on a daemon thread so a network
-    # failure can't slow CLI startup; honours CLAWMETRY_NO_TELEMETRY=1
-    # and ~/.clawmetry/notelemetry.
+    # Anonymous, opt-out install-lifecycle ping (install once ever, update
+    # once per new version). See clawmetry/telemetry.py for the privacy
+    # contract. Fires on a daemon thread so a network failure can't slow
+    # CLI startup; honours CLAWMETRY_NO_TELEMETRY=1 and
+    # ~/.clawmetry/notelemetry.
     try:
         from clawmetry import telemetry as _telemetry
         try:

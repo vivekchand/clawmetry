@@ -1,10 +1,12 @@
-"""clawmetry/telemetry.py — anonymous, opt-out, first-run install ping.
+"""clawmetry/telemetry.py — anonymous, opt-out, install-lifecycle pings.
 
-What we send (one POST, max once per install):
+What we send (one POST per lifecycle event — ``install`` once ever,
+``update`` at most once per new version, ``onboarded`` once per explicit
+onboarding choice):
 
   {
     "install_id":  "<random uuid4 stored in ~/.clawmetry/install_id>",
-    "event":       "first_run",
+    "event":       "install" | "update" | "onboarded",
     "version":     "0.12.167",
     "os":          "Darwin",       # platform.system()
     "os_version":  "25.3.0",       # platform.release()
@@ -12,6 +14,8 @@ What we send (one POST, max once per install):
     "agent":       "openclaw" | "nemoclaw" | "hermes" | "none",
     "is_ci":       true / false,
     "ci_provider": "github_actions" | "gitlab_ci" | …  (only if is_ci)
+    "onboarding_state": "managed" | "selfhost_license" | "selfhost_trial"
+                                   (only on event="onboarded")
   }
 
 What we DO NOT send: hostname, username, IP (cloud derives country from
@@ -29,8 +33,10 @@ network failure, DNS hijack, or the cloud being down NEVER affects
 
 Why first-run instead of pip-install: PyPI removed install hooks years
 ago for supply-chain safety, so ``pip install clawmetry`` cannot phone
-home directly. We instead fire on first ``clawmetry`` CLI invocation,
-gated by ``~/.clawmetry/install_id`` so subsequent runs are silent.
+home directly. We instead fire on ``clawmetry`` CLI / daemon startup,
+deduped through ``~/.clawmetry/telemetry_state.json`` (the last version
+we reported): a restart on an already-reported version sends nothing, a
+version change sends one ``update``.
 """
 from __future__ import annotations
 
@@ -51,6 +57,7 @@ TELEMETRY_TIMEOUT_SEC = 3
 CONFIG_DIR = Path.home() / ".clawmetry"
 INSTALL_ID_FILE = CONFIG_DIR / "install_id"
 OPTOUT_MARKER = CONFIG_DIR / "notelemetry"
+STATE_FILE = CONFIG_DIR / "telemetry_state.json"
 
 # CI env-var → provider name. Order matters when more than one is set
 # (some providers leave others' vars in for back-compat); pick the most
@@ -145,13 +152,13 @@ def _ensure_install_id() -> str | None:
         return None
 
 
-def _build_payload(version: str) -> dict:
+def _build_payload(version: str, event: str = "install", extra: dict | None = None) -> dict:
     """Assemble the JSON body. Pure function — no I/O — so tests can
     stub the small helpers and assert the shape independently."""
     is_ci, ci_provider = _detect_ci()
-    return {
+    payload = {
         "install_id":  _ensure_install_id() or "",
-        "event":       "first_run",
+        "event":       event,
         "version":     version,
         "os":          platform.system() or "unknown",
         "os_version":  platform.release() or "",
@@ -160,6 +167,9 @@ def _build_payload(version: str) -> dict:
         "is_ci":       is_ci,
         "ci_provider": ci_provider,
     }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def _post(payload: dict, url: str) -> None:
@@ -180,6 +190,64 @@ def _post(payload: dict, url: str) -> None:
             r.read()  # drain so the connection releases cleanly
     except Exception as e:
         log.debug("telemetry: post failed: %s", e)
+
+
+def _read_state() -> dict:
+    """Lifecycle state: {install_id, first_version, last_version,
+    first_ts, last_ts}. Empty dict when absent/corrupt — never raises."""
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_state(state: dict) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except Exception as e:
+        log.debug("telemetry: cannot persist state: %s", e)
+
+
+def _derive_event(install_id: str, version: str) -> str | None:
+    """What (if anything) to report for this startup.
+
+    - state file says we already reported this version  → nothing
+    - state file has a different version                → "update"
+    - no state file, but the legacy ``.pinged`` marker  → "update"
+      (an existing install that just upgraded onto the first version
+      that ships lifecycle state — its first_run row is already in the
+      cloud, so "install" would double-count it)
+    - nothing on disk at all                            → "install"
+    """
+    state = _read_state()
+    last = state.get("last_version")
+    if last == version:
+        return None
+    if last:
+        return "update"
+    if _has_pinged_this_install(install_id):
+        return "update"
+    return "install"
+
+
+def _record_reported(install_id: str, version: str, event: str) -> None:
+    """Persist that ``version`` has been reported, after a post attempt.
+    Also writes the legacy ``.pinged`` marker so a downgrade to an older
+    clawmetry (which only knows the marker) stays silent."""
+    state = _read_state()
+    now = int(time.time())
+    if not state.get("first_version"):
+        state["first_version"] = version
+        state["first_ts"] = now
+    state["install_id"] = install_id
+    state["last_version"] = version
+    state["last_ts"] = now
+    state["last_event"] = event
+    _write_state(state)
+    _mark_pinged(install_id)
 
 
 def _has_pinged_this_install(install_id: str) -> bool:
@@ -211,16 +279,35 @@ def _send_in_background(version: str) -> None:
     try:
         if _is_optout():
             return
-        payload = _build_payload(version)
-        if not payload.get("install_id"):
+        install_id = _ensure_install_id()
+        if not install_id:
             return
-        if _has_pinged_this_install(payload["install_id"]):
+        event = _derive_event(install_id, version)
+        if event is None:
             return
+        payload = _build_payload(version, event=event)
         url = os.environ.get("CLAWMETRY_TELEMETRY_URL", TELEMETRY_URL_DEFAULT)
         _post(payload, url)
-        _mark_pinged(payload["install_id"])
+        _record_reported(install_id, version, event)
     except Exception as e:
         log.debug("telemetry: background failure: %s", e)
+
+
+def _send_event_in_background(event: str, version: str, extra: dict | None) -> None:
+    """Worker for explicit lifecycle events (e.g. ``onboarded``).
+    No version-dedup — the caller decides when the event happened; the
+    cloud's UNIQUE(install_id, event, version) still absorbs repeats."""
+    try:
+        if _is_optout():
+            return
+        install_id = _ensure_install_id()
+        if not install_id:
+            return
+        payload = _build_payload(version, event=event, extra=extra)
+        url = os.environ.get("CLAWMETRY_TELEMETRY_URL", TELEMETRY_URL_DEFAULT)
+        _post(payload, url)
+    except Exception as e:
+        log.debug("telemetry: event background failure: %s", e)
 
 
 def maybe_ping(version: str = "unknown") -> threading.Thread | None:
@@ -241,6 +328,23 @@ def maybe_ping(version: str = "unknown") -> threading.Thread | None:
         args=(version,),
         daemon=True,
         name="clawmetry-telemetry",
+    )
+    t.start()
+    return t
+
+
+def ping_event(event: str, version: str = "unknown",
+               extra: dict | None = None) -> threading.Thread | None:
+    """Fire one explicit lifecycle event (e.g. ``onboarded`` with
+    ``extra={"onboarding_state": "managed"}``). Same opt-out and
+    fire-and-forget contract as :func:`maybe_ping`."""
+    if _is_optout():
+        return None
+    t = threading.Thread(
+        target=_send_event_in_background,
+        args=(event, version, extra),
+        daemon=True,
+        name="clawmetry-telemetry-event",
     )
     t.start()
     return t

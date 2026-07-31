@@ -24,6 +24,7 @@ def telemetry(monkeypatch, tmp_path):
     monkeypatch.setattr(t, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(t, "INSTALL_ID_FILE", tmp_path / "install_id")
     monkeypatch.setattr(t, "OPTOUT_MARKER", tmp_path / "notelemetry")
+    monkeypatch.setattr(t, "STATE_FILE", tmp_path / "telemetry_state.json")
     # Strip any CI env vars the test runner might have set so detection
     # tests aren't poisoned by GitHub Actions itself.
     for k in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "TRAVIS",
@@ -110,7 +111,7 @@ def test_payload_shape(telemetry):
     # Required fields
     assert set(p) == {"install_id", "event", "version", "os", "os_version",
                       "python", "agent", "is_ci", "ci_provider"}
-    assert p["event"] == "first_run"
+    assert p["event"] == "install"
     assert p["version"] == "9.9.9"
     assert p["os"]  # platform.system() always returns something
     # PII NOT in payload
@@ -163,3 +164,79 @@ def test_payload_omits_ci_provider_when_not_ci(telemetry):
     p = telemetry._build_payload("0.0.0")
     if not p["is_ci"]:
         assert p["ci_provider"] is None
+
+
+# ---------------------------------------------------------------------------
+# Install-lifecycle state machine (install → silent → update)
+# ---------------------------------------------------------------------------
+
+def _run_send(telemetry, version):
+    """Run the background worker synchronously, capturing posted payloads."""
+    sent = []
+    with patch.object(telemetry, "_post", side_effect=lambda p, u: sent.append(p)):
+        telemetry._send_in_background(version)
+    return sent
+
+
+def test_fresh_install_sends_install_event(telemetry):
+    sent = _run_send(telemetry, "1.0.0")
+    assert [p["event"] for p in sent] == ["install"]
+    state = telemetry._read_state()
+    assert state["last_version"] == "1.0.0"
+    assert state["first_version"] == "1.0.0"
+
+
+def test_same_version_second_run_is_silent(telemetry):
+    _run_send(telemetry, "1.0.0")
+    sent = _run_send(telemetry, "1.0.0")
+    assert sent == []
+
+
+def test_version_change_sends_update(telemetry):
+    _run_send(telemetry, "1.0.0")
+    sent = _run_send(telemetry, "1.1.0")
+    assert [p["event"] for p in sent] == ["update"]
+    state = telemetry._read_state()
+    assert state["last_version"] == "1.1.0"
+    assert state["first_version"] == "1.0.0", "first_version must not move"
+
+
+def test_legacy_pinged_install_reports_update_not_install(telemetry):
+    """Pre-state installs (only the .pinged marker on disk) already have
+    a first_run row in the cloud — their next report must be an update,
+    never a second install."""
+    install_id = telemetry._ensure_install_id()
+    telemetry._mark_pinged(install_id)
+    sent = _run_send(telemetry, "2.0.0")
+    assert [p["event"] for p in sent] == ["update"]
+
+
+def test_corrupt_state_file_does_not_crash(telemetry):
+    telemetry.STATE_FILE.write_text("{not json!!", encoding="utf-8")
+    sent = _run_send(telemetry, "1.0.0")
+    assert [p["event"] for p in sent] == ["install"]
+
+
+def test_state_write_also_writes_legacy_marker(telemetry):
+    """Downgrade safety: an older clawmetry only knows the .pinged
+    marker; it must stay silent after this version has reported."""
+    _run_send(telemetry, "1.0.0")
+    install_id = telemetry._ensure_install_id()
+    assert telemetry._has_pinged_this_install(install_id) is True
+
+
+def test_ping_event_onboarded_payload(telemetry):
+    sent = []
+    with patch.object(telemetry, "_post", side_effect=lambda p, u: sent.append(p)):
+        telemetry._send_event_in_background(
+            "onboarded", "1.0.0", {"onboarding_state": "selfhost_trial"})
+    assert len(sent) == 1
+    assert sent[0]["event"] == "onboarded"
+    assert sent[0]["onboarding_state"] == "selfhost_trial"
+
+
+def test_ping_event_respects_optout(telemetry, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_NO_TELEMETRY", "1")
+    with patch("urllib.request.urlopen") as urlopen:
+        assert telemetry.ping_event("onboarded", "1.0.0") is None
+        urlopen.assert_not_called()
