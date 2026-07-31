@@ -180,6 +180,81 @@ def _windows_fix_text(issuer: str) -> str:
     ).format(issuer or "<unknown>", vendor_note)
 
 
+def check_installs(out=print) -> int:
+    """Census every clawmetry copy on this machine; warn about stale ones.
+
+    The auto-updater keeps ONE environment current: the daemon's
+    (``~/.clawmetry``). A duplicate copy elsewhere on PATH (an old
+    ``pip install --user``) never updates and, when it shadows the daemon's
+    binary, makes the whole node LOOK stale while the daemon is current.
+    Returns the number of warnings (informational; doctor's exit code stays
+    about connectivity). Never raises.
+    """
+    warnings = 0
+    try:
+        from clawmetry import installs as _inst
+
+        snap = _inst.installs_snapshot()
+        denv = snap.get("daemon_env") or {}
+        out("Installs on this machine:")
+        if denv.get("version"):
+            out("{0} daemon environment: {1} (v{2}, kept current by "
+                "auto-update)".format(PASS, denv.get("home"), denv.get("version")))
+        elif denv.get("present"):
+            out("{0} daemon environment: {1} (clawmetry package not found "
+                "inside it)".format(WARN, denv.get("home")))
+            warnings += 1
+        else:
+            out("{0} daemon environment: none at {1} (single-environment "
+                "install; auto-update runs in the daemon's own env)".format(
+                    PASS, denv.get("home")))
+
+        exes = _inst.path_executables()
+        dver = denv.get("version")
+        for i, exe in enumerate(exes):
+            ver = _inst.executable_version(exe)
+            shadows = " <- what a bare `clawmetry` runs" if i == 0 and len(exes) > 1 else ""
+            if ver and dver and _inst.version_gt(dver, ver):
+                warnings += 1
+                out("{0} PATH: {1} (v{2}, STALE){3}".format(WARN, exe, ver, shadows))
+                out("       This copy is a separate install the auto-updater "
+                    "never touches.")
+                out("       Fix: {0}".format(_pip_hint_for(exe)))
+            else:
+                out("{0} PATH: {1} (v{2}){3}".format(
+                    PASS, exe, ver or "unknown", shadows))
+        if not exes:
+            out("{0} PATH: no `clawmetry` executable found on PATH".format(WARN))
+            warnings += 1
+        out("")
+    except Exception as e:  # never let the census break connectivity checks
+        out("{0} install census skipped ({1})".format(WARN, e))
+        out("")
+    return warnings
+
+
+def _pip_hint_for(exe) -> str:
+    """The upgrade command for the environment that owns console script ``exe``.
+
+    Console scripts carry their interpreter in the shebang on POSIX; that
+    interpreter's pip is the one that can actually upgrade (or remove) the
+    copy. Falls back to a generic hint when unreadable (e.g. Windows .exe
+    launchers embed the interpreter instead).
+    """
+    try:
+        with open(exe, "rb") as fh:
+            first = fh.readline(200)
+        if first.startswith(b"#!"):
+            py = first[2:].strip().decode("utf-8", "replace")
+            if py:
+                return "{0} -m pip install -U clawmetry   (or remove it: " \
+                    "{0} -m pip uninstall clawmetry)".format(py)
+    except Exception:
+        pass
+    return "python3 -m pip install -U clawmetry (from the environment that " \
+        "owns {0})".format(exe)
+
+
 def run_doctor(host: str = None, port: int = 443, out=print) -> int:
     """Run all connectivity checks. Returns process exit code (0 = all pass)."""
     if not host:
@@ -204,6 +279,9 @@ def run_doctor(host: str = None, port: int = 443, out=print) -> int:
             out(WARN + " TLS verification is DISABLED (CLAWMETRY_TLS_NO_VERIFY /"
                 " tls_verify:false) — insecure, pilot use only")
     out("")
+
+    # ── 0. Install census (stale duplicate copies) ────────────────────────
+    check_installs(out)
 
     # ── 1. DNS ────────────────────────────────────────────────────────────
     try:

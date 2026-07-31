@@ -2708,6 +2708,24 @@ def _status_snapshot(args) -> dict:
     except Exception:
         pass
 
+    # Installs — this CLI copy vs the daemon environment the auto-updater
+    # keeps current. ``version`` (above) is THIS process's package version,
+    # which on a machine with a stale duplicate install (a pre-venv
+    # ``pip install --user`` shadowing ``~/.clawmetry/bin`` on PATH) is NOT
+    # the version the daemon runs — that mismatch read as "auto-update is
+    # broken" (founder live-hit 2026-07-31). ``daemon.installed_version`` is
+    # the on-disk truth for the daemon env; ``installs.stale_cli`` is the
+    # one-bit answer scripts can alert on.
+    try:
+        from clawmetry.installs import installs_snapshot as _installs_snap
+        _inst = _installs_snap()
+        snap["installs"] = _inst
+        _dver = (_inst.get("daemon_env") or {}).get("version")
+        if _dver and isinstance(snap.get("daemon"), dict):
+            snap["daemon"]["installed_version"] = _dver
+    except Exception:
+        snap["installs"] = None
+
     return snap
 
 
@@ -2738,6 +2756,21 @@ def _cmd_status(args) -> None:
         _cm_ver = ""
     if _cm_ver:
         print(f"  Version:     {_cm_ver}")
+    # Stale-duplicate guard: when this CLI is a separate copy that is OLDER
+    # than the daemon's auto-updated install, the version above is misleading
+    # (the node itself IS current). Say so, with the daemon's real version.
+    try:
+        from clawmetry.installs import installs_snapshot as _inst_snap, \
+            stale_warning_lines as _stale_lines
+        _inst = _inst_snap()
+        _dver = (_inst.get("daemon_env") or {}).get("version")
+        if _dver and _dver != _cm_ver:
+            print(f"  Daemon ver:  {_dver}  (auto-updated install at "
+                  f"{(_inst.get('daemon_env') or {}).get('home')})")
+        for _ln in _stale_lines(_inst):
+            print("  " + _ln)
+    except Exception:
+        pass
 
     # Config
     if CONFIG_FILE.exists():
@@ -5995,6 +6028,21 @@ def main() -> None:
     try:
         from clawmetry.net import configure_outbound_network
         configure_outbound_network(role="cli")
+    except Exception:
+        pass
+    # Stale-duplicate guard: the auto-updater keeps the DAEMON's environment
+    # (~/.clawmetry venv) current, not every stray pip copy on the machine.
+    # When this process is such a stray copy and it's older than the daemon
+    # install, every version this CLI prints is misleading — warn once, on
+    # stderr, with the exact upgrade command. Cheap (directory glob, no
+    # subprocess, no network); skipped for JSON output so wrapper scripts
+    # stay parseable on stdout AND quiet on stderr. CLAWMETRY_NO_STALE_WARN=1
+    # silences it. The hooks / agent-read fast paths above return before this
+    # line on purpose — they are latency-critical.
+    try:
+        if "--json" not in sys.argv:
+            from clawmetry.installs import maybe_warn_stale_cli
+            maybe_warn_stale_cli()
     except Exception:
         pass
     # Cloud-sync toggles — plain flags so a non-engineer can flip sync from
