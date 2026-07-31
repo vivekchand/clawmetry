@@ -15,8 +15,11 @@
       <div style="font-size:11px;color:var(--text-muted);line-height:1.5;">Scoring sends a <strong>redacted</strong> transcript to a judge LLM, which needs your own API key. Stored locally only (chmod 600), never synced to the cloud. Leave blank and Save to clear.</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <select id="eval-key-provider" onchange="loadEvalKeyStatus()" style="font-size:12px;padding:6px 8px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">
-          <option value="anthropic">Anthropic (claude-*)</option>
-          <option value="openai">OpenAI (gpt-*/o*)</option>
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI</option>
+          <option value="google">Google (Gemini)</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="custom">Custom (OpenAI-compatible)</option>
         </select>
         <input id="eval-key-input" type="password" autocomplete="off" placeholder="sk-ant-... / sk-..." style="flex:1;min-width:200px;font-family:monospace;font-size:12px;padding:6px 10px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">
         <button onclick="saveEvalKey()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Save key</button>

@@ -3607,41 +3607,147 @@ function _evalsLockedHtml() {
     t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
 }
 
+// The provider catalogue fetched from /api/evals/key — cached per page load so
+// the provider-change handler can fill in default models without a refetch.
+var _evalsKeyCfg = null;
+
 async function loadEvalsJudgeCard() {
   var el = document.getElementById('evals-judge-body');
   if (!el) return;
-  var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
-  var judge = data && data.judge;
+  var meta = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
+  var judge = meta && meta.judge;
   if (!judge) {
     el.innerHTML = '<span style="color:var(--text-muted);">' +
       t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
     return;
   }
+  var cfgResp = await fetch('/api/evals/key').catch(function(){return null;});
+  var cfg = (cfgResp && cfgResp.ok) ? await cfgResp.json().catch(function(){return null;}) : null;
+  _evalsKeyCfg = cfg;
+  var keyRejected = judge.key_present && judge.last_error === 'auth';
   var html = '';
   if (!judge.enabled) {
     html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
       t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+  } else if (keyRejected) {
+    html += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
+      t("evals.judge_key_rejected", null, "Your judge key was rejected by the provider. Re-add a valid key below.") + '</div>';
   } else if (judge.key_present) {
-    html += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">&#9679; ' +
+    html += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">● ' +
       t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
   } else {
-    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">&#9679; ' +
-      t("evals.judge_needs_key", null, "Waiting for a judge API key. Nothing is being scored yet.") + '</div>';
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">● ' +
+      t("evals.judge_needs_key", null, "Add an API key below to turn scoring on. Any provider works, not just Claude.") + '</div>';
   }
   html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;">' +
     t("evals.judge_how", null, "How it works: after a session finishes, a small model reads a redacted copy of the transcript and scores it 0 to 5 against your rubric. It runs on your machine, with your own API key, capped at 100 scores per hour. Your transcripts never go to ClawMetry servers.") +
     '</div>';
+  var provLabel = '';
+  if (cfg && cfg.providers && cfg.selection && cfg.providers[cfg.selection.provider]) {
+    provLabel = cfg.providers[cfg.selection.provider].label;
+  }
   html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;">';
-  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(judge.model || 'claude-haiku-4-5') + '</code></span>';
+  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(judge.model || '') + '</code>' +
+    (provLabel ? ' <span style="color:var(--text-muted);">' + t("evals.via", null, "via") + ' ' + escHtml(provLabel) + '</span>' : '') + '</span>';
   html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_key", null, "API key") + ':</span> ' +
-    (judge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
-                       : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
+    (keyRejected ? '<span style="color:#ef4444;font-weight:600;">' + t("evals.key_rejected", null, "rejected") + '</span>'
+      : judge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
+      : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
   html += '</div>';
-  if (!judge.key_present && judge.enabled) {
-    html += '<div style="margin-top:10px;"><button onclick="openEvalRubricModal()" style="background:#f59e0b;color:#1a1a1a;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;">' +
-      t("evals.add_key_cta", null, "Add a judge API key") + '</button></div>';
+  // The simple ask-for-a-key form: always shown when scoring cannot run, and
+  // reachable via a small "change" link when it can.
+  var showForm = judge.enabled && (!judge.key_present || keyRejected);
+  if (cfg && cfg.providers) {
+    if (showForm) {
+      html += _evalsKeyFormHtml(cfg);
+    } else if (judge.enabled) {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="#" onclick="var f=document.getElementById(\'evals-key-form\');if(f)f.style.display=f.style.display===\'none\'?\'\':\'none\';return false;" style="color:var(--text-secondary);font-weight:600;text-decoration:none;">' +
+        t("evals.change_judge", null, "Change judge model or key") + '</a></div>';
+      html += '<div id="evals-key-form-wrap" style="display:contents;">' + _evalsKeyFormHtml(cfg, true) + '</div>';
+    }
   }
   el.innerHTML = html;
+}
+
+// Build the inline provider/model/key form. hidden=true renders it collapsed
+// (behind the "change" link) for boxes where scoring is already healthy.
+function _evalsKeyFormHtml(cfg, hidden) {
+  var sel = (cfg.selection && cfg.selection.provider) || 'anthropic';
+  if (!cfg.providers[sel]) sel = Object.keys(cfg.providers)[0];
+  var html = '<div id="evals-key-form" style="' + (hidden ? 'display:none;' : '') +
+    'margin-top:12px;padding:12px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:10px;">';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+  html += '<select id="evals-key-provider" onchange="_evalsKeyProviderChanged()" style="font-size:12px;padding:7px 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  Object.keys(cfg.providers).forEach(function(pid) {
+    html += '<option value="' + escHtml(pid) + '"' + (pid === sel ? ' selected' : '') + '>' +
+      escHtml(cfg.providers[pid].label) + (cfg.present && cfg.present[pid] ? ' ✓' : '') + '</option>';
+  });
+  html += '</select>';
+  var model = (cfg.selection && cfg.selection.provider === sel && cfg.selection.model) || cfg.providers[sel].default_model;
+  html += '<input id="evals-key-model" type="text" value="' + escHtml(model) + '" title="' +
+    t("evals.model_title", null, "Judge model id — any model this provider serves") + '" style="width:190px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<input id="evals-key-input" type="password" autocomplete="off" placeholder="' + escHtml(cfg.providers[sel].key_hint) + '" style="flex:1;min-width:180px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<input id="evals-key-baseurl" type="text" placeholder="http://localhost:11434/v1" style="' +
+    (cfg.providers[sel].needs_base_url ? '' : 'display:none;') +
+    'width:210px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<button id="evals-key-save" onclick="evalsSaveJudgeKey()" style="background:#22c55e;color:#0a0a0a;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">' +
+    t("evals.save_verify", null, "Save & verify") + '</button>';
+  html += '</div>';
+  html += '<div id="evals-key-status" style="font-size:11px;margin-top:8px;min-height:14px;color:var(--text-muted);">' +
+    t("evals.key_note", null, "Verified with one tiny test call before saving, then stored only on this machine (never synced).") + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _evalsKeyProviderChanged() {
+  var cfg = _evalsKeyCfg;
+  var sel = document.getElementById('evals-key-provider');
+  if (!cfg || !cfg.providers || !sel) return;
+  var info = cfg.providers[sel.value];
+  if (!info) return;
+  var modelEl = document.getElementById('evals-key-model');
+  if (modelEl) {
+    modelEl.value = (cfg.selection && cfg.selection.provider === sel.value && cfg.selection.model) || info.default_model;
+  }
+  var keyEl = document.getElementById('evals-key-input');
+  if (keyEl) keyEl.placeholder = info.key_hint;
+  var baseEl = document.getElementById('evals-key-baseurl');
+  if (baseEl) baseEl.style.display = info.needs_base_url ? '' : 'none';
+}
+
+async function evalsSaveJudgeKey() {
+  var btn = document.getElementById('evals-key-save');
+  var status = document.getElementById('evals-key-status');
+  var provider = (document.getElementById('evals-key-provider') || {}).value;
+  var model = ((document.getElementById('evals-key-model') || {}).value || '').trim();
+  var apiKey = ((document.getElementById('evals-key-input') || {}).value || '').trim();
+  var baseUrl = ((document.getElementById('evals-key-baseurl') || {}).value || '').trim();
+  if (!provider) return;
+  if (btn) { btn.disabled = true; btn.textContent = t("evals.verifying", null, "Verifying…"); }
+  if (status) { status.style.color = 'var(--text-muted)'; status.textContent = t("evals.verifying_note", null, "Making one tiny test call to check the key works…"); }
+  try {
+    var r = await fetch('/api/evals/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: provider, api_key: apiKey, model: model, base_url: baseUrl }),
+    });
+    var data = await r.json().catch(function(){return {};});
+    if (r.ok && data.ok) {
+      if (status) {
+        status.style.color = '#22c55e';
+        status.textContent = t("evals.key_verified", null, "Key verified and saved. Scoring starts within a minute.");
+      }
+      setTimeout(function(){ loadEvalsJudgeCard(); loadEvaluators(); }, 1200);
+    } else {
+      if (status) {
+        status.style.color = '#ef4444';
+        status.textContent = t("evals.key_failed", null, "Not saved:") + ' ' + (data.error || ('HTTP ' + r.status));
+      }
+    }
+  } catch (e) {
+    if (status) { status.style.color = '#ef4444'; status.textContent = t("evals.key_failed", null, "Not saved:") + ' ' + e; }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = t("evals.save_verify", null, "Save & verify"); }
 }
 
 async function loadEvalsTabSummary() {

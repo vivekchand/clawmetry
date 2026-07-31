@@ -122,7 +122,7 @@ def _stub_eval_runner(monkeypatch):
     def judge_keys_present():
         return {"anthropic": False, "openai": False}
 
-    def save_judge_key(_provider, _api_key):
+    def save_judge_key(_provider, _api_key, base_url=None):
         return None
 
     def save_rubric_yaml(_text):
@@ -139,6 +139,18 @@ def _stub_eval_runner(monkeypatch):
         def score_session(self, _sid):
             return _Result()
 
+    stub._JUDGE_PROVIDERS = ("anthropic", "openai", "google", "openrouter", "custom")
+    stub.JUDGE_PROVIDERS_INFO = {
+        p: {"label": p, "default_model": "m", "key_hint": "", "needs_base_url": p == "custom",
+            "env": ()}
+        for p in stub._JUDGE_PROVIDERS
+    }
+    stub.judge_provider_for = lambda rubric=None: "anthropic"
+    stub.judge_base_url = lambda: ""
+    stub.last_judge_status = lambda: {"ok": None, "error": None, "at": None,
+                                      "provider": None, "model": None}
+    stub.validate_judge_key = lambda provider, **kw: (True, "")
+    stub.set_judge_selection = lambda provider, model: None
     stub.is_enabled = is_enabled
     stub.get_rubric_yaml = get_rubric_yaml
     stub.judge_keys_present = judge_keys_present

@@ -76,6 +76,7 @@ RUBRIC_PATH = Path(
 # define the requested rubric. Codified inline so a fresh install scores
 # sessions out of the box without any user setup.
 DEFAULT_RUBRIC: dict[str, Any] = {
+    "judge_provider": "anthropic",
     "judge_model": "claude-haiku-4-5",
     "prompt": (
         "You're evaluating an AI agent's response. Score 0-5:\n"
@@ -594,11 +595,15 @@ class EvalRunner:
         caller = judge_call or _call_judge
         try:
             reply = caller(judge_model, prompt, timeout=JUDGE_TIMEOUT_SECS)
+            _record_judge_status(True, None, judge_provider_for(rubric), judge_model)
         except Exception as e:
             # Judge failure is best-effort — surface as a non-skipped
             # NULL score so the scheduler will pick it up again later,
             # and so /api/evals/recent can show "judge unavailable".
             log.warning("evals: judge call failed for %s: %s", session_id, e)
+            _record_judge_status(
+                False, _classify_judge_error(e), judge_provider_for(rubric), judge_model,
+            )
             return EvalResult(
                 session_id=session_id,
                 score=None,
@@ -679,12 +684,73 @@ def _redact_for_judge(text: str) -> str:
 # a key saved from the UI takes effect on the next scheduler tick without a
 # daemon restart.
 _EVAL_KEYS_PATH = os.path.expanduser("~/.clawmetry/eval_keys.json")
-_JUDGE_PROVIDERS = ("anthropic", "openai")
+
+# The judge works with various providers, not just Claude. Each entry drives
+# the UI (label, default model, key hint) and the wire call (env var, auth
+# style). "custom" is any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM,
+# LiteLLM, ...) reached via a user-supplied base URL.
+JUDGE_PROVIDERS_INFO: dict[str, dict[str, Any]] = {
+    "anthropic": {
+        "label": "Anthropic (Claude)",
+        "env": ("ANTHROPIC_API_KEY",),
+        "default_model": "claude-haiku-4-5",
+        "key_hint": "sk-ant-...",
+        "needs_base_url": False,
+    },
+    "openai": {
+        "label": "OpenAI",
+        "env": ("OPENAI_API_KEY",),
+        "default_model": "gpt-5-mini",
+        "key_hint": "sk-...",
+        "needs_base_url": False,
+    },
+    "google": {
+        "label": "Google (Gemini)",
+        "env": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        "default_model": "gemini-2.5-flash",
+        "key_hint": "AIza...",
+        "needs_base_url": False,
+    },
+    "openrouter": {
+        "label": "OpenRouter (any model)",
+        "env": ("OPENROUTER_API_KEY",),
+        "default_model": "google/gemini-2.5-flash",
+        "key_hint": "sk-or-...",
+        "needs_base_url": False,
+    },
+    "custom": {
+        "label": "Custom (OpenAI-compatible, e.g. Ollama)",
+        "env": ("CLAWMETRY_JUDGE_API_KEY",),
+        "default_model": "llama3.1",
+        "key_hint": "optional for local servers",
+        "needs_base_url": True,
+    },
+}
+
+_JUDGE_PROVIDERS = tuple(JUDGE_PROVIDERS_INFO.keys())
 
 
 def _provider_for_model(model: str) -> str:
+    """Best-effort provider inference from a model id — the fallback when the
+    rubric doesn't carry an explicit ``judge_provider``."""
     m = (model or "").lower()
-    return "openai" if m.startswith(("gpt-", "o1-", "o3-", "o4-")) else "anthropic"
+    if m.startswith(("gpt-", "o1-", "o3-", "o4-")):
+        return "openai"
+    if m.startswith("gemini"):
+        return "google"
+    if "/" in m:
+        return "openrouter"
+    return "anthropic"
+
+
+def judge_provider_for(rubric: dict[str, Any] | None = None) -> str:
+    """The provider the judge will actually use: the rubric's explicit
+    ``judge_provider`` when valid, else inferred from the judge model id."""
+    r = rubric if rubric is not None else load_rubric("default")
+    prov = str(r.get("judge_provider") or "").strip().lower()
+    if prov in _JUDGE_PROVIDERS:
+        return prov
+    return _provider_for_model(str(r.get("judge_model") or DEFAULT_RUBRIC["judge_model"]))
 
 
 def _stored_judge_key(provider: str) -> str:
@@ -699,17 +765,53 @@ def _stored_judge_key(provider: str) -> str:
         return ""
 
 
+def _judge_api_key_for_provider(provider: str) -> str:
+    """The API key for ``provider``: env var(s) first (operator intent / CI),
+    then the UI-saved local key. Empty string when neither is set."""
+    info = JUDGE_PROVIDERS_INFO.get(provider) or {}
+    for env_name in info.get("env", ()):
+        v = os.environ.get(env_name, "").strip()
+        if v:
+            return v
+    return _stored_judge_key(provider)
+
+
 def _judge_api_key(model: str) -> str:
-    """The API key to use for this judge model: env var first (operator intent
-    / CI), then the UI-saved local key. Empty string when neither is set."""
-    provider = _provider_for_model(model)
-    env_name = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
-    return os.environ.get(env_name, "").strip() or _stored_judge_key(provider)
+    """Back-compat shape (clawmetry-pro calls this with a model id): resolve
+    the provider from the default rubric (explicit judge_provider wins, else
+    inferred from the model string), then look up its key."""
+    try:
+        rubric = load_rubric("default")
+    except Exception:
+        rubric = None
+    if rubric and str(rubric.get("judge_model") or "") != (model or ""):
+        # Caller asked about a model that is not the configured judge —
+        # infer its provider from the id alone.
+        provider = _provider_for_model(model)
+    else:
+        provider = judge_provider_for(rubric)
+    return _judge_api_key_for_provider(provider)
 
 
-def save_judge_key(provider: str, api_key: str) -> None:
+def judge_base_url() -> str:
+    """Base URL for the ``custom`` provider (OpenAI-compatible server).
+    Env wins; else the UI-saved value; empty when unset."""
+    env = os.environ.get("CLAWMETRY_JUDGE_BASE_URL", "").strip()
+    if env:
+        return env.rstrip("/")
+    try:
+        with open(_EVAL_KEYS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return str((data or {}).get("custom_base_url", "") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def save_judge_key(provider: str, api_key: str, *, base_url: str | None = None) -> None:
     """Persist a judge API key locally (chmod 600). Used by the dashboard so a
-    user can enable evals without setting an env var. ``api_key=""`` clears it."""
+    user can enable evals without setting an env var. ``api_key=""`` clears it.
+    For the ``custom`` provider, ``base_url`` stores the OpenAI-compatible
+    endpoint alongside the (possibly empty — local servers) key."""
     import json as _json
     provider = (provider or "").strip().lower()
     if provider not in _JUDGE_PROVIDERS:
@@ -726,6 +828,12 @@ def save_judge_key(provider: str, api_key: str) -> None:
         data[provider] = key
     else:
         data.pop(provider, None)
+    if base_url is not None:
+        url = base_url.strip().rstrip("/")
+        if url:
+            data["custom_base_url"] = url
+        else:
+            data.pop("custom_base_url", None)
     # Write 0600 so the key is not world-readable.
     fd = os.open(_EVAL_KEYS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -738,18 +846,34 @@ def save_judge_key(provider: str, api_key: str) -> None:
 
 def judge_keys_present() -> dict:
     """Presence map for the UI — NEVER returns the key values themselves. Each
-    provider is True if a key is available via env OR the local store."""
+    provider is True if a key is available via env OR the local store. The
+    ``custom`` provider counts as configured when a base URL is set, even with
+    no key (local servers like Ollama need none)."""
     out = {}
     for prov in _JUDGE_PROVIDERS:
-        env_name = "OPENAI_API_KEY" if prov == "openai" else "ANTHROPIC_API_KEY"
-        out[prov] = bool(os.environ.get(env_name, "").strip() or _stored_judge_key(prov))
+        out[prov] = bool(_judge_api_key_for_provider(prov))
+    if not out.get("custom") and judge_base_url():
+        out["custom"] = True
     return out
 
 
 def _judge_key_present(model: str) -> bool:
-    """True if an API key for this judge model's provider is available (env or
-    the UI-saved local store)."""
-    return bool(_judge_api_key(model))
+    """True if credentials to judge with ``model`` are available (env or the
+    UI-saved local store). Provider resolution mirrors ``_call_judge``: the
+    rubric's explicit provider when asking about the configured judge model,
+    else inferred from the model id. ``custom`` needs only a base URL — a key
+    is optional (local servers)."""
+    try:
+        rubric = load_rubric("default")
+    except Exception:
+        rubric = None
+    if rubric and str(rubric.get("judge_model") or "") == (model or ""):
+        provider = judge_provider_for(rubric)
+    else:
+        provider = _provider_for_model(model)
+    if provider == "custom":
+        return bool(judge_base_url())
+    return bool(_judge_api_key_for_provider(provider))
 
 
 def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
@@ -786,66 +910,244 @@ def _judge_http_post_json(url: str, payload: dict, headers: dict, timeout: float
         return _json.loads(resp.read() or b"{}")
 
 
-def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
-    """Call the Anthropic Messages API with the user's existing API key.
+def _judge_request(
+    provider: str,
+    model: str,
+    prompt: str,
+    *,
+    api_key: str,
+    base_url: str = "",
+    timeout: float = 30.0,
+    max_tokens: int = 200,
+) -> str:
+    """One provider-routed judge call. Returns the reply text; raises on any
+    HTTP / network / JSON failure — callers catch and degrade.
 
-    Routed through ``httpx`` so ``clawmetry/interceptor.py``'s cost
-    tracking picks up the call — eval spend shows up in /api/usage like
-    any other LLM call.
-
-    Returns the judge's reply text. Raises on any HTTP / network /
-    JSON-decoding failure — the caller catches and degrades gracefully.
-
-    Provider routing follows the model prefix:
-      * ``claude-*``  → api.anthropic.com (ANTHROPIC_API_KEY)
-      * ``gpt-*``, ``o1-*``, ``o3-*`` → api.openai.com (OPENAI_API_KEY)
-    Anything else falls back to Anthropic — Phase 1 is Haiku-by-default,
-    so the long tail of providers can wait for Phase 2.
+    Wire shapes (raw HTTP by design — deps stay flask+waitress+cryptography):
+      * anthropic  → api.anthropic.com/v1/messages (x-api-key)
+      * openai     → api.openai.com/v1/chat/completions (Bearer,
+                     max_completion_tokens — required by current OpenAI models)
+      * google     → generativelanguage.googleapis.com v1beta generateContent
+                     (x-goog-api-key)
+      * openrouter → openrouter.ai/api/v1/chat/completions (Bearer)
+      * custom     → {base_url}/chat/completions (Bearer optional — any
+                     OpenAI-compatible server: Ollama, LM Studio, vLLM, ...)
     """
-    model_lower = model.lower()
-    if model_lower.startswith(("gpt-", "o1-", "o3-", "o4-")):
-        api_key = _judge_api_key(model)  # env var, else UI-saved local key
+    if provider == "anthropic":
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not set")
+            raise RuntimeError("no Anthropic judge key configured (set ANTHROPIC_API_KEY or add a key in the dashboard)")
+        data = _judge_http_post_json(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            timeout,
+        )
+        parts = [
+            blk["text"] for blk in (data.get("content") or [])
+            if isinstance(blk, dict) and isinstance(blk.get("text"), str)
+        ]
+        return "\n".join(parts)
+
+    if provider == "google":
+        if not api_key:
+            raise RuntimeError("no Google judge key configured (set GEMINI_API_KEY or add a key in the dashboard)")
+        data = _judge_http_post_json(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent",
+            {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"maxOutputTokens": max_tokens},
+            },
+            {"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            timeout,
+        )
+        cands = data.get("candidates") or []
+        if not cands:
+            return ""
+        parts = [
+            p.get("text", "")
+            for p in ((cands[0].get("content") or {}).get("parts") or [])
+            if isinstance(p, dict)
+        ]
+        return "\n".join(x for x in parts if x)
+
+    # OpenAI-compatible chat/completions: openai, openrouter, custom.
+    if provider == "openai":
         url = "https://api.openai.com/v1/chat/completions"
-        payload = {
+        if not api_key:
+            raise RuntimeError("no OpenAI judge key configured (set OPENAI_API_KEY or add a key in the dashboard)")
+        # Current OpenAI models reject max_tokens; older compatible servers
+        # reject max_completion_tokens — so the real OpenAI endpoint gets the
+        # new field and everything else keeps the widely-supported one.
+        limit_field = "max_completion_tokens"
+    elif provider == "openrouter":
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        if not api_key:
+            raise RuntimeError("no OpenRouter judge key configured (set OPENROUTER_API_KEY or add a key in the dashboard)")
+        limit_field = "max_tokens"
+    elif provider == "custom":
+        base = (base_url or judge_base_url()).rstrip("/")
+        if not base:
+            raise RuntimeError("no base URL configured for the custom judge provider")
+        url = f"{base}/chat/completions"
+        limit_field = "max_tokens"
+    else:
+        raise RuntimeError(f"unknown judge provider {provider!r}")
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    data = _judge_http_post_json(
+        url,
+        {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
-            "temperature": 0,
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        data = _judge_http_post_json(url, payload, headers, timeout)
-        choices = data.get("choices") or []
-        if not choices:
-            return ""
-        return choices[0].get("message", {}).get("content", "") or ""
+            limit_field: max_tokens,
+        },
+        headers,
+        timeout,
+    )
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    return choices[0].get("message", {}).get("content", "") or ""
 
-    # Default: Anthropic (Claude Haiku/Sonnet/Opus).
-    api_key = _judge_api_key(model)  # env var, else UI-saved local key
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-    url = "https://api.anthropic.com/v1/messages"
-    payload = {
-        "model": model,
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-    data = _judge_http_post_json(url, payload, headers, timeout)
-    blocks = data.get("content") or []
-    parts: list[str] = []
-    for blk in blocks:
-        if isinstance(blk, dict) and isinstance(blk.get("text"), str):
-            parts.append(blk["text"])
-    return "\n".join(parts)
+
+def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
+    """Call the configured judge provider with the user's own key.
+
+    Back-compat entry point (clawmetry-pro's faithfulness evaluator calls
+    this with ``(model, prompt, timeout=...)``). Provider comes from the
+    rubric's ``judge_provider`` when set, else is inferred from the model id.
+    """
+    rubric = load_rubric("default")
+    if str(rubric.get("judge_model") or "") == (model or ""):
+        provider = judge_provider_for(rubric)
+    else:
+        provider = _provider_for_model(model)
+    return _judge_request(
+        provider,
+        model,
+        prompt,
+        api_key=_judge_api_key_for_provider(provider),
+        timeout=timeout,
+    )
+
+
+# ── Judge health: validate-on-save + last-call status (issue #4313) ───────────
+
+# The most recent judge call outcome, so the UI can say honestly whether the
+# configured key actually works instead of "Scoring is ON" over silent 401s.
+_LAST_JUDGE_STATUS: dict[str, Any] = {"ok": None, "error": None, "at": None,
+                                      "provider": None, "model": None}
+_LAST_JUDGE_LOCK = threading.Lock()
+
+
+def _record_judge_status(ok: bool, error: str | None, provider: str, model: str) -> None:
+    with _LAST_JUDGE_LOCK:
+        _LAST_JUDGE_STATUS.update({
+            "ok": ok,
+            "error": (error or None) if not ok else None,
+            "at": int(time.time() * 1000),
+            "provider": provider,
+            "model": model,
+        })
+
+
+def last_judge_status() -> dict[str, Any]:
+    """A copy of the most recent judge call outcome (never key material)."""
+    with _LAST_JUDGE_LOCK:
+        return dict(_LAST_JUDGE_STATUS)
+
+
+def _classify_judge_error(exc: Exception) -> str:
+    """Small human-readable classification for a judge failure. 'auth' means
+    the key was rejected — the UI turns that into a re-add-your-key state."""
+    text = str(exc)
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    if code is None:
+        m = re.search(r"\b(401|403|404|429)\b", text)
+        code = int(m.group(1)) if m else None
+    if code in (401, 403):
+        return "auth"
+    if code == 404:
+        return "model_not_found"
+    if code == 429:
+        return "rate_limited"
+    return "network"
+
+
+def validate_judge_key(
+    provider: str,
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> tuple[bool, str]:
+    """Fire a tiny real call ("Reply with exactly: OK", a few tokens) against
+    ``provider`` to prove the credentials work BEFORE they are saved. Returns
+    ``(ok, detail)`` — detail is a plain-language reason on failure. Costs a
+    fraction of a cent on hosted providers; nothing on local servers."""
+    provider = (provider or "").strip().lower()
+    if provider not in _JUDGE_PROVIDERS:
+        return False, f"unknown provider {provider!r}"
+    info = JUDGE_PROVIDERS_INFO[provider]
+    use_model = (model or "").strip() or str(info["default_model"])
+    key = api_key if api_key is not None else _judge_api_key_for_provider(provider)
+    try:
+        reply = _judge_request(
+            provider,
+            use_model,
+            "Reply with exactly: OK",
+            api_key=(key or "").strip(),
+            base_url=(base_url or "").strip(),
+            timeout=min(JUDGE_TIMEOUT_SECS, 20.0),
+            max_tokens=8,
+        )
+    except RuntimeError as e:
+        return False, str(e)
+    except Exception as e:
+        kind = _classify_judge_error(e)
+        if kind == "auth":
+            return False, "the provider rejected this key (unauthorized)"
+        if kind == "model_not_found":
+            return False, f"model {use_model!r} was not found at this provider"
+        if kind == "rate_limited":
+            return False, "the provider rate-limited the test call — try again shortly"
+        return False, f"could not reach the provider: {type(e).__name__}"
+    if not isinstance(reply, str):
+        return False, "unexpected reply shape from the provider"
+    return True, ""
+
+
+def set_judge_selection(provider: str, model: str) -> None:
+    """Persist the judge provider + model into the rubric YAML so the daemon
+    scheduler picks them up on its next tick. Rewrites only the two keys,
+    preserving the user's prompt and any other rubric fields."""
+    provider = (provider or "").strip().lower()
+    model = (model or "").strip()
+    if provider not in _JUDGE_PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r}")
+    if not model:
+        model = str(JUDGE_PROVIDERS_INFO[provider]["default_model"])
+    text = get_rubric_yaml()
+    if re.search(r"(?m)^\s+judge_model:\s*\S.*$", text):
+        text = re.sub(r"(?m)^(\s+)judge_model:\s*\S.*$", rf"\g<1>judge_model: {model}", text, count=1)
+    else:
+        text = re.sub(r"(?m)^(default:\s*)$", rf"\g<1>\n  judge_model: {model}", text, count=1)
+    if re.search(r"(?m)^\s+judge_provider:\s*\S.*$", text):
+        text = re.sub(r"(?m)^(\s+)judge_provider:\s*\S.*$", rf"\g<1>judge_provider: {provider}", text, count=1)
+    else:
+        text = re.sub(r"(?m)^(\s+judge_model:.*)$", rf"\g<1>\n  judge_provider: {provider}", text, count=1)
+    save_rubric_yaml(text)
 
 
 # ── Scheduler ──────────────────────────────────────────────────────────────────

@@ -15,7 +15,9 @@ def _isolate(tmp_path, monkeypatch):
 
 def test_save_present_resolve_and_clear(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
-    assert er.judge_keys_present() == {"anthropic": False, "openai": False}
+    present = er.judge_keys_present()
+    assert set(present) == set(er._JUDGE_PROVIDERS)
+    assert not any(present.values())
 
     er.save_judge_key("anthropic", "sk-ant-secret123")
     assert er.judge_keys_present()["anthropic"] is True
@@ -56,4 +58,5 @@ def test_presence_never_leaks_value(tmp_path, monkeypatch):
     er.save_judge_key("anthropic", "sk-ant-topsecret")
     present = er.judge_keys_present()
     assert "sk-ant-topsecret" not in str(present)
-    assert present == {"anthropic": True, "openai": False}
+    assert present["anthropic"] is True
+    assert not any(v for k, v in present.items() if k != "anthropic")

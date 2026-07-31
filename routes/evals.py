@@ -101,15 +101,25 @@ def evaluators_catalogue():
         from clawmetry import eval_runner
         keys = eval_runner.judge_keys_present()
         enabled = eval_runner.is_enabled()
-        judge_ready = bool(enabled and any(keys.values()))
+        rubric = eval_runner.load_rubric("default") or {}
+        provider = eval_runner.judge_provider_for(rubric)
+        # Honest per-box readiness: the key must exist for the provider the
+        # judge is actually configured to use, not just any provider.
+        provider_key = bool(keys.get(provider))
+        last = eval_runner.last_judge_status()
+        judge_ready = bool(enabled and provider_key)
         judge_meta = {
             "enabled": enabled,
-            "key_present": any(keys.values()),
+            "key_present": provider_key,
             "keys": keys,
+            "provider": provider,
             "model": str(
-                (eval_runner.load_rubric("default") or {}).get("judge_model")
+                rubric.get("judge_model")
                 or eval_runner.DEFAULT_RUBRIC["judge_model"]
             ),
+            # issue #4313: a present-but-rejected key must not read as healthy.
+            "last_error": last.get("error"),
+            "last_ok_at": last.get("at") if last.get("ok") else None,
         }
     except Exception:
         judge_ready = None
@@ -274,8 +284,9 @@ def evals_suites():
 @bp_evals.route("/api/evals/key", methods=["GET"])
 @gate("eval_suite")
 def evals_key_get():
-    """Presence-only: which judge providers have a key (env or UI-saved).
-    NEVER returns the key value itself."""
+    """Judge configuration for the UI: which providers have credentials (env
+    or UI-saved), the provider catalogue (labels, default models), the current
+    selection, and the last judge-call outcome. NEVER returns key values."""
     try:
         from clawmetry import eval_runner
     except Exception as e:
@@ -283,16 +294,55 @@ def evals_key_get():
     try:
         present = eval_runner.judge_keys_present()
     except Exception:
-        present = {"anthropic": False, "openai": False}
-    return jsonify({"present": present, "any": any(present.values())})
+        present = {}
+    providers = {}
+    try:
+        for pid, info in eval_runner.JUDGE_PROVIDERS_INFO.items():
+            providers[pid] = {
+                "label": info["label"],
+                "default_model": info["default_model"],
+                "key_hint": info["key_hint"],
+                "needs_base_url": info["needs_base_url"],
+                "env": list(info["env"]),
+            }
+    except Exception:
+        pass
+    selection = {}
+    try:
+        rubric = eval_runner.load_rubric("default") or {}
+        selection = {
+            "provider": eval_runner.judge_provider_for(rubric),
+            "model": str(rubric.get("judge_model") or ""),
+        }
+    except Exception:
+        pass
+    payload = {
+        "present": present,
+        "any": any(present.values()),
+        "providers": providers,
+        "selection": selection,
+    }
+    try:
+        payload["base_url_set"] = bool(eval_runner.judge_base_url())
+        payload["last_status"] = eval_runner.last_judge_status()
+    except Exception:
+        pass
+    return jsonify(payload)
 
 
 @bp_evals.route("/api/evals/key", methods=["POST"])
 @gate("eval_suite")
 def evals_key_save():
-    """Save (or clear) a judge API key locally so evals can run without an env
-    var. Body: ``{"provider": "anthropic"|"openai", "api_key": "<key>"}``. An
-    empty ``api_key`` clears it. The key is stored chmod 600 on disk only and is
+    """Save a judge credential + provider/model selection in one step.
+
+    Body: ``{"provider": <id>, "api_key": "<key>", "model": "<optional>",
+    "base_url": "<custom provider only>", "validate": true}``.
+
+    By default the key is VERIFIED with a tiny real call before anything is
+    written — a mistyped paste comes back as a 400 with a plain reason instead
+    of being saved and silently failing forever (issue #4313). ``validate:
+    false`` skips the check. An empty ``api_key`` clears the stored key for
+    that provider (no validation). Keys live chmod 600 on disk only and are
     never echoed back or synced to the cloud."""
     try:
         from clawmetry import eval_runner
@@ -301,15 +351,47 @@ def evals_key_save():
     body = request.get_json(silent=True) or {}
     provider = str(body.get("provider", "")).strip().lower()
     api_key = body.get("api_key", "")
-    if provider not in ("anthropic", "openai"):
-        return jsonify({"error": "provider must be 'anthropic' or 'openai'"}), 400
+    model = str(body.get("model", "") or "").strip()
+    base_url = body.get("base_url")
+    do_validate = body.get("validate", True) not in (False, "false", "0", 0)
+    if provider not in eval_runner._JUDGE_PROVIDERS:
+        return jsonify({
+            "error": f"provider must be one of {list(eval_runner._JUDGE_PROVIDERS)}",
+        }), 400
     if not isinstance(api_key, str):
         return jsonify({"error": "api_key must be a string"}), 400
+    if base_url is not None and not isinstance(base_url, str):
+        return jsonify({"error": "base_url must be a string"}), 400
+
+    clearing = not api_key.strip()
+    if clearing and provider == "custom" and (base_url or "").strip():
+        # Local OpenAI-compatible servers legitimately have no key.
+        clearing = False
+    if not clearing and do_validate:
+        ok, detail = eval_runner.validate_judge_key(
+            provider,
+            api_key=api_key.strip() or None,
+            model=model or None,
+            base_url=(base_url or "").strip() or None,
+        )
+        if not ok:
+            return jsonify({"ok": False, "error": detail}), 400
     try:
-        eval_runner.save_judge_key(provider, api_key)
+        eval_runner.save_judge_key(
+            provider, api_key,
+            base_url=base_url if provider == "custom" else None,
+        )
+        if not clearing:
+            eval_runner.set_judge_selection(provider, model)
     except Exception as e:
         return jsonify({"error": f"save failed: {e}"}), 400
-    return jsonify({"ok": True, "present": eval_runner.judge_keys_present()})
+    return jsonify({
+        "ok": True,
+        "present": eval_runner.judge_keys_present(),
+        "provider": provider,
+        "model": model or eval_runner.JUDGE_PROVIDERS_INFO[provider]["default_model"],
+        "validated": bool(not clearing and do_validate),
+    })
 
 
 @bp_evals.route("/api/evals/rubric", methods=["POST"])
