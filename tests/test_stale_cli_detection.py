@@ -12,7 +12,6 @@ Pure unit tests: temp dirs only, no network, no running server.
 import io
 import os
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -172,7 +171,8 @@ def test_warning_env_kill_switch(tmp_path, monkeypatch):
 def test_path_executables_dedups_symlinks(tmp_path, monkeypatch):
     d1 = tmp_path / "bin1"
     d2 = tmp_path / "bin2"
-    d1.mkdir(); d2.mkdir()
+    d1.mkdir()
+    d2.mkdir()
     real = d1 / "clawmetry"
     real.write_text("#!/bin/sh\necho clawmetry 0.0.1\n")
     real.chmod(0o755)
