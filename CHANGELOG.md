@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: heartbeat liveness watchdog respects the opt-in egress gate (#4337) (2026-07-31)
+- **Why:** follow-up to #4329, caught live on the Windows verification node minutes after 0.12.606 auto-rolled: the silenced 401 wall was replaced by `CRITICAL: N consecutive heartbeat failures` every ~15s — the watchdog's skip-guard knew only the #3281 local-only marker, not the new no-account state, and the daemon-error tee evicts real agent events from the Brain feed.
+- **What:** the guard now keys on `cloud_egress_enabled(config)` (one truth for both no-egress states); regression test pins the watchdog to that helper.
+- **Verified:** 6/6 guard tests; to be re-verified live on the same Windows node post-release (no 401s, no CRITICALs).
+
 ### Fix: cloud egress is opt-in — a self-hosted node sends nothing until the user links an account (#4329) (2026-07-31)
 - **Why:** founder rule — default install = self-host, zero ingest. Gating was opt-OUT only (nocloud marker), so a never-connected node (license-key onboarding) POSTed `X-Api-Key:""` heartbeats every ~55s, got 401 + 3 retries per cycle, and filled sync.log with warnings (found live on a real Windows node).
 - **What:** `config.cloud_egress_enabled()` single opt-in truth; `_post()` returns a `_no_account` sentinel on empty api_key (covers every `/ingest/*` write); `send_heartbeat()` early-returns; startup banner says once "SELF-HOSTED: no cloud account linked… run `clawmetry login`"; cycle summary reads "Ingested locally (self-hosted, nothing sent)" with no "(unencrypted)" scare-suffix. Anonymous install/update pings unchanged (install-registry funnel).
