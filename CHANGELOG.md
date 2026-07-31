@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Feature: locked runtimes lead to in-dashboard sign-in + trial, never a pricing tab (#4287) (2026-07-31)
+- **Why:** the founder's original report: clicking a paid runtime dumped users at the pricing page / external upgrade URL even after sign-in-first onboarding shipped; the dashboard already had the whole rail (cloud-cta OTP + /api/trial/activate minting and activating the trial license locally) but the paywall never used it.
+- **What:** the runtime-switcher paywall CTA runs an inline email -> code -> activate flow and reloads on success so the runtime unlocks in place; the Agents empty-state CTA opens the same modal; plan-ladder prices corrected to live pricing (Pro $19/$190, was stale $29/$290).
+- **Verified:** live in the founder dashboard: CTA click reveals the sign-in step, $19/node/mo renders, no external upgrade links remain in the modal.
+
 ### Feature: Conversations time-window picker for post-mortem digging (#4284) (2026-07-31)
 - **Why:** founder request during the 2026-07-30 Brain-window RCA (#4285): when a P0 lands, developers need to time-travel — pick the incident window and read exactly which conversations were active and what context the agent had, then write the RCA. Brain already had a range picker; Conversations didn't.
 - **What:** the Conversations tab gains the same range bar as Brain — Live (default) / 1h / 6h / 24h / 7d / Custom with From/To pickers, a "Viewing history · X → Y" banner with Back to live, and an overlap filter on [started, modified] so a conversation that began before the window but was still active inside it is listed. `/api/transcripts`' DuckDB fast path now ships `started` (ms) alongside `modified`; new i18n keys ride the autotranslate bot; honest window-scoped empty state. Companion cloud PR #1829 (merged) makes the hosted interceptor emit `started` too.
