@@ -262,7 +262,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.597"
+__version__ = "0.12.598"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -12236,6 +12236,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
+        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
+        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
+      </div>
       {# Notifications sits directly under its two consumers (Approvals,
          Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
          nobody could find where to connect a delivery channel, so enabled
@@ -12338,6 +12342,9 @@ DASHBOARD_HTML = r"""
 
 <!-- ALERTS (Cloud-Pro feature) -->
 {% include 'tabs/alerts.html' %}
+
+<!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->
+{% include 'tabs/evals.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}

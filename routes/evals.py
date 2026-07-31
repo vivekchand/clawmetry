@@ -92,13 +92,37 @@ def evaluators_catalogue():
         except Exception:
             store = None
 
+    # Honest per-box judge state: the answer-quality entry is only "Live" when
+    # a judge API key actually exists on this box (env or the UI-saved store).
+    # judge_ready=None (lookup failed / cloud) keeps the static status.
+    judge_ready = None
+    judge_meta = None
     try:
-        payload = evaluators.catalogue_with_coverage(store)
+        from clawmetry import eval_runner
+        keys = eval_runner.judge_keys_present()
+        enabled = eval_runner.is_enabled()
+        judge_ready = bool(enabled and any(keys.values()))
+        judge_meta = {
+            "enabled": enabled,
+            "key_present": any(keys.values()),
+            "keys": keys,
+            "model": str(
+                (eval_runner.load_rubric("default") or {}).get("judge_model")
+                or eval_runner.DEFAULT_RUBRIC["judge_model"]
+            ),
+        }
+    except Exception:
+        judge_ready = None
+
+    try:
+        payload = evaluators.catalogue_with_coverage(store, judge_ready=judge_ready)
     except Exception as e:  # pragma: no cover - defensive
         try:
             payload = {"evaluators": evaluators.catalogue(), "coverage": None}
         except Exception:
             payload = {"evaluators": [], "error": f"catalogue failed: {e}"}
+    if judge_meta is not None:
+        payload["judge"] = judge_meta
     return jsonify(payload)
 
 
@@ -228,6 +252,23 @@ def evals_regression_summary():
             "errored": 0, "window_days": days, "last_run_at": None,
         }
     return jsonify(payload)
+
+
+@bp_evals.route("/api/evals/suites", methods=["GET"])
+@gate("eval_suite")
+def evals_suites():
+    """List golden test suites (~/.clawmetry/evals/<name>.yaml) so the Evals
+    tab can show them alongside the CLI hint. Empty list on a fresh install."""
+    try:
+        from clawmetry import eval_suite_runner
+        names = eval_suite_runner.list_suites()
+    except Exception:
+        names = []
+    return jsonify({
+        "suites": names,
+        "suites_dir": "~/.clawmetry/evals",
+        "cli": "clawmetry eval --suite <name>",
+    })
 
 
 @bp_evals.route("/api/evals/key", methods=["GET"])

@@ -492,7 +492,7 @@
   "approvals.tool_write": "File writes (write)",
   "approvals.trial_note": "7-day free trial · no credit card required",
   "approvals.upgrade_pitch": "Cloud-mediated approvals block risky agent actions before they execute. Get notified via Slack, Email, PagerDuty or Telegram, and approve or deny with one click.",
-  "banners.agent_builder_pill": "New: Agent Builder \u00b7 describe your agent, we build it, host it, you watch every move",
+  "banners.agent_builder_pill": "New: Agent Builder · describe your agent, we build it, host it, you watch every move",
   "banners.changelog": "Changelog",
   "banners.detected_runtimes_msg": "Detected {runtimes} on this machine. ClawMetry Pro watches them in real time.",
   "banners.hide": "Hide",
@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Never used yet",
   "skills.never_used_verdict": "{n} skill(s) installed, never used yet.",
   "skills.all_good": "All good",
-  "skills.all_good_sub": "every skill is being used"
+  "skills.all_good_sub": "every skill is being used",
+  "evaluators.open_tab": "Open Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Automatic checks that tell you if your agent is doing good work. Everything runs on your machine, on your own key.",
+  "evals.setup": "Judge setup",
+  "evals.judge_title": "The judge",
+  "evals.summary_title": "Session quality, last 24 hours",
+  "evals.recent_title": "Recently scored sessions",
+  "evals.suites_title": "Golden test suites"
 }

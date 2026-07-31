@@ -1,0 +1,56 @@
+<div class="page" id="page-evals">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:8px;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">🔬 <span data-i18n="evals.title">Evals</span></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="evals.subtitle">Automatic checks that tell you if your agent is doing good work. Everything runs on your machine, on your own key.</div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="refresh-btn" onclick="openEvalRubricModal()" title="Judge key &amp; rubric">⚙ <span data-i18n="evals.setup">Judge setup</span></button>
+      <button class="refresh-btn" onclick="loadEvalsTab()">↻ <span data-i18n="common.refresh">Refresh</span></button>
+    </div>
+  </div>
+
+  <!-- Judge status: which model scores sessions, whether a key exists on this
+       box, and how many sessions it scored in the last day. This is the honest
+       heart of the tab: it never claims scoring is happening when it is not. -->
+  <div id="evals-judge-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin:14px 0;box-shadow:var(--card-shadow);">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">⚖️ <span data-i18n="evals.judge_title">The judge</span></div>
+    <div id="evals-judge-body" style="font-size:13px;color:var(--text-primary);"><span data-i18n="app.loading">Loading...</span></div>
+  </div>
+
+  <!-- Score summary over the last 24h + the 7d regression-replay line. -->
+  <div id="evals-summary-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;" data-i18n="evals.summary_title">Session quality, last 24 hours</div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="evals-tab-avg" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
+        <span id="evals-tab-coverage" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+      <div id="evals-tab-regression" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+    <div id="evals-tab-percentiles" style="font-size:12px;color:var(--text-muted);text-align:right;"></div>
+  </div>
+
+  <!-- The named evaluator library (moved here from Overview). Same element ids
+       the shared loadEvaluators() renderer targets. -->
+  <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">🔬 <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
+      <div id="evaluators-count" style="font-size:11px;color:var(--text-muted);"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" data-i18n="evaluators.subtitle">Named checks ClawMetry runs to tell you if your agent is doing good work. Each one answers a plain question.</div>
+    <div id="evaluators-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;"></div>
+  </div>
+
+  <!-- Recently scored sessions, newest first, with a per-row re-score button. -->
+  <div id="evals-recent-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">🧾 <span data-i18n="evals.recent_title">Recently scored sessions</span></div>
+    <div id="evals-recent-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
+  </div>
+
+  <!-- Golden test suites: release-gating evals run from the CLI / CI. -->
+  <div id="evals-suites-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">🏅 <span data-i18n="evals.suites_title">Golden test suites</span></div>
+    <div id="evals-suites-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
+  </div>
+</div><!-- end page-evals -->

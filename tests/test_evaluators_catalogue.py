@@ -174,3 +174,56 @@ def test_route_cloud_safe(monkeypatch):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["evaluators"], "no-store path must still return the catalogue"
+
+
+def test_needs_key_downgrade_is_per_box_honest():
+    """A judge-backed evaluator (answer-quality) must not badge 'live' on a box
+    that has no judge API key: with a store present + judge_ready=False it
+    reports 'needs_key' and drops out of the payload's live count. With no
+    store (the cloud container) the static status is preserved, so a keyless
+    cloud env never mislabels a node that does have a key."""
+
+    class _Store:
+        def query_eval_summary(self, **kw):
+            return {"total": 5, "scored": 0}
+
+        def query_outcomes(self, **kw):
+            return []
+
+    p = evaluators.catalogue_with_coverage(_Store(), judge_ready=False)
+    by = {e["slug"]: e for e in p["evaluators"]}
+    assert by["answer-quality"]["status"] == "needs_key"
+    assert p["live"] == sum(
+        1 for e in p["evaluators"] if e["status"] == "live"
+    )
+    assert by["agent-goal-accuracy"]["status"] == "live"  # deterministic stays live
+
+    p2 = evaluators.catalogue_with_coverage(None, judge_ready=False)
+    by2 = {e["slug"]: e for e in p2["evaluators"]}
+    assert by2["answer-quality"]["status"] == "live"
+
+    p3 = evaluators.catalogue_with_coverage(_Store(), judge_ready=True)
+    by3 = {e["slug"]: e for e in p3["evaluators"]}
+    assert by3["answer-quality"]["status"] == "live"
+
+
+def test_faithfulness_hook_without_key_reports_needs_key():
+    """Pro faithfulness reuses the same judge key as answer-quality: a
+    registered hook with no key on the box must badge needs_key, not live."""
+    evaluators.register_pro_evaluator("faithfulness", lambda *a, **k: None)
+    try:
+        class _Store:
+            def query_eval_summary(self, **kw):
+                return {"total": 1, "scored": 0}
+
+            def query_outcomes(self, **kw):
+                return []
+
+        p = evaluators.catalogue_with_coverage(_Store(), judge_ready=False)
+        by = {e["slug"]: e for e in p["evaluators"]}
+        assert by["faithfulness"]["status"] == "needs_key"
+        p2 = evaluators.catalogue_with_coverage(_Store(), judge_ready=True)
+        by2 = {e["slug"]: e for e in p2["evaluators"]}
+        assert by2["faithfulness"]["status"] == "live"
+    finally:
+        importlib.reload(evaluators)
