@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fix: no emoji logos in CLI output; uniform runtime bullets in `clawmetry status` (#4351) (2026-07-31)
+- **Why:** founder report from a live node: the Runtimes list gave OpenClaw a lobster emoji (and NemoClaw a lightning bolt) while every family runtime got a plain bullet. It read as favoritism in a runtime-neutral product, and the double-width emoji broke the checkmark column alignment. The proxy banner carried the same emoji.
+- **What:** one bullet style for every runtime row; the proxy banner drops the emoji and its em-dash. Pure output formatting, no behavior change.
+- **Verified:** ran `clawmetry status` and `clawmetry proxy` live on a 9-runtime node from the branch; columns align, all rows identical in style.
+
 ### Feature: self-hosted fleet overview page at /selfhosted (#4341) (2026-07-31)
 - **Why:** the 0.12.605 Enterprise release shipped the self-hosted server with JSON-only fleet APIs; operators asked "is every agent box alive and current?" and had no page to look at.
 - **What:** admin-gated HTML at `/selfhosted` (SELF_HOSTED=true only): node roster with hostname, platform, daemon version, last-seen, and liveness badges (online / N min ago / N h ago), plus E2E mode and stored-event count. Zero JS, inline CSS, dark-mode aware, HTML-escaped fields. Rich per-node views remain each node's own local dashboard. The managed cloud pre-classifies the route as cloud-disabled (clawmetry-cloud #1850), so the pin audit stays clean.
