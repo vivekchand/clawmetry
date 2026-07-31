@@ -66,6 +66,9 @@ jobs:
           if ($out -notmatch 'TLS interception detected') { throw "missing 'TLS interception detected' guidance" }
           if ($out -notmatch 'certmgr.msc') { throw "missing certmgr.msc walkthrough" }
           Write-Host "PASS: interception detected, guidance printed, exit=1"
+          # doctor exiting 1 is the ASSERTED behaviour here; without this the
+          # step inherits $LASTEXITCODE from the native command and fails.
+          exit 0
 
       - name: "Scenario B: CA in Windows Root store -> truststore validates"
         shell: pwsh
