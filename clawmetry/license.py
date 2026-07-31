@@ -4238,6 +4238,94 @@ def license_features_at_batch(epochs) -> list[dict]:
     return out
 
 
+def license_subject_at_batch(epochs) -> list[dict]:
+    """Per-value perspective-epoch license-subject scalar for N epochs in
+    ONE round-trip.
+
+    Per-value axis batch sibling of :func:`license_subject_at`. Fills the
+    ``_at_batch`` slot on the license-subject axis alongside the singular
+    :func:`license_subject_at` and the "now" flavour
+    :func:`license_subject`, so a scheduled-audit tile that wants to
+    render a per-epoch "who was this node licensed to on each of these
+    audit dates?" timeline stops fanning out N calls to
+    :func:`license_subject_at`. Matches the batch shape already established
+    by :func:`license_tier_at_batch` / :func:`license_state_at_batch` /
+    :func:`license_features_at_batch` on the other perspective-epoch
+    scalar axes.
+
+    Each item in ``epochs`` may be:
+
+      * an int (or int-parseable string) -- a perspective epoch. The
+        emitted row's ``subject`` is what :func:`license_subject_at` would
+        return for that epoch alone.
+      * ``bool`` (subclass of ``int``) or any non-int-parseable value
+        (``None``, empty string, non-numeric string) -- collapses to a
+        row with ``subject=None``, matching the never-mis-gate posture
+        :func:`license_subject_at` uses for the same inputs. The raw
+        stringified token surfaces in ``epoch`` so a caller can still
+        identify the offending entry.
+
+    Row shape::
+
+        {
+          "epoch":   <int> | "<raw>",
+          "subject": <str> | None,
+        }
+
+    Semantics per row mirror :func:`license_subject_at`: the stripped
+    subject string (casing preserved) when the license is signature-
+    valid, carries a string ``sub`` claim, AND (perpetual OR
+    ``exp > epoch``); ``None`` for no license, invalid signature, an
+    ``exp`` claim that has already lapsed at ``epoch``, a signed payload
+    with a missing / non-string / empty ``sub``, and ``bool`` /
+    non-numeric epochs.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``subject=None`` so the batch
+    keeps building. Matches the never-mis-gate posture used by
+    :func:`license_subject_at` -- a bad row cannot silently claim a
+    subject that would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now", the row's ``subject`` field
+    must byte-equal :func:`license_subject` for the same install --
+    both derive from the same signed ``sub`` claim via
+    :func:`license_subject_at` / :func:`license_subject`, so a caller
+    binding both cannot catch them disagreeing at the boundary.
+
+    Pairs with :func:`license_tier_at_batch` /
+    :func:`license_state_at_batch` / :func:`license_features_at_batch`
+    on the row-shape axis: for the same ``epochs`` list, a caller can
+    zip the responses index-for-index and hydrate a whole entitlement
+    timeline row for one install in a handful of round-trips instead
+    of ``N * M`` calls to the scalar surface.
+    """
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "subject": None})
+            continue
+        try:
+            subject = license_subject_at(parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: license_subject_at_batch per-row failed: %s", exc
+            )
+            subject = None
+        if subject is not None and not isinstance(subject, str):
+            # Defensive: the scalar contract is str | None, but a future
+            # change that ever emitted a non-string would silently break
+            # the per-row parity guarantee. Collapse to None.
+            subject = None
+        out.append({"epoch": parsed, "subject": subject})
+    return out
+
+
 def has_feature(feature: str) -> bool:
     """Boolean gate for "is feature ``<X>`` claimed by my installed key?".
 
