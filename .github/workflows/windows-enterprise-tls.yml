@@ -38,7 +38,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --quiet .
-          python -m pip install --quiet pytest mitmproxy
+          # requests: not a package dep, but tests/conftest.py imports it
+          python -m pip install --quiet pytest mitmproxy requests
           python -c "import truststore; print('truststore OK')"
 
       - name: Unit tests (py3.13, VERIFY_X509_STRICT default-on)
