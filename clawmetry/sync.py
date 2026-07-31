@@ -7945,6 +7945,16 @@ def _build_brain_events() -> list:
 
     picked.sort(key=lambda r: r.get("ts") or "", reverse=True)
     picked = picked[:BRAIN_CACHE_LIMIT]
+    # Collapse duplicate-content siblings (assistant + model.completed +
+    # delivery-mirror echo; gateway prompt.submitted + transcript user copy)
+    # with the SAME shared logic /api/brain-history uses. Without this the
+    # cloud feed showed each reply three times while the local API showed it
+    # once (founder screenshot, 2026-07-31).
+    try:
+        from clawmetry.brain_dedupe import collapse_duplicate_brain_rows
+        picked = collapse_duplicate_brain_rows(picked)
+    except Exception:
+        pass
     # Same translation as routes/brain.py:_try_local_store_brain (incl. the
     # hide_clawmetry_session filter + sessionId stamp + size cap).
     return _rows_to_brain_events(picked)[:BRAIN_CACHE_LIMIT]
@@ -7983,6 +7993,13 @@ def _build_brain_events_window(since=None, until=None, limit=BRAIN_WINDOW_LIMIT)
     except Exception:
         return []
     rows = [r for r in rows if _brain_row_renderable(r)][:lim]
+    # Same duplicate-sibling collapse as the live blob (_build_brain_events):
+    # a windowed investigation must not show one reply three times either.
+    try:
+        from clawmetry.brain_dedupe import collapse_duplicate_brain_rows
+        rows = collapse_duplicate_brain_rows(rows)
+    except Exception:
+        pass
     return _rows_to_brain_events(rows)[:lim]
 
 
