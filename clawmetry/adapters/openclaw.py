@@ -89,7 +89,13 @@ def _d():
 
 def _gateway_live() -> bool:
     """True only if the OpenClaw gateway is actually up (pid alive or port
-    18789 listening). Never raises."""
+    18789 listening). Never raises.
+
+    When ``OPENCLAW_SUPERVISOR_MODE=external`` is set, a ``False`` return
+    during a restart-handoff is an expected transient, not a failure.
+    Callers should check ``gatewayInRestartHandoff`` in
+    ``DetectResult.meta`` (set by ``detect()``) for the full picture.
+    """
     home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
     pid_file = os.path.join(home, "gateway", "gateway.pid")
     try:
@@ -1727,6 +1733,24 @@ def _gateway_supervisor_mode_env() -> dict:
         return {}
 
 
+def _gateway_is_in_restart_handoff(supervisor_mode: str, gateway_live: bool) -> bool:
+    """True when the gateway is briefly offline during an externally-supervised
+    restart-handoff (#4302).
+
+    An external lifecycle owner (e.g. OCM) manages gateway restarts when
+    ``OPENCLAW_SUPERVISOR_MODE=external``.  A ``False`` result from
+    ``_gateway_live()`` is then an expected transient — the supervisor will
+    bring the gateway back.  Callers surface "restarting (supervised)" rather
+    than "gateway offline" in the UI.
+
+    Never raises.
+    """
+    try:
+        return supervisor_mode == "external" and not gateway_live
+    except Exception:
+        return False
+
+
 def _gateway_presence_roster() -> dict:
     """Who's-online presence roster from the OpenClaw gateway.status RPC (#3884).
 
@@ -2108,6 +2132,13 @@ class OpenClawAdapter(AgentAdapter):
             # a supervised restart handoff). _gateway_host_status() below will
             # overwrite with the live RPC value when the gateway is up.
             meta.update(_gateway_supervisor_mode_env())
+            # During an externally-supervised restart-handoff the gateway is
+            # briefly down; flag this so callers show "restarting (supervised)"
+            # rather than "gateway offline" (#4302).
+            if _gateway_is_in_restart_handoff(
+                meta.get("gatewaySupervisorMode", ""), running
+            ):
+                meta["gatewayInRestartHandoff"] = True
             # Gateway plugin health (#3200): per-plugin state (loaded/errored/
             # disabled) added to gateway.status in harness 2026.6.9 (#93395).
             # Only meaningful — and safe to query — when the gateway is live.
