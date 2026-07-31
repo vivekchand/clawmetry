@@ -1050,6 +1050,10 @@ _LAST_JUDGE_STATUS: dict[str, Any] = {"ok": None, "error": None, "at": None,
                                       "provider": None, "model": None}
 _LAST_JUDGE_LOCK = threading.Lock()
 
+# Shared across processes (daemon writes, dashboard reads). No key material —
+# ok/error/provider/model/at only. Mirrors _EVAL_KEYS_PATH convention.
+_EVAL_STATUS_PATH = os.path.expanduser("~/.clawmetry/eval_status.json")
+
 
 def _record_judge_status(ok: bool, error: str | None, provider: str, model: str) -> None:
     with _LAST_JUDGE_LOCK:
@@ -1060,12 +1064,31 @@ def _record_judge_status(ok: bool, error: str | None, provider: str, model: str)
             "provider": provider,
             "model": model,
         })
+        snapshot = dict(_LAST_JUDGE_STATUS)
+    try:
+        Path(_EVAL_STATUS_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(_EVAL_STATUS_PATH).write_text(json.dumps(snapshot))
+    except Exception:
+        pass
 
 
 def last_judge_status() -> dict[str, Any]:
-    """A copy of the most recent judge call outcome (never key material)."""
+    """A copy of the most recent judge call outcome (never key material).
+
+    Reads from the shared file when it's newer than the in-memory copy so that
+    the dashboard process reflects daemon-side judge outcomes without a restart
+    (fix for issue #4332: status was per-process, 401s from the daemon never
+    surfaced in the dashboard card until a dashboard-side call happened).
+    """
     with _LAST_JUDGE_LOCK:
-        return dict(_LAST_JUDGE_STATUS)
+        mem = dict(_LAST_JUDGE_STATUS)
+    try:
+        file_status = json.loads(Path(_EVAL_STATUS_PATH).read_text())
+        if (file_status.get("at") or 0) > (mem.get("at") or 0):
+            return file_status
+    except Exception:
+        pass
+    return mem
 
 
 def _classify_judge_error(exc: Exception) -> str:
