@@ -645,7 +645,16 @@ def _download_and_install_pro(payload: dict) -> str:
             token = ""
         if not token:
             return "clawmetry-pro install deferred (no license on disk)"
-        body = json.dumps({"key": token, "node_id": node_id}).encode()
+        # install_id links this activation to the cloud install registry
+        # (best-effort; server ignores unknown fields on older deploys).
+        try:
+            from clawmetry.telemetry import _ensure_install_id
+            install_id = _ensure_install_id() or ""
+        except Exception:
+            install_id = ""
+        body = json.dumps(
+            {"key": token, "node_id": node_id, "install_id": install_id}
+        ).encode()
         req = urllib.request.Request(
             base + "/api/license/activate", data=body,
             headers={"Content-Type": "application/json"}, method="POST",

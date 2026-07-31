@@ -105,6 +105,7 @@ from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
 from routes.overview import bp_overview
 from routes.trial import bp_trial
+from routes.onboarding import bp_onboarding
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
@@ -11725,6 +11726,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_otlp_traces)
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_trial)
+    app.register_blueprint(bp_onboarding)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
@@ -12183,6 +12185,7 @@ DASHBOARD_HTML = r"""
   {% endif %}
 </div>
 {% include 'partials/cloud-modal.html' %}
+{% include 'partials/onboarding-modal.html' %}
 
 
 {% include 'partials/banners.html' %}
@@ -12540,6 +12543,7 @@ DASHBOARD_HTML = r"""
 </div>
 
 <script src="{{ url_for('static', filename='js/gw-setup.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/onboarding.js', v=version) }}"></script>
 
 </body>
 </html>

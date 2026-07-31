@@ -1282,7 +1282,12 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
 
             label = "com.clawmetry.dashboard"
             plist_path = _P.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-            _args_xml = "\n".join(f"        <string>{a}</string>" for a in cmd)
+            # Use `python -m clawmetry` (not the console-script path) so the
+            # plist stays valid if the venv is rebuilt without entry points.
+            # The console-script path rots silently; the interpreter path is
+            # stable across venv rebuilds (#4297).
+            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--port", str(port)]
+            _args_xml = "\n".join(f"        <string>{a}</string>" for a in _launchd_cmd)
             plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -5815,10 +5820,11 @@ def main() -> None:
     os.environ["CLAWMETRY_ROLE"] = "dashboard"
     from dashboard import main as dashboard_main
 
-    # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
-    # for the privacy contract. Fires on a daemon thread so a network
-    # failure can't slow CLI startup; honours CLAWMETRY_NO_TELEMETRY=1
-    # and ~/.clawmetry/notelemetry.
+    # Anonymous, opt-out install-lifecycle ping (install once ever, update
+    # once per new version). See clawmetry/telemetry.py for the privacy
+    # contract. Fires on a daemon thread so a network failure can't slow
+    # CLI startup; honours CLAWMETRY_NO_TELEMETRY=1 and
+    # ~/.clawmetry/notelemetry.
     try:
         from clawmetry import telemetry as _telemetry
         try:
