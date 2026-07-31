@@ -1467,6 +1467,77 @@ def license_tier_at(epoch: int) -> str | None:
     return normalized or None
 
 
+def is_tier_at(tier: str, epoch: int) -> bool:
+    """Perspective-epoch flavour of :func:`is_tier` -- "was the installed
+    license on tier <X> evaluated as of ``epoch``?" -- for a scheduled-
+    audit / retrospective tile that wants to answer "was this node Pro
+    on <date>?" without the caller having to snapshot the license state
+    at that time or compare ``exp`` to a caller-supplied epoch itself.
+
+    Compares :func:`license_tier_at` case-insensitively (after strip) to
+    the supplied ``tier``. Missing / empty / non-string input degrades
+    to ``False`` -- matches the never-raise posture of :func:`is_tier` /
+    :func:`is_state_at`.
+
+    Unlike :func:`is_state_at` (which validates against the closed
+    :data:`LICENSE_STATES` set), the tier axis is deliberately open-
+    ended -- a future tier lands without a code change here, exactly
+    the way :func:`license_tier` / :func:`is_tier` intentionally do not
+    whitelist ``tier`` values. So any non-empty normalised string is
+    accepted as a possible match; a typo like ``"pro__"`` simply
+    doesn't match any real tier and collapses to ``False``.
+
+    ``tier`` is coerced through ``str()`` and normalised the same way
+    :func:`license_tier_at` normalises the stored claim, so a caller
+    can pass ``"Pro"``, ``"pro"``, or ``"  PRO "`` and get the same
+    answer.
+
+    ``epoch`` is coerced through :func:`license_tier_at`; ``bool`` and
+    non-numeric epochs are refused there and collapse this predicate
+    to ``False`` (there is no tier to match against once the perspective
+    is unusable -- the conservative "no entitlement" fallback matching
+    the never-mis-gate posture of the surrounding ``_at`` family).
+
+    When ``epoch`` equals "now", this predicate must agree with
+    :func:`is_tier` for the same install and the same requested ``tier``
+    -- both derive from the same signed ``tier`` claim and use the same
+    ``exp <= cutoff`` boundary via :func:`license_tier_at` /
+    :func:`license_tier`, so the two scalars cannot disagree at the
+    boundary. On any other epoch this helper answers the retrospective
+    / prospective question :func:`is_tier` cannot -- e.g. "was this
+    node Pro last Friday?" (``False`` on a key that has since been
+    renewed but was already expired then) or "will this node still be
+    Pro at our next quarterly audit?" (``False`` on an active key whose
+    ``exp`` falls before the audit date).
+
+    Never raises. Any underlying failure of :func:`license_tier_at`
+    collapses this to ``False`` -- a scheduled audit job bound to this
+    gate stays "unclaimed" rather than falsely asserting an entitlement
+    it can't verify.
+
+    Pairs with :func:`is_state_at`, :func:`is_expired_at`, and
+    :func:`is_expiring_within_at` on the perspective-epoch predicate
+    axis: for the same ``epoch``, a caller can zip the boolean gates
+    index-for-index and render a whole entitlement audit row for one
+    install without the gates catching each other disagreeing on the
+    perspective-epoch classification.
+    """
+    try:
+        requested = str(tier).strip().lower() if tier is not None else ""
+    except Exception:
+        return False
+    if not requested:
+        return False
+    try:
+        actual = license_tier_at(epoch)
+    except Exception as exc:
+        logger.debug("license: is_tier_at underlying read failed: %s", exc)
+        return False
+    if actual is None:
+        return False
+    return actual == requested
+
+
 def is_expired() -> bool:
     """True iff an installed, signature-valid license has an ``exp`` claim in
     the past.
@@ -3610,6 +3681,95 @@ def license_tier_at_batch(epochs) -> list[dict]:
         out.append(
             {"epoch": parsed, "tier": tier if isinstance(tier, str) else None}
         )
+    return out
+
+
+def is_tier_at_batch(tier, epochs) -> list[dict]:
+    """Per-value perspective-epoch "was the license on tier <X> at each
+    of these epochs?" gate for N epochs in ONE round-trip.
+
+    Shared-threshold sibling of :func:`is_tier_at`. Where the singular
+    scalar folds ONE ``(tier, epoch)`` pair to ONE bool, this preserves
+    per-value rows for a fixed ``tier`` and a sequence of perspective
+    epochs so a scheduled-audit tile that wants to answer "was this
+    node Pro on each of these audit dates?" hydrates the whole column
+    in ONE round-trip instead of fanning out N calls to the scalar.
+    Same "shared threshold applied to EVERY row, per-row epoch" shape
+    as :func:`is_state_at_batch` / :func:`is_expiring_within_at_batch`
+    -- both take one gate parameter plus a batch of epochs.
+
+    ``tier`` is normalised (``str().strip().lower()``) the same way
+    :func:`is_tier_at` normalises it, so ``"Pro"``, ``"pro"``, and
+    ``"  PRO "`` collapse to the same query. A missing / empty /
+    non-string ``tier`` collapses EVERY row to ``is_tier=False`` while
+    preserving row slots so the output length still matches N.
+
+    Unlike :func:`is_state_at_batch` (which validates against the
+    closed :data:`LICENSE_STATES` set), the tier axis is deliberately
+    open-ended -- a future tier lands without a code change here,
+    matching the open-ended posture of :func:`is_tier` /
+    :func:`license_tier`. A typo like ``"pro__"`` simply doesn't match
+    any real tier and collapses every row to ``False``.
+
+    Row shape::
+
+        {
+          "epoch":   <int> | "<raw>",
+          "is_tier": <bool>,
+        }
+
+    Semantics per row mirror :func:`is_tier_at`: ``True`` iff the
+    perspective-epoch tier byte-equals the (normalised) ``tier``
+    requested. For a bad epoch token (``bool`` / non-numeric /
+    ``None``) the scalar collapses :func:`license_tier_at` to ``None``
+    so the row's ``is_tier`` is ``False`` -- exactly matching the
+    conservative "no entitlement" fallback of :func:`license_tier_at`
+    (unlike :func:`is_state_at_batch`, there is no meaningful "no-
+    license tier" the caller could ask for, since :func:`license_tier`
+    already returns ``None`` -- not a sentinel string -- on that
+    branch).
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``is_tier=False`` so the batch
+    keeps building. Matches the never-mis-gate posture used by
+    :func:`is_tier_at` -- a bad row cannot silently claim a tier that
+    would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now" and ``tier`` is a
+    normalisable string, this predicate must agree with :func:`is_tier`
+    for the same install and the same requested ``tier`` at that row
+    -- both derive from the same signed ``tier`` claim via
+    :func:`license_tier_at` / :func:`license_tier`, so a caller
+    binding both the singular and the batch cannot catch them
+    disagreeing at the boundary.
+    """
+    try:
+        requested = str(tier).strip().lower() if tier is not None else ""
+    except Exception:
+        requested = ""
+    have_query = bool(requested)
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "is_tier": False})
+            continue
+        if not have_query:
+            out.append({"epoch": parsed, "is_tier": False})
+            continue
+        try:
+            matched = is_tier_at(requested, parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_tier_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append({"epoch": parsed, "is_tier": bool(matched)})
     return out
 
 

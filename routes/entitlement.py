@@ -12132,6 +12132,239 @@ def api_license_tier_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/is-tier-at")
+def api_license_is_tier_at():
+    """``GET /api/license/is-tier-at?tier=<name>&epoch=<int>`` -- boolean
+    gate for "was the installed license on tier <X> evaluated as of
+    ``epoch``?" -- the perspective-epoch flavour of ``/api/license/
+    is-tier``, for a scheduled-audit tile that wants to answer "was
+    this node Pro on <date>?" without the caller having to snapshot
+    the license state at that time or compare ``exp`` to a caller-
+    supplied epoch themselves.
+
+    Query parameters:
+      * ``tier`` (str, required in-spirit) -- the tier to test against.
+        Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_tier_at`. Missing / empty / non-
+        string input degrades to ``is_tier_at=false`` rather than a
+        4xx, matching the surrounding endpoints' never-5xx / never-4xx
+        posture. Unlike ``/api/license/is-state-at`` (which validates
+        against the closed ``LICENSE_STATES`` set), the tier axis is
+        deliberately open-ended -- a future tier lands without a code
+        change here, matching :func:`clawmetry.license.is_tier`'s
+        open-ended posture.
+      * ``epoch`` (int, required in-spirit) -- Unix epoch seconds.
+        Missing / non-integer / bool input collapses ``tier_at`` to
+        ``null`` and the predicate to ``false`` (there is no tier to
+        match against once the perspective is unusable -- the
+        conservative "no entitlement" fallback matching the never-mis-
+        gate posture of the surrounding ``_at`` family).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_tier_at":      <bool>,
+          "tier_at":         <str|null>,    # tier as of epoch
+          "requested_tier":  <str>,         # normalised echo of query
+          "requested_epoch": <int|null>,    # int-coerced input, or null on typo
+          "tier":            <str|null>,    # current-time tier
+          "expires_at":      <int|null>,
+          "has_license":     <bool>,
+          "valid":           <bool>         # signature-valid AND not expired NOW
+        }
+
+    ``is_tier_at`` is ``True`` iff the perspective-epoch tier byte-
+    equals ``requested_tier`` (after both are lower/stripped) AND the
+    requested value is a non-empty string -- an empty / missing
+    ``tier=`` query returns ``is_tier_at=false`` so a caller cannot
+    silently claim a tier that would grant unearned entitlement.
+
+    Mirrors :func:`clawmetry.license.is_tier_at` -- the HTTP shape
+    layers ``tier_at`` / ``requested_tier`` / ``requested_epoch`` /
+    ``tier`` / ``expires_at`` / ``has_license`` / ``valid`` on top of
+    that bool so a widget never needs a second call to
+    ``/api/license/tier-at`` (or ``/api/license/tier``) to render the
+    accompanying "you were on tier <X>" copy.
+
+    When ``epoch`` equals "now" and ``tier`` is a non-empty string,
+    this endpoint must agree with ``/api/license/is-tier`` at the
+    boundary for the same install -- both derive from the same signed
+    ``tier`` claim via :func:`license_tier_at` / :func:`license_tier`,
+    so a UI binding both cannot catch them disagreeing at the boundary.
+
+    Shares :func:`_license_tier_at_snapshot` with ``/api/license/
+    tier-at{,-batch}`` so the current-time reference fields (``tier``
+    / ``expires_at`` / ``has_license`` / ``valid``) cannot disagree
+    between the sibling endpoints for the same install.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``is_tier_at=false``, ``tier_at=null``,
+    ``tier=null``, ``expires_at=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    raw_tier = request.args.get("tier", "") or ""
+    try:
+        requested_tier = str(raw_tier).strip().lower()
+    except Exception:
+        requested_tier = ""
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested_epoch = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested_epoch = None
+    try:
+        snap = _license_tier_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_tier_at: snapshot error: %s", exc)
+        snap = {
+            "tier": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    tier_at: str | None = None
+    if requested_epoch is not None:
+        try:
+            from clawmetry import license as _lic
+
+            tier_at = _lic.license_tier_at(requested_epoch)
+        except Exception as exc:
+            logger.warning("api_license_is_tier_at: derive error: %s", exc)
+            tier_at = None
+    if tier_at is not None and not isinstance(tier_at, str):
+        tier_at = None
+    match = bool(
+        requested_tier
+        and isinstance(tier_at, str)
+        and tier_at == requested_tier
+    )
+    return jsonify(
+        {
+            "is_tier_at": match,
+            "tier_at": tier_at,
+            "requested_tier": requested_tier,
+            "requested_epoch": requested_epoch,
+            "tier": snap["tier"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/is-tier-at-batch")
+def api_license_is_tier_at_batch():
+    """``GET /api/license/is-tier-at-batch?tier=<name>&epochs=<int>,<int>,...``
+    -- shared-``tier`` batch sibling of ``/api/license/is-tier-at``.
+
+    Where the singular endpoint folds ONE ``(tier, epoch)`` pair to
+    ONE "was the license on tier <X> as-of epoch?" bool, this
+    preserves per-value rows for a fixed ``tier`` across a sequence
+    of perspective epochs so a scheduled-audit tile answering "was
+    this node Pro on each of these audit dates?" hydrates the whole
+    column in ONE round-trip instead of fanning out N calls to the
+    scalar. Wraps :func:`clawmetry.license.is_tier_at_batch`. Same
+    "shared threshold applied to EVERY row, per-row epoch" shape as
+    ``/api/license/is-state-at-batch`` -- both take one gate query
+    parameter plus a batch of epochs.
+
+    Query parameters:
+      * ``tier`` (str, required in-spirit) -- the tier to test
+        against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_tier_at`. Missing / empty / non-
+        string value degrades EVERY row to ``is_tier=false`` (matches
+        the never-mis-gate posture of the scalar) rather than a 4xx
+        -- a caller on a stale UI shouldn't have the whole batch
+        hidden behind a typo. Deliberately open-ended (no ``LICENSE_
+        STATES``-style whitelist) so a future tier lands without a
+        code change.
+      * ``epochs`` (CSV of ints, required) -- Missing / blank /
+        only-commas -> ``400 missing epochs``. Comma-separated tokens
+        are stripped, then handed to
+        :func:`clawmetry.license.is_tier_at_batch`, which dedupes by
+        parsed int key preserving first-seen order and collapses
+        non-int / ``bool`` / ``None`` tokens to a row with
+        ``is_tier=false`` (unlike ``/api/license/is-state-at-batch``,
+        there is no meaningful "no-license tier" the caller could
+        ask for, since :func:`license_tier` already returns ``None``
+        -- not a sentinel string -- on that branch).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":           "is_tier_at",
+          "count":          <int>,             # len(rows)
+          "requested_tier": <str>,             # normalised echo of query
+          "rows":  [
+            {"epoch": <int|"<raw>">, "is_tier": <bool>},
+            ...
+          ],
+          "tier":        <str|null>,           # current-time tier
+          "expires_at":  <int|null>,           # on-disk exp for comparison
+          "has_license": <bool>,
+          "valid":       <bool>                # signature-valid AND not expired NOW
+        }
+
+    Envelope carries the same current-time snapshot fields (``tier`` /
+    ``expires_at`` / ``has_license`` / ``valid``) as the surrounding
+    ``/api/license/tier-at{,-batch}`` and ``/api/license/is-tier-at``
+    endpoints so a UI binding several endpoints for the same install
+    cannot catch them disagreeing. Row shape mirrors ``/api/license/
+    is-state-at-batch`` so a caller assembling a timeline can zip the
+    responses index-for-index by epoch.
+
+    Per-row parity with ``/api/license/is-tier-at?tier=<X>&epoch=<n>``
+    is pinned in the test suite so the batch cannot silently drift
+    from the scalar endpoint.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (empty rows envelope with the OSS-free snapshot
+    fields intact).
+    """
+    raw_tier = request.args.get("tier", "") or ""
+    try:
+        requested_tier = str(raw_tier).strip().lower()
+    except Exception:
+        requested_tier = ""
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_tier_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_tier_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "tier": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.is_tier_at_batch(requested_tier, tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_tier_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "is_tier_at",
+            "count": len(rows),
+            "requested_tier": requested_tier,
+            "rows": rows,
+            "tier": snap["tier"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 
 def _license_features_at_snapshot() -> dict:
     """Shared one-shot read for the paired ``/api/license/features-at``
