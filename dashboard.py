@@ -284,16 +284,16 @@ except ImportError:
         pass  # noqa
 
 
-app = Flask(
-    __name__,
-    static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
-    template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
-)
-
-# Plugins (e.g. ``clawmetry-pro``) can now register Blueprints on ``app``.
-# Older plugins with ``register_all()`` (no args) keep working unchanged:
-# the loader inspects the signature and only passes ``app`` when accepted.
-_ext_load(app)
+# NOTE: the Flask app is constructed ONCE, further down this module (search
+# for ``app = Flask(``). A second, earlier construction used to live here and
+# silently orphaned every plugin Blueprint: clawmetry-pro registered its
+# routes on the early app, then the later ``app = Flask(...)`` replaced it and
+# every pro-only endpoint (nemoclaw, selfevolve, assets, compliance, ...)
+# 404'd on licensed installs while the OSS 402 stubs skipped registration
+# because ``clawmetry_pro.is_loaded()`` was True. ``_ext_load(app)`` must be
+# invoked on the app instance that actually serves — it is called immediately
+# after the real construction below. Guarded by
+# tests/test_plugin_load_on_served_app.py.
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
@@ -8646,6 +8646,14 @@ app = Flask(
     static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
+
+# Plugins (e.g. ``clawmetry-pro``) register their Blueprints on ``app`` HERE —
+# this must stay immediately after the one-and-only Flask() construction (see
+# the note near the top of this module: a second construction once orphaned
+# every plugin route). Older plugins with ``register_all()`` (no args) keep
+# working unchanged: the loader inspects the signature and only passes
+# ``app`` when accepted.
+_ext_load(app)
 
 # Cap request body size (DoS guard). OTLP/JSON batches and config posts are
 # small; a 32 MB ceiling lets Flask reject oversized bodies (413) before they
