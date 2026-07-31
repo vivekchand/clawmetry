@@ -62,6 +62,7 @@ def _record_paywall_event(action: str) -> None:
     the same telemetry the UI's upgrade CTAs feed. Never blocks, never
     raises; 1 s budget."""
     try:
+        import os
         import urllib.request
         payload = json.dumps({
             "event": "paywall_view",
@@ -69,8 +70,9 @@ def _record_paywall_event(action: str) -> None:
             "source": "cli",
             "harness": f"selfevolve_{action}",
         }).encode("utf-8")
+        base = (os.environ.get("CLAWMETRY_URL") or "http://127.0.0.1:8900").rstrip("/")
         req = urllib.request.Request(
-            "http://127.0.0.1:8900/api/paywall/event",
+            f"{base}/api/paywall/event",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",

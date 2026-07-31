@@ -176,11 +176,15 @@ def _run_detail(store, source, args) -> int:
         c.note(f"session {sid} · source: {source}")
         return c.EXIT_OK
 
-    # Default detail: the session row + cost headline.
+    # Default detail: the session row + cost headline. Human view shows the
+    # DERIVED runtime (session-id prefix rule) — agent_type says which
+    # adapter ingested the row and stays in --json only, so the detail and
+    # list views tell one story.
     if args.as_json:
         c.emit_json({"session": row, "source": source})
         return c.EXIT_OK
-    for key in ("session_id", "agent_type", "status", "title", "started_at",
+    print(f"{'runtime':16} {_runtime_of(row)}")
+    for key in ("session_id", "status", "title", "started_at",
                 "last_active_at", "ended_at", "message_count"):
         if row.get(key) not in (None, ""):
             print(f"{key:16} {row.get(key)}")
@@ -239,6 +243,9 @@ def _print_facet_human(facet: str, payload) -> None:
         return
     # cost / lineage / journey: structured dicts/lists — render as indented JSON
     # (still data → stdout; these shapes vary too much for a fixed table).
+    if payload in ([], {}):
+        c.note(f"(no {facet} rows recorded for this session)")
+        return
     import json as _json
     print(_json.dumps(payload, indent=2, default=str))
 

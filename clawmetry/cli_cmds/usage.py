@@ -166,7 +166,7 @@ def _run_efficiency(store, source, args) -> int:
     if by_rt:
         print()
         view = [
-            {"runtime": rt, "grade": (v or {}).get("grade", "?")}
+            {"runtime": rt, "grade": (v or {}).get("grade") or "-"}
             for rt, v in sorted(by_rt.items())
         ]
         c.print_table(view, [("runtime", "RUNTIME", 14), ("grade", "GRADE", 6)])
