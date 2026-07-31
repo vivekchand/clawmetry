@@ -3784,7 +3784,7 @@ def _cmd_proxy(args) -> None:
         config.save()
 
         print()
-        print(f"  {BOLD('🦞 ClawMetry Proxy')}")
+        print(f"  {BOLD('ClawMetry Proxy')}")
         print()
         print(f"  Listening on {CYAN(f'http://{config.host}:{config.port}')}")
         print()
@@ -3909,7 +3909,7 @@ def _cmd_proxy(args) -> None:
         print()
 
     else:
-        print(f"\n  {BOLD('🦞 ClawMetry Proxy')} — enforcement layer for LLM API calls")
+        print(f"\n  {BOLD('ClawMetry Proxy')}: enforcement layer for LLM API calls")
         print()
         print(f"  {BOLD('Commands:')}")
         print("    clawmetry proxy start    Start the proxy server")
