@@ -675,8 +675,6 @@
   "history.to": "ถึง",
   "history.token_usage_over_time": "การใช้โทเค็นตามช่วงเวลา",
   "i18n.language": "ภาษา",
-  "inventory.selected_chip": "เลือกแล้ว",
-  "inventory.selected_chip_tip": "แสดงเนื่องจากรันไทม์นี้ถูกเลือกไว้ในตัวสลับ ไม่มีกิจกรรมใน 24 ชั่วโมงที่ผ่านมา",
   "inventory.title": "Agent ของคุณ",
   "inventory.story": "ภาพรวมทุก agent บนเครื่องนี้ในมุมมองเดียว รู้ทันทีว่ารันอะไร เสียค่าใช้จ่ายเท่าไหร่ และยังทำงานอยู่หรือไม่",
   "inventory.tile_alive": "ทำงานอยู่",

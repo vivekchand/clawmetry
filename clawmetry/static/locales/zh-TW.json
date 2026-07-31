@@ -675,8 +675,6 @@
   "history.to": "至",
   "history.token_usage_over_time": "Token 用量趨勢",
   "i18n.language": "語言",
-  "inventory.selected_chip": "已選取",
-  "inventory.selected_chip_tip": "因為此運行環境已在切換器中選取而顯示,過去24小時內無活動。",
   "inventory.title": "您的代理程式",
   "inventory.story": "一覽此機器上每個代理程式的運行狀態、費用與存活情況。",
   "inventory.tile_alive": "存活",

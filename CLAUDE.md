@@ -179,4 +179,5 @@ DEBUG=1                                # Enable debug logging
 - **Read-only by default** — ClawMetry observes, it doesn't modify agent behavior (except cron management via gateway RPC).
 - **Auto-detect everything** — users should never need to configure anything manually.
 - **Never crash on bad input** — graceful fallbacks for missing data, log warnings but continue.
+- **Never starve the heartbeat** — the cloud relay drains and answers `pending_queries` (Brain time-window fetches, transcript reads, approvals) only when the daemon heart-beats, and the heartbeat fires at the end of a main-loop iteration. Any ingest pass that can run long (deep `runtime_backfill`, first-run ingest of hundreds of sessions) must call `_ingest_keepalive_heartbeat(config)` between items, or every hosted relay read sits on `relay_pending` until the browser gives up (2026-07-30 Brain-window RCA: a 465-session backfill blocked heartbeats for ~2m40s).
 - **snake_case** functions, **PascalCase** classes, **SCREAMING_SNAKE_CASE** constants.

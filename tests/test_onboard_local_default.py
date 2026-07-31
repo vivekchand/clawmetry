@@ -119,7 +119,7 @@ def test_env_local_only_forces_local(onboard_env, monkeypatch):
 
 def test_selfhosted_trial_reaches_connect_keep_local(onboard_env, monkeypatch):
     state, marker = onboard_env
-    answers = iter(["1", "n", "y"])  # Self-Hosted -> no key -> yes, trial sign-in
+    answers = iter(["2", "n", "y"])  # Self-Hosted -> no key -> yes, trial sign-in
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     cli._cmd_onboard(_args())
     assert state["connect"] == 1, "the trial path must reach the authenticated connect flow"
@@ -132,7 +132,7 @@ def test_selfhosted_trial_reaches_connect_keep_local(onboard_env, monkeypatch):
 
 def test_selfhosted_trial_declined_is_free_local(onboard_env, monkeypatch, capsys):
     state, marker = onboard_env
-    answers = iter(["1", "n", "n"])  # Self-Hosted -> no key -> no trial
+    answers = iter(["2", "n", "n"])  # Self-Hosted -> no key -> no trial
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     cli._cmd_onboard(_args())
     assert state["connect"] == 0 and state["instant_register"] == 0
@@ -140,22 +140,22 @@ def test_selfhosted_trial_declined_is_free_local(onboard_env, monkeypatch, capsy
     assert "Free plan: OpenClaw + NeMo" in capsys.readouterr().out
 
 
-def test_empty_enters_default_to_selfhosted_trial_signin(onboard_env, monkeypatch):
-    """Enter-Enter-Enter = Self-Hosted -> no key -> trial (founder 2026-07-30):
-    the default path signs in, keep-local. A human pressing Enter at visible
-    prompts is not a silent mint."""
+def test_empty_enter_defaults_to_cloud_signin(onboard_env, monkeypatch):
+    """Enter = [1] Cloud (founder 2026-07-30: lead with full capability).
+    A human pressing Enter at the visible menu is not a silent mint; the
+    headless/EOF path stays account-free (pinned above)."""
     state, marker = onboard_env
     monkeypatch.setattr("builtins.input", lambda _p="": "")  # Enter everywhere
     cli._cmd_onboard(_args())
     assert state["connect"] == 1
-    assert state.get("connect_keep_local") is True
+    assert not state.get("connect_keep_local"), "default cloud sign-in is not keep-local"
     assert state["instant_register"] == 0
     assert marker.exists(), "incomplete sign-in must fall back to free local"
 
 
 def test_selfhosted_key_later_points_at_selfhosted_pricing(onboard_env, monkeypatch, capsys):
     state, marker = onboard_env
-    answers = iter(["1", "y", ""])  # Self-Hosted -> have a key -> paste later
+    answers = iter(["2", "y", ""])  # Self-Hosted -> have a key -> paste later
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     cli._cmd_onboard(_args())
     out = capsys.readouterr().out
@@ -179,7 +179,7 @@ def test_choice_1_success_skips_local_fallback(onboard_env, monkeypatch, tmp_pat
             _json.dumps({"api_key": "cm_fresh_signup", "node_id": "n1"}))
 
     monkeypatch.setattr(cli, "_cmd_connect", _connect_writes_config)
-    monkeypatch.setattr("builtins.input", lambda _p="": "2")
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
     cli._cmd_onboard(_args())
     assert state["connect"] == 1
     assert not marker.exists(), "successful cloud sign-in clears local-only"
@@ -274,11 +274,12 @@ def test_already_connected_empty_enter_keeps_current(onboard_env, monkeypatch, t
 def test_already_connected_shows_two_options_and_shared_plans(onboard_env, monkeypatch, tmp_path, capsys):
     state, marker = onboard_env
     _make_connected(tmp_path / "home")
-    answers = iter(["1", "y", ""])  # Self-Hosted -> have key -> later
+    answers = iter(["2", "y", ""])  # Self-Hosted -> have key -> later
     monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
     cli._cmd_onboard(_args())
     out = capsys.readouterr().out
-    assert "[1] Self-Hosted" in out and "[2] Cloud" in out
+    assert "[1] Managed" in out and "[2] Self-Host" in out
+    assert "We host the dashboard for you" in out
     assert "Plans" in out and "Starter $9/node/mo" in out and "Pro    $19/node/mo" in out
     assert out.count("$9") == 1 and out.count("$19") == 1, "plans stated once, not per option"
     assert "watch OpenClaw + NVIDIA NemoClaw" in out
@@ -286,10 +287,10 @@ def test_already_connected_shows_two_options_and_shared_plans(onboard_env, monke
     assert marker.exists(), "explicit Self-Hosted reconfigures a connected user to local"
 
 
-def test_already_connected_choice_2_reaches_connect(onboard_env, monkeypatch, tmp_path):
+def test_already_connected_choice_1_reaches_connect(onboard_env, monkeypatch, tmp_path):
     state, _marker = onboard_env
     _make_connected(tmp_path / "home")
-    monkeypatch.setattr("builtins.input", lambda _p="": "2")
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
     cli._cmd_onboard(_args())
     assert state["connect"] == 1
     assert state["instant_register"] == 0
@@ -324,7 +325,7 @@ def test_cloud_choice_clears_marker_before_connect(onboard_env, monkeypatch):
     cleared before connect runs (an incomplete sign-in re-writes it)."""
     state, marker = onboard_env
     marker.write_text("")
-    monkeypatch.setattr("builtins.input", lambda _p="": "2")
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
     cli._cmd_onboard(_args())
     assert state["connect"] == 1
     assert state.get("marker_at_connect") is False

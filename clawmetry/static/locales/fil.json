@@ -675,8 +675,6 @@
   "history.to": "hanggang",
   "history.token_usage_over_time": "Paggamit ng Token sa Paglipas ng Panahon",
   "i18n.language": "Wika",
-  "inventory.selected_chip": "Napili",
-  "inventory.selected_chip_tip": "Ipinapakita dahil napili ang runtime na ito sa switcher. Walang aktibidad sa huling 24 oras.",
   "inventory.title": "Iyong mga agent",
   "inventory.story": "Isang malinaw na tingin sa lahat ng agent sa makina na ito: kung ano ang pinapatakbo, magkano ang gastos, at aktibo pa ba ito.",
   "inventory.tile_alive": "Aktibo",

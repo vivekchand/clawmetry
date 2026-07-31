@@ -675,8 +675,6 @@
   "history.to": "থেকে",
   "history.token_usage_over_time": "সময়ের সাথে টোকেন ব্যবহার",
   "i18n.language": "ভাষা",
-  "inventory.selected_chip": "নির্বাচিত",
-  "inventory.selected_chip_tip": "সুইচারে এই রানটাইমটি নির্বাচিত থাকায় এটি দেখানো হচ্ছে। গত ২৪ ঘণ্টায় কোনো কার্যকলাপ নেই।",
   "inventory.title": "আপনার এজেন্টগুলো",
   "inventory.story": "এই মেশিনের প্রতিটি এজেন্টের একটি শান্ত, এক-নজরের দৃশ্য: এটি কী চালায়, কত খরচ হয়, এবং এটি সক্রিয় কিনা।",
   "inventory.tile_alive": "সক্রিয়",

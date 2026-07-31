@@ -29,6 +29,7 @@ from itertools import islice
 
 # Leaf module (typing-only deps) — safe to import at package load, no cycle.
 from clawmetry import error_signal as _error_signal
+from clawmetry import session_titles as _session_titles
 
 
 def _get_openclaw_dir():
@@ -11928,6 +11929,42 @@ def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
     return out
 
 
+# ── Ingest keepalive heartbeat ──────────────────────────────────────────────
+# The cloud relay drains `pending_queries` (Brain time-window fetches,
+# transcript reads, approvals) ONLY when this daemon heart-beats, but the
+# heartbeat fires at the END of a main-loop iteration. A long synchronous
+# ingest pass — e.g. a `runtime_backfill` action raising the claude_code depth
+# from 50 to 465 sessions (~47k events, minutes of work) — therefore starved
+# the heartbeat and every hosted relay read sat on `relay_pending` until the
+# browser gave up ("Could not fetch this window from your node yet",
+# 2026-07-30). Heavy per-item loops call this between items; it re-sends the
+# heartbeat (which drains + answers pending queries as a side effect) at most
+# every _INGEST_KEEPALIVE_SEC.
+
+_INGEST_KEEPALIVE_SEC = 20.0
+_last_ingest_keepalive = 0.0
+
+
+def _ingest_keepalive_heartbeat(config: dict) -> bool:
+    """Throttled mid-ingest heartbeat. Returns True when a heartbeat was
+    actually attempted (test hook). Never raises — a keepalive failure must
+    not break the ingest pass it is protecting."""
+    global _last_ingest_keepalive
+    now = time.time()
+    if now - _last_ingest_keepalive < _INGEST_KEEPALIVE_SEC:
+        return False
+    _last_ingest_keepalive = now
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return False
+        send_heartbeat(config)
+        return True
+    except Exception as e:
+        log.debug("ingest keepalive heartbeat failed (non-fatal): %s", e)
+        return True
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -11981,6 +12018,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 continue
             runtime = adapter.name
             for s in adapter.list_sessions(limit=_effective_family_limit(runtime)):
+                # A deep pass (runtime_backfill) makes this loop run for
+                # minutes; keep the relay responsive between sessions.
+                _ingest_keepalive_heartbeat(config)
                 if runtime == "claude_code" and s.id in openclaw_spawned_claude:
                     continue  # owned by OpenClaw; avoid the double-count
                 ns_id = f"{runtime}:{s.id}"
@@ -12042,14 +12082,23 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_compress)
                 # Readable title: a raw UUID is unreadable on the dashboard/device.
                 # When the adapter gives no display_name (Claude Code, Codex, ...),
-                # derive a human title from the first real user message.
+                # derive a ChatGPT-style title from the first real user prompt
+                # (founder report 2026-07-30: every Conversations row said
+                # "Untitled session"). _session_titles skips harness plumbing
+                # ("<system-reminder>", the "Caveat:" resume preamble), handles
+                # list-block content, and caches per session so an already-titled
+                # session never re-reads the transcript head. Never raises.
                 _ftitle = (s.display_name or s.title or "").strip()
-                if not _ftitle:
-                    for _e in _events:
-                        _txt = (getattr(_e, "content", "") or getattr(_e, "text", "") or "").strip()
-                        if _txt and not _txt.startswith("<") and len(_txt) > 3:
-                            _ftitle = _txt[:80]
-                            break
+                if not _ftitle or _session_titles.looks_like_session_id(_ftitle, s.id):
+                    _ftitle = _session_titles.title_for_family_session(
+                        runtime, s.id, _events
+                    )
+                # No-clobber: when nothing is derivable pass None so
+                # ingest_session's COALESCE keeps whatever title the row already
+                # has (the legacy s.id fallback used to overwrite real titles
+                # with a UUID on every pass). Sub-agent labels + the cloud row
+                # still want SOMETHING, so they fall back to the raw id.
+                _row_title = _ftitle or None
                 _ftitle = _ftitle or s.id
                 # Compaction count: each auto-compaction silently re-summarises
                 # (and re-bills) the context. A session that compacted N times
@@ -12067,7 +12116,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "session_id": ns_id,
                         "node_id": node_id,
                         "agent_id": "main",
-                        "title": _ftitle,
+                        "title": _row_title,
                         "started_at": started,
                         "last_active_at": ended or started,
                         "ended_at": ended,
@@ -12853,6 +12902,30 @@ def _build_agent_inventory(
             a.get("displayName") or "",
         ))
 
+        # Subscription-coverage enrichment (device parity): the desk device
+        # already tells the truth about flat-fee plans ("covered / EXTRA TODAY
+        # $0.00 / Claude Max 20x covers it"); the web roster reads the SAME
+        # daemon-side detection so both surfaces agree. extraCost24hUsd counts
+        # METERED agents only - a subscription is a flat fee already paid, so
+        # its usage adds $0 of marginal spend (same semantics as the cloud
+        # device-summary endpoint). Cached 300s in _build_billing_payload;
+        # best-effort, never raises.
+        account_plan = None
+        extra_24h = 0.0
+        try:
+            _billing = _build_billing_payload(load_config() or {}) or {}
+            account_plan = _billing.get("account_plan")
+            _rt_billing = _billing.get("runtimes") or {}
+            for a in agents:
+                b = _rt_billing.get(a["agentKey"])
+                if isinstance(b, dict) and b.get("mode"):
+                    a["billingMode"] = b.get("mode")
+                    a["billingLabel"] = b.get("label")
+                    if b.get("mode") == "metered":
+                        extra_24h += float(a.get("cost24hUsd") or 0.0)
+        except Exception as _be:
+            log.debug("inventory billing enrichment skipped: %s", _be)
+
         node_wide = {
             "nodeId": node_id,
             "agents": agents,
@@ -12863,6 +12936,11 @@ def _build_agent_inventory(
             # column that would imply a per-agent number it cannot back.
             "nodeWideToolGroups": tool_groups if isinstance(tool_groups, dict) else {},
             "nodeWideEval": eval_summary if isinstance(eval_summary, dict) else {},
+            # Account-level plan ({mode,label,usd_month} or None) + the rolling
+            # 24h spend of METERED agents only - the "extra today" number when
+            # the plan is a subscription (device-parity hero).
+            "accountPlan": account_plan,
+            "extraCost24hUsd": round(extra_24h, 4),
             "total": len(agents),
         }
         by_runtime = {}
@@ -18455,9 +18533,23 @@ def run_daemon() -> None:
                 )
             save_state(state)
             if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
-                log.info(
-                    f"Synced {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
-                )
+                try:
+                    from clawmetry.config import is_cloud_disabled as _icd_cycle
+                    _cycle_local_only = _icd_cycle()
+                except Exception:
+                    _cycle_local_only = False
+                if _cycle_local_only:
+                    # _post() short-circuits every cloud call in local-only
+                    # mode; logging "Synced … E2E encrypted" here made the
+                    # founder believe data was leaving a machine whose whole
+                    # promise was that it never would (2026-07-30).
+                    log.info(
+                        f"Ingested locally (local-only, nothing sent): {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out"
+                    )
+                else:
+                    log.info(
+                        f"Synced {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
+                    )
 
             # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──
             # Reads cached rules + recent events from the local DuckDB and

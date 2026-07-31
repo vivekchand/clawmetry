@@ -7091,15 +7091,22 @@ async function loadBrainPage(silent) {
     var data = await _bhRaw.json();
     if (_bhRange !== _brainRange) return; // stale response for an old range
     // Hosted relay warm-up: the cloud answered "asked your node, poll me
-    // again" — show an honest status and retry a few times (the node
-    // answers within one heartbeat when it is online).
+    // again" — show an honest status and keep polling. Budget: a node
+    // mid-ingest (e.g. a deep runtime backfill) can hold its next heartbeat
+    // for 2-3 minutes, so allow ~5 min (12 quick polls, then 10s apart)
+    // before declaring failure. The old 12-poll (~40s) budget was shorter
+    // than one busy heartbeat and produced false "could not reach your
+    // node" errors while the node was fine (2026-07-30 window RCA).
     if (_bhRange && data && data._source === 'relay_pending') {
       var stEl = document.getElementById('brain-history-banner-status');
-      if (stEl) stEl.textContent = t('brain.window_fetching', null, 'Fetching this window from your node…');
-      if (_brainRangeRetries++ < 12) {
+      var _bhTry = _brainRangeRetries++;
+      if (stEl) stEl.textContent = _bhTry < 12
+        ? t('brain.window_fetching', null, 'Fetching this window from your node…')
+        : t('brain.window_fetching_busy', null, 'Your node is busy syncing — still fetching this window…');
+      if (_bhTry < 36) {
         setTimeout(function() {
           if (_bhRange === _brainRange) loadBrainPage(true);
-        }, Math.max(2000, (data.eta_sec || 3) * 1000));
+        }, _bhTry < 12 ? Math.max(2000, (data.eta_sec || 3) * 1000) : 10000);
       } else {
         var sEl2 = document.getElementById('brain-stream');
         if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not reach your node for this window. Check that the machine is online, then retry.') + '</div>';
@@ -9090,15 +9097,27 @@ async function _invFetchData() {
   }
 }
 
-// An agent is "active/recent" (shown by default) when it's running, did work in
-// the last 24h (cost or tokens), or is the currently-selected runtime. Everything
-// else folds under a "Show N inactive" expander so the roster reads like the
-// device's calm view instead of every runtime ever used here (#web-accuracy).
-function _invIsRecentlyActive(a, rtFilter) {
+// An agent is "active/recent" (shown by default) when it's running or did work
+// in the last 24h (cost or tokens). Everything else folds under a "Show N
+// inactive" expander so the roster reads like the device's calm view.
+// The partition is INDEPENDENT of the runtime switcher: this tab is node-wide,
+// so the same rows must show no matter what is selected (founder report
+// 2026-07-30 - the old selected-runtime promotion made the row set and the
+// fold count shift on every switcher change). The selected runtime is only
+// HIGHLIGHTED, never promoted or hidden.
+function _invIsRecentlyActive(a) {
   return !!(a.running
     || (Number(a.cost24hUsd || 0) > 0)
-    || (Number(a.tokens24h || 0) > 0)
-    || (rtFilter !== 'all' && a.agentKey === rtFilter));
+    || (Number(a.tokens24h || 0) > 0));
+}
+
+// Compact token count, mirroring the desk device's fmt_tokens ("360", "1.2k",
+// "3.4M") so both surfaces read the same.
+function _invFmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (Math.round(n / 1e5) / 10) + 'M';
+  if (n >= 1e3) return (Math.round(n / 100) / 10) + 'k';
+  return String(n);
 }
 
 function _invRosterRow(a, rtFilter) {
@@ -9116,25 +9135,31 @@ function _invRosterRow(a, rtFilter) {
   var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
-  // When the row is only visible BECAUSE it is the selected runtime (it had no
-  // activity in 24h and would otherwise sit in the inactive fold), say so.
-  // Without this chip the roster looks like it shows different data on every
-  // switcher change (founder report 2026-07-02).
-  var selectedChip = '';
-  if (rtFilter !== 'all' && rt === rtFilter && !_invIsRecentlyActive(a, 'all')) {
-    selectedChip = ' <span class="inv-selected-chip" '
-      + 'title="' + t('inventory.selected_chip_tip', null, 'Shown because this runtime is selected in the switcher. No activity in the last 24h.') + '" '
-      + 'style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 7px;border-radius:9px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#818cf8;vertical-align:middle;">'
-      + t('inventory.selected_chip', null, 'selected') + '</span>';
+  // Subscription coverage, mirroring the desk device's green "covered" / amber
+  // "metered" chip: a subscription runtime's usage adds $0 on top of the flat
+  // plan fee, so its cost columns are API-equivalent value, not extra spend.
+  var covChip = '';
+  if (a.billingMode === 'subscription') {
+    covChip = ' <span class="inv-cov-chip inv-cov-sub" title="'
+      + escHtml((a.billingLabel || 'Subscription'))
+      + ' covers this agent. Usage adds $0 extra; the cost columns show API-equivalent value.">'
+      + t('inventory.covered_chip', null, 'covered') + '</span>';
+  } else if (a.billingMode === 'metered') {
+    covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
+      + t('inventory.metered_chip', null, 'metered') + '</span>';
   }
   var pencil = window.CLOUD_MODE
     ? ''
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + selectedChip + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + covChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
-    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span>'
+    +     (Number(a.tokens24h || 0) > 0
+        ? ' <span class="inv-doing-tok" title="Tokens in the last 24 hours">' + _invFmtTok(a.tokens24h) + ' tok</span>'
+        : '')
+    +   '</td>'
     +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
     +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
     +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
@@ -9152,29 +9177,27 @@ function _invRenderRoster(inv) {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var active = [], inactive = [];
   agents.forEach(function (a) {
-    (_invIsRecentlyActive(a, rtFilter) ? active : inactive).push(a);
+    (_invIsRecentlyActive(a) ? active : inactive).push(a);
   });
   // Never end up with an empty roster: if nothing is "active" right now, show
   // everything rather than an empty table.
   if (!active.length && inactive.length) { active = inactive; inactive = []; }
-  // Consistent ordering: the selected runtime is always the FIRST row. Without
-  // this the promoted row lands wherever the roster order puts it (OpenClaw
-  // above Claude Code, Hermes below), which reads as the list changing
-  // arbitrarily on every switcher change.
-  if (rtFilter !== 'all') {
-    active.sort(function (a, b) {
-      return (b.agentKey === rtFilter ? 1 : 0) - (a.agentKey === rtFilter ? 1 : 0);
-    });
-  }
+  // NO switcher-dependent re-sort or promotion: the roster set AND order stay
+  // identical across runtime changes (node-wide contract). The selected
+  // runtime's row is highlighted in place, wherever it lives.
   var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
   var foldRows = '';
   if (inactive.length) {
+    // The toggle row lives in its own explicit <tbody>: a bare <tr> emitted as
+    // a direct <table> child gets wrapped in an implicit anonymous tbody by
+    // the HTML parser, which broke _invToggleInactive's sibling lookup and
+    // made the fold permanently un-openable (founder report 2026-07-30).
     foldRows = ''
-      + '<tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
+      + '<tbody class="inv-fold-head"><tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
       +   '<td colspan="8"><span class="inv-fold-caret">&#9656;</span> '
       +     'Show ' + inactive.length + ' inactive agent' + (inactive.length === 1 ? '' : 's')
       +     ' <span class="inv-fold-hint">(no activity in 24h)</span></td>'
-      + '</tr>'
+      + '</tr></tbody>'
       + '<tbody class="inv-fold-body" style="display:none;">'
       +   inactive.map(function (a) { return _invRosterRow(a, rtFilter); }).join('')
       + '</tbody>';
@@ -9199,7 +9222,12 @@ function _invRenderRoster(inv) {
 
 function _invToggleInactive(el) {
   try {
-    var body = el.parentNode.querySelector('.inv-fold-body')
+    // The fold body is a SIBLING <tbody> of the toggle row's <tbody> - walk up
+    // to the table and search from there (parentNode/nextElementSibling lookups
+    // miss it and made the fold a silent no-op).
+    var table = (el.closest ? el.closest('table') : null);
+    var body = (table && table.querySelector('.inv-fold-body'))
+      || el.parentNode.querySelector('.inv-fold-body')
       || (el.nextElementSibling && el.nextElementSibling.classList.contains('inv-fold-body') ? el.nextElementSibling : null);
     if (!body) return;
     var open = body.style.display !== 'none';
@@ -9334,14 +9362,34 @@ async function renderInventory() {
 
   // 4-tile strip.
   var aliveCount = agents.filter(function (a) { return a.running; }).length;
-  var totalCost = agents.reduce(function (s, a) {
-    return s + (_invHasCost(a.agentKey) ? Number(a.costUsd || 0) : 0);
+  // "Today" = the rolling-24h spend (cost24hUsd). It used to sum costUsd,
+  // which is LIFETIME - the tile showed the all-time total under a "Today"
+  // label (founder screenshot 2026-07-30: Today $812.65 == lifetime).
+  var totalCost24h = agents.reduce(function (s, a) {
+    return s + (_invHasCost(a.agentKey) ? Number(a.cost24hUsd || 0) : 0);
   }, 0);
   var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
   var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
   setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
   setTxt('inv-tile-agents', String(agents.length));
-  setTxt('inv-tile-today', _invFmtUsd(totalCost));
+  // Subscription honesty (device parity): when the account plan is a
+  // subscription, today's marginal spend is the METERED agents' cost only -
+  // the plan is a flat fee already paid. Mirror the desk device's hero:
+  // "$0.00 extra / Claude Max 20x covers it - ~$X.XX at API rates".
+  var plan = inv.accountPlan || null;
+  var extra = Number(inv.extraCost24hUsd);
+  var todaySub = document.getElementById('inv-tile-today-sub');
+  if (plan && plan.mode === 'subscription') {
+    setTxt('inv-tile-today', _invFmtUsd(isFinite(extra) ? extra : 0) + ' extra');
+    if (todaySub) {
+      todaySub.textContent = (plan.label || 'Subscription') + ' covers it · ~'
+        + _invFmtUsd(totalCost24h) + ' at API rates';
+      todaySub.style.display = '';
+    }
+  } else {
+    setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
+    if (todaySub) { todaySub.textContent = ''; todaySub.style.display = 'none'; }
+  }
   setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
   if (statsEl) statsEl.style.display = '';
 

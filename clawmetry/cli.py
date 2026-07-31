@@ -1214,9 +1214,15 @@ def _cmd_connect(args) -> None:
     _node_id = config.get("node_id", "")
     _dashboard_url = f"https://app.clawmetry.com/cloud?token={api_key}#key={enc_key}&node={_node_id}"
 
+    # Cloud includes the local dashboard too (the onboard copy promises
+    # BOTH app.clawmetry.com and localhost:8900) — make it true, best-effort.
+    _local_dash_up = _ensure_local_dashboard()
+
     print()
     print("  All done! Opening your dashboard...")
     print(f"  https://app.clawmetry.com/cloud")
+    if _local_dash_up:
+        print("  Also on this machine: http://localhost:8900")
     print()
 
     # If this was a zero-friction connect (no real key), the node landed on a
@@ -2502,6 +2508,11 @@ def _status_snapshot(args) -> dict:
                     cloud["encryption"]["secret_key"] = enc_key
         except Exception as exc:
             cloud["config_error"] = str(exc)
+        try:
+            from clawmetry.config import is_cloud_disabled as _icd_json
+            cloud["local_only"] = _icd_json()
+        except Exception:
+            cloud["local_only"] = None
         snap["cloud_sync"] = cloud
 
     # Sync state.
@@ -2707,7 +2718,18 @@ def _cmd_status(args) -> None:
             masked_api = (
                 api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             )
-            print("  Cloud sync:  ✅  Connected")
+            try:
+                from clawmetry.config import is_cloud_disabled as _icd_status
+                _status_local_only = _icd_status()
+            except Exception:
+                _status_local_only = False
+            if _status_local_only:
+                # Signed-in Self-Hosted: the account exists (it holds the
+                # trial license) but nothing syncs — saying "Connected"
+                # here read as a betrayal (founder 2026-07-30).
+                print("  Cloud sync:  ⏸   Local-only (account linked; data stays on this machine)")
+            else:
+                print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             _acct_email, _acct_plan = _resolve_account_email(api_key)
             # Self-heal the local plan cache from the LIVE account. The runtime
@@ -3267,12 +3289,14 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
-    print(f"    {BOLD('[1] Self-Hosted')}  {DIM('Everything runs and stays on your devices.')}")
-    print(f"                     {DIM('Dashboard at http://localhost:8900.')}")
-    print(f"    {BOLD('[2] Cloud')}        {DIM('Your whole fleet in one dashboard, from anywhere')}")
-    print(f"                     {DIM('(app.clawmetry.com), plus the desk device')}")
-    print(f"                     {DIM('(clawmetry.com/device). E2E-encrypted: snapshots are')}")
-    print(f"                     {DIM('sealed on your machine and only you hold the key.')}")
+    print(f"    {BOLD('[1] Managed')}    {DIM('We host the dashboard for you: easy to manage when')}")
+    print(f"                   {DIM('observing a large fleet of nodes. app.clawmetry.com from')}")
+    print(f"                   {DIM('anywhere PLUS http://localhost:8900 on this machine; desk')}")
+    print(f"                   {DIM('device at clawmetry.com/device. E2E-encrypted: snapshots')}")
+    print(f"                   {DIM('are sealed here and only you hold the key.')}")
+    print(f"    {BOLD('[2] Self-Host')}  {DIM('You host it: great for observing one node, difficult')}")
+    print(f"                   {DIM('to manage for a fleet. Everything stays on your devices;')}")
+    print(f"                   {DIM('dashboard at http://localhost:8900.')}")
     print()
 
     def _write_nocloud_marker():
@@ -3332,12 +3356,13 @@ def _cmd_onboard(args) -> None:
     # Scriptable / non-interactive overrides. A headless install (curl | bash
     # with no /dev/tty) must NEVER silently create a cloud account, so the
     # EOF fallback is the free local tier ("0"), even though the interactive
-    # default keypress is [1] Self-Hosted (whose trial sub-prompt signs in).
+    # default keypress is [1] Cloud (founder 2026-07-30: lead with the full
+    # capability; self-host is the deliberate alternative).
     _env_local = _os.environ.get("CLAWMETRY_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
     if getattr(args, "local", False) or _env_local:
         choice = "0"
     elif getattr(args, "cloud", False):
-        choice = "2"
+        choice = "1"
     else:
         # When already connected, the default on an empty Enter is "keep current
         # setup" (return without changes) so re-running onboard never silently
@@ -3381,8 +3406,8 @@ def _cmd_onboard(args) -> None:
 
     import argparse as _ap
 
-    if choice == "2":
-        # ── [2] Cloud: sign in, fleet dashboard from anywhere ─────────────
+    if choice != "2":
+        # ── [1] Cloud (default): sign in, fleet dashboard from anywhere ───
         # The keypress IS the cloud consent: clear the marker so connect goes
         # straight to sign-in; an incomplete sign-in re-writes it below.
         try:
@@ -3408,7 +3433,7 @@ def _cmd_onboard(args) -> None:
         _finish_local()
         return
 
-    # ── [1] Self-Hosted (default): key if you have one, else trial sign-in ──
+    # ── [2] Self-Hosted: key if you have one, else trial sign-in ────────────
     # Data never leaves the machine on this path (nocloud marker). Identity
     # is still how the trial unlocks runtimes: no key -> sign in (Google /
     # GitHub / email OTP) via connect's keep-local mode, which mints and
