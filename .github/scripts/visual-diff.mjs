@@ -92,7 +92,7 @@ async function reachable(url) {
  * This is called before the screenshot loop to provide an early diagnostic
  * message. A failure no longer aborts the run -- we continue screenshotting
  * so the PR comment always has images (showing the overlay) rather than
- * "Bot run failed before producing screenshots". The error is collected into
+ * "no screenshots". The error is collected into
  * preflightFailed[] and merged into authGaps at the end so the workflow
  * still exits 3 to signal the auth problem.
  */
