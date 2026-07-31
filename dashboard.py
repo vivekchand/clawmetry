@@ -14,6 +14,10 @@ https://github.com/vivekchand/clawmetry
 MIT License
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
 import hmac
 import os
 import sys
@@ -12862,8 +12866,8 @@ def _auto_discover_gateway(token):
                 "id": "discover",
                 "method": "connect",
                 "params": {
-                    "minProtocol": 3,
-                    "maxProtocol": 3,
+                    "minProtocol": _GW_MIN_PROTO,
+                    "maxProtocol": _GW_MAX_PROTO,
                     "client": {
                         "id": "cli",
                         "version": __version__,
