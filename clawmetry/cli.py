@@ -5928,7 +5928,7 @@ def _cmd_compliance(args) -> None:
         resp = urllib.request.urlopen(req, timeout=120)
     except urllib.error.HTTPError as e:
         if e.code == 402:
-            print("❌  The Compliance Pack is a paid feature (Enterprise).")
+            print("❌  The Compliance Pack is a paid feature (Pro and up).")
             print("    Install clawmetry-pro with a license key, or see "
                   "clawmetry.com/pricing.")
         elif e.code == 404:
@@ -6922,7 +6922,7 @@ def main() -> None:
         "compliance",
         help=(
             "Compliance Pack — generate an auditor-ready evidence bundle "
-            "from the running dashboard (Enterprise)"
+            "from the running dashboard (Pro)"
         ),
     )
     comp_sub = p_compliance.add_subparsers(dest="compliance_cmd")

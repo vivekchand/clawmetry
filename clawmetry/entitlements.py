@@ -315,6 +315,7 @@ PRO_ONLY_FEATURES = frozenset(
         "alert_webhooks",
         "anomaly_detection",
         "cost_optimizer",
+        "compliance_pack",
     }
 )
 
@@ -328,7 +329,6 @@ ENTERPRISE_FEATURES = frozenset(
         "rbac",
         "air_gapped_license",
         "custom_data_residency",
-        "compliance_pack",
     }
 )
 
