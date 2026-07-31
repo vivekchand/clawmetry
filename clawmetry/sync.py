@@ -4987,6 +4987,7 @@ _CHANNEL_DIRS: tuple[str, ...] = (
     "synologychat",
     "nextcloudtalk",
     "clickclack",
+    "buzz",
 )
 
 # Filenames inside ``~/.openclaw/<channel>/`` that are NOT conversation
