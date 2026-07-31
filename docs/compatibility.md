@@ -27,6 +27,7 @@ This page tracks each one's real status, honestly.
 | Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |
 | Deep Agents | Beta adapter   | SQLite `~/.deepagents/.state/sessions.db` | Transcripts, model, tool calls, real tokens + cost. |
 | n8n         | Beta adapter   | SQLite `~/.n8n/database.sqlite` (`execution_entity`/`execution_data`, WAL) | Workflow executions as sessions, node runs as tool calls, AI Agent prompts + model attribution; tokens + cost where the model sub-node records usage. Postgres and n8n Cloud installs are not covered by this adapter. |
+| Antigravity | Beta adapter   | Brain JSONL under `~/.gemini/<flavor>/brain/<uuid>/` (flavors: `antigravity`, `antigravity-cli`, `antigravity-ide`, `jetski`) + `conversations/<uuid>.db` (SQLite, WAL) | Conversations as sessions, planner/tool steps as events, thinking + checkpoint (compaction) events; per-generation model, token split (prompt/thinking/response) and cost decoded from `gen_metadata`; background-generation burn; subagent + battle-mode metadata. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 ## What "Beta adapter" means (and what it does not)

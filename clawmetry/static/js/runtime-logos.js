@@ -41,7 +41,8 @@
     "qwen_code": "#6d5cff",
     "pi": "#4f8ef7",
     "deepagents": "#2fa87c",
-    "n8n": "#ea4b71"
+    "n8n": "#ea4b71",
+    "antigravity": "#4285f4"
   };
   var FALLBACK_HUE = "#8b97ad";
 

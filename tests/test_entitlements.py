@@ -255,10 +255,11 @@ def test_paid_runtimes_exact_membership(ent):
             "pi",
             "deepagents",
             "n8n",
+            "antigravity",
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 13
+    assert len(ent.PAID_RUNTIMES) == 14
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):
