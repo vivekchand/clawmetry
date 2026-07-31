@@ -19099,6 +19099,14 @@ def _init_data_provider():
 
 
 def main():
+    # Enterprise TLS/proxy bootstrap (idempotent; also runs in cli.main).
+    # Covers direct `python3 dashboard.py` runs so telemetry/cloud-proxy
+    # POSTs work behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="dashboard")
+    except Exception:
+        pass
     # -----------------------------------------------------------------------
     # Build a shared parent parser for options that apply to all subcommands
     # (and to foreground mode when no subcommand is given).

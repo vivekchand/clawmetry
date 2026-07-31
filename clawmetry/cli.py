@@ -5751,6 +5751,15 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "hooks":
         from clawmetry.hooks_claude_code import cli_main as _hooks_cli
         raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # Enterprise TLS/proxy bootstrap — OS trust store (truststore), 3.13
+    # strict-flag relax, CLAWMETRY_CA_BUNDLE, proxy env vars — so every
+    # outbound HTTPS call from the CLI/dashboard (connect, OTP, telemetry,
+    # update check) works behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="cli")
+    except Exception:
+        pass
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
@@ -6470,6 +6479,21 @@ def main() -> None:
         ),
     )
 
+    # doctor — enterprise network/TLS connectivity diagnostics
+    p_doctor = sub.add_parser(
+        "doctor",
+        help=(
+            "Diagnose cloud connectivity: DNS, TCP, proxy, TLS "
+            "(detects corporate TLS interception), heartbeat POST"
+        ),
+    )
+    p_doctor.add_argument(
+        "--host",
+        dest="doctor_host",
+        default=None,
+        help="Override target (default: ingest.clawmetry.com / CLAWMETRY_INGEST_URL)",
+    )
+
     # verify-integrity — walk hash chain and report validity (Issue #2200)
     p_verify = sub.add_parser(
         "verify-integrity",
@@ -6527,6 +6551,7 @@ def main() -> None:
         "bundle",
         "extensions",
         "diagnose",
+        "doctor",
         "verify-integrity",
         "nemoclaw-daemons",
     )
@@ -6582,6 +6607,9 @@ def main() -> None:
             _cmd_extensions(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
+        elif args.cmd == "doctor":
+            from clawmetry.doctor import run_doctor
+            sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "nemoclaw-daemons":
