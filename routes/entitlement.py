@@ -12895,6 +12895,134 @@ def api_license_features_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/has-feature-at")
+def api_license_has_feature_at():
+    """``GET /api/license/has-feature-at?feature=<id>&epoch=<int>`` --
+    boolean gate for "did the installed license claim feature <X>
+    evaluated as of ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/has-feature``, for a scheduled-audit tile that
+    wants to answer "was this node entitled to feature <X> on <date>?"
+    without the caller having to snapshot the license state at that
+    time or compare ``exp`` to a caller-supplied epoch themselves.
+
+    Query parameters:
+      * ``feature`` (str, required in-spirit) -- the feature id to
+        test against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.has_feature_at`. Missing / empty /
+        non-string input degrades to ``has_feature_at=false`` rather
+        than a 4xx, matching the surrounding endpoints' never-5xx /
+        never-4xx posture.
+      * ``epoch`` (int, required in-spirit) -- Unix epoch seconds.
+        Missing / non-integer / bool input collapses ``features_at``
+        to ``null`` and the predicate to ``false`` (there is no
+        features list to search once the perspective is unusable --
+        the conservative "no entitlement" fallback matching the never-
+        mis-gate posture of the surrounding ``_at`` family).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "has_feature_at":    <bool>,
+          "features_at":       [<id>, ...] | null,   # features as of epoch
+          "requested_feature": <str>,                # normalised echo of query
+          "requested_epoch":   <int|null>,           # int-coerced input, or null on typo
+          "features":          [<id>, ...] | null,   # current-time features
+          "expires_at":        <int|null>,
+          "has_license":       <bool>,
+          "valid":             <bool>                # signature-valid AND not expired NOW
+        }
+
+    ``has_feature_at`` is ``True`` iff the perspective-epoch features
+    list is a list AND contains the normalised ``requested_feature``
+    AND the requested value is a non-empty string -- an empty /
+    missing ``feature=`` query returns ``has_feature_at=false`` so a
+    caller cannot silently claim a feature that would grant unearned
+    entitlement.
+
+    Mirrors :func:`clawmetry.license.has_feature_at` -- the HTTP shape
+    layers ``features_at`` / ``requested_feature`` / ``requested_epoch``
+    / ``features`` / ``expires_at`` / ``has_license`` / ``valid`` on
+    top of that bool so a widget never needs a second call to
+    ``/api/license/features-at`` (or ``/api/license/features``) to
+    render the accompanying "you had feature <X> then" copy.
+
+    When ``epoch`` equals "now" and ``feature`` is a non-empty string,
+    this endpoint must agree with ``/api/license/has-feature`` at the
+    boundary for the same install -- both derive from the same signed
+    ``features`` claim via :func:`license_features_at` /
+    :func:`license_features`, so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Shares :func:`_license_features_at_snapshot` with ``/api/license/
+    features-at{,-batch}`` so the current-time reference fields
+    (``features`` / ``expires_at`` / ``has_license`` / ``valid``)
+    cannot disagree between the sibling endpoints for the same
+    install.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This endpoint answers *"did the KEY carry this feature
+    id at <epoch>?"*, not *"was this feature enforced at <epoch>?"*.
+    For the resolved feature set actually enforced by gates, read
+    ``/api/entitlement`` (which layers this claim on top of the
+    FREE-tier baseline).
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``has_feature_at=false``, ``features_at=null``,
+    ``features=null``, ``expires_at=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    raw_feature = request.args.get("feature", "") or ""
+    try:
+        requested_feature = str(raw_feature).strip().lower()
+    except Exception:
+        requested_feature = ""
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested_epoch = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested_epoch = None
+    try:
+        snap = _license_features_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_has_feature_at: snapshot error: %s", exc)
+        snap = {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    features_at: list | None = None
+    if requested_epoch is not None:
+        try:
+            from clawmetry import license as _lic
+
+            features_at = _lic.license_features_at(requested_epoch)
+        except Exception as exc:
+            logger.warning(
+                "api_license_has_feature_at: derive error: %s", exc
+            )
+            features_at = None
+    if features_at is not None and not isinstance(features_at, list):
+        features_at = None
+    match = bool(
+        requested_feature
+        and isinstance(features_at, list)
+        and requested_feature in features_at
+    )
+    return jsonify(
+        {
+            "has_feature_at": match,
+            "features_at": features_at,
+            "requested_feature": requested_feature,
+            "requested_epoch": requested_epoch,
+            "features": snap["features"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
 
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])
