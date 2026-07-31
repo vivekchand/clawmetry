@@ -12,7 +12,6 @@ Exit code 0 only when every check passes.
 """
 from __future__ import annotations
 
-import os
 import socket
 import ssl
 import urllib.error
@@ -183,9 +182,9 @@ def _windows_fix_text(issuer: str) -> str:
 
 def run_doctor(host: str = None, port: int = 443, out=print) -> int:
     """Run all connectivity checks. Returns process exit code (0 = all pass)."""
-    host = host or os.environ.get(
-        "CLAWMETRY_INGEST_URL", "https://" + INGEST_HOST_DEFAULT
-    )
+    if not host:
+        from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+        host = _resolve_ingest_url()
     if "://" in host:
         parsed = urllib.parse.urlparse(host)
         port = parsed.port or 443

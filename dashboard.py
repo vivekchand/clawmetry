@@ -11754,6 +11754,20 @@ def detect_config(args=None):
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
+    # ClawMetry Enterprise self-hosted server mode: one process serves the
+    # dashboard AND the ingest API the node daemons push to. Gated hard on
+    # SELF_HOSTED=true — never registered for normal local/cloud installs.
+    try:
+        from clawmetry.selfhosted import is_self_hosted as _is_self_hosted
+        if _is_self_hosted():
+            from routes.selfhosted_ingest import bp_selfhosted
+            app.register_blueprint(bp_selfhosted)
+            from clawmetry.selfhosted import maybe_start_license_ping
+            if maybe_start_license_ping():
+                print("  SelfHosted: [ok] license/version ping enabled (daily)")
+            print("  SelfHosted: [ok] ingest API registered (/auth, /ingest/*)")
+    except Exception as _sh_exc:
+        print(f"  SelfHosted: [warn] not registered: {_sh_exc}")
     app.register_blueprint(bp_dives)
     app.register_blueprint(bp_reports)
     app.register_blueprint(bp_scheduler)
@@ -18228,7 +18242,8 @@ def _start_oauth_bridge(provider):
                          "node_id": "", "enc_key": "", "error": "Unsupported provider"}
         return None
 
-    app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    app_base = _resolve_app_url()
     captured = {}
 
     class _Handler(http.server.BaseHTTPRequestHandler):

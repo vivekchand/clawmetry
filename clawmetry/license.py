@@ -300,11 +300,14 @@ def _cloud_base() -> str:
     wheel. ``CLAWMETRY_LICENSE_SERVER`` wins (self-hosted/air-gapped), else the
     cloud ingest app (which also hosts /api/license/*). Always HTTPS in prod;
     the only non-HTTPS values are explicit localhost overrides for tests."""
-    return (
-        os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
-        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
-        or _DEFAULT_CLOUD_BASE
-    ).rstrip("/")
+    explicit = os.environ.get("CLAWMETRY_LICENSE_SERVER", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    try:
+        from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+        return _resolve_ingest_url()
+    except Exception:
+        return _DEFAULT_CLOUD_BASE
 
 
 def _offline_mode() -> bool:

@@ -1,0 +1,50 @@
+# ClawMetry Enterprise, self-hosted, single-tenant deployment.
+#
+# One command:   docker compose up -d
+# Then point each node at this server:
+#   CLAWMETRY_ENDPOINT=https://clawmetry.internal.example clawmetry connect --key cm_...
+#
+# One container serves both the dashboard UI and the ingest API the node
+# daemons push to (SELF_HOSTED=true registers the ingest blueprint). The
+# database is embedded (SQLite for the ingest/audit store, DuckDB for the
+# local event store) and lives on the named volume, no external DB server
+# required. See README.md in this directory for auth setup, upgrades, and
+# backups.
+
+services:
+  clawmetry:
+    build:
+      context: ../..
+    image: clawmetry-selfhosted:latest
+    restart: unless-stopped
+    ports:
+      - "8900:8900"
+    environment:
+      SELF_HOSTED: "true"
+      # ── Auth (REQUIRED, set real values in .env or here) ────────────────
+      # Node tokens (comma-separated, each must start with cm_):
+      CLAWMETRY_API_TOKENS: "${CLAWMETRY_API_TOKENS:?set node tokens, e.g. cm_change_me}"
+      # Admin credentials for audit export / node list / relay reads:
+      CLAWMETRY_ADMIN_USER: "${CLAWMETRY_ADMIN_USER:?set admin user}"
+      CLAWMETRY_ADMIN_PASSWORD: "${CLAWMETRY_ADMIN_PASSWORD:?set admin password}"
+      # ── Privacy: nothing leaves this deployment ──────────────────────────
+      CLAWMETRY_NO_TELEMETRY: "1"
+      CLAWMETRY_NO_CLOUD: "1"
+      # Optional, OFF by default: daily license/version ping to
+      # app.clawmetry.com (payload documented in clawmetry/selfhosted.py).
+      # CLAWMETRY_LICENSE_PING: "1"
+      # ── Optional: ask nodes to E2E-encrypt blobs (server then stores
+      # opaque ciphertext; audit export contains envelope metadata only) ────
+      # CLAWMETRY_SELF_HOSTED_E2E: "1"
+    volumes:
+      # ~/.clawmetry inside the container (HOME=/root): SQLite ingest/audit
+      # store, DuckDB event store, config, logs.
+      - clawmetry-data:/root/.clawmetry
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8900/api/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  clawmetry-data:

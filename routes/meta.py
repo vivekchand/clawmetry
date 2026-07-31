@@ -1017,6 +1017,11 @@ def _anon_forward_cloud(payload: dict) -> None:
     OSS side starts feeding live data without another release.
     """
     try:
+        from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
+        if _is_custom_ep():
+            # Self-hosted / enterprise: anonymous analytics must not leave
+            # the deployment. The local JSONL remains the durable record.
+            return
         import urllib.request as _ur
         req = _ur.Request(
             "https://app.clawmetry.com/api/admin/anon-event",

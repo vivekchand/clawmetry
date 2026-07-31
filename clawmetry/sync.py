@@ -295,7 +295,12 @@ def _validate_log_offsets(state: dict, paths: dict) -> None:
             log.warning(f"Could not validate offset for {fname}: {e}")
 
 
-INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+# Resolved through clawmetry.endpoints (env CLAWMETRY_ENDPOINT >
+# env CLAWMETRY_INGEST_URL > config "endpoint" > managed cloud). Snapshotted
+# at import time — approvals.py and tests import this constant directly.
+from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+
+INGEST_URL = _resolve_ingest_url()
 CONFIG_DIR = Path.home() / ".clawmetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE = CONFIG_DIR / "sync-state.json"
@@ -17609,7 +17614,9 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
     return t
 
 
-_APP_BASE = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+from clawmetry.endpoints import app_url as _resolve_app_url
+
+_APP_BASE = _resolve_app_url()
 
 
 def _is_placeholder_email(email) -> bool:
@@ -17709,6 +17716,16 @@ def run_daemon() -> None:
         configure_outbound_network(role="daemon")
     except Exception as _net_e:
         log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Outbound OTLP exporter (enterprise): activated by the ``otlp_endpoint``
+    # key in ~/.clawmetry/config.json. scope="config" is daemon-only — the
+    # dashboard's env-var-activated exporter is a separate scope, so both
+    # processes never double-export. No-op when the key is unset.
+    try:
+        from clawmetry.otel_exporter import start_exporter as _start_otel
+        if _start_otel(scope="config"):
+            log.info("OTLP exporter started (config otlp_endpoint)")
+    except Exception as _otel_e:
+        log.warning("OTLP exporter not started: %s", _otel_e)
     # Windows: the daemon runs DETACHED (no console), so unpatched child
     # processes (pip update check, node --version, disk probes) each flash
     # a visible cmd window. Patch Popen once so children stay windowless.

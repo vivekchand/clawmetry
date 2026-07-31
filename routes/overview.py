@@ -1719,7 +1719,8 @@ def cloud_proxy(cloud_path):
     if not token:
         return jsonify({"error": "cloud_not_connected"}), 401
 
-    url = "https://app.clawmetry.com/" + cloud_path
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    url = _resolve_app_url() + "/" + cloud_path
     if request.query_string:
         url += "?" + request.query_string.decode("utf-8", errors="replace")
 
@@ -1795,9 +1796,10 @@ def cloud_cta_send_otp():
     if not email or "@" not in email:
         return jsonify({"ok": False, "error": "Invalid email"}), 400
     try:
+        from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "source": "dashboard"}).encode()
         _req = _ur.Request(
-            "https://app.clawmetry.com/api/otp/send",
+            _resolve_app_url() + "/api/otp/send",
             data=_body,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -1828,9 +1830,10 @@ def cloud_cta_verify_otp():
     if not email or not code:
         return jsonify({"ok": False, "error": "Missing email or code"}), 400
     try:
+        from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "code": code}).encode()
         _req = _ur.Request(
-            "https://app.clawmetry.com/api/otp/verify",
+            _resolve_app_url() + "/api/otp/verify",
             data=_body,
             headers={"Content-Type": "application/json"},
             method="POST",

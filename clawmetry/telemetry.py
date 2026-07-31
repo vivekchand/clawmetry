@@ -273,6 +273,24 @@ def _mark_pinged(install_id: str) -> None:
         pass
 
 
+def _resolve_telemetry_url() -> str:
+    """Telemetry URL to post to, or "" when pings must not fire.
+
+    A custom endpoint (self-hosted / enterprise, see clawmetry.endpoints)
+    means data stays inside the deployment: skip the managed-cloud install
+    pings entirely unless CLAWMETRY_TELEMETRY_URL is explicitly set."""
+    url = os.environ.get("CLAWMETRY_TELEMETRY_URL", "")
+    if url:
+        return url
+    try:
+        from clawmetry.endpoints import is_custom_endpoint
+        if is_custom_endpoint():
+            return ""
+    except Exception:
+        pass
+    return TELEMETRY_URL_DEFAULT
+
+
 def _send_in_background(version: str) -> None:
     """Worker that runs on the daemon thread. Fully isolated — no
     raised exception can bubble back to the caller."""
@@ -286,7 +304,9 @@ def _send_in_background(version: str) -> None:
         if event is None:
             return
         payload = _build_payload(version, event=event)
-        url = os.environ.get("CLAWMETRY_TELEMETRY_URL", TELEMETRY_URL_DEFAULT)
+        url = _resolve_telemetry_url()
+        if not url:
+            return
         _post(payload, url)
         _record_reported(install_id, version, event)
     except Exception as e:
@@ -304,7 +324,9 @@ def _send_event_in_background(event: str, version: str, extra: dict | None) -> N
         if not install_id:
             return
         payload = _build_payload(version, event=event, extra=extra)
-        url = os.environ.get("CLAWMETRY_TELEMETRY_URL", TELEMETRY_URL_DEFAULT)
+        url = _resolve_telemetry_url()
+        if not url:
+            return
         _post(payload, url)
     except Exception as e:
         log.debug("telemetry: event background failure: %s", e)

@@ -32,6 +32,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+
 log = logging.getLogger("clawmetry.insights")
 
 # ── Config / paths ─────────────────────────────────────────────────────────
@@ -429,10 +431,10 @@ def _bind_params(now: datetime.datetime) -> dict:
 # error) we fall back to the same "<n> rows" stub that the no-key path
 # already produces. No new failure modes introduced.
 
-# Cloud-relay endpoint. Env override mirrors clawmetry/sync.py + cli.py.
-INGEST_URL = os.environ.get(
-    "CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com"
-)
+# Cloud-relay endpoint. Resolved via clawmetry.endpoints (CLAWMETRY_ENDPOINT >
+# CLAWMETRY_INGEST_URL > config "endpoint" > managed cloud), snapshotted at
+# import time like clawmetry/sync.py.
+INGEST_URL = _resolve_ingest_url()
 RELAY_SYNTHESIZE_URL = INGEST_URL.rstrip("/") + "/api/insights/synthesize"
 
 

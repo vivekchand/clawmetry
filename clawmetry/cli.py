@@ -459,7 +459,8 @@ def _oauth_browser_login(provider: str, input_fn=input, api_call=None) -> str:
     import hashlib as _hashlib
     import base64 as _base64
 
-    app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    app_base = _resolve_app_url()
 
     # PKCE: the verifier stays in CLI memory only; only its SHA256 (the
     # challenge) ever leaves this process, in the start URL.
@@ -565,7 +566,8 @@ def _get_api_key_interactive() -> str:
             return line.rstrip("\n")
         return input(prompt)
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api_call(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -719,7 +721,8 @@ def _verify_key_ownership(api_key: str) -> None:
             return _tty.readline().rstrip("\n")
         return input(prompt)
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -996,11 +999,16 @@ def _cmd_connect(args) -> None:
         elif getattr(args, "start_sync_now", False):
             pass  # Key from the authenticated dashboard command — already proven
         else:
-            _verify_key_ownership(api_key)
+            from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
+            if _is_custom_ep():
+                pass  # Self-hosted server — no email-OTP service; /auth is the gate
+            else:
+                _verify_key_ownership(api_key)
 
     custom_name = getattr(args, "custom_node_id", None) or ""
     machine_hostname = custom_name or socket.gethostname()
     _existing_node_id = _saved_node_id
+    _server_e2e = None
     print("Verifying your account… " if _keep_local_signin
           else "Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
@@ -1008,6 +1016,10 @@ def _cmd_connect(args) -> None:
             api_key, hostname=machine_hostname, existing_node_id=_existing_node_id
         )
         node_id = result.get("node_id") or machine_hostname
+        # Self-hosted servers may answer {"e2e": false} — data stays inside the
+        # customer deployment, so blob encryption is optional there and the
+        # server needs plaintext to serve fleet views / audit export.
+        _server_e2e = result.get("e2e") if isinstance(result, dict) else None
         print("✅")
     except Exception as e:
         err = str(e)
@@ -1047,11 +1059,20 @@ def _cmd_connect(args) -> None:
         # noise (and printing a "keep this safe" secret mid-Self-Hosted run
         # reads like a cloud signup; founder live-hit 2026-07-30).
         enc_key = _kc_key or _saved_enc_key or generate_encryption_key()
+    # A self-hosted server answering {"e2e": false} opts this node into
+    # plaintext ingest (data never leaves the deployment; the server needs
+    # plaintext for fleet views + audit export). An explicit --enc-key wins.
+    _server_plaintext = (
+        _server_e2e is False and not _enc_key_arg and not _keep_local_signin
+    )
     print()
-    if not _keep_local_signin:
+    if not _keep_local_signin and not _server_plaintext:
         print("🔐 Encryption key protects your data end-to-end.")
     if _keep_local_signin:
         pass  # enc_key already chosen above, silently
+    elif _server_plaintext:
+        enc_key = ""
+        print("🔓 Server requested plaintext ingest (self-hosted, E2E off).")
     elif _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
@@ -1071,15 +1092,17 @@ def _cmd_connect(args) -> None:
         ).strip()
         enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
 
-    _keychain_set(node_id, enc_key)  # persist to OS keychain when available
+    if enc_key:
+        _keychain_set(node_id, enc_key)  # persist to OS keychain when available
 
     config = {
         "api_key": api_key,
         "node_id": node_id,
         "platform": platform.system(),
         "connected_at": __import__("datetime").datetime.now().isoformat(),
-        "encryption_key": enc_key,
     }
+    if enc_key:
+        config["encryption_key"] = enc_key
     save_config(config)
 
     # Explicit connect is an opt-in to cloud: clear any local-only marker so the
@@ -1212,7 +1235,9 @@ def _cmd_connect(args) -> None:
     # Open browser with encryption key in URL fragment (never sent to server)
     # The #key=... fragment stays client-side — true E2E encryption
     _node_id = config.get("node_id", "")
-    _dashboard_url = f"https://app.clawmetry.com/cloud?token={api_key}#key={enc_key}&node={_node_id}"
+    from clawmetry.endpoints import app_url as _resolve_app_url2
+    _app_base_done = _resolve_app_url2()
+    _dashboard_url = f"{_app_base_done}/cloud?token={api_key}#key={enc_key}&node={_node_id}"
 
     # Cloud includes the local dashboard too (the onboard copy promises
     # BOTH app.clawmetry.com and localhost:8900) — make it true, best-effort.
@@ -1220,7 +1245,7 @@ def _cmd_connect(args) -> None:
 
     print()
     print("  All done! Opening your dashboard...")
-    print(f"  https://app.clawmetry.com/cloud")
+    print(f"  {_app_base_done}/cloud")
     if _local_dash_up:
         print("  Also on this machine: http://localhost:8900")
     print()
@@ -2057,8 +2082,9 @@ def _cmd_uninstall() -> None:
                 def _purge_server():
                     try:
                         import urllib.request
+                        from clawmetry.endpoints import app_url as _resolve_app_url
                         _req = urllib.request.Request(
-                            "https://app.clawmetry.com/api/unregister",
+                            _resolve_app_url() + "/api/unregister",
                             data=_json_u.dumps({
                                 "node_id": _node_id,
                                 "hostname": _hostname,
@@ -2350,7 +2376,8 @@ def _resolve_account_email(api_key: str):
         import urllib.parse as _up
         import urllib.request as _ur
 
-        base = _os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+        from clawmetry.endpoints import app_url as _resolve_app_url
+        base = _resolve_app_url()
         url = base + "/api/cloud/account?token=" + _up.quote(api_key)
         with _ur.urlopen(url, timeout=2.5) as resp:
             data = _json.loads(resp.read() or b"{}")
@@ -3133,7 +3160,8 @@ def _instant_register(BOLD, GREEN, DIM):
     import socket
     import platform
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
     url = INGEST_URL.rstrip("/") + "/api/register"
 
     hostname = socket.gethostname()
@@ -3573,7 +3601,8 @@ def _cmd_account(args) -> None:
     import urllib.error
     import json as _json
 
-    INGEST_URL = _os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api_call(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -3587,7 +3616,8 @@ def _cmd_account(args) -> None:
     print()
     print(f"  Node:      {node_id}")
     if dashboard_id:
-        print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+        from clawmetry.endpoints import app_url as _resolve_app_url_d
+        print(f"  Dashboard: {_resolve_app_url_d()}/d/{dashboard_id}")
     print(f"  API key:   {api_key[:8]}...")
     print()
 
@@ -3657,7 +3687,8 @@ def _cmd_account(args) -> None:
         print(f" {GREEN('verified')}")
         print(f"\n  {GREEN(BOLD('Email linked to your account!'))}")
         if dashboard_id:
-            print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+            from clawmetry.endpoints import app_url as _resolve_app_url_d
+        print(f"  Dashboard: {_resolve_app_url_d()}/d/{dashboard_id}")
         print()
         return
 
@@ -5830,6 +5861,110 @@ def _cmd_cloud_toggle(enable: bool) -> int:
     return 0
 
 
+def _cmd_export(args) -> None:
+    """``clawmetry export --from <date> --to <date> --format jsonl|csv``.
+
+    Audit/compliance dump of the immutable event log for a time range,
+    fetched from the configured endpoint (managed cloud or a self-hosted
+    Enterprise server — resolution: CLAWMETRY_ENDPOINT env > config
+    ``endpoint`` > cloud default) with the configured credentials.
+
+    The server side is ``GET /api/export/events?from=&to=`` returning JSONL
+    (one event per line). CSV conversion happens client-side so the server
+    contract stays minimal. Exit codes: 0 ok, 1 error.
+    """
+    import csv as _csv
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+
+    api_key = os.environ.get("CLAWMETRY_API_KEY", "").strip()
+    if not api_key:
+        try:
+            from clawmetry.sync import CONFIG_FILE as _CFG
+            api_key = json.loads(_CFG.read_text()).get("api_key", "")
+        except Exception:
+            api_key = ""
+    if not api_key:
+        print("❌  No API key. Set CLAWMETRY_API_KEY or run `clawmetry connect` first.")
+        sys.exit(1)
+
+    base = _resolve_ingest_url()
+    query = []
+    if getattr(args, "date_from", None):
+        query.append("from=" + urllib.parse.quote(args.date_from))
+    if getattr(args, "date_to", None):
+        query.append("to=" + urllib.parse.quote(args.date_to))
+    url = base + "/api/export/events"
+    if query:
+        url += "?" + "&".join(query)
+
+    fmt = getattr(args, "format", "jsonl") or "jsonl"
+    out_path = getattr(args, "out", None)
+
+    req = urllib.request.Request(
+        url, headers={"X-Api-Key": api_key, "Accept": "application/x-ndjson"}
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"❌  {base} does not implement /api/export/events.")
+            print("    Self-hosted servers support it from clawmetry 0.12.602;")
+            print("    for ClawMetry Cloud, contact support to enable audit export.")
+        elif e.code == 401:
+            print("❌  Unauthorized — check your API key against the configured endpoint.")
+        else:
+            print(f"❌  Export failed: HTTP {e.code} {e.reason}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌  Could not reach {base}: {e}")
+        sys.exit(1)
+
+    sink = open(out_path, "w", encoding="utf-8", newline="") if out_path else sys.stdout
+    count = 0
+    try:
+        if fmt == "csv":
+            cols = (
+                "id", "node_id", "agent_type", "agent_id", "session_id",
+                "event_type", "ts", "model", "token_count", "cost_usd",
+                "data", "received_at",
+            )
+            writer = _csv.writer(sink)
+            writer.writerow(cols)
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                data = rec.get("data")
+                if isinstance(data, (dict, list)):
+                    data = json.dumps(data, separators=(",", ":"), default=str)
+                writer.writerow(
+                    [rec.get(c) if c != "data" else data for c in cols]
+                )
+                count += 1
+        else:
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                if line.strip():
+                    sink.write(line + "\n")
+                    count += 1
+    finally:
+        resp.close()
+        if out_path:
+            sink.close()
+
+    dest = out_path or "stdout"
+    print(f"✅  Exported {count} events to {dest}", file=sys.stderr)
+
+
 def main() -> None:
     import argparse
     # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
@@ -6620,6 +6755,43 @@ def main() -> None:
         ),
     )
 
+    # export — audit/compliance dump of the immutable event log (enterprise)
+    p_export = sub.add_parser(
+        "export",
+        help=(
+            "Export the event log for a time range from the configured "
+            "endpoint (cloud or self-hosted) for compliance handoff"
+        ),
+    )
+    p_export.add_argument(
+        "--from",
+        dest="date_from",
+        default=None,
+        metavar="DATE",
+        help="Start of range (ISO date/datetime, e.g. 2026-07-01)",
+    )
+    p_export.add_argument(
+        "--to",
+        dest="date_to",
+        default=None,
+        metavar="DATE",
+        help="End of range (ISO date/datetime, inclusive)",
+    )
+    p_export.add_argument(
+        "--format",
+        dest="format",
+        choices=["jsonl", "csv"],
+        default="jsonl",
+        help="Output format (default: jsonl)",
+    )
+    p_export.add_argument(
+        "--out",
+        dest="out",
+        default=None,
+        metavar="FILE",
+        help="Write to FILE instead of stdout",
+    )
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     # `hooks` is absent from this tuple ON PURPOSE: it's intercepted by the
     # fast path at the top of main() before the dashboard import. The parser
@@ -6658,6 +6830,7 @@ def main() -> None:
         "diagnose",
         "doctor",
         "verify-integrity",
+        "export",
         "nemoclaw-daemons",
     )
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
@@ -6719,6 +6892,8 @@ def main() -> None:
             sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
+        elif args.cmd == "export":
+            _cmd_export(args)
         elif args.cmd == "nemoclaw-daemons":
             _register_nemoclaw_sandbox_daemons()
     else:

@@ -57,6 +57,20 @@ _EXCLUDED_HOST_DEFAULTS = frozenset([
 ])
 
 
+def _clawmetry_endpoint_hosts() -> frozenset:
+    """Hostnames of the *configured* ClawMetry endpoint (self-hosted installs
+    repoint sync away from *.clawmetry.com; those hosts must be excluded too
+    or the interceptor records our own sync traffic as external API calls)."""
+    try:
+        from clawmetry.endpoints import endpoint_hosts
+        return frozenset(endpoint_hosts())
+    except Exception:
+        return frozenset()
+
+
+_EXCLUDED_HOST_DEFAULTS = _EXCLUDED_HOST_DEFAULTS | _clawmetry_endpoint_hosts()
+
+
 # Output file — in ClawMetry's OWN data dir (~/.clawmetry), never inside the
 # agent's ~/.openclaw workspace. ClawMetry is read-only w.r.t. the agent: it
 # must not create or modify files under the agent's dir. The sync daemon tails
