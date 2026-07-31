@@ -325,79 +325,29 @@ def _collapse_duplicate_brain_events(events):
     path but not the other), so the ``(src, detail)`` key from pass 1 misses them.
     A 10-second cross-source window is tight enough to avoid collapsing genuine
     re-utterances while reliably catching the ~2s ingest gap.
+
+    The implementation now lives in :mod:`clawmetry.brain_dedupe` so the cloud
+    blob builder (``sync._build_brain_events``) applies the SAME collapse —
+    previously it applied none, and the hosted Brain feed showed each reply
+    three times while the local API showed it once (founder screenshot,
+    2026-07-31). The shared version also normalizes the text key (stripping
+    ``(untrusted metadata)`` preambles) and adds a same-session short-text
+    pass, so the gateway ``prompt.submitted`` + transcript ``USER`` copies of
+    one inbound channel message collapse too.
     """
-    import datetime as _dt
+    from clawmetry.brain_dedupe import collapse_events, type_priority
 
-    WINDOW_S = 120.0
-    CROSS_SRC_WINDOW_S = 10.0
-    MIN_DETAIL = 40
-    _PRIO = {"MESSAGE": 3, "ASSISTANT": 3, "AGENT": 3, "USER": 3, "RESULT": 3,
-             "THINK": 2, "MODEL.COMPLETED": 1, "MODEL": 1}
-
-    def _src(ev):
-        return ev.get("src") or ev.get("source") or ev.get("sessionId") or ""
-
-    def _parse(ev):
-        ts = ev.get("time") or ""
-        try:
-            return _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        except Exception:
-            return None
-
-    def _richness(ev):
-        return (_PRIO.get((ev.get("type") or "").upper(), 2), ev.get("tokens") or 0)
-
-    def _collapse_groups(groups, window_s, drop):
-        for evs in groups.values():
-            if len(evs) < 2:
-                continue
-            ordered = sorted(evs, key=lambda e: (_parse(e) or _dt.datetime.min))
-            cluster = [ordered[0]]
-            clusters = [cluster]
-            for prev, cur in zip(ordered, ordered[1:]):
-                tp, tc = _parse(prev), _parse(cur)
-                if tp is None or tc is None or abs((tc - tp).total_seconds()) <= window_s:
-                    cluster.append(cur)
-                else:
-                    cluster = [cur]
-                    clusters.append(cluster)
-            for cl in clusters:
-                if len(cl) < 2:
-                    continue
-                best = max(cl, key=_richness)
-                for e in cl:
-                    if e is not best:
-                        drop.add(id(e))
-
-    # Pass 1: same-source dedup — (src, detail) key, 120s window.
-    # Collapses model.completed-vs-assistant siblings from a single ingest path.
-    groups: dict = {}
-    for ev in events:
-        detail = (ev.get("detail") or "").strip()
-        if len(detail) < MIN_DETAIL:
-            continue
-        groups.setdefault((_src(ev), detail), []).append(ev)
-
-    drop: set = set()
-    _collapse_groups(groups, WINDOW_S, drop)
-
-    # Pass 2: cross-source content dedup — detail key only, tight 10s window.
-    # Catches the session-file + via-index double-ingest of the same reply (#3924).
-    # Events already eliminated by pass 1 are skipped to avoid id() aliasing.
-    cross_groups: dict = {}
-    for ev in events:
-        if id(ev) in drop:
-            continue
-        detail = (ev.get("detail") or "").strip()
-        if len(detail) < MIN_DETAIL:
-            continue
-        cross_groups.setdefault(detail, []).append(ev)
-
-    _collapse_groups(cross_groups, CROSS_SRC_WINDOW_S, drop)
-
-    if not drop:
-        return events
-    return [ev for ev in events if id(ev) not in drop]
+    return collapse_events(
+        events,
+        get_src=lambda ev: ev.get("src") or ev.get("source")
+        or ev.get("sessionId") or "",
+        get_session=lambda ev: str(ev.get("sessionId") or ev.get("src")
+                                   or "")[:32],
+        get_detail=lambda ev: ev.get("detail") or "",
+        get_time=lambda ev: ev.get("time") or "",
+        get_richness=lambda ev: (type_priority(ev.get("type")),
+                                 ev.get("tokens") or 0),
+    )
 
 
 def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
