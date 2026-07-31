@@ -17709,6 +17709,14 @@ def run_daemon() -> None:
         configure_outbound_network(role="daemon")
     except Exception as _net_e:
         log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Windows: the daemon runs DETACHED (no console), so unpatched child
+    # processes (pip update check, node --version, disk probes) each flash
+    # a visible cmd window. Patch Popen once so children stay windowless.
+    try:
+        from clawmetry.winconsole import hide_child_console_windows
+        hide_child_console_windows()
+    except Exception:
+        pass
     if not _acquire_pid_lock():
         print(
             "[clawmetry-sync] Another instance is already running. Exiting.", flush=True

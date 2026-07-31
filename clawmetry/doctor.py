@@ -224,9 +224,7 @@ def run_doctor(host: str = None, port: int = 443, out=print) -> int:
     try:
         socket.create_connection((host, port), timeout=TIMEOUT_S).close()
         out("{0} TCP: direct connection to {1}:{2} works".format(PASS, host, port))
-        direct_tcp = True
     except Exception as e:
-        direct_tcp = False
         level = WARN if proxy else FAIL
         if not proxy:
             failures += 1
@@ -247,7 +245,11 @@ def run_doctor(host: str = None, port: int = 443, out=print) -> int:
 
     # ── 3. TLS handshake with our configured context ──────────────────────
     tls_ok = False
-    tls_route = proxy if not direct_tcp else ""
+    # Mirror urllib's routing: when an HTTPS proxy is configured the real
+    # heartbeat traffic tunnels through it, so the TLS check must too —
+    # a direct handshake could pass while proxied traffic fails on the
+    # proxy's re-signed certificate.
+    tls_route = proxy
     ctx = _net.build_ssl_context(allow_insecure=True)
     try:
         raw = _open_tcp(host, port, tls_route)
@@ -265,8 +267,9 @@ def run_doctor(host: str = None, port: int = 443, out=print) -> int:
             except Exception:
                 pass
         tls_ok = True
-        out("{0} TLS: certificate verified (issuer: {1})".format(
-            PASS, issuer or "unknown"))
+        via = " via proxy" if tls_route else ""
+        out("{0} TLS{1}: certificate verified (issuer: {2})".format(
+            PASS, via, issuer or "unknown"))
         if issuer and classify_issuer(issuer) == "corporate":
             out("       Note: that issuer is not a public CA — your network")
             out("       re-signs HTTPS, but its root CA is trusted here. Good.")
