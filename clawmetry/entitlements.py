@@ -261,6 +261,7 @@ FEATURE_LABELS = {
     "rbac": "RBAC",
     "air_gapped_license": "Air-gapped license",
     "custom_data_residency": "Custom data residency",
+    "compliance_pack": "Compliance pack",
 }
 
 _ALIAS_FEATURES = frozenset(
@@ -327,6 +328,7 @@ ENTERPRISE_FEATURES = frozenset(
         "rbac",
         "air_gapped_license",
         "custom_data_residency",
+        "compliance_pack",
     }
 )
 
