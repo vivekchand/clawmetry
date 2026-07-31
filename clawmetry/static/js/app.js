@@ -832,8 +832,14 @@ function _cmApplyNoAgentVariant(data) {
     var t = (typeof window.t === 'function') ? window.t : function(k, v, fb){ return fb; };
     msg.textContent = t('banners.detected_runtimes_msg', {runtimes: names},
       'Detected ' + names + ' on this machine. ClawMetry Pro watches them in real time.');
-    cta.href = 'https://app.clawmetry.com/upgrade?source=no-agent-banner&harness='
-      + encodeURIComponent(locked[0].id || '');
+    // Same rail as the runtime-switcher paywall: sign in HERE, trial key
+    // minted + activated locally — never an external upgrade tab (founder
+    // spec 2026-07-30).
+    cta.href = '#';
+    cta.onclick = function (e) {
+      e.preventDefault();
+      _cmShowRuntimePaywall(locked[0].id || '', locked[0].label || locked[0].id || 'Pro runtimes');
+    };
     cta.style.display = 'inline-block';
     installs.forEach(function(a){ if (a) a.style.display = 'none'; });
     if (!_cmNoAgentPaywallLogged) {
@@ -9431,15 +9437,12 @@ function _cmShowRuntimePaywall(harness, label) {
   overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,24,22,.45);'
     + 'display:flex;align-items:center;justify-content:center;padding:24px;';
 
-  var upgradeUrl = 'https://app.clawmetry.com/upgrade?source=runtime-switcher&harness='
-    + encodeURIComponent(harness);
-
   // The plan ladder, mirroring the LIVE clawmetry.com/pricing page
   // (verified 2026-06-09: Free $0 / Starter $9 / Pro $29 / self-hosted via
   // license key / Enterprise; annual includes the desk device). Prices live
   // in this ONE object so a reprice is a one-line change here plus the
   // pricing page. Plain words for someone who has never compared plans.
-  var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$29', proYr: '$290' };
+  var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$19', proYr: '$190' };
   function _tierRow(accent, name, price, desc) {
     return '<div style="margin-bottom:10px;padding:11px 14px;border:1px solid ' + accent + ';'
       + 'border-radius:8px;font-size:13px;color:var(--text-secondary,#cbd5e1);line-height:1.5;">'
@@ -9467,14 +9470,82 @@ function _cmShowRuntimePaywall(harness, label) {
     + '$149 desk device, free. Prefer your own infra? Self-hosted uses the same plans with a license key: '
     + '<a href="https://clawmetry.com/pricing" target="_blank" rel="noopener noreferrer" '
     + 'style="color:#a78bfa;">see all plans</a>.</div>'
+    + '<div id="_cmRtTrialFlow" style="display:none;margin:0 0 12px;">'
+    + '<input id="_cmRtTrialEmail" type="email" placeholder="you@example.com" '
+    + 'style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border-color,rgba(255,255,255,.2));'
+    + 'border-radius:6px;background:var(--bg-secondary,#101022);color:var(--text-primary,#e2e8f0);font-size:13px;margin-bottom:8px;">'
+    + '<input id="_cmRtTrialCode" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" '
+    + 'style="display:none;width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border-color,rgba(255,255,255,.2));'
+    + 'border-radius:6px;background:var(--bg-secondary,#101022);color:var(--text-primary,#e2e8f0);font-size:15px;'
+    + 'letter-spacing:5px;text-align:center;font-family:monospace;margin-bottom:8px;">'
+    + '<div id="_cmRtTrialMsg" style="display:none;font-size:12px;color:var(--text-muted,#94a3b8);margin-bottom:8px;"></div>'
+    + '</div>'
     + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
     + '<button type="button" id="_cmRtPaywallCancel" style="padding:8px 16px;'
     + 'border:1px solid var(--border-color,rgba(255,255,255,.2));border-radius:6px;'
     + 'background:transparent;color:var(--text-secondary,#cbd5e1);cursor:pointer;font-size:13px;">Not now</button>'
-    + '<a href="' + upgradeUrl + '" target="_blank" rel="noopener noreferrer" id="_cmRtPaywallCTA"'
-    + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border-radius:6px;'
-    + 'text-decoration:none;font-size:13px;font-weight:500;">Start 7-day free trial</a>'
+    + '<button type="button" id="_cmRtPaywallCTA"'
+    + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;'
+    + 'cursor:pointer;font-size:13px;font-weight:500;">Start 7-day free trial</button>'
     + '</div></div>';
+
+  // Founder spec (2026-07-30): a locked runtime must lead to SIGN-IN ->
+  // trial license -> unlocked runtimes, right here — never a pricing tab.
+  // Reuses the existing rail: /api/cloud-cta/send-otp (code email) +
+  // /api/trial/activate (verify with the cloud, mint + activate the 7-day
+  // trial license locally). Success reloads so entitlement re-resolves.
+  (function _wireTrialCta() {
+    var state = 'idle';
+    function _msg(t, isErr) {
+      var m = overlay.querySelector('#_cmRtTrialMsg');
+      if (!m) return;
+      m.style.display = t ? 'block' : 'none';
+      m.style.color = isErr ? '#f87171' : 'var(--text-muted,#94a3b8)';
+      m.textContent = t || '';
+    }
+    var cta = overlay.querySelector('#_cmRtPaywallCTA');
+    if (!cta) return;
+    cta.addEventListener('click', function () {
+      var flow = overlay.querySelector('#_cmRtTrialFlow');
+      var emailEl = overlay.querySelector('#_cmRtTrialEmail');
+      var codeEl = overlay.querySelector('#_cmRtTrialCode');
+      if (state === 'idle') {
+        flow.style.display = 'block';
+        _msg('Sign in with your email to start the free 7-day Pro trial. No card needed.');
+        emailEl.focus();
+        state = 'email';
+        cta.textContent = 'Email me a code';
+        return;
+      }
+      if (state === 'email') {
+        var email = (emailEl.value || '').trim();
+        if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) { _msg('Enter a valid email.', true); return; }
+        cta.disabled = true; _msg('Sending code…');
+        fetch('/api/cloud-cta/send-otp', {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({email: email})})
+          .then(function(r){ return r.json(); }).then(function(d){
+            cta.disabled = false;
+            if (d && d.ok === false) { _msg(d.error || 'Could not send the code.', true); return; }
+            emailEl.style.display = 'none'; codeEl.style.display = 'block'; codeEl.focus();
+            _msg('We emailed a 6-digit code to ' + email + '.');
+            state = 'code'; cta.textContent = 'Activate trial';
+          }).catch(function(){ cta.disabled = false; _msg('Network error. Try again.', true); });
+        return;
+      }
+      if (state === 'code') {
+        var code = (codeEl.value || '').replace(/\s/g, '');
+        if (code.length !== 6) { _msg('Enter the 6-digit code from your email.', true); return; }
+        cta.disabled = true; _msg('Activating your trial…');
+        fetch('/api/trial/activate', {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({email: (emailEl.value||'').trim(), code: code})})
+          .then(function(r){ return r.json(); }).then(function(d){
+            if (!d || !d.ok) { cta.disabled = false; _msg((d && d.error) || 'Activation failed. Try again.', true); return; }
+            _msg('Pro trial active — unlocking ' + label + '…');
+            setTimeout(function(){ location.reload(); }, 900);
+          }).catch(function(){ cta.disabled = false; _msg('Network error. Try again.', true); });
+      }
+    });
+  })();
 
   document.body.appendChild(overlay);
   overlay.addEventListener('click', function(e) { if (e.target === overlay) _cmDismissRtPaywall(); });
@@ -14569,6 +14640,82 @@ window.toggleTranscriptPlumbing = function() {
   if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
   loadTranscripts();
 };
+// ── Conversations time-window filter (post-mortem digging) ──────────────
+// null = Live (full recent list). Otherwise {sinceMs, untilMs}: the list is
+// narrowed to conversations ACTIVE inside the window — overlap test on
+// [started||modified, modified] so a session that began before the window
+// and kept running through it still shows. Same UX as the Brain range bar.
+var _transcriptRange = null;
+
+function _txSetRangeActiveBtn(key) {
+  document.querySelectorAll('#tx-range-bar .brain-range-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-range') === String(key));
+  });
+}
+
+function _txUpdateRangeUI() {
+  var banner = document.getElementById('tx-history-banner');
+  var bannerText = document.getElementById('tx-history-banner-text');
+  if (_transcriptRange) {
+    if (banner) banner.style.display = 'flex';
+    if (bannerText) bannerText.textContent = _brainRangeHuman(
+      new Date(_transcriptRange.sinceMs).toISOString(),
+      new Date(_transcriptRange.untilMs).toISOString());
+  } else if (banner) {
+    banner.style.display = 'none';
+  }
+}
+
+function setTranscriptTimeRange(secondsOrLive, el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (custom) custom.style.display = 'none';
+  if (secondsOrLive === 'live') {
+    _transcriptRange = null;
+    _txSetRangeActiveBtn('live');
+    _txUpdateRangeUI();
+    loadTranscripts();
+    return;
+  }
+  var secs = parseInt(secondsOrLive, 10) || 3600;
+  var now = Date.now();
+  _transcriptRange = {sinceMs: now - secs * 1000, untilMs: now};
+  _txSetRangeActiveBtn(secs);
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
+function toggleTranscriptCustomRange(el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (!custom) return;
+  var showing = custom.style.display !== 'none';
+  custom.style.display = showing ? 'none' : 'flex';
+  if (!showing) {
+    var to = document.getElementById('tx-range-to');
+    var from = document.getElementById('tx-range-from');
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    var fmt = function(d) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+             'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    };
+    var now = new Date();
+    if (to && !to.value) to.value = fmt(now);
+    if (from && !from.value) from.value = fmt(new Date(now.getTime() - 24 * 3600 * 1000));
+  }
+}
+
+function applyTranscriptCustomRange() {
+  var from = document.getElementById('tx-range-from');
+  var to = document.getElementById('tx-range-to');
+  if (!from || !from.value || !to || !to.value) return;
+  var s = new Date(from.value), u = new Date(to.value);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _transcriptRange = {sinceMs: s.getTime(), untilMs: u.getTime()};
+  _txSetRangeActiveBtn('custom');
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -14597,6 +14744,21 @@ async function loadTranscripts() {
     if (_rtFilter !== 'all') {
       data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
     }
+    // Time-window filter: keep conversations ACTIVE inside the window.
+    // Overlap test on [started, modified]; when the endpoint doesn't ship
+    // `started` (legacy filesystem path), fall back to started = modified,
+    // i.e. strict last-activity-in-window.
+    var _txWin = _transcriptRange;
+    var _txWinEmpty = false;
+    if (_txWin) {
+      var _preWin = data.transcripts.length;
+      data.transcripts = data.transcripts.filter(function(t) {
+        var mod = t.modified || 0;
+        var start = t.started || mod;
+        return start <= _txWin.untilMs && mod >= _txWin.sinceMs;
+      });
+      _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
+    }
     var plumbingTotal = 0;
     data.transcripts.forEach(function(t) {
       var raw = String(t.id || '');
@@ -14623,7 +14785,9 @@ async function loadTranscripts() {
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = _rtNoTx
+    var emptyMsg = _txWinEmpty
+      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No conversations were active in this window. Try a wider window — or note that only recently synced conversations are listed here.') + '</div>'
+      : _rtNoTx
       ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'

@@ -372,3 +372,32 @@ def test_ensure_local_dashboard_spawns_then_polls(monkeypatch):
     assert cli._ensure_local_dashboard(wait_secs=2) is True
     assert len(spawned) == 1
     assert "--port" in spawned[0] and "8900" in spawned[0]
+
+
+def test_ensure_local_dashboard_launchd_plist_uses_python_m():
+    """The macOS launchd plist must use `python -m clawmetry`, not the
+    console-script path, so it survives venv rebuilds that drop entry points
+    (issue #4297: ~/.clawmetry/bin/clawmetry missing → launchd exits 78 loop).
+
+    The _register_launchd (sync daemon) already uses this pattern; the
+    dashboard launchd path must match. Verified by source inspection so the
+    test stays fast and platform-independent.
+    """
+    import inspect
+    src = inspect.getsource(cli._ensure_local_dashboard)
+
+    # The Darwin/launchd block must build its arg list from a variable named
+    # _launchd_cmd that contains "-m" (python -m clawmetry), not from `cmd`
+    # which may hold the console-script path.
+    assert "_launchd_cmd" in src, (
+        "_ensure_local_dashboard must use _launchd_cmd for the launchd plist "
+        "(not `cmd`, which may reference a stale console-script path)"
+    )
+    assert '"-m"' in src or "'-m'" in src, (
+        "_launchd_cmd must include '-m' to invoke via python -m clawmetry"
+    )
+    # _args_xml (the plist ProgramArguments) must reference _launchd_cmd, not cmd
+    launchd_block = src[src.find("_launchd_cmd"):]
+    assert "_args_xml" in launchd_block and "_launchd_cmd" in launchd_block, (
+        "_args_xml must be built from _launchd_cmd so the plist uses python -m"
+    )

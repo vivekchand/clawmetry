@@ -1,0 +1,60 @@
+<!-- First-run onboarding gate (hard gate: no close). Shown by
+     static/js/onboarding.js when /api/onboarding/state says required.
+     The cloud OTP/OAuth modal (z-index 2000) opens ABOVE this overlay
+     for the managed branch; this overlay sits at 1900. -->
+<div id="onboarding-gate-overlay" role="dialog" aria-modal="true" aria-labelledby="obg-title">
+  <style>
+    #onboarding-gate-overlay{display:none;position:fixed;inset:0;z-index:1900;background:rgba(4,8,16,0.82);backdrop-filter:blur(6px);align-items:center;justify-content:center;overflow:auto;padding:24px}
+    #onboarding-gate-overlay .obg-card{background:#0f1623;border:1px solid rgba(255,255,255,0.08);border-radius:16px;width:100%;max-width:680px;padding:36px;box-shadow:0 25px 60px rgba(0,0,0,0.55);margin:auto}
+    #onboarding-gate-overlay .obg-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+    #onboarding-gate-overlay .obg-head span{font-size:19px;font-weight:700;color:#fff}
+    #onboarding-gate-overlay .obg-detect{color:#94a3b8;font-size:13.5px;line-height:1.55;margin:0 0 22px}
+    #onboarding-gate-overlay .obg-detect b{color:#e2e8f0;font-weight:600}
+    #onboarding-gate-overlay .obg-q{color:#e2e8f0;font-size:15px;font-weight:600;margin:0 0 14px}
+    #onboarding-gate-overlay .obg-choices{display:flex;gap:14px}
+    #onboarding-gate-overlay .obg-opt{flex:1;background:#111b2c;border:1px solid rgba(255,255,255,0.09);border-radius:12px;padding:20px}
+    #onboarding-gate-overlay .obg-opt h3{margin:0 0 2px;font-size:14.5px;color:#fff}
+    #onboarding-gate-overlay .obg-opt .obg-rec{display:inline-block;margin-left:6px;font-size:10.5px;font-weight:700;letter-spacing:0.4px;color:#f0b429;text-transform:uppercase}
+    #onboarding-gate-overlay .obg-opt p{color:#94a3b8;font-size:12.5px;line-height:1.55;margin:8px 0 14px;min-height:58px}
+    #onboarding-gate-overlay .obg-btn{display:block;width:100%;padding:11px 14px;border:none;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;box-sizing:border-box;text-align:center}
+    #onboarding-gate-overlay .obg-btn-primary{background:#E5443A;color:#fff}
+    #onboarding-gate-overlay .obg-btn-primary:hover{background:#d13a30}
+    #onboarding-gate-overlay .obg-btn-quiet{background:#1a2235;color:#fff;border:1px solid rgba(255,255,255,0.12)}
+    #onboarding-gate-overlay .obg-btn-quiet:hover{background:#202a42}
+    #onboarding-gate-overlay .obg-alt{display:block;text-align:center;color:#7c8aa0;font-size:11.5px;margin-top:10px;text-decoration:none}
+    #onboarding-gate-overlay .obg-alt:hover{color:#aab6c8;text-decoration:underline}
+    #onboarding-gate-overlay .obg-input{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,0.14);border-radius:8px;background:#0b111d;color:#fff;font-size:13px;box-sizing:border-box;outline:none;margin-bottom:8px}
+    #onboarding-gate-overlay .obg-input:focus-visible,#onboarding-gate-overlay .obg-btn:focus-visible,#onboarding-gate-overlay .obg-alt:focus-visible{outline:2px solid #E5443A;outline-offset:2px}
+    #onboarding-gate-overlay .obg-err{display:none;color:#f87171;font-size:12px;margin:0 0 8px}
+    #onboarding-gate-overlay .obg-foot{color:#64748b;font-size:11.5px;line-height:1.6;margin:22px 0 0;text-align:center}
+    #onboarding-gate-overlay .obg-foot a{color:#7c8aa0}
+    @media (max-width:700px){ #onboarding-gate-overlay .obg-choices{flex-direction:column} #onboarding-gate-overlay .obg-card{padding:24px} #onboarding-gate-overlay .obg-opt p{min-height:0}}
+    @media (prefers-reduced-motion:no-preference){ #onboarding-gate-overlay .obg-card{animation:obgIn .28s ease-out}@keyframes obgIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}}
+  </style>
+  <div class="obg-card">
+    <div class="obg-head">
+      <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;" alt="">
+      <span id="obg-title">Welcome to ClawMetry</span>
+    </div>
+    <p class="obg-detect" id="obg-detect">One quick choice and your dashboard is ready.</p>
+    <p class="obg-q">Where should ClawMetry keep an eye on your agents?</p>
+    <div class="obg-choices">
+      <div class="obg-opt">
+        <h3>Managed cloud<span class="obg-rec">Recommended</span></h3>
+        <p>See your agents from any browser at app.clawmetry.com. End-to-end encrypted: only your browser holds the key, we never see your data. Includes a free 7-day Pro trial, no card needed.</p>
+        <button class="obg-btn obg-btn-primary" id="obg-managed-btn" type="button">Connect ClawMetry Cloud</button>
+        <div class="obg-err" id="obg-managed-err"></div>
+      </div>
+      <div class="obg-opt">
+        <h3>Self-host</h3>
+        <p>Everything stays on this machine. Sign in once by email to start the same free 7-day Pro trial and unlock every runtime, or activate a license key you already have.</p>
+        <div id="obg-selfhost-body">
+          <button class="obg-btn obg-btn-quiet" id="obg-trial-btn" type="button">Start free 7-day trial</button>
+          <a class="obg-alt" href="#" id="obg-license-link">I have a license key</a>
+        </div>
+      </div>
+    </div>
+    <p class="obg-foot">Read-only by design: ClawMetry watches your agents, it never changes them.<br>
+    You can switch between cloud and self-host any time from Settings.</p>
+  </div>
+</div>

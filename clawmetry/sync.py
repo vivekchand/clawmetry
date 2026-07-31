@@ -7125,6 +7125,17 @@ def _heartbeat_limits_payload():
     return _LIMITS_CACHE["payload"]
 
 
+def _install_id_for_heartbeat() -> str:
+    """The persistent install_id (creating it if this daemon is the first
+    process to run on a fresh install). Empty string on any failure —
+    the heartbeat must never be blocked by identity plumbing."""
+    try:
+        from clawmetry import telemetry as _telemetry
+        return _telemetry._ensure_install_id() or ""
+    except Exception:
+        return ""
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -7151,6 +7162,11 @@ def send_heartbeat(config: dict) -> bool:
         "e2e": bool(config.get("encryption_key")),
         "ollama": _detect_ollama_for_heartbeat(),
         "node_meta": _build_node_meta(),
+        # Persistent per-install identity (~/.clawmetry/install_id) so the
+        # cloud can join this node to its row in the install registry.
+        # Part of authenticated cloud sync, not the anonymous telemetry
+        # channel — the node already identifies itself by node_id here.
+        "install_id": _install_id_for_heartbeat(),
         # Runtimes DETECTED on this machine (Claude Code, Codex, …) — reported
         # even when not synced, so the Fleet can show "you're running these,
         # upgrade to observe them". Free lite-detection so the nudge reaches
@@ -17722,6 +17738,18 @@ def run_daemon() -> None:
         _ext_load()
     except Exception as _ext_e:
         log.warning("extensions load_plugins failed: %s", _ext_e)
+
+    # Install-lifecycle ping (install/update, anonymous, opt-out — see
+    # clawmetry/telemetry.py). The daemon is the only process guaranteed
+    # to run after an unattended auto-update (os.execv re-exec), so
+    # without this call headless nodes would never report upgrades and
+    # the cloud install registry would silently go stale for exactly the
+    # most-engaged installs.
+    try:
+        from clawmetry import telemetry as _telemetry
+        _telemetry.maybe_ping(_get_version())
+    except Exception:
+        pass
 
     try:
         config = load_config()
