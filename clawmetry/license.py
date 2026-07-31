@@ -2178,6 +2178,102 @@ def is_subject(subject: str) -> bool:
     return actual.lower() == requested
 
 
+def license_subject_at(epoch: int) -> str | None:
+    """Perspective-epoch flavour of :func:`license_subject` -- "what
+    subject would :func:`license_subject` have returned evaluated as of
+    ``epoch``?" -- for a scheduled-audit / retrospective badge that wants
+    to answer "who was this node licensed to on <date>?" without the
+    caller having to snapshot the license state at that time or compare
+    ``exp`` to a caller-supplied epoch themselves.
+
+    Returns:
+      * ``None`` when there is nothing trustworthy to surface AS OF
+        ``epoch``: no license file on disk, an invalid signature (an
+        attacker could stuff any ``sub`` into an unsigned body -- refused
+        for every perspective, matching :func:`license_subject`), a
+        signed key whose ``exp`` claim has already passed at ``epoch``
+        (retrospective on a lapsed key when ``epoch`` equals "now";
+        prospective on an active key when ``epoch`` is in the future
+        beyond ``exp``), OR a signed payload whose ``sub`` claim is
+        absent / non-string / empty after strip.
+      * The stripped subject string otherwise. Casing is preserved --
+        subjects are typically email addresses / account ids where case
+        can matter for exact-match comparisons, matching the
+        current-time :func:`license_subject` accessor. :func:`is_subject`
+        handles case-insensitive matching on top for callers that want
+        it.
+
+    ``epoch`` is coerced through ``int()``; ``bool`` is explicitly
+    refused despite being an ``int`` subclass so a caller that passes
+    ``True`` / ``False`` gets ``None`` back rather than a spurious "was
+    the subject X at epoch 1?" classification. A non-numeric value
+    collapses to ``None`` so a caller cannot silently mis-gate on a
+    typo -- the conservative fallback since ``None`` implies no
+    trustworthy subject, matching the never-mis-gate posture of the
+    surrounding ``_at`` family.
+
+    When ``epoch`` equals "now", this scalar must agree with
+    :func:`license_subject` for the same install -- both derive from
+    the same signed ``sub`` claim, refuse the invalid-signature branch,
+    and use the same ``exp <= cutoff`` boundary via the shared
+    :func:`current_license_info` / :func:`license_state_at` reader, so
+    the two scalars cannot disagree at the boundary. On any other
+    epoch this helper answers the retrospective / prospective question
+    :func:`license_subject` cannot -- e.g. "who was this node licensed
+    to last Friday?" (``None`` on a key that has since been renewed but
+    was already expired then) or "will this node still be bound to
+    <X> at our next quarterly audit?" (``None`` on an active key whose
+    ``exp`` falls before the audit date).
+
+    Never raises. Any underlying introspection failure (import error,
+    corrupt install, cryptography-lib mismatch) collapses to ``None``
+    -- same fallback as :func:`license_subject` -- so a scheduled audit
+    tile bound to this helper never breaks on a partial install.
+
+    Pairs with the sibling ``_at`` scalars
+    (:func:`license_tier_at`, :func:`license_state_at`,
+    :func:`is_expired_at`, :func:`days_until_expiry_at`,
+    :func:`is_expiring_within_at`) at the row level: for the same
+    ``epoch``, a caller can zip the responses index-for-index and get
+    the whole entitlement row for one install without the scalars
+    catching each other disagreeing on the perspective-epoch
+    classification.
+    """
+    if isinstance(epoch, bool):
+        return None
+    try:
+        wanted = int(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        info = current_license_info()
+    except Exception as exc:
+        logger.debug("license: license_subject_at underlying read failed: %s", exc)
+        return None
+    if not isinstance(info, dict):
+        return None
+    status = info.get("status")
+    if status == "invalid":
+        # Signature-bogus branch: an unsigned body is untrusted whatever
+        # the perspective, so the classification is time-independent.
+        # Mirrors :func:`license_subject` -- payload-derived claims never
+        # get to influence the answer here.
+        return None
+    exp = info.get("exp")
+    if isinstance(exp, (int, float)) and int(exp) <= wanted:
+        # Signed key that has already lapsed AS OF ``epoch`` -- refuse
+        # for the same reason :func:`license_subject` refuses the
+        # expired branch at "now": a lapsed customer's subject must
+        # stop rendering as the account holder once the perspective
+        # epoch is past ``exp``.
+        return None
+    sub = info.get("sub")
+    if not isinstance(sub, str):
+        return None
+    stripped = sub.strip()
+    return stripped or None
+
+
 def license_permissions_safe() -> bool | None:
     """Scalar view onto the installed license file's on-disk permission
     hygiene -- for a security-posture tile that wants ONE tri-state

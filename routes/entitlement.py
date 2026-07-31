@@ -9355,6 +9355,170 @@ def api_license_is_subject():
     )
 
 
+def _license_subject_at_snapshot() -> dict:
+    """Shared one-shot read for the ``/api/license/subject-at`` endpoint
+    below.
+
+    Reads :func:`clawmetry.license.license_subject` (current-time
+    subject), :func:`clawmetry.license.current_license_info` (for
+    ``has_license`` / ``valid`` NOW), and
+    :func:`clawmetry.license.license_expires_at` (for the
+    ``expires_at`` field the sibling perspective-epoch tiles all carry)
+    ONCE so a UI binding both the current-time endpoint and this
+    perspective-epoch endpoint in the same tile can't catch them
+    disagreeing on ``subject`` / ``expires_at`` / ``has_license`` /
+    ``valid`` for the same install -- mirrors the
+    ``_license_subject_snapshot`` + ``_license_tier_at_snapshot``
+    pattern used by the current-time subject pair and the
+    perspective-epoch tier scalar.
+
+    ``subject`` here is the CURRENT-time subject (matches
+    :func:`clawmetry.license.license_subject`); the perspective-epoch
+    subject (``subject_at``) is derived per-request by the endpoint via
+    :func:`clawmetry.license.license_subject_at` and lives on top of
+    this snapshot -- keeping ``subject`` in the shared read guarantees
+    a UI that renders "as of <date> vs now" tiles side-by-side can
+    never catch them disagreeing on the current-time reference.
+
+    Never raises. Any introspection failure collapses to the OSS-free
+    branch shape (``subject=None``, ``expires_at=None``,
+    ``has_license=False``, ``valid=False``) so the endpoint never 5xxs
+    -- same posture as the surrounding license endpoints.
+    """
+    try:
+        from clawmetry import license as _lic
+
+        subject = _lic.license_subject()
+        info = _lic.current_license_info()
+        expires = _lic.license_expires_at()
+    except Exception as exc:
+        logger.debug("_license_subject_at_snapshot: underlying read failed: %s", exc)
+        return {
+            "subject": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    if not isinstance(subject, str):
+        subject = None
+    if info is None or not isinstance(info, dict):
+        return {
+            "subject": subject,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    return {
+        "subject": subject,
+        "expires_at": expires,
+        "has_license": True,
+        "valid": bool(info.get("valid")),
+    }
+
+
+@bp_entitlement.route("/api/license/subject-at")
+def api_license_subject_at():
+    """``GET /api/license/subject-at?epoch=<int>`` -- scalar view of the
+    installed license's ``sub`` claim evaluated as of ``epoch`` -- the
+    perspective-epoch flavour of ``/api/license/subject``, for a
+    scheduled-audit / retrospective badge that wants to answer "who was
+    this node licensed to on <date>?" without the caller having to
+    snapshot the license state at that time or compare ``exp`` to a
+    caller-supplied epoch themselves.
+
+    Response shape (always HTTP 200)::
+
+        {
+          "subject_at": <str|null>,       # subject as of epoch
+          "requested_epoch": <int|null>,  # int-coerced input, or null on typo
+          "subject": <str|null>,          # current-time subject
+          "expires_at": <int|null>,       # on-disk exp for comparison
+          "has_license": <bool>,          # is a license file installed at all?
+          "valid": <bool>                 # signature-valid AND not expired NOW
+        }
+
+    ``subject_at`` mirrors :func:`clawmetry.license.license_subject_at`:
+    ``None`` for no license, invalid signature, an ``exp`` claim that
+    has already lapsed at ``epoch``, or a signed payload whose ``sub``
+    claim is absent / non-string / empty; otherwise the
+    whitespace-stripped subject string (casing preserved).
+
+    Query parameter:
+
+      * ``epoch`` -- required. Unix epoch seconds as an integer. A
+        missing / non-integer / bool value collapses to
+        ``subject_at=null`` with ``requested_epoch=null`` so a caller
+        cannot silently mis-gate on a typo. HTTP status is 200 either
+        way -- the "bad input" signal is ``requested_epoch=null`` plus
+        the ``null`` subject, not a 4xx, matching the never-crash
+        posture of the surrounding license endpoints.
+
+    Pairs with ``/api/license/tier-at`` / ``/api/license/state-at`` /
+    ``/api/license/is-expired-at`` / ``/api/license/days-until-expiry-
+    at`` / ``/api/license/expiring-within-at`` -- all share the
+    perspective-epoch input pattern, and the
+    ``_license_subject_at_snapshot`` reader here carries ``expires_at``
+    / ``has_license`` / ``valid`` on the same shape the tier / state
+    perspective-epoch scalars carry, so a UI binding two for the same
+    install cannot catch them disagreeing on the current-time
+    reference fields.
+
+    When ``epoch`` equals "now", the ``subject_at`` field must byte-
+    equal ``subject`` (both derive from the same signed ``sub`` claim,
+    refuse the invalid-signature branch, and use the same
+    ``exp <= cutoff`` boundary via :func:`license_subject_at` /
+    :func:`license_subject`), so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Never 5xxs -- any underlying failure degrades to
+    ``{subject_at: null, requested_epoch: <echo>, subject: null,
+    expires_at: null, has_license: false, valid: false}`` (the OSS-
+    free branch shape).
+    """
+    raw = request.args.get("epoch", "")
+    try:
+        requested = int(str(raw).strip())
+    except (TypeError, ValueError):
+        requested = None
+    if isinstance(requested, bool):
+        # Guard against ``bool`` subclassing ``int`` -- ``int("1")`` isn't
+        # bool, but a query like ``?epoch=True`` gets coerced through the
+        # same path the scalar predicate refuses on purpose. Belt-and-
+        # braces symmetry with :func:`clawmetry.license.license_subject_at`.
+        requested = None
+    try:
+        snap = _license_subject_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_subject_at: snapshot error: %s", exc)
+        snap = {
+            "subject": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    subject_at: str | None = None
+    if requested is not None:
+        try:
+            from clawmetry import license as _lic
+
+            subject_at = _lic.license_subject_at(requested)
+        except Exception as exc:
+            logger.warning("api_license_subject_at: derive error: %s", exc)
+            subject_at = None
+    if subject_at is not None and not isinstance(subject_at, str):
+        subject_at = None
+    return jsonify(
+        {
+            "subject_at": subject_at,
+            "requested_epoch": requested,
+            "subject": snap["subject"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 def _license_permissions_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two permission-hygiene
     endpoints both need (``permissions_safe``, ``file_mode``,
