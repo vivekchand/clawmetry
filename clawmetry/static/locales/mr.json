@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "अद्याप कधीही वापरले नाही",
   "skills.never_used_verdict": "{n} skill(s) इन्स्टॉल आहे, अद्याप कधीही वापरले नाही.",
   "skills.all_good": "सर्व ठीक",
-  "skills.all_good_sub": "प्रत्येक skill वापरला जात आहे"
+  "skills.all_good_sub": "प्रत्येक skill वापरला जात आहे",
+  "evaluators.open_tab": "Evals उघडा",
+  "evals.title": "Evals",
+  "evals.subtitle": "स्वयंचलित तपासण्या ज्या सांगतात की तुमचा एजंट चांगले काम करत आहे की नाही. सर्व काही तुमच्या मशीनवर, तुमच्याच key ने चालते.",
+  "evals.setup": "जज सेटअप",
+  "evals.judge_title": "जज",
+  "evals.summary_title": "सेशन क्वालिटी, मागील 24 तास",
+  "evals.recent_title": "अलीकडे स्कोअर केलेले सेशन",
+  "evals.suites_title": "गोल्डन टेस्ट सुइट्स"
 }

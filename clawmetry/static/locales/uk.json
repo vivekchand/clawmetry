@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Ще не використовувалися",
   "skills.never_used_verdict": "{n} навичок встановлено, але жодна ще не використовувалася.",
   "skills.all_good": "Все гаразд",
-  "skills.all_good_sub": "кожна навичка використовується"
+  "skills.all_good_sub": "кожна навичка використовується",
+  "evaluators.open_tab": "Відкрити Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Автоматичні перевірки, які показують, чи добре працює ваш агент. Усе виконується на вашому пристрої, з використанням власного ключа.",
+  "evals.setup": "Налаштування судді",
+  "evals.judge_title": "Суддя",
+  "evals.summary_title": "Якість сесій за останні 24 години",
+  "evals.recent_title": "Нещодавно оцінені сесії",
+  "evals.suites_title": "Еталонні набори тестів"
 }

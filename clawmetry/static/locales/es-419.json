@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Nunca usado",
   "skills.never_used_verdict": "{n} skill(s) instalado(s), nunca usado(s).",
   "skills.all_good": "Todo bien",
-  "skills.all_good_sub": "cada skill está siendo utilizado"
+  "skills.all_good_sub": "cada skill está siendo utilizado",
+  "evaluators.open_tab": "Abrir Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Verificaciones automáticas que te dicen si tu agente está haciendo un buen trabajo. Todo se ejecuta en tu máquina, con tu propia clave.",
+  "evals.setup": "Configuración del juez",
+  "evals.judge_title": "El juez",
+  "evals.summary_title": "Calidad de sesión, últimas 24 horas",
+  "evals.recent_title": "Sesiones evaluadas recientemente",
+  "evals.suites_title": "Suites de pruebas de referencia"
 }

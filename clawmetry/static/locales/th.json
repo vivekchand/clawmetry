@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "ยังไม่เคยใช้",
   "skills.never_used_verdict": "ติดตั้ง {n} skill แล้ว ยังไม่เคยใช้",
   "skills.all_good": "ทุกอย่างดี",
-  "skills.all_good_sub": "ทุก skill กำลังถูกใช้งาน"
+  "skills.all_good_sub": "ทุก skill กำลังถูกใช้งาน",
+  "evaluators.open_tab": "เปิด Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "การตรวจสอบอัตโนมัติที่บอกคุณว่าเอเจนต์ของคุณทำงานได้ดีหรือไม่ ทุกอย่างทำงานบนเครื่องของคุณ ด้วยคีย์ของคุณเอง",
+  "evals.setup": "การตั้งค่าผู้ตัดสิน",
+  "evals.judge_title": "ผู้ตัดสิน",
+  "evals.summary_title": "คุณภาพเซสชัน 24 ชั่วโมงล่าสุด",
+  "evals.recent_title": "เซสชันที่ให้คะแนนล่าสุด",
+  "evals.suites_title": "ชุดทดสอบมาตรฐาน"
 }

@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "இன்னும் பயன்படுத்தப்படவில்லை",
   "skills.never_used_verdict": "{n} skill(கள்) நிறுவப்பட்டுள்ளன, இன்னும் பயன்படுத்தப்படவில்லை.",
   "skills.all_good": "எல்லாம் சரி",
-  "skills.all_good_sub": "ஒவ்வொரு skill-உம் பயன்படுத்தப்படுகிறது"
+  "skills.all_good_sub": "ஒவ்வொரு skill-உம் பயன்படுத்தப்படுகிறது",
+  "evaluators.open_tab": "Evals திற",
+  "evals.title": "Evals",
+  "evals.subtitle": "உங்கள் ஏஜென்ட் சிறப்பாகச் செயல்படுகிறதா என்பதைச் சொல்லும் தானியங்கி சோதனைகள். அனைத்தும் உங்கள் சொந்த கணினியில், உங்கள் சொந்த கீயில் இயங்குகிறது.",
+  "evals.setup": "நடுவர் அமைப்பு",
+  "evals.judge_title": "நடுவர்",
+  "evals.summary_title": "செஷன் தரம், கடந்த 24 மணிநேரம்",
+  "evals.recent_title": "சமீபத்தில் மதிப்பிடப்பட்ட செஷன்கள்",
+  "evals.suites_title": "கோல்டன் சோதனை தொகுப்புகள்"
 }

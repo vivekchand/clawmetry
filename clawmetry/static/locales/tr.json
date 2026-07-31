@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Henüz hiç kullanılmadı",
   "skills.never_used_verdict": "{n} beceri yüklendi, henüz hiç kullanılmadı.",
   "skills.all_good": "Her şey yolunda",
-  "skills.all_good_sub": "tüm beceriler kullanılıyor"
+  "skills.all_good_sub": "tüm beceriler kullanılıyor",
+  "evaluators.open_tab": "Evals'i Aç",
+  "evals.title": "Evals",
+  "evals.subtitle": "Aracınızın iyi iş çıkarıp çıkarmadığını gösteren otomatik kontroller. Her şey kendi makinenizde, kendi anahtarınızla çalışır.",
+  "evals.setup": "Hakem kurulumu",
+  "evals.judge_title": "Hakem",
+  "evals.summary_title": "Son 24 saatte oturum kalitesi",
+  "evals.recent_title": "Son puanlanan oturumlar",
+  "evals.suites_title": "Altın test paketleri"
 }

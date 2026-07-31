@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "هنوز استفاده نشده",
   "skills.never_used_verdict": "{n} مهارت نصب شده، هنوز استفاده نشده.",
   "skills.all_good": "همه چیز خوب است",
-  "skills.all_good_sub": "هر مهارتی در حال استفاده است"
+  "skills.all_good_sub": "هر مهارتی در حال استفاده است",
+  "evaluators.open_tab": "باز کردن ارزیابی‌ها",
+  "evals.title": "ارزیابی‌ها",
+  "evals.subtitle": "بررسی‌های خودکار که نشان می‌دهند عامل شما کار خوبی انجام می‌دهد یا نه. همه چیز روی دستگاه خودتان و با کلید خودتان اجرا می‌شود.",
+  "evals.setup": "تنظیم داور",
+  "evals.judge_title": "داور",
+  "evals.summary_title": "کیفیت نشست‌ها، 24 ساعت گذشته",
+  "evals.recent_title": "نشست‌های اخیراً امتیازدهی‌شده",
+  "evals.suites_title": "مجموعه تست‌های طلایی"
 }

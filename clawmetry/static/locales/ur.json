@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "ابھی تک استعمال نہیں ہوا",
   "skills.never_used_verdict": "{n} اسکل انسٹال ہیں، ابھی تک کبھی استعمال نہیں ہوئے۔",
   "skills.all_good": "سب ٹھیک ہے",
-  "skills.all_good_sub": "ہر اسکل استعمال ہو رہا ہے"
+  "skills.all_good_sub": "ہر اسکل استعمال ہو رہا ہے",
+  "evaluators.open_tab": "Evals کھولیں",
+  "evals.title": "Evals",
+  "evals.subtitle": "خودکار جانچ جو بتاتی ہے کہ آپ کا ایجنٹ اچھا کام کر رہا ہے یا نہیں۔ سب کچھ آپ کی اپنی مشین پر، آپ کی اپنی کلید کے ساتھ چلتا ہے۔",
+  "evals.setup": "جج کی ترتیب",
+  "evals.judge_title": "جج",
+  "evals.summary_title": "سیشن کوالٹی، پچھلے 24 گھنٹے",
+  "evals.recent_title": "حال ہی میں اسکور کیے گئے سیشنز",
+  "evals.suites_title": "گولڈن ٹیسٹ سویٹس"
 }

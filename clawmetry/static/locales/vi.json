@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Chưa từng được dùng",
   "skills.never_used_verdict": "{n} skill đã cài đặt, chưa từng được dùng.",
   "skills.all_good": "Tất cả ổn",
-  "skills.all_good_sub": "mọi skill đều đang được sử dụng"
+  "skills.all_good_sub": "mọi skill đều đang được sử dụng",
+  "evaluators.open_tab": "Mở Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Các kiểm tra tự động cho biết agent của bạn có đang làm việc tốt hay không. Mọi thứ chạy trên máy của bạn, bằng key của chính bạn.",
+  "evals.setup": "Thiết lập giám khảo",
+  "evals.judge_title": "Giám khảo",
+  "evals.summary_title": "Chất lượng phiên, 24 giờ qua",
+  "evals.recent_title": "Các phiên vừa được chấm điểm",
+  "evals.suites_title": "Bộ kiểm thử chuẩn"
 }

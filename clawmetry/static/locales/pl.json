@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Jeszcze nigdy nie użyto",
   "skills.never_used_verdict": "Zainstalowano {n} umiejętności, których jeszcze nie użyto.",
   "skills.all_good": "Wszystko w porządku",
-  "skills.all_good_sub": "każda umiejętność jest używana"
+  "skills.all_good_sub": "każda umiejętność jest używana",
+  "evaluators.open_tab": "Otwórz Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Automatyczne testy, które pokazują, czy Twój agent dobrze wykonuje swoją pracę. Wszystko działa lokalnie, na Twoim własnym kluczu.",
+  "evals.setup": "Konfiguracja sędziego",
+  "evals.judge_title": "Sędzia",
+  "evals.summary_title": "Jakość sesji, ostatnie 24 godziny",
+  "evals.recent_title": "Ostatnio ocenione sesje",
+  "evals.suites_title": "Wzorcowe zestawy testów"
 }

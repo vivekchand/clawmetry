@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Belum pernah digunakan",
   "skills.never_used_verdict": "{n} skill terpasang, belum pernah digunakan.",
   "skills.all_good": "Semua baik",
-  "skills.all_good_sub": "setiap skill sedang digunakan"
+  "skills.all_good_sub": "setiap skill sedang digunakan",
+  "evaluators.open_tab": "Buka Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Pemeriksaan otomatis yang memberi tahu Anda apakah agent Anda bekerja dengan baik. Semuanya berjalan di mesin Anda sendiri, dengan key Anda sendiri.",
+  "evals.setup": "Pengaturan judge",
+  "evals.judge_title": "Judge",
+  "evals.summary_title": "Kualitas sesi, 24 jam terakhir",
+  "evals.recent_title": "Sesi yang baru dinilai",
+  "evals.suites_title": "Golden test suites"
 }

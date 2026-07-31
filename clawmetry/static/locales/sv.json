@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Aldrig använts än",
   "skills.never_used_verdict": "{n} färdighet(er) installerad(e), aldrig använd(a) än.",
   "skills.all_good": "Allt bra",
-  "skills.all_good_sub": "alla färdigheter används"
+  "skills.all_good_sub": "alla färdigheter används",
+  "evaluators.open_tab": "Öppna Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Automatiska kontroller som visar om din agent gör ett bra jobb. Allt körs på din egen maskin, med din egen nyckel.",
+  "evals.setup": "Domarinställning",
+  "evals.judge_title": "Domaren",
+  "evals.summary_title": "Sessionskvalitet, senaste 24 timmarna",
+  "evals.recent_title": "Nyligen bedömda sessioner",
+  "evals.suites_title": "Golden test suites"
 }

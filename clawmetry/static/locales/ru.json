@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Ещё не использовались",
   "skills.never_used_verdict": "Установлено навыков: {n}, ни один ещё не использован.",
   "skills.all_good": "Всё хорошо",
-  "skills.all_good_sub": "все навыки используются"
+  "skills.all_good_sub": "все навыки используются",
+  "evaluators.open_tab": "Открыть Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Автоматические проверки, которые показывают, хорошо ли работает ваш агент. Всё выполняется на вашей машине, на вашем собственном ключе.",
+  "evals.setup": "Настройка судьи",
+  "evals.judge_title": "Судья",
+  "evals.summary_title": "Качество сессий за последние 24 часа",
+  "evals.recent_title": "Недавно оценённые сессии",
+  "evals.suites_title": "Эталонные тестовые наборы"
 }

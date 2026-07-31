@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Δεν χρησιμοποιήθηκε ποτέ",
   "skills.never_used_verdict": "{n} skill(s) εγκατεστημένα, δεν χρησιμοποιήθηκαν ποτέ.",
   "skills.all_good": "Όλα καλά",
-  "skills.all_good_sub": "κάθε skill χρησιμοποιείται"
+  "skills.all_good_sub": "κάθε skill χρησιμοποιείται",
+  "evaluators.open_tab": "Άνοιγμα Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Αυτόματοι έλεγχοι που σας δείχνουν αν ο agent σας κάνει καλή δουλειά. Όλα εκτελούνται στη δική σας συσκευή, με το δικό σας κλειδί.",
+  "evals.setup": "Ρύθμιση κριτή",
+  "evals.judge_title": "Ο κριτής",
+  "evals.summary_title": "Ποιότητα συνεδρίας, τελευταίες 24 ώρες",
+  "evals.recent_title": "Πρόσφατα βαθμολογημένες συνεδρίες",
+  "evals.suites_title": "Golden test suites"
 }

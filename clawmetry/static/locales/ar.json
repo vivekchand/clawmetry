@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "لم يُستخدم بعد",
   "skills.never_used_verdict": "{n} مهارة مثبتة ولم تُستخدم بعد.",
   "skills.all_good": "كل شيء على ما يرام",
-  "skills.all_good_sub": "كل مهارة قيد الاستخدام"
+  "skills.all_good_sub": "كل مهارة قيد الاستخدام",
+  "evaluators.open_tab": "فتح Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "فحوصات تلقائية تخبرك إن كان عميلك يقوم بعمل جيد. كل شيء يعمل على جهازك، بمفتاحك الخاص.",
+  "evals.setup": "إعداد الحكم",
+  "evals.judge_title": "الحكم",
+  "evals.summary_title": "جودة الجلسات، آخر 24 ساعة",
+  "evals.recent_title": "الجلسات المُقيَّمة مؤخراً",
+  "evals.suites_title": "مجموعات الاختبار الذهبية"
 }

@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "ఇంకా ఎప్పుడూ ఉపయోగించలేదు",
   "skills.never_used_verdict": "{n} స్కిల్(లు) ఇన్‌స్టాల్ అయ్యాయి, ఇంకా ఎప్పుడూ ఉపయోగించలేదు.",
   "skills.all_good": "అన్నీ సరే",
-  "skills.all_good_sub": "ప్రతి స్కిల్ ఉపయోగించబడుతోంది"
+  "skills.all_good_sub": "ప్రతి స్కిల్ ఉపయోగించబడుతోంది",
+  "evaluators.open_tab": "Evals తెరవండి",
+  "evals.title": "Evals",
+  "evals.subtitle": "మీ ఏజెంట్ మంచి పనిచేస్తుందో లేదో చెప్పే ఆటోమేటిక్ చెక్‌లు. అన్నీ మీ మెషీన్‌లో, మీ సొంత కీపై రన్ అవుతాయి.",
+  "evals.setup": "జడ్జి సెటప్",
+  "evals.judge_title": "జడ్జి",
+  "evals.summary_title": "సెషన్ నాణ్యత, గత 24 గంటలు",
+  "evals.recent_title": "ఇటీవల స్కోర్ చేసిన సెషన్‌లు",
+  "evals.suites_title": "గోల్డెన్ టెస్ట్ సూట్‌లు"
 }

@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "હજુ ક્યારેય ઉપયોગ થયો નથી",
   "skills.never_used_verdict": "{n} skill(s) ઇન્સ્ટૉલ, હજુ ક્યારેય ઉપયોગ થયો નથી.",
   "skills.all_good": "બધું સારું",
-  "skills.all_good_sub": "દરેક skill ઉપયોગમાં છે"
+  "skills.all_good_sub": "દરેક skill ઉપયોગમાં છે",
+  "evaluators.open_tab": "Evals ખોલો",
+  "evals.title": "Evals",
+  "evals.subtitle": "તમારો એજન્ટ સારું કામ કરી રહ્યો છે કે નહીં તે જણાવતી ઓટોમેટિક ચકાસણીઓ. બધું તમારા પોતાના મશીન પર, તમારી પોતાની કી પર ચાલે છે.",
+  "evals.setup": "જજ સેટઅપ",
+  "evals.judge_title": "જજ",
+  "evals.summary_title": "સેશન ગુણવત્તા, છેલ્લા 24 કલાક",
+  "evals.recent_title": "તાજેતરમાં સ્કોર થયેલા સેશન્સ",
+  "evals.suites_title": "ગોલ્ડન ટેસ્ટ સ્યુટ્સ"
 }

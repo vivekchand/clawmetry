@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Hindi pa nagagamit",
   "skills.never_used_verdict": "{n} skill(s) naka-install, hindi pa nagagamit.",
   "skills.all_good": "Maayos lahat",
-  "skills.all_good_sub": "bawat skill ay ginagamit"
+  "skills.all_good_sub": "bawat skill ay ginagamit",
+  "evaluators.open_tab": "Buksan ang Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Mga awtomatikong tsek na nagsasabi kung maayos ang trabaho ng iyong agent. Tumatakbo ang lahat sa sarili mong makina, gamit ang sarili mong key.",
+  "evals.setup": "Pag-setup ng judge",
+  "evals.judge_title": "Ang judge",
+  "evals.summary_title": "Kalidad ng session, huling 24 oras",
+  "evals.recent_title": "Kamakailang na-score na mga session",
+  "evals.suites_title": "Golden test suites"
 }

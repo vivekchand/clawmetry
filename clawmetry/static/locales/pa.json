@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "ਅਜੇ ਕਦੇ ਨਹੀਂ ਵਰਤਿਆ",
   "skills.never_used_verdict": "{n} ਸਕਿੱਲ ਸਥਾਪਿਤ, ਅਜੇ ਕਦੇ ਨਹੀਂ ਵਰਤਿਆ।",
   "skills.all_good": "ਸਭ ਠੀਕ ਹੈ",
-  "skills.all_good_sub": "ਹਰ ਸਕਿੱਲ ਵਰਤੀ ਜਾ ਰਹੀ ਹੈ"
+  "skills.all_good_sub": "ਹਰ ਸਕਿੱਲ ਵਰਤੀ ਜਾ ਰਹੀ ਹੈ",
+  "evaluators.open_tab": "Evals ਖੋਲ੍ਹੋ",
+  "evals.title": "Evals",
+  "evals.subtitle": "ਆਪਣੇ ਆਪ ਹੋਣ ਵਾਲੀਆਂ ਜਾਂਚਾਂ ਜੋ ਦੱਸਦੀਆਂ ਹਨ ਕਿ ਤੁਹਾਡਾ ਏਜੰਟ ਵਧੀਆ ਕੰਮ ਕਰ ਰਿਹਾ ਹੈ ਜਾਂ ਨਹੀਂ। ਸਭ ਕੁਝ ਤੁਹਾਡੀ ਆਪਣੀ ਮਸ਼ੀਨ 'ਤੇ, ਤੁਹਾਡੀ ਆਪਣੀ ਕੁੰਜੀ ਨਾਲ ਚੱਲਦਾ ਹੈ।",
+  "evals.setup": "ਜੱਜ ਸੈੱਟਅੱਪ",
+  "evals.judge_title": "ਜੱਜ",
+  "evals.summary_title": "ਸੈਸ਼ਨ ਗੁਣਵੱਤਾ, ਪਿਛਲੇ 24 ਘੰਟੇ",
+  "evals.recent_title": "ਹਾਲ ਹੀ ਵਿੱਚ ਸਕੋਰ ਕੀਤੇ ਸੈਸ਼ਨ",
+  "evals.suites_title": "ਗੋਲਡਨ ਟੈਸਟ ਸੂਟ"
 }

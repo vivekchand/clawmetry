@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Nog nooit gebruikt",
   "skills.never_used_verdict": "{n} skill(s) geïnstalleerd, nog nooit gebruikt.",
   "skills.all_good": "Alles in orde",
-  "skills.all_good_sub": "elke skill wordt gebruikt"
+  "skills.all_good_sub": "elke skill wordt gebruikt",
+  "evaluators.open_tab": "Evals openen",
+  "evals.title": "Evals",
+  "evals.subtitle": "Automatische controles die aangeven of je agent goed werk levert. Alles draait op je eigen machine, met je eigen sleutel.",
+  "evals.setup": "Judge-instellingen",
+  "evals.judge_title": "De judge",
+  "evals.summary_title": "Sessiekwaliteit, laatste 24 uur",
+  "evals.recent_title": "Recent beoordeelde sessies",
+  "evals.suites_title": "Golden test suites"
 }

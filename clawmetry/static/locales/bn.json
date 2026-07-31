@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "এখনো ব্যবহার হয়নি",
   "skills.never_used_verdict": "{n}টি স্কিল ইনস্টল করা, এখনো ব্যবহার হয়নি।",
   "skills.all_good": "সব ঠিক আছে",
-  "skills.all_good_sub": "প্রতিটি স্কিল ব্যবহার হচ্ছে"
+  "skills.all_good_sub": "প্রতিটি স্কিল ব্যবহার হচ্ছে",
+  "evaluators.open_tab": "Evals খুলুন",
+  "evals.title": "Evals",
+  "evals.subtitle": "স্বয়ংক্রিয় চেক যা জানায় আপনার এজেন্ট ভালো কাজ করছে কিনা। সবকিছু আপনার নিজের মেশিনে, নিজের কী দিয়ে চলে।",
+  "evals.setup": "জাজ সেটআপ",
+  "evals.judge_title": "জাজ",
+  "evals.summary_title": "সেশনের মান, গত ২৪ ঘণ্টা",
+  "evals.recent_title": "সম্প্রতি স্কোর করা সেশন",
+  "evals.suites_title": "গোল্ডেন টেস্ট স্যুট"
 }

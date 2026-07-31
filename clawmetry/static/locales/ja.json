@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "未使用",
   "skills.never_used_verdict": "{n}個のスキルがインストールされていますが、まだ一度も使用されていません。",
   "skills.all_good": "問題なし",
-  "skills.all_good_sub": "すべてのスキルが使用されています"
+  "skills.all_good_sub": "すべてのスキルが使用されています",
+  "evaluators.open_tab": "Evalsを開く",
+  "evals.title": "Evals",
+  "evals.subtitle": "エージェントが良い仕事をしているかを判定する自動チェックです。すべて自分のマシン上で、自分のAPIキーを使って実行されます。",
+  "evals.setup": "ジャッジのセットアップ",
+  "evals.judge_title": "ジャッジ",
+  "evals.summary_title": "セッション品質(過去24時間)",
+  "evals.recent_title": "最近スコアリングされたセッション",
+  "evals.suites_title": "ゴールデンテストスイート"
 }

@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "Jamais utilisé",
   "skills.never_used_verdict": "{n} compétence(s) installée(s), jamais utilisée(s).",
   "skills.all_good": "Tout va bien",
-  "skills.all_good_sub": "chaque compétence est utilisée"
+  "skills.all_good_sub": "chaque compétence est utilisée",
+  "evaluators.open_tab": "Ouvrir Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "Des vérifications automatiques qui vous indiquent si votre agent fait du bon travail. Tout s'exécute sur votre machine, avec votre propre clé.",
+  "evals.setup": "Configuration du juge",
+  "evals.judge_title": "Le juge",
+  "evals.summary_title": "Qualité des sessions, dernières 24 heures",
+  "evals.recent_title": "Sessions notées récemment",
+  "evals.suites_title": "Suites de tests de référence"
 }

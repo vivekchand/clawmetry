@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "从未使用",
   "skills.never_used_verdict": "已安装 {n} 个技能，尚未使用。",
   "skills.all_good": "一切正常",
-  "skills.all_good_sub": "所有技能均在使用中"
+  "skills.all_good_sub": "所有技能均在使用中",
+  "evaluators.open_tab": "打开 Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "自动检查,让你知道 agent 的工作是否达标。一切都在你自己的机器上运行,使用你自己的密钥。",
+  "evals.setup": "评审模型设置",
+  "evals.judge_title": "评审模型",
+  "evals.summary_title": "会话质量,近 24 小时",
+  "evals.recent_title": "近期评分会话",
+  "evals.suites_title": "黄金测试套件"
 }

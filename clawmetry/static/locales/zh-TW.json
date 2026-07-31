@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "尚未使用",
   "skills.never_used_verdict": "已安裝 {n} 個技能，尚未使用。",
   "skills.all_good": "一切正常",
-  "skills.all_good_sub": "所有技能均已使用"
+  "skills.all_good_sub": "所有技能均已使用",
+  "evaluators.open_tab": "開啟 Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "自動檢查功能,讓您隨時掌握代理的工作品質。所有運算皆在您自己的裝置上執行,使用您自己的金鑰。",
+  "evals.setup": "評判設定",
+  "evals.judge_title": "評判者",
+  "evals.summary_title": "工作階段品質,過去 24 小時",
+  "evals.recent_title": "最近評分的工作階段",
+  "evals.suites_title": "黃金測試套件"
 }

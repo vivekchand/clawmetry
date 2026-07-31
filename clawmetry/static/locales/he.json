@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "טרם נוצל",
   "skills.never_used_verdict": "{n} skill(ים) מותקן(ים), לא בשימוש עדיין.",
   "skills.all_good": "הכל תקין",
-  "skills.all_good_sub": "כל הסקילים בשימוש"
+  "skills.all_good_sub": "כל הסקילים בשימוש",
+  "evaluators.open_tab": "פתיחת Evals",
+  "evals.title": "Evals",
+  "evals.subtitle": "בדיקות אוטומטיות שמראות אם הסוכן שלכם עושה עבודה טובה. הכל רץ על המחשב שלכם, עם המפתח שלכם.",
+  "evals.setup": "הגדרת השופט",
+  "evals.judge_title": "השופט",
+  "evals.summary_title": "איכות הסשנים, 24 השעות האחרונות",
+  "evals.recent_title": "סשנים שניקדו לאחרונה",
+  "evals.suites_title": "חבילות בדיקה מובחרות"
 }

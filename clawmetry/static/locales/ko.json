@@ -1030,5 +1030,13 @@
   "skills.never_used_title": "아직 사용되지 않음",
   "skills.never_used_verdict": "{n}개의 스킬이 설치되어 있으나 아직 사용되지 않았습니다.",
   "skills.all_good": "모두 정상",
-  "skills.all_good_sub": "모든 스킬이 사용되고 있습니다"
+  "skills.all_good_sub": "모든 스킬이 사용되고 있습니다",
+  "evaluators.open_tab": "Evals 열기",
+  "evals.title": "Evals",
+  "evals.subtitle": "에이전트가 제대로 작업하고 있는지 알려주는 자동 점검 기능입니다. 모든 과정은 사용자의 기기에서, 사용자 본인의 키로 실행됩니다.",
+  "evals.setup": "심사자 설정",
+  "evals.judge_title": "심사자",
+  "evals.summary_title": "세션 품질, 최근 24시간",
+  "evals.recent_title": "최근 평가된 세션",
+  "evals.suites_title": "골든 테스트 스위트"
 }
