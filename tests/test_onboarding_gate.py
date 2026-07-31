@@ -28,7 +28,15 @@ def ob(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
     monkeypatch.setattr(mod, "_ping_onboarded", lambda choice: None)
     monkeypatch.setattr(mod, "_apply_marker_semantics", lambda choice: None)
-    monkeypatch.delenv("CLAWMETRY_CLOUD", raising=False)
+    # Strip every env that legitimately suppresses the gate — including
+    # the CI vars GitHub Actions itself sets, or the "fresh install
+    # requires onboarding" tests would pass locally and fail in CI.
+    for k in ("CLAWMETRY_CLOUD", "CLAWMETRY_SKIP_ONBOARDING", "CI",
+              "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "TRAVIS",
+              "BUILDKITE", "JENKINS_URL", "TEAMCITY_VERSION",
+              "BITBUCKET_BUILD_NUMBER", "CODEBUILD_BUILD_ID", "DRONE",
+              "AGENT_NAME"):
+        monkeypatch.delenv(k, raising=False)
     return mod
 
 
@@ -60,6 +68,18 @@ def test_cloud_mode_never_gates(client, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_CLOUD", "1")
     d = client.get("/api/onboarding/state").get_json()
     assert d["required"] is False and d["source"] == "cloud_mode"
+
+
+def test_env_skip_never_gates(client, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_SKIP_ONBOARDING", "1")
+    d = client.get("/api/onboarding/state").get_json()
+    assert d["required"] is False and d["source"] == "env_skip"
+
+
+def test_ci_never_gates(client, monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    d = client.get("/api/onboarding/state").get_json()
+    assert d["required"] is False and d["source"] == "ci"
 
 
 def test_complete_managed_requires_cloud_connection(client):

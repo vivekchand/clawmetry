@@ -144,6 +144,22 @@ def api_onboarding_state():
             # Hosted dashboard: signing up WAS the onboarding.
             return jsonify({"required": False, "state": "managed",
                             "source": "cloud_mode"})
+        # Fleet-managed / scripted installs get an explicit escape: the
+        # operator made the choice for the machine, a modal can't.
+        if os.environ.get("CLAWMETRY_SKIP_ONBOARDING", "").strip() \
+                not in ("", "0", "false", "False"):
+            return jsonify({"required": False, "state": "none",
+                            "source": "env_skip"})
+        # CI runs (our own E2E suites included) boot fresh dashboards with
+        # no human present; a mandatory modal there only breaks automation.
+        try:
+            from clawmetry.telemetry import _detect_ci
+
+            if _detect_ci()[0]:
+                return jsonify({"required": False, "state": "none",
+                                "source": "ci"})
+        except Exception:
+            pass
         return jsonify(_resolve_state())
     except Exception as exc:
         # Never let gate plumbing brick the dashboard: fail open.
