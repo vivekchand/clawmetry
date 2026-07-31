@@ -14,6 +14,10 @@ https://github.com/vivekchand/clawmetry
 MIT License
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
 import hmac
 import os
 import sys
@@ -262,7 +266,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.610"
+__version__ = "0.12.612"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -12862,8 +12866,8 @@ def _auto_discover_gateway(token):
                 "id": "discover",
                 "method": "connect",
                 "params": {
-                    "minProtocol": 3,
-                    "maxProtocol": 3,
+                    "minProtocol": _GW_MIN_PROTO,
+                    "maxProtocol": _GW_MAX_PROTO,
                     "client": {
                         "id": "cli",
                         "version": __version__,

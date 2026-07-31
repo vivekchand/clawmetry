@@ -30,6 +30,10 @@ Flask app, not a Blueprint, so it stays in ``dashboard.py``.
 Pure mechanical move — zero behaviour change.
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
 import collections
 import hashlib
 import html
@@ -664,8 +668,8 @@ def api_gw_config():
                     "id": "validate",
                     "method": "connect",
                     "params": {
-                        "minProtocol": 3,
-                        "maxProtocol": 3,
+                        "minProtocol": _GW_MIN_PROTO,
+                        "maxProtocol": _GW_MAX_PROTO,
                         "client": {
                             "id": "cli",
                             "version": _d.__version__,
