@@ -47,9 +47,14 @@
       </div>
       <div class="obg-opt">
         <h3>Self-host</h3>
-        <p>Everything stays on this machine. Sign in once by email to start the same free 7-day Pro trial and unlock every runtime, or activate a license key you already have.</p>
+        <p>Everything stays on this machine. Sign in once with Google, GitHub, or email to start the same free 7-day Pro trial and unlock every runtime, or activate a license key you already have.</p>
+        <!-- Keep this initial body mirrored with _selfhostHome() in
+             static/js/onboarding.js — both renders must offer the same options. -->
         <div id="obg-selfhost-body">
-          <button class="obg-btn obg-btn-quiet" id="obg-trial-btn" type="button">Start free 7-day trial</button>
+          <button class="obg-btn obg-btn-quiet" id="obg-oauth-github" type="button">Continue with GitHub</button>
+          <button class="obg-btn obg-btn-quiet" id="obg-oauth-google" type="button" style="margin-top:8px;">Continue with Google</button>
+          <button class="obg-btn obg-btn-quiet" id="obg-trial-btn" type="button" style="margin-top:8px;">Continue with email</button>
+          <div class="obg-err" id="obg-oauth-err"></div>
           <a class="obg-alt" href="#" id="obg-license-link">I have a license key</a>
         </div>
       </div>

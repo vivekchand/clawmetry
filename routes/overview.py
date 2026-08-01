@@ -1750,12 +1750,14 @@ def cloud_proxy(cloud_path):
 
 @bp_overview.route("/api/cloud-cta/oauth-start", methods=["POST"])
 def cloud_cta_oauth_start():
-    """One-click cloud sign-up + node connect via GitHub/Google OAuth.
+    """One-click sign-up via GitHub/Google OAuth (managed or self-host).
 
     Starts a loopback browser-bridge and returns the cloud OAuth start URL for
     the dashboard to open in a new tab. The cm_ key the cloud mints rides back
-    over 127.0.0.1 only; the bridge thread then registers this node and starts
-    the sync daemon. The dashboard polls /api/cloud-cta/oauth-status.
+    over 127.0.0.1 only. mode="managed" (default) then registers this node and
+    starts the sync daemon; mode="selfhost" keeps data local (nocloud marker)
+    and activates the account's 7-day trial license instead. The dashboard
+    polls /api/cloud-cta/oauth-status.
     """
     import dashboard as _d
 
@@ -1763,7 +1765,10 @@ def cloud_cta_oauth_start():
     provider = (data.get("provider") or "").strip().lower()
     if provider not in ("github", "google"):
         return jsonify({"ok": False, "error": "Unsupported provider"}), 400
-    url = _d._start_oauth_bridge(provider)
+    mode = (data.get("mode") or "managed").strip().lower()
+    if mode not in ("managed", "selfhost"):
+        return jsonify({"ok": False, "error": "Unsupported mode"}), 400
+    url = _d._start_oauth_bridge(provider, mode=mode)
     if not url:
         err = (_d._OAUTH_BRIDGE or {}).get("error") or "Could not start sign-in"
         return jsonify({"ok": False, "error": err}), 500
@@ -1779,8 +1784,10 @@ def cloud_cta_oauth_status():
         {
             "status": st.get("status", "idle"),
             "provider": st.get("provider", ""),
+            "mode": st.get("mode", ""),
             "node_id": st.get("node_id", ""),
             "enc_key": st.get("enc_key", ""),
+            "trial": st.get("trial", ""),
             "error": st.get("error", ""),
         }
     )

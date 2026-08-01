@@ -1770,6 +1770,22 @@
 .brain-seq-label { color: var(--text-secondary); }
 .brain-seq-meta { margin-left: auto; font-weight: 500; opacity: 0.85; }
 .brain-seq-body { padding: 0 8px 8px; }
+/* Per-run error badge + error row tint (Brain-visualizer adoption #3). */
+.brain-seq-errs {
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.brain-event.brain-error-row {
+  border-left: 2px solid rgba(239, 68, 68, 0.6);
+  padding-left: 6px;
+  background: rgba(239, 68, 68, 0.05);
+}
 
 /* ── Brain swimlane ───────────────────────────────────────────────────────
    Bird's-eye strip: one lane per agent run, drawn against real wall-clock
@@ -1825,6 +1841,9 @@
   opacity: 0.85;
 }
 .brain-lane:hover .brain-lane-bar { opacity: 1; }
+/* A run that hit failed tool calls gets a red ring so problems are
+   visible from the bird's-eye strip before expanding anything. */
+.brain-lane-bar.brain-lane-bar-err { box-shadow: 0 0 0 1.5px rgba(239, 68, 68, 0.85); }
 .brain-seq-flash {
   box-shadow: 0 0 0 2px var(--accent, #60a5fa), 0 0 18px rgba(96, 165, 250, 0.35);
   transition: box-shadow 0.25s ease;
