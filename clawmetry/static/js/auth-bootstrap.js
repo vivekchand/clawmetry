@@ -1,11 +1,14 @@
 (function(){
   var stored = localStorage.getItem('clawmetry-token');
+  var triedZeroClick = false;
 
-  // Zero-click localhost auto-login: if no token in localStorage, ask the
-  // server for the on-disk token (only returned on loopback). If we get one,
-  // persist it and continue inline by re-entering checkAuth with the token.
-  // Falls back to the manual login overlay on any error / 403 / 404 (endpoint
-  // may not be deployed yet, or the request isn't from localhost).
+  // Zero-click localhost auto-login: ask the server for the on-disk token
+  // (only returned on loopback), persist it, and continue inline by
+  // re-entering checkAuth with the fresh token. Runs on first load when no
+  // token is stored, AND as a one-shot retry when a stored token turns out
+  // stale (the gateway token rotated on disk) -- the manual login wall is
+  // the last resort, never the first response. The server trusts loopback
+  // for /api/* regardless, so walling a localhost user is pure friction.
   //
   // No location.reload() — the fetch shim below pulls the token from
   // localStorage on the next /api/* call, so subsequent fetches authenticate
@@ -13,18 +16,23 @@
   // harnesses, which observe the load event before the bootstrap's async
   // fetch resolves and then crash when the navigation fires under their feet
   // ("Execution context was destroyed").
-  if(!stored){
+  function tryZeroClick(done){
+    triedZeroClick = true;
     fetch('/api/auth/detected-token')
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
         if(d && d.token){
           localStorage.setItem('clawmetry-token', d.token);
-          checkAuth(d.token);
+          done(d.token);
         } else {
-          checkAuth(null);
+          done(null);
         }
       })
-      .catch(function(){ checkAuth(null); });
+      .catch(function(){ done(null); });
+  }
+
+  if(!stored){
+    tryZeroClick(checkAuth);
   } else {
     checkAuth(stored);
   }
@@ -34,7 +42,9 @@
       .then(function(r){return r.json()})
       .then(function(d){
         if(d.needsSetup){
-          // No gateway token configured -- show mandatory gateway setup wizard
+          // No gateway token configured -- show the setup wizard. It starts
+          // mandatory, but gw-setup.js relaxes it (dismissible, token form
+          // hidden) when runtime detection finds no OpenClaw on the machine.
           document.getElementById('login-overlay').style.display='none';
           var overlay=document.getElementById('gw-setup-overlay');
           overlay.dataset.mandatory='true';
@@ -51,7 +61,17 @@
           var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
           return;
         }
-        localStorage.removeItem('cm-token');localStorage.removeItem('clawmetry-token');sessionStorage.removeItem('cm-token');document.getElementById('login-overlay').style.display='flex';
+        localStorage.removeItem('cm-token');localStorage.removeItem('clawmetry-token');sessionStorage.removeItem('cm-token');
+        if(!triedZeroClick){
+          // Stored token was stale -- recover the fresh on-disk token over
+          // loopback before resorting to the manual wall.
+          tryZeroClick(function(fresh){
+            if(fresh){ checkAuth(fresh); }
+            else { document.getElementById('login-overlay').style.display='flex'; }
+          });
+          return;
+        }
+        document.getElementById('login-overlay').style.display='flex';
       })
       .catch(function(){document.getElementById('login-overlay').style.display='none';});
   }
