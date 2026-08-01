@@ -1637,6 +1637,99 @@ def api_security_threats():
     )
 
 
+@bp_security.route("/api/numbat/ingest", methods=["POST"])
+def api_numbat_ingest():
+    """Receive Perplexity numbat NDJSON records over HTTP.
+
+    numbat (github.com/perplexityai/numbat) POSTs application/x-ndjson
+    batches from its HTTP sink; any 2xx acknowledges. Wire it with:
+
+        numbat hook install --agent all --emit all --output file \\
+            --output http --http-url http://127.0.0.1:8900/api/numbat/ingest
+
+    Loopback needs no numbat auth flags; for remote delivery use numbat's
+    ``--http-auth bearer`` with NUMBAT_HTTP_TOKEN set to the gateway token —
+    the global /api/* before_request check validates it. Duplicate batches
+    are expected (numbat retries); all mapped ids are deterministic and the
+    store upserts, so replays are no-ops. finding → security_events,
+    enforcement → guardrail_events (mapper: clawmetry/numbat_ingest.py).
+    The durable path is the daemon's file tail (sync_numbat_events) — this
+    endpoint is the low-latency supplement, and the two dedupe by id.
+    """
+    import dashboard as _d
+    from clawmetry import numbat_ingest as _ni
+
+    raw = request.get_data(cache=False)
+    if not raw:
+        return jsonify({"ok": True, "ingested": 0, "note": "empty body"})
+    if len(raw) > 32 * 1024 * 1024:
+        return jsonify({"error": "body too large"}), 413
+    if (request.headers.get("Content-Encoding") or "").lower() == "gzip":
+        import gzip as _gzip
+        try:
+            raw = _gzip.decompress(raw)
+        except Exception:
+            return jsonify({"error": "bad gzip body"}), 400
+
+    records, bad_lines = _ni.parse_records(raw.decode("utf-8", errors="replace"))
+    mapped = _ni.map_records(records)  # no node_id: shadow rows are daemon-side
+
+    ingested = 0
+    errors = 0
+    try:
+        from routes.local_query import local_store_via_daemon
+        from clawmetry import local_store as _ls_mod
+
+        def _write(method: str, ev: dict) -> None:
+            nonlocal ingested, errors
+            try:
+                result = local_store_via_daemon(method, event=ev)
+                if result is None:
+                    getattr(_ls_mod.get_store(), method)(ev)
+                ingested += 1
+            except Exception:
+                errors += 1
+
+        for sec in mapped["security_events"]:
+            _write("ingest_security_event", sec)
+        for gr in mapped["guardrail_events"]:
+            _write("ingest_guardrail_event", gr)
+    except Exception:
+        errors += len(mapped["security_events"]) + len(mapped["guardrail_events"])
+
+    # Critical/high findings ping the operator now (cooldown via _fire_alert),
+    # mirroring /api/security/threats. Rule-based alerting over shadow rows
+    # covers the file-tail path; this covers HTTP-only setups.
+    for rec in mapped["findings_raw"]:
+        if rec.get("severity") in ("critical", "high"):
+            try:
+                _d._fire_alert(
+                    rule_id=f"numbat_{rec.get('rule_id', 'finding')}",
+                    alert_type="numbat_finding",
+                    message=(
+                        f"🛡️ numbat: {str(rec.get('severity', '')).upper()} — "
+                        f"{rec.get('title', rec.get('rule_id', 'finding'))}"
+                        f" [{rec.get('source_agent', '?')}]"
+                    ),
+                    channels=["banner", "telegram"],
+                )
+            except Exception:
+                pass
+
+    return jsonify({
+        "ok": errors == 0,
+        "ingested": ingested,
+        "findings": len(mapped["security_events"]),
+        "enforcements": len(mapped["guardrail_events"]),
+        "skipped_events": mapped["skipped_events"],
+        "skipped_schema": mapped["skipped_schema"],
+        "skipped_other": mapped["skipped_other"],
+        "bad_lines": bad_lines,
+        "errors": errors,
+        "_source": "local_store",
+    })
+
+
 @bp_security.route("/api/security/signatures")
 def api_security_signatures():
     """Return the built-in threat signature catalog."""

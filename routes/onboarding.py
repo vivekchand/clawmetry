@@ -136,13 +136,19 @@ def _apply_marker_semantics(choice: str) -> None:
     connect without enable_cloud() silently no-ops sync). Self-host writes
     it so identity/trial never turns into an unasked-for data upload."""
     try:
+        import pathlib
+
         from clawmetry import config as _cfg
 
         if choice == "managed":
             _cfg.enable_cloud()
         else:
-            _cfg.NOCLOUD_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _cfg.NOCLOUD_MARKER_PATH.touch(exist_ok=True)
+            # NOCLOUD_MARKER_PATH is a plain str; the old .parent/.touch
+            # calls raised AttributeError into this except, so the marker
+            # was silently never written for self-host choices.
+            marker = pathlib.Path(str(_cfg.NOCLOUD_MARKER_PATH))
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch(exist_ok=True)
     except Exception as exc:
         log.warning("onboarding: marker update failed: %s", exc)
 

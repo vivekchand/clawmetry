@@ -5134,7 +5134,9 @@ function setBrainTypeFilter(type, btn) {
     b.style.background = isActive ? 'rgba(168,85,247,0.2)' : 'transparent';
     b.style.fontWeight = isActive ? '600' : '400';
   });
-  renderBrainFeed();
+  // Was renderBrainFeed() — a function that never existed, so every type-chip
+  // click died on a ReferenceError and the filter silently did nothing.
+  renderBrainStream(_brainAllEvents);
   _brainRefreshGraphIfActive();
 }
 function setBrainFilter(source, btn) {
@@ -5265,7 +5267,7 @@ function renderBrainTypeChips(events) {
   if (_tcRt && _tcRt !== 'all' && typeof _cmRuntimeOf === 'function') {
     events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _tcRt; });
   }
-  var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7'};
+  var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7','ERROR':'#ef4444'};
   var typeCounts = {};
   events.forEach(function(ev) { typeCounts[ev.type] = (typeCounts[ev.type]||0) + 1; });
   var types = Object.keys(typeCounts).sort();
@@ -5775,6 +5777,7 @@ function renderBrainStream(events) {
     var rowCls = '';
     if (_isPlumbingEvent(ev)) rowCls += ' brain-plumbing';
     if (chInfo && chInfo.bodyMissing) rowCls += ' brain-relay-only';
+    if (evType === 'ERROR' || ev.isError) rowCls += ' brain-error-row';
     html += '<div class="brain-event' + _evExpCls + rowCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
@@ -5895,10 +5898,19 @@ function _brainGroupSequences(rows) {
     var dur = _brainSeqDuration(newest - oldest);
     var steps = g.length;
     var meta = steps + ' event' + (steps === 1 ? '' : 's') + (dur ? ' \u00b7 \u23f1 ' + dur : '');
+    // Per-run error badge (Brain-visualizer adoption #3): failed tool
+    // results arrive typed ERROR, so a collapsed block still tells you
+    // which run hit problems before you expand it.
+    var errs = 0;
+    g.forEach(function(r) { var e = r.ev || {}; if ((e.type || '') === 'ERROR' || e.isError) errs++; });
+    var errBadge = errs
+      ? '<span class="brain-seq-errs" title="' + errs + ' failed tool call' + (errs === 1 ? '' : 's') + ' in this run">\u26a0 ' + errs + '</span>'
+      : '';
     out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '">'
         +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
         +  '<span class="brain-seq-chevron">\u203a</span>'
         +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
+        +  errBadge
         +  '<span class="brain-seq-meta">' + escHtml(meta) + '</span>'
         +  '</div>'
         +  '<div class="brain-seq-body">'
@@ -5943,7 +5955,9 @@ function _brainSwimlane(order, buckets) {
     if (!start || !end) return;
     if (start < min) min = start;
     if (end > max) max = end;
-    spans.push({key: key, start: start, end: end, n: g.length, ev: g[0].ev});
+    var errs = 0;
+    g.forEach(function(r) { var e = r.ev || {}; if ((e.type || '') === 'ERROR' || e.isError) errs++; });
+    spans.push({key: key, start: start, end: end, n: g.length, ev: g[0].ev, errs: errs});
   });
   if (spans.length < 2 || !isFinite(min) || max <= min) return '';
   var total = max - min;
@@ -5953,12 +5967,13 @@ function _brainSwimlane(order, buckets) {
     if (left + width > 100) width = 100 - left;
     var col = brainSourceColor(sp.ev.source || sp.ev.src || 'main');
     var title = _brainSeqLabel(sp.ev) + ' \u00b7 ' + sp.n + ' events \u00b7 '
-              + _brainSeqDuration(sp.end - sp.start);
+              + _brainSeqDuration(sp.end - sp.start)
+              + (sp.errs ? ' \u00b7 \u26a0 ' + sp.errs + ' error' + (sp.errs === 1 ? '' : 's') : '');
     return '<div class="brain-lane" onclick="jumpToBrainSequence(\'' + _brainSeqDomId(sp.key) + '\')" title="'
          + escHtml(title) + '">'
          + '<span class="brain-lane-name">' + escHtml(_brainSeqLabel(sp.ev)) + '</span>'
          + '<span class="brain-lane-track">'
-         + '<span class="brain-lane-bar" style="left:' + left.toFixed(2) + '%;width:'
+         + '<span class="brain-lane-bar' + (sp.errs ? ' brain-lane-bar-err' : '') + '" style="left:' + left.toFixed(2) + '%;width:'
          + width.toFixed(2) + '%;background:' + col + ';"></span>'
          + '</span></div>';
   }).join('');
