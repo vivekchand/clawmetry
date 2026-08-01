@@ -16536,6 +16536,42 @@ def _build_device_summary(spending, daily_usage, efficiency=None):
     return summary
 
 
+def _build_evals_judge_status() -> dict | None:
+    """Node judge status for the hosted Evals card's snapshot slice.
+
+    Founder report 2026-08-01: the cloud Evals card showed the CONTAINER's
+    "API key: not set" plus a live-looking key form while the node's real
+    state was key-present-but-auth-rejected — the screen read as fake, and a
+    key pasted into that form landed on the container's ephemeral disk
+    instead of the node. This bakes the node's truth into the snapshot so
+    the hosted card can render it. Same recipe as routes/evals.py
+    judge_meta. Booleans and labels ONLY — key material never enters the
+    snapshot (it is E2E-encrypted, but the key still must not leave
+    ~/.clawmetry/eval_keys.json by contract). Returns None on any failure
+    so a broken eval stack can't break the snapshot.
+    """
+    try:
+        from clawmetry import eval_runner as _ev_run
+        keys = _ev_run.judge_keys_present()
+        rubric = _ev_run.load_rubric("default") or {}
+        provider = _ev_run.judge_provider_for(rubric)
+        last = _ev_run.last_judge_status()
+        return {
+            "enabled": _ev_run.is_enabled(),
+            "key_present": bool(keys.get(provider)),
+            "provider": str(provider),
+            "model": str(
+                rubric.get("judge_model")
+                or _ev_run.DEFAULT_RUBRIC["judge_model"]
+            ),
+            "last_error": last.get("error"),
+            "last_ok_at": last.get("at") if last.get("ok") else None,
+        }
+    except Exception as e:
+        log.debug("snapshot: evals judge status failed: %s", e)
+        return None
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -17083,6 +17119,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         evals_slice["recent"] = _ev_store.query_recent_evals(limit=10) or []
     except Exception as _e_ev:
         log.debug("snapshot: evals slice failed: %s", _e_ev)
+    _evj = _build_evals_judge_status()
+    if _evj:
+        evals_slice["judge"] = _evj
 
     # Per-runtime breakdowns so the Overview cards (outcome tile + activity
     # strip) re-scope with the runtime switcher on the hosted dashboard. Keyed
