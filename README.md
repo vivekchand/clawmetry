@@ -143,6 +143,8 @@ The production bundle is written to `clawmetry/static/v2/dist/`.
 
 ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw runtime ships a dedicated reader adapter that translates its native session format into ClawMetry's unified shapes; the daemon ingests them into the same DuckDB store + cloud snapshot, tagged with the runtime, and the Session replay tab shows a **runtime switcher** when more than one is present. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix + a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for the OpenClaw-family primer.
 
+Running [Perplexity's numbat](https://github.com/perplexityai/numbat) agent-security tool? ClawMetry ingests its findings and enforcement decisions out of the box — see [`docs/NUMBAT.md`](docs/NUMBAT.md).
+
 | Runtime / Agent | Status | Notes |
 |---|---|---|
 | **OpenClaw** | Native | Reference runtime, auto-detected |
