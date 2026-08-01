@@ -5388,6 +5388,13 @@ function renderBrainStream(events) {
   if (hasTelegramAck) {
     html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;margin-bottom:6px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:6px;font-size:11px;color:#60a5fa;">📱 Telegram body capture pending OpenClaw upstream — outbound counts only</div>';
   }
+  // Rows are buffered per-event (not concatenated straight into `html`) so
+  // they can be grouped into per-turn sequences below — the Brain-visualizer
+  // pattern. Buffering is the only change here; each row's markup is
+  // untouched.
+  var _seqRowBuf = [];
+  var _seqHeadHtml = html;
+  html = '';
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
@@ -5654,8 +5661,103 @@ function renderBrainStream(events) {
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += turnTimeline;
     html += '</div>';
+    _seqRowBuf.push({ev: ev, html: html});
+    html = '';
   });
-  el.innerHTML = html;
+  el.innerHTML = _seqHeadHtml + _brainGroupSequences(_seqRowBuf);
+}
+
+// ── Sequences: group the feed into readable blocks ───────────────────────
+// Adapted from the Antigravity Brain Visualizer (Apache-2.0): a run reads as
+// a handful of "what happened, and how long did it take" blocks instead of
+// one undifferentiated wall of events.
+//
+// Their visualizer anchors each sequence on a USER turn. Our brain feed does
+// NOT carry a user-turn marker on every runtime (a live Claude Code window is
+// TOOL_CALL / TOOL_RESULT / MESSAGE / THINKING with no USER row), and it
+// interleaves concurrent sessions in one chronological stream. So we anchor on
+// what every event does carry: its session. One block per agent run, ordered
+// by most-recent activity, rows inside kept newest-first. Where a runtime DOES
+// emit USER rows, each one starts a new block within its session, which
+// reproduces the visualizer's per-turn grouping exactly.
+//
+// Grouping is presentation-only: every row is rendered exactly once, in the
+// same markup, and a feed with a single session degrades to one block.
+
+function _brainSeqDuration(ms) {
+  if (!isFinite(ms) || ms < 0) return '';
+  var sec = Math.floor(ms / 1000);
+  if (sec < 1) return '<1s';
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ' + (sec % 60) + 's';
+  var hr = Math.floor(min / 60);
+  return hr + 'h ' + (min % 60) + 'm';
+}
+
+function _brainSeqTime(ev) {
+  try { return ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0; }
+  catch (e) { return 0; }
+}
+
+function toggleBrainSequence(el) {
+  var body = el && el.nextElementSibling;
+  if (!body) return;
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  var chev = el.querySelector('.brain-seq-chevron');
+  if (chev) chev.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+
+// Human label for one block: the runtime + short session id, so a feed mixing
+// Claude Code with Antigravity says which is which.
+function _brainSeqLabel(ev) {
+  var sid = (ev && (ev.sessionId || ev.src)) || '';
+  var rt = 'openclaw', native = sid;
+  var i = sid.indexOf(':');
+  if (i > 0) {
+    var pfx = sid.slice(0, i).toLowerCase();
+    if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { rt = pfx; native = sid.slice(i + 1); }
+  }
+  var label = (_CM_RT_LABEL && _CM_RT_LABEL[rt]) || rt;
+  return label + ' \u00b7 ' + (native || '?').slice(0, 8);
+}
+
+function _brainGroupSequences(rows) {
+  if (!rows || !rows.length) return '';
+  // Bucket by session, preserving newest-first order inside each bucket. A
+  // USER row (runtimes that emit one) starts a fresh block within its session.
+  var order = [], buckets = {}, turnSeq = 0;
+  rows.forEach(function(row) {
+    var ev = row.ev || {};
+    var key = (ev.sessionId || ev.src || 'unknown');
+    if ((ev.type || '') === 'USER') key += '#turn' + (turnSeq++);
+    if (!buckets[key]) { buckets[key] = []; order.push(key); }
+    buckets[key].push(row);
+  });
+  // A single bucket adds nothing but chrome — render flat (also the exact
+  // pre-sequence output, so one-session feeds are unchanged).
+  if (order.length < 2) return rows.map(function(r) { return r.html; }).join('');
+
+  var out = '';
+  order.forEach(function(key) {
+    var g = buckets[key];
+    var newest = _brainSeqTime(g[0].ev);
+    var oldest = _brainSeqTime(g[g.length - 1].ev);
+    var dur = _brainSeqDuration(newest - oldest);
+    var steps = g.length;
+    var meta = steps + ' event' + (steps === 1 ? '' : 's') + (dur ? ' \u00b7 \u23f1 ' + dur : '');
+    out += '<div class="brain-seq">'
+        +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
+        +  '<span class="brain-seq-chevron">\u203a</span>'
+        +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
+        +  '<span class="brain-seq-meta">' + escHtml(meta) + '</span>'
+        +  '</div>'
+        +  '<div class="brain-seq-body">'
+        +  g.map(function(r) { return r.html; }).join('')
+        +  '</div></div>';
+  });
+  return out;
 }
 
 // Reasoning Chain Viewer (GH #565)

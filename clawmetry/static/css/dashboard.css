@@ -1735,3 +1735,38 @@
     font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);
   }
 }
+
+/* ── Brain sequences ──────────────────────────────────────────────────────
+   Per-turn grouping of the activity stream (adapted from the Antigravity
+   Brain Visualizer): each block is one user turn plus everything the agent
+   did in response, with its wall-clock duration. */
+.brain-seq {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+.brain-seq-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.brain-seq-head:hover { color: var(--text-secondary); }
+.brain-seq-chevron {
+  display: inline-block;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+  font-size: 15px;
+  line-height: 1;
+}
+.brain-seq-label { color: var(--text-secondary); }
+.brain-seq-meta { margin-left: auto; font-weight: 500; opacity: 0.85; }
+.brain-seq-body { padding: 0 8px 8px; }
