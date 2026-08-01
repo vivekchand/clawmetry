@@ -167,7 +167,10 @@
         if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
         return;
       }
-      _complete('selfhost_trial', function (msg) { _err('obg-trial-err', msg); });
+      _complete('selfhost_trial', function (msg) {
+        _err('obg-trial-err', msg);
+        if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
+      });
     }).catch(function () {
       _err('obg-trial-err', 'Network error. Try again.');
       if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
