@@ -8876,14 +8876,17 @@ def _get_heartbeat_status():
     }
 
 
-# ── Agent-presence detection (no-agent empty-state, sibling of #1604) ──
+# ── Agent-presence detection (sibling of #1604) ──
 # Distinct from ``_get_heartbeat_status``:
 #   * heartbeat-status answers "has THIS install's daemon checked in yet?"
 #     (transient race, resolves in ~30s — drives #1631's onboarding banner)
 #   * detect_agent_install() answers "is there any underlying agent at
-#     all?" (persistent until the user installs one — drives the
-#     "No OpenClaw or NemoClaw detected" page-level empty-state).
-# Cached 60s so every tab switch doesn't re-stat 4+ paths and shell out
+#     all?" — served at /api/agent-presence and mirrored into heartbeats
+#     (sync.py) for the cloud's install-state aggregation. The dashboard
+#     banner this used to drive ("No OpenClaw or NVIDIA NemoClaw
+#     detected") was removed once ClawMetry grew past two runtimes; the
+#     detection API stays for cloud consumers.
+# Cached 60s so polling consumers don't re-stat 4+ paths and shell out
 # to ``shutil.which``.
 _agent_presence_cache = {"ts": 0.0, "value": None}
 _AGENT_PRESENCE_TTL_SEC = 60

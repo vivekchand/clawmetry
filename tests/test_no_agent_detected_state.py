@@ -1,32 +1,32 @@
-"""Tests for the "No OpenClaw or NVIDIA NemoClaw detected" empty-state.
+"""Tests for agent-presence detection + the no-agent banner REMOVAL.
 
-Symptom: ClawMetry installs and registers as a node in cloud even when
-the user has not installed any underlying agent. Every tab (Brain, AI
-Model, Channels, Sessions) renders empty or shows stale data because
-there is no agent producing events. Users see a broken-looking
-dashboard and bounce.
+History: the dashboard used to show a persistent "No OpenClaw or NVIDIA
+NemoClaw detected. Install one to start seeing data." banner whenever
+neither of those two runtimes was installed. That copy dates from when
+ClawMetry supported exactly two runtimes; with 12+ observed runtimes it
+was flat wrong (a machine with hundreds of Claude Code sessions still
+got told to install OpenClaw) and it rendered on cloud node pages where
+the pod can never filesystem-detect anything. The banner, its JS poller
+(``checkAgentPresence``), and its locale keys are REMOVED.
 
-The fix detects "no agent installed at all" at boot and surfaces an
-explicit, persistent banner with install CTAs for both OpenClaw and
-NVIDIA NemoClaw. Distinct from issue #1604 / PR #1631 (first-heartbeat
-race) which handles the transient "agent installed but no heartbeat
-yet" window — see the JS mutual-exclusion in ``checkAgentPresence``.
+What stays: ``detect_agent_install()`` and ``GET /api/agent-presence``.
+The cloud still consumes the payload (heartbeat ``agent_install`` mirror
+in sync.py + the cloud route-policy entry), so the backend detection
+contract keeps its tests here.
 
-This suite pins five scenarios + the user-facing copy contract:
-  1. No openclaw + no nemoclaw + empty local store → no-agent state
-  2. OpenClaw installed + running, no first heartbeat yet → NOT the
-     no-agent state (#1631's banner owns that window)
-  3. OpenClaw installed + heartbeat received → normal dashboard
-  4. NemoClaw installed only → normal dashboard
-  5. Both installed → normal dashboard
-plus the banner partial + JS contract assertions.
+This suite now pins:
+  1. The backend payload contract (5 detection scenarios + cache TTL +
+     runtime-aware detected_runtimes fields) for cloud consumers.
+  2. The REMOVAL guard: no banner markup in banners.html, no poller in
+     app.js, no orphaned locale keys — so the two-runtime framing can't
+     quietly come back.
 """
 
 from __future__ import annotations
 
+import glob
+import json
 import os
-
-import pytest
 
 
 # ── Shared monkeypatch helpers ───────────────────────────────────────────
@@ -44,9 +44,7 @@ def _force(monkeypatch, openclaw, nemoclaw, any_data,
            other_runtimes=(), entitled_ids=()):
     """Stub all detectors so a test can drive the exact combo it wants
     without touching the real filesystem, DuckDB, or the entitlement
-    resolver. ``other_runtimes`` feeds the paid-runtime lite detector
-    (``{id,label,sessions}`` dicts); ``entitled_ids`` is the subset the
-    plan covers."""
+    resolver."""
     import dashboard as _d
     _reset_cache(monkeypatch)
     monkeypatch.setattr(_d, "_detect_openclaw_install", lambda: openclaw)
@@ -58,58 +56,31 @@ def _force(monkeypatch, openclaw, nemoclaw, any_data,
                         lambda ids: [r for r in ids if r in set(entitled_ids)])
 
 
-# ── Scenario 1: no openclaw + no nemoclaw + empty store → no-agent ──────
+# ── Backend payload contract (cloud consumers still read this) ──────────
 def test_no_agent_at_all_reports_no_agent_true(monkeypatch):
-    """The exact predicate the banner JS gates on: ``no_agent === true``.
-
-    If any of the three detectors returned True here it would mean either
-    (a) the banner never shows on a truly empty machine (regression) or
-    (b) we are silently masking a detection bug — both have caused real
-    user-visible "broken dashboard" reports.
-    """
     import dashboard as _d
     _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False)
     payload = _d.detect_agent_install()
-    assert payload["no_agent"] is True, (
-        "with no openclaw + no nemoclaw + no local data the banner JS "
-        "needs no_agent=true to render the empty state; got " + repr(payload)
-    )
+    assert payload["no_agent"] is True
     assert payload["openclaw_detected"] is False
     assert payload["nemoclaw_detected"] is False
     assert payload["any_data"] is False
     assert payload["signals"] == [], (
-        "signals list MUST be empty when nothing is detected so the UI "
-        "does not display a misleading 'detected via X' tag"
+        "signals list MUST be empty when nothing is detected so consumers "
+        "do not display a misleading 'detected via X' tag"
     )
 
 
-# ── Scenario 2: openclaw installed but heartbeat hasn't landed yet ──────
 def test_openclaw_installed_but_no_heartbeat_is_NOT_no_agent_state(monkeypatch):
-    """The first-heartbeat race is #1631's territory, NOT this PR's.
-
-    If openclaw IS installed (PID file, workspace dir, anything) we must
-    return ``no_agent=false`` so the persistent no-agent banner stays
-    hidden and the transient "Setting up your node" banner from #1631
-    owns the ~30s warm-up window. Showing both would be visually
-    confusing and contradict each other.
-    """
     import dashboard as _d
     _force(monkeypatch, openclaw=True, nemoclaw=False, any_data=False)
     payload = _d.detect_agent_install()
-    assert payload["no_agent"] is False, (
-        "openclaw installed → no_agent MUST be false even if no heartbeat "
-        "yet (issue #1604 / PR #1631 owns that transient window)"
-    )
+    assert payload["no_agent"] is False
     assert payload["openclaw_detected"] is True
     assert "openclaw" in payload["signals"]
 
 
-# ── Scenario 3: openclaw installed + heartbeat → normal dashboard ───────
-def test_openclaw_installed_and_data_present_is_normal_dashboard(monkeypatch):
-    """The steady-state happy path. ``no_agent=false`` and BOTH the
-    openclaw_detected flag AND the local-store signal must be set so
-    the system-health card can show a green "OpenClaw OK" pill.
-    """
+def test_openclaw_installed_and_data_present_is_normal_state(monkeypatch):
     import dashboard as _d
     _force(monkeypatch, openclaw=True, nemoclaw=False, any_data=True)
     payload = _d.detect_agent_install()
@@ -120,30 +91,16 @@ def test_openclaw_installed_and_data_present_is_normal_dashboard(monkeypatch):
     assert "local_data" in payload["signals"]
 
 
-# ── Scenario 4: nemoclaw installed only → normal dashboard ──────────────
-def test_nemoclaw_only_install_is_normal_dashboard(monkeypatch):
-    """A pure NemoClaw user (no OpenClaw) must NOT see the no-agent
-    banner. Per memory ``feedback_em_style_judgment`` we treat OpenClaw
-    and NemoClaw as equal first-class agents — neither's absence alone
-    triggers the empty state.
-    """
+def test_nemoclaw_only_install_is_normal_state(monkeypatch):
     import dashboard as _d
     _force(monkeypatch, openclaw=False, nemoclaw=True, any_data=False)
     payload = _d.detect_agent_install()
-    assert payload["no_agent"] is False, (
-        "nemoclaw alone is enough to hide the no-agent banner — they are "
-        "treated as equal first-class agents (feedback_em_style_judgment)"
-    )
+    assert payload["no_agent"] is False
     assert payload["nemoclaw_detected"] is True
     assert "nemoclaw" in payload["signals"]
 
 
-# ── Scenario 5: both installed → normal dashboard ───────────────────────
-def test_both_agents_installed_is_normal_dashboard(monkeypatch):
-    """Belt-and-braces: both signals true MUST keep no_agent=false and
-    surface BOTH in the signals list so the UI can attribute data
-    correctly across the two agents.
-    """
+def test_both_agents_installed_is_normal_state(monkeypatch):
     import dashboard as _d
     _force(monkeypatch, openclaw=True, nemoclaw=True, any_data=True)
     payload = _d.detect_agent_install()
@@ -153,12 +110,10 @@ def test_both_agents_installed_is_normal_dashboard(monkeypatch):
     assert set(payload["signals"]) == {"openclaw", "nemoclaw", "local_data"}
 
 
-# ── Cache contract: TTL prevents storming the FS on every tab switch ────
 def test_detection_result_is_cached_for_60s(monkeypatch):
-    """Every tab switch on the dashboard pings ``/api/agent-presence`` —
-    without a cache that would re-stat the workspace + shell out to
-    ``shutil.which`` on every page load. The 60s TTL is the contract.
-    """
+    """Consumers poll /api/agent-presence — without a cache that would
+    re-stat the workspace + shell out to ``shutil.which`` on every call.
+    The 60s TTL is the contract."""
     import dashboard as _d
     _reset_cache(monkeypatch)
     calls = {"openclaw": 0, "nemoclaw": 0, "data": 0}
@@ -179,155 +134,34 @@ def test_detection_result_is_cached_for_60s(monkeypatch):
     monkeypatch.setattr(_d, "_detect_nemoclaw_install", _nc)
     monkeypatch.setattr(_d, "_detect_any_local_data", _da)
 
-    # First call: detectors run.
     _d.detect_agent_install()
     assert calls == {"openclaw": 1, "nemoclaw": 1, "data": 1}
-    # Second call within TTL: detectors must NOT run again.
     _d.detect_agent_install()
     _d.detect_agent_install()
     assert calls == {"openclaw": 1, "nemoclaw": 1, "data": 1}, (
-        "cache MUST suppress re-running the detectors within the 60s TTL — "
-        "otherwise every tab switch storms the filesystem"
+        "cache MUST suppress re-running the detectors within the 60s TTL"
     )
 
 
-# ── Banner partial + JS contract ────────────────────────────────────────
-def _read_banners_html():
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(here, "clawmetry", "templates", "partials", "banners.html")
-    with open(path, "r", encoding="utf-8") as fh:
-        return fh.read()
-
-
-def _read_app_js():
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(here, "clawmetry", "static", "js", "app.js")
-    with open(path, "r", encoding="utf-8") as fh:
-        return fh.read()
-
-
-def test_no_agent_banner_partial_carries_both_install_ctas():
-    """User-facing copy must name BOTH agents and offer install links
-    for each. Per memory ``feedback_em_style_judgment`` we do NOT pick
-    one over the other — listing both lets the user choose.
-    """
-    html = _read_banners_html()
-    assert 'id="no-agent-banner"' in html, (
-        "no-agent banner element must exist in banners.html partial"
-    )
-    # Copy MUST name both agents — the entire point of this PR.
-    assert "OpenClaw" in html
-    assert "NemoClaw" in html or "NVIDIA NemoClaw" in html
-    # Both install CTAs must be present and clickable.
-    assert "Install OpenClaw" in html
-    assert "Install NVIDIA NemoClaw" in html or "Install NemoClaw" in html
-
-
-def test_no_agent_banner_avoids_em_dashes_in_user_copy():
-    """Per memory ``feedback_no_em_dashes_in_user_facing_copy``."""
-    html = _read_banners_html()
-    start = html.find('id="no-agent-banner"')
-    assert start != -1
-    # Grab a generous window covering the entire banner block.
-    block = html[start:start + 2500]
-    # Slice off after the closing </div> for THIS banner so we don't
-    # accidentally lint siblings.
-    end_marker = "<!-- Onboarding"
-    end = block.find(end_marker)
-    if end != -1:
-        block = block[:end]
-    assert "—" not in block, (
-        "em-dash banned in user-facing no-agent banner copy "
-        "(feedback_no_em_dashes_in_user_facing_copy.md)"
-    )
-
-
-def test_no_agent_js_does_not_reload_or_sign_out_on_transient_failure():
-    """Per memory ``feedback_no_reload_in_bootstrap_e2e`` +
-    ``feedback_persistent_sessions``: never page-reload or redirect to
-    /login when ``/api/agent-presence`` returns transiently bad data.
-    """
-    js = _read_app_js()
-    anchor = js.find("checkAgentPresence")
-    assert anchor != -1, "checkAgentPresence must be defined in app.js"
-    block = js[anchor:anchor + 5000]
-    assert "location.reload" not in block, (
-        "no-agent banner must not page-reload on transient empty state "
-        "(feedback_no_reload_in_bootstrap_e2e.md)"
-    )
-    assert "/login" not in block, (
-        "no-agent banner must not redirect to /login on transient empty "
-        "state (feedback_persistent_sessions.md)"
-    )
-
-
-def test_no_agent_js_is_mutually_exclusive_with_first_heartbeat_banner():
-    """If openclaw or nemoclaw IS detected (and we're just in the
-    first-heartbeat warm-up window), the no-agent banner must hide and
-    let #1631's onboarding-banner own that scenario. The two must
-    never both display at once.
-    """
-    js = _read_app_js()
-    anchor = js.find("checkAgentPresence")
-    assert anchor != -1
-    block = js[anchor:anchor + 5000]
-    # When no_agent is true the JS hides the onboarding-banner so we
-    # don't double up. Look for the explicit handoff.
-    assert "onboarding-banner" in block, (
-        "mutual-exclusion: when no_agent=true the JS must explicitly "
-        "hide the onboarding-banner so the two banners never stack"
-    )
-    # And inversely it must reference its own element id.
-    assert "no-agent-banner" in block
-
-
-def test_no_agent_js_polls_at_least_every_minute():
-    """The detection result is cached 60s server-side; the client poll
-    cadence should match so users who install an agent mid-session see
-    the banner disappear within a minute, not on the next page load.
-    """
-    js = _read_app_js()
-    anchor = js.find("checkAgentPresence")
-    assert anchor != -1
-    block = js[anchor:anchor + 5000]
-    assert "60000" in block, (
-        "no-agent banner must re-poll at the 60s server-cache cadence so "
-        "an agent installed mid-session clears the banner within ~1 min"
-    )
-
-
-# ── Runtime-aware upgrade variant (14-runtime detection) ────────────────
+# ── Runtime-aware payload fields (cloud install-state aggregation) ──────
 _CLAUDE_CODE = {"id": "claude_code", "label": "Claude Code", "sessions": 12}
 _CURSOR = {"id": "cursor", "label": "Cursor", "sessions": 0}
 
 
 def test_detected_paid_runtime_keeps_no_agent_but_flags_upgrade(monkeypatch):
-    """A machine with ONLY Claude Code on it: the banner must still show
-    (there is nothing we are observing), but in the upgrade variant, not
-    the install variant. The payload carries the detected runtimes with
-    ``entitled=False`` and ``upgrade_candidate=True`` so the JS can pitch
-    the Pro trial instead of telling the user to install a second agent.
-    """
     import dashboard as _d
     _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False,
            other_runtimes=[_CLAUDE_CODE, _CURSOR], entitled_ids=[])
     payload = _d.detect_agent_install()
-    assert payload["no_agent"] is True, (
-        "detected-but-unobserved runtimes must NOT clear no_agent — the "
-        "banner still needs to render (in its upgrade variant)"
-    )
+    assert payload["no_agent"] is True
     assert [r["id"] for r in payload["detected_runtimes"]] == ["claude_code", "cursor"]
     assert all(r["entitled"] is False for r in payload["detected_runtimes"])
     assert payload["detected_runtimes"][0]["label"] == "Claude Code"
     assert payload["upgrade_candidate"] is True
-    assert payload["signals"] == [], (
-        "signals stays the free-agent contract; paid-runtime detection "
-        "rides in detected_runtimes, not signals"
-    )
+    assert payload["signals"] == []
 
 
 def test_entitled_runtime_is_not_an_upgrade_candidate(monkeypatch):
-    """Pro user whose plan covers claude_code: no trial pitch."""
     import dashboard as _d
     _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False,
            other_runtimes=[_CLAUDE_CODE], entitled_ids=["claude_code"])
@@ -337,7 +171,6 @@ def test_entitled_runtime_is_not_an_upgrade_candidate(monkeypatch):
 
 
 def test_truly_empty_machine_has_no_detected_runtimes(monkeypatch):
-    """Nothing anywhere → install variant: empty list, no upgrade flag."""
     import dashboard as _d
     _force(monkeypatch, openclaw=False, nemoclaw=False, any_data=False)
     payload = _d.detect_agent_install()
@@ -345,37 +178,76 @@ def test_truly_empty_machine_has_no_detected_runtimes(monkeypatch):
     assert payload["upgrade_candidate"] is False
 
 
-def test_no_agent_banner_partial_carries_pro_trial_cta():
-    """The upgrade variant needs its CTA in the partial (hidden by
-    default; JS toggles it). Free-trial wording per the paywall modal."""
-    html = _read_banners_html()
-    assert 'id="no-agent-upgrade-cta"' in html
-    assert "Start 7-day free trial" in html
-    assert "app.clawmetry.com/upgrade?source=no-agent-banner" in html
+# ── Removal guard: the two-runtime banner must NOT come back ────────────
+def _repo_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def test_no_agent_js_swaps_to_upgrade_variant():
-    """The JS must read detected_runtimes, hide the install CTAs in the
-    upgrade variant, and emit paywall_view telemetry attributed to this
-    banner so conversion is measurable."""
-    js = _read_app_js()
-    anchor = js.find("_cmApplyNoAgentVariant")
-    assert anchor != -1, "upgrade-variant helper must exist in app.js"
-    block = js[anchor:anchor + 5000]
-    assert "detected_runtimes" in block
-    assert "no-agent-install-openclaw" in block
-    assert "no-agent-upgrade-cta" in block
-    assert "paywall_view" in block and "no-agent-banner" in block
+def _read(relpath):
+    with open(os.path.join(_repo_root(), relpath), "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
-# ── Announcement pill: Agent Builder cross-sell ─────────────────────────
+def test_no_agent_banner_markup_is_gone():
+    """The banner claimed 'No OpenClaw or NVIDIA NemoClaw detected' on
+    machines running any of the 10+ other observed runtimes. Removed;
+    must not resurface in the partial."""
+    html = _read("clawmetry/templates/partials/banners.html")
+    assert 'id="no-agent-banner"' not in html
+    assert "No OpenClaw or NVIDIA NemoClaw detected" not in html
+    assert "Install one to start seeing data" not in html
+
+
+def test_no_agent_banner_js_poller_is_gone():
+    """checkAgentPresence polled /api/agent-presence every 60s purely to
+    drive the removed banner. The dashboard must not fetch that endpoint
+    anymore (the endpoint itself stays for cloud consumers)."""
+    js = _read("clawmetry/static/js/app.js")
+    assert "checkAgentPresence" not in js
+    assert "_cmApplyNoAgentVariant" not in js
+    assert "/api/agent-presence" not in js
+    assert "no-agent-banner" not in js
+
+
+def test_no_agent_banner_locale_keys_are_gone_in_every_locale():
+    """Orphaned i18n keys linger for years; sweep all locales."""
+    removed = {
+        "banners.no_agent_msg",
+        "banners.install_openclaw",
+        "banners.install_nemoclaw",
+        "banners.detected_runtimes_msg",
+        "banners.start_pro_trial",
+    }
+    locale_files = glob.glob(
+        os.path.join(_repo_root(), "clawmetry", "static", "locales", "*.json")
+    )
+    assert locale_files, "locale dir must exist"
+    for path in locale_files:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            continue  # _meta.json / _glossary.json are list-shaped
+        leftovers = removed & set(data.keys())
+        assert not leftovers, (
+            os.path.basename(path) + " still carries removed banner keys: "
+            + ", ".join(sorted(leftovers))
+        )
+
+
+def test_agent_presence_endpoint_still_exists():
+    """The /api/agent-presence route must survive the banner removal —
+    the cloud route policy classifies it and the heartbeat mirror in
+    sync.py shares its shape. Removing it is a separate, coordinated
+    cross-repo change."""
+    src = _read("routes/health.py")
+    assert "/api/agent-presence" in src
+
+
+# ── Announcement pill: Agent Builder cross-sell (unrelated, kept) ───────
 def test_announcement_pill_cross_sells_agent_builder():
     """ONE announcement pill, and it points at Agent Builder now — the
     desk-device launch pill was retired in its favor."""
-    html = _read_banners_html()
+    html = _read("clawmetry/templates/partials/banners.html")
     assert "build.clawmetry.com" in html
     assert "Agent Builder" in html
-    assert "desk device, $49" not in html, (
-        "the desk-device pill was replaced by the Agent Builder pill — "
-        "only ONE announcement pill may exist at a time"
-    )
+    assert "desk device, $49" not in html
