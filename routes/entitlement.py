@@ -3515,6 +3515,135 @@ def api_entitlement_has_runtime():
         return jsonify(_has_axis_fallback("runtime", key))
 
 
+def _has_channel_count_fallback(count_raw: str) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-channel-count``.
+
+    Fail-closed on ``has_channel_count`` (matches the sibling
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` fallback) so a paywall
+    tile that lost the resolver doesn't silently grant a capacity that might be
+    over-quota. ``count`` is echoed as ``None`` and ``count_raw`` as the
+    stripped input so a UI can still surface the offending value in a diagnostic
+    tooltip. 10-key envelope, byte-stable with the happy-path branch.
+    """
+    return {
+        "count": None,
+        "count_raw": count_raw,
+        "has_channel_count": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "upgrade_required": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-channel-count")
+def api_entitlement_has_channel_count():
+    """``GET /api/entitlement/has-channel-count?count=<N>`` -- capacity-axis
+    boolean-gate scalar sibling of ``/api/entitlement/has-feature`` /
+    ``/api/entitlement/has-runtime``.
+
+    Returns ONE boolean (``has_channel_count``) plus the surrounding tier
+    envelope (``current_tier``, ``required_tier``, ``upgrade_required``) so a
+    paywall tile on the channels surface can bind ``allowed`` directly off this
+    URL without parsing the full ``/api/entitlement/required-tier?channels=<N>``
+    body. Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) ``has_channel_count`` reports ``True`` for every finite
+    count, so wiring this into a gate today changes NO current behavior.
+
+    Envelope shape (10 keys, byte-stable across every input branch)::
+
+        {
+          "count": 5,                    # parsed int, null on missing/unparseable/blowup
+          "count_raw": "5",              # stripped raw string echo
+          "has_channel_count": True,
+          "allowed": True,               # mirror of has_channel_count
+          "required_tier": "cloud_starter",
+          "required_tier_label": "Starter",
+          "required_tier_rank": 1,
+          "current_tier": "oss",
+          "current_tier_rank": 0,
+          "upgrade_required": True,
+        }
+
+    Input semantics:
+
+    * ``?count=`` missing / blank / whitespace / unparseable -- ``count=null``,
+      ``has_channel_count=false``, ``required_tier=null``. Never 4xx (matches
+      the never-crash posture of ``/api/entitlement/required-tier`` and
+      ``/api/entitlement/lock-reason`` on their capacity axes).
+    * ``count <= 0`` -- ``has_channel_count=true``, ``required_tier="oss"``
+      (trivially satisfied by the free floor -- mirrors
+      :func:`min_tier_for_channel_count` and
+      :meth:`Entitlement.allows_channel_count`).
+    * Positive int -- ``has_channel_count`` reflects the resolver;
+      ``required_tier`` is the cheapest tier admitting ``count`` per
+      :func:`min_tier_for_channel_count`.
+
+    Cross-consistency: ``required_tier`` / ``required_tier_label`` /
+    ``required_tier_rank`` agree byte-for-byte with
+    ``/api/entitlement/required-tier?channels=<N>`` for the same ``count`` so a
+    UI wiring both endpoints for the same paywall tile can't see inconsistent
+    tier state.
+
+    Never 5xx: any resolver blowup collapses to :func:`_has_channel_count_fallback`.
+    """
+    count_raw = (request.args.get("count") or "").strip()
+    try:
+        from clawmetry import entitlements as _ent
+
+        try:
+            n = int(count_raw)
+            parsed_ok = True
+        except (TypeError, ValueError):
+            n = None
+            parsed_ok = False
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+
+        if not parsed_ok:
+            return jsonify(
+                {
+                    "count": None,
+                    "count_raw": count_raw,
+                    "has_channel_count": False,
+                    "allowed": False,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            )
+
+        has_flag = _ent.has_channel_count(n)
+        required = _ent.min_tier_for_channel_count(n)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "count": n,
+                "count_raw": count_raw,
+                "has_channel_count": bool(has_flag),
+                "allowed": bool(has_flag),
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_channel_count: error: %s", exc)
+        return jsonify(_has_channel_count_fallback(count_raw))
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:
@@ -9628,6 +9757,144 @@ def api_license_subject_at():
     )
 
 
+@bp_entitlement.route("/api/license/is-subject-at")
+def api_license_is_subject_at():
+    """``GET /api/license/is-subject-at?subject=<value>&epoch=<int>`` --
+    boolean gate for "was the installed license issued to subject <X>
+    evaluated as of ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/is-subject``, for a scheduled-audit tile that wants
+    to answer "was this node licensed to <account> on <date>?" without
+    the caller having to snapshot the license state at that time or
+    compare ``exp`` to a caller-supplied epoch themselves.
+
+    Query parameters:
+      * ``subject`` (str, required in-spirit) -- the subject to test
+        against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_subject_at` (and the current-time
+        :func:`clawmetry.license.is_subject`). Missing / empty / non-
+        string input degrades to ``is_subject_at=false`` rather than a
+        4xx, matching the surrounding endpoints' never-5xx / never-4xx
+        posture. Unlike ``/api/license/is-state-at`` (which validates
+        against the closed ``LICENSE_STATES`` set), the subject axis
+        is deliberately open-ended -- a subject typically encodes an
+        account id / email / tenant handle that the code here has no
+        business whitelisting, matching :func:`is_subject`'s open-
+        ended posture on the current-time axis.
+      * ``epoch`` (int, required in-spirit) -- Unix epoch seconds.
+        Missing / non-integer / bool input collapses ``subject_at`` to
+        ``null`` and the predicate to ``false`` (there is no subject
+        to match against once the perspective is unusable -- the
+        conservative "no entitlement" fallback matching the never-mis-
+        gate posture of the surrounding ``_at`` family).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "is_subject_at":     <bool>,
+          "subject_at":        <str|null>,    # subject as of epoch (case preserved)
+          "requested_subject": <str>,         # normalised (strip+lower) echo of query
+          "requested_epoch":   <int|null>,    # int-coerced input, or null on typo
+          "subject":           <str|null>,    # current-time subject (case preserved)
+          "expires_at":        <int|null>,
+          "has_license":       <bool>,
+          "valid":             <bool>         # signature-valid AND not expired NOW
+        }
+
+    ``is_subject_at`` is ``True`` iff the perspective-epoch subject
+    matches ``requested_subject`` (both normalised via strip+lower)
+    AND the requested value is a non-empty string -- an empty /
+    missing ``subject=`` query returns ``is_subject_at=false`` so a
+    caller cannot silently claim a subject that would grant unearned
+    entitlement.
+
+    ``subject_at`` mirrors :func:`clawmetry.license.license_subject_at`
+    and preserves casing on read; ``requested_subject`` echoes the
+    normalised form used for the comparison so a UI can render "you
+    asked '<x>'" copy without re-deriving the normalisation itself.
+
+    Mirrors :func:`clawmetry.license.is_subject_at` -- the HTTP shape
+    layers ``subject_at`` / ``requested_subject`` / ``requested_epoch``
+    / ``subject`` / ``expires_at`` / ``has_license`` / ``valid`` on
+    top of that bool so a widget never needs a second call to
+    ``/api/license/subject-at`` (or ``/api/license/subject``) to render
+    the accompanying "you were licensed to <X>" copy.
+
+    When ``epoch`` equals "now" and ``subject`` is a non-empty string,
+    this endpoint must agree with ``/api/license/is-subject`` at the
+    boundary for the same install -- both derive from the same signed
+    ``sub`` claim via :func:`license_subject_at` /
+    :func:`license_subject`, so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Shares :func:`_license_subject_at_snapshot` with ``/api/license/
+    subject-at`` so the current-time reference fields (``subject`` /
+    ``expires_at`` / ``has_license`` / ``valid``) cannot disagree
+    between the sibling endpoints for the same install -- the same
+    read-once pattern ``/api/license/is-tier-at`` uses with
+    :func:`_license_tier_at_snapshot`.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``is_subject_at=false``, ``subject_at=null``,
+    ``subject=null``, ``expires_at=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    raw_subject = request.args.get("subject", "") or ""
+    try:
+        requested_subject = str(raw_subject).strip().lower()
+    except Exception:
+        requested_subject = ""
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested_epoch = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested_epoch = None
+    if isinstance(requested_epoch, bool):
+        # Guard against ``bool`` subclassing ``int`` -- ``int("1")`` isn't
+        # bool, but a query like ``?epoch=True`` gets coerced through the
+        # same path the scalar predicate refuses on purpose. Belt-and-
+        # braces symmetry with :func:`clawmetry.license.is_subject_at`.
+        requested_epoch = None
+    try:
+        snap = _license_subject_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_is_subject_at: snapshot error: %s", exc)
+        snap = {
+            "subject": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    subject_at: str | None = None
+    if requested_epoch is not None:
+        try:
+            from clawmetry import license as _lic
+
+            subject_at = _lic.license_subject_at(requested_epoch)
+        except Exception as exc:
+            logger.warning("api_license_is_subject_at: derive error: %s", exc)
+            subject_at = None
+    if subject_at is not None and not isinstance(subject_at, str):
+        subject_at = None
+    match = bool(
+        requested_subject
+        and isinstance(subject_at, str)
+        and subject_at.strip().lower() == requested_subject
+    )
+    return jsonify(
+        {
+            "is_subject_at": match,
+            "subject_at": subject_at,
+            "requested_subject": requested_subject,
+            "requested_epoch": requested_epoch,
+            "subject": snap["subject"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 def _license_permissions_snapshot() -> dict:
     """Shared helper: read once, derive the trio the two permission-hygiene
     endpoints both need (``permissions_safe``, ``file_mode``,
@@ -12895,6 +13162,134 @@ def api_license_features_at_batch():
     )
 
 
+@bp_entitlement.route("/api/license/has-feature-at")
+def api_license_has_feature_at():
+    """``GET /api/license/has-feature-at?feature=<id>&epoch=<int>`` --
+    boolean gate for "did the installed license claim feature <X>
+    evaluated as of ``epoch``?" -- the perspective-epoch flavour of
+    ``/api/license/has-feature``, for a scheduled-audit tile that
+    wants to answer "was this node entitled to feature <X> on <date>?"
+    without the caller having to snapshot the license state at that
+    time or compare ``exp`` to a caller-supplied epoch themselves.
+
+    Query parameters:
+      * ``feature`` (str, required in-spirit) -- the feature id to
+        test against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.has_feature_at`. Missing / empty /
+        non-string input degrades to ``has_feature_at=false`` rather
+        than a 4xx, matching the surrounding endpoints' never-5xx /
+        never-4xx posture.
+      * ``epoch`` (int, required in-spirit) -- Unix epoch seconds.
+        Missing / non-integer / bool input collapses ``features_at``
+        to ``null`` and the predicate to ``false`` (there is no
+        features list to search once the perspective is unusable --
+        the conservative "no entitlement" fallback matching the never-
+        mis-gate posture of the surrounding ``_at`` family).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "has_feature_at":    <bool>,
+          "features_at":       [<id>, ...] | null,   # features as of epoch
+          "requested_feature": <str>,                # normalised echo of query
+          "requested_epoch":   <int|null>,           # int-coerced input, or null on typo
+          "features":          [<id>, ...] | null,   # current-time features
+          "expires_at":        <int|null>,
+          "has_license":       <bool>,
+          "valid":             <bool>                # signature-valid AND not expired NOW
+        }
+
+    ``has_feature_at`` is ``True`` iff the perspective-epoch features
+    list is a list AND contains the normalised ``requested_feature``
+    AND the requested value is a non-empty string -- an empty /
+    missing ``feature=`` query returns ``has_feature_at=false`` so a
+    caller cannot silently claim a feature that would grant unearned
+    entitlement.
+
+    Mirrors :func:`clawmetry.license.has_feature_at` -- the HTTP shape
+    layers ``features_at`` / ``requested_feature`` / ``requested_epoch``
+    / ``features`` / ``expires_at`` / ``has_license`` / ``valid`` on
+    top of that bool so a widget never needs a second call to
+    ``/api/license/features-at`` (or ``/api/license/features``) to
+    render the accompanying "you had feature <X> then" copy.
+
+    When ``epoch`` equals "now" and ``feature`` is a non-empty string,
+    this endpoint must agree with ``/api/license/has-feature`` at the
+    boundary for the same install -- both derive from the same signed
+    ``features`` claim via :func:`license_features_at` /
+    :func:`license_features`, so a UI binding both cannot catch them
+    disagreeing at the boundary.
+
+    Shares :func:`_license_features_at_snapshot` with ``/api/license/
+    features-at{,-batch}`` so the current-time reference fields
+    (``features`` / ``expires_at`` / ``has_license`` / ``valid``)
+    cannot disagree between the sibling endpoints for the same
+    install.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This endpoint answers *"did the KEY carry this feature
+    id at <epoch>?"*, not *"was this feature enforced at <epoch>?"*.
+    For the resolved feature set actually enforced by gates, read
+    ``/api/entitlement`` (which layers this claim on top of the
+    FREE-tier baseline).
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (``has_feature_at=false``, ``features_at=null``,
+    ``features=null``, ``expires_at=null``, ``has_license=false``,
+    ``valid=false``), matching the never-crash posture of the
+    surrounding license endpoints.
+    """
+    raw_feature = request.args.get("feature", "") or ""
+    try:
+        requested_feature = str(raw_feature).strip().lower()
+    except Exception:
+        requested_feature = ""
+    raw_epoch = request.args.get("epoch", "")
+    try:
+        requested_epoch = int(str(raw_epoch).strip())
+    except (TypeError, ValueError):
+        requested_epoch = None
+    try:
+        snap = _license_features_at_snapshot()
+    except Exception as exc:
+        logger.warning("api_license_has_feature_at: snapshot error: %s", exc)
+        snap = {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    features_at: list | None = None
+    if requested_epoch is not None:
+        try:
+            from clawmetry import license as _lic
+
+            features_at = _lic.license_features_at(requested_epoch)
+        except Exception as exc:
+            logger.warning(
+                "api_license_has_feature_at: derive error: %s", exc
+            )
+            features_at = None
+    if features_at is not None and not isinstance(features_at, list):
+        features_at = None
+    match = bool(
+        requested_feature
+        and isinstance(features_at, list)
+        and requested_feature in features_at
+    )
+    return jsonify(
+        {
+            "has_feature_at": match,
+            "features_at": features_at,
+            "requested_feature": requested_feature,
+            "requested_epoch": requested_epoch,
+            "features": snap["features"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
 
 
 @bp_entitlement.route("/api/paywall/event", methods=["POST"])

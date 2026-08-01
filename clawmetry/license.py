@@ -2348,6 +2348,84 @@ def license_subject_at(epoch: int) -> str | None:
     return stripped or None
 
 
+def is_subject_at(subject: str, epoch: int) -> bool:
+    """Perspective-epoch flavour of :func:`is_subject` -- "was the
+    installed license issued to subject <X> evaluated as of ``epoch``?"
+    -- for a scheduled-audit / retrospective tile that wants to answer
+    "was this node licensed to <account> on <date>?" without the caller
+    having to snapshot the license state at that time or compare ``exp``
+    to a caller-supplied epoch themselves.
+
+    Compares :func:`license_subject_at` case-insensitively (after strip)
+    to the supplied ``subject``. Missing / empty / non-string input
+    degrades to ``False`` -- matches the never-raise posture of
+    :func:`is_subject` / :func:`is_tier_at`.
+
+    Unlike :func:`is_state_at` (which validates against the closed
+    :data:`LICENSE_STATES` set), the subject axis is deliberately open-
+    ended -- a subject typically encodes an account id / email / tenant
+    handle that the code here has no business whitelisting. Any non-
+    empty normalised string is accepted as a possible match; a typo
+    like ``"acct_test_"`` simply doesn't match any real subject and
+    collapses to ``False``.
+
+    ``subject`` is coerced through ``str()`` and normalised the same
+    way :func:`is_subject` normalises the stored claim (strip +
+    lowercase). The stored subject is compared case-insensitively even
+    though :func:`license_subject_at` preserves casing on read (subjects
+    are typically email addresses / account ids where a UI wants to
+    render the customer-facing form verbatim; but for a yes/no gate
+    ``"acct_test"`` should match a stored ``"Acct_Test"``, matching
+    :func:`is_subject`'s stance on the current-time axis).
+
+    ``epoch`` is coerced through :func:`license_subject_at`; ``bool``
+    and non-numeric epochs are refused there and collapse this
+    predicate to ``False`` (there is no subject to match against once
+    the perspective is unusable -- the conservative "no entitlement"
+    fallback matching the never-mis-gate posture of the surrounding
+    ``_at`` family).
+
+    When ``epoch`` equals "now", this predicate must agree with
+    :func:`is_subject` for the same install and the same requested
+    ``subject`` -- both derive from the same signed ``sub`` claim and
+    use the same ``exp <= cutoff`` boundary via
+    :func:`license_subject_at` / :func:`license_subject`, so the two
+    scalars cannot disagree at the boundary. On any other epoch this
+    helper answers the retrospective / prospective question
+    :func:`is_subject` cannot -- e.g. "was this node licensed to
+    <X> last Friday?" (``False`` on a key that has since been renewed
+    but was already expired then) or "will this node still be bound to
+    <X> at our next quarterly audit?" (``False`` on an active key
+    whose ``exp`` falls before the audit date).
+
+    Never raises. Any underlying failure of :func:`license_subject_at`
+    collapses this to ``False`` -- a scheduled audit job bound to this
+    gate stays "unclaimed" rather than falsely asserting an entitlement
+    it can't verify.
+
+    Pairs with :func:`is_state_at`, :func:`is_expired_at`,
+    :func:`is_tier_at`, and :func:`is_expiring_within_at` on the
+    perspective-epoch predicate axis: for the same ``epoch``, a caller
+    can zip the boolean gates index-for-index and render a whole
+    entitlement audit row for one install without the gates catching
+    each other disagreeing on the perspective-epoch classification.
+    """
+    try:
+        requested = str(subject).strip().lower() if subject is not None else ""
+    except Exception:
+        return False
+    if not requested:
+        return False
+    try:
+        actual = license_subject_at(epoch)
+    except Exception as exc:
+        logger.debug("license: is_subject_at underlying read failed: %s", exc)
+        return False
+    if not isinstance(actual, str):
+        return False
+    return actual.strip().lower() == requested
+
+
 def license_permissions_safe() -> bool | None:
     """Scalar view onto the installed license file's on-disk permission
     hygiene -- for a security-posture tile that wants ONE tri-state
@@ -4299,6 +4377,102 @@ def has_feature(feature: str) -> bool:
         feats = license_features()
     except Exception as exc:
         logger.debug("license: has_feature underlying read failed: %s", exc)
+        return False
+    if not isinstance(feats, list):
+        return False
+    return requested in feats
+
+
+def has_feature_at(feature: str, epoch: int) -> bool:
+    """Perspective-epoch flavour of :func:`has_feature` -- "did the
+    installed license claim feature ``<X>`` evaluated as of ``epoch``?"
+    -- for a scheduled-audit / retrospective diagnostic tile that wants
+    to answer "was this node entitled to feature <X> on <date>?" without
+    the caller having to snapshot the license state at that time or
+    compare ``exp`` to a caller-supplied epoch themselves.
+
+    Membership predicate over :func:`license_features_at`: fills the
+    ``license_features_at -> has_feature_at`` seat on the perspective-
+    epoch axis, matching the ``license_features -> has_feature`` shape
+    on the current-time axis and the sibling ``license_tier_at ->
+    is_tier_at`` / ``license_state_at -> is_state_at`` pairs.
+
+    Compares ``feature`` case-insensitively (after strip) to the
+    normalised :func:`license_features_at` list. Missing / empty / non-
+    string input degrades to ``False`` -- matches the never-mis-gate
+    posture of :func:`has_feature` / :func:`is_tier_at`.
+
+    ``epoch`` is coerced through :func:`license_features_at`; ``bool``
+    and non-numeric epochs are refused there and collapse this
+    predicate to ``False`` (there is no features list to search once
+    the perspective is unusable -- the conservative "no entitlement"
+    fallback matching the never-mis-gate posture of the surrounding
+    ``_at`` family).
+
+    Returns ``False`` in every non-match branch:
+
+      * no license file on disk (OSS free)
+      * file exists but signature is bogus (never trust an unsigned
+        body -- an attacker who could edit the payload could otherwise
+        smuggle any id into the ``features`` list, for any perspective
+        epoch)
+      * signed key whose ``exp`` claim has already lapsed at ``epoch``
+        (retrospective on a lapsed key when ``epoch`` equals "now";
+        prospective on an active key when ``epoch`` is in the future
+        beyond ``exp``). Matches :func:`has_feature`'s "not entitled
+        AT THAT TIME" posture.
+      * valid key AS OF ``epoch`` whose ``features`` claim omits the
+        queried id (or carries no explicit ``features`` claim at all)
+      * missing / empty / non-string ``feature`` argument
+      * bool / non-numeric ``epoch`` argument
+
+    When ``epoch`` equals "now", this predicate must agree with
+    :func:`has_feature` for the same install and the same requested
+    ``feature`` -- both derive from the same signed ``features`` claim
+    via :func:`license_features_at` / :func:`license_features` and use
+    the same ``exp <= cutoff`` boundary, so the two scalars cannot
+    disagree at the boundary. On any other epoch this helper answers
+    the retrospective / prospective question :func:`has_feature`
+    cannot -- e.g. "was this node entitled to alerts last quarter?"
+    (``False`` on a key that has since been renewed but was already
+    expired then) or "will this node still have alerts at our next
+    audit?" (``False`` on an active key whose ``exp`` falls before
+    the audit date).
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This predicate answers *"did the KEY carry this
+    feature id at <epoch>?"*, not *"was this feature enforced at
+    <epoch>?"*. For the resolved feature set actually enforced by
+    gates, callers should read
+    :func:`clawmetry.entitlements.get_entitlement` (which layers this
+    claim on top of the FREE-tier baseline).
+
+    Pairs with :func:`is_state_at`, :func:`is_tier_at`,
+    :func:`is_expired_at`, :func:`is_expiring_within_at` on the
+    perspective-epoch predicate axis: for the same ``epoch``, a caller
+    can zip the boolean gates index-for-index and render a whole
+    entitlement audit row for one install without the gates catching
+    each other disagreeing on the perspective-epoch classification.
+
+    Never raises. Any underlying failure of :func:`license_features_at`
+    (or any exception thrown by argument normalisation) degrades to
+    ``False`` -- a scheduled audit job bound to this gate stays
+    "unclaimed" rather than falsely asserting an entitlement it can't
+    verify.
+    """
+    try:
+        requested = str(feature).strip().lower() if feature is not None else ""
+    except Exception:
+        return False
+    if not requested:
+        return False
+    try:
+        feats = license_features_at(epoch)
+    except Exception as exc:
+        logger.debug(
+            "license: has_feature_at underlying read failed: %s", exc
+        )
         return False
     if not isinstance(feats, list):
         return False
