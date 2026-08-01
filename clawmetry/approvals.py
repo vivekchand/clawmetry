@@ -290,12 +290,16 @@ for _canon, _aliases in {
     "exec": ["exec", "bash", "sh", "shell", "zsh", "fish", "powershell", "pwsh",
              "cmd", "command", "run", "run_command", "run_terminal_cmd",
              "terminal", "execute", "shell_command", "bashtool"],
-    "read": ["read", "cat", "view", "open", "read_file", "get_file", "fs_read"],
+    "read": ["read", "cat", "view", "open", "read_file", "get_file", "fs_read",
+             "view_file", "view_file_outline", "list_dir"],
     "write": ["write", "edit", "multiedit", "str_replace", "str_replace_editor",
-              "create", "apply_patch", "write_file", "fs_write"],
+              "create", "apply_patch", "write_file", "fs_write",
+              "write_to_file", "replace_file_content", "edit_file"],
     "web": ["web_fetch", "webfetch", "fetch", "curl", "wget", "http",
-            "web_search", "websearch", "browser", "browse"],
-    "search": ["grep", "glob", "ls", "find", "search", "memory_search"],
+            "web_search", "websearch", "browser", "browse", "search_web",
+            "read_url_content"],
+    "search": ["grep", "glob", "ls", "find", "search", "memory_search",
+               "grep_search", "find_by_name", "codebase_search"],
 }.items():
     for _a in _aliases:
         _TOOL_CANON[_a] = _canon

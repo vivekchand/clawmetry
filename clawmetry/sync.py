@@ -6138,7 +6138,8 @@ _LITE_RT_LABELS = {
     "claude_code": "Claude Code", "codex": "Codex", "cursor": "Cursor",
     "aider": "Aider", "goose": "Goose", "opencode": "opencode",
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
-    "nanoclaw": "NanoClaw",
+    "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
+    "n8n": "n8n", "antigravity": "Antigravity",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6176,6 +6177,8 @@ def _runtime_data_paths(rid: str) -> list:
         "picoclaw": [os.path.join(home, ".picoclaw")],
         "nanoclaw": [os.path.join(home, ".nanoclaw")],
         "n8n": [os.path.join(home, ".n8n", "database.sqlite")],
+        "antigravity": [os.path.join(home, ".gemini", f) for f in
+                        ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
     }
     return _M.get(rid, [])
 
@@ -6302,6 +6305,8 @@ def _detect_runtimes_lite() -> list:
         "picoclaw": [os.path.join(home, ".picoclaw")],
         "nanoclaw": [os.path.join(home, ".nanoclaw")],
         "n8n": [os.path.join(home, ".n8n", "database.sqlite")],
+        "antigravity": [os.path.join(home, ".gemini", f) for f in
+                        ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
     }
     for rid, paths in _present.items():
         try:
@@ -11466,6 +11471,7 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
     ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
     ("clawmetry_pro.adapters.n8n", "N8nAdapter"),
+    ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
 )
 
 
@@ -12583,6 +12589,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
+    "antigravity",
 })
 
 
