@@ -10535,6 +10535,28 @@ class LocalStore:
             "reclaimed_bytes": max(0, before_size - after_size),
         }
 
+    def delete_events_by_type(self, event_type: str) -> dict[str, Any]:
+        """Delete every ``events`` row of one ``event_type``. Returns
+        ``{deleted_rows, event_type}``.
+
+        The undo for an ingest that shouldn't have happened — e.g. a
+        ``numbat scan`` backfill of historical transcripts flooding the live
+        activity feed (2026-08-01). Deliberately narrow: one exact event_type,
+        no wildcards, no time ranges, so it can't become a general "delete my
+        data" footgun. Read-only stores raise.
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: delete_events_by_type() on read-only store")
+        et = (event_type or "").strip()
+        if not et:
+            raise ValueError("event_type is required")
+        with self._write_lock:
+            before = self._conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = ?", [et]
+            ).fetchone()[0]
+            self._conn.execute("DELETE FROM events WHERE event_type = ?", [et])
+        return {"deleted_rows": int(before), "event_type": et}
+
     def prune_events_by_age(
         self,
         retention_days: int | None,

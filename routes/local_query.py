@@ -790,6 +790,10 @@ _DAEMON_METHODS = frozenset({
     # proxy so the dashboard process never opens DuckDB writable.
     "ingest_security_event",
     "query_security_events",
+    # Undo for an unwanted ingest (e.g. a numbat at-rest scan backfilling the
+    # live activity feed). Write under the daemon's _write_lock, so it must
+    # go through the proxy like every other write.
+    "delete_events_by_type",
     # Issue #3306 — audit log read path. ingest_ is called from operator
     # actions; query_ serves /api/audit-log. Both routed through the daemon
     # proxy so the dashboard process never opens DuckDB writable.

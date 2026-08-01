@@ -1701,7 +1701,9 @@ def api_numbat_ingest():
     # mirroring /api/security/threats. Rule-based alerting over shadow rows
     # covers the file-tail path; this covers HTTP-only setups.
     for rec in mapped["findings_raw"]:
-        if rec.get("severity") in ("critical", "high"):
+        # Live findings only: a `numbat scan` backfill of historical
+        # transcripts can emit thousands at once and must never page.
+        if rec.get("severity") in ("critical", "high") and _ni.is_live_finding(rec):
             try:
                 _d._fire_alert(
                     rule_id=f"numbat_{rec.get('rule_id', 'finding')}",

@@ -152,6 +152,39 @@ def test_ids_deterministic_across_replays():
     assert a["shadow_events"][0]["id"] == b["shadow_events"][0]["id"]
 
 
+def test_shadow_row_carries_a_readable_summary():
+    """routes/brain.py's detail extractor reads summary/text/name/... — without
+    `summary` every activity row rendered blank (founder screenshot 2026-08-01)."""
+    shadow = ni.map_records([_finding()], node_id="n")["shadow_events"][0]
+    data = json.loads(shadow["data"])
+    assert data["summary"] == (
+        "HIGH · Agent launched with permission checks bypassed "
+        "(exec.agent_runtime_bypass_flags)"
+    )
+    # And the extractor actually finds it.
+    from routes.brain import _extract_brain_detail
+    assert "Agent launched with permission" in _extract_brain_detail(
+        {"data": json.loads(shadow["data"])}
+    )
+
+
+def test_summary_does_not_repeat_rule_when_it_is_the_title():
+    rec = _finding(title=None, rule_id="secrets.read_private_key")
+    assert ni.finding_summary(rec) == "HIGH · secrets.read_private_key"
+
+
+def test_scan_backfill_findings_stay_out_of_the_activity_feed():
+    """`numbat scan` re-reads historical transcripts and can emit thousands of
+    findings at once (942 from one real scan). They belong on the Security
+    surface, not in the live feed or alert thresholds."""
+    scan = _finding(source_type="artifact")
+    mapped = ni.map_records([scan], node_id="n")
+    assert len(mapped["security_events"]) == 1   # still stored + queryable
+    assert mapped["shadow_events"] == []         # but not in the live feed
+    assert ni.is_live_finding(scan) is False
+    assert ni.is_live_finding(_finding(source_type="otel")) is True
+
+
 def test_no_node_id_omits_shadow_rows():
     mapped = ni.map_records([_finding()])
     assert mapped["shadow_events"] == []
@@ -213,3 +246,29 @@ def test_severity_filter_serves_dashboard_query(store):
         store.ingest_security_event(sec)
     highs = store.query_security_events(severity="high", limit=10)
     assert [r["id"] for r in highs] == ["numbat_fnd-0123456789abcdef01234567"]
+
+
+def test_delete_events_by_type_is_the_undo_for_a_bad_ingest(store):
+    """A `numbat scan` backfill put 942 rows in the live feed; this is how a
+    user (or the daemon) takes them back out."""
+    for i in range(3):
+        store.ingest({
+            "id": f"numbat_finding_{i}", "node_id": "n",
+            "event_type": "numbat_finding", "ts": "2026-08-01T10:00:00",
+        })
+    store.ingest({
+        "id": "keep-me", "node_id": "n",
+        "event_type": "assistant", "ts": "2026-08-01T10:00:00",
+    })
+    store._flush_now()
+    assert len(store.query_events(limit=50)) == 4
+
+    res = store.delete_events_by_type("numbat_finding")
+    assert res == {"deleted_rows": 3, "event_type": "numbat_finding"}
+    remaining = store.query_events(limit=50)
+    assert [r["id"] for r in remaining] == ["keep-me"]
+
+    # Idempotent, and empty input is rejected rather than nuking everything.
+    assert store.delete_events_by_type("numbat_finding")["deleted_rows"] == 0
+    with pytest.raises(ValueError):
+        store.delete_events_by_type("  ")
