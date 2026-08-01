@@ -186,21 +186,47 @@ def test_gate_js_is_hard_gate_and_cloud_safe():
     assert "openCloudModal" in js
 
 
-def test_selfhost_card_offers_oauth_in_both_renders():
-    """The self-host card must offer Google/GitHub in BOTH renders: the
-    template's initial body and the JS re-render (_selfhostHome). One
-    without the other means the options vanish after any back-navigation."""
+def test_selfhost_modal_offers_oauth_email_and_license():
+    """The self-host side mirrors the cloud side: one button on the gate
+    card opens a modal offering GitHub/Google OAuth (mode=selfhost bridge),
+    email OTP, and a license key. The gate card itself must stay a single
+    button — the options live in the modal, not the card."""
     js = open(os.path.join(
         _ROOT, "clawmetry", "static", "js", "onboarding.js"),
         encoding="utf-8").read()
     assert "mode: 'selfhost'" in js, "self-host OAuth must use the selfhost bridge mode"
     assert "/api/cloud-cta/oauth-start" in js
-    assert js.count("obg-oauth-github") >= 2 and js.count("obg-oauth-google") >= 2, \
-        "OAuth buttons must be both rendered (_selfhostHome) and wired (_wireSelfhostHome)"
-    html = open(os.path.join(
+    assert "openSelfhostModal" in js and "closeSelfhostModal" in js
+    for fn in ("shmOauth", "shmSendOtp", "shmVerifyOtp", "shmActivateLicense"):
+        assert fn in js, "modal driver %s missing from onboarding.js" % fn
+
+    card = open(os.path.join(
         _ROOT, "clawmetry", "templates", "partials", "onboarding-modal.html"),
         encoding="utf-8").read()
-    assert 'id="obg-oauth-github"' in html and 'id="obg-oauth-google"' in html
+    assert 'id="obg-selfhost-btn"' in card, "gate card needs its single button"
+    assert "obg-oauth-github" not in card, \
+        "OAuth buttons moved to the self-host modal; the card is one button"
+
+    modal = open(os.path.join(
+        _ROOT, "clawmetry", "templates", "partials", "selfhost-modal.html"),
+        encoding="utf-8").read()
+    assert 'id="selfhost-modal-overlay"' in modal
+    for probe in ("shmOauth('github')", "shmOauth('google')", "shmSendOtp()",
+                  "shmActivateLicense()", 'id="shm-step-wait"',
+                  'id="shm-step-ended"'):
+        assert probe in modal, "self-host modal missing %s" % probe
+
+
+def test_selfhost_modal_is_in_live_dashboard_html():
+    """The modal partial must be included OUTSIDE #zoom-wrapper in the LIVE
+    (second) DASHBOARD_HTML, next to cloud-modal (the #4386 overlay rule)."""
+    src = _dash_src()
+    live = src.rfind("DASHBOARD_HTML = ")
+    idx = src.find("partials/selfhost-modal.html", live)
+    assert idx > live, "selfhost-modal partial missing from the LIVE DASHBOARD_HTML"
+    wrapper_end = src.find("end zoom-wrapper", live)
+    assert wrapper_end != -1 and idx > wrapper_end, \
+        "selfhost-modal must be included after #zoom-wrapper closes (fixed overlay rule)"
 
 
 def test_marker_semantics_selfhost_writes_nocloud(monkeypatch, tmp_path):
