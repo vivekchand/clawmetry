@@ -9288,6 +9288,7 @@ class LocalStore:
         self,
         *,
         session_id: str | None = None,
+        runtime: str | None = None,
         util_limit: int = 400,
         compaction_limit: int = 200,
     ) -> dict[str, Any]:
@@ -9315,6 +9316,13 @@ class LocalStore:
         picker / clickable chips in the UI). Compactions + overflow flags are
         always computed workspace-wide so the summary chips stay meaningful;
         the route filters them client-side when a session is picked.
+
+        ``runtime`` scopes utilization + compactions + overflow to one
+        runtime's sessions via the ``_runtime_session_id_clause`` prefix
+        contract (the local twin of the snapshot's
+        ``contextEconomics.byRuntime`` slice the cloud interceptor serves) —
+        so the OSS dashboard honours the runtime switcher server-side
+        instead of showing node-wide numbers under a runtime filter.
 
         Never raises — an empty / fresh DB returns empty lists. Reads only;
         the daemon owns the writer lock.
@@ -9376,11 +9384,15 @@ class LocalStore:
 
         # ── utilization series (assistant turns, chronological) ──
         ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
         util_clauses = [f"event_type IN {ev_in}"]
         util_params: list[Any] = []
         if session_id:
             util_clauses.append("session_id = ?")
             util_params.append(session_id)
+        if _rt_clause:
+            util_clauses.append(_rt_clause)
+            util_params.extend(_rt_params)
         util_where = "WHERE " + " AND ".join(util_clauses)
         util_params.append(int(util_limit))
         util_rows = self._fetch(
@@ -9413,16 +9425,22 @@ class LocalStore:
         # Oldest-first so the gauge reads left-to-right as a timeline.
         utilization.sort(key=lambda u: str(u.get("ts") or ""))
 
-        # ── compactions (workspace-wide) ──
+        # ── compactions (workspace-wide, or runtime-scoped when filtered) ──
+        comp_where = "WHERE event_type = 'compaction'"
+        comp_params: list[Any] = []
+        if _rt_clause:
+            comp_where += f" AND {_rt_clause}"
+            comp_params.extend(_rt_params)
+        comp_params.append(int(compaction_limit))
         comp_rows = self._fetch(
             f"""
             SELECT session_id, ts, data
             FROM events
-            WHERE event_type = 'compaction'
+            {comp_where}
             ORDER BY ts DESC
             LIMIT ?
             """,
-            [int(compaction_limit)],
+            comp_params,
         )
         # First post-compaction context reading per session, so we can derive
         # tokens_after. Build a per-session sorted list of (ts, tokens) once.

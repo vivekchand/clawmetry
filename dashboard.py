@@ -4733,7 +4733,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
+    <div class="nav-tab" onclick="switchTab('context-economics')" title="Context-window usage from real per-turn readings">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -12184,7 +12184,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
+    <div class="nav-tab" onclick="switchTab('context-economics')" title="Context-window usage from real per-turn readings">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -12292,9 +12292,11 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
           <span class="left-nav-label" data-i18n="nav.models">Models</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
-          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
-        </div>
+        {# "LLM Context" merged into Context usage (2026-08-01): the old tab
+           mixed hardcoded token estimates with a node-wide gauge. Context
+           usage (context-economics) shows the same story from real per-turn
+           readings, session + runtime scoped. switchTab('context') aliases
+           there so old deep links keep working. #}
         {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
            SESSION-scoped, so they left the global nav and are reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
@@ -12415,7 +12417,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/notifications.html' %}
 
 <!-- CONTEXT INSPECTOR -->
-{% include 'tabs/context.html' %}
 
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}

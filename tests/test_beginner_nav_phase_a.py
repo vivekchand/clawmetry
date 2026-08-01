@@ -81,7 +81,9 @@ def test_no_tab_lost_in_restructure():
         # session-scoped views (tracing, turn-anatomy, swimlane) OUT of the
         # nav and into the session drill-down - their pages and switchTab ids
         # still work; tests/test_session_deep_dive.py guards that entry point.
-        "flow", "models", "context", "agents",
+        # "context" (LLM Context) merged into context-economics 2026-08-01;
+        # switchTab('context') aliases there so old deep links still land.
+        "flow", "models", "agents",
         "tool-catalog", "context-economics", "harness", "dives",
         # Advanced
         "crons", "memory", "security", "policy", "skills",
@@ -102,7 +104,7 @@ def test_developer_drawer_membership():
     drawer = nav[start:end]
     got = set(_ordered_tabs(drawer))
     assert got == {
-        "flow", "models", "context", "agents",
+        "flow", "models", "agents",
         "tool-catalog", "context-economics", "harness", "dives",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 

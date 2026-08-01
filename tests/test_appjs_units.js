@@ -1182,13 +1182,25 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
   vm.createContext(sandbox);
   vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
 
-  // aggregate tab (LLM Context) → "all runtimes" note mentioning the runtime.
-  // (usage/Cost moved to real per-runtime filtering; LLM Context is the
-  // remaining aggregate tab in _CM_RT_AGGREGATE.)
-  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-context' ? (thePage = thePage || makePage()) : null; };
-  sandbox._note('context');
-  truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
-  truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
+  // NO aggregate tabs remain: the last one (LLM Context, fabricated
+  // node-wide estimates) merged into Context usage (real per-turn readings,
+  // session + runtime scoped) on 2026-08-01. Guard the merge: an entry
+  // reappearing in _CM_RT_AGGREGATE means someone shipped a view that
+  // silently aggregates across runtimes — do per-runtime slicing instead.
+  truthy(/var _CM_RT_AGGREGATE = \{\};/.test(src), '_CM_RT_AGGREGATE stays empty (no silently-aggregating tabs)');
+  truthy(src.indexOf('loadContextInspector') === -1, 'fake LLM Context Inspector loader stays deleted');
+  truthy(src.indexOf("name === 'context') name = 'context-economics'") !== -1, "switchTab('context') aliases to context-economics");
+
+  // JSON.stringify inside a double-quoted inline handler emits raw double
+  // quotes that TERMINATE the attribute — the handler silently truncates and
+  // every click throws (Context usage session chips + swimlane shipped broken
+  // this way). Builders must use attrJsStr() instead.
+  const badAttrLines = src.split('\n').filter(function(l) {
+    return l.indexOf('onclick="') !== -1 && /\+ JSON\.stringify\(/.test(l) && l.indexOf('&quot;') === -1;
+  });
+  truthy(badAttrLines.length === 0,
+    'no raw JSON.stringify inside double-quoted onclick attributes (use attrJsStr): '
+    + badAttrLines.slice(0, 3).join(' | '));
 
   // models is NO LONGER aggregate (it filters for real now) → no note
   thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
