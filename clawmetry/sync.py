@@ -5508,6 +5508,78 @@ def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
     return ingested
 
 
+def sync_numbat_events(config: dict, state: dict, paths: dict) -> int:
+    """Tail Perplexity numbat's NDJSON sinks (~/.numbat/*.ndjson) and ingest
+    findings → security_events, enforcement decisions → guardrail_events,
+    plus a shadow ``events`` row per finding (event_type "numbat_finding")
+    so alert rules fire. Mapper shared with POST /api/numbat/ingest lives in
+    clawmetry/numbat_ingest.py. Byte-offset cursor per file in state; the
+    file sink is numbat's durable path (its HTTP sink drops on failure), so
+    this tail is the primary integration. Returns rows ingested."""
+    numbat_dir = Path(
+        os.environ.get("NUMBAT_HOME", "") or (Path.home() / ".numbat")
+    )
+    if not numbat_dir.is_dir():
+        return 0
+    # findings.ndjson is the default hook sink (--emit findings); records.ndjson
+    # and live.ndjson appear with --emit all. Tail whichever exist.
+    candidates = ("findings.ndjson", "records.ndjson", "live.ndjson")
+    node_id = config.get("node_id", "")
+    ingested = 0
+    try:
+        from clawmetry import local_store as _ls
+        from clawmetry import numbat_ingest as _ni
+        store = _ls.get_store()
+        for fname in candidates:
+            fpath = numbat_dir / fname
+            if not fpath.exists():
+                continue
+            offset_key = f"numbat_offset_{fname}"
+            offset = state.get(offset_key, 0)
+            try:
+                with open(fpath, "r", errors="replace") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    if offset > size:
+                        offset = 0  # rotated/truncated — restart from top
+                    f.seek(offset)
+                    text = f.read()
+                    state[offset_key] = f.tell()
+            except Exception as _re:
+                log.debug("numbat tail read failed (%s): %s", fname, _re)
+                continue
+            if not text:
+                continue
+            records, _bad = _ni.parse_records(text)
+            mapped = _ni.map_records(records, node_id=node_id)
+            for sec in mapped["security_events"]:
+                try:
+                    store.ingest_security_event(sec)
+                    ingested += 1
+                except Exception as _ie:
+                    log.debug("numbat ingest_security_event failed: %s", _ie)
+            for gr in mapped["guardrail_events"]:
+                try:
+                    store.ingest_guardrail_event(gr)
+                    ingested += 1
+                except Exception as _ie:
+                    log.debug("numbat ingest_guardrail_event failed: %s", _ie)
+            for ev in mapped["shadow_events"]:
+                try:
+                    store.ingest(ev)
+                except Exception as _ie:
+                    log.debug("numbat shadow event ingest failed: %s", _ie)
+            if mapped["skipped_schema"]:
+                log.warning(
+                    "numbat: skipped %d record(s) with unsupported schema_version "
+                    "(ClawMetry understands %sx) — update ClawMetry or pin numbat",
+                    mapped["skipped_schema"], _ni.SCHEMA_PREFIX,
+                )
+    except Exception as e:
+        log.warning("sync_numbat_events error: %s", e)
+    return ingested
+
+
 def _flush_log_batch(
     entries: list, fname: str, api_key: str, enc_key: str | None, node_id: str
 ) -> None:
@@ -18628,6 +18700,15 @@ def run_daemon() -> None:
                 sync_intercepted_events(config, state, paths)
             except Exception as _ie:
                 log.debug("sync_intercepted_events tick error (non-fatal): %s", _ie)
+
+            # ── numbat (Perplexity agent-EDR) findings tail ──────────────
+            # Findings/denies from ~/.numbat/*.ndjson land in
+            # security_events / guardrail_events + shadow events rows so
+            # alert rules fire. Cheap byte-tail, idempotent ids, best-effort.
+            try:
+                sync_numbat_events(config, state, paths)
+            except Exception as _ne:
+                log.debug("sync_numbat_events tick error (non-fatal): %s", _ne)
 
             # ── Telegram outbound from gateway.log (#1192 follow-up) ──
             # OpenClaw stores Telegram chats in memory only — no JSONL is

@@ -155,6 +155,31 @@ DEFAULT_ALERT_RULES = [
             "proxy.json to activate. Observe-only: requests are never blocked."
         ),
     },
+    # numbat integration (Perplexity agent-EDR): the sync daemon tails
+    # ~/.numbat/*.ndjson and ingests findings as events rows with
+    # event_type "numbat_finding" (clawmetry/numbat_ingest.py), so this
+    # standard count-over-threshold rule lights up with zero new alert
+    # machinery — the loop_detected precedent. Off by default: it only
+    # matters once the user installs numbat, and numbat publishes no
+    # false-positive rates yet. OSS (no proxy or Pro adapter required).
+    {
+        "id":           "numbat_finding_default",
+        "type":         "numbat_finding",
+        "event_type":   "numbat_finding",
+        "window_hours": 24,
+        "threshold":    1,
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 60,
+        "enabled":      False,
+        "pro_only":     False,
+        "label":        "numbat security finding",
+        "description": (
+            "Fires when Perplexity's numbat agent-security tool reports a "
+            "finding (secret exfiltration, permission bypass, persistence, "
+            "…) on this node. Install numbat and point it at ClawMetry to "
+            "activate — see docs/NUMBAT.md."
+        ),
+    },
     # G3 of #1708 (Wolfgang burnout): the proxy now emits a structured
     # BUDGET_EXCEEDED abort signal when the daily cap is hit. This seed
     # rule surfaces those aborts in the alerts UI as an opt-in template
