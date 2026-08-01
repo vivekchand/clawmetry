@@ -5413,6 +5413,60 @@ def has_runtime(runtime: str) -> bool:
         return False
 
 
+def has_channel_count(count) -> bool:
+    """Boolean-gate scalar: does the CURRENT install admit ``count`` chat-channel
+    adapters concurrently?
+
+    Capacity-axis mirror of :func:`has_feature` / :func:`has_runtime`, wrapping
+    :meth:`Entitlement.allows_channel_count` on the resolved entitlement so the
+    ``channels`` capacity axis has the same scalar boolean gate the feature and
+    runtime axes already carry. Sibling of :func:`min_tier_for_channel_count`
+    on the same axis: that one answers "cheapest tier that would admit this
+    count"; this one answers "does the resolved entitlement admit it right
+    now?".
+
+    Grace semantics: :meth:`Entitlement.allows_channel_count` returns ``True``
+    for every count while ``ent.grace`` is ``True`` (the current rollout state
+    -- see the module-level "Rollout: GRACE vs ENFORCE" docstring), so wiring
+    this into a capacity gate today changes NO current behavior. Enforcement
+    flips on when :func:`is_enforced` returns ``True`` and the resolver stops
+    setting ``grace``. For a forward-looking "would this be locked once
+    enforcement is on?" gate, compare :func:`min_tier_for_channel_count`
+    against :attr:`Entitlement.tier` explicitly -- this scalar deliberately
+    reflects the LIVE grant so a UI wired off it doesn't render locks before
+    the enforce date.
+
+    Semantics on ``count``:
+
+    * ``count <= 0`` -- returns ``True``. A zero/negative count is either
+      "not measured yet" or trivially satisfied; either way the free floor
+      covers it (matches :meth:`Entitlement.allows_channel_count`'s
+      grace-on-zero contract and :func:`min_tier_for_channel_count`'s
+      ``TIER_OSS`` fallback).
+    * Non-int ``count`` (str, ``None``, list, ...) -- returns ``False``. This
+      DIFFERS from the underlying :meth:`Entitlement.allows_channel_count`
+      (which returns ``True`` on parse failure to stay "unmeasured=permissive")
+      because the scalar has a strict callsite-typo posture matching
+      :func:`has_feature` / :func:`has_runtime`. A caller that passes non-int
+      here has a bug -- fail-closed instead of silently granting.
+    * Positive int -- delegates to :meth:`Entitlement.allows_channel_count`,
+      returning ``True`` iff the resolved tier's ``channel_limit`` is ``None``
+      (unlimited) or ``>= count``.
+
+    Never raises: any resolver blowup collapses to ``False`` so a caller can
+    bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(get_entitlement().allows_channel_count(n))
+    except Exception as exc:
+        logger.warning("entitlements: has_channel_count(%r) failed: %s", count, exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
