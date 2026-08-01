@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Fix: removed the two-runtime "No OpenClaw or NVIDIA NemoClaw detected" banner (2026-08-02)
+- **Why:** the banner predates multi-runtime ClawMetry. With 16 observed runtimes it told users running any of the other 14 (the triggering report: a Claude Code node with 521 live sessions) to install OpenClaw or NemoClaw, and it rendered permanently on cloud node pages, where the server can never filesystem-detect a runtime.
+- **What:** removed the banner markup, the `checkAgentPresence` 60s poller (one fewer background request), and its five locale keys across all 36 locales. `GET /api/agent-presence` and the heartbeat `agent_install` mirror stay: cloud consumers still read them. Regression guards pin the removal so the two-runtime framing cannot quietly return.
+
 ### Fix: `clawmetry login` crashed with AttributeError for signed-out users (2026-08-02)
 - **Why:** the `login` subparser only defines `--force`, but `_cmd_login` delegates to `_cmd_connect`, which read `args.key` directly — so every not-yet-logged-in user hit `AttributeError: 'Namespace' object has no attribute 'key'` instead of the sign-in flow. Already-logged-in users were unaffected (login short-circuits to account info before the delegation).
 - **What:** `_cmd_connect` now treats `key` like every other connect-only flag (`getattr` with a default), matching how it already reads `enc_key`, `key_only`, `no_daemon`, etc. Regression test (`tests/test_login_bare_namespace.py`) drives `_cmd_login` with the exact bare Namespace argparse produces for `clawmetry login`.
