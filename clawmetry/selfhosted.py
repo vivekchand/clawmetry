@@ -139,9 +139,11 @@ def _license_ping_payload() -> dict:
     try:
         from clawmetry.license import load_license
 
-        lic = load_license() or {}
-        sub = str(lic.get("sub") or "")
-        tier = str(lic.get("tier") or "")
+        lic = load_license()
+        # Entitlement object on current builds, dict on older ones.
+        data = lic.to_dict() if hasattr(lic, "to_dict") else (lic or {})
+        sub = str(data.get("sub") or "")
+        tier = str(data.get("tier") or "")
     except Exception:
         pass
     return {

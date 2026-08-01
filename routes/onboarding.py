@@ -77,7 +77,17 @@ def _license_state() -> str:
         payload = _lic.load_license()
         if not payload:
             return ""
-        tier = str(payload.get("tier", "")).strip().lower()
+        # load_license() returns an Entitlement object (older builds returned
+        # a dict). A .get() call on the object raised AttributeError into the
+        # broad except below, so an ACTIVE trial read as "no license" and
+        # /api/onboarding/complete 409'd right after a successful activation.
+        if isinstance(payload, dict):
+            tier = payload.get("tier", "")
+        else:
+            tier = getattr(payload, "tier", "")
+        tier = str(tier or "").strip().lower()
+        if not tier or tier in ("oss", "free"):
+            return ""
         return "selfhost_trial" if tier == "trial" else "selfhost_license"
     except Exception:
         return ""
