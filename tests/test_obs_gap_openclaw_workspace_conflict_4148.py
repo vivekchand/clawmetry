@@ -117,3 +117,64 @@ def test_unknown_v3_type_still_dropped():
     # the parser must still drop it cleanly.
     # Verify _is_v3_event rejects it:
     assert sync._is_v3_event(obj) is False
+
+
+# ---------------------------------------------------------------------------
+# Transcript-rendering tests (#3928): workspace.conflict must surface in the
+# Sessions transcript view, not be silently dropped by the renderable gate.
+# ---------------------------------------------------------------------------
+
+def _sessions():
+    import routes.sessions as sess
+    return sess
+
+
+def test_workspace_conflict_is_renderable():
+    """'workspace.conflict' must appear in _RENDERABLE_TRANSCRIPT_EVENT_TYPES."""
+    sess = _sessions()
+    assert "workspace.conflict" in sess._RENDERABLE_TRANSCRIPT_EVENT_TYPES
+
+
+def test_expand_workspace_conflict_returns_turn():
+    """_expand_openclaw_event must produce a non-empty system turn."""
+    sess = _sessions()
+    obj = {
+        "type": "workspace.conflict",
+        "conflictedPaths": ["/src/app.py", "/src/utils.py"],
+        "resolution": "use_remote",
+        "stagedRef": "refs/heads/main",
+        "data": {
+            "conflictedPaths": ["/src/app.py", "/src/utils.py"],
+            "resolution": "use_remote",
+            "stagedRef": "refs/heads/main",
+        },
+    }
+    turns = sess._expand_openclaw_event(obj, ts_ms=1700000000000)
+    assert len(turns) == 1
+    turn = turns[0]
+    assert turn["role"] == "system"
+    assert "/src/app.py" in turn["content"]
+    assert "use_remote" in turn["content"]
+    assert "refs/heads/main" in turn["content"]
+
+
+def test_expand_workspace_conflict_empty_paths():
+    """Missing paths must not crash — content still meaningful."""
+    sess = _sessions()
+    obj = {"type": "workspace.conflict", "data": {}}
+    turns = sess._expand_openclaw_event(obj, ts_ms=None)
+    assert len(turns) == 1
+    assert "workspace conflict" in turns[0]["content"].lower()
+
+
+def test_model_completed_not_broken():
+    """Regression: model.completed must still produce an assistant turn."""
+    sess = _sessions()
+    obj = {
+        "type": "model.completed",
+        "data": {"completionText": "Hello world"},
+    }
+    turns = sess._expand_openclaw_event(obj, ts_ms=None)
+    assert len(turns) == 1
+    assert turns[0]["role"] == "assistant"
+    assert "Hello world" in turns[0]["content"]

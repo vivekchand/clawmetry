@@ -3494,6 +3494,9 @@ _RENDERABLE_TRANSCRIPT_EVENT_TYPES = frozenset({
     "prompt.submitted", "trace.artifacts", "model.completed",
     "tool.call", "tool.invoked", "tool.result", "tool.completed",
     "compaction",
+    # Cloud workspace conflict marker — sync.py normalises all aliases to this
+    # type so the transcript view can surface a visible inline notification (#3928).
+    "workspace.conflict",
     # Subagent fan-out — child turns surface in the parent's transcript
     # via ``query_events_with_subagents`` (#1597).
     "subagent:assistant", "subagent:user",
@@ -4039,6 +4042,25 @@ def _expand_openclaw_event(obj: dict, ts_ms):
                 "content": f"[Tool result: {tname}]\n{body}",
                 "timestamp": ts_ms,
             })
+        return turns
+
+    if etype == "workspace.conflict":
+        # Cloud workspace conflict event (#3928): OpenClaw emits this when the
+        # Control UI detects a conflict between local and cloud workspace state.
+        # Render as a system-role notification so it appears inline in the
+        # transcript at the right point without disrupting the message flow.
+        paths = obj.get("conflictedPaths") or data.get("conflictedPaths") or []
+        resolution = obj.get("resolution") or data.get("resolution") or ""
+        staged_ref = obj.get("stagedRef") or data.get("stagedRef") or ""
+        n = len(paths) if isinstance(paths, list) else 0
+        parts = [f"⚠ Cloud workspace conflict ({n} conflicted path{'s' if n != 1 else ''})"]
+        if resolution:
+            parts.append(f"Resolution: {resolution}")
+        if staged_ref:
+            parts.append(f"Staged ref: {staged_ref}")
+        if isinstance(paths, list) and paths:
+            parts.append("Paths:\n" + "\n".join(f"  • {p}" for p in paths[:20]))
+        turns.append({"role": "system", "content": "\n".join(parts), "timestamp": ts_ms})
         return turns
 
     # Unknown OpenClaw event — silently skip rather than emit "x.y" role trash.
