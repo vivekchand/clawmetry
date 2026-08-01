@@ -1,4 +1,4 @@
-<!-- i18n-src:02b789586c7d -->
+<!-- i18n-src:191e9094d7fa -->
 > Português (PT) translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -11,89 +11,88 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Veja seu agente pensar.** Observabilidade em tempo real para **14 runtimes de agentes de IA**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex e mais 10. Um único painel para toda a sua frota de agentes.
+**Veja o seu agente pensar.** Observabilidade em tempo real para **14 runtimes de agentes de IA**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex e mais 10. Um único painel para toda a sua frota de agentes.
 
 > 🌐 **Leia isto em:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mais →](docs/i18n/)
 
-Um comando. Zero configuração. Detecta tudo automaticamente.
+Um comando. Zero configuração. Deteta tudo automaticamente.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-Abre em **http://localhost:8900** e pronto.
+Abre em **http://localhost:8900** e está pronto.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
 ## Funciona com 14 runtimes de agentes
 
-O ClawMetry começou como observabilidade para o OpenClaw e agora mede toda a sua **frota de agentes** em um único painel, detectando automaticamente cada runtime na sua máquina:
+O ClawMetry começou como observabilidade para o OpenClaw e agora mede toda a sua **frota de agentes** num único painel, detetando automaticamente cada runtime na sua máquina:
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity**
 
-OpenClaw e NemoClaw são gratuitos no aplicativo de código aberto; os demais runtimes são ativados com o ClawMetry Cloud ou uma licença Pro self-hosted. Troque de runtime pelo cabeçalho e cada aba (custo, tokens, ferramentas, traces) se reajusta a esse runtime. Veja **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** para a divisão exata entre gratuito/pago, a matriz de níveis, o formato do `/api/entitlement` e a CLI `clawmetry license`.
+O OpenClaw e o NemoClaw são gratuitos na aplicação open-source; os restantes runtimes ficam disponíveis com o ClawMetry Cloud ou uma licença Pro auto-alojada. Mude de runtime a partir do cabeçalho e todos os separadores (custo, tokens, ferramentas, traces) reajustam-se a esse runtime. Consulte **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** para a divisão exata entre gratuito e pago, a matriz de níveis, a forma de `/api/entitlement`, e a CLI `clawmetry license`.
 
-## O Que Você Recebe
+## O que Obtém
 
-- **Flow** — Diagrama animado ao vivo mostrando mensagens fluindo por canais, cérebro, ferramentas e de volta
-- **Overview** — Verificações de saúde, mapa de calor de atividade, contagem de sessões, informações do modelo
-- **Usage** — Rastreamento de tokens e custos com detalhamento diário/semanal/mensal
+- **Flow** — Diagrama animado ao vivo que mostra as mensagens a fluir através de canais, cérebro, ferramentas e de volta
+- **Overview** — Verificações de saúde, mapa de calor de atividade, contagem de sessões, informação do modelo
+- **Usage** — Rastreio de tokens e custos com resumos diários/semanais/mensais
 - **Sessions** — Sessões de agente ativas com modelo, tokens, última atividade
-- **Crons** — Jobs agendados com status, próxima execução, duração
-- **Logs** — Streaming de logs em tempo real com cores
+- **Crons** — Tarefas agendadas com estado, próxima execução, duração
+- **Logs** — Streaming de logs em tempo real com código de cores
 - **Memory** — Navegue por SOUL.md, MEMORY.md, AGENTS.md, notas diárias
-- **Transcripts** — Interface de bolhas de chat para ler históricos de sessões
-- **Alerts** — Limites de orçamento, gatilhos de taxa de erro, detecção de agente offline; encaminha para Slack, Discord, PagerDuty, Telegram, Email
-- **Approvals** — Bloqueia exclusões destrutivas, force pushes, mutações de banco de dados, sudo, instalações de pacotes, chamadas de rede atrás de uma aprovação com um clique
+- **Transcripts** — Interface em formato de balões de conversa para ler históricos de sessões
+- **Alerts** — Limites de orçamento, gatilhos de taxa de erro, deteção de agente offline; encaminha para Slack, Discord, PagerDuty, Telegram, Email
+- **Approvals** — Bloqueia eliminações destrutivas, force pushes, mutações de base de dados, sudo, instalações de pacotes, chamadas de rede atrás de uma aprovação com um clique
 
-## Capturas de Tela
+## Capturas de Ecrã
 
-### 🧠 Brain — Stream de eventos do agente ao vivo
+### 🧠 Brain — Fluxo de eventos do agente em tempo real
 ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
-### 📊 Overview — Uso de tokens e resumo de sessão
+### 📊 Overview — Uso de tokens e resumo de sessões
 ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
 ### ⚡ Flow — Feed de chamadas de ferramentas em tempo real
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 Tokens — Detalhamento de custos por modelo e sessão
+### 💰 Tokens — Divisão de custos por modelo e sessão
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
-### 🧬 Memory — Navegador de arquivos do workspace
+### 🧬 Memory — Navegador de ficheiros do workspace
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 Security — Postura e log de auditoria
+### 🔐 Security — Postura e registo de auditoria
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
 ### 🚨 Alerts — Limites de orçamento, gatilhos de taxa de erro, webhooks para Slack / Discord / PagerDuty / Email
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals — Bloqueia chamadas de ferramentas arriscadas atrás de aprovação manual; regras de proteção baseadas em política
+### ✋ Approvals — Bloqueia chamadas de ferramentas de risco atrás de uma aprovação manual; regras de proteção com base em políticas
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 **Bloqueio pré-execução para o Claude Code** — um único comando instala um
-hook PreToolUse que pausa chamadas de ferramentas correspondentes *antes* de
-serem executadas e aguarda sua decisão (um toque no celular com
-[notificações push na nuvem](https://app.clawmetry.com/push) ativadas):
+hook PreToolUse que pausa as chamadas de ferramentas correspondentes *antes* de serem executadas e aguarda
+a sua decisão (um toque a partir do telemóvel com
+[notificações push na cloud](https://app.clawmetry.com/push) ativadas):
 
 ```bash
-clawmetry hooks install     # escreve ~/.claude/settings.json (idempotente)
-clawmetry hooks status      # o que está conectado + quantas políticas estão ativas
-clawmetry hooks uninstall   # remove apenas as entradas do ClawMetry
+clawmetry hooks install     # writes ~/.claude/settings.json (idempotent)
+clawmetry hooks status      # what's wired + how many policies are active
+clawmetry hooks uninstall   # removes only ClawMetry's entries
 ```
 
-Uma negação bloqueia apenas aquela chamada de ferramenta; o agente mantém sua
-sessão e pode tentar outra abordagem. Aprovar pelo celular pula o próprio
-prompt de permissão do Claude Code (você já respondeu). Ferramentas sem
-correspondência custam ~40ms e caem no fluxo de permissão normal do Claude
-Code. Você também recebe um push no celular quando o próprio Claude Code
-está aguardando sua resposta (notificações `permission_prompt` /
+Uma recusa bloqueia apenas essa chamada de ferramenta específica — o agente mantém a sua sessão e pode
+tentar outra abordagem. Aprovar a partir do telemóvel salta o próprio pedido de
+permissão do Claude Code (já respondeu). Ferramentas não correspondidas custam cerca de 40 ms e
+seguem para o fluxo normal de permissões do Claude Code. Também recebe uma notificação push no telemóvel quando o próprio Claude Code
+está à espera de si (notificações `permission_prompt` /
 `idle_prompt`).
 
 ## Instalação
 
-**Uma linha (recomendado):**
+**Comando único (recomendado):**
 ```bash
 curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
@@ -112,44 +111,46 @@ cd clawmetry && pip install flask && python3 dashboard.py
 
 ## Desenvolvimento do Frontend v2
 
-O app React v2 fica em `frontend/` e é servido em `/v2` quando o servidor
-Flask é iniciado com o v2 habilitado.
+A aplicação React v2 vive em `frontend/` e é servida em `/v2` quando o servidor
+Flask é iniciado com o v2 ativado.
 
 Use dois terminais durante o desenvolvimento:
 
 ```bash
-# Terminal 1: API/servidor Flask na porta :8900
+# Terminal 1: Flask API/server on :8900
 CLAWMETRY_V2=1 python3 dashboard.py
 ```
 
 ```bash
-# Terminal 2: servidor de desenvolvimento Vite na porta :5173
+# Terminal 2: Vite dev server on :5173
 cd frontend
 nvm use
 npm ci
 npm run dev
 ```
 
-Abra `http://localhost:5173/v2/`. O Vite encaminha requisições `/api` para
-`http://localhost:8900`, para que o app React possa se comunicar com o
-servidor Flask local sem configuração extra de CORS.
+Abra `http://localhost:5173/v2/`. O Vite encaminha os pedidos `/api` para
+`http://localhost:8900`, para que a aplicação React possa comunicar com o servidor Flask local
+sem configuração adicional de CORS.
 
-Para compilar o bundle que é distribuído com o pacote Python:
+Para compilar o pacote que é distribuído com o pacote Python:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-O bundle de produção é gravado em `clawmetry/static/v2/dist/`.
+O pacote de produção é escrito em `clawmetry/static/v2/dist/`.
 
 ## Compatibilidade de Runtime / Agente
 
-O ClawMetry observa muitos runtimes de agentes de IA, não apenas o OpenClaw. Cada runtime não-OpenClaw possui um adaptador leitor dedicado que traduz o formato nativo de sessão desse runtime para os formatos unificados do ClawMetry; o daemon os ingere no mesmo armazenamento DuckDB + snapshot na nuvem, marcados com o runtime, e a aba de replay de sessões mostra um **seletor de runtime** quando há mais de um presente. Veja [`docs/compatibility.md`](docs/compatibility.md) para a matriz completa + um guia de como adicionar runtimes, e [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) para a introdução à família OpenClaw.
+O ClawMetry observa muitos runtimes de agentes de IA, não apenas o OpenClaw. Cada runtime que não seja o OpenClaw tem um adaptador de leitura dedicado que traduz o seu formato de sessão nativo para as estruturas unificadas do ClawMetry; o daemon ingere-os no mesmo armazenamento DuckDB + snapshot na cloud, etiquetados com o runtime, e o separador de reprodução de sessões mostra um **seletor de runtime** quando existe mais do que um presente. Consulte [`docs/compatibility.md`](docs/compatibility.md) para a matriz completa + um guia sobre como adicionar runtimes, e [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) para a introdução à família OpenClaw.
 
-| Runtime / Agente | Status | Notas |
+Está a usar a ferramenta de segurança de agentes [numbat da Perplexity](https://github.com/perplexityai/numbat)? O ClawMetry ingere as suas descobertas e decisões de aplicação de forma nativa; consulte [`docs/NUMBAT.md`](docs/NUMBAT.md).
+
+| Runtime / Agente | Estado | Notas |
 |---|---|---|
-| **OpenClaw** | Nativo | Runtime de referência, detectado automaticamente |
+| **OpenClaw** | Nativo | Runtime de referência, detetado automaticamente |
 | **PicoClaw** | Adaptador beta | JSONL plano `providers.Message` (`~/.picoclaw/workspace/sessions`). Transcrições, modelo, chamadas de ferramentas. |
 | **NanoClaw** | Adaptador beta | SQLite por sessão (`data/v2-sessions`). Transcrições + contagem de mensagens. |
 | **Hermes** | Adaptador beta | SQLite `~/.hermes/state.db`. Transcrições, modelo, tokens/custo. |
@@ -162,111 +163,111 @@ O ClawMetry observa muitos runtimes de agentes de IA, não apenas o OpenClaw. Ca
 | **Qwen Code** | Adaptador beta | JSONL `~/.qwen/projects/.../chats`. Transcrições, modelo, chamadas de ferramentas, uso de tokens. |
 | **Pi** | Adaptador beta | JSONL `~/.pi/agent/sessions`. Transcrições, modelo, chamadas de ferramentas, tokens + custo. |
 | **Deep Agents** | Adaptador beta | SQLite `~/.deepagents/.state/sessions.db`. Transcrições, modelo, chamadas de ferramentas, tokens + custo. |
-| **n8n** | Adaptador beta | SQLite `~/.n8n/database.sqlite`. Execuções de workflow, execuções de nós, prompts do AI Agent, modelo + tokens quando o n8n os registra. |
-| **Antigravity** | Adaptador beta | Brain JSONL em `~/.gemini/<flavor>/brain/`. Conversas, etapas de ferramentas, raciocínio, divisão de tokens Gemini por geração + custo, consumo de gerações em segundo plano. |
+| **n8n** | Adaptador beta | SQLite `~/.n8n/database.sqlite`. Execuções de workflow, execuções de nós, prompts do AI Agent, modelo + tokens onde o n8n os regista. |
+| **Antigravity** | Adaptador beta | Brain JSONL em `~/.gemini/<flavor>/brain/`. Conversas, passos de ferramentas, raciocínio, divisão de tokens Gemini por geração + custo, consumo de geração em segundo plano. |
 
-"Adaptador beta" significa que o ClawMetry disponibiliza um leitor para o formato real em disco daquele runtime, cada um construído + verificado contra uma instalação real em uma máquina real (veja `tests/fixtures/runtimes/<rt>/`). Os adaptadores são somente leitura; cada um é transparente sobre o que o runtime de fato armazena (por exemplo, PicoClaw/NanoClaw/Cursor não gravam custo de tokens em disco). Quando vários runtimes rodam em um único nó, o seletor de runtime restringe a visualização de sessões a um deles para uma análise mais limpa.
+"Adaptador beta" significa que o ClawMetry disponibiliza um leitor para o formato real em disco desse runtime, cada um construído + verificado numa instalação real numa máquina real (consulte `tests/fixtures/runtimes/<rt>/`). Os adaptadores são apenas de leitura; cada um é transparente quanto ao que o seu runtime efetivamente armazena (por exemplo, o PicoClaw/NanoClaw/Cursor não escrevem o custo em tokens em disco). Quando vários runtimes são executados num único nó, o seletor de runtime restringe a vista de sessões a um só, para uma análise aprofundada mais clara.
 
-## Rastreie qualquer agente SDK — atribuição de custo out-loop
+## Rastreie qualquer agente SDK — atribuição de custos fora do loop
 
-Os runtimes acima gravam sessões em disco. Já o seu próprio **agente de produção** (aquele que você construiu com o OpenAI Agents SDK, LangChain, o Vercel AI SDK, LlamaIndex, E2B, ou um loop simples com `httpx`) não faz isso. O interceptor zero-config do ClawMetry ainda captura suas chamadas de LLM (custo, tokens, latência, erros) fazendo monkey-patching de `httpx`/`requests`:
+Os runtimes acima escrevem todos as sessões em disco. O seu próprio **agente de produção** — aquele que construiu com o OpenAI Agents SDK, LangChain, o Vercel AI SDK, LlamaIndex, E2B, ou um simples loop `httpx` — não o faz. O interceptor de zero configuração do ClawMetry continua a capturar as suas chamadas de LLM (custo, tokens, latência, erros) através de monkey-patching a `httpx`/`requests`:
 
 ```python
-import clawmetry.track            # ativa o interceptor
-clawmetry.track.set_source("support-agent")   # nomeia este produto
+import clawmetry.track            # activate the interceptor
+clawmetry.track.set_source("support-agent")   # name this product
 
-# ...seu agente roda normalmente; cada chamada de LLM agora é rastreada + atribuída.
+# ...your agent runs as normal; every LLM call is now tracked + attributed.
 ```
 
-`set_source()` (ou a variável de ambiente `CLAWMETRY_SOURCE=support-agent`) marca cada chamada com uma **fonte nomeada**, para que cada produto que você executa apareça como sua própria linha de primeira classe e com custo atribuível no cartão **🔌 Out-loop sources** do Overview no painel: chamadas, provedores, latência, taxa de erro por agente. Nenhuma fonte definida? As chamadas continuam sendo rastreadas; o cartão simplesmente permanece oculto.
+`set_source()` (ou a variável de ambiente `CLAWMETRY_SOURCE=support-agent`) etiqueta cada chamada com uma **fonte nomeada**, para que cada produto que executa apareça como a sua própria linha de primeira classe, atribuível a custos, no cartão **🔌 Out-loop sources** do painel na Overview: chamadas, fornecedores, latência, taxa de erro por agente. Nenhuma fonte definida? As chamadas continuam a ser rastreadas; o cartão apenas fica oculto.
 
 ```bash
 CLAWMETRY_SOURCE=billing-agent python my_agent.py
 ```
 
-Esta é a mesma camada de dados que os adaptadores de runtime alimentam (DuckDB → snapshot na nuvem), então as fontes out-loop sincronizam com o painel na nuvem da mesma forma que tudo o mais, com criptografia ponta a ponta.
+Esta é a mesma camada de dados que os adaptadores de runtime alimentam (DuckDB → snapshot na cloud), pelo que as fontes fora do loop sincronizam com o painel na cloud tal como tudo o resto, com encriptação E2E.
 
-## OpenTelemetry — neutro em relação a fornecedores, envie seus traces para qualquer lugar
+## OpenTelemetry — neutro em relação ao fornecedor, envie os seus traces para qualquer lugar
 
 O ClawMetry fala **OpenTelemetry** em ambas as direções, usando as **convenções semânticas GenAI**, para que os traces do seu agente nunca fiquem presos a uma única ferramenta.
 
-**Exporte** cada sessão (chamadas de LLM, ferramentas, sub-agentes, tokens, custo) como spans GenAI OTLP/HTTP para qualquer coletor (Datadog, Grafana, Honeycomb, ou seu próprio OTel Collector):
+**Exporte** cada sessão (chamadas de LLM, ferramentas, subagentes, tokens, custo) como spans GenAI OTLP/HTTP para qualquer coletor (Datadog, Grafana, Honeycomb, ou o seu próprio OTel Collector):
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
-# equivalentemente:
+# equivalently:
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-Cabeçalhos de autenticação e intervalo de polling são variáveis de ambiente opcionais:
+Os cabeçalhos de autenticação e o intervalo de sondagem são variáveis de ambiente opcionais:
 
 ```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # cabeçalhos HTTP extras
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # segundos (padrão 60)
+CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
+CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**Ingestão** — o receptor OTLP embutido aceita traces e métricas de qualquer outra fonte em `/v1/traces` e `/v1/metrics` (`pip install clawmetry[otel]` para ingestão via protobuf).
+**Ingira** — o recetor OTLP incorporado aceita traces e métricas de qualquer outra origem em `/v1/traces` e `/v1/metrics` (`pip install clawmetry[otel]` para ingestão via protobuf).
 
-Você obtém o painel ClawMetry zero-config e local-first **e** seus dados no backend que a sua equipe já utiliza, sem lock-in, sem precisar instalar um segundo agente.
+Obtém o painel ClawMetry de zero configuração e local-first, **e** os seus dados no backend que a sua equipa já utiliza — sem aprisionamento, sem necessidade de instalar um segundo agente.
 
 ## Configuração
 
-A maioria das pessoas não precisa de nenhuma configuração. O ClawMetry detecta automaticamente seu workspace, logs, sessões e crons.
+A maioria das pessoas não precisa de qualquer configuração. O ClawMetry deteta automaticamente o seu workspace, logs, sessões e crons.
 
-Se você precisar personalizar:
+Se precisar de personalizar:
 
 ```bash
-clawmetry --port 9000              # Porta personalizada (padrão: 8900)
-clawmetry --host 127.0.0.1         # Vincula apenas ao localhost
-clawmetry --workspace ~/mybot      # Caminho de workspace personalizado
-clawmetry --name "Alice"           # Seu nome na visualização Flow
+clawmetry --port 9000              # Custom port (default: 8900)
+clawmetry --host 127.0.0.1         # Bind to localhost only
+clawmetry --workspace ~/mybot      # Custom workspace path
+clawmetry --name "Alice"           # Your name in Flow visualization
 ```
 
 Todas as opções: `clawmetry --help`
 
 ## Canais Suportados
 
-O ClawMetry mostra atividade ao vivo para cada canal do OpenClaw configurado. Somente os canais que estão de fato configurados no seu `openclaw.json` aparecem no diagrama Flow; os não configurados ficam ocultos automaticamente.
+O ClawMetry mostra a atividade ao vivo para todos os canais do OpenClaw que tiver configurados. Apenas os canais que estão efetivamente configurados no seu `openclaw.json` aparecem no diagrama Flow; os que não estão configurados ficam automaticamente ocultos.
 
-Clique em qualquer nó de canal no Flow para ver uma visualização de bolhas de chat ao vivo com contagens de mensagens recebidas/enviadas.
+Clique em qualquer nó de canal no Flow para ver uma vista de balões de chat ao vivo com contagens de mensagens recebidas/enviadas.
 
-| Canal | Status | Popup ao Vivo | Notas |
+| Canal | Estado | Popup ao Vivo | Notas |
 |---------|--------|------------|-------|
 | 📱 **Telegram** | ✅ Completo | ✅ | Mensagens, estatísticas, atualização a cada 10s |
 | 💬 **iMessage** | ✅ Completo | ✅ | Lê `~/Library/Messages/chat.db` diretamente |
 | 💚 **WhatsApp** | ✅ Completo | ✅ | Via WhatsApp Web (Baileys) |
 | 🔵 **Signal** | ✅ Completo | ✅ | Via signal-cli |
-| 🟣 **Discord** | ✅ Completo | ✅ | Detecção de guild + canal |
-| 🟪 **Slack** | ✅ Completo | ✅ | Detecção de workspace + canal |
-| 🌐 **Webchat** | ✅ Completo | ✅ | Sessões de UI web embutida |
-| 📡 **IRC** | ✅ Completo | ✅ | Interface de bolhas estilo terminal |
+| 🟣 **Discord** | ✅ Completo | ✅ | Deteção de servidor + canal |
+| 🟪 **Slack** | ✅ Completo | ✅ | Deteção de workspace + canal |
+| 🌐 **Webchat** | ✅ Completo | ✅ | Sessões na interface web incorporada |
+| 📡 **IRC** | ✅ Completo | ✅ | Interface de balões estilo terminal |
 | 🍏 **BlueBubbles** | ✅ Completo | ✅ | iMessage via API REST do BlueBubbles |
 | 🔵 **Google Chat** | ✅ Completo | ✅ | Via webhooks da Chat API |
 | 🟣 **MS Teams** | ✅ Completo | ✅ | Via plugin de bot do Teams |
-| 🔷 **Mattermost** | ✅ Completo | ✅ | Chat de equipe self-hosted |
-| 🟩 **Matrix** | ✅ Completo | ✅ | Descentralizado, suporte a E2EE |
+| 🔷 **Mattermost** | ✅ Completo | ✅ | Chat de equipa auto-alojado |
+| 🟩 **Matrix** | ✅ Completo | ✅ | Descentralizado, com suporte E2EE |
 | 🟢 **LINE** | ✅ Completo | ✅ | LINE Messaging API |
 | ⚡ **Nostr** | ✅ Completo | ✅ | DMs descentralizadas NIP-04 |
-| 🟣 **Twitch** | ✅ Completo | ✅ | Chat via conexão IRC |
-| 🔷 **Feishu/Lark** | ✅ Completo | ✅ | Inscrição de eventos via WebSocket |
+| 🟣 **Twitch** | ✅ Completo | ✅ | Chat via ligação IRC |
+| 🔷 **Feishu/Lark** | ✅ Completo | ✅ | Subscrição de eventos WebSocket |
 | 🔵 **Zalo** | ✅ Completo | ✅ | Zalo Bot API |
 
-> **Detecção automática:** o ClawMetry lê seu `~/.openclaw/openclaw.json` e renderiza somente os canais que você realmente configurou. Nenhuma configuração manual necessária.
+> **Deteção automática:** O ClawMetry lê o seu `~/.openclaw/openclaw.json` e apenas apresenta os canais que efetivamente configurou. Não é necessária qualquer configuração manual.
 
-## Implantação com Docker
+## Implementação com Docker
 
-Quer rodar o ClawMetry em um container? Sem problemas! 🐳
+Quer executar o ClawMetry num contentor? Sem problema! 🐳
 
 **Início rápido com Docker:**
 
 ```bash
-# Compilar a imagem
+# Build the image
 docker build -t clawmetry .
 
-# Executar com as configurações padrão
+# Run with default settings
 docker run -p 8900:8900 clawmetry
 
-# Ou monte o diretório de dados do seu agente (mostrado: o ~/.openclaw do OpenClaw)
+# Or mount your agent's data dir (shown: OpenClaw's ~/.openclaw)
 docker run -p 8900:8900 \
   -v ~/.openclaw:/root/.openclaw \
   -v /tmp/moltbot:/tmp/moltbot \
@@ -288,7 +289,7 @@ services:
     restart: unless-stopped
 ```
 
-> **Nota:** ao rodar em Docker, monte os diretórios de dados + logs do seu agente (por exemplo, `~/.openclaw`, `~/.claude`, `~/.codex`) para que o ClawMetry possa detectar automaticamente sua configuração.
+> **Nota:** Ao executar em Docker, monte os diretórios de dados + logs do seu agente (por exemplo, `~/.openclaw`, `~/.claude`, `~/.codex`) para que o ClawMetry possa detetar automaticamente a sua configuração.
 
 ## Requisitos
 
@@ -297,46 +298,46 @@ services:
 - Um runtime de agente de IA na mesma máquina: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, ou Antigravity (ou volumes montados para Docker)
 - Linux ou macOS
 
-## Suporte a NemoClaw / OpenShell
+## Suporte para NemoClaw / OpenShell
 
-O ClawMetry detecta automaticamente o [NemoClaw](https://github.com/NVIDIA/NemoClaw), o wrapper de segurança empresarial da NVIDIA para o OpenClaw, que executa agentes dentro de containers OpenShell isolados (sandboxed).
+O ClawMetry deteta automaticamente o [NemoClaw](https://github.com/NVIDIA/NemoClaw) — o wrapper de segurança empresarial da NVIDIA para o OpenClaw que executa agentes dentro de contentores OpenShell isolados.
 
-Na maioria dos casos, nenhuma configuração extra é necessária. O daemon de sincronização descobre automaticamente os arquivos de sessão, estejam eles no host em `~/.openclaw/` ou dentro de um container OpenShell.
+Não é necessária configuração adicional na maioria dos casos. O daemon de sincronização descobre automaticamente os ficheiros de sessão, quer estejam em `~/.openclaw/` no anfitrião, quer dentro de um contentor OpenShell.
 
 ### Como funciona
 
-O ClawMetry detecta o NemoClaw de duas formas:
+O ClawMetry deteta o NemoClaw de duas formas:
 
-1. **Detecção de binário** — verifica a CLI `nemoclaw` e executa `nemoclaw status` para obter informações do sandbox
-2. **Detecção de container** — varre os containers Docker em execução em busca de imagens `openshell`, `nemoclaw` ou `ghcr.io/nvidia/`, e então lê as sessões via volumes montados ou `docker cp`
+1. **Deteção binária** — verifica a CLI `nemoclaw` e executa `nemoclaw status` para obter informação da sandbox
+2. **Deteção de contentor** — analisa os contentores Docker em execução à procura de imagens `openshell`, `nemoclaw`, ou `ghcr.io/nvidia/`, e depois lê as sessões através de montagens de volume ou `docker cp`
 
-Os arquivos de sessão sincronizados a partir de containers NemoClaw são marcados com `runtime=nemoclaw` e metadados `container_id` no painel na nuvem, para que você possa diferenciá-los das sessões padrão do OpenClaw rapidamente.
+Os ficheiros de sessão sincronizados a partir de contentores NemoClaw são etiquetados com `runtime=nemoclaw` e metadados `container_id` no painel na cloud, para que os possa distinguir das sessões OpenClaw padrão de relance.
 
-### Configuração recomendada: daemon de sincronização no HOST
+### Configuração recomendada: daemon de sincronização no ANFITRIÃO
 
-Para a melhor experiência, execute o daemon de sincronização do ClawMetry na **máquina host** (não dentro do sandbox). Isso evita restrições de política de rede do NemoClaw.
+Para a melhor experiência, execute o daemon de sincronização do ClawMetry na **máquina anfitriã** (não dentro da sandbox). Isto evita as restrições de política de rede do NemoClaw.
 
 ```bash
-# No host (fora do sandbox)
+# On the host (outside the sandbox)
 pip install clawmetry
 clawmetry connect
 clawmetry sync
 ```
 
-O daemon de sincronização encontrará automaticamente as sessões dentro de quaisquer containers OpenShell em execução.
+O daemon de sincronização irá encontrar automaticamente as sessões dentro de qualquer contentor OpenShell em execução.
 
-### Opcional: nome de sandbox explícito
+### Opcional: nome explícito da sandbox
 
-Se a detecção automática não funcionar, aponte o ClawMetry para o sandbox correto:
+Se a deteção automática não funcionar, aponte o ClawMetry para a sandbox correta:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
 clawmetry sync
 ```
 
-### Executando dentro do sandbox (avançado)
+### Executar dentro da sandbox (avançado)
 
-Se você precisar executar o daemon de sincronização **dentro** do sandbox OpenShell, adicione esta regra de saída (egress) à sua política de rede do NemoClaw para que ele possa acessar a API de ingestão do ClawMetry:
+Se precisar de executar o daemon de sincronização **dentro** da sandbox OpenShell, adicione esta regra de saída à sua política de rede do NemoClaw para que possa aceder à API de ingestão do ClawMetry:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -357,17 +358,17 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 | Endpoint | Porta | Protocolo | Necessário |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | Sim (daemon de sincronização → nuvem) |
-| `localhost:8900` | 8900 | HTTP | Sim (UI do painel local) |
-| Socket do Docker (`/var/run/docker.sock`) | — | Socket Unix | Para descoberta de sessões em containers |
+| `ingest.clawmetry.com` | 443 | HTTPS | Sim (daemon de sincronização → cloud) |
+| `localhost:8900` | 8900 | HTTP | Sim (interface do painel local) |
+| Socket do Docker (`/var/run/docker.sock`) | — | Socket Unix | Para deteção de sessões em contentores |
 
-O daemon de sincronização faz apenas chamadas HTTPS de saída para `ingest.clawmetry.com`. Nenhuma porta de entrada é necessária.
+O daemon de sincronização apenas efetua chamadas HTTPS de saída para `ingest.clawmetry.com`. Não são necessárias portas de entrada.
 
 ---
 
-## Implantação na Nuvem
+## Implementação na Cloud
 
-Veja o **[Guia de Testes na Nuvem](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** para túneis SSH, proxy reverso e Docker.
+Consulte o **[Guia de Testes na Cloud](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** para túneis SSH, proxy reverso e Docker.
 
 ## Testes
 
@@ -377,45 +378,43 @@ Este projeto é testado com BrowserStack.
 
 ## Telemetria
 
-O ClawMetry envia pings anônimos do ciclo de vida da instalação para
+O ClawMetry envia pings anónimos do ciclo de vida da instalação para
 `https://app.clawmetry.com/api/install`: um ping `install` na primeira
-vez que você executa a CLI `clawmetry` em uma nova máquina, um ping
-`update` na primeira execução após atualizar para uma nova versão, e um
-ping `onboarded` quando você completa a escolha de onboarding no
-painel. Usamos isso para contar instalações reais (os números brutos de
-downloads do PyPI são ~98% espelhos, CI e re-downloads de atualização
-automática) e para saber quais frameworks de agentes e versões estão
-realmente em uso.
+vez que executa a CLI `clawmetry` numa nova máquina, um ping `update`
+na primeira execução após atualizar para uma nova versão, e um ping
+`onboarded` quando conclui a escolha de integração no painel. Usamos isto
+para contar instalações reais (os números brutos de downloads do PyPI são cerca de 98% mirrors, CI,
+e re-downloads de atualização automática) e para saber quais as frameworks de agentes e
+versões que estão efetivamente em uso.
 
-**No máximo um POST por evento de ciclo de vida por versão**, contendo:
+**No máximo um POST por evento do ciclo de vida por versão**, contendo:
 
-| Campo | Exemplo | Motivo |
+| Campo | Exemplo | Porquê |
 |---|---|---|
-| `install_id` | UUID aleatório armazenado em `~/.clawmetry/install_id` | deduplicação; anônimo até você conectar explicitamente a sincronização na nuvem (o heartbeat autenticado do daemon passa a carregá-lo, vinculando esta instalação à sua conta) |
+| `install_id` | UUID aleatório guardado em `~/.clawmetry/install_id` | desduplicação; anónimo até ligar explicitamente a sincronização na Cloud (o heartbeat autenticado do daemon passa então a transportá-lo, associando esta instalação à sua conta) |
 | `event` | `install` / `update` / `onboarded` | instalação nova vs atualização de uma existente |
-| `version` | `0.12.167` | quais versões estão em uso |
+| `version` | `0.12.167` | quais as versões que estão em uso |
 | `os` / `os_version` | `Darwin` / `25.3.0` | prioridades de suporte de plataforma |
-| `python` | `3.11.15` | matriz de suporte de versão do Python |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | com quais agentes devemos integrar em seguida |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | separar instalações humanas do ruído de CI |
+| `python` | `3.11.15` | matriz de suporte de versões do Python |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | com que agentes devemos integrar a seguir |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | separar instalações humanas de ruído de CI |
 
-**O que NÃO enviamos**: IP (a nuvem deriva o código do país no lado do
-servidor a partir da requisição, e então descarta o IP), hostname, nome
-de usuário, caminho do workspace, conteúdo de arquivos, sua api_key,
-seu e-mail, nada que seja PII ou específico do workspace. O payload da
-transmissão é auditável em
+**O que NÃO enviamos**: IP (a cloud deriva o código do país do lado do
+servidor a partir do pedido e depois descarta o IP), nome do anfitrião, nome de utilizador, caminho do
+workspace, conteúdo de ficheiros, a sua api_key, o seu email, nada que seja PII ou
+específico do workspace. A carga útil transmitida é auditável em
 [`clawmetry/telemetry.py`](clawmetry/telemetry.py).
 
 **Desativar** (qualquer uma destas opções desativa permanentemente):
 
 ```bash
-export CLAWMETRY_NO_TELEMETRY=1                # por shell
-export DO_NOT_TRACK=1                          # padrão cross-tool W3C
-touch ~/.clawmetry/notelemetry                 # marcador de arquivo persistente
+export CLAWMETRY_NO_TELEMETRY=1                # per-shell
+export DO_NOT_TRACK=1                          # W3C cross-tool standard
+touch ~/.clawmetry/notelemetry                 # persistent file marker
 ```
 
-Uma falha de rede aqui nunca bloqueia a execução do `clawmetry`; o ping
-é fire-and-forget em uma thread do daemon com timeout de 3 s.
+Uma falha de rede aqui nunca bloqueia a execução do `clawmetry`; o
+ping é fire-and-forget numa thread do daemon com um timeout de 3 s.
 
 ## Histórico de Estrelas
 
@@ -434,6 +433,6 @@ MIT
 ---
 
 <p align="center">
-  <strong>🦞 Veja seu agente pensar</strong><br>
+  <strong>🦞 Veja o seu agente pensar</strong><br>
   <sub>Criado por <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Parte do ecossistema <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
 </p>

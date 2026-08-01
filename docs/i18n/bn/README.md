@@ -1,4 +1,4 @@
-<!-- i18n-src:02b789586c7d -->
+<!-- i18n-src:191e9094d7fa -->
 > বাংলা translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -144,6 +144,8 @@ npm run build
 ## রানটাইম / এজেন্ট সামঞ্জস্যতা
 
 ClawMetry কেবল OpenClaw নয়, আরও অনেক AI-এজেন্ট রানটাইম পর্যবেক্ষণ করে। প্রতিটি নন-OpenClaw রানটাইমের একটি ডেডিকেটেড রিডার অ্যাডাপ্টার থাকে যা সেই রানটাইমের নেটিভ সেশন ফরম্যাটকে ClawMetry-এর ইউনিফায়েড শেপে অনুবাদ করে; ডেমন সেগুলোকে একই DuckDB স্টোর + ক্লাউড স্ন্যাপশটে ইনজেস্ট করে, রানটাইম দিয়ে ট্যাগ করে, এবং একাধিক রানটাইম উপস্থিত থাকলে সেশন রিপ্লে ট্যাব একটি **রানটাইম সুইচার** দেখায়। সম্পূর্ণ ম্যাট্রিক্স + রানটাইম যোগ করার গাইডের জন্য দেখুন [`docs/compatibility.md`](docs/compatibility.md), এবং OpenClaw-ফ্যামিলি প্রাইমারের জন্য [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md)।
+
+[Perplexity-এর numbat](https://github.com/perplexityai/numbat) এজেন্ট-সিকিউরিটি টুল চালাচ্ছেন? ClawMetry এর ফাইন্ডিংস এবং এনফোর্সমেন্ট সিদ্ধান্তগুলো সরাসরি ইনজেস্ট করে — দেখুন [`docs/NUMBAT.md`](docs/NUMBAT.md)।
 
 | রানটাইম / এজেন্ট | স্ট্যাটাস | নোট |
 |---|---|---|
