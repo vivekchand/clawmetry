@@ -22426,14 +22426,36 @@ async function bootDashboard() {
       return;
     }
     if (authData.authRequired && !authData.valid) {
-      // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
-      // so we measure fresh-install rejects, not session timeouts.
-      if (_shouldPingAuthFailFirstLoad(stored, authData)) {
-        _pingAuthFailFirstLoad();
+      // Stored token may simply be stale (gateway token rotated on disk).
+      // Retry the zero-click loopback bootstrap before walling the user --
+      // the server hands the fresh token to provably-local browsers.
+      var recovered = false;
+      try {
+        var dtRes = await _withTimeout(fetch('/api/auth/detected-token'), 3000, 'auth-bootstrap');
+        if (dtRes && dtRes.ok) {
+          var dt = await dtRes.json();
+          if (dt && dt.token) {
+            var reRes = await _withTimeout(
+              fetch('/api/auth/check?token=' + encodeURIComponent(dt.token)), 3000, 'auth');
+            var re = await reRes.json();
+            if (re && re.valid) {
+              localStorage.setItem('clawmetry-token', dt.token);
+              recovered = true;
+            }
+          }
+        }
+      } catch (e) { /* fall through to the manual login wall */ }
+      if (!recovered) {
+        // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
+        // so we measure fresh-install rejects, not session timeouts.
+        if (_shouldPingAuthFailFirstLoad(stored, authData)) {
+          _pingAuthFailFirstLoad();
+        }
+        document.getElementById('login-overlay').style.display = 'flex';
+        _safeFinishBoot();
+        return;
       }
-      document.getElementById('login-overlay').style.display = 'flex';
-      _safeFinishBoot();
-      return;
+      document.getElementById('login-overlay').style.display = 'none';
     }
   } catch(e) { /* auth check hung -- boot anyway, safety timeout will fire */ }
 

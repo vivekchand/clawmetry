@@ -267,7 +267,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.616"
+__version__ = "0.12.618"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -12212,13 +12212,7 @@ DASHBOARD_HTML = r"""
   </div>
   {% endif %}
 </div>
-{% include 'partials/cloud-modal.html' %}
-{% include 'partials/onboarding-modal.html' %}
-
-
 {% include 'partials/banners.html' %}
-
-{% include 'partials/budget-modal.html' %}
 
 {% if not legacy_nav %}
 {# Phase-1 IA refactor (issue #1659): 220px left sidebar + content grid.
@@ -12470,6 +12464,15 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
+
+{# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
+   transform makes it the containing block for fixed descendants, which
+   stretches an inset:0 overlay to document height and pushes the centered
+   card below the fold (users saw only the blur backdrop, issue: blank
+   blurred dashboard on first run). #}
+{% include 'partials/cloud-modal.html' %}
+{% include 'partials/onboarding-modal.html' %}
+{% include 'partials/budget-modal.html' %}
 
 <!-- Component Detail Modal -->
 <div class="comp-modal-overlay" id="comp-modal-overlay" onclick="if(event.target===this)closeCompModal()">

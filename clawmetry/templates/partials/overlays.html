@@ -64,8 +64,8 @@
       margin-right:auto;
       " alt="ClawMetry">
     <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
-    <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;" data-i18n="login.prompt">Enter your OpenClaw Gateway Token</p>
-    <input id="login-token" type="password" data-i18n-placeholder="login.token_placeholder" placeholder="Gateway token..." style="
+    <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;" data-i18n="login.prompt">Enter your access token to open the dashboard</p>
+    <input id="login-token" type="password" data-i18n-placeholder="login.token_placeholder" placeholder="Access token..." style="
       width:100%;
       box-sizing:border-box;
       padding:12px 16px;
@@ -89,6 +89,7 @@
       cursor:pointer;
       " data-i18n="login.login">Login</button>
     <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;" data-i18n="login.invalid_token">Invalid token</p>
+    <p style="color:#64748b;margin:16px 0 0;font-size:12px;" data-i18n="login.hint">Local installs sign in automatically. For remote access, use the gateway token from the machine running your agents.</p>
   </div>
 </div>
 <script src="{{ url_for('static', filename='js/auth-bootstrap.js') }}"></script>
