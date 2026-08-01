@@ -267,7 +267,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.616"
+__version__ = "0.12.618"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -4733,7 +4733,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
+    <div class="nav-tab" onclick="switchTab('context-economics')" title="Context-window usage from real per-turn readings">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -12184,7 +12184,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
+    <div class="nav-tab" onclick="switchTab('context-economics')" title="Context-window usage from real per-turn readings">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -12212,13 +12212,7 @@ DASHBOARD_HTML = r"""
   </div>
   {% endif %}
 </div>
-{% include 'partials/cloud-modal.html' %}
-{% include 'partials/onboarding-modal.html' %}
-
-
 {% include 'partials/banners.html' %}
-
-{% include 'partials/budget-modal.html' %}
 
 {% if not legacy_nav %}
 {# Phase-1 IA refactor (issue #1659): 220px left sidebar + content grid.
@@ -12292,9 +12286,11 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
           <span class="left-nav-label" data-i18n="nav.models">Models</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
-          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
-        </div>
+        {# "LLM Context" merged into Context usage (2026-08-01): the old tab
+           mixed hardcoded token estimates with a node-wide gauge. Context
+           usage (context-economics) shows the same story from real per-turn
+           readings, session + runtime scoped. switchTab('context') aliases
+           there so old deep links keep working. #}
         {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
            SESSION-scoped, so they left the global nav and are reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
@@ -12415,7 +12411,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/notifications.html' %}
 
 <!-- CONTEXT INSPECTOR -->
-{% include 'tabs/context.html' %}
 
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}
@@ -12469,6 +12464,15 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
+
+{# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
+   transform makes it the containing block for fixed descendants, which
+   stretches an inset:0 overlay to document height and pushes the centered
+   card below the fold (users saw only the blur backdrop, issue: blank
+   blurred dashboard on first run). #}
+{% include 'partials/cloud-modal.html' %}
+{% include 'partials/onboarding-modal.html' %}
+{% include 'partials/budget-modal.html' %}
 
 <!-- Component Detail Modal -->
 <div class="comp-modal-overlay" id="comp-modal-overlay" onclick="if(event.target===this)closeCompModal()">

@@ -1063,7 +1063,10 @@ async function loadContextEconomics() {
   var compEl = document.getElementById('ce-compactions-panel');
   var ovEl = document.getElementById('ce-overflow-panel');
   if (!gaugeEl) return;
-  var url = '/api/context-economics?limit=400' + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '');
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/context-economics?limit=400'
+    + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '')
+    + ((_rt && _rt !== 'all') ? ('&runtime=' + encodeURIComponent(_rt)) : '');
   var data;
   try {
     data = await fetch(url).then(function(r){ return r.json(); });
@@ -1075,7 +1078,26 @@ async function loadContextEconomics() {
   var comps = data.compactions || [];
   var overflow = data.overflow_sessions || [];
   var chips = data.session_chips || [];
-  var s = data.summary || {};
+  // Session scope, enforced client-side as well: the cloud snapshot
+  // interceptor serves the whole contextEconomics slice regardless of
+  // session_id, so without this the chip picker silently kept showing
+  // all sessions on the hosted dashboard.
+  if (_ceSessionId) {
+    util = util.filter(function(u){ return String(u.session_id) === _ceSessionId; });
+    comps = comps.filter(function(c){ return String(c.session_id) === _ceSessionId; });
+    overflow = overflow.filter(function(o){ return String(o.session_id) === _ceSessionId; });
+  }
+  // Recompute the summary from the scoped lists so the chips always agree
+  // with the gauge and compaction log below them, local and cloud alike.
+  var _ovCount = comps.filter(function(c){ return c.trigger === 'overflow'; }).length;
+  var s = {
+    compaction_count: comps.length,
+    overflow_count: _ovCount,
+    proactive_count: comps.length - _ovCount,
+    total_reclaimed: comps.reduce(function(t2, c){ return t2 + Number(c.reclaimed || 0); }, 0),
+    peak_pct: Math.round(util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0) * 10) / 10,
+    overflow_sessions: overflow.length
+  };
   _ceCompactionsCache = comps;
 
   // ── Summary chips ──
@@ -1087,6 +1109,7 @@ async function loadContextEconomics() {
     }
     var peakColor = (s.peak_pct || 0) >= 90 ? '#ef4444' : ((s.peak_pct || 0) >= 70 ? '#d97706' : 'var(--text-primary)');
     sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+      + chip('Turns', util.length)
       + chip('Peak window', (s.peak_pct || 0) + '%', peakColor)
       + chip('Compactions', s.compaction_count || 0)
       + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
@@ -1094,6 +1117,30 @@ async function loadContextEconomics() {
       + chip('Tokens reclaimed', _ceFmtTokens(s.total_reclaimed || 0), '#16a34a')
       + chip('Overflow sessions', s.overflow_sessions || 0, (s.overflow_sessions || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
       + '</div>';
+  }
+
+  // ── Current context window (latest real per-turn reading) ──
+  // The honest replacement for the old LLM Context tab's headline gauge:
+  // measured input + cache tokens from the newest assistant turn against
+  // that turn's model-aware window, scoped to the picked session/runtime.
+  var curEl = document.getElementById('ce-current-gauge');
+  if (curEl) {
+    if (util.length === 0) {
+      curEl.innerHTML = '';
+    } else {
+      var _last = util[util.length - 1];
+      var _lp = Number(_last.pct || 0);
+      var _lcolor = _lp >= 90 ? '#ef4444' : (_lp >= 70 ? '#d97706' : '#22c55e');
+      var _lscope = _ceSessionId ? _ceShortSid(_ceSessionId) : t('app.latest_turn_any_session', null, 'latest turn, any session in scope');
+      curEl.innerHTML = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;">'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">' + t('app.current_context_window', null, 'Current context window') + '</span>'
+        + '<span style="font-size:12px;color:var(--text-muted);">' + _ceFmtTokens(_last.tokens) + ' / ' + _ceFmtTokens(_last.window) + ' tokens (' + _lp + '%)' + (_last.model ? (' · ' + escHtml(String(_last.model))) : '') + '</span></div>'
+        + '<div style="height:14px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:7px;overflow:hidden;">'
+        + '<div style="height:100%;width:' + Math.min(100, _lp) + '%;background:' + _lcolor + ';border-radius:7px;transition:width .5s;"></div></div>'
+        + '<div style="font-size:10px;color:var(--text-faint);margin-top:4px;">' + escHtml(_lscope) + ' · ' + escHtml(String(_last.ts || '')) + '</div>'
+        + '</div>';
+    }
   }
 
   // ── Session picker chips ──
@@ -1108,7 +1155,7 @@ async function loadContextEconomics() {
         var active = (_ceSessionId === c.session_id);
         var pk = Number(c.peak_pct || 0);
         var dot = pk >= 90 ? '#ef4444' : (pk >= 70 ? '#d97706' : '#16a34a');
-        ch += '<span onclick="_ceSelectSession(' + JSON.stringify(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
+        ch += '<span onclick="_ceSelectSession(' + attrJsStr(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
           + '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + dot + ';margin-right:5px;"></span>'
           + escHtml(_ceShortSid(c.session_id)) + ' <span style="color:var(--text-muted);font-weight:500;">' + pk + '%</span></span>';
       });
@@ -1150,7 +1197,7 @@ async function loadContextEconomics() {
       compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_compactions_recorded", null, "No compactions recorded") + '' + (_ceSessionId ? ' for this session' : '') + '. Your agent compacts the transcript when the window fills; events appear here as they happen.</div>';
     } else {
       var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
-      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
+      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">click a row to expand</span></div>';
       comps.forEach(function(cp, idx) {
         var isOverflow = cp.trigger === 'overflow';
         var trigColor = isOverflow ? '#ef4444' : '#16a34a';
@@ -1176,7 +1223,7 @@ async function loadContextEconomics() {
           c += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Compaction summary</div>';
           c += '<div style="max-height:160px;overflow:auto;white-space:pre-wrap;color:var(--text-secondary);line-height:1.5;border:1px solid var(--border-secondary);border-radius:6px;padding:8px;background:var(--bg-primary);">' + escHtml(String(cp.summary).slice(0, 4000)) + '</div>';
         }
-        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + JSON.stringify(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
+        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + attrJsStr(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
         c += '</div>';
       });
       c += '</div>';
@@ -1195,8 +1242,8 @@ async function loadContextEconomics() {
         o += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         o += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(os.session_id || '') + '">' + escHtml(_ceShortSid(os.session_id)) + '</span>';
         o += '<span style="flex:1;color:var(--text-muted);">' + (os.compaction_count || 0) + ' compactions · ' + (os.overflow_count || 0) + ' overflow</span>';
-        o += '<a href="#" onclick="_ceSelectSession(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
-        o += '<a href="#" onclick="viewTranscript(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
+        o += '<a href="#" onclick="_ceSelectSession(' + attrJsStr(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
+        o += '<a href="#" onclick="viewTranscript(' + attrJsStr(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
         o += '</div>';
       });
       o += '</div>';
@@ -1207,6 +1254,10 @@ async function loadContextEconomics() {
 
 
 function switchTab(name) {
+  // The old "LLM Context" tab (mostly hardcoded estimates, node-wide) merged
+  // into Context usage (real per-turn readings, session + runtime scoped).
+  // Alias so deep links and old bookmarks keep working.
+  if (name === 'context') name = 'context-economics';
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
   _cmCurrentTab = name;
@@ -1283,7 +1334,6 @@ function switchTab(name) {
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
-  if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
@@ -5388,6 +5438,13 @@ function renderBrainStream(events) {
   if (hasTelegramAck) {
     html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;margin-bottom:6px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:6px;font-size:11px;color:#60a5fa;">📱 Telegram body capture pending OpenClaw upstream — outbound counts only</div>';
   }
+  // Rows are buffered per-event (not concatenated straight into `html`) so
+  // they can be grouped into per-turn sequences below — the Brain-visualizer
+  // pattern. Buffering is the only change here; each row's markup is
+  // untouched.
+  var _seqRowBuf = [];
+  var _seqHeadHtml = html;
+  html = '';
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
@@ -5654,8 +5711,181 @@ function renderBrainStream(events) {
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += turnTimeline;
     html += '</div>';
+    _seqRowBuf.push({ev: ev, html: html});
+    html = '';
   });
-  el.innerHTML = html;
+  el.innerHTML = _seqHeadHtml + _brainGroupSequences(_seqRowBuf);
+}
+
+// ── Sequences: group the feed into readable blocks ───────────────────────
+// Adapted from the Antigravity Brain Visualizer (Apache-2.0): a run reads as
+// a handful of "what happened, and how long did it take" blocks instead of
+// one undifferentiated wall of events.
+//
+// Their visualizer anchors each sequence on a USER turn. Our brain feed does
+// NOT carry a user-turn marker on every runtime (a live Claude Code window is
+// TOOL_CALL / TOOL_RESULT / MESSAGE / THINKING with no USER row), and it
+// interleaves concurrent sessions in one chronological stream. So we anchor on
+// what every event does carry: its session. One block per agent run, ordered
+// by most-recent activity, rows inside kept newest-first. Where a runtime DOES
+// emit USER rows, each one starts a new block within its session, which
+// reproduces the visualizer's per-turn grouping exactly.
+//
+// Grouping is presentation-only: every row is rendered exactly once, in the
+// same markup, and a feed with a single session degrades to one block.
+
+function _brainSeqDuration(ms) {
+  if (!isFinite(ms) || ms < 0) return '';
+  var sec = Math.floor(ms / 1000);
+  if (sec < 1) return '<1s';
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ' + (sec % 60) + 's';
+  var hr = Math.floor(min / 60);
+  return hr + 'h ' + (min % 60) + 'm';
+}
+
+function _brainSeqTime(ev) {
+  try { return ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0; }
+  catch (e) { return 0; }
+}
+
+function toggleBrainSequence(el) {
+  var body = el && el.nextElementSibling;
+  if (!body) return;
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  var chev = el.querySelector('.brain-seq-chevron');
+  if (chev) chev.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+
+// Human label for one block: the runtime + short session id, so a feed mixing
+// Claude Code with Antigravity says which is which.
+function _brainSeqLabel(ev) {
+  var sid = (ev && (ev.sessionId || ev.src)) || '';
+  var rt = 'openclaw', native = sid;
+  var i = sid.indexOf(':');
+  if (i > 0) {
+    var pfx = sid.slice(0, i).toLowerCase();
+    if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { rt = pfx; native = sid.slice(i + 1); }
+  }
+  var label = (_CM_RT_LABEL && _CM_RT_LABEL[rt]) || rt;
+  return label + ' \u00b7 ' + (native || '?').slice(0, 8);
+}
+
+function _brainGroupSequences(rows) {
+  if (!rows || !rows.length) return '';
+  // Bucket by session, preserving newest-first order inside each bucket. A
+  // USER row (runtimes that emit one) starts a fresh block within its session.
+  var order = [], buckets = {}, turnOf = {};
+  rows.forEach(function(row) {
+    var ev = row.ev || {};
+    var sess = (ev.sessionId || ev.src || 'unknown');
+    if (turnOf[sess] === undefined) turnOf[sess] = 0;
+    var key = sess + '#' + turnOf[sess];
+    if (!buckets[key]) { buckets[key] = []; order.push(key); }
+    buckets[key].push(row);
+    // The feed is newest-first, so rows ABOVE a USER row are that turn's
+    // responses: the USER row CLOSES its turn, and everything older belongs
+    // to the previous one.
+    if ((ev.type || '') === 'USER') turnOf[sess]++;
+  });
+  // A single bucket adds nothing but chrome — render flat (also the exact
+  // pre-sequence output, so one-session feeds are unchanged).
+  if (order.length < 2) return rows.map(function(r) { return r.html; }).join('');
+
+  // Only wrap runs with real substance. A live box emits a lot of one-shot
+  // sessions (a single OpenClaw LOG line, <1s); giving each of those a block
+  // header buried the feed under more chrome than content — strictly worse
+  // than the flat wall it replaced. Those render bare, exactly as before.
+  var BLOCK_MIN_EVENTS = 3;
+  var blocked = order.filter(function(k) { return buckets[k].length >= BLOCK_MIN_EVENTS; });
+  if (!blocked.length) return rows.map(function(r) { return r.html; }).join('');
+
+  var out = _brainSwimlane(blocked, buckets);
+  order.forEach(function(key) {
+    var g = buckets[key];
+    if (g.length < BLOCK_MIN_EVENTS) {
+      out += g.map(function(r) { return r.html; }).join('');
+      return;
+    }
+    var newest = _brainSeqTime(g[0].ev);
+    var oldest = _brainSeqTime(g[g.length - 1].ev);
+    var dur = _brainSeqDuration(newest - oldest);
+    var steps = g.length;
+    var meta = steps + ' event' + (steps === 1 ? '' : 's') + (dur ? ' \u00b7 \u23f1 ' + dur : '');
+    out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '">'
+        +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
+        +  '<span class="brain-seq-chevron">\u203a</span>'
+        +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
+        +  '<span class="brain-seq-meta">' + escHtml(meta) + '</span>'
+        +  '</div>'
+        +  '<div class="brain-seq-body">'
+        +  g.map(function(r) { return r.html; }).join('')
+        +  '</div></div>';
+  });
+  return out;
+}
+
+// ── Session swimlane ─────────────────────────────────────────────────────
+// The Brain Visualizer's "proportional timeline": a bird's-eye strip where
+// every run is drawn against real wall-clock time, so idle gaps and overlaps
+// are visible at a glance. Adapted to our data — the feed carries no per-turn
+// anchor but does carry a session per event, so each lane is one agent run.
+// Answers the question the density chart can't: WHICH runs were going, WHEN,
+// and did they overlap. Clicking a lane jumps to that run's block.
+
+function _brainSeqDomId(key) {
+  var h = 0;
+  for (var i = 0; i < key.length; i++) { h = ((h << 5) - h + key.charCodeAt(i)) | 0; }
+  return 'brain-seq-' + Math.abs(h).toString(36);
+}
+
+function jumpToBrainSequence(domId) {
+  var el = document.getElementById(domId);
+  if (!el) return;
+  var body = el.querySelector('.brain-seq-body');
+  var head = el.querySelector('.brain-seq-head');
+  if (body && body.style.display === 'none' && head) toggleBrainSequence(head);
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  el.classList.add('brain-seq-flash');
+  setTimeout(function() { el.classList.remove('brain-seq-flash'); }, 1400);
+}
+
+function _brainSwimlane(order, buckets) {
+  var spans = [];
+  var min = Infinity, max = -Infinity;
+  order.forEach(function(key) {
+    var g = buckets[key];
+    var end = _brainSeqTime(g[0].ev);
+    var start = _brainSeqTime(g[g.length - 1].ev);
+    if (!start || !end) return;
+    if (start < min) min = start;
+    if (end > max) max = end;
+    spans.push({key: key, start: start, end: end, n: g.length, ev: g[0].ev});
+  });
+  if (spans.length < 2 || !isFinite(min) || max <= min) return '';
+  var total = max - min;
+  var rows = spans.map(function(sp) {
+    var left = ((sp.start - min) / total) * 100;
+    var width = Math.max(1.5, ((sp.end - sp.start) / total) * 100);
+    if (left + width > 100) width = 100 - left;
+    var col = brainSourceColor(sp.ev.source || sp.ev.src || 'main');
+    var title = _brainSeqLabel(sp.ev) + ' \u00b7 ' + sp.n + ' events \u00b7 '
+              + _brainSeqDuration(sp.end - sp.start);
+    return '<div class="brain-lane" onclick="jumpToBrainSequence(\'' + _brainSeqDomId(sp.key) + '\')" title="'
+         + escHtml(title) + '">'
+         + '<span class="brain-lane-name">' + escHtml(_brainSeqLabel(sp.ev)) + '</span>'
+         + '<span class="brain-lane-track">'
+         + '<span class="brain-lane-bar" style="left:' + left.toFixed(2) + '%;width:'
+         + width.toFixed(2) + '%;background:' + col + ';"></span>'
+         + '</span></div>';
+  }).join('');
+  var span = _brainSeqDuration(total);
+  return '<div class="brain-swimlane">'
+       + '<div class="brain-swimlane-head">' + escHtml(t('brain.swimlane_title', null, 'Runs over time'))
+       + '<span class="brain-swimlane-span">' + escHtml(span ? 'spanning ' + span : '') + '</span></div>'
+       + rows + '</div>';
 }
 
 // Reasoning Chain Viewer (GH #565)
@@ -6854,205 +7084,6 @@ function _buildSourcesList(events) {
   return sources;
 }
 
-// ── LLM Context Inspector ─────────────────────────────────────────────────
-async function loadContextInspector() {
-  try {
-    // Fetch overview for model + token info
-    var ov = await fetchJsonWithTimeout('/api/overview', 5000).catch(function(){return {};});
-    // Fetch brain history for compaction events + turn count
-    var brain = await fetchJsonWithTimeout('/api/brain-history?limit=300', 8000).catch(function(){return {events:[]};});
-    // Skills header token count. Prefer the OSS↔cloud-shared
-    // `skillHeaderTokens` now exposed by /api/overview + the snapshot
-    // (2026-05-23 OSS↔cloud parity fix) so both sides render the same
-    // value. We only need to hit /api/skills when the daemon is too
-    // old to publish that field AND we're not in cloud (where the
-    // endpoint is 410 Gone). Cloud mode without the field falls back
-    // to an empty stub — the bar then uses the contextWindow*0.008
-    // approximation instead of returning a misleading 1.6K.
-    var skills;
-    if (typeof ov.skillHeaderTokens === 'number') {
-      skills = {skills:[], summary:{total_header_tokens: ov.skillHeaderTokens}};
-    } else if (window.CLOUD_MODE) {
-      skills = {skills:[], summary:{}};
-    } else {
-      skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
-    }
-
-    var contextWindow = ov.contextWindow || 200000;
-    // Prefer `currentContextTokens` (the latest assistant turn's actual
-    // input_tokens, capped naturally at the model's context window) over
-    // `mainTokens` (cumulative session total, which can exceed the
-    // window and gave the gauge a misleading "204K/200K (100%)" reading).
-    // Falls back to mainTokens for daemons older than the field.
-    var mainTokens = ov.currentContextTokens || ov.mainTokens || 0;
-    var model = ov.model || 'unknown';
-    // brain may be either {events:[...]} (legacy/local_store) or
-    // {_source:"cache", events_blob:"..."} (cache hit on cloud). Use the
-    // async unwrapper so the cloud-injected decryptBlob can decode the
-    // ciphertext when CLOUD_MODE+enc-key are both available.
-    var events = await unwrapListAsync(brain, 'events', 'events_blob');
-
-    // Context window usage bar
-    var pct = contextWindow > 0 ? Math.min(100, Math.round(mainTokens / contextWindow * 100)) : 0;
-    var usageFill = document.getElementById('ctx-usage-fill');
-    if (usageFill) usageFill.style.width = pct + '%';
-    var usageText = document.getElementById('ctx-usage-text');
-    if (usageText) usageText.textContent = _fmtTokens(mainTokens) + ' / ' + _fmtTokens(contextWindow) + ' tokens (' + pct + '%)';
-    var windowMax = document.getElementById('ctx-window-max');
-    if (windowMax) windowMax.textContent = _fmtTokens(contextWindow);
-    var threshold = document.getElementById('ctx-compact-threshold');
-    if (threshold) threshold.textContent = t("app.compaction_at", null, "Compaction at ~") + _fmtTokens(Math.round(contextWindow * 0.8));
-
-    // Stats cards
-    var turns = events.filter(function(e){return e.type === 'USER';}).length;
-    var compactions = events.filter(function(e){return e.type === 'CONTEXT' && (e.detail||'').indexOf('Compact') >= 0;}).length;
-    var el;
-    el = document.getElementById('ctx-total-turns'); if (el) el.textContent = turns;
-    el = document.getElementById('ctx-compactions'); if (el) el.textContent = compactions;
-    el = document.getElementById('ctx-model-name'); if (el) { el.textContent = model.split('/').pop(); el.style.fontSize = model.length > 20 ? '14px' : '20px'; }
-
-    // Active model + model mix, scoped to the selected runtime. The overview
-    // model (ov.model) is the node-wide active model — for a non-OpenClaw
-    // runtime that's wrong (e.g. it showed claude-opus-4-7 for Codex, which
-    // actually ran gpt-5.4). Pull the per-runtime attribution: the MOST-USED
-    // model becomes the "active" one, the rest are listed with % of turns
-    // (founder spec 2026-06-04). /api/model-attribution honours ?runtime=.
-    (function _ctxModelMix() {
-      var mixEl = document.getElementById('ctx-model-mix');
-      var nameEl = document.getElementById('ctx-model-name');
-      var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-      var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
-      fetch('/api/model-attribution' + _q).then(function (r) { return r.json(); }).then(function (ma) {
-        var models = (ma && ma.models) || [];
-        var total = (ma && ma.total_turns) || models.reduce(function (s, m) { return s + (m.turns || 0); }, 0);
-        if (!models.length || !total) {
-          if (mixEl) mixEl.style.display = 'none';
-          // A specific runtime with no model data must NOT leak the node-wide
-          // model (Codex showed claude-opus-4-7 for this reason). Show a dash.
-          if (_rt && _rt !== 'all' && nameEl) {
-            nameEl.textContent = '—';
-            nameEl.style.fontSize = '20px';
-            nameEl.title = 'No model usage recorded for ' + _rt + ' yet';
-          }
-          return;
-        }
-        // most-used first
-        models = models.slice().sort(function (a, b) { return (b.turns || 0) - (a.turns || 0); });
-        var top = (ma.primary_model && ma.primary_model !== '--') ? ma.primary_model : models[0].model;
-        if (nameEl) {
-          var shortTop = String(top).replace('anthropic/', '').replace('openai/', '').split('/').pop();
-          nameEl.textContent = shortTop;
-          nameEl.style.fontSize = shortTop.length > 20 ? '14px' : '20px';
-          nameEl.title = top + ' — most-used model for ' + (_rt === 'all' ? 'all runtimes' : _rt);
-        }
-        if (!mixEl) return;
-        // List the OTHER models with % of turns (skip the primary already shown above).
-        var others = models.filter(function (m) { return m.model !== top; });
-        if (!others.length) { mixEl.style.display = 'none'; return; }
-        var html = '';
-        others.slice(0, 4).forEach(function (m) {
-          var pct = total > 0 ? (m.turns / total * 100) : 0;
-          var nm = String(m.model || '').replace('anthropic/', '').replace('openai/', '').split('/').pop();
-          html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:10px;color:var(--text-muted);margin:2px 0;">'
-            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(m.model || '') + '">' + escHtml(nm) + '</span>'
-            + '<span style="flex-shrink:0;font-weight:600;color:var(--text-secondary);">' + pct.toFixed(0) + '%</span></div>';
-        });
-        mixEl.innerHTML = html;
-        mixEl.style.display = 'block';
-      }).catch(function () { if (mixEl) mixEl.style.display = 'none'; });
-    })();
-
-    // Context composition breakdown
-    var skillHeaderTokens = (skills.summary || {}).total_header_tokens || 0;
-    var memoryFiles = ov.memoryCount || 0;
-    var memorySize = ov.memorySize || 0;
-    var memoryTokens = Math.round(memorySize / 4); // rough estimate
-
-    // Estimate system prompt sections based on known OpenClaw structure
-    var sections = [
-      {name: '## Tooling', tokens: Math.round(contextWindow * 0.015), color: '#3b82f6', desc: 'Tool list + descriptions'},
-      {name: '## Safety', tokens: 120, color: '#ef4444', desc: 'Safety guardrails'},
-      {name: '## Skills', tokens: skillHeaderTokens || Math.round(contextWindow * 0.008), color: '#f59e0b', desc: (skills.skills||[]).length + ' skill headers always loaded'},
-      {name: '## Memories', tokens: 200, color: '#8b5cf6', desc: 'Memory tool guidance'},
-      {name: '## Workspace', tokens: 150, color: '#06b6d4', desc: 'Working directory + docs path'},
-      {name: '## Heartbeats', tokens: 80, color: '#10b981', desc: 'Heartbeat prompt'},
-      {name: 'Bootstrap: SOUL.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.2)) : 750, color: '#e879f9', desc: 'Agent identity + personality'},
-      {name: 'Bootstrap: AGENTS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.15)) : 500, color: '#c084fc', desc: 'Workspace configuration'},
-      {name: 'Bootstrap: TOOLS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.1)) : 400, color: '#a78bfa', desc: 'Custom tool instructions'},
-      {name: 'Bootstrap: MEMORY.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.3)) : 1000, color: '#818cf8', desc: 'Persistent agent memory'},
-      {name: 'Tool schemas (JSON)', tokens: Math.round(contextWindow * 0.035), color: '#64748b', desc: 'Hidden but counted in context'},
-      {name: 'Conversation history', tokens: Math.max(0, mainTokens - Math.round(contextWindow * 0.08)), color: '#22c55e', desc: 'Recent messages + tool results'},
-    ];
-
-    var totalSysPrompt = 0;
-    sections.forEach(function(s) { if (s.name.indexOf('Conversation') === -1) totalSysPrompt += s.tokens; });
-    var sysTotalEl = document.getElementById('ctx-sysprompt-total');
-    if (sysTotalEl) sysTotalEl.textContent = '~' + _fmtTokens(totalSysPrompt) + ' tokens (estimated)';
-
-    // Render composition bars
-    var barsEl = document.getElementById('ctx-composition-bars');
-    if (barsEl) {
-      var maxTokens = Math.max.apply(null, sections.map(function(s){return s.tokens;}));
-      var html = '';
-      sections.forEach(function(s) {
-        var barPct = maxTokens > 0 ? Math.max(1, Math.round(s.tokens / maxTokens * 100)) : 0;
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-        html += '<div style="min-width:160px;font-size:11px;color:var(--text-secondary);white-space:nowrap;">' + escHtml(s.name) + '</div>';
-        html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:4px;overflow:hidden;border:1px solid var(--border);">';
-        html += '<div style="height:100%;width:' + barPct + '%;background:' + s.color + ';border-radius:4px;transition:width 0.5s;"></div>';
-        html += '</div>';
-        html += '<div style="min-width:70px;text-align:right;font-size:11px;color:var(--text-muted);font-family:monospace;">' + _fmtTokens(s.tokens) + '</div>';
-        html += '</div>';
-      });
-      barsEl.innerHTML = html;
-    }
-
-    // Render system prompt sections (expandable)
-    var secEl = document.getElementById('ctx-sysprompt-sections');
-    if (secEl) {
-      var html = '';
-      sections.filter(function(s){return s.name.indexOf('Conversation') === -1;}).forEach(function(s) {
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
-        html += '<span style="width:8px;height:8px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>';
-        html += '<span style="font-size:12px;color:var(--text-primary);min-width:160px;">' + escHtml(s.name) + '</span>';
-        html += '<span style="font-size:11px;color:var(--text-muted);flex:1;">' + escHtml(s.desc) + '</span>';
-        html += '<span style="font-size:11px;color:var(--text-secondary);font-family:monospace;">' + _fmtTokens(s.tokens) + '</span>';
-        html += '</div>';
-      });
-      secEl.innerHTML = html;
-    }
-
-    // Compaction log
-    var compactionEvents = events.filter(function(e) {
-      return e.type === 'CONTEXT' && (e.detail||'').toLowerCase().indexOf('compact') >= 0;
-    });
-    var logEl = document.getElementById('ctx-compaction-log');
-    if (logEl) {
-      if (compactionEvents.length === 0) {
-        logEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No compactions yet. Context hasn\'t exceeded the ~' + _fmtTokens(Math.round(contextWindow * 0.8)) + ' threshold.</div>';
-      } else {
-        var html = '';
-        compactionEvents.forEach(function(ev) {
-          html += '<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;">';
-          html += '<span style="color:var(--text-muted);margin-right:8px;">' + formatBrainTime(ev.time) + '</span>';
-          html += '<span style="color:#f59e0b;font-weight:600;">Compaction</span> ';
-          html += '<span style="color:var(--text-secondary);">' + escHtml((ev.detail||'').substring(0, 200)) + '</span>';
-          html += '</div>';
-        });
-        logEl.innerHTML = html;
-      }
-    }
-  } catch(e) {
-    var barsEl = document.getElementById('ctx-composition-bars');
-    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-error);font-size:12px;">' + t("app.error_loading_context_data", null, "Error loading context data") + ': ' + escHtml(String(e)) + '</div>';
-  }
-}
-
-function _fmtTokens(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-  return String(n);
-}
 
 // ── Advisor: natural-language Q&A over the agent's recent activity ─────────
 async function advisorProbe() {
@@ -8799,6 +8830,12 @@ function renderLogs(elId, lines) {
 }
 
 function escHtml(s) { s=String(s||''); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Embed a JS string literal inside a double-quoted inline handler
+// (onclick="fn(...)"). JSON.stringify emits double quotes, which TERMINATE
+// the surrounding attribute and silently truncate the handler (the Context
+// usage session chips shipped broken exactly this way). &quot;-encode so the
+// HTML parser hands the handler a proper string literal.
+function attrJsStr(v) { return JSON.stringify(String(v == null ? '' : v)).replace(/"/g, '&quot;'); }
 
 async function viewFile(path) {
   var viewer = document.getElementById('file-viewer');
@@ -8926,13 +8963,12 @@ function _cmClientFilterRt(rt) {
 // Tabs whose data is a cross-runtime AGGREGATE (merged server/snapshot-side):
 // the switcher can't scope them client-side yet, so picking a specific runtime
 // shows an honest "all runtimes" note rather than pretending the numbers are
-// runtime-specific. (Per-runtime aggregation is a follow-up.)
-// Tool catalog + Context economics now filter per-runtime (snapshot byRuntime
-// slice + cloud interceptor), so they're no longer aggregate-only tabs.
-// context (LLM Context) still pending per-runtime slicing.
-var _CM_RT_AGGREGATE = {
-  context: 1
-};
+// runtime-specific. EMPTY as of the LLM Context → Context usage merge
+// (2026-08-01): every remaining tab either filters for real (server runtime=
+// param / snapshot byRuntime slice) or is an explicitly node-wide concept in
+// _CM_RT_NODEWIDE. Adding a tab here means shipping a view that silently
+// aggregates — do the per-runtime slicing instead.
+var _CM_RT_AGGREGATE = {};
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
 // memory/skills are workspace-level, security is machine posture, self-evolve is
 // node findings. The runtime selector simply does not apply to these.
@@ -8979,8 +9015,11 @@ var _CM_RT_CAPS = {
 // declares (at least) one capability that enables it.
 var _CM_CAP_TABS = {
   SESSIONS:    ['overview','dives'],
-  EVENTS:      ['brain','models','context','tracing','turn-anatomy'],
-  COST:        ['cost','context-economics'],
+  // context-economics moved COST → EVENTS with the LLM Context merge: the
+  // utilization gauge reads per-turn usage tokens (an EVENTS concern), so
+  // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
+  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics'],
+  COST:        ['cost'],
   SUBAGENTS:   ['subagents'],
   CRONS:       ['crons'],
   SKILLS:      ['skills'],
@@ -8992,7 +9031,7 @@ var _CM_CAP_TABS = {
 var _CM_NODE_TABS = ['alerts','notifications','security'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
-var _CM_RT_ALL_TABS = ['flow','brain','models','context','tracing','turn-anatomy',
+var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
   'context-economics','approvals','alerts','cost','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -9743,10 +9782,17 @@ function _cmShowRuntimePaywall(harness, label) {
     + 'display:flex;align-items:center;justify-content:center;padding:24px;';
 
   // The plan ladder, mirroring the LIVE clawmetry.com/pricing page
-  // (verified 2026-06-09: Free $0 / Starter $9 / Pro $29 / self-hosted via
-  // license key / Enterprise; annual includes the desk device). Prices live
-  // in this ONE object so a reprice is a one-line change here plus the
-  // pricing page. Plain words for someone who has never compared plans.
+  // (Free $0 / Starter $9 / Pro $19 / self-hosted via license key /
+  // Enterprise; annual includes the desk device). Prices live in this ONE
+  // object so a reprice is a one-line change here plus the pricing page.
+  // Plain words for someone who has never compared plans.
+  //
+  // SOURCE OF TRUTH is the cloud Stripe catalog (cloud routes/api.py
+  // _SUB_PRICING: starter 900/9000, pro 1900/19000 cents). This comment
+  // said "Pro $29" for weeks after the values were correctly repriced to
+  // $19. Anyone trusting the prose over the code would have "fixed" a
+  // working paywall back to a price no checkout has ever charged. Read
+  // _SUB_PRICING before touching either.
   var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$19', proYr: '$190' };
   function _tierRow(accent, name, price, desc) {
     return '<div style="margin-bottom:10px;padding:11px 14px;border:1px solid ' + accent + ';'
@@ -16000,7 +16046,7 @@ async function loadSubagents() {
       var isExpanded = _subagentsExpanded[sid] !== false;
       var indent = depth > 0 ? 'padding-left:' + (depth * 22 + 12) + 'px;' : 'padding-left:12px;';
       var toggleBtn = hasChildren
-        ? '<button onclick="event.stopPropagation();_saToggle(' + JSON.stringify(sid) + ')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-muted);padding:0 4px 0 0;line-height:1;min-width:16px;">' + (isExpanded ? '▼' : '▶') + '</button>'
+        ? '<button onclick="event.stopPropagation();_saToggle(' + attrJsStr(sid) + ')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-muted);padding:0 4px 0 0;line-height:1;min-width:16px;">' + (isExpanded ? '▼' : '▶') + '</button>'
         : '<span style="display:inline-block;min-width:16px;"></span>';
       var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
       var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
@@ -17750,7 +17796,7 @@ function loadFlowRuns() {
         var ch = r.channel || '—';
         return ''
           + '<tr style="border-top:1px solid var(--border-secondary,#2a2a4a);cursor:pointer;" '
-          +     'onclick="showFlowRunDetail(' + JSON.stringify(sid).replace(/"/g, '&quot;') + ')" '
+          +     'onclick="showFlowRunDetail(' + attrJsStr(sid) + ')" '
           +     'onmouseover="this.style.background=\'var(--bg-tertiary,#0d0d1f)\'" '
           +     'onmouseout="this.style.background=\'\'">'
           + '<td style="padding:8px 14px;font-family:monospace;color:var(--text-primary);">' + sidShort + '</td>'
@@ -22380,14 +22426,36 @@ async function bootDashboard() {
       return;
     }
     if (authData.authRequired && !authData.valid) {
-      // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
-      // so we measure fresh-install rejects, not session timeouts.
-      if (_shouldPingAuthFailFirstLoad(stored, authData)) {
-        _pingAuthFailFirstLoad();
+      // Stored token may simply be stale (gateway token rotated on disk).
+      // Retry the zero-click loopback bootstrap before walling the user --
+      // the server hands the fresh token to provably-local browsers.
+      var recovered = false;
+      try {
+        var dtRes = await _withTimeout(fetch('/api/auth/detected-token'), 3000, 'auth-bootstrap');
+        if (dtRes && dtRes.ok) {
+          var dt = await dtRes.json();
+          if (dt && dt.token) {
+            var reRes = await _withTimeout(
+              fetch('/api/auth/check?token=' + encodeURIComponent(dt.token)), 3000, 'auth');
+            var re = await reRes.json();
+            if (re && re.valid) {
+              localStorage.setItem('clawmetry-token', dt.token);
+              recovered = true;
+            }
+          }
+        }
+      } catch (e) { /* fall through to the manual login wall */ }
+      if (!recovered) {
+        // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
+        // so we measure fresh-install rejects, not session timeouts.
+        if (_shouldPingAuthFailFirstLoad(stored, authData)) {
+          _pingAuthFailFirstLoad();
+        }
+        document.getElementById('login-overlay').style.display = 'flex';
+        _safeFinishBoot();
+        return;
       }
-      document.getElementById('login-overlay').style.display = 'flex';
-      _safeFinishBoot();
-      return;
+      document.getElementById('login-overlay').style.display = 'none';
     }
   } catch(e) { /* auth check hung -- boot anyway, safety timeout will fire */ }
 
@@ -23118,7 +23186,7 @@ function openSwimlaneAddLane() {
       var label = s.displayName || s.title || s.subject || _swimlaneShortSid(sid);
       var tok = Number(s.total_tokens || 0);
       var tokStr = tok > 1e6 ? (tok / 1e6).toFixed(1) + 'M' : (tok > 1e3 ? (tok / 1e3).toFixed(0) + 'K' : tok);
-      html += '<div class="swimlane-add-row' + (already ? ' is-added' : '') + '" onclick="' + (already ? '' : 'swimlaneAddLane(' + JSON.stringify(sid) + ')') + '">';
+      html += '<div class="swimlane-add-row' + (already ? ' is-added' : '') + '" onclick="' + (already ? '' : 'swimlaneAddLane(' + attrJsStr(sid) + ')') + '">';
       html += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
       html += '<span class="swimlane-add-name" title="' + escHtml(sid) + '">' + escHtml(label) + '</span>';
       html += '<span class="swimlane-add-tok">' + tokStr + ' tok</span>';
@@ -23222,7 +23290,7 @@ async function loadSwimlane() {
         var ph = '<span style="font-size:11px;color:var(--text-muted);margin-right:6px;">Lane:</span>';
         lanes.forEach(function (sid) {
           ph += '<button type="button" class="swimlane-single-tab' + (sid === activeSid ? ' active' : '')
-            + '" onclick="window._swimlaneSingleSid=' + JSON.stringify(sid) + ';loadSwimlane()">'
+            + '" onclick="window._swimlaneSingleSid=' + attrJsStr(sid) + ';loadSwimlane()">'
             + escHtml(_swimlaneSessionLabel(sid)) + '</button>';
         });
         sp.innerHTML = ph;
@@ -23312,7 +23380,7 @@ function _swimlaneRenderLane(lm, ranked, rank) {
   h += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
   h += '<span class="swimlane-title" title="' + escHtml(lm.sid) + '">' + escHtml(lm.label) + '</span>';
   if (lm.isLive) h += '<span class="swimlane-live-dot" title="active in the last 60s"></span>';
-  h += '<span class="swimlane-x" title="Remove lane" onclick="swimlaneRemoveLane(' + JSON.stringify(lm.sid) + ')">✕</span>';
+  h += '<span class="swimlane-x" title="Remove lane" onclick="swimlaneRemoveLane(' + attrJsStr(lm.sid) + ')">✕</span>';
   h += '</div>';
   h += '<div class="swimlane-model">' + escHtml(lm.model || 'model unknown') + '</div>';
   h += '<div class="swimlane-stats">';

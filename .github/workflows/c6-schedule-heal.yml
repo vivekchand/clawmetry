@@ -57,6 +57,13 @@ on:
     - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
   workflow_dispatch:
 
+# Cancel in-progress push runs when a newer push arrives so only the latest
+# push run executes. Uses a separate group per event type so schedule and
+# workflow_dispatch runs are never cancelled by a push event.
+concurrency:
+  group: c6-schedule-heal-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   issues: write

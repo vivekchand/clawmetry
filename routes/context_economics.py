@@ -55,22 +55,29 @@ def api_context_economics():
         (the UI session picker / clickable chips). Compactions + overflow
         flags are computed workspace-wide; the route filters them to the
         picked session here so the chips/list stay coherent with the gauge.
+      * ``runtime`` — scope everything to one runtime's sessions (the
+        global runtime switcher). Server-side, same prefix contract as the
+        snapshot's ``contextEconomics.byRuntime`` slice on cloud.
       * ``limit`` — max utilization points (<=2000, default 400).
 
     The ``summary`` block is a small derived rollup the tab paints as chips:
     compaction count, overflow count, total tokens reclaimed, peak window %.
     """
     session_id = (request.args.get("session_id") or "").strip() or None
+    runtime = (request.args.get("runtime") or "").strip() or None
+    if runtime and runtime.lower() == "all":
+        runtime = None
     try:
         limit = max(1, min(2000, int(request.args.get("limit", 400))))
     except (TypeError, ValueError):
         limit = 400
 
-    data = _coerce(_ls_call(
-        "query_context_economics",
-        session_id=session_id,
-        util_limit=limit,
-    ))
+    kwargs = {"session_id": session_id, "util_limit": limit}
+    if runtime:
+        # Only sent when set: an older daemon wheel without the kwarg
+        # 400s the proxy call and _ls_call falls back to a direct read.
+        kwargs["runtime"] = runtime
+    data = _coerce(_ls_call("query_context_economics", **kwargs))
     utilization = data.get("utilization") or []
     compactions = data.get("compactions") or []
     overflow_sessions = data.get("overflow_sessions") or []

@@ -117,7 +117,9 @@ CANONICAL_TABS = [
     "approvals",
     "alerts",
     "notifications",
-    "context",
+    # "context" (LLM Context) merged into "context-economics" (Context usage)
+    # 2026-08-01: the old tab rendered hardcoded token estimates node-wide.
+    # switchTab('context') aliases to context-economics for old deep links.
     "limits",
     "clusters",
     "history",
