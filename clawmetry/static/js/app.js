@@ -3664,6 +3664,51 @@ var _evalsKeyCfg = null;
 async function loadEvalsJudgeCard() {
   var el = document.getElementById('evals-judge-body');
   if (!el) return;
+  // Hosted dashboard: the judge (and its API key) lives on the NODE, never
+  // here. /api/evaluators on cloud reflects the empty container, so the card
+  // used to read "API key: not set" with a live-looking key form that saved
+  // to the container's ephemeral disk instead of the node (founder report
+  // 2026-08-01, the "fake screen"). Render the node's REAL status from the
+  // encrypted snapshot and never render the key form on cloud.
+  if (window.CLOUD_MODE) {
+    var snapJudge = null;
+    try {
+      var _sp = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
+      snapJudge = _sp && _sp.evals && _sp.evals.judge;
+    } catch (e) {}
+    if (!snapJudge) {
+      el.innerHTML = '<span style="color:var(--text-muted);">' +
+        t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+      return;
+    }
+    var snapRejected = snapJudge.key_present && snapJudge.last_error === 'auth';
+    var chtml = '';
+    if (!snapJudge.enabled) {
+      chtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
+        t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+    } else if (snapRejected) {
+      chtml += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_key_rejected_node", null, "The judge key saved on your machine was rejected by the provider. Replace it there to resume scoring.") + '</div>';
+    } else if (snapJudge.key_present) {
+      chtml += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
+    } else {
+      chtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_needs_key_node", null, "No judge API key on your machine yet, so scoring is off.") + '</div>';
+    }
+    chtml += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;font-size:12px;">';
+    chtml += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(snapJudge.model || '') + '</code></span>';
+    chtml += '<span><span style="color:var(--text-muted);">' + t("evals.judge_key", null, "API key") + ':</span> ' +
+      (snapRejected ? '<span style="color:#ef4444;font-weight:600;">' + t("evals.key_rejected", null, "rejected") + '</span>'
+        : snapJudge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
+        : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
+    chtml += '</div>';
+    chtml += '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.6;">' +
+      t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+      '</div>';
+    el.innerHTML = chtml;
+    return;
+  }
   var meta = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
   var judge = meta && meta.judge;
   if (!judge) {
@@ -3992,7 +4037,42 @@ async function openEvalRubricModal() {
   var pathEl = document.getElementById('eval-rubric-path');
   if (!modal || !ta) return;
   modal.style.display = 'flex';
-  loadEvalKeyStatus();
+  // Hosted dashboard: the key row would save to the cloud container, not the
+  // node the judge runs on (same "fake screen" as the Evals card — founder
+  // report 2026-08-01). Replace it with guidance and show the node's real
+  // status from the snapshot. This supersedes the cloud-side
+  // cm-cloud-evals-keynote patch, which only knew this modal's ids.
+  if (window.CLOUD_MODE) {
+    var keyInp = document.getElementById('eval-key-input');
+    var keyRow = keyInp && keyInp.parentNode;
+    if (keyRow && !keyRow.__cmGated) {
+      keyRow.__cmGated = 1;
+      keyRow.innerHTML = '<div style="font-size:11px;color:var(--text-muted);line-height:1.5;">' +
+        t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+        '</div>';
+    }
+    var keySt = document.getElementById('eval-key-status');
+    if (keySt) {
+      keySt.textContent = t("evals.key_managed_on_node", null, "managed on your machine");
+      keySt.style.color = 'var(--text-muted)';
+      try {
+        var _msp = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
+        var mj = _msp && _msp.evals && _msp.evals.judge;
+        if (mj && mj.key_present && mj.last_error === 'auth') {
+          keySt.textContent = t("evals.key_rejected_on_node", null, "key on your machine was rejected");
+          keySt.style.color = '#ef4444';
+        } else if (mj && mj.key_present) {
+          keySt.textContent = t("evals.key_set_on_node", null, "✓ key set on your machine");
+          keySt.style.color = '#22c55e';
+        } else if (mj) {
+          keySt.textContent = t("evals.key_missing_on_node", null, "no key on your machine yet");
+          keySt.style.color = '#f59e0b';
+        }
+      } catch (e) {}
+    }
+  } else {
+    loadEvalKeyStatus();
+  }
   if (status) status.textContent = t("app.loading", null, "Loading...");
   try {
     var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
@@ -4011,6 +4091,7 @@ async function openEvalRubricModal() {
 // Judge API key: presence-only status (never the value) so the user knows
 // whether scoring can run, and can paste a key to enable it without an env var.
 async function loadEvalKeyStatus() {
+  if (window.CLOUD_MODE) return;  // hosted: status comes from the snapshot, form is gated
   var el = document.getElementById('eval-key-status');
   var sel = document.getElementById('eval-key-provider');
   if (!el) return;
