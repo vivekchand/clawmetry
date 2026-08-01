@@ -5687,6 +5687,147 @@ def has_runtimes(runtimes) -> bool:
         return False
 
 
+def missing_features(features) -> list:
+    """Row-level complement of :func:`has_features`: return the subset of
+    ``features`` NOT granted by the resolved entitlement.
+
+    Where the plural fold in :func:`has_features` collapses a bundle to ONE
+    boolean ("does the whole set pass?"), this preserves the per-item detail
+    so a paywall diagnostics tile ("you're missing these -- upgrade to unlock")
+    can bind the exact denial list off ONE scalar without walking the
+    :func:`has_batch` matrix and filtering on ``has=False`` client-side.
+    Symmetric to :func:`has_features` at row level in the same way
+    :func:`has_batch` is symmetric at envelope level.
+
+    Rules, all deliberate:
+
+    * Empty / ``None`` iterable / non-iterable input -- returns ``[]``. Nothing
+      to check, nothing missing. (:func:`has_features` collapses these to
+      ``False`` for the boolean-gate seat; the complement here is naturally
+      empty because there is no bundle to invert.)
+    * Grace pass-through: while ``ent.grace`` is ``True`` and every item is a
+      known id, each :func:`has_feature` reports ``True`` so the returned list
+      is ``[]``. Wiring this into a diagnostics tile today surfaces NOTHING
+      (matches the ``has_features=True`` grace answer on the same bundle).
+    * Unknown / non-string / empty-string ids -- **included** in the missing
+      list in their canonicalised form (``.strip().lower()`` for strings;
+      ``""`` for non-strings). The singular :func:`has_feature` fails-closed
+      on typos, so the complement fold reflects that: a typo like
+      ``missing_features(["fleet", "Fleeet"])`` in grace returns ``["fleeet"]``
+      (only the typo), surfacing it at the callsite instead of silently
+      reporting a fully-granted bundle.
+    * Order: first-seen; dedup on the canonicalised key so a repeated id (or
+      an equivalent alias for runtimes) collapses to one row.
+
+    Never raises: a delegate blowup logs a warning and returns ``[]`` (matches
+    the "no info to surface" posture; the endpoint fallback carries the same
+    empty-missing shape so a UI wired off this scalar cannot silently render a
+    denial banner on a resolver hiccup).
+    """
+    try:
+        if features is None:
+            return []
+        items = list(features)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Probe the resolver up front: if it blows up we have no idea what's
+    # granted, so we can't report what's missing. Return [] (fail-open on
+    # the diagnostic) rather than marking every id missing off a
+    # false-negative delegate, which would render a spurious denial
+    # banner. Mirrors the endpoint's own fail-closed fallback envelope.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_features(%r) resolver probe failed: %s",
+            features,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for f in items:
+            if isinstance(f, str):
+                fid = f.strip().lower()
+            else:
+                fid = ""
+            if fid in seen:
+                continue
+            seen.add(fid)
+            if not has_feature(f):
+                out.append(fid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_features(%r) failed: %s", features, exc)
+        return []
+
+
+def missing_runtimes(runtimes) -> list:
+    """Row-level complement of :func:`has_runtimes`: return the subset of
+    ``runtimes`` NOT granted by the resolved entitlement.
+
+    Runtime-axis twin of :func:`missing_features`. Delegates to
+    :func:`has_runtime` per item, so the same fail-closed unknown /
+    non-string / empty posture is inherited.
+
+    Alias posture matches the sibling :func:`has_runtimes` scalar
+    exactly: the delegate :func:`has_runtime` does **not** alias-resolve
+    (``has_runtime("claude-code")`` is ``False`` because ``"claude-code"``
+    is not in :data:`ALL_RUNTIMES` after ``strip().lower()``), so an
+    alias input at this scalar layer collapses to "missing" too. Callers
+    who want alias tolerance should canonicalise upstream via
+    :func:`canonical_runtime` (which is what the paired
+    ``/api/entitlement/missing-runtimes`` endpoint does before delegating
+    to this scalar, matching the ``/has-runtimes`` endpoint's own
+    upstream-canonicalise pattern).
+
+    Fold semantics mirror :func:`missing_features` exactly: empty / ``None``
+    iterable / non-iterable input returns ``[]``; grace pass-through returns
+    ``[]`` for fully-known (canonical) bundles; unknown / non-string /
+    empty / alias ids are INCLUDED in the returned list in their
+    ``.strip().lower()`` form; first-seen dedup on that key; never raises.
+    """
+    try:
+        if runtimes is None:
+            return []
+        items = list(runtimes)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Same resolver-probe as :func:`missing_features` -- see rationale
+    # there.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_runtimes(%r) resolver probe failed: %s",
+            runtimes,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for rt in items:
+            if isinstance(rt, str):
+                rid = rt.strip().lower()
+            else:
+                rid = ""
+            if rid in seen:
+                continue
+            seen.add(rid)
+            if not has_runtime(rt):
+                out.append(rid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_runtimes(%r) failed: %s", runtimes, exc)
+        return []
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
