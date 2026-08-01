@@ -3644,135 +3644,6 @@ def api_entitlement_has_channel_count():
         return jsonify(_has_channel_count_fallback(count_raw))
 
 
-def _has_node_count_fallback(count_raw: str) -> dict:
-    """OSS-free / never-5xx shape for ``/api/entitlement/has-node-count``.
-
-    Fail-closed on ``has_node_count`` (matches the sibling
-    ``/api/entitlement/has-feature`` / ``/has-runtime`` / ``/has-channel-count``
-    fallbacks) so a fleet paywall tile that lost the resolver doesn't silently
-    grant a node count that might be over-quota. ``count`` is echoed as
-    ``None`` and ``count_raw`` as the stripped input so a UI can still surface
-    the offending value in a diagnostic tooltip. 10-key envelope, byte-stable
-    with the happy-path branch.
-    """
-    return {
-        "count": None,
-        "count_raw": count_raw,
-        "has_node_count": False,
-        "allowed": False,
-        "required_tier": None,
-        "required_tier_label": None,
-        "required_tier_rank": -1,
-        "current_tier": "oss",
-        "current_tier_rank": 0,
-        "upgrade_required": False,
-    }
-
-
-@bp_entitlement.route("/api/entitlement/has-node-count")
-def api_entitlement_has_node_count():
-    """``GET /api/entitlement/has-node-count?count=<N>`` -- capacity-axis
-    boolean-gate scalar sibling of ``/api/entitlement/has-feature`` /
-    ``/api/entitlement/has-runtime`` / ``/api/entitlement/has-channel-count``.
-
-    Returns ONE boolean (``has_node_count``) plus the surrounding tier
-    envelope (``current_tier``, ``required_tier``, ``upgrade_required``) so a
-    paywall tile on the fleet surface can bind ``allowed`` directly off this
-    URL without parsing the full ``/api/entitlement/required-tier?nodes=<N>``
-    body. Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
-    rollout state) ``has_node_count`` reports ``True`` for every finite count,
-    so wiring this into a gate today changes NO current behavior.
-
-    Envelope shape (10 keys, byte-stable across every input branch)::
-
-        {
-          "count": 5,                    # parsed int, null on missing/unparseable/blowup
-          "count_raw": "5",              # stripped raw string echo
-          "has_node_count": True,
-          "allowed": True,               # mirror of has_node_count
-          "required_tier": "cloud_starter",
-          "required_tier_label": "Starter",
-          "required_tier_rank": 1,
-          "current_tier": "oss",
-          "current_tier_rank": 0,
-          "upgrade_required": True,
-        }
-
-    Input semantics:
-
-    * ``?count=`` missing / blank / whitespace / unparseable -- ``count=null``,
-      ``has_node_count=false``, ``required_tier=null``. Never 4xx (matches
-      the never-crash posture of ``/api/entitlement/required-tier`` and
-      ``/api/entitlement/lock-reason`` on their capacity axes).
-    * ``count <= 0`` -- ``has_node_count=true``, ``required_tier="oss"``
-      (trivially satisfied by the free floor -- mirrors
-      :func:`min_tier_for_node_count` and
-      :meth:`Entitlement.allows_node_count`).
-    * Positive int -- ``has_node_count`` reflects the resolver;
-      ``required_tier`` is the cheapest tier admitting ``count`` per
-      :func:`min_tier_for_node_count`.
-
-    Cross-consistency: ``required_tier`` / ``required_tier_label`` /
-    ``required_tier_rank`` agree byte-for-byte with
-    ``/api/entitlement/required-tier?nodes=<N>`` for the same ``count`` so a
-    UI wiring both endpoints for the same paywall tile can't see inconsistent
-    tier state.
-
-    Never 5xx: any resolver blowup collapses to :func:`_has_node_count_fallback`.
-    """
-    count_raw = (request.args.get("count") or "").strip()
-    try:
-        from clawmetry import entitlements as _ent
-
-        try:
-            n = int(count_raw)
-            parsed_ok = True
-        except (TypeError, ValueError):
-            n = None
-            parsed_ok = False
-
-        ent = _ent.get_entitlement()
-        cur_tier = ent.tier
-        cur_rank = _ent.tier_rank(cur_tier)
-
-        if not parsed_ok:
-            return jsonify(
-                {
-                    "count": None,
-                    "count_raw": count_raw,
-                    "has_node_count": False,
-                    "allowed": False,
-                    "required_tier": None,
-                    "required_tier_label": None,
-                    "required_tier_rank": -1,
-                    "current_tier": cur_tier,
-                    "current_tier_rank": cur_rank,
-                    "upgrade_required": False,
-                }
-            )
-
-        has_flag = _ent.has_node_count(n)
-        required = _ent.min_tier_for_node_count(n)
-        req_rank = _ent.tier_rank(required) if required else -1
-        required_label = _ent.tier_label(required) if required else None
-        return jsonify(
-            {
-                "count": n,
-                "count_raw": count_raw,
-                "has_node_count": bool(has_flag),
-                "allowed": bool(has_flag),
-                "required_tier": required,
-                "required_tier_label": required_label,
-                "required_tier_rank": req_rank,
-                "current_tier": cur_tier,
-                "current_tier_rank": cur_rank,
-                "upgrade_required": bool(required) and req_rank > cur_rank,
-            }
-        )
-    except Exception as exc:
-        logger.warning("api_entitlement_has_node_count: error: %s", exc)
-        return jsonify(_has_node_count_fallback(count_raw))
-
 def _has_retention_window_fallback(days_raw: str, unlimited: bool) -> dict:
     """OSS-free / never-5xx shape for ``/api/entitlement/has-retention-window``.
 
@@ -3921,6 +3792,136 @@ def api_entitlement_has_retention_window():
         return jsonify(
             _has_retention_window_fallback(days_raw, unlimited)
         )
+
+
+def _has_node_count_fallback(count_raw: str) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-node-count``.
+
+    Fail-closed on ``has_node_count`` (matches the sibling
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` / ``/has-channel-count``
+    fallbacks) so a fleet paywall tile that lost the resolver doesn't silently
+    grant a node count that might be over-quota. ``count`` is echoed as
+    ``None`` and ``count_raw`` as the stripped input so a UI can still surface
+    the offending value in a diagnostic tooltip. 10-key envelope, byte-stable
+    with the happy-path branch.
+    """
+    return {
+        "count": None,
+        "count_raw": count_raw,
+        "has_node_count": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "upgrade_required": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-node-count")
+def api_entitlement_has_node_count():
+    """``GET /api/entitlement/has-node-count?count=<N>`` -- capacity-axis
+    boolean-gate scalar sibling of ``/api/entitlement/has-feature`` /
+    ``/api/entitlement/has-runtime`` / ``/api/entitlement/has-channel-count``.
+
+    Returns ONE boolean (``has_node_count``) plus the surrounding tier
+    envelope (``current_tier``, ``required_tier``, ``upgrade_required``) so a
+    paywall tile on the fleet surface can bind ``allowed`` directly off this
+    URL without parsing the full ``/api/entitlement/required-tier?nodes=<N>``
+    body. Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) ``has_node_count`` reports ``True`` for every finite count,
+    so wiring this into a gate today changes NO current behavior.
+
+    Envelope shape (10 keys, byte-stable across every input branch)::
+
+        {
+          "count": 5,                    # parsed int, null on missing/unparseable/blowup
+          "count_raw": "5",              # stripped raw string echo
+          "has_node_count": True,
+          "allowed": True,               # mirror of has_node_count
+          "required_tier": "cloud_starter",
+          "required_tier_label": "Starter",
+          "required_tier_rank": 1,
+          "current_tier": "oss",
+          "current_tier_rank": 0,
+          "upgrade_required": True,
+        }
+
+    Input semantics:
+
+    * ``?count=`` missing / blank / whitespace / unparseable -- ``count=null``,
+      ``has_node_count=false``, ``required_tier=null``. Never 4xx (matches
+      the never-crash posture of ``/api/entitlement/required-tier`` and
+      ``/api/entitlement/lock-reason`` on their capacity axes).
+    * ``count <= 0`` -- ``has_node_count=true``, ``required_tier="oss"``
+      (trivially satisfied by the free floor -- mirrors
+      :func:`min_tier_for_node_count` and
+      :meth:`Entitlement.allows_node_count`).
+    * Positive int -- ``has_node_count`` reflects the resolver;
+      ``required_tier`` is the cheapest tier admitting ``count`` per
+      :func:`min_tier_for_node_count`.
+
+    Cross-consistency: ``required_tier`` / ``required_tier_label`` /
+    ``required_tier_rank`` agree byte-for-byte with
+    ``/api/entitlement/required-tier?nodes=<N>`` for the same ``count`` so a
+    UI wiring both endpoints for the same paywall tile can't see inconsistent
+    tier state.
+
+    Never 5xx: any resolver blowup collapses to :func:`_has_node_count_fallback`.
+    """
+    count_raw = (request.args.get("count") or "").strip()
+    try:
+        from clawmetry import entitlements as _ent
+
+        try:
+            n = int(count_raw)
+            parsed_ok = True
+        except (TypeError, ValueError):
+            n = None
+            parsed_ok = False
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+
+        if not parsed_ok:
+            return jsonify(
+                {
+                    "count": None,
+                    "count_raw": count_raw,
+                    "has_node_count": False,
+                    "allowed": False,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "upgrade_required": False,
+                }
+            )
+
+        has_flag = _ent.has_node_count(n)
+        required = _ent.min_tier_for_node_count(n)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "count": n,
+                "count_raw": count_raw,
+                "has_node_count": bool(has_flag),
+                "allowed": bool(has_flag),
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_node_count: error: %s", exc)
+        return jsonify(_has_node_count_fallback(count_raw))
 
 
 @bp_entitlement.route("/api/entitlement/lock-reason")
