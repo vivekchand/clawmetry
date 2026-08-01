@@ -5467,6 +5467,81 @@ def has_channel_count(count) -> bool:
         return False
 
 
+def has_retention_window(days) -> bool:
+    """Boolean-gate scalar: does the CURRENT install admit a ``days`` history
+    window?
+
+    Capacity-axis mirror of :func:`has_feature` / :func:`has_runtime`, wrapping
+    :meth:`Entitlement.allows_retention_window` on the resolved entitlement so
+    the ``retention_days`` capacity axis has the same scalar boolean gate the
+    feature and runtime axes already carry. Sibling of
+    :func:`min_tier_for_retention_window` on the same axis: that one answers
+    "cheapest tier that would admit this window"; this one answers "does the
+    resolved entitlement admit it right now?".
+
+    Grace semantics: :meth:`Entitlement.allows_retention_window` returns
+    ``True`` for every ``days`` value while ``ent.grace`` is ``True`` (the
+    current rollout state -- see the module-level "Rollout: GRACE vs ENFORCE"
+    docstring), so wiring this into a history-range gate today changes NO
+    current behavior. Enforcement flips on when :func:`is_enforced` returns
+    ``True`` and the resolver stops setting ``grace``. For a forward-looking
+    "would this be locked once enforcement is on?" gate, compare
+    :func:`min_tier_for_retention_window` against :attr:`Entitlement.tier`
+    explicitly -- this scalar deliberately reflects the LIVE grant so a UI
+    wired off it doesn't render locks before the enforce date.
+
+    Semantics on ``days``:
+
+    * ``None`` -- the caller is asking about the *unlimited* history request.
+      Delegates to :meth:`Entitlement.allows_retention_window(None)`, which
+      grants only on tiers whose ``event_retention_days`` cap is ``None``
+      (Enterprise on the current tier table) once enforcement is on -- while
+      grace is on the answer is ``True`` for any tier. This is the ONE input
+      where non-int is meaningful (unlimited request), distinguishing it from
+      the :func:`has_channel_count` / :func:`has_node_count` scalars where
+      ``None`` is junk.
+    * ``days <= 0`` -- returns ``True``. A zero/negative window is either
+      "not measured yet" or trivially satisfied; either way the free floor
+      covers it (matches :meth:`Entitlement.allows_retention_window`'s
+      grace-on-zero contract and :func:`min_tier_for_retention_window`'s
+      ``TIER_OSS`` fallback).
+    * Non-int ``days`` (other than the explicit ``None``: str that doesn't
+      parse as int, list, dict, ...) -- returns ``False``. This DIFFERS from
+      the underlying :meth:`Entitlement.allows_retention_window` (which is
+      typed ``int | None`` and would blow up on junk) because the scalar has
+      a strict callsite-typo posture matching :func:`has_feature` /
+      :func:`has_runtime` / :func:`has_channel_count`. A caller passing
+      ``has_retention_window("seven")`` sees the typo at the callsite instead
+      of a silent grant.
+    * Positive int -- delegates to
+      :meth:`Entitlement.allows_retention_window`, returning ``True`` iff the
+      resolved tier's ``event_retention_days`` cap is ``None`` (unlimited)
+      or ``>= days``.
+
+    Never raises: any resolver blowup collapses to ``False`` so a caller can
+    bind this into a boolean AND-chain without a try/except.
+    """
+    if days is None:
+        try:
+            return bool(get_entitlement().allows_retention_window(None))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_retention_window(None) failed: %s", exc
+            )
+            return False
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(get_entitlement().allows_retention_window(n))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window(%r) failed: %s", days, exc
+        )
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,

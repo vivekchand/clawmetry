@@ -3644,6 +3644,156 @@ def api_entitlement_has_channel_count():
         return jsonify(_has_channel_count_fallback(count_raw))
 
 
+def _has_retention_window_fallback(days_raw: str, unlimited: bool) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-retention-window``.
+
+    Fail-closed on ``has_retention_window`` (matches the sibling
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` / ``/has-channel-count``
+    fallback) so a paywall tile that lost the resolver doesn't silently grant
+    a history window that might exceed the paid cap. ``days`` is echoed as
+    ``None`` and ``days_raw`` as the stripped input so a UI can still surface
+    the offending value in a diagnostic tooltip. ``unlimited`` mirrors the
+    happy-path field so callers can bind off it without a branch on the
+    fallback state. 11-key envelope, byte-stable with the happy-path branch.
+    """
+    return {
+        "days": None,
+        "days_raw": days_raw,
+        "unlimited": unlimited,
+        "has_retention_window": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "upgrade_required": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-retention-window")
+def api_entitlement_has_retention_window():
+    """``GET /api/entitlement/has-retention-window?days=<N|unlimited>`` --
+    capacity-axis boolean-gate scalar sibling of
+    ``/api/entitlement/has-feature`` / ``/api/entitlement/has-runtime`` /
+    ``/api/entitlement/has-channel-count`` on the ``retention_days`` axis.
+
+    Returns ONE boolean (``has_retention_window``) plus the surrounding tier
+    envelope (``current_tier``, ``required_tier``, ``upgrade_required``) so a
+    history-range paywall tile can bind ``allowed`` directly off this URL
+    without parsing the full
+    ``/api/entitlement/required-tier?retention_days=<N>`` body. Grace-safe:
+    while :attr:`Entitlement.grace` is ``True`` (the current rollout state)
+    ``has_retention_window`` reports ``True`` for every finite ``days`` value
+    AND the ``unlimited`` request, so wiring this into a gate today changes
+    NO current behavior.
+
+    Envelope shape (11 keys, byte-stable across every input branch)::
+
+        {
+          "days": 30,                    # parsed int, null on missing/unparseable/unlimited/blowup
+          "days_raw": "30",              # stripped raw string echo
+          "unlimited": False,            # True iff ?days=unlimited (case-insensitive)
+          "has_retention_window": True,
+          "allowed": True,               # mirror of has_retention_window
+          "required_tier": "cloud_starter",
+          "required_tier_label": "Starter",
+          "required_tier_rank": 1,
+          "current_tier": "oss",
+          "current_tier_rank": 0,
+          "upgrade_required": True,
+        }
+
+    Input semantics:
+
+    * ``?days=`` missing / blank / whitespace -- ``days=null``,
+      ``unlimited=false``, ``has_retention_window=false``,
+      ``required_tier=null``. Never 4xx (matches the never-crash posture of
+      ``/api/entitlement/required-tier`` and ``/api/entitlement/lock-reason``
+      on their capacity axes).
+    * ``?days=unlimited`` (case-insensitive) -- explicit unlimited-history
+      request. ``days=null``, ``unlimited=true``,
+      ``has_retention_window`` reflects the resolver (grace: ``true`` on
+      every tier; enforce: only Enterprise grants it), ``required_tier`` is
+      the cheapest tier admitting the unlimited window per
+      :func:`min_tier_for_retention_window(None)` (Enterprise on the current
+      tier table).
+    * ``?days=`` non-int junk (``bogus`` / ``5.5`` / ...) --
+      ``has_retention_window=false``, ``days=null``, ``required_tier=null``,
+      ``unlimited=false``. Fail-closed matches
+      :func:`has_retention_window` / :func:`has_channel_count` on parse
+      failure.
+    * ``days <= 0`` -- ``has_retention_window=true``,
+      ``required_tier="oss"`` (trivially satisfied by the free floor --
+      mirrors :func:`min_tier_for_retention_window` and
+      :meth:`Entitlement.allows_retention_window`).
+    * Positive int -- ``has_retention_window`` reflects the resolver;
+      ``required_tier`` is the cheapest tier admitting ``days`` per
+      :func:`min_tier_for_retention_window`.
+
+    Cross-consistency: ``required_tier`` / ``required_tier_label`` /
+    ``required_tier_rank`` agree byte-for-byte with
+    ``/api/entitlement/required-tier?retention_days=<N>`` for the same
+    parsed ``days`` so a UI wiring both endpoints for the same paywall tile
+    can't see inconsistent tier state.
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_retention_window_fallback`.
+    """
+    days_raw = (request.args.get("days") or "").strip()
+    unlimited = days_raw.lower() == "unlimited"
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+
+        if unlimited:
+            n: int | None = None
+            has_flag = _ent.has_retention_window(None)
+            required = _ent.min_tier_for_retention_window(None)
+        elif not days_raw:
+            n = None
+            has_flag = False
+            required = None
+        else:
+            try:
+                n = int(days_raw)
+            except (TypeError, ValueError):
+                n = None
+                has_flag = False
+                required = None
+            else:
+                has_flag = _ent.has_retention_window(n)
+                required = _ent.min_tier_for_retention_window(n)
+
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "days": n,
+                "days_raw": days_raw,
+                "unlimited": unlimited,
+                "has_retention_window": bool(has_flag),
+                "allowed": bool(has_flag),
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "upgrade_required": bool(required) and req_rank > cur_rank,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_retention_window: error: %s", exc
+        )
+        return jsonify(
+            _has_retention_window_fallback(days_raw, unlimited)
+        )
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:
