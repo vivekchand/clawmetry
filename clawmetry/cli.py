@@ -976,7 +976,7 @@ def _cmd_connect(args) -> None:
     import platform
     import socket
 
-    api_key = args.key or os.environ.get("CLAWMETRY_API_KEY") or ""
+    api_key = getattr(args, "key", None) or os.environ.get("CLAWMETRY_API_KEY") or ""
     if not api_key:
         api_key = _get_api_key_interactive()
 
@@ -993,7 +993,7 @@ def _cmd_connect(args) -> None:
     # actual security bar: the cm_ key is a bearer credential the server
     # accepts directly on /auth and ingest, so the client-side OTP never
     # stopped anyone who already holds the key.
-    if args.key:
+    if getattr(args, "key", None):
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
         elif getattr(args, "start_sync_now", False):
