@@ -350,6 +350,30 @@ def _collapse_duplicate_brain_events(events):
     )
 
 
+def _row_is_error(row: dict) -> bool:
+    """True when a stored tool-result row carries a real error flag.
+
+    The flag lives in different spots per ingest path: family adapters
+    (Claude Code, Codex, …) stamp ``data.extra.isError``; the OpenClaw v3
+    mapper stamps ``data.is_error`` plus the ``data.data`` mirror. Benign
+    failures (read-guards, transient timeouts) are already downgraded at
+    ingest and marked ``benign_error`` — those must not resurface here.
+    """
+    data = row.get("data")
+    if not isinstance(data, dict):
+        return False
+    inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+    if data.get("benign_error") or inner.get("benign_error"):
+        return False
+    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    return bool(
+        data.get("is_error")
+        or inner.get("is_error")
+        or extra.get("isError")
+        or extra.get("is_error")
+    )
+
+
 def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
     """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
     when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
@@ -443,6 +467,14 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
         detail = _extract_brain_detail(r)
         evt_type = (r.get("event_type") or "").upper()
+        # Error surfacing (Brain-visualizer adoption #3): a failed tool
+        # result becomes a first-class ERROR event so the ❌ icon, the
+        # type chips, and the type filter all pick it up with no extra
+        # client plumbing. The store has carried the flag since ingest;
+        # this mapper just dropped it.
+        is_err = evt_type in ("TOOL_RESULT", "TOOL.RESULT") and _row_is_error(r)
+        if is_err:
+            evt_type = "ERROR"
         if evt_type == "THINKING" and not str(detail).strip():
             # Claude Code (and siblings) persist extended thinking as an
             # ENCRYPTED signature block — the text itself is never written to
@@ -472,6 +504,8 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
             # carries one extra short string per row.
             "eventId":    r.get("id") or "",
         }
+        if is_err:
+            row["isError"] = True
         # ── Channel-event enrichment (PR aca53ec8 / Telegram ingest) ─────
         # Channel turns land here as event_type=channel.in|channel.out with
         # the raw provider payload under ``data``. Surface a few flat fields

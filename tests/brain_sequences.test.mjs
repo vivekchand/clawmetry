@@ -81,5 +81,21 @@ check('USER rows split turns within a session',
 check('duration formatting', _brainSeqDuration(500)==='<1s' && _brainSeqDuration(45000)==='45s' && _brainSeqDuration(3900000)==='1h 5m');
 check('bad duration safe', _brainSeqDuration(NaN)==='' && _brainSeqDuration(-5)==='');
 
+// Error surfacing (adoption #3): failed tool results arrive typed ERROR.
+// The run that contains them gets a ⚠ badge on its block header and a red
+// ring on its swimlane bar; clean runs get neither.
+const errRows = [
+  R('claude_code:err11111', 10, '<e4>'), R('codex:ok222222', 9, '<o3>'),
+  R('claude_code:err11111', 8,  '<e3>', 'ERROR'), R('codex:ok222222', 6, '<o2>'),
+  R('claude_code:err11111', 4,  '<e2>', 'ERROR'), R('claude_code:err11111', 0, '<e1>'),
+  R('codex:ok222222', 0, '<o1>'),
+];
+const eout = _brainGroupSequences(errRows);
+check('error run gets a ⚠ badge with the count', eout.includes('brain-seq-errs') && eout.includes('⚠ 2'));
+check('exactly one block is badged', (eout.match(/brain-seq-errs/g)||[]).length === 1);
+check('error lane gets the red ring', (eout.match(/brain-lane-bar-err/g)||[]).length === 1);
+check('lane tooltip carries the error count', eout.includes('2 errors'));
+check('clean feed has no error chrome', !out.includes('brain-seq-errs') && !out.includes('brain-lane-bar-err'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
