@@ -263,6 +263,7 @@ FEATURE_LABELS = {
     "rbac": "RBAC",
     "air_gapped_license": "Air-gapped license",
     "custom_data_residency": "Custom data residency",
+    "compliance_pack": "Compliance pack",
 }
 
 _ALIAS_FEATURES = frozenset(
@@ -316,6 +317,7 @@ PRO_ONLY_FEATURES = frozenset(
         "alert_webhooks",
         "anomaly_detection",
         "cost_optimizer",
+        "compliance_pack",
     }
 )
 
