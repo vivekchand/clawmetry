@@ -123,6 +123,10 @@ def test_activate_license_happy_path(ob, client, monkeypatch):
     fake_lic = types.SimpleNamespace(
         activate=lambda key, actor="": (True, "activated"))
     monkeypatch.setitem(sys.modules, "clawmetry.license", fake_lic)
+    # `from clawmetry import license` prefers the package attribute once the
+    # real module has been imported anywhere in the session, so shim both.
+    import clawmetry
+    monkeypatch.setattr(clawmetry, "license", fake_lic, raising=False)
     monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_license")
     pings = []
     monkeypatch.setattr(ob, "_ping_onboarded", pings.append)
@@ -180,3 +184,46 @@ def test_gate_js_is_hard_gate_and_cloud_safe():
     assert "/api/trial/activate" in js
     assert "/api/onboarding/activate-license" in js
     assert "openCloudModal" in js
+
+
+def test_selfhost_card_offers_oauth_in_both_renders():
+    """The self-host card must offer Google/GitHub in BOTH renders: the
+    template's initial body and the JS re-render (_selfhostHome). One
+    without the other means the options vanish after any back-navigation."""
+    js = open(os.path.join(
+        _ROOT, "clawmetry", "static", "js", "onboarding.js"),
+        encoding="utf-8").read()
+    assert "mode: 'selfhost'" in js, "self-host OAuth must use the selfhost bridge mode"
+    assert "/api/cloud-cta/oauth-start" in js
+    assert js.count("obg-oauth-github") >= 2 and js.count("obg-oauth-google") >= 2, \
+        "OAuth buttons must be both rendered (_selfhostHome) and wired (_wireSelfhostHome)"
+    html = open(os.path.join(
+        _ROOT, "clawmetry", "templates", "partials", "onboarding-modal.html"),
+        encoding="utf-8").read()
+    assert 'id="obg-oauth-github"' in html and 'id="obg-oauth-google"' in html
+
+
+def test_marker_semantics_selfhost_writes_nocloud(monkeypatch, tmp_path):
+    """NOCLOUD_MARKER_PATH is a plain str; the old .parent/.touch calls
+    raised AttributeError into the broad except, so the marker was silently
+    never written for self-host choices (identity risked becoming an
+    unasked-for upload once a cm_ key landed on disk)."""
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "clawmetry-home" / "nocloud"
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    mod._apply_marker_semantics("selfhost_trial")
+    assert marker.exists(), "self-host choice must write the nocloud marker"
+
+
+def test_marker_semantics_managed_clears_nocloud(monkeypatch, tmp_path):
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud"
+    marker.write_text("")
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+    mod._apply_marker_semantics("managed")
+    assert not marker.exists()

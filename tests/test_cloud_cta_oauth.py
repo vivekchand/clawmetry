@@ -42,7 +42,8 @@ def test_oauth_start_returns_url_for_valid_provider(cta_app, monkeypatch):
 
     monkeypatch.setattr(
         _d, "_start_oauth_bridge",
-        lambda provider: "https://app.clawmetry.com/api/oauth/%s/start?cli_port=51234" % provider,
+        lambda provider, mode="managed":
+            "https://app.clawmetry.com/api/oauth/%s/start?cli_port=51234" % provider,
     )
     c = cta_app.test_client()
     for provider in ("github", "google"):
@@ -52,6 +53,34 @@ def test_oauth_start_returns_url_for_valid_provider(cta_app, monkeypatch):
         assert body["ok"] is True
         assert provider in body["url"]
         assert "cli_port=" in body["url"]
+
+
+def test_oauth_start_rejects_bad_mode(cta_app):
+    c = cta_app.test_client()
+    r = c.post("/api/cloud-cta/oauth-start",
+               json={"provider": "github", "mode": "sideways"})
+    assert r.status_code == 400
+    assert r.get_json()["ok"] is False
+
+
+def test_oauth_start_passes_mode_to_bridge(cta_app, monkeypatch):
+    import dashboard as _d
+
+    seen = {}
+
+    def _fake(provider, mode="managed"):
+        seen["provider"], seen["mode"] = provider, mode
+        return "https://app.clawmetry.com/api/oauth/%s/start?cli_port=51234" % provider
+
+    monkeypatch.setattr(_d, "_start_oauth_bridge", _fake)
+    c = cta_app.test_client()
+    r = c.post("/api/cloud-cta/oauth-start",
+               json={"provider": "github", "mode": "selfhost"})
+    assert r.status_code == 200, r.data
+    assert seen == {"provider": "github", "mode": "selfhost"}
+    # Callers that omit mode (the existing cloud modal) stay managed.
+    c.post("/api/cloud-cta/oauth-start", json={"provider": "google"})
+    assert seen["mode"] == "managed"
 
 
 def test_oauth_status_shape(cta_app, monkeypatch):
@@ -69,6 +98,21 @@ def test_oauth_status_shape(cta_app, monkeypatch):
     assert body["status"] == "connected"
     assert body["node_id"] == "host-1"
     assert body["enc_key"] == "abc123"
+
+
+def test_oauth_status_includes_mode_and_trial(cta_app, monkeypatch):
+    import dashboard as _d
+
+    monkeypatch.setattr(
+        _d, "_OAUTH_BRIDGE",
+        {"status": "connected", "provider": "github", "mode": "selfhost",
+         "node_id": "host-1", "enc_key": "", "trial": "active", "error": ""},
+    )
+    c = cta_app.test_client()
+    body = c.get("/api/cloud-cta/oauth-status").get_json()
+    assert body["mode"] == "selfhost"
+    assert body["trial"] == "active"
+    assert body["enc_key"] == ""
 
 
 def test_start_oauth_bridge_rejects_bad_provider():
@@ -131,3 +175,118 @@ def test_enable_cloud_removes_marker(tmp_path, monkeypatch):
     assert _cfg.enable_cloud() is True
     assert _cfg.is_cloud_disabled() is False
     assert _cfg.enable_cloud() is False  # idempotent: nothing left to remove
+
+
+# ── Self-host OAuth rail (identity + trial, egress stays off) ──────────────
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._data = json.dumps(payload).encode()
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _selfhost_env(tmp_path, monkeypatch):
+    """Common monkeypatching for _selfhost_signin_with_key tests."""
+    import urllib.request as _ur
+
+    import dashboard as _d
+    from clawmetry import config as _cfg
+    from clawmetry import license as _lic
+    from clawmetry import sync as _sync
+
+    home = tmp_path / "home"
+    (home / ".clawmetry").mkdir(parents=True)
+    nocloud = home / ".clawmetry" / "nocloud"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(_d.os.path, "expanduser",
+                        lambda p: p.replace("~", str(home)))
+    monkeypatch.setattr(_sync, "CONFIG_DIR", home / ".clawmetry")
+    monkeypatch.setattr(_sync, "CONFIG_FILE", home / ".clawmetry" / "config.json")
+    monkeypatch.setattr(_sync, "validate_key",
+                        lambda *a, **k: {"node_id": "node-sh"})
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(nocloud))
+    monkeypatch.setattr(_d, "_write_cloud_token", lambda tok: None)
+    monkeypatch.setattr(_lic, "_node_id", lambda: "node-sh")
+    import routes.trial as _rt
+    monkeypatch.setattr(_rt, "_ensure_local_daemon", lambda: None)
+    return _d, _lic, _ur, home, nocloud
+
+
+def test_selfhost_signin_keeps_marker_and_activates_trial(tmp_path, monkeypatch):
+    """The self-host OAuth rail must never enable egress: the nocloud marker
+    is written before the key is persisted (the daemon must not observe a
+    cm_ key without it), and the account's trial is minted server-side then
+    activated locally — same rail as `clawmetry connect` keep-local."""
+    _d, _lic, _ur, home, nocloud = _selfhost_env(tmp_path, monkeypatch)
+
+    activated = {}
+
+    def _fake_activate(key, node_id=None, **k):
+        activated["key"] = key
+        return True, "ok"
+
+    monkeypatch.setattr(_lic, "activate", _fake_activate)
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://ingest.example")
+    monkeypatch.setattr(
+        _ur, "urlopen",
+        lambda req, timeout=0: _FakeResp(
+            {"ok": True, "key": "CLAW1.test.key", "expires_at": 9999999999}),
+    )
+
+    node_id, trial = _d._selfhost_signin_with_key("cm_selfhost123")
+    assert node_id == "node-sh"
+    assert trial == "active"
+    assert activated["key"] == "CLAW1.test.key"
+    assert nocloud.exists(), \
+        "self-host sign-in must keep egress off (nocloud marker)"
+    cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
+    assert cfg["api_key"] == "cm_selfhost123"
+    assert cfg["node_id"] == "node-sh"
+
+
+def test_selfhost_signin_expired_trial_never_activates(tmp_path, monkeypatch):
+    _d, _lic, _ur, home, nocloud = _selfhost_env(tmp_path, monkeypatch)
+
+    def _boom(*a, **k):
+        raise AssertionError("expired trial must not call license.activate")
+
+    monkeypatch.setattr(_lic, "activate", _boom)
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://ingest.example")
+    monkeypatch.setattr(
+        _ur, "urlopen",
+        lambda req, timeout=0: _FakeResp({"ok": True, "expired": True}),
+    )
+
+    node_id, trial = _d._selfhost_signin_with_key("cm_selfhost123")
+    assert trial == "expired"
+    assert nocloud.exists()
+    # Identity still persisted: the user is signed in even without a trial.
+    cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
+    assert cfg["api_key"] == "cm_selfhost123"
+
+
+def test_selfhost_signin_survives_trial_server_outage(tmp_path, monkeypatch):
+    """A trial-mint outage must not lose the sign-in: identity persists,
+    egress stays off, trial reports 'unavailable'."""
+    _d, _lic, _ur, home, nocloud = _selfhost_env(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://ingest.example")
+
+    def _down(req, timeout=0):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(_ur, "urlopen", _down)
+
+    node_id, trial = _d._selfhost_signin_with_key("cm_selfhost123")
+    assert trial == "unavailable"
+    assert nocloud.exists()
+    cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
+    assert cfg["api_key"] == "cm_selfhost123"

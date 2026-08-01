@@ -6,8 +6,10 @@
 // activate-license endpoint):
 //   managed          — existing cloud modal (OTP / Google / GitHub), we
 //                      poll /api/cloud-cta/status until connected
-//   selfhost_trial   — email + 6-digit code, the flow /api/trial/activate
-//                      already implements (same as the gw-setup teaser)
+//   selfhost_trial   — Google/GitHub OAuth (mode=selfhost bridge: identity
+//                      + trial license, data stays local) or email +
+//                      6-digit code via /api/trial/activate (same as the
+//                      gw-setup teaser)
 //   selfhost_license — CLAW1 key via /api/onboarding/activate-license
 //
 // Never runs on the hosted cloud dashboard (window.CLOUD_MODE) and defers
@@ -17,6 +19,7 @@
   'use strict';
 
   var _pollTimer = null;
+  var _oauthTimer = null;
   var _trialEmail = '';
 
   function $(id) { return document.getElementById(id); }
@@ -32,6 +35,7 @@
     var o = _overlay();
     if (o) o.style.display = 'none';
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+    if (_oauthTimer) { clearInterval(_oauthTimer); _oauthTimer = null; }
   }
 
   function _err(id, msg) {
@@ -220,20 +224,103 @@
     });
   }
 
+  // Keep this markup mirrored with the initial #obg-selfhost-body in
+  // templates/partials/onboarding-modal.html — both renders must offer
+  // the same options.
   function _selfhostHome() {
     var body = $('obg-selfhost-body');
     if (!body) return;
     body.innerHTML =
-      '<button class="obg-btn obg-btn-quiet" id="obg-trial-btn" type="button">Start free 7-day trial</button>' +
+      '<button class="obg-btn obg-btn-quiet" id="obg-oauth-github" type="button">Continue with GitHub</button>' +
+      '<button class="obg-btn obg-btn-quiet" id="obg-oauth-google" type="button" style="margin-top:8px;">Continue with Google</button>' +
+      '<button class="obg-btn obg-btn-quiet" id="obg-trial-btn" type="button" style="margin-top:8px;">Continue with email</button>' +
+      '<div class="obg-err" id="obg-oauth-err"></div>' +
       '<a class="obg-alt" href="#" id="obg-license-link">I have a license key</a>';
     _wireSelfhostHome();
   }
 
   function _wireSelfhostHome() {
+    var gh = $('obg-oauth-github');
+    if (gh) gh.addEventListener('click', function () { _selfhostOauth('github'); });
+    var go = $('obg-oauth-google');
+    if (go) go.addEventListener('click', function () { _selfhostOauth('google'); });
     var t = $('obg-trial-btn');
     if (t) t.addEventListener('click', _trialEmailStep);
     var l = $('obg-license-link');
     if (l) l.addEventListener('click', function (ev) { ev.preventDefault(); _licenseStep(); });
+  }
+
+  // ── Self-host: Google/GitHub OAuth (identity + trial, data stays local) ──
+  function _selfhostOauth(provider) {
+    _err('obg-oauth-err', '');
+    var pretty = provider === 'github' ? 'GitHub' : 'Google';
+    fetch('/api/cloud-cta/oauth-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: provider, mode: 'selfhost' }),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok || !d.url) {
+        _err('obg-oauth-err', (d && d.error) || 'Could not start sign-in. Try email instead.');
+        return;
+      }
+      window.open(d.url, '_blank');
+      _selfhostOauthWait(pretty);
+    }).catch(function () {
+      _err('obg-oauth-err', 'Network error. Try again.');
+    });
+  }
+
+  function _selfhostOauthWait(pretty) {
+    var body = $('obg-selfhost-body');
+    if (!body) return;
+    body.innerHTML =
+      '<p style="color:#94a3b8;font-size:12px;margin:0 0 8px;">Finish signing in with ' + pretty +
+      ' in the tab we just opened. Your trial activates here automatically.</p>' +
+      '<div class="obg-err" id="obg-oauth-err"></div>' +
+      '<a class="obg-alt" href="#" id="obg-oauth-cancel">Cancel</a>';
+    $('obg-oauth-cancel').addEventListener('click', function (ev) {
+      ev.preventDefault();
+      if (_oauthTimer) { clearInterval(_oauthTimer); _oauthTimer = null; }
+      _selfhostHome();
+    });
+    var tries = 0;
+    if (_oauthTimer) clearInterval(_oauthTimer);
+    _oauthTimer = setInterval(function () {
+      tries += 1;
+      if (tries > 150) {
+        clearInterval(_oauthTimer); _oauthTimer = null;
+        _err('obg-oauth-err', 'Sign-in timed out. Try again.');
+        return;
+      }
+      fetch('/api/cloud-cta/oauth-status').then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d) return;
+          if (d.status === 'connected') {
+            clearInterval(_oauthTimer); _oauthTimer = null;
+            if (d.trial === 'active') {
+              _complete('selfhost_trial', function (msg) { _err('obg-oauth-err', msg); });
+            } else if (d.trial === 'expired') {
+              _selfhostTrialEnded();
+            } else {
+              _err('obg-oauth-err',
+                "You're signed in, but we couldn't start your trial. Try again or use email.");
+            }
+          } else if (d.status === 'error') {
+            clearInterval(_oauthTimer); _oauthTimer = null;
+            _err('obg-oauth-err', d.error || 'Sign-in failed. Try email instead.');
+          }
+        }).catch(function () {});
+    }, 2000);
+  }
+
+  function _selfhostTrialEnded() {
+    var body = $('obg-selfhost-body');
+    if (!body) return;
+    body.innerHTML =
+      '<p style="color:#94a3b8;font-size:12px;margin:0 0 8px;">You\'re signed in, but your 7-day trial has already ended. ' +
+      'Keep every runtime with a license: <a href="https://clawmetry.com/pricing?deploy=self" target="_blank" rel="noopener" style="color:#e2e8f0;">clawmetry.com/pricing</a></p>' +
+      '<button class="obg-btn obg-btn-quiet" id="obg-license-btn2" type="button">I have a license key</button>';
+    $('obg-license-btn2').addEventListener('click', _licenseStep);
   }
 
   // ── Greeting: lead with what ClawMetry can already see ───────────────
