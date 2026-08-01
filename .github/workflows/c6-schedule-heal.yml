@@ -4,9 +4,13 @@ name: C6 auto-heal (required-checks application)
 # Runs every 2 hours and once daily at 10:15am UTC.
 # Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
 #
-# On push to main: runs in informational mode (exit 0 regardless of state).
-# Reads current branch protection and reports status in the job summary,
-# but never exits 1 -- push CI must never be blocked by this workflow.
+# NOTE: Push trigger intentionally removed (2026-08-01). It was informational-
+# only (exit 0 regardless of state per the event_name != 'push' guard on the
+# Error step), but caused persistent 0-job failures on the CI dashboard
+# whenever many PRs merged to main in quick succession, due to GitHub
+# repository-level workflow queue pressure. The 2-hourly schedule trigger
+# already provides equivalent status information, so the push trigger is
+# redundant. See issue #4029 for context.
 #
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
@@ -50,16 +54,12 @@ name: C6 auto-heal (required-checks application)
 # Tracking: vivekchand/clawmetry#4029
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '0 */2 * * *'   # every 2 hours -- heals within 2h of E2E_ADMIN_PAT being set
     - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
   workflow_dispatch:
 
-# Cancel in-progress push runs when a newer push arrives so only the latest
-# push run executes. Uses a separate group per event type so schedule and
-# workflow_dispatch runs are never cancelled by a push event.
+# Prevent two schedule/dispatch runs from overlapping.
 concurrency:
   group: c6-schedule-heal-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
