@@ -6398,6 +6398,38 @@ def main() -> None:
     )
 
     # proxy
+    # secure — numbat (Perplexity agent-EDR) install + hook status
+    p_secure = sub.add_parser(
+        "secure",
+        help="Agent security via numbat: install hooks, show status (docs/NUMBAT.md)",
+    )
+    secure_sub = p_secure.add_subparsers(dest="secure_cmd")
+    p_secure_enable = secure_sub.add_parser(
+        "enable", help="Install numbat + monitor-only hooks wired to ClawMetry"
+    )
+    p_secure_enable.add_argument(
+        "--yes", action="store_true",
+        help="Skip the confirmation prompt (hook install edits agent configs)",
+    )
+    p_secure_enable.add_argument(
+        "--port", type=int, default=None,
+        help="Dashboard port for the HTTP sink (default: 8900)",
+    )
+    p_secure_enable.add_argument(
+        "--emit-all", action="store_true",
+        help="Emit full event stream to the file sink, not just findings",
+    )
+    p_secure_enable.add_argument(
+        "--reinstall", action="store_true",
+        help="Re-download the numbat binary even if one is already installed",
+    )
+    secure_sub.add_parser(
+        "status", help="Per-agent hook wiring + findings ingested by ClawMetry"
+    )
+    secure_sub.add_parser(
+        "disable", help="Remove numbat hooks from all agent configs"
+    )
+
     p_proxy = sub.add_parser(
         "proxy", help="Local enforcement proxy (budget, loops, routing)"
     )
@@ -6987,6 +7019,7 @@ def main() -> None:
         "sync",
         "status",
         "proxy",
+        "secure",
         "reports",
         "eval",
         "mcp",
@@ -7031,6 +7064,9 @@ def main() -> None:
             _cmd_status(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
+        elif args.cmd == "secure":
+            from clawmetry.secure import cmd_secure
+            sys.exit(cmd_secure(args))
         elif args.cmd == "reports":
             _cmd_reports(args)
         elif args.cmd == "eval":

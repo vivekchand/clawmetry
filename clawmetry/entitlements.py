@@ -5467,6 +5467,226 @@ def has_channel_count(count) -> bool:
         return False
 
 
+def has_retention_window(days) -> bool:
+    """Boolean-gate scalar: does the CURRENT install admit a ``days`` history
+    window?
+
+    Capacity-axis mirror of :func:`has_feature` / :func:`has_runtime`, wrapping
+    :meth:`Entitlement.allows_retention_window` on the resolved entitlement so
+    the ``retention_days`` capacity axis has the same scalar boolean gate the
+    feature and runtime axes already carry. Sibling of
+    :func:`min_tier_for_retention_window` on the same axis: that one answers
+    "cheapest tier that would admit this window"; this one answers "does the
+    resolved entitlement admit it right now?".
+
+    Grace semantics: :meth:`Entitlement.allows_retention_window` returns
+    ``True`` for every ``days`` value while ``ent.grace`` is ``True`` (the
+    current rollout state -- see the module-level "Rollout: GRACE vs ENFORCE"
+    docstring), so wiring this into a history-range gate today changes NO
+    current behavior. Enforcement flips on when :func:`is_enforced` returns
+    ``True`` and the resolver stops setting ``grace``. For a forward-looking
+    "would this be locked once enforcement is on?" gate, compare
+    :func:`min_tier_for_retention_window` against :attr:`Entitlement.tier`
+    explicitly -- this scalar deliberately reflects the LIVE grant so a UI
+    wired off it doesn't render locks before the enforce date.
+
+    Semantics on ``days``:
+
+    * ``None`` -- the caller is asking about the *unlimited* history request.
+      Delegates to :meth:`Entitlement.allows_retention_window(None)`, which
+      grants only on tiers whose ``event_retention_days`` cap is ``None``
+      (Enterprise on the current tier table) once enforcement is on -- while
+      grace is on the answer is ``True`` for any tier. This is the ONE input
+      where non-int is meaningful (unlimited request), distinguishing it from
+      the :func:`has_channel_count` / :func:`has_node_count` scalars where
+      ``None`` is junk.
+    * ``days <= 0`` -- returns ``True``. A zero/negative window is either
+      "not measured yet" or trivially satisfied; either way the free floor
+      covers it (matches :meth:`Entitlement.allows_retention_window`'s
+      grace-on-zero contract and :func:`min_tier_for_retention_window`'s
+      ``TIER_OSS`` fallback).
+    * Non-int ``days`` (other than the explicit ``None``: str that doesn't
+      parse as int, list, dict, ...) -- returns ``False``. This DIFFERS from
+      the underlying :meth:`Entitlement.allows_retention_window` (which is
+      typed ``int | None`` and would blow up on junk) because the scalar has
+      a strict callsite-typo posture matching :func:`has_feature` /
+      :func:`has_runtime` / :func:`has_channel_count`. A caller passing
+      ``has_retention_window("seven")`` sees the typo at the callsite instead
+      of a silent grant.
+    * Positive int -- delegates to
+      :meth:`Entitlement.allows_retention_window`, returning ``True`` iff the
+      resolved tier's ``event_retention_days`` cap is ``None`` (unlimited)
+      or ``>= days``.
+
+    Never raises: any resolver blowup collapses to ``False`` so a caller can
+    bind this into a boolean AND-chain without a try/except.
+    """
+    if days is None:
+        try:
+            return bool(get_entitlement().allows_retention_window(None))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_retention_window(None) failed: %s", exc
+            )
+            return False
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(get_entitlement().allows_retention_window(n))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window(%r) failed: %s", days, exc
+        )
+        return False
+
+
+def has_node_count(count) -> bool:
+    """Boolean-gate scalar: does the CURRENT install admit ``count`` registered
+    fleet nodes concurrently?
+
+    Capacity-axis mirror of :func:`has_feature` / :func:`has_runtime` /
+    :func:`has_channel_count`, wrapping :meth:`Entitlement.allows_node_count`
+    on the resolved entitlement so the ``nodes`` capacity axis has the same
+    scalar boolean gate the feature / runtime / channels axes already carry.
+    Sibling of :func:`min_tier_for_node_count` on the same axis: that one
+    answers "cheapest tier that would admit this count"; this one answers
+    "does the resolved entitlement admit it right now?".
+
+    Grace semantics: :meth:`Entitlement.allows_node_count` returns ``True``
+    for every count while ``ent.grace`` is ``True`` (the current rollout
+    state -- see the module-level "Rollout: GRACE vs ENFORCE" docstring), so
+    wiring this into a capacity gate today changes NO current behavior.
+    Enforcement flips on when :func:`is_enforced` returns ``True`` and the
+    resolver stops setting ``grace``. For a forward-looking "would this be
+    locked once enforcement is on?" gate, compare
+    :func:`min_tier_for_node_count` against :attr:`Entitlement.tier`
+    explicitly -- this scalar deliberately reflects the LIVE grant so a UI
+    wired off it doesn't render locks before the enforce date.
+
+    Semantics on ``count``:
+
+    * ``count <= 0`` -- returns ``True``. A zero/negative count is either
+      "no nodes registered yet" or trivially satisfied; either way the free
+      floor covers it (matches :meth:`Entitlement.allows_node_count`'s
+      grace-on-zero contract and :func:`min_tier_for_node_count`'s
+      ``TIER_OSS`` fallback).
+    * Non-int ``count`` (str, ``None``, list, ...) -- returns ``False``.
+      This DIFFERS from the underlying :meth:`Entitlement.allows_node_count`
+      (which returns ``True`` on parse failure to stay "unmeasured=permissive")
+      because the scalar has a strict callsite-typo posture matching
+      :func:`has_feature` / :func:`has_runtime` / :func:`has_channel_count`.
+      A caller that passes non-int here has a bug -- fail-closed instead of
+      silently granting.
+    * Positive int -- delegates to :meth:`Entitlement.allows_node_count`,
+      returning ``True`` iff the resolved tier's ``node_limit`` is ``None``
+      (unlimited) or ``>= count``. When the resolved entitlement is a paid
+      tier that has expired, :meth:`Entitlement.allows_node_count` collapses
+      to ``count <= 1`` (the free floor) -- this scalar surfaces that
+      collapse verbatim, so a fleet gate wired off this URL sees the
+      downgrade the moment the license lapses.
+
+    Never raises: any resolver blowup collapses to ``False`` so a caller
+    can bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(get_entitlement().allows_node_count(n))
+    except Exception as exc:
+        logger.warning("entitlements: has_node_count(%r) failed: %s", count, exc)
+        return False
+
+
+def has_features(features) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow **all** ``features``?
+
+    Plural sibling of :func:`has_feature`. A paywall tile that gates on a
+    bundle ("you are using fleet + otel_export + sso") needs one boolean off
+    the whole set; this scalar folds the per-item :func:`has_feature` walk in
+    one place so callers don't reinvent the AND-chain (and so the feature axis
+    reads symmetric to :func:`min_tier_for_features`: min-tier picks the
+    most-constraining item, this one picks the most-restrictive grant).
+
+    Fold rule: returns ``True`` iff :func:`has_feature` returns ``True`` for
+    **every** item in the iterable, i.e. the tightest single-item denial wins.
+    Consequences of that fold, all deliberate:
+
+    * Empty / ``None`` iterable -- returns ``False``. The vacuous-truth answer
+      would silently render "granted" on a caller who forgot to pass the
+      bundle, which is exactly the callsite-typo posture the singular helper
+      catches with its empty-id ``False``. Mirrors the ``None`` return of
+      :func:`min_tier_for_features` on empty (nothing to compute), collapsed
+      to a strict-``False`` for the boolean seat.
+    * Any unknown / empty / non-string item -- returns ``False``. The singular
+      :func:`has_feature` fails-closed on typos so the bundle fold inherits
+      that: ``has_features(["fleet", "Fleeet"])`` is ``False`` even in grace,
+      surfacing the typo instead of silently granting.
+    * Grace pass-through: while ``ent.grace`` is ``True`` and every item is a
+      known id, the scalar reports ``True`` (each :func:`has_feature` reports
+      ``True`` in grace), so wiring this into a gate today changes NO current
+      behavior.
+    * Non-iterable input (int, ``None`` handled above, arbitrary object) --
+      returns ``False`` without raising.
+
+    Never raises: a delegate failure logs a warning and returns ``False`` so
+    a caller can bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        if features is None:
+            return False
+        items = list(features)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for f in items:
+            if not has_feature(f):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning("entitlements: has_features(%r) failed: %s", features, exc)
+        return False
+
+
+def has_runtimes(runtimes) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow **all** ``runtimes``?
+
+    Runtime-axis twin of :func:`has_features`. Delegates to :func:`has_runtime`
+    per item so runtime-alias canonicalisation (``claude-code`` ->
+    ``claude_code``) and the same unknown/empty/non-string strict-``False``
+    posture are inherited from the singular helper.
+
+    Fold semantics mirror :func:`has_features` exactly: ``True`` iff every
+    item is granted; empty / ``None`` iterable / non-iterable input /
+    any-unknown-item all collapse to ``False``. Grace pass-through applies
+    per item, so a fully-known bundle reads ``True`` in grace and wires in as
+    a no-op behavior change today.
+
+    Never raises: delegate failure -> logged warning -> ``False``.
+    """
+    try:
+        if runtimes is None:
+            return False
+        items = list(runtimes)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for rt in items:
+            if not has_runtime(rt):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning("entitlements: has_runtimes(%r) failed: %s", runtimes, exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,

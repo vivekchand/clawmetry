@@ -14,13 +14,26 @@ and in alerts, and (on paid plans) aggregate fleet-wide in the cloud.
 
 ## Quick start
 
+```bash
+clawmetry secure enable    # downloads numbat (SHA-256 verified), installs
+                           # monitor-only hooks wired to this dashboard
+clawmetry secure status    # per-agent hook wiring + findings ingested
+clawmetry secure disable   # removes the hooks again
+```
+
+`enable` asks for confirmation first — hook install edits each harness's own
+config (that's how numbat works), which crosses ClawMetry's read-only
+default. Enforce mode is never enabled.
+
+### Manual setup (what `clawmetry secure enable` runs for you)
+
 1. [Install numbat](https://github.com/perplexityai/numbat/releases) (single
    static binary, macOS/Linux/Windows).
 2. Install its hooks with ClawMetry as the HTTP sink *and* keep the file sink
    (the file is numbat's durable path — its HTTP sink buffers in memory only):
 
    ```bash
-   numbat hook install --agent all --emit all \
+   numbat hook install --agent all --emit findings \
      --output file \
      --output http --http-url http://127.0.0.1:8900/api/numbat/ingest
    ```
