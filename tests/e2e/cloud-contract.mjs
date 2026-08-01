@@ -310,7 +310,10 @@ async function testNormalUser() {
     { label: 'Approvals',     key: 'approvals' },
     { label: 'Alerts',        key: 'alerts' },
     { label: 'Notifications', key: 'notifications' },
-    { label: 'Context',       key: 'context' },
+    // "LLM Context" merged into Context usage (#4375, 0.12.617): the old
+    // data-tab="context" nav item is gone; the surviving tab is
+    // context-economics (the legacy .nav-tab fallback label stays "Context").
+    { label: 'Context',       key: 'context-economics' },
     { label: 'Tokens',        key: 'usage' },
     { label: 'Crons',         key: 'crons' },
     { label: 'Memory',        key: 'memory' },
