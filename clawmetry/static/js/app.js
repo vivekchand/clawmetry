@@ -9743,10 +9743,17 @@ function _cmShowRuntimePaywall(harness, label) {
     + 'display:flex;align-items:center;justify-content:center;padding:24px;';
 
   // The plan ladder, mirroring the LIVE clawmetry.com/pricing page
-  // (verified 2026-06-09: Free $0 / Starter $9 / Pro $29 / self-hosted via
-  // license key / Enterprise; annual includes the desk device). Prices live
-  // in this ONE object so a reprice is a one-line change here plus the
-  // pricing page. Plain words for someone who has never compared plans.
+  // (Free $0 / Starter $9 / Pro $19 / self-hosted via license key /
+  // Enterprise; annual includes the desk device). Prices live in this ONE
+  // object so a reprice is a one-line change here plus the pricing page.
+  // Plain words for someone who has never compared plans.
+  //
+  // SOURCE OF TRUTH is the cloud Stripe catalog (cloud routes/api.py
+  // _SUB_PRICING: starter 900/9000, pro 1900/19000 cents). This comment
+  // said "Pro $29" for weeks after the values were correctly repriced to
+  // $19. Anyone trusting the prose over the code would have "fixed" a
+  // working paywall back to a price no checkout has ever charged. Read
+  // _SUB_PRICING before touching either.
   var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$19', proYr: '$190' };
   function _tierRow(accent, name, price, desc) {
     return '<div style="margin-bottom:10px;padding:11px 14px;border:1px solid ' + accent + ';'
