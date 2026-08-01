@@ -5777,27 +5777,44 @@ function _brainGroupSequences(rows) {
   if (!rows || !rows.length) return '';
   // Bucket by session, preserving newest-first order inside each bucket. A
   // USER row (runtimes that emit one) starts a fresh block within its session.
-  var order = [], buckets = {}, turnSeq = 0;
+  var order = [], buckets = {}, turnOf = {};
   rows.forEach(function(row) {
     var ev = row.ev || {};
-    var key = (ev.sessionId || ev.src || 'unknown');
-    if ((ev.type || '') === 'USER') key += '#turn' + (turnSeq++);
+    var sess = (ev.sessionId || ev.src || 'unknown');
+    if (turnOf[sess] === undefined) turnOf[sess] = 0;
+    var key = sess + '#' + turnOf[sess];
     if (!buckets[key]) { buckets[key] = []; order.push(key); }
     buckets[key].push(row);
+    // The feed is newest-first, so rows ABOVE a USER row are that turn's
+    // responses: the USER row CLOSES its turn, and everything older belongs
+    // to the previous one.
+    if ((ev.type || '') === 'USER') turnOf[sess]++;
   });
   // A single bucket adds nothing but chrome — render flat (also the exact
   // pre-sequence output, so one-session feeds are unchanged).
   if (order.length < 2) return rows.map(function(r) { return r.html; }).join('');
 
-  var out = '';
+  // Only wrap runs with real substance. A live box emits a lot of one-shot
+  // sessions (a single OpenClaw LOG line, <1s); giving each of those a block
+  // header buried the feed under more chrome than content — strictly worse
+  // than the flat wall it replaced. Those render bare, exactly as before.
+  var BLOCK_MIN_EVENTS = 3;
+  var blocked = order.filter(function(k) { return buckets[k].length >= BLOCK_MIN_EVENTS; });
+  if (!blocked.length) return rows.map(function(r) { return r.html; }).join('');
+
+  var out = _brainSwimlane(blocked, buckets);
   order.forEach(function(key) {
     var g = buckets[key];
+    if (g.length < BLOCK_MIN_EVENTS) {
+      out += g.map(function(r) { return r.html; }).join('');
+      return;
+    }
     var newest = _brainSeqTime(g[0].ev);
     var oldest = _brainSeqTime(g[g.length - 1].ev);
     var dur = _brainSeqDuration(newest - oldest);
     var steps = g.length;
     var meta = steps + ' event' + (steps === 1 ? '' : 's') + (dur ? ' \u00b7 \u23f1 ' + dur : '');
-    out += '<div class="brain-seq">'
+    out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '">'
         +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
         +  '<span class="brain-seq-chevron">\u203a</span>'
         +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
@@ -5808,6 +5825,67 @@ function _brainGroupSequences(rows) {
         +  '</div></div>';
   });
   return out;
+}
+
+// ── Session swimlane ─────────────────────────────────────────────────────
+// The Brain Visualizer's "proportional timeline": a bird's-eye strip where
+// every run is drawn against real wall-clock time, so idle gaps and overlaps
+// are visible at a glance. Adapted to our data — the feed carries no per-turn
+// anchor but does carry a session per event, so each lane is one agent run.
+// Answers the question the density chart can't: WHICH runs were going, WHEN,
+// and did they overlap. Clicking a lane jumps to that run's block.
+
+function _brainSeqDomId(key) {
+  var h = 0;
+  for (var i = 0; i < key.length; i++) { h = ((h << 5) - h + key.charCodeAt(i)) | 0; }
+  return 'brain-seq-' + Math.abs(h).toString(36);
+}
+
+function jumpToBrainSequence(domId) {
+  var el = document.getElementById(domId);
+  if (!el) return;
+  var body = el.querySelector('.brain-seq-body');
+  var head = el.querySelector('.brain-seq-head');
+  if (body && body.style.display === 'none' && head) toggleBrainSequence(head);
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  el.classList.add('brain-seq-flash');
+  setTimeout(function() { el.classList.remove('brain-seq-flash'); }, 1400);
+}
+
+function _brainSwimlane(order, buckets) {
+  var spans = [];
+  var min = Infinity, max = -Infinity;
+  order.forEach(function(key) {
+    var g = buckets[key];
+    var end = _brainSeqTime(g[0].ev);
+    var start = _brainSeqTime(g[g.length - 1].ev);
+    if (!start || !end) return;
+    if (start < min) min = start;
+    if (end > max) max = end;
+    spans.push({key: key, start: start, end: end, n: g.length, ev: g[0].ev});
+  });
+  if (spans.length < 2 || !isFinite(min) || max <= min) return '';
+  var total = max - min;
+  var rows = spans.map(function(sp) {
+    var left = ((sp.start - min) / total) * 100;
+    var width = Math.max(1.5, ((sp.end - sp.start) / total) * 100);
+    if (left + width > 100) width = 100 - left;
+    var col = brainSourceColor(sp.ev.source || sp.ev.src || 'main');
+    var title = _brainSeqLabel(sp.ev) + ' \u00b7 ' + sp.n + ' events \u00b7 '
+              + _brainSeqDuration(sp.end - sp.start);
+    return '<div class="brain-lane" onclick="jumpToBrainSequence(\'' + _brainSeqDomId(sp.key) + '\')" title="'
+         + escHtml(title) + '">'
+         + '<span class="brain-lane-name">' + escHtml(_brainSeqLabel(sp.ev)) + '</span>'
+         + '<span class="brain-lane-track">'
+         + '<span class="brain-lane-bar" style="left:' + left.toFixed(2) + '%;width:'
+         + width.toFixed(2) + '%;background:' + col + ';"></span>'
+         + '</span></div>';
+  }).join('');
+  var span = _brainSeqDuration(total);
+  return '<div class="brain-swimlane">'
+       + '<div class="brain-swimlane-head">' + escHtml(t('brain.swimlane_title', null, 'Runs over time'))
+       + '<span class="brain-swimlane-span">' + escHtml(span ? 'spanning ' + span : '') + '</span></div>'
+       + rows + '</div>';
 }
 
 // Reasoning Chain Viewer (GH #565)
