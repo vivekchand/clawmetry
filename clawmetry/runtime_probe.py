@@ -75,6 +75,10 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("pi", "Pi", ("~/.pi/agent/sessions",)),
     RuntimeProbe("deepagents", "DeepAgents", ("~/.deepagents/.state", "~/.deepagents")),
     RuntimeProbe("n8n", "n8n", ("~/.n8n",), env="N8N_USER_FOLDER"),
+    RuntimeProbe("antigravity", "Antigravity",
+                 ("~/.gemini/antigravity", "~/.gemini/antigravity-cli",
+                  "~/.gemini/antigravity-ide", "~/.gemini/jetski"),
+                 env="CLAWMETRY_ANTIGRAVITY_HOME"),
 )
 
 

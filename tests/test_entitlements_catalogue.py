@@ -70,6 +70,13 @@ def test_enterprise_features_match_pricing(ent):
     assert ent.ENTERPRISE_FEATURES == expected
 
 
+def test_compliance_pack_is_pro_and_enterprise(ent):
+    """Compliance Pack ships in Pro AND Enterprise (decision 2026-07-31)."""
+    assert "compliance_pack" in ent.PRO_ONLY_FEATURES
+    assert "compliance_pack" not in ent.ENTERPRISE_FEATURES
+    assert "compliance_pack" in ent.PAID_FEATURES
+
+
 def test_paid_features_is_starter_plus_pro_only(ent):
     assert ent.PAID_FEATURES == ent.STARTER_FEATURES | ent.PRO_ONLY_FEATURES
 

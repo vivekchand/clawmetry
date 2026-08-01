@@ -1,3 +1,18 @@
+## 0.12.613
+
+- **Antigravity is the 16th observed runtime.** Google Antigravity (IDE + CLI, all
+  four product flavors under `~/.gemini/`) now shows up across the dashboard:
+  sessions from brain JSONL transcripts, planner/tool steps as events, CHECKPOINT
+  compactions, per-generation Gemini model + token split (prompt/thinking/response)
+  and cost decoded from the `gen_metadata` store, background-generation burn,
+  subagent + battle-mode metadata. Adapter lives in clawmetry-pro (0.6.0).
+- Approval policies match Antigravity tool names (`run_command`, `view_file`,
+  `write_to_file`, `search_web`, …) via the canonical tool categories.
+- Fixed: n8n was missing from the harness-data and usage-slicing runtime
+  registries (the Pro n8n harness panel rendered empty; per-runtime usage
+  lumped n8n into OpenClaw). Same pass adds pi/deep agents/n8n to the lite
+  runtime labels.
+
 ## [Unreleased]
 
 ### Fix: Brain feed shows each message once, on every surface (#4354) (2026-07-31)

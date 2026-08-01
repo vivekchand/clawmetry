@@ -94,6 +94,7 @@ PAID_RUNTIMES = frozenset(
         "pi",
         "deepagents",
         "n8n",
+        "antigravity",
     }
 )
 
@@ -116,6 +117,7 @@ RUNTIME_LABELS = {
     "pi": "Pi",
     "deepagents": "Deep Agents",
     "n8n": "n8n",
+    "antigravity": "Antigravity",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -261,6 +263,7 @@ FEATURE_LABELS = {
     "rbac": "RBAC",
     "air_gapped_license": "Air-gapped license",
     "custom_data_residency": "Custom data residency",
+    "compliance_pack": "Compliance pack",
 }
 
 _ALIAS_FEATURES = frozenset(
@@ -314,6 +317,7 @@ PRO_ONLY_FEATURES = frozenset(
         "alert_webhooks",
         "anomaly_detection",
         "cost_optimizer",
+        "compliance_pack",
     }
 )
 

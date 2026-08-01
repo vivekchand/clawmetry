@@ -65,7 +65,7 @@ below live here so the free UI can render locked rows with an accurate
 **Additional runtimes** (`entitlements.PAID_RUNTIMES`):
 
 `claude_code`, `codex`, `cursor`, `aider`, `goose`, `opencode`,
-`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`, `n8n`.
+`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`, `n8n`, `antigravity`.
 
 **Additional features**, split across three tiers:
 
