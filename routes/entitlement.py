@@ -3924,6 +3924,184 @@ def api_entitlement_has_node_count():
         return jsonify(_has_node_count_fallback(count_raw))
 
 
+def _has_bundle_fallback(axis: str, tokens: list[str]) -> dict:
+    """OSS-free / never-5xx envelope for the plural ``/api/entitlement/has-features``
+    and ``/api/entitlement/has-runtimes`` endpoints.
+
+    Mirrors the fail-closed posture the singular ``/api/entitlement/has-feature``
+    / ``/has-runtime`` and ``/api/entitlement/has-channel-count`` fallbacks
+    carry: on a resolver blowup the endpoint still returns 200 with the same
+    envelope shape as the happy path, but with ``has_<axis>``/``allowed`` False
+    so a paywall tile that lost the resolver doesn't silently grant a bundle
+    it can't evaluate. ``tokens`` echoes the caller's raw input list into
+    ``unknown`` so a diagnostics tooltip can still surface the offending set.
+    """
+    key = f"has_{axis}"
+    return {
+        axis: [],
+        "unknown": list(tokens),
+        "kind": axis,
+        "count": 0,
+        key: False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+        "upgrade_required": False,
+    }
+
+
+def _has_bundle_body(axis: str) -> dict:
+    """Happy-path body builder for ``/api/entitlement/has-features`` /
+    ``/api/entitlement/has-runtimes``.
+
+    Splits the caller's CSV into ``known`` / ``unknown`` against the
+    entitlement's ``ALL_FEATURES`` / ``ALL_RUNTIMES`` id set (with runtime-
+    alias canonicalisation for the runtimes axis) so the UI can surface a
+    diagnostics list of tokens the resolver couldn't place. The scalar
+    boolean ``has_<axis>`` is delegated to :func:`has_features` /
+    :func:`has_runtimes` against the ORIGINAL CSV -- unknown tokens
+    collapse the bundle to ``False`` there so the endpoint stays byte-parity
+    with the scalar's typo-catches-at-callsite posture (a UI that binds
+    ``allowed`` off this URL can't accidentally render "granted" for a
+    typo'd feature id). ``required_tier`` is resolved against the ``known``
+    subset for parity with the ``/api/entitlement/min-tier-for-<axis>``
+    envelope (which does the same known/unknown split).
+    """
+    from clawmetry import entitlements as _ent
+
+    param = "features" if axis == "features" else "runtimes"
+    tokens = _parse_csv_arg(param)
+
+    known: list[str] = []
+    unknown: list[str] = []
+    if axis == "features":
+        for fid in tokens:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            elif fid not in unknown:
+                unknown.append(fid)
+        required = _ent.min_tier_for_features(known) if known else None
+    else:
+        for rid_raw in tokens:
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known:
+                    known.append(rid)
+            elif rid not in unknown:
+                unknown.append(rid_raw)
+        required = _ent.min_tier_for_runtimes(known) if known else None
+
+    # Scalar boolean: only ``True`` when every input token resolved to a
+    # granted known id (delegates to the plural scalars on the canonicalised
+    # ``known`` list). ``unknown`` tokens collapse the bundle to ``False``
+    # for the same typo-catches-at-callsite reason the singular
+    # ``has_feature("BOGUS")`` returns ``False`` -- a UI can still surface
+    # the offending set via the ``unknown`` slot.
+    if tokens and not unknown and known:
+        has_flag = (
+            _ent.has_features(known)
+            if axis == "features"
+            else _ent.has_runtimes(known)
+        )
+    else:
+        has_flag = False
+
+    env = _resolver_envelope(_ent)
+    cur_rank = env["current_tier_rank"]
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+    return {
+        axis: known,
+        "unknown": unknown,
+        "kind": axis,
+        "count": len(known),
+        f"has_{axis}": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": cur_rank,
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-features")
+def api_entitlement_has_features():
+    """``GET /api/entitlement/has-features?features=a,b,c`` -- plural
+    boolean-gate scalar sibling of ``/api/entitlement/has-feature?feature=<id>``.
+
+    Returns ONE boolean (``has_features``) plus the surrounding tier envelope
+    (``current_tier``, ``required_tier``, ``upgrade_required``) and a
+    known/unknown split of the caller's CSV, so a paywall tile that gates on
+    a bundle (``fleet + otel_export + sso -- Available in Enterprise``) can
+    bind ``allowed`` directly off this URL without parsing the fuller
+    ``/api/entitlement/min-tier-for-features`` body plus a follow-up hit to
+    the singular ``/has-feature`` endpoint per item.
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) ``has_features`` reports ``True`` for every fully-known
+    bundle, so wiring this into a gate today changes NO current behavior.
+    Unknown tokens collapse the bundle to ``has_features=False`` (matches
+    the scalar's typo-catches-at-callsite posture -- a UI can still show
+    ``unknown`` in a diagnostics tooltip). Missing / blank / all-unknown
+    CSV -> 200 with ``has_features=False``, ``features=[]``, ``count=0``
+    (never 4xx, matching the singular ``/has-feature`` envelope). Never
+    5xx.
+
+    Envelope shape (14 keys, byte-stable across every input branch)::
+
+        {
+          "features":            ["fleet", "sso"],   # known ids only, dedup, first-seen order
+          "unknown":             ["bogus"],           # tokens not in ALL_FEATURES, echoed raw
+          "kind":                "features",
+          "count":               2,                   # len(features)
+          "has_features":        false,               # scalar over the ORIGINAL CSV (unknowns collapse)
+          "allowed":             false,               # alias of has_features
+          "required_tier":       "enterprise" | null, # min_tier_for_features(known); null if empty
+          "required_tier_label": "Enterprise" | null,
+          "required_tier_rank":  <int>,               # -1 when required_tier is null
+          "current_tier":        "oss",
+          "current_tier_rank":   0,
+          "grace":               true,
+          "enforced":            false,
+          "upgrade_required":    <bool>               # required_rank > current_rank
+        }
+    """
+    try:
+        return jsonify(_has_bundle_body("features"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_features: error: %s", exc)
+        return jsonify(_has_bundle_fallback("features", _parse_csv_arg("features")))
+
+
+@bp_entitlement.route("/api/entitlement/has-runtimes")
+def api_entitlement_has_runtimes():
+    """``GET /api/entitlement/has-runtimes?runtimes=x,y,z`` -- runtime-axis
+    twin of ``/api/entitlement/has-features``.
+
+    Same 14-key envelope with ``runtimes`` / ``has_runtimes`` in the
+    axis-specific slots. Runtime-alias canonicalisation (``claude-code`` ->
+    ``claude_code``) is applied per token before the known/unknown split so
+    a caller doesn't need to normalise before hitting the URL. Grace
+    pass-through, unknown-collapses-bundle, never-4xx, never-5xx
+    guarantees mirror the features sibling exactly.
+    """
+    try:
+        return jsonify(_has_bundle_body("runtimes"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_runtimes: error: %s", exc)
+        return jsonify(_has_bundle_fallback("runtimes", _parse_csv_arg("runtimes")))
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:

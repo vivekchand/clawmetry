@@ -5601,6 +5601,92 @@ def has_node_count(count) -> bool:
         return False
 
 
+def has_features(features) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow **all** ``features``?
+
+    Plural sibling of :func:`has_feature`. A paywall tile that gates on a
+    bundle ("you are using fleet + otel_export + sso") needs one boolean off
+    the whole set; this scalar folds the per-item :func:`has_feature` walk in
+    one place so callers don't reinvent the AND-chain (and so the feature axis
+    reads symmetric to :func:`min_tier_for_features`: min-tier picks the
+    most-constraining item, this one picks the most-restrictive grant).
+
+    Fold rule: returns ``True`` iff :func:`has_feature` returns ``True`` for
+    **every** item in the iterable, i.e. the tightest single-item denial wins.
+    Consequences of that fold, all deliberate:
+
+    * Empty / ``None`` iterable -- returns ``False``. The vacuous-truth answer
+      would silently render "granted" on a caller who forgot to pass the
+      bundle, which is exactly the callsite-typo posture the singular helper
+      catches with its empty-id ``False``. Mirrors the ``None`` return of
+      :func:`min_tier_for_features` on empty (nothing to compute), collapsed
+      to a strict-``False`` for the boolean seat.
+    * Any unknown / empty / non-string item -- returns ``False``. The singular
+      :func:`has_feature` fails-closed on typos so the bundle fold inherits
+      that: ``has_features(["fleet", "Fleeet"])`` is ``False`` even in grace,
+      surfacing the typo instead of silently granting.
+    * Grace pass-through: while ``ent.grace`` is ``True`` and every item is a
+      known id, the scalar reports ``True`` (each :func:`has_feature` reports
+      ``True`` in grace), so wiring this into a gate today changes NO current
+      behavior.
+    * Non-iterable input (int, ``None`` handled above, arbitrary object) --
+      returns ``False`` without raising.
+
+    Never raises: a delegate failure logs a warning and returns ``False`` so
+    a caller can bind this into a boolean AND-chain without a try/except.
+    """
+    try:
+        if features is None:
+            return False
+        items = list(features)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for f in items:
+            if not has_feature(f):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning("entitlements: has_features(%r) failed: %s", features, exc)
+        return False
+
+
+def has_runtimes(runtimes) -> bool:
+    """Boolean-gate scalar: does the CURRENT install allow **all** ``runtimes``?
+
+    Runtime-axis twin of :func:`has_features`. Delegates to :func:`has_runtime`
+    per item so runtime-alias canonicalisation (``claude-code`` ->
+    ``claude_code``) and the same unknown/empty/non-string strict-``False``
+    posture are inherited from the singular helper.
+
+    Fold semantics mirror :func:`has_features` exactly: ``True`` iff every
+    item is granted; empty / ``None`` iterable / non-iterable input /
+    any-unknown-item all collapse to ``False``. Grace pass-through applies
+    per item, so a fully-known bundle reads ``True`` in grace and wires in as
+    a no-op behavior change today.
+
+    Never raises: delegate failure -> logged warning -> ``False``.
+    """
+    try:
+        if runtimes is None:
+            return False
+        items = list(runtimes)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for rt in items:
+            if not has_runtime(rt):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning("entitlements: has_runtimes(%r) failed: %s", runtimes, exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
