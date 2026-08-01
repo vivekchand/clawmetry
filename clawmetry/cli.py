@@ -5898,6 +5898,66 @@ def _cmd_cloud_toggle(enable: bool) -> int:
     return 0
 
 
+def _cmd_compliance(args) -> None:
+    """``clawmetry compliance bundle --framework <id> --from --to --out``.
+
+    Fetches an auditor-ready evidence bundle (zip) from the running local
+    dashboard's Compliance Pack endpoint. The engine lives in clawmetry-pro;
+    vanilla OSS answers HTTP 402 and we explain the upgrade path.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    verb = getattr(args, "compliance_cmd", None)
+    if verb != "bundle":
+        print("Usage: clawmetry compliance bundle "
+              "[--framework nist-ai-rmf|soc2-cc] [--from DATE] [--to DATE] "
+              "[--out FILE] [--port PORT]")
+        sys.exit(2)
+    port = getattr(args, "port", None) or 8900
+    query = {"framework": getattr(args, "framework", None) or "nist-ai-rmf"}
+    if getattr(args, "date_from", None):
+        query["from"] = args.date_from
+    if getattr(args, "date_to", None):
+        query["to"] = args.date_to
+    url = (f"http://127.0.0.1:{port}/api/compliance/bundle?"
+           + urllib.parse.urlencode(query))
+    req = urllib.request.Request(url, method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        if e.code == 402:
+            print("❌  The Compliance Pack is a paid feature (Pro and up).")
+            print("    Install clawmetry-pro with a license key, or see "
+                  "clawmetry.com/pricing.")
+        elif e.code == 404:
+            print(f"❌  Unknown framework {query['framework']!r} (or the "
+                  "dashboard predates the Compliance Pack — update it).")
+        else:
+            print(f"❌  Bundle request failed: HTTP {e.code}")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        print(f"❌  No dashboard at http://127.0.0.1:{port} — start it with "
+              "`clawmetry` first (or pass --port).")
+        sys.exit(1)
+    blob = resp.read()
+    out = getattr(args, "out", None)
+    if not out:
+        frm = (query.get("from") or "start")[:10]
+        to = (query.get("to") or "now")[:10]
+        out = f"clawmetry-compliance_{query['framework']}_{frm}_{to}.zip"
+    with open(out, "wb") as fh:
+        fh.write(blob)
+    sha = resp.headers.get("X-Clawmetry-Bundle-Sha256", "")
+    n_controls = resp.headers.get("X-Clawmetry-Bundle-Controls", "?")
+    print(f"✅  Wrote {out} ({len(blob):,} bytes, {n_controls} controls)")
+    if sha:
+        print(f"    sha256: {sha}")
+    print("    Contents: manifest, integrity proof, controls.json, "
+          "approvals.csv, violations.csv, audit_log.csv, attestation.md")
+
+
 def _cmd_export(args) -> None:
     """``clawmetry export --from <date> --to <date> --format jsonl|csv``.
 
@@ -6858,6 +6918,55 @@ def main() -> None:
         help="Write to FILE instead of stdout",
     )
 
+    p_compliance = sub.add_parser(
+        "compliance",
+        help=(
+            "Compliance Pack — generate an auditor-ready evidence bundle "
+            "from the running dashboard (Pro)"
+        ),
+    )
+    comp_sub = p_compliance.add_subparsers(dest="compliance_cmd")
+    p_comp_bundle = comp_sub.add_parser(
+        "bundle",
+        help="Build and download the evidence bundle zip",
+    )
+    p_comp_bundle.add_argument(
+        "--framework",
+        dest="framework",
+        default="nist-ai-rmf",
+        metavar="ID",
+        help="Control map to evaluate (default: nist-ai-rmf; also: soc2-cc)",
+    )
+    p_comp_bundle.add_argument(
+        "--from",
+        dest="date_from",
+        default=None,
+        metavar="DATE",
+        help="Start of reporting period (ISO date; default: 30 days ago)",
+    )
+    p_comp_bundle.add_argument(
+        "--to",
+        dest="date_to",
+        default=None,
+        metavar="DATE",
+        help="End of reporting period (ISO date; default: now)",
+    )
+    p_comp_bundle.add_argument(
+        "--out",
+        dest="out",
+        default=None,
+        metavar="FILE",
+        help="Write the zip to FILE (default: derived name in cwd)",
+    )
+    p_comp_bundle.add_argument(
+        "--port",
+        dest="port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Local dashboard port (default: 8900)",
+    )
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     # `hooks` is absent from this tuple ON PURPOSE: it's intercepted by the
     # fast path at the top of main() before the dashboard import. The parser
@@ -6897,6 +7006,7 @@ def main() -> None:
         "doctor",
         "verify-integrity",
         "export",
+        "compliance",
         "nemoclaw-daemons",
     )
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
@@ -6960,6 +7070,8 @@ def main() -> None:
             _cmd_verify_integrity(args)
         elif args.cmd == "export":
             _cmd_export(args)
+        elif args.cmd == "compliance":
+            _cmd_compliance(args)
         elif args.cmd == "nemoclaw-daemons":
             _register_nemoclaw_sandbox_daemons()
     else:

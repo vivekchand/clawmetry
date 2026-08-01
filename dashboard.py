@@ -114,6 +114,7 @@ from routes.components import bp_components
 from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_traces, bp_version, bp_version_impact
+from routes.compliance import bp_compliance
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
@@ -283,16 +284,16 @@ except ImportError:
         pass  # noqa
 
 
-app = Flask(
-    __name__,
-    static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
-    template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
-)
-
-# Plugins (e.g. ``clawmetry-pro``) can now register Blueprints on ``app``.
-# Older plugins with ``register_all()`` (no args) keep working unchanged:
-# the loader inspects the signature and only passes ``app`` when accepted.
-_ext_load(app)
+# NOTE: the Flask app is constructed ONCE, further down this module (search
+# for ``app = Flask(``). A second, earlier construction used to live here and
+# silently orphaned every plugin Blueprint: clawmetry-pro registered its
+# routes on the early app, then the later ``app = Flask(...)`` replaced it and
+# every pro-only endpoint (nemoclaw, selfevolve, assets, compliance, ...)
+# 404'd on licensed installs while the OSS 402 stubs skipped registration
+# because ``clawmetry_pro.is_loaded()`` was True. ``_ext_load(app)`` must be
+# invoked on the app instance that actually serves — it is called immediately
+# after the real construction below. Guarded by
+# tests/test_plugin_load_on_served_app.py.
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
@@ -8646,6 +8647,14 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
 
+# Plugins (e.g. ``clawmetry-pro``) register their Blueprints on ``app`` HERE —
+# this must stay immediately after the one-and-only Flask() construction (see
+# the note near the top of this module: a second construction once orphaned
+# every plugin route). Older plugins with ``register_all()`` (no args) keep
+# working unchanged: the loader inspects the signature and only passes
+# ``app`` when accepted.
+_ext_load(app)
+
 # Cap request body size (DoS guard). OTLP/JSON batches and config posts are
 # small; a 32 MB ceiling lets Flask reject oversized bodies (413) before they
 # are read into memory. Override with CLAWMETRY_MAX_REQUEST_MB for large OTLP
@@ -11748,6 +11757,7 @@ def detect_config(args=None):
     # the OSS stub registers and returns HTTP 402 ``upgrade_required``.
     if not _pro_loaded:
         app.register_blueprint(bp_nemoclaw)
+        app.register_blueprint(bp_compliance)
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
