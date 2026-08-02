@@ -1317,6 +1317,18 @@ def api_system_health():
     else:
         top_source = "gateway"
 
+    # Trusted-proxy device pairing (#4431): surface auto-approved vs
+    # manually-approved device grants from the gateway in the health view.
+    # _gateway_trusted_proxy_devices() reads gateway.status (+ fallback
+    # gateway.devices RPC); returns {} when the gateway is down or the
+    # feature hasn't shipped yet — never raises.
+    trusted_devices: dict = {}
+    try:
+        from clawmetry.adapters.openclaw import _gateway_trusted_proxy_devices
+        trusted_devices = _gateway_trusted_proxy_devices()
+    except Exception:
+        pass
+
     return jsonify(
         {
             "services": services,
@@ -1337,6 +1349,7 @@ def api_system_health():
             "sandbox": _d._detect_sandbox_metadata(),
             "inference": _d._detect_inference_metadata(),
             "security": _d._detect_security_metadata(),
+            "trusted_devices": trusted_devices,
             "service_status": service_status,
             "daemon": daemon_health,
             "daemon_error_rate_per_min": round(
