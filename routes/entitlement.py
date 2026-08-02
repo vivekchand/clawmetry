@@ -3515,6 +3515,193 @@ def api_entitlement_has_runtime():
         return jsonify(_has_axis_fallback("runtime", key))
 
 
+def _has_axis_at_fallback(axis: str, tier: str, key: str) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-feature-at`` /
+    ``/has-runtime-at``.
+
+    What-if sibling of :func:`_has_axis_fallback`. On any resolver / helper
+    blowup the endpoint still returns 200 with the same 12-key envelope as
+    the happy-path branch, but with ``has_<axis>_at`` and ``allowed``
+    strict-``False`` (matches the fail-closed posture the sibling
+    ``/has-feature`` / ``/has-runtime`` fallback uses -- a paywall matrix
+    tile that lost the resolver never silently renders a grant it can't
+    verify). ``tier`` and the axis slot echo the caller's canonicalised
+    input so the UI can still surface both in a diagnostics tooltip.
+    """
+    return {
+        "tier": tier,
+        axis: key,
+        f"has_{axis}_at": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "perspective_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_axis_at_body(axis: str) -> dict:
+    """Happy-path body builder for ``/api/entitlement/has-feature-at`` /
+    ``/has-runtime-at`` -- scalar what-if boolean plus the surrounding
+    what-if envelope.
+
+    Perspective-shaped sibling of :func:`_has_axis_body`: where the live
+    variant folds :func:`has_feature` / :func:`has_runtime` against the
+    resolved entitlement, this folds :func:`has_feature_at` /
+    :func:`has_runtime_at` against a caller-supplied ``tier=`` perspective
+    so a pricing matrix ("does Starter grant fleet? Pro? Enterprise?")
+    can bind ONE boolean per cell off ONE URL each instead of
+    hydrating the full ``/feature-catalog-at`` payload and pulling out
+    the ``allowed`` field client-side.
+
+    12-key envelope (adds ``tier`` + ``perspective_tier_rank`` +
+    ``grace`` / ``enforced`` on top of the sibling ``/has-feature`` shape)::
+
+        {
+          "tier":                  "<perspective tier id>" | "",
+          "feature":               "<canonicalised id>"    | "",
+          "has_feature_at":        <bool>,
+          "allowed":               <bool>,             # alias of has_feature_at
+          "required_tier":         "<tier id>" | null, # min_tier_for_<axis>
+          "required_tier_label":   "<label>"  | null,
+          "required_tier_rank":    <int>,              # -1 when required_tier null
+          "perspective_tier_rank": <int>,              # -1 when tier unknown/blank
+          "current_tier":          "<live tier id>",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,             # live resolver grace bit
+          "enforced":              <bool>,
+        }
+
+    Runtime-axis alias canonicalisation: the endpoint layer calls
+    :func:`canonical_runtime` on the raw ``runtime`` arg before delegating
+    to :func:`has_runtime_at`, matching the ``/has-runtime`` endpoint's
+    own upstream posture. This lets ``?runtime=claude-code`` collapse to
+    the granted ``claude_code`` at the URL layer even though the scalar
+    itself is strict (no alias resolution at scalar level -- see
+    :func:`has_runtime_at`).
+
+    Never 4xxs (missing / blank / unknown tier or axis id -> 200 with
+    ``has_<axis>_at=False``, mirroring the ``/has-feature`` posture). The
+    ``perspective_tier_rank`` slot is ``-1`` for an unknown perspective
+    so a UI can distinguish "typo perspective" from "valid perspective
+    that just doesn't grant this axis". Never 5xxs.
+    """
+    from clawmetry import entitlements as _ent
+
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    if axis == "feature":
+        raw_key = request.args.get("feature")
+        key = (raw_key or "").strip().lower()
+    else:
+        raw_key = request.args.get("runtime")
+        # Canonicalise runtime alias upstream of the strict scalar
+        # (``has_runtime_at`` does not resolve aliases -- see the
+        # scalar docstring for rationale), matching the sibling
+        # ``/has-runtime`` endpoint's own upstream-canonicalise pattern.
+        raw_stripped = (raw_key or "").strip().lower()
+        try:
+            key = _ent.canonical_runtime(raw_stripped) or raw_stripped
+        except Exception:
+            key = raw_stripped
+    if axis == "feature":
+        has_flag = _ent.has_feature_at(tier, key)
+        required = _ent.min_tier_for_feature(key) if key else None
+    else:
+        has_flag = _ent.has_runtime_at(tier, key)
+        required = _ent.min_tier_for_runtime(key) if key else None
+    ent = _ent.get_entitlement()
+    cur_rank = _ent.tier_rank(ent.tier)
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+    # Rank of the perspective tier itself, so a paywall matrix can sort
+    # cells by tier without a follow-up ``/tier-rank`` call. ``-1`` when
+    # the perspective is unknown / blank (matches the ``required_tier_rank``
+    # sentinel for a not-resolved tier).
+    persp_rank = _ent.tier_rank(tier) if tier and tier in _ent._TIER_ORDER else -1
+    return {
+        "tier": tier,
+        axis: key,
+        f"has_{axis}_at": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "perspective_tier_rank": persp_rank,
+        "current_tier": ent.tier,
+        "current_tier_rank": cur_rank,
+        "grace": bool(ent.grace),
+        "enforced": _ent.is_enforced(),
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-feature-at")
+def api_entitlement_has_feature_at():
+    """``GET /api/entitlement/has-feature-at?tier=<perspective>&feature=<id>``
+    -- what-if boolean-gate scalar sibling of ``/api/entitlement/has-feature``.
+
+    Returns ONE boolean (``has_feature_at``) plus a what-if envelope that
+    tells the caller which perspective they asked about, whether the
+    requested feature is admitted by that perspective, the cheapest tier
+    that would unlock it (``required_tier``, byte-parity with the sibling
+    ``/api/entitlement/min-tier-for-feature`` answer), and the LIVE
+    resolver context (``current_tier`` / ``grace`` / ``enforced``) so a
+    pricing matrix can render "you are here" alongside "would tier X
+    grant this?" off ONE URL per cell.
+
+    Unlike the live ``/has-feature`` sibling this endpoint is
+    perspective-shaped: even in grace ``has_feature_at="oss","fleet"`` is
+    ``False`` (because OSS-free does not statically grant ``fleet``),
+    whereas ``/has-feature?feature=fleet`` in grace returns ``True``.
+    That is the whole point of the ``_at`` slot -- render the
+    would-be-locked state alongside the live grant.
+
+    Never 4xxs (missing / blank / unknown tier or feature -> 200 with
+    ``has_feature_at=false``, matching the ``/has-feature`` posture --
+    a paywall matrix tile binds ``allowed`` directly without a
+    pre-validation round-trip). Never 5xxs: any helper blowup collapses
+    to :func:`_has_axis_at_fallback`.
+    """
+    try:
+        return jsonify(_has_axis_at_body("feature"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_feature_at: error: %s", exc)
+        tier = (request.args.get("tier") or "").strip().lower()
+        key = (request.args.get("feature") or "").strip().lower()
+        return jsonify(_has_axis_at_fallback("feature", tier, key))
+
+
+@bp_entitlement.route("/api/entitlement/has-runtime-at")
+def api_entitlement_has_runtime_at():
+    """``GET /api/entitlement/has-runtime-at?tier=<perspective>&runtime=<id>``
+    -- runtime-axis twin of ``/api/entitlement/has-feature-at``.
+
+    Same 12-key envelope with ``runtime`` / ``has_runtime_at`` in the
+    axis-specific slots. Runtime-alias canonicalisation
+    (``claude-code`` -> ``claude_code``) is applied upstream at the
+    endpoint layer so ``?runtime=claude-code`` collapses to the granted
+    ``claude_code`` -- matches the sibling ``/has-runtime`` endpoint's
+    own upstream-canonicalise pattern. Never 4xxs; never 5xxs.
+    """
+    try:
+        return jsonify(_has_axis_at_body("runtime"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_runtime_at: error: %s", exc)
+        tier = (request.args.get("tier") or "").strip().lower()
+        raw_key = (request.args.get("runtime") or "").strip().lower()
+        try:
+            from clawmetry import entitlements as _ent
+
+            key = _ent.canonical_runtime(raw_key) or raw_key
+        except Exception:
+            key = raw_key
+        return jsonify(_has_axis_at_fallback("runtime", tier, key))
+
+
 def _has_channel_count_fallback(count_raw: str) -> dict:
     """OSS-free / never-5xx shape for ``/api/entitlement/has-channel-count``.
 
