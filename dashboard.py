@@ -267,7 +267,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.622"
+__version__ = "0.12.628"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -8876,14 +8876,17 @@ def _get_heartbeat_status():
     }
 
 
-# ── Agent-presence detection (no-agent empty-state, sibling of #1604) ──
+# ── Agent-presence detection (sibling of #1604) ──
 # Distinct from ``_get_heartbeat_status``:
 #   * heartbeat-status answers "has THIS install's daemon checked in yet?"
 #     (transient race, resolves in ~30s — drives #1631's onboarding banner)
 #   * detect_agent_install() answers "is there any underlying agent at
-#     all?" (persistent until the user installs one — drives the
-#     "No OpenClaw or NemoClaw detected" page-level empty-state).
-# Cached 60s so every tab switch doesn't re-stat 4+ paths and shell out
+#     all?" — served at /api/agent-presence and mirrored into heartbeats
+#     (sync.py) for the cloud's install-state aggregation. The dashboard
+#     banner this used to drive ("No OpenClaw or NVIDIA NemoClaw
+#     detected") was removed once ClawMetry grew past two runtimes; the
+#     detection API stays for cloud consumers.
+# Cached 60s so polling consumers don't re-stat 4+ paths and shell out
 # to ``shutil.which``.
 _agent_presence_cache = {"ts": 0.0, "value": None}
 _AGENT_PRESENCE_TTL_SEC = 60
@@ -12472,6 +12475,7 @@ DASHBOARD_HTML = r"""
    blurred dashboard on first run). #}
 {% include 'partials/cloud-modal.html' %}
 {% include 'partials/onboarding-modal.html' %}
+{% include 'partials/selfhost-modal.html' %}
 {% include 'partials/budget-modal.html' %}
 
 <!-- Component Detail Modal -->
@@ -18740,7 +18744,16 @@ def _start_daemon_background():
     import subprocess
     import pathlib as _pl
 
-    spawn_kwargs = {}
+    # Without a config the spawned daemon crash-loops (load_config raises)
+    # and the local store never fills; and `python -m` puts the CWD on
+    # sys.path, so a dashboard launched from a source checkout would spawn
+    # the repo's (possibly stale) sync.py instead of the installed wheel.
+    try:
+        from clawmetry.sync import ensure_local_config
+        ensure_local_config()
+    except Exception:
+        pass
+    spawn_kwargs = {"cwd": os.path.expanduser("~")}
     if os.name == "nt":
         # start_new_session is POSIX-only and silently no-ops on Windows:
         # the daemon stayed tied to this console (killed when it closes)

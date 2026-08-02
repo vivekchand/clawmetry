@@ -173,12 +173,40 @@ def map_enforcement(rec: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def finding_summary(rec: dict[str, Any]) -> str:
+    """One human-readable line for a finding: what happened, how bad, which
+    rule. This is what the activity feed shows the user."""
+    sev = str(rec.get("severity") or "").upper()
+    title = rec.get("title") or rec.get("rule_id") or "security finding"
+    rule = rec.get("rule_id") or ""
+    line = f"{sev} · {title}" if sev else str(title)
+    if rule and rule != title:
+        line = f"{line} ({rule})"
+    return line
+
+
+def is_live_finding(rec: dict[str, Any]) -> bool:
+    """True for findings observed as the agent acts (hooks / OTLP logs).
+
+    ``source_type="artifact"`` findings come from ``numbat scan`` re-reading
+    historical transcripts — one scan of a year of history emits thousands at
+    once. Those belong on the Security surface, NOT in the live activity feed
+    (which is a stream of what's happening now) and NOT in alert-rule
+    thresholds, where a single backfill would look like a live incident storm.
+    """
+    return rec.get("source_type") in ("hook", "otel")
+
+
 def map_finding_shadow_event(rec: dict[str, Any], node_id: str) -> dict[str, Any] | None:
     """finding record → events-table shadow row so event_type-based alert
     rules fire (the proxy.py loop_detected precedent). Daemon-side only:
-    LocalStore.ingest needs node_id and isn't proxy-allowlisted."""
+    LocalStore.ingest needs node_id and isn't proxy-allowlisted.
+
+    Returns None for at-rest scan findings — see is_live_finding()."""
     fid = rec.get("finding_id")
     if not fid or not node_id:
+        return None
+    if not is_live_finding(rec):
         return None
     ts = _norm_ts(rec.get("timestamp")) or _norm_ts(rec.get("detected_at"))
     if not ts:
@@ -190,10 +218,13 @@ def map_finding_shadow_event(rec: dict[str, Any], node_id: str) -> dict[str, Any
         "event_type": SHADOW_EVENT_TYPE,
         "ts": ts,
         "session_id": _canonical_session_id(rec),
-        # Keep the payload lean (snapshot bloat rule): enough for an alert
-        # message and the Brain badge, nothing more.
+        # ``summary`` is load-bearing: routes/brain.py's detail extractor
+        # looks for summary/text/name/... — without it every row rendered
+        # blank in the activity feed (founder screenshot 2026-08-01).
+        # Payload stays lean otherwise (snapshot bloat rule).
         "data": json.dumps(
             {
+                "summary": finding_summary(rec),
                 "rule_id": rec.get("rule_id"),
                 "severity": rec.get("severity"),
                 "title": rec.get("title"),

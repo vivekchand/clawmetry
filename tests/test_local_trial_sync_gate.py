@@ -101,11 +101,15 @@ def test_sync_allowed_cloud_yes_stays_yes(monkeypatch):
 
 
 def test_ensure_local_daemon_spawn_shape(monkeypatch):
-    """The spawn is detached per-OS and runs `python -m clawmetry.sync`."""
+    """The spawn is detached per-OS, runs `python -m clawmetry.sync` from a
+    neutral CWD, and bootstraps a local-only config first (a config-less
+    daemon crash-loops in load_config and the store never fills)."""
     import routes.trial as T
+    import clawmetry.sync as S
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     captured = {}
+    calls = []
 
     def _fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
@@ -113,13 +117,39 @@ def test_ensure_local_daemon_spawn_shape(monkeypatch):
         return SimpleNamespace(pid=4242)
 
     monkeypatch.setattr(T.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(S, "ensure_local_config",
+                        lambda: calls.append("config") or True)
     T._ensure_local_daemon()
+    assert calls == ["config"], "config must be bootstrapped before the spawn"
     assert captured["cmd"][-2:] == ["-m", "clawmetry.sync"]
     kw = captured["kwargs"]
+    assert kw.get("cwd") == os.path.expanduser("~"), \
+        "`python -m` puts the CWD on sys.path; a repo CWD runs stale source"
     if os.name == "nt":
         assert kw.get("creationflags"), "Windows spawn must be detached"
     else:
         assert kw.get("start_new_session") is True
+
+
+def test_ensure_local_config_writes_once(monkeypatch, tmp_path):
+    """Missing config -> local-only shape written 0600; existing -> no-op."""
+    import clawmetry.sync as S
+    import json as _json
+    import pathlib
+
+    cfg = pathlib.Path(tmp_path) / "config.json"
+    monkeypatch.setattr(S, "CONFIG_DIR", pathlib.Path(tmp_path))
+    monkeypatch.setattr(S, "CONFIG_FILE", cfg)
+
+    assert S.ensure_local_config() is True
+    data = _json.loads(cfg.read_text())
+    assert data["local_only"] is True
+    assert data["api_key"] == ""
+    assert data["node_id"]
+
+    cfg.write_text(_json.dumps({"api_key": "keep-me"}))
+    assert S.ensure_local_config() is False, "existing config must survive"
+    assert _json.loads(cfg.read_text()) == {"api_key": "keep-me"}
 
 
 def test_trial_activation_calls_ensure_daemon(monkeypatch, tmp_path):

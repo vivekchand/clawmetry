@@ -1,4 +1,4 @@
-<!-- i18n-src:02b789586c7d -->
+<!-- i18n-src:191e9094d7fa -->
 > मराठी translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -31,7 +31,7 @@ ClawMetry ची सुरुवात OpenClaw साठी ऑब्झर्�
 
 🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity**
 
-OpenClaw आणि NemoClaw हे ओपन-सोर्स ॲपमध्ये मोफत आहेत; उर्वरित रनटाइम्स ClawMetry Cloud किंवा सेल्फ-होस्टेड Pro लायसन्ससह सक्रिय होतात. हेडरमधून आणि प्रत्येक टॅबमधून रनटाइम बदला — किंमत, टोकन्स, टूल्स, ट्रेसेस — सर्व त्या रनटाइमसाठी पुन्हा-स्कोप होते. नेमका फ्री/पेड विभाजन, टियर मॅट्रिक्स, `/api/entitlement` शेप आणि `clawmetry license` CLI साठी **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** पहा.
+OpenClaw आणि NemoClaw हे ओपन-सोर्स ॲपमध्ये मोफत आहेत; उर्वरित रनटाइम्स ClawMetry Cloud किंवा सेल्फ-होस्टेड Pro लायसन्ससह सक्रिय होतात. हेडरमधून रनटाइम बदला, आणि प्रत्येक टॅब — कॉस्ट, टोकन्स, टूल्स, ट्रेसेस — त्या रनटाइमसाठी पुन्हा-स्कोप होतो. नेमका फ्री/पेड विभाजन, टियर मॅट्रिक्स, `/api/entitlement` शेप आणि `clawmetry license` CLI साठी **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** पहा.
 
 ## तुम्हाला काय मिळते
 
@@ -152,6 +152,8 @@ ClawMetry फक्त OpenClaw नव्हे तर अनेक AI-एजं
 replay टॅबमध्ये **रनटाइम स्विचर** दाखवला जातो. संपूर्ण मॅट्रिक्स + रनटाइम्स
 जोडण्याच्या मार्गदर्शकासाठी [`docs/compatibility.md`](docs/compatibility.md)
 आणि OpenClaw-फॅमिली प्रायमरसाठी [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) पहा.
+
+[Perplexity चे numbat](https://github.com/perplexityai/numbat) एजंट-सुरक्षा टूल वापरत आहात? ClawMetry त्याचे फाइंडिंग्स आणि एन्फोर्समेंट निर्णय जशाच्या तशा इनजेस्ट करते — पाहा [`docs/NUMBAT.md`](docs/NUMBAT.md).
 
 | रनटाइम / एजंट | स्थिती | टिपा |
 |---|---|---|
