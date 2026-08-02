@@ -15,6 +15,11 @@
 
 ## [Unreleased]
 
+### Fix: Overview hero said "It's idle right now" while main sessions were hard at work (2026-08-02)
+- **Why:** the hero's alive-state read only `/api/subagents`, which lists spawned Task-tool children. Main terminal sessions (Claude Code busy in several terminals) never appear there, so a working node read as idle. For a product whose promise is "is my agent alive, what is it doing", the headline was untruthful (founder report, app.clawmetry.com claude_code view).
+- **What:** a per-runtime `last_activity_ms` recency signal (newest event ts / session `last_active_at`, epoch ms) now rides the existing rollup: `query_model_rollup`, the `runtimeSummary` snapshot slice, and the local `/api/runtime-summary` route carry it, and the hero computes busy as an active subagent OR activity within the last 3 minutes, scoped to the runtime switcher (all-runtimes uses the max). Cached 30 seconds with a single in-flight fetch; on a fetch error the previous data is kept and retried in 5 seconds so a cold-load timeout cannot pin the hero on idle. Also fixes the latent live tok/s chip bug this exposed: it diffed the today-token counter across renders without noticing the runtime scope changed sources between samples (rendering "23,058,079 tok/s"); samples are now same-scope with a sanity ceiling.
+- **Verified:** guard tests across all four hops (store rollup, snapshot builder, local route, hero JS) proven red on un-fixed code; live daemon patched and the decrypted cloud snapshot carried the field 1.9 minutes fresh; browser render showed "It's working right now." node-wide and scoped while the reporting session itself was the activity source.
+
 ### Feature: expired-trial banner with a buy path on the local dashboard (2026-08-02)
 - **Why:** once a self-host trial ended, the local dashboard had no honest purchase path: the paywall modal pitches "Start 7-day free trial" (one per account, so a dead end post-trial) and the selfhost modal's ended-step only appears on a re-signup attempt.
 - **What:** a banner keyed off the entitlement's expired flag (expired trial or expired paid license, tier-aware copy) with "Get a license" pointing at self-host pricing and "I have a license key" opening the existing paste surface. One entitlement fetch on load, no poller; dismiss lasts 24 hours.
