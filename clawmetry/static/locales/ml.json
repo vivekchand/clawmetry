@@ -692,7 +692,6 @@
   "inventory.owner_default": "ഞാൻ",
   "inventory.cost_na_tip": "ഈ റൺടൈം ഇതുവരെ ചെലവ് റിപ്പോർട്ട് ചെയ്യുന്നില്ല.",
   "inventory.empty_title": "ഇതുവരെ ഒരു ഏജന്റും ഇല്ല, അത് ശരിതന്നെ.",
-  "inventory.empty_body": "ClawMetry, OpenClaw, NVIDIA NemoClaw, കൂടാതെ 10 കൂടുതൽ റൺടൈമുകളും പ്രവർത്തനം ആരംഭിക്കുന്ന നിമിഷം നിരീക്ഷിക്കുന്നു. ഒന്നും കോൺഫിഗർ ചെയ്യേണ്ടതില്ല.",
   "inventory.expand_brain": "ചിന്ത കാണുക",
   "inventory.expand_cost": "ചെലവ് കാണുക",
   "inventory.expand_flow": "തത്സമയം കാണുക",

@@ -692,7 +692,6 @@
   "inventory.owner_default": "من",
   "inventory.cost_na_tip": "این محیط اجرا هنوز هزینه را گزارش نمی‌دهد.",
   "inventory.empty_title": "هنوز هیچ عاملی وجود ندارد، و این اشکالی ندارد.",
-  "inventory.empty_body": "ClawMetry به محض اجرا، OpenClaw، NVIDIA NemoClaw و ۱۰ محیط اجرای دیگر را زیر نظر می‌گیرد. هیچ تنظیمی لازم نیست.",
   "inventory.expand_brain": "ببینید چه فکری می‌کند",
   "inventory.expand_cost": "ببینید چه هزینه‌ای داشته",
   "inventory.expand_flow": "آن را زنده تماشا کنید",

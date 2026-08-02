@@ -692,7 +692,6 @@
   "inventory.owner_default": "میں",
   "inventory.cost_na_tip": "یہ رن ٹائم ابھی تک خرچ کی رپورٹ نہیں دیتا۔",
   "inventory.empty_title": "ابھی کوئی ایجنٹ نہیں، اور یہ بالکل ٹھیک ہے۔",
-  "inventory.empty_body": "ClawMetry، OpenClaw، NVIDIA NemoClaw اور 10 مزید رن ٹائمز کو چلتے ہی دیکھنا شروع کر دیتا ہے۔ کچھ بھی ترتیب دینے کی ضرورت نہیں۔",
   "inventory.expand_brain": "دیکھیں یہ کیا سوچ رہا ہے",
   "inventory.expand_cost": "دیکھیں اس کا خرچ کتنا ہے",
   "inventory.expand_flow": "لائیو دیکھیں",

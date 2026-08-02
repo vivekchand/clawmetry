@@ -692,7 +692,6 @@
   "inventory.owner_default": "ben",
   "inventory.cost_na_tip": "Bu çalışma ortamı henüz maliyet bildirmiyor.",
   "inventory.empty_title": "Henüz ajan yok, bu gayet normal.",
-  "inventory.empty_body": "ClawMetry; OpenClaw, NVIDIA NemoClaw ve 10'dan fazla çalışma ortamını çalışır çalışmaz izlemeye alır. Yapılandırmaya gerek yok.",
   "inventory.expand_brain": "Ne düşündüğüne bak",
   "inventory.expand_cost": "Maliyetini incele",
   "inventory.expand_flow": "Canlı izle",
