@@ -4102,6 +4102,193 @@ def api_entitlement_has_runtimes():
         return jsonify(_has_bundle_fallback("runtimes", _parse_csv_arg("runtimes")))
 
 
+def _missing_bundle_fallback(axis: str, tokens: list) -> dict:
+    """OSS-free / never-5xx envelope for the ``/api/entitlement/missing-features``
+    and ``/api/entitlement/missing-runtimes`` endpoints.
+
+    Complement of :func:`_has_bundle_fallback`: on a resolver blowup the
+    endpoint still returns 200 with the same envelope shape as the happy
+    path, but with ``missing=[]`` (matches the ``[]`` module scalar returns
+    on error) and the ``any_missing`` rollup ``False`` so a diagnostics tile
+    wired off this URL does not silently render a denial banner on a resolver
+    hiccup. ``tokens`` echoes the caller's raw input list into ``unknown``
+    so the tooltip can still surface the caller-supplied set for debugging.
+    """
+    return {
+        axis: [],
+        "unknown": list(tokens),
+        "missing": [],
+        "kind": axis,
+        "count": 0,
+        "missing_count": 0,
+        "any_missing": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+        "upgrade_required": False,
+    }
+
+
+def _missing_bundle_body(axis: str) -> dict:
+    """Happy-path body builder for ``/api/entitlement/missing-features`` /
+    ``/api/entitlement/missing-runtimes``.
+
+    Row-detail complement of :func:`_has_bundle_body`: where ``has-features``
+    /``has-runtimes`` fold the bundle to ONE boolean, this preserves the
+    per-item denial list so a paywall diagnostics tile ("you're missing
+    fleet, sso -- upgrade to unlock") can bind the exact set off ONE URL
+    without walking the ``/has-batch`` matrix and filtering ``has=False``
+    client-side.
+
+    Splits the caller's CSV into ``known`` / ``unknown`` against the
+    entitlement's ``ALL_FEATURES`` / ``ALL_RUNTIMES`` id set (with runtime-
+    alias canonicalisation for the runtimes axis). ``missing`` is delegated
+    to :func:`missing_features` / :func:`missing_runtimes` against the
+    ORIGINAL CSV so unknown tokens surface in the denial list (matches the
+    scalar's typo-catches-at-callsite posture -- a UI can still separate
+    unknown vs known-but-denied via the ``unknown`` slot). ``required_tier``
+    is resolved against the ``known`` subset for parity with the sibling
+    ``/api/entitlement/min-tier-for-<axis>`` envelope.
+    """
+    from clawmetry import entitlements as _ent
+
+    param = "features" if axis == "features" else "runtimes"
+    tokens = _parse_csv_arg(param)
+
+    known: list = []
+    unknown: list = []
+    if axis == "features":
+        for fid in tokens:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            elif fid not in unknown:
+                unknown.append(fid)
+        missing = _ent.missing_features(tokens)
+        required = _ent.min_tier_for_features(known) if known else None
+    else:
+        # Canonicalise upstream of the scalar so an alias input
+        # (``claude-code``) collapses to the granted runtime
+        # (``claude_code``) here instead of surfacing in ``missing`` --
+        # matches the :func:`_has_bundle_body` upstream-canonicalise
+        # pattern for the sibling ``/has-runtimes`` endpoint, and dedups
+        # an alias-and-canonical pair to one entry before the scalar
+        # sees it.
+        canon_tokens: list = []
+        canon_seen: set = set()
+        for rid_raw in tokens:
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in canon_seen:
+                continue
+            canon_seen.add(rid)
+            canon_tokens.append(rid)
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known:
+                    known.append(rid)
+            elif rid not in unknown:
+                unknown.append(rid_raw)
+        missing = _ent.missing_runtimes(canon_tokens)
+        required = _ent.min_tier_for_runtimes(known) if known else None
+
+    env = _resolver_envelope(_ent)
+    cur_rank = env["current_tier_rank"]
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+    return {
+        axis: known,
+        "unknown": unknown,
+        "missing": list(missing),
+        "kind": axis,
+        "count": len(known),
+        "missing_count": len(missing),
+        "any_missing": bool(missing) or bool(unknown),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": cur_rank,
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-features")
+def api_entitlement_missing_features():
+    """``GET /api/entitlement/missing-features?features=a,b,c`` -- row-detail
+    complement of ``/api/entitlement/has-features``.
+
+    Returns the SUBSET of ``features`` NOT granted by the resolved
+    entitlement (the exact list of ids blocking the bundle) plus the
+    surrounding tier envelope. Where ``/has-features`` folds the bundle to
+    ONE boolean ("does the whole set pass?"), this preserves the per-item
+    denial so a paywall diagnostics tile ("you're missing fleet, sso") can
+    bind the missing list directly off ONE URL instead of walking the
+    ``/has-batch`` matrix and filtering ``has=False`` client-side.
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) ``missing=[]`` for every fully-known bundle -- ``True``
+    grace answer on ``/has-features`` collapses to an empty complement here
+    -- so wiring this into a diagnostics tile today changes NO current
+    behavior. Unknown tokens surface INSIDE ``missing`` (canonicalised to
+    ``.strip().lower()``), matching the scalar's typo-catches-at-callsite
+    posture; the ``unknown`` slot still splits them out for a diagnostics
+    tooltip that wants to distinguish "denied by tier" vs "not a real id".
+    Missing / blank / all-unknown CSV -> 200 with ``missing=[]``,
+    ``features=[]``, ``count=0``, ``any_missing=false`` (never 4xx,
+    matching the sibling envelope). Never 5xx.
+
+    Envelope shape (15 keys, byte-stable across every input branch)::
+
+        {
+          "features":            ["fleet", "sso"],   # known ids only, dedup, first-seen order
+          "unknown":             ["bogus"],           # tokens not in ALL_FEATURES, echoed raw
+          "missing":             ["bogus", "sso"],    # subset NOT granted (denials + unknowns)
+          "kind":                "features",
+          "count":               2,                   # len(features) known
+          "missing_count":       2,                   # len(missing)
+          "any_missing":         true,                # missing != [] OR unknown != []
+          "required_tier":       "enterprise" | null, # min_tier_for_features(known); null if empty
+          "required_tier_label": "Enterprise" | null,
+          "required_tier_rank":  <int>,               # -1 when required_tier is null
+          "current_tier":        "oss",
+          "current_tier_rank":   0,
+          "grace":               true,
+          "enforced":            false,
+          "upgrade_required":    <bool>               # required_rank > current_rank
+        }
+    """
+    try:
+        return jsonify(_missing_bundle_body("features"))
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_features: error: %s", exc)
+        return jsonify(_missing_bundle_fallback("features", _parse_csv_arg("features")))
+
+
+@bp_entitlement.route("/api/entitlement/missing-runtimes")
+def api_entitlement_missing_runtimes():
+    """``GET /api/entitlement/missing-runtimes?runtimes=x,y,z`` -- runtime-axis
+    twin of ``/api/entitlement/missing-features``.
+
+    Same 15-key envelope with ``runtimes`` in the axis-specific slot.
+    Runtime-alias canonicalisation (``claude-code`` -> ``claude_code``) is
+    applied per token before the known/unknown split and inside
+    :func:`missing_runtimes` so an alias-and-canonical pair
+    (``?runtimes=claude-code,claude_code``) collapses to one row in
+    ``missing``. Grace pass-through, unknown-surfaces-inside-missing,
+    never-4xx, never-5xx guarantees mirror the features sibling exactly.
+    """
+    try:
+        return jsonify(_missing_bundle_body("runtimes"))
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_runtimes: error: %s", exc)
+        return jsonify(_missing_bundle_fallback("runtimes", _parse_csv_arg("runtimes")))
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:
@@ -7147,6 +7334,162 @@ def api_entitlement_min_tier_batch():
                 "enforced": False,
             }
         )
+
+
+def _has_batch_fallback() -> dict:
+    """OSS-free / never-5xx envelope for ``/api/entitlement/has-batch``.
+
+    Fail-closed on the ``has_all`` rollup (matches the singular
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` fallbacks): a paywall
+    matrix that lost the resolver must not silently render every row as
+    granted. All axis slots collapse to the "not supplied" sentinel so a UI
+    can still diff against the request shape.
+    """
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "has_all": False,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_batch_rollup(batch: dict) -> bool:
+    """Fold every emitted row in ``batch`` to ONE ``has_all`` boolean.
+
+    ``True`` iff every emitted row is ``has=True`` AND ``unknown=False`` --
+    matches the strict-typo-fail-closed posture of :func:`has_features` /
+    :func:`has_runtimes` in the plural fold sibling (a single unknown-id
+    row flips the rollup to ``False`` so a typo does not silently render
+    as granted). A batch with no rows at all (every axis was "not
+    supplied") returns ``True`` vacuously -- the endpoint 400s on that
+    input before this rollup runs, so callers never see the vacuous case
+    on a live URL.
+    """
+    for axis in ("features", "runtimes"):
+        for row in batch.get(axis) or []:
+            if row.get("unknown") or not row.get("has"):
+                return False
+    for axis in ("channels", "retention_days", "nodes"):
+        row = batch.get(axis)
+        if row is None:
+            continue
+        if row.get("unknown") or not row.get("has"):
+            return False
+    return True
+
+
+@bp_entitlement.route("/api/entitlement/has-batch")
+def api_entitlement_has_batch():
+    """``GET /api/entitlement/has-batch?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-item plural sibling of
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` /
+    ``/has-channel-count``.
+
+    Where ``/api/entitlement/has-features`` / ``/has-runtimes`` fold a
+    bundle to ONE boolean, this preserves the per-item detail so a
+    paywall MATRIX UI ("show every requested feature + runtime + capacity
+    row with its individual granted flag AND the cheapest tier that
+    would unlock it") renders off ONE round-trip instead of N calls to
+    ``/has-feature`` / ``/has-runtime`` / ``/has-channel-count``. Wraps
+    :func:`clawmetry.entitlements.has_batch` and appends the same
+    ``current_tier`` / ``grace`` / ``enforced`` resolver envelope
+    ``/min-tier-batch`` and ``/lock-reasons-batch`` return so a caller
+    sees the same resolver context alongside the per-item answers.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation). ``features=`` / ``runtimes=`` take
+    comma-separated tokens (whitespace and duplicates are normalised
+    away; runtime aliases like ``claude-code`` canonicalise to
+    ``claude_code``; unknown ids contribute a fail-closed
+    ``unknown=True`` / ``has=False`` row -- they do NOT silently render
+    as granted the way ``/lock-reasons-batch``'s ``allowed`` slot does).
+    The three capacity axes take a single int each; a blank or non-int
+    value is treated as "not supplied" (matches the singular endpoint's
+    never-crash posture rather than fabricating a row for garbage
+    input). Never 5xxs: the fail-closed envelope is returned on any
+    resolver failure.
+
+    Response shape (10 keys, byte-stable across every input branch)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "has_all":            <bool>,   # True iff every emitted row is has=True AND unknown=False
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``has``, ``unknown``,
+    ``required_tier``, ``required_tier_label`` and ``required_tier_rank``
+    (``-1`` when ``required_tier`` is ``None``). Per-row parity with the
+    singular ``/has-feature?feature=`` / ``/has-runtime?runtime=`` /
+    ``/has-channel-count?count=`` endpoints is pinned in the test suite
+    so the batch cannot silently drift from the scalar.
+
+    ``has_all`` cross-consistency with the sibling
+    ``/api/entitlement/has-features`` / ``/has-runtimes`` plural-fold
+    endpoints is pinned: for a single-axis batch of features, this
+    endpoint's ``has_all`` byte-equals the ``/has-features`` endpoint's
+    ``has_features`` for the same bundle; ditto for runtimes.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.has_batch(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        ent = _ent.get_entitlement()
+        batch["has_all"] = _has_batch_rollup(batch)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_has_batch: error: %s", exc)
+        return jsonify(_has_batch_fallback())
 
 
 @bp_entitlement.route("/api/entitlement/min-tier-batch-at")

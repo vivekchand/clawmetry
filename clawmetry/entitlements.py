@@ -5687,6 +5687,147 @@ def has_runtimes(runtimes) -> bool:
         return False
 
 
+def missing_features(features) -> list:
+    """Row-level complement of :func:`has_features`: return the subset of
+    ``features`` NOT granted by the resolved entitlement.
+
+    Where the plural fold in :func:`has_features` collapses a bundle to ONE
+    boolean ("does the whole set pass?"), this preserves the per-item detail
+    so a paywall diagnostics tile ("you're missing these -- upgrade to unlock")
+    can bind the exact denial list off ONE scalar without walking the
+    :func:`has_batch` matrix and filtering on ``has=False`` client-side.
+    Symmetric to :func:`has_features` at row level in the same way
+    :func:`has_batch` is symmetric at envelope level.
+
+    Rules, all deliberate:
+
+    * Empty / ``None`` iterable / non-iterable input -- returns ``[]``. Nothing
+      to check, nothing missing. (:func:`has_features` collapses these to
+      ``False`` for the boolean-gate seat; the complement here is naturally
+      empty because there is no bundle to invert.)
+    * Grace pass-through: while ``ent.grace`` is ``True`` and every item is a
+      known id, each :func:`has_feature` reports ``True`` so the returned list
+      is ``[]``. Wiring this into a diagnostics tile today surfaces NOTHING
+      (matches the ``has_features=True`` grace answer on the same bundle).
+    * Unknown / non-string / empty-string ids -- **included** in the missing
+      list in their canonicalised form (``.strip().lower()`` for strings;
+      ``""`` for non-strings). The singular :func:`has_feature` fails-closed
+      on typos, so the complement fold reflects that: a typo like
+      ``missing_features(["fleet", "Fleeet"])`` in grace returns ``["fleeet"]``
+      (only the typo), surfacing it at the callsite instead of silently
+      reporting a fully-granted bundle.
+    * Order: first-seen; dedup on the canonicalised key so a repeated id (or
+      an equivalent alias for runtimes) collapses to one row.
+
+    Never raises: a delegate blowup logs a warning and returns ``[]`` (matches
+    the "no info to surface" posture; the endpoint fallback carries the same
+    empty-missing shape so a UI wired off this scalar cannot silently render a
+    denial banner on a resolver hiccup).
+    """
+    try:
+        if features is None:
+            return []
+        items = list(features)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Probe the resolver up front: if it blows up we have no idea what's
+    # granted, so we can't report what's missing. Return [] (fail-open on
+    # the diagnostic) rather than marking every id missing off a
+    # false-negative delegate, which would render a spurious denial
+    # banner. Mirrors the endpoint's own fail-closed fallback envelope.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_features(%r) resolver probe failed: %s",
+            features,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for f in items:
+            if isinstance(f, str):
+                fid = f.strip().lower()
+            else:
+                fid = ""
+            if fid in seen:
+                continue
+            seen.add(fid)
+            if not has_feature(f):
+                out.append(fid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_features(%r) failed: %s", features, exc)
+        return []
+
+
+def missing_runtimes(runtimes) -> list:
+    """Row-level complement of :func:`has_runtimes`: return the subset of
+    ``runtimes`` NOT granted by the resolved entitlement.
+
+    Runtime-axis twin of :func:`missing_features`. Delegates to
+    :func:`has_runtime` per item, so the same fail-closed unknown /
+    non-string / empty posture is inherited.
+
+    Alias posture matches the sibling :func:`has_runtimes` scalar
+    exactly: the delegate :func:`has_runtime` does **not** alias-resolve
+    (``has_runtime("claude-code")`` is ``False`` because ``"claude-code"``
+    is not in :data:`ALL_RUNTIMES` after ``strip().lower()``), so an
+    alias input at this scalar layer collapses to "missing" too. Callers
+    who want alias tolerance should canonicalise upstream via
+    :func:`canonical_runtime` (which is what the paired
+    ``/api/entitlement/missing-runtimes`` endpoint does before delegating
+    to this scalar, matching the ``/has-runtimes`` endpoint's own
+    upstream-canonicalise pattern).
+
+    Fold semantics mirror :func:`missing_features` exactly: empty / ``None``
+    iterable / non-iterable input returns ``[]``; grace pass-through returns
+    ``[]`` for fully-known (canonical) bundles; unknown / non-string /
+    empty / alias ids are INCLUDED in the returned list in their
+    ``.strip().lower()`` form; first-seen dedup on that key; never raises.
+    """
+    try:
+        if runtimes is None:
+            return []
+        items = list(runtimes)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Same resolver-probe as :func:`missing_features` -- see rationale
+    # there.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_runtimes(%r) resolver probe failed: %s",
+            runtimes,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for rt in items:
+            if isinstance(rt, str):
+                rid = rt.strip().lower()
+            else:
+                rid = ""
+            if rid in seen:
+                continue
+            seen.add(rid)
+            if not has_runtime(rt):
+                out.append(rid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_runtimes(%r) failed: %s", runtimes, exc)
+        return []
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
@@ -9030,6 +9171,269 @@ def lock_reasons_batch(
         "nodes": _lock_row(ent, nodes, "nodes") if nodes is not None else None,
     }
     return out
+
+
+def _has_row(ent, key, kind: str) -> dict:
+    """Per-item boolean-gate row for :func:`has_batch`.
+
+    Row-shape sibling of :func:`_min_tier_row` (which carries the reverse-
+    lookup cheapest-tier answer per item) and :func:`_lock_row` (which
+    carries the current-resolver lock reason per item): mirrors the same
+    ``key`` + ``kind`` + normalised value contract but carries the
+    boolean-gate answer (``has`` + ``unknown``) on the resolved
+    entitlement, matching the strict callsite-typo posture of the singular
+    :func:`has_feature` / :func:`has_runtime` / :func:`has_channel_count`
+    scalars.
+
+    ``unknown`` is the key differentiator from :func:`_lock_row`: an
+    unrecognised feature/runtime id or a non-int capacity value flips
+    ``unknown=True`` and ``has=False`` (fail-closed), where the lock-
+    reasons row would report ``allowed=True`` with a ``None`` reason and
+    silently render the mystery id as granted. A paywall matrix wiring
+    off this row cannot mistake a typo (``fleeet``) for a granted
+    feature.
+
+    Kind semantics mirror :func:`_min_tier_row` exactly:
+
+    * ``"feature"`` / ``"runtime"`` -- ``key`` is a normalised id
+      (whitespace stripped, lowercased; runtimes additionally
+      canonicalised via :func:`canonical_runtime` so ``claude-code`` ->
+      ``claude_code``). Unknown ids get ``unknown=True`` / ``has=False``
+      / ``required_tier=None`` / ``required_tier_rank=-1``.
+    * ``"channels"`` / ``"retention_days"`` / ``"nodes"`` -- ``key``
+      is int-parseable; non-int input collapses to
+      ``unknown=True`` / ``has=False``. Non-negative ints are considered
+      "known"; the underlying :meth:`Entitlement.allows_*` decides
+      ``has``.
+
+    ``required_tier`` on this row reports the cheapest tier that would
+    admit the item -- the same tier :func:`min_tier_for_feature` /
+    :func:`min_tier_for_runtime` / :func:`min_tier_for_channel_count` /
+    :func:`min_tier_for_retention_window` / :func:`min_tier_for_node_count`
+    return -- so a UI showing "you don't have this; buy tier X to unlock"
+    reads off the same row without a second call.
+
+    Never raises: any resolver failure short-circuits to the fail-closed
+    row shape so the caller keeps rendering.
+    """
+    try:
+        if kind == "feature":
+            fid = str(key or "").strip().lower()
+            if not fid or fid not in ALL_FEATURES:
+                return {
+                    "key": fid,
+                    "kind": kind,
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            has_flag = bool(ent.allows_feature(fid))
+            req = min_tier_for_feature(fid)
+            return {
+                "key": fid,
+                "kind": kind,
+                "has": has_flag,
+                "unknown": False,
+                "required_tier": req,
+                "required_tier_label": tier_label(req) if req else None,
+                "required_tier_rank": tier_rank(req) if req else -1,
+            }
+        if kind == "runtime":
+            raw = str(key or "").strip().lower()
+            rt = canonical_runtime(raw)
+            if not rt or rt not in ALL_RUNTIMES:
+                return {
+                    "key": raw,
+                    "kind": kind,
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            has_flag = bool(ent.allows_runtime(rt))
+            req = min_tier_for_runtime(rt)
+            return {
+                "key": rt,
+                "kind": kind,
+                "has": has_flag,
+                "unknown": False,
+                "required_tier": req,
+                "required_tier_label": tier_label(req) if req else None,
+                "required_tier_rank": tier_rank(req) if req else -1,
+            }
+        if kind in ("channels", "retention_days", "nodes"):
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                return {
+                    "key": str(key),
+                    "kind": kind,
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            if kind == "channels":
+                has_flag = bool(ent.allows_channel_count(n))
+                req = min_tier_for_channel_count(n)
+            elif kind == "retention_days":
+                has_flag = bool(ent.allows_retention_window(n))
+                req = min_tier_for_retention_window(n)
+            else:
+                has_flag = bool(ent.allows_node_count(n))
+                req = min_tier_for_node_count(n)
+            return {
+                "key": str(n),
+                "kind": kind,
+                "has": has_flag,
+                "unknown": False,
+                "required_tier": req,
+                "required_tier_label": tier_label(req) if req else None,
+                "required_tier_rank": tier_rank(req) if req else -1,
+            }
+    except Exception:
+        pass
+    return {
+        "key": str(key),
+        "kind": kind,
+        "has": False,
+        "unknown": True,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+    }
+
+
+def has_batch(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-item boolean-gate rows for every supplied item across all five
+    capacity axes in one pass.
+
+    Per-item plural sibling of :func:`has_feature` / :func:`has_runtime`
+    / :func:`has_channel_count` (singular) and :func:`has_features` /
+    :func:`has_runtimes` (plural bundle fold). Where the plural fold
+    collapses a bundle to ONE boolean (``True`` iff every item is
+    granted), this helper preserves per-item detail so a paywall matrix
+    UI ("show me each requested feature + runtime + capacity row with
+    its individual granted flag AND the cheapest tier that would unlock
+    it") renders off ONE round-trip instead of N calls to
+    ``/api/entitlement/has-feature`` + ``/api/entitlement/has-runtime`` +
+    ``/api/entitlement/has-channel-count`` etc.
+
+    Envelope shape mirrors :func:`min_tier_batch` and
+    :func:`lock_reasons_batch` exactly (same five-axis kwargs, same per-
+    axis ``None`` "not supplied" sentinel, same never-raise contract)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``has`` (bool),
+    ``unknown`` (True iff the id was not in :data:`ALL_FEATURES` /
+    :data:`ALL_RUNTIMES` or was non-int for the capacity axes),
+    ``required_tier`` (cheapest tier that would unlock the item; the
+    same answer :func:`min_tier_for_feature` / ...runtime /
+    ...channel_count / ...retention_window / ...node_count would return),
+    ``required_tier_label`` and ``required_tier_rank`` (``-1`` when
+    ``required_tier`` is ``None``).
+
+    Strict-typo-fail-closed posture matches the singular scalars: a
+    typo like ``has_batch(features=["Fleeet"])`` (uppercase, dropped by
+    strip-lower, then unmatched against :data:`ALL_FEATURES`) surfaces
+    as ``unknown=True`` / ``has=False`` -- NOT silently granted in
+    grace. This is DIFFERENT from :func:`lock_reasons_batch`, which
+    treats unknown ids as ``allowed=True`` with a ``None`` reason (the
+    lock-reasons axis is diagnostic, not gate-shaped). A callsite that
+    binds a gate off this batch cannot mistake a typo for a grant.
+
+    Per-row parity with the singular helpers is pinned in the test
+    suite: for every feature id ``f`` in :data:`ALL_FEATURES`,
+    ``has_batch(features=[f])['features'][0]['has']`` byte-equals
+    :func:`has_feature`; ditto for every id in :data:`ALL_RUNTIMES`
+    against :func:`has_runtime`, and for the ``channels`` axis against
+    :func:`has_channel_count`.
+
+    Feature ids are normalised via :func:`_normalise_csv` (whitespace
+    stripped, lowercased, duplicates dropped while preserving first-
+    seen order). Runtime ids additionally canonicalise via
+    :func:`canonical_runtime` so aliases (``claude-code`` ->
+    ``claude_code``) resolve the same way they do on the singular
+    ``has_runtime`` scalar; duplicates that collapse after
+    canonicalisation only contribute one row.
+
+    Critically, ``retention_days=None`` here means *unset* -- NOT
+    *unlimited*. Same posture as :func:`min_tier_batch` /
+    :func:`lock_reasons_batch`: asking about the unlimited-retention
+    tier is the singular :meth:`Entitlement.allows_retention_window`
+    (``days=None``) call's job and would collapse the batch row
+    kwarg-branch to "not supplied" otherwise.
+
+    Grace vs enforce: while ``ent.grace`` is ``True`` (the current
+    rollout state) every KNOWN row reports ``has=True``; unknown rows
+    still fail-closed to ``has=False`` (the typo-catches-at-callsite
+    contract). Post-enforcement each row reflects the underlying
+    :meth:`Entitlement.allows_*` answer.
+
+    Never raises: a per-row failure short-circuits to the fail-closed
+    row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning("entitlements: has_batch falling back to grace: %s", exc)
+        ent = _oss_free()
+    try:
+        feats = _normalise_csv(features)
+        raw_rts = _normalise_csv(runtimes)
+        seen: set[str] = set()
+        rt_rows: list[dict] = []
+        for raw in raw_rts:
+            rt = canonical_runtime(raw)
+            key = rt if rt else raw
+            if key in seen:
+                continue
+            seen.add(key)
+            rt_rows.append(_has_row(ent, raw, "runtime"))
+        return {
+            "features": [_has_row(ent, f, "feature") for f in feats],
+            "runtimes": rt_rows,
+            "channels": (
+                _has_row(ent, channels, "channels")
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                _has_row(ent, retention_days, "retention_days")
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                _has_row(ent, nodes, "nodes") if nodes is not None else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning("entitlements: has_batch failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
 
 
 def feature_label(feature: str) -> str:
