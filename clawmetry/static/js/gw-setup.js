@@ -521,3 +521,137 @@ function _updateCloudStatus() {
   });
 }
 _updateCloudStatus();
+
+// ── Account menu (top-right avatar) ─────────────────────────────────────────
+// Self-hosted requires sign-in now, so the header gets the same profile
+// affordance as app.clawmetry.com: who you are, plan state, billing/account
+// management, and sign-out. Identity comes from the trial/paid license
+// (/api/license/status: sub + tier + days_left) — the only identity a
+// local-only node has; /api/cloud-cta/status distinguishes signed-out.
+var _cmProfile = { state: null };
+
+function _cmProfileEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _cmProfileFetchState() {
+  return Promise.all([
+    fetch('/api/license/status').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    fetch('/api/cloud-cta/status').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+  ]).then(function (res) {
+    var lic = res[0] || {};
+    var cta = res[1] || {};
+    var signedIn = !!(lic.valid || cta.account_linked);
+    _cmProfile.state = {
+      signedIn: signedIn,
+      // license `sub` is the account the key was issued to (the sign-in email)
+      who: lic.sub || '',
+      tier: (lic.tier || '').toLowerCase(),
+      daysLeft: (typeof lic.days_left === 'number') ? lic.days_left : null,
+      licenseValid: !!lic.valid
+    };
+    return _cmProfile.state;
+  });
+}
+
+function _cmProfileApplyAvatar(st) {
+  var btn = document.getElementById('cm-profile-btn');
+  var initial = document.getElementById('cm-profile-initial');
+  if (!btn || !initial) return;
+  if (st.signedIn && st.who) {
+    btn.dataset.signedIn = '1';
+    initial.textContent = st.who.charAt(0).toUpperCase();
+    btn.title = st.who;
+  } else {
+    delete btn.dataset.signedIn;
+    btn.title = t('profile.account', null, 'Account');
+  }
+}
+
+function _cmProfilePlanLine(st) {
+  if (!st.licenseValid) return '';
+  if (st.tier === 'trial') {
+    var d = (st.daysLeft == null) ? '?' : st.daysLeft;
+    return t('profile.trial_days_left', { days: d }, 'Trial · ' + d + ' days left');
+  }
+  var label = st.tier ? st.tier.charAt(0).toUpperCase() + st.tier.slice(1) : '';
+  return t('profile.plan', { tier: label }, label + ' plan');
+}
+
+function _cmProfileRender(st) {
+  var menu = document.getElementById('cm-profile-menu');
+  if (!menu) return;
+  var h = '';
+  // Identity header
+  h += '<div style="padding:10px 10px 8px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.08));margin-bottom:4px;">';
+  if (st.signedIn && st.who) {
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + _cmProfileEsc(st.who) + '</div>';
+    var plan = _cmProfilePlanLine(st);
+    if (plan) h += '<div style="font-size:11px;color:var(--text-muted,#94a3b8);margin-top:2px;">' + _cmProfileEsc(plan) + '</div>';
+  } else {
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);" data-i18n="profile.not_signed_in">' + t('profile.not_signed_in', null, 'Not signed in') + '</div>';
+  }
+  h += '</div>';
+  if (st.signedIn) {
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/settings?utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>'
+      + t('profile.billing', null, 'Billing & plan') + '</button>';
+    if (st.tier === 'trial') {
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/upgrade?source=profile-menu\',\'_blank\')">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>'
+        + t('profile.upgrade', null, 'Upgrade plan') + '</button>';
+    }
+  } else {
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal()">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
+      + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
+  }
+  h += '<button class="cm-profile-item" onclick="cmProfileClose();var o=document.getElementById(\'gw-setup-overlay\');if(o){o.dataset.mandatory=\'false\';var c=document.getElementById(\'gw-setup-close\');if(c)c.style.display=\'\';o.style.display=\'flex\'}">'
+    + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+    + t('profile.gateway_settings', null, 'Gateway settings') + '</button>';
+  // Sign out clears this browser's dashboard session (the gateway token in
+  // localStorage) — mirror the #logout-btn visibility contract set by
+  // auth-bootstrap.js: only shown when token auth is actually active.
+  var lb = document.getElementById('logout-btn');
+  if (lb && lb.style.display !== 'none') {
+    h += '<div style="border-top:1px solid var(--border-color,rgba(255,255,255,0.08));margin:4px 0;"></div>';
+    h += '<button class="cm-profile-item cm-profile-danger" onclick="cmProfileClose();clawmetryLogout()">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>'
+      + t('profile.sign_out', null, 'Sign out') + '</button>';
+  }
+  menu.innerHTML = h;
+}
+
+function cmProfileClose() {
+  var menu = document.getElementById('cm-profile-menu');
+  var btn = document.getElementById('cm-profile-btn');
+  if (menu) menu.style.display = 'none';
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function cmProfileToggle(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('cm-profile-menu');
+  var btn = document.getElementById('cm-profile-btn');
+  if (!menu) return;
+  if (menu.style.display !== 'none') { cmProfileClose(); return; }
+  // Open immediately with the cached (or empty) state, then re-fetch so
+  // plan/days-left/sign-in state is never stale.
+  var open = function (st) { _cmProfileApplyAvatar(st); _cmProfileRender(st); menu.style.display = 'block'; if (btn) btn.setAttribute('aria-expanded', 'true'); };
+  open(_cmProfile.state || { signedIn: false, who: '', tier: '', daysLeft: null, licenseValid: false });
+  _cmProfileFetchState().then(function (st) {
+    if (menu.style.display !== 'none') open(st);
+  });
+}
+
+function cmProfileInit() {
+  if (!document.getElementById('cm-profile-btn')) return;
+  _cmProfileFetchState().then(_cmProfileApplyAvatar);
+  document.addEventListener('click', function (ev) {
+    if (!ev.target.closest || !ev.target.closest('#cm-profile-wrap')) cmProfileClose();
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') cmProfileClose();
+  });
+}
+cmProfileInit();
