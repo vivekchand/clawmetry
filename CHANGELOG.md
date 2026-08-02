@@ -1,3 +1,37 @@
+## 0.12.639
+
+- **Runtime feature parity: the dashboard stops being OpenClaw-first.** Every
+  advertised surface now runs on real per-runtime logic or gates honestly:
+  - **Agent Graph for every runtime.** Spans are reconstructed from each family
+    runtime's normalized events at ingest (session root, llm.call, tool.<n>,
+    agent.spawn from Task tool-calls + subagent records) with the real
+    agent_type/agent_id, so "who spawned whom" renders with real cost/token
+    rollups — Claude Code shows main → Explore/general-purpose/... instead of
+    an empty panel. Graph honours the runtime switcher (?runtime=).
+  - **Approvals works locally for all runtimes — and Claude Code gets a real
+    pre-tool gate.** The tab now reads the local DuckDB queue and writes
+    policies.yml through validated endpoints; a generic gate-handler seam
+    turns the OpenClaw exec-policy flip into one handler and adds a Claude
+    Code PreToolUse hook (merge-safe installer, `clawmetry hook claude-code`
+    client, sliced long-poll receiver, fail-open, loopback-only) so a policy
+    match parks the tool call until you decide from the dashboard.
+  - **Logs are runtime-aware.** /api/logs + /api/logs-stream take ?runtime=
+    and serve the adapter's declared LogSource (hermes errors.log, nanoclaw
+    docker logs, codex codex-tui.log, n8n event log) or say honestly that a
+    runtime has no daemon log stream — never another runtime's logs under the
+    selected runtime's name.
+  - **Security posture scans the selected runtime.** Provider registry with
+    the full OpenClaw scan moved intact, a real Claude Code provider
+    (settings.json permissions/hooks/MCP auto-trust/dangerous grants), a
+    Codex provider (approval_policy/sandbox_mode), and a neutral
+    "not available yet" envelope instead of a red openclaw.json failure.
+  - **Tab visibility can no longer lie.** The sidebar derives from each
+    adapter's declared capabilities served by /api/agents (static map is just
+    the fallback), the dead 'cost' tab id is fixed so no-cost runtimes hide
+    the Cost tab, and logs/version-impact leave the false "node-wide" set.
+  Pairs with clawmetry-pro 0.7.2 (claude_code declares SUBAGENTS; hermes/
+  nanoclaw/codex/n8n declare real log sources).
+
 ## 0.12.637
 
 - Re-publish of 0.12.636: the published 0.12.636 wheel raced the merge commit
