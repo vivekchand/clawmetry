@@ -9748,15 +9748,27 @@ async function renderInventory() {
       if (detected.length && bodyEl) {
         var rtNames = detected.map(function (r) { return r.displayName || r.name; }).join(', ');
         var msg = inv.daemonRunning
-          ? rtNames + ' detected. Sync is starting up -- data will appear shortly.'
+          ? rtNames + ' detected. Sync is starting up. Data will appear shortly.'
           : rtNames + ' is running, but the sync daemon is not ingesting yet.'
             + ' Run: <code>clawmetry connect</code> (or <code>clawmetry sync</code>).';
         bodyEl.innerHTML = msg;
       }
       emptyEl.style.display = '';
     }
+    // Transient-empty heal: a roster that comes back empty (daemon still
+    // warming up after install/activation, or one failed fetch swallowed by
+    // _invFetchData) used to STICK until the user re-clicked the tab. Re-poll
+    // while the empty state is on the active, visible tab so it resolves
+    // itself the moment ingest catches up.
+    if (!window._invEmptyRetryTimer) {
+      window._invEmptyRetryTimer = setTimeout(function () {
+        window._invEmptyRetryTimer = null;
+        if (_cmCurrentTab === 'inventory' && !document.hidden) renderInventory();
+      }, 20000);
+    }
     return;
   }
+  if (window._invEmptyRetryTimer) { clearTimeout(window._invEmptyRetryTimer); window._invEmptyRetryTimer = null; }
   if (emptyEl) emptyEl.style.display = 'none';
 
   // 4-tile strip.

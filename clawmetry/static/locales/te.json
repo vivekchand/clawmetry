@@ -692,7 +692,6 @@
   "inventory.owner_default": "నేను",
   "inventory.cost_na_tip": "ఈ రన్‌టైమ్ ఇంకా ఖర్చు నివేదించడం లేదు.",
   "inventory.empty_title": "ఇంకా ఏజెంట్లు లేవు, అది సరే.",
-  "inventory.empty_body": "ClawMetry అమలు అవుతున్న వెంటనే OpenClaw, NVIDIA NemoClaw మరియు మరో 10 రన్‌టైమ్‌లను గమనిస్తుంది. కాన్ఫిగర్ చేయాల్సింది ఏమీ లేదు.",
   "inventory.expand_brain": "అది ఏమి ఆలోచిస్తుందో చూడండి",
   "inventory.expand_cost": "దాని ఖర్చు చూడండి",
   "inventory.expand_flow": "దాన్ని లైవ్‌లో చూడండి",

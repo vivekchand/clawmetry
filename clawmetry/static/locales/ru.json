@@ -692,7 +692,6 @@
   "inventory.owner_default": "я",
   "inventory.cost_na_tip": "Эта среда выполнения пока не сообщает о стоимости.",
   "inventory.empty_title": "Агентов пока нет, и это нормально.",
-  "inventory.empty_body": "ClawMetry отслеживает OpenClaw, NVIDIA NemoClaw и ещё 10 сред выполнения сразу после их запуска. Никакой настройки не требуется.",
   "inventory.expand_brain": "Посмотреть, что он думает",
   "inventory.expand_cost": "Посмотреть стоимость",
   "inventory.expand_flow": "Наблюдать в реальном времени",
