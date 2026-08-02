@@ -5657,6 +5657,107 @@ def has_retention_window(days) -> bool:
         return False
 
 
+def has_retention_window_at(perspective_tier: str, days) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_retention_window`: would
+    tier ``perspective_tier`` admit a ``days`` event-retention window?
+
+    Retention-capacity twin of :func:`has_feature_at` / :func:`has_runtime_at`
+    on the grant axes and of :func:`has_channel_count_at` /
+    :func:`has_node_count_at` on the sibling capacity axes. Fills the ``_at``
+    slot on the ``retention_days`` capacity axis so a pricing matrix ("does
+    OSS admit a 30-day window? Starter? Pro? Enterprise?") can bind ONE
+    boolean per cell off ONE URL each instead of hydrating the full
+    :func:`capacity_headroom_at` payload and pulling out the delta
+    client-side.
+
+    Backed directly by the static :data:`_TIER_RETENTION_DAYS` table so the
+    answer is grace-independent by construction. That mirrors the sibling
+    :func:`has_channel_count_at` / :func:`has_node_count_at` design: the
+    ``_at`` slot deliberately reports the would-be-locked state alongside
+    the live grant. Unlike :func:`has_retention_window` (which returns
+    ``True`` for every finite ``days`` value AND the ``None`` unlimited
+    request while ``ent.grace`` is on via
+    :meth:`Entitlement.allows_retention_window`'s grace-passthrough),
+    ``has_retention_window_at("oss", 30)`` returns ``False`` even in grace
+    -- that is the whole point of a what-if scalar.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature_at` /
+      :func:`has_channel_count_at` / :func:`has_node_count_at` on an
+      unknown perspective: the strict validity gate catches a typo like
+      ``has_retention_window_at("Pro+", 30)`` at the callsite (uppercase
+      ``"Pro"`` strip-lower normalises so ``"Pro"`` IS valid; ``"Pro+"``
+      collapses to ``False``).
+    * ``days is None`` -- the caller is asking about the *unlimited*
+      history request. Returns ``True`` iff the perspective's cap in
+      :data:`_TIER_RETENTION_DAYS` is ``None`` (Enterprise on the current
+      tier table). Mirrors
+      :meth:`Entitlement.allows_retention_window(None)`'s post-enforce
+      contract and :func:`min_tier_for_retention_window(None)`'s
+      Enterprise fallback. This is the ONE input where non-int is
+      meaningful -- the same asymmetry :func:`has_retention_window`
+      carries against its sibling :func:`has_channel_count` /
+      :func:`has_node_count` capacity scalars.
+    * ``days <= 0`` -- ``True``. A zero/negative window is either "not
+      measured yet" or trivially satisfied; either way the free floor
+      covers it on every perspective (matches
+      :meth:`Entitlement.allows_retention_window`'s grace-on-zero
+      contract, :func:`min_tier_for_retention_window`'s ``TIER_OSS``
+      fallback, and the sibling ``_at`` scalars).
+    * Non-int ``days`` (other than the explicit ``None``: str that
+      doesn't parse as int, list, dict, ...) -- returns ``False``. Same
+      strict callsite-typo posture :func:`has_retention_window` /
+      :func:`has_feature_at` / :func:`has_channel_count_at` /
+      :func:`has_node_count_at` use: a caller passing
+      ``has_retention_window_at("pro", "seven")`` sees the typo at the
+      callsite instead of a silent grant.
+    * Positive int -- ``True`` iff the perspective's cap in
+      :data:`_TIER_RETENTION_DAYS` is ``None`` (unlimited) or ``>=
+      days``. Unknown perspective already failed above, so the
+      ``dict.get`` fallback is defensive only.
+
+    Never raises: any lookup failure logs a warning and returns
+    ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        cap = _TIER_RETENTION_DAYS.get(p, 7)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_at(%r, %r) cap lookup failed: %s",
+            perspective_tier,
+            days,
+            exc,
+        )
+        return False
+    if days is None:
+        return cap is None
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return True
+    try:
+        return cap is None or n <= int(cap)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_at(%r, %r) failed: %s",
+            perspective_tier,
+            days,
+            exc,
+        )
+        return False
+
+
 def has_node_count(count) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit ``count`` registered
     fleet nodes concurrently?

@@ -3981,6 +3981,191 @@ def api_entitlement_has_retention_window():
         )
 
 
+def _has_retention_window_at_fallback(
+    tier: str, days_raw: str, unlimited: bool
+) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-retention-window-at``.
+
+    What-if sibling of :func:`_has_retention_window_fallback`. On any
+    resolver / helper blowup the endpoint still returns 200 with the same
+    14-key envelope as the happy-path branch, but with
+    ``has_retention_window_at`` and ``allowed`` strict-``False`` (matches
+    the fail-closed posture the sibling ``/has-feature-at`` /
+    ``/has-runtime-at`` / ``/has-channel-count-at`` /
+    ``/has-node-count-at`` fallbacks use -- a paywall matrix tile that
+    lost the resolver never silently reports a grant it cannot verify).
+    ``tier``, ``days_raw`` and ``unlimited`` echo the caller's
+    canonicalised inputs so the UI can still surface all three in a
+    diagnostics tooltip.
+    """
+    return {
+        "tier": tier,
+        "days": None,
+        "days_raw": days_raw,
+        "unlimited": unlimited,
+        "has_retention_window_at": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "perspective_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-retention-window-at")
+def api_entitlement_has_retention_window_at():
+    """``GET /api/entitlement/has-retention-window-at?tier=<perspective>&days=<N|unlimited>``
+    -- what-if capacity-axis boolean-gate scalar sibling of
+    ``/api/entitlement/has-retention-window``.
+
+    Retention-capacity twin of ``/api/entitlement/has-feature-at`` /
+    ``/api/entitlement/has-runtime-at`` on the grant axes and of
+    ``/api/entitlement/has-channel-count-at`` /
+    ``/api/entitlement/has-node-count-at`` on the sibling capacity axes.
+    Returns ONE boolean (``has_retention_window_at``) plus a what-if
+    envelope that tells the caller which perspective they asked about,
+    whether that perspective admits ``days`` of history, the cheapest tier
+    that would admit it (``required_tier``, byte-parity with the sibling
+    ``/api/entitlement/required-tier?retention_days=<N>`` answer), and the
+    LIVE resolver context (``current_tier`` / ``grace`` / ``enforced``) so
+    a history-range pricing matrix can render "you are here" alongside
+    "would tier X admit this?" off ONE URL per cell.
+
+    Unlike the live ``/has-retention-window`` sibling this endpoint is
+    perspective-shaped: even in grace
+    ``/has-retention-window-at?tier=oss&days=30`` returns ``allowed=false``
+    (because the OSS-free tier statically caps at 7 days), whereas
+    ``/has-retention-window?days=30`` in grace returns ``true`` via
+    :meth:`Entitlement.allows_retention_window`'s grace-passthrough. That
+    is the whole point of the ``_at`` slot -- render the would-be-locked
+    state alongside the live grant.
+
+    14-key envelope (adds ``tier`` + ``perspective_tier_rank`` + ``grace``
+    / ``enforced`` on top of the sibling ``/has-retention-window`` shape,
+    drops ``upgrade_required`` since the perspective is the what-if tier,
+    not the actual current one)::
+
+        {
+          "tier":                    "<perspective tier id>" | "",
+          "days":                    <int> | null,        # parsed, null on missing/unparseable/unlimited/blowup
+          "days_raw":                "<stripped raw>",
+          "unlimited":               <bool>,              # True iff ?days=unlimited (case-insensitive)
+          "has_retention_window_at": <bool>,
+          "allowed":                 <bool>,              # alias of has_retention_window_at
+          "required_tier":           "<tier id>" | null,  # min_tier_for_retention_window(days)
+          "required_tier_label":     "<label>"   | null,
+          "required_tier_rank":      <int>,               # -1 when required_tier null
+          "perspective_tier_rank":   <int>,               # -1 when tier unknown/blank
+          "current_tier":            "<live tier id>",
+          "current_tier_rank":       <int>,
+          "grace":                   <bool>,              # live resolver grace bit
+          "enforced":                <bool>,
+        }
+
+    Input semantics mirror the sibling ``/has-feature-at`` +
+    ``/has-channel-count-at`` + ``/has-node-count-at`` +
+    ``/has-retention-window`` endpoints:
+
+    * ``?tier=`` missing / blank / whitespace / unknown perspective ->
+      ``has_retention_window_at=false``, ``perspective_tier_rank=-1``.
+      Never 4xx.
+    * ``?days=`` missing / blank / whitespace ->
+      ``has_retention_window_at=false``, ``days=null``,
+      ``required_tier=null``, ``unlimited=false``. Never 4xx (matches
+      the never-crash posture of the sibling ``/has-retention-window``
+      endpoint on missing input).
+    * ``?days=unlimited`` (case-insensitive) -- explicit unlimited-history
+      request. ``days=null``, ``unlimited=true``,
+      ``has_retention_window_at`` reflects the perspective's static cap
+      (Enterprise -> ``true``; every other perspective -> ``false``,
+      even in grace), ``required_tier`` routes to
+      :func:`min_tier_for_retention_window(None)` (Enterprise on the
+      current tier table).
+    * ``?days=`` non-int junk (``bogus`` / ``5.5`` / ...) ->
+      ``has_retention_window_at=false``, ``days=null``,
+      ``required_tier=null``, ``unlimited=false``. Fail-closed matches
+      :func:`has_retention_window_at` / :func:`has_channel_count_at` on
+      parse failure.
+    * ``days <= 0`` on a valid perspective ->
+      ``has_retention_window_at=true``, ``required_tier="oss"``
+      (trivially satisfied by the free floor -- mirrors
+      :func:`min_tier_for_retention_window`).
+    * Positive int on a valid perspective ->
+      ``has_retention_window_at`` reflects the static per-tier cap in
+      :data:`_TIER_RETENTION_DAYS`; ``required_tier`` is the cheapest
+      tier admitting ``days`` per
+      :func:`min_tier_for_retention_window` (perspective-independent;
+      matches the ``/has-retention-window`` sibling byte-for-byte).
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_retention_window_at_fallback`.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    days_raw = (request.args.get("days") or "").strip()
+    unlimited = days_raw.lower() == "unlimited"
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        persp_rank = (
+            _ent.tier_rank(tier) if tier and tier in _ent._TIER_ORDER else -1
+        )
+
+        if unlimited:
+            n: int | None = None
+            has_flag = _ent.has_retention_window_at(tier, None)
+            required = _ent.min_tier_for_retention_window(None)
+        elif not days_raw:
+            n = None
+            has_flag = False
+            required = None
+        else:
+            try:
+                n = int(days_raw)
+            except (TypeError, ValueError):
+                n = None
+                has_flag = False
+                required = None
+            else:
+                has_flag = _ent.has_retention_window_at(tier, n)
+                required = _ent.min_tier_for_retention_window(n)
+
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "tier": tier,
+                "days": n,
+                "days_raw": days_raw,
+                "unlimited": unlimited,
+                "has_retention_window_at": bool(has_flag),
+                "allowed": bool(has_flag),
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "perspective_tier_rank": persp_rank,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_retention_window_at: error: %s", exc
+        )
+        return jsonify(
+            _has_retention_window_at_fallback(tier, days_raw, unlimited)
+        )
+
+
 def _has_node_count_fallback(count_raw: str) -> dict:
     """OSS-free / never-5xx shape for ``/api/entitlement/has-node-count``.
 
