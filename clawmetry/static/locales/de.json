@@ -692,7 +692,6 @@
   "inventory.owner_default": "ich",
   "inventory.cost_na_tip": "Diese Laufzeitumgebung meldet noch keine Kosten.",
   "inventory.empty_title": "Noch keine Agenten, das ist in Ordnung.",
-  "inventory.empty_body": "ClawMetry überwacht OpenClaw, NVIDIA NemoClaw und 10 weitere Laufzeitumgebungen, sobald sie starten. Keine Konfiguration erforderlich.",
   "inventory.expand_brain": "Sehen, was es denkt",
   "inventory.expand_cost": "Kosten einsehen",
   "inventory.expand_flow": "Live beobachten",

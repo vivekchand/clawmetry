@@ -692,7 +692,6 @@
   "inventory.owner_default": "ฉัน",
   "inventory.cost_na_tip": "Runtime นี้ยังไม่รายงานค่าใช้จ่าย",
   "inventory.empty_title": "ยังไม่มี agent และไม่เป็นไร",
-  "inventory.empty_body": "ClawMetry ตรวจสอบ OpenClaw, NVIDIA NemoClaw และ runtime อีก 10 ตัวทันทีที่รัน ไม่ต้องตั้งค่าใดๆ",
   "inventory.expand_brain": "ดูว่ากำลังคิดอะไร",
   "inventory.expand_cost": "ดูค่าใช้จ่าย",
   "inventory.expand_flow": "ดูแบบเรียลไทม์",

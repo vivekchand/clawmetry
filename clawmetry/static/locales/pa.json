@@ -692,7 +692,6 @@
   "inventory.owner_default": "ਮੈਂ",
   "inventory.cost_na_tip": "ਇਹ ਰਨਟਾਈਮ ਅਜੇ ਲਾਗਤ ਰਿਪੋਰਟ ਨਹੀਂ ਕਰਦਾ।",
   "inventory.empty_title": "ਅਜੇ ਕੋਈ ਏਜੈਂਟ ਨਹੀਂ, ਅਤੇ ਇਹ ਠੀਕ ਹੈ।",
-  "inventory.empty_body": "ClawMetry, OpenClaw, NVIDIA NemoClaw, ਅਤੇ 10 ਹੋਰ ਰਨਟਾਈਮਾਂ ਨੂੰ ਉਸੇ ਪਲ ਤੋਂ ਦੇਖਦਾ ਹੈ ਜਦੋਂ ਉਹ ਚੱਲਦੇ ਹਨ। ਕੁਝ ਵੀ ਕੌਂਫਿਗਰ ਕਰਨ ਦੀ ਲੋੜ ਨਹੀਂ।",
   "inventory.expand_brain": "ਦੇਖੋ ਇਹ ਕੀ ਸੋਚ ਰਿਹਾ ਹੈ",
   "inventory.expand_cost": "ਦੇਖੋ ਇਸ ਦੀ ਕੀ ਲਾਗਤ ਆਈ",
   "inventory.expand_flow": "ਲਾਈਵ ਦੇਖੋ",

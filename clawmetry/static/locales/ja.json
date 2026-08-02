@@ -692,7 +692,6 @@
   "inventory.owner_default": "自分",
   "inventory.cost_na_tip": "このランタイムはまだコストを報告していません。",
   "inventory.empty_title": "エージェントはまだありません。",
-  "inventory.empty_body": "ClawMetry は OpenClaw、NVIDIA NemoClaw、その他10以上のランタイムを起動した瞬間から監視します。設定は不要です。",
   "inventory.expand_brain": "思考内容を確認する",
   "inventory.expand_cost": "コストを確認する",
   "inventory.expand_flow": "ライブで見る",
