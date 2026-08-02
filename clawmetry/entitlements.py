@@ -5582,6 +5582,94 @@ def has_channel_count(count) -> bool:
         return False
 
 
+def has_channel_count_at(perspective_tier: str, count) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_channel_count`: would
+    tier ``perspective_tier`` admit ``count`` chat-channel adapters
+    concurrently?
+
+    Channel-capacity twin of :func:`has_feature_at` / :func:`has_runtime_at`
+    on the grant axes and of :func:`has_node_count_at` on the sibling fleet
+    capacity axis. Fills the ``_at`` slot on the ``channels`` capacity axis
+    so a pricing matrix ("does OSS admit 5 channels? Starter? Pro?
+    Enterprise?") can bind ONE boolean per cell off ONE URL each instead
+    of hydrating the full :func:`capacity_headroom_at` payload and pulling
+    out the delta client-side. Scalar-precise complement of the
+    capacity-axis ``_at`` catalogs.
+
+    Backed directly by the static :data:`_TIER_CHANNEL_LIMIT` table (not
+    by :func:`_hypothetical_entitlement`, which always synthesises
+    ``channel_limit=_FREE_CHANNEL_LIMIT`` regardless of the requested
+    tier and would defeat the whole point of this scalar). The
+    perspective's cap comes from
+    ``_TIER_CHANNEL_LIMIT[perspective_tier]``; ``None`` there means
+    unlimited (every paid tier today), any integer is the hard cap
+    (OSS / Cloud Free share the free floor of
+    :data:`_FREE_CHANNEL_LIMIT`).
+
+    Semantics diverge from the perspective-independent
+    :func:`min_tier_for_channel_count` deliberately: the boolean answer
+    *is* perspective-shaped -- the whole point of the ``_at`` slot is to
+    answer "would THIS tier admit ``count``?" per pricing matrix cell.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature_at` /
+      :func:`has_node_count_at` on an unknown perspective: the strict
+      validity gate catches a typo like ``has_channel_count_at("Pro+", 5)``
+      (uppercase input strip-lower normalises so ``"Pro"`` IS valid;
+      ``"Pro+"`` collapses to ``False``).
+    * ``count`` is parsed via ``int(count)`` with the same strict
+      callsite-typo posture as :func:`has_channel_count`: non-int
+      (``None``, ``"five"``, ``list``, ...) -> ``False``. A caller that
+      passes non-int here has a bug -- fail-closed instead of silently
+      granting.
+    * ``count <= 0`` -- ``True``. A zero/negative count is either "no
+      channels configured yet" or trivially satisfied by the free floor
+      (matches :func:`min_tier_for_channel_count`'s ``TIER_OSS`` fallback
+      and :func:`has_channel_count`'s free-floor branch).
+    * Positive int -- ``True`` iff the perspective's cap in
+      :data:`_TIER_CHANNEL_LIMIT` is ``None`` (unlimited) or ``>= count``.
+      Unknown perspective already failed above, so the ``dict.get``
+      fallback to :data:`_FREE_CHANNEL_LIMIT` is defensive only.
+
+    Grace-independence (perspective-shaped by design): the answer
+    depends only on the static per-tier cap, not on ``ent.grace`` /
+    :func:`is_enforced` / the resolved entitlement. That means, unlike
+    :func:`has_channel_count` (which returns ``True`` for every finite
+    count in grace via :meth:`Entitlement.allows_channel_count`'s
+    grace-passthrough), ``has_channel_count_at("oss", 100)`` returns
+    ``False`` even in grace -- the whole point of a what-if scalar.
+
+    Never raises: any lookup / parse failure logs a warning and
+    returns ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return True
+    try:
+        cap = _TIER_CHANNEL_LIMIT.get(p, _FREE_CHANNEL_LIMIT)
+        return cap is None or n <= int(cap)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_channel_count_at(%r, %r) failed: %s",
+            perspective_tier,
+            count,
+            exc,
+        )
+        return False
+
+
 def has_retention_window(days) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit a ``days`` history
     window?
@@ -5657,6 +5745,107 @@ def has_retention_window(days) -> bool:
         return False
 
 
+def has_retention_window_at(perspective_tier: str, days) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_retention_window`: would
+    tier ``perspective_tier`` admit a ``days`` event-retention window?
+
+    Retention-capacity twin of :func:`has_feature_at` / :func:`has_runtime_at`
+    on the grant axes and of :func:`has_channel_count_at` /
+    :func:`has_node_count_at` on the sibling capacity axes. Fills the ``_at``
+    slot on the ``retention_days`` capacity axis so a pricing matrix ("does
+    OSS admit a 30-day window? Starter? Pro? Enterprise?") can bind ONE
+    boolean per cell off ONE URL each instead of hydrating the full
+    :func:`capacity_headroom_at` payload and pulling out the delta
+    client-side.
+
+    Backed directly by the static :data:`_TIER_RETENTION_DAYS` table so the
+    answer is grace-independent by construction. That mirrors the sibling
+    :func:`has_channel_count_at` / :func:`has_node_count_at` design: the
+    ``_at`` slot deliberately reports the would-be-locked state alongside
+    the live grant. Unlike :func:`has_retention_window` (which returns
+    ``True`` for every finite ``days`` value AND the ``None`` unlimited
+    request while ``ent.grace`` is on via
+    :meth:`Entitlement.allows_retention_window`'s grace-passthrough),
+    ``has_retention_window_at("oss", 30)`` returns ``False`` even in grace
+    -- that is the whole point of a what-if scalar.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature_at` /
+      :func:`has_channel_count_at` / :func:`has_node_count_at` on an
+      unknown perspective: the strict validity gate catches a typo like
+      ``has_retention_window_at("Pro+", 30)`` at the callsite (uppercase
+      ``"Pro"`` strip-lower normalises so ``"Pro"`` IS valid; ``"Pro+"``
+      collapses to ``False``).
+    * ``days is None`` -- the caller is asking about the *unlimited*
+      history request. Returns ``True`` iff the perspective's cap in
+      :data:`_TIER_RETENTION_DAYS` is ``None`` (Enterprise on the current
+      tier table). Mirrors
+      :meth:`Entitlement.allows_retention_window(None)`'s post-enforce
+      contract and :func:`min_tier_for_retention_window(None)`'s
+      Enterprise fallback. This is the ONE input where non-int is
+      meaningful -- the same asymmetry :func:`has_retention_window`
+      carries against its sibling :func:`has_channel_count` /
+      :func:`has_node_count` capacity scalars.
+    * ``days <= 0`` -- ``True``. A zero/negative window is either "not
+      measured yet" or trivially satisfied; either way the free floor
+      covers it on every perspective (matches
+      :meth:`Entitlement.allows_retention_window`'s grace-on-zero
+      contract, :func:`min_tier_for_retention_window`'s ``TIER_OSS``
+      fallback, and the sibling ``_at`` scalars).
+    * Non-int ``days`` (other than the explicit ``None``: str that
+      doesn't parse as int, list, dict, ...) -- returns ``False``. Same
+      strict callsite-typo posture :func:`has_retention_window` /
+      :func:`has_feature_at` / :func:`has_channel_count_at` /
+      :func:`has_node_count_at` use: a caller passing
+      ``has_retention_window_at("pro", "seven")`` sees the typo at the
+      callsite instead of a silent grant.
+    * Positive int -- ``True`` iff the perspective's cap in
+      :data:`_TIER_RETENTION_DAYS` is ``None`` (unlimited) or ``>=
+      days``. Unknown perspective already failed above, so the
+      ``dict.get`` fallback is defensive only.
+
+    Never raises: any lookup failure logs a warning and returns
+    ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        cap = _TIER_RETENTION_DAYS.get(p, 7)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_at(%r, %r) cap lookup failed: %s",
+            perspective_tier,
+            days,
+            exc,
+        )
+        return False
+    if days is None:
+        return cap is None
+    try:
+        n = int(days)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return True
+    try:
+        return cap is None or n <= int(cap)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_at(%r, %r) failed: %s",
+            perspective_tier,
+            days,
+            exc,
+        )
+        return False
+
+
 def has_node_count(count) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit ``count`` registered
     fleet nodes concurrently?
@@ -5713,6 +5902,90 @@ def has_node_count(count) -> bool:
         return bool(get_entitlement().allows_node_count(n))
     except Exception as exc:
         logger.warning("entitlements: has_node_count(%r) failed: %s", count, exc)
+        return False
+
+
+def has_node_count_at(perspective_tier: str, count) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_node_count`: would tier
+    ``perspective_tier`` admit ``count`` registered fleet nodes concurrently?
+
+    Node-capacity twin of :func:`has_feature_at` / :func:`has_runtime_at`.
+    Fills the ``_at`` slot on the ``nodes`` capacity axis so a pricing
+    matrix ("does Starter admit 5 nodes? Pro? Enterprise?") can bind ONE
+    boolean per cell off ONE URL each instead of hydrating the full
+    :func:`capacity_headroom_at` payload and pulling out the delta
+    client-side. Scalar-precise complement of the capacity-axis
+    ``_at`` catalogs.
+
+    Backed directly by the static :data:`_TIER_NODE_LIMIT` table (not by
+    :func:`_hypothetical_entitlement`, which always synthesises
+    ``node_limit=1`` regardless of the requested tier and would defeat
+    the whole point of this scalar). The perspective's cap comes from
+    ``_TIER_NODE_LIMIT[perspective_tier]``; ``None`` there means
+    unlimited (every paid tier today), any integer is the hard cap.
+
+    Semantics diverge from the perspective-independent
+    :func:`min_tier_for_node_count_at` deliberately: the boolean answer
+    *is* perspective-shaped -- the whole point of the ``_at`` slot is
+    to answer "would THIS tier admit ``count``?" per pricing matrix
+    cell.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature_at` on
+      an unknown perspective: the strict validity gate catches a typo
+      like ``has_node_count_at("Pro", 5)`` (uppercase P after
+      strip-lower normalises to ``"pro"``, so that specific input IS
+      valid; ``"Pro+"`` collapses to ``False``).
+    * ``count`` is parsed via ``int(count)`` with the same strict
+      callsite-typo posture as :func:`has_node_count`: non-int
+      (``None``, ``"five"``, ``list``, ...) -> ``False``. A caller that
+      passes non-int here has a bug -- fail-closed instead of silently
+      granting.
+    * ``count <= 0`` -- ``True``. A zero/negative count is either "no
+      nodes registered yet" or trivially satisfied by the free floor
+      (matches :func:`min_tier_for_node_count`'s ``TIER_OSS`` fallback
+      and :func:`has_node_count`'s free-floor branch).
+    * Positive int -- ``True`` iff the perspective's cap in
+      :data:`_TIER_NODE_LIMIT` is ``None`` (unlimited) or ``>= count``.
+      Unknown perspective already failed above, so a ``dict.get``
+      fallback to :data:`_FREE_NODE_LIMIT` here is defensive only.
+
+    Grace-independence (perspective-shaped by design): the answer
+    depends only on the static per-tier cap, not on ``ent.grace`` /
+    :func:`is_enforced` / the resolved entitlement. That means, unlike
+    :func:`has_node_count` (which returns ``True`` for every finite
+    count in grace via :meth:`Entitlement.allows_node_count`'s
+    grace-passthrough), ``has_node_count_at("oss", 5)`` returns
+    ``False`` even in grace -- the whole point of a what-if scalar.
+
+    Never raises: any lookup / parse failure logs a warning and
+    returns ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return True
+    try:
+        cap = _TIER_NODE_LIMIT.get(p, _FREE_NODE_LIMIT)
+        return cap is None or n <= int(cap)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_node_count_at(%r, %r) failed: %s",
+            perspective_tier,
+            count,
+            exc,
+        )
         return False
 
 
@@ -5799,6 +6072,133 @@ def has_runtimes(runtimes) -> bool:
         return True
     except Exception as exc:
         logger.warning("entitlements: has_runtimes(%r) failed: %s", runtimes, exc)
+        return False
+
+
+def has_features_at(perspective_tier: str, features) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_features`: would tier
+    ``perspective_tier`` grant **all** ``features``?
+
+    Plural-fold twin of :func:`has_feature_at` on the same axis, in the same
+    relationship :func:`has_features` has to :func:`has_feature`. Fills the
+    plural ``_at`` slot in the grant-axis boolean-gate family so a pricing
+    matrix that gates on a BUNDLE (``fleet + otel_export + sso -- Available
+    in Enterprise``) can bind ONE boolean per (perspective, bundle) cell off
+    ONE URL each, instead of walking the singular :func:`has_feature_at` per
+    item and AND-ing on the client.
+
+    Fold rule mirrors :func:`has_features` exactly: returns ``True`` iff
+    :func:`has_feature_at` returns ``True`` for **every** item in the
+    iterable, i.e. the tightest single-item denial wins. Consequences of
+    that fold, all deliberate:
+
+    * Empty / ``None`` / non-iterable ``features`` -- returns ``False``.
+      The vacuous-truth answer would silently render "granted" on a caller
+      who forgot to pass the bundle, which is exactly the callsite-typo
+      posture the singular :func:`has_feature_at` catches with its empty-id
+      ``False``. Matches the plural :func:`has_features` empty-fold posture
+      byte-for-byte.
+    * Unknown / empty / non-string ``perspective_tier`` -- returns ``False``.
+      Perspective validation lives on the OUTER helper (once per call) rather
+      than folding into per-item :func:`has_feature_at` calls, so a bogus
+      perspective fails-closed in one place instead of re-parsing the tier
+      per item. Same fail-closed posture as :func:`has_feature_at` on an
+      unknown perspective.
+    * Unknown / empty / non-string item id -- returns ``False``. The singular
+      :func:`has_feature_at` fails-closed on typos so the bundle fold
+      inherits that: ``has_features_at("pro", ["fleet", "Fleeet"])`` is
+      ``False`` even in grace, surfacing the typo instead of silently
+      granting the bundle.
+    * Grace-independence: the answer is derived from the static per-tier
+      grant map via :func:`has_feature_at`'s :func:`_hypothetical_entitlement`
+      backing, so the returned bit is IDENTICAL under grace vs enforce for
+      the same (perspective, bundle) pair. Diverges deliberately from
+      :func:`has_features` (which reports ``True`` for every fully-known
+      bundle in grace via the live resolver's grace pass-through) -- the
+      whole point of the ``_at`` slot is to render the would-be-locked
+      state alongside the live grant.
+
+    Never raises: any delegate failure logs a warning and returns ``False``
+    so a pricing-matrix cell keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        if features is None:
+            return False
+        items = list(features)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for f in items:
+            if not has_feature_at(p, f):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_features_at(%r, %r) failed: %s",
+            perspective_tier,
+            features,
+            exc,
+        )
+        return False
+
+
+def has_runtimes_at(perspective_tier: str, runtimes) -> bool:
+    """Runtime-axis twin of :func:`has_features_at`: would tier
+    ``perspective_tier`` grant **all** ``runtimes``?
+
+    Same relationship to :func:`has_runtime_at` that :func:`has_features_at`
+    has to :func:`has_feature_at`. Delegates to :func:`has_runtime_at` per
+    item, so the strict alias posture the singular helper carries (no
+    :func:`canonical_runtime` resolution at scalar layer; a raw
+    ``"claude-code"`` collapses to ``False`` because it is not in
+    :data:`ALL_RUNTIMES` after ``.strip().lower()``) is inherited. Alias
+    tolerance belongs to the endpoint, which canonicalises per-token upstream
+    -- matching the sibling :func:`has_runtimes` scalar / ``/has-runtimes``
+    endpoint split exactly.
+
+    Fold semantics mirror :func:`has_features_at` byte-for-byte: perspective
+    validated once against :data:`_TIER_ORDER` (fail-closed on empty /
+    unknown / non-string); empty / ``None`` / non-iterable bundle collapses
+    to ``False``; unknown / empty / non-string item collapses the whole fold
+    to ``False``; grace-independent by construction (backed by
+    :func:`_hypothetical_entitlement` via the singular delegate).
+
+    Never raises: delegate failure -> logged warning -> ``False``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        if runtimes is None:
+            return False
+        items = list(runtimes)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for rt in items:
+            if not has_runtime_at(p, rt):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_runtimes_at(%r, %r) failed: %s",
+            perspective_tier,
+            runtimes,
+            exc,
+        )
         return False
 
 

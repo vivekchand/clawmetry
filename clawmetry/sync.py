@@ -1765,6 +1765,42 @@ def _detect_nemoclaw() -> dict:
         if not result.get("sandbox_name"):
             result["sandbox_name"] = default_route.get("sandbox") or ""
 
+    # 6. Per-sandbox health report via `nemoclaw sandbox status --json`.
+    # Distinct from step 3's `nemoclaw status --json` (global report) — this
+    # command calls getSandboxStatusReport and exposes OOM-kill counter,
+    # RPC/image drift type, docker-pause flag, GPU-proof, route drift,
+    # gateway state, and lifecycle phase. Issue #4434.
+    _sbox_name = result.get("sandbox_name", "")
+    if nemo_bin and _sbox_name:
+        try:
+            import json as _j
+            _sbox_raw = subprocess.check_output(
+                [nemo_bin, "sandbox", "status", "--json", _sbox_name],
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).decode()
+            _sbox_data = _j.loads(_sbox_raw)
+            _health: dict = {}
+            _trh = _sbox_data.get("terminalRuntimeHealth")
+            if isinstance(_trh, dict):
+                _health["terminalRuntimeHealth"] = {
+                    "kind": _trh.get("kind", ""),
+                    "oomKillCount": _trh.get("oomKillCount", 0),
+                    "source": _trh.get("source", ""),
+                }
+            for _field in (
+                "rpcIssue", "failureLayer", "routeDrift",
+                "dockerPaused", "sandboxGpuProof",
+                "baselineExclusionStates", "gatewayState", "phase",
+            ):
+                _val = _sbox_data.get(_field)
+                if _val is not None:
+                    _health[_field] = _val
+            if _health:
+                result["sandbox_health"] = _health
+        except Exception:
+            pass
+
     return result
 
 

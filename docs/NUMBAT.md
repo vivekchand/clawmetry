@@ -23,7 +23,9 @@ clawmetry secure disable   # removes the hooks again
 
 `enable` asks for confirmation first — hook install edits each harness's own
 config (that's how numbat works), which crosses ClawMetry's read-only
-default. Enforce mode is never enabled.
+default. Enforce mode is never enabled. First-time setup surfaces the same
+step: `clawmetry onboard` ends with a default-yes "Agent security
+monitoring" offer, and that answer is the consent (no second prompt).
 
 ### Manual setup (what `clawmetry secure enable` runs for you)
 

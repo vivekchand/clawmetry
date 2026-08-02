@@ -7499,7 +7499,7 @@ async function loadBrainPage(silent) {
         }, _bhTry < 12 ? Math.max(2000, (data.eta_sec || 3) * 1000) : 10000);
       } else {
         var sEl2 = document.getElementById('brain-stream');
-        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not reach your node for this window. Check that the machine is online, then retry.') + '</div>';
+        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not fetch this window from your node. The node may be offline, or was mid-sync when the request was made — if it is online, retry in a moment.') + '</div>';
         if (stEl) stEl.textContent = '';
       }
       return;
