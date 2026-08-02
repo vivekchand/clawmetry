@@ -692,7 +692,6 @@
   "inventory.owner_default": "אני",
   "inventory.cost_na_tip": "סביבת ריצה זו אינה מדווחת על עלות עדיין.",
   "inventory.empty_title": "עדיין אין סוכנים, וזה בסדר גמור.",
-  "inventory.empty_body": "ClawMetry עוקב אחר OpenClaw, NVIDIA NemoClaw, ועוד 10 סביבות ריצה ברגע שהן פועלות. אין מה להגדיר.",
   "inventory.expand_brain": "ראה מה הוא חושב",
   "inventory.expand_cost": "ראה מה הוא עלה",
   "inventory.expand_flow": "צפה בו בזמן אמת",

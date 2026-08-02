@@ -692,7 +692,6 @@
   "inventory.owner_default": "saya",
   "inventory.cost_na_tip": "Runtime ini belum melaporkan biaya.",
   "inventory.empty_title": "Belum ada agen, dan itu tidak masalah.",
-  "inventory.empty_body": "ClawMetry memantau OpenClaw, NVIDIA NemoClaw, dan 10 runtime lainnya begitu mereka berjalan. Tidak perlu konfigurasi apa pun.",
   "inventory.expand_brain": "Lihat apa yang sedang dipikirkan",
   "inventory.expand_cost": "Lihat berapa biayanya",
   "inventory.expand_flow": "Pantau secara langsung",

@@ -692,7 +692,6 @@
   "inventory.owner_default": "我",
   "inventory.cost_na_tip": "该运行时暂不支持费用报告。",
   "inventory.empty_title": "暂无代理，这完全正常。",
-  "inventory.empty_body": "ClawMetry 即时监控 OpenClaw、NVIDIA NemoClaw 及其他 10 种运行时，无需任何配置。",
   "inventory.expand_brain": "查看正在思考的内容",
   "inventory.expand_cost": "查看费用详情",
   "inventory.expand_flow": "实时观察",

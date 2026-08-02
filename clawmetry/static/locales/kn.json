@@ -692,7 +692,6 @@
   "inventory.owner_default": "ನಾನು",
   "inventory.cost_na_tip": "ಈ ರನ್‌ಟೈಮ್ ಇನ್ನೂ ವೆಚ್ಚ ವರದಿ ಮಾಡುತ್ತಿಲ್ಲ.",
   "inventory.empty_title": "ಇನ್ನೂ ಏಜೆಂಟ್‌ಗಳಿಲ್ಲ, ಅದು ಸರಿಯೇ.",
-  "inventory.empty_body": "ClawMetry ಅವು ಚಲಿಸುವ ಕ್ಷಣದಲ್ಲೇ OpenClaw, NVIDIA NemoClaw, ಮತ್ತು 10 ಹೆಚ್ಚಿನ ರನ್‌ಟೈಮ್‌ಗಳನ್ನು ವೀಕ್ಷಿಸುತ್ತದೆ. ಯಾವುದನ್ನೂ ಕಾನ್ಫಿಗರ್ ಮಾಡಬೇಕಿಲ್ಲ.",
   "inventory.expand_brain": "ಅದು ಏನು ಯೋಚಿಸುತ್ತಿದೆ ನೋಡಿ",
   "inventory.expand_cost": "ಅದು ಎಷ್ಟು ವೆಚ್ಚವಾಯಿತು ನೋಡಿ",
   "inventory.expand_flow": "ಲೈವ್‌ನಲ್ಲಿ ವೀಕ್ಷಿಸಿ",

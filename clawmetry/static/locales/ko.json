@@ -692,7 +692,6 @@
   "inventory.owner_default": "나",
   "inventory.cost_na_tip": "이 런타임은 아직 비용을 보고하지 않습니다.",
   "inventory.empty_title": "아직 에이전트가 없습니다. 괜찮습니다.",
-  "inventory.empty_body": "ClawMetry는 OpenClaw, NVIDIA NemoClaw를 비롯한 10개 이상의 런타임을 실행 즉시 감지합니다. 별도 설정이 필요 없습니다.",
   "inventory.expand_brain": "현재 사고 과정 보기",
   "inventory.expand_cost": "비용 내역 보기",
   "inventory.expand_flow": "실시간으로 보기",

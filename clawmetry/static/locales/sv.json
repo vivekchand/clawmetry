@@ -692,7 +692,6 @@
   "inventory.owner_default": "jag",
   "inventory.cost_na_tip": "Den här körmiljön rapporterar inte kostnad ännu.",
   "inventory.empty_title": "Inga agenter ännu, och det är helt okej.",
-  "inventory.empty_body": "ClawMetry bevakar OpenClaw, NVIDIA NemoClaw och 10 andra körmiljöer så fort de startar. Inget att konfigurera.",
   "inventory.expand_brain": "Se vad den tänker",
   "inventory.expand_cost": "Se vad det kostade",
   "inventory.expand_flow": "Följ det live",
