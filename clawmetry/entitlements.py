@@ -5989,6 +5989,121 @@ def has_node_count_at(perspective_tier: str, count) -> bool:
         return False
 
 
+def has_node_count_batch(counts) -> list[dict]:
+    """Per-value boolean-gate rows on the ``nodes`` capacity axis in ONE
+    round-trip. Batch sibling of :func:`has_node_count` and node-axis twin
+    of the not-yet-existing ``has_channel_count_batch`` /
+    ``has_retention_window_batch`` scalars.
+
+    Where :func:`has_node_count` answers "does the CURRENT install admit
+    ``count``?" as ONE boolean and :func:`min_tier_for_node_count_batch`
+    answers "cheapest tier that would admit each count?" as a list of
+    reverse-lookup rows, this scalar folds the two together: for every
+    supplied count it emits ONE row carrying both the live boolean
+    ``has`` gate (via :meth:`Entitlement.allows_node_count` on the
+    resolved entitlement) and the reverse-lookup ``required_tier``
+    answer. A fleet paywall matrix ("show me each requested node count
+    with its live grant AND the cheapest tier that would unlock it")
+    renders off ONE URL instead of ``N`` calls to
+    ``/api/entitlement/has-node-count?count=<N>``.
+
+    Row shape (byte-parity with :func:`_has_row` rows produced by
+    :func:`has_batch` on the ``"nodes"`` axis, so a UI already wired for
+    ``has_batch`` rows can rebind to this batch without reshaping)::
+
+        {
+          "key":                "<normalised int as str>",
+          "kind":               "nodes",
+          "has":                <bool>,
+          "unknown":            <bool>,   # True iff non-int input
+          "required_tier":      "<tier id>" | None,
+          "required_tier_label":"<label>"  | None,
+          "required_tier_rank": <int>,     # -1 when required_tier None
+        }
+
+    Delegates per-row to :func:`_has_row` so the boolean gate + reverse-
+    lookup answer stay byte-parity with the singular :func:`has_node_count`
+    + :func:`min_tier_for_node_count` pair and with the ``nodes`` axis
+    row emitted by :func:`has_batch`. That single delegation point means
+    any future contract change to the ``nodes`` row shape (e.g. adding a
+    ``label`` conjugation) lands in ONE place.
+
+    Contract:
+
+    * ``counts`` is any iterable. ``None`` -> ``[]``. Non-iterable ->
+      ``[]`` (mirrors :func:`min_tier_for_node_count_batch`).
+    * Per-value dedup by ``str(int(raw))`` when parseable, else
+      ``str(raw)``. First-seen order preserved (matches
+      :func:`min_tier_for_node_count_batch`).
+    * Non-int items surface as one row with ``unknown=True`` /
+      ``has=False`` (strict callsite-typo fail-closed posture matching
+      :func:`has_node_count` and :func:`_has_row`). A caller that passes
+      ``["five"]`` here has a bug -- fail-closed instead of silently
+      granting.
+    * ``count <= 0`` -- ``has=True`` (trivially satisfied by the free
+      floor via :meth:`Entitlement.allows_node_count`'s zero contract);
+      ``required_tier="oss"`` per :func:`min_tier_for_node_count`.
+    * Positive int -- ``has`` reflects the resolver's live grant
+      (grace-passthrough while ``ent.grace`` is ``True``, hard cap
+      thereafter); ``required_tier`` is the cheapest tier admitting
+      ``count`` per :func:`min_tier_for_node_count`.
+
+    Grace vs enforce: while ``ent.grace`` is ``True`` (the current
+    rollout state) every KNOWN row reports ``has=True``; unknown rows
+    still fail-closed to ``has=False`` (the typo-catches-at-callsite
+    contract). Post-enforcement each row reflects the underlying
+    :meth:`Entitlement.allows_node_count` answer.
+
+    Never raises: any resolver / row-shape failure short-circuits to the
+    fail-closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        if counts is None:
+            return []
+        items = list(counts)
+    except TypeError:
+        return []
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_node_count_batch falling back to grace: %s", exc
+        )
+        ent = _oss_free()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            n = int(raw)
+            key = str(n)
+            passthrough = n
+        except (TypeError, ValueError):
+            key = str(raw)
+            passthrough = raw
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            row = _has_row(ent, passthrough, "nodes")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_node_count_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            row = {
+                "key": key,
+                "kind": "nodes",
+                "has": False,
+                "unknown": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        out.append(row)
+    return out
+
+
 def has_features(features) -> bool:
     """Boolean-gate scalar: does the CURRENT install allow **all** ``features``?
 

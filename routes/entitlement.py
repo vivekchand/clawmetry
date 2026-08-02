@@ -4623,6 +4623,175 @@ def api_entitlement_has_node_count_at():
         return jsonify(_has_node_count_at_fallback(tier, count_raw))
 
 
+def _has_node_count_batch_row_to_body(
+    row: dict, count_raw: str, cur_rank: int
+) -> dict:
+    """Translate a :func:`has_node_count_batch` scalar row into the endpoint
+    body row shape.
+
+    Rekeys ``has`` -> ``has_node_count`` / ``allowed`` (matches the
+    singular ``/api/entitlement/has-node-count`` body), replaces the
+    normalised-str ``key`` with an int ``count`` (or ``null`` on non-int
+    input) plus the caller's raw ``count_raw`` echo (matches the
+    singular endpoint's ``count`` / ``count_raw`` pair), and layers a
+    conjugated human ``label`` ("1 node" / "5 nodes"; matches
+    :func:`_capacity_batch_row_to_body`) plus a per-row
+    ``upgrade_required`` bit computed against the shared ``cur_rank`` so
+    a paywall matrix tile can bind it directly without a second lookup.
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape (``count=null``, ``has_node_count=false``, ``allowed=false``,
+    ``required_tier=null``, ``upgrade_required=false``) so the batch keeps
+    building.
+    """
+    try:
+        n = int(row.get("key"))
+        count: int | None = n
+        label = f"{n} node" if n == 1 else f"{n} nodes"
+    except (TypeError, ValueError):
+        count = None
+        label = None
+    req_rank = row.get("required_tier_rank")
+    if req_rank is None:
+        req_rank = -1
+    has_flag = bool(row.get("has"))
+    required = row.get("required_tier")
+    return {
+        "count": count,
+        "count_raw": count_raw,
+        "kind": "node_count",
+        "label": label,
+        "has_node_count": has_flag,
+        "allowed": has_flag,
+        "unknown": bool(row.get("unknown")),
+        "required_tier": required,
+        "required_tier_label": row.get("required_tier_label"),
+        "required_tier_rank": req_rank,
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+def _has_node_count_batch_fallback() -> dict:
+    """Grace-shape fallback body for ``/api/entitlement/has-node-count-batch``.
+
+    Sibling of :func:`_min_tier_for_capacity_batch_fallback` on the
+    same axis: on a resolver crash the pricing surface keeps rendering
+    with an empty ``rows`` list instead of a stack trace. Envelope
+    mirrors the happy-path body so a caller does not have to branch on
+    the error shape.
+    """
+    return {
+        "kind": "node_count",
+        "count": 0,
+        "rows": [],
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-node-count-batch")
+def api_entitlement_has_node_count_batch():
+    """``GET /api/entitlement/has-node-count-batch?counts=1,5,100`` -- per-
+    value boolean-gate batch sibling of ``/api/entitlement/has-node-count``
+    on the ``nodes`` capacity axis.
+
+    Node-axis twin of the not-yet-existing has-channel-count-batch /
+    has-retention-window-batch endpoints. Where the singular
+    ``/has-node-count?count=<N>`` endpoint answers ONE
+    (``has_node_count``, ``required_tier``) pair per request, this batch
+    answers all requested counts in ONE round-trip so a fleet paywall
+    matrix ("does the current install admit 1? 5? 100 nodes?") binds
+    off one URL instead of ``N`` calls.
+
+    ``?counts=`` is a comma-separated list. Empty / whitespace tokens
+    are dropped, duplicates by normalised int key are dropped preserving
+    first-seen order, non-int tokens pass through as one row with
+    ``unknown=true`` / ``has_node_count=false`` (matches
+    :func:`has_node_count`'s strict callsite-typo posture). Missing /
+    blank ``?counts=`` -> ``400`` (matches the sibling
+    ``/api/entitlement/min-tier-for-node-count-batch`` posture).
+
+    Per-row body shape (extends the singular ``/has-node-count`` shape
+    with ``kind`` / ``label`` / ``unknown`` / ``count_raw`` so a UI
+    already rendering ``min-tier-for-node-count-batch`` rows can rebind
+    without reshaping)::
+
+        {
+          "count":              <int> | null,
+          "count_raw":          "<stripped raw token>",
+          "kind":               "node_count",
+          "label":              "1 node" | "5 nodes" | null,
+          "has_node_count":     <bool>,
+          "allowed":            <bool>,               # mirror of has_node_count
+          "unknown":            <bool>,               # true iff non-int input
+          "required_tier":      "<tier id>" | null,
+          "required_tier_label":"<label>"   | null,
+          "required_tier_rank": <int>,                # -1 when required_tier null
+          "upgrade_required":   <bool>,               # required_tier_rank > current_tier_rank
+        }
+
+    Envelope wraps ``rows`` with ``kind`` / ``count`` (row count) plus
+    the standard resolver envelope (``current_tier`` /
+    ``current_tier_rank`` / ``grace`` / ``enforced``) so a UI can render
+    "you are here" once alongside the per-row grants.
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) every KNOWN row reports ``has_node_count=true``, so
+    wiring this into a fleet gate today changes NO current behavior.
+    Post-enforcement each row reflects the resolver's live grant.
+
+    Cross-consistency: the ``required_tier`` on each row agrees byte-for-
+    byte with ``/api/entitlement/required-tier?nodes=<count>`` and with
+    the per-row ``required_tier`` on the sibling
+    ``/api/entitlement/min-tier-for-node-count-batch`` -- a UI wiring
+    both for the same paywall matrix cannot see inconsistent tier state.
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_node_count_batch_fallback`.
+    """
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        scalar_rows = _ent.has_node_count_batch(values)
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            try:
+                key = str(int(raw))
+            except (TypeError, ValueError):
+                key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_node_count_batch_row_to_body(
+                r, raw_by_key.get(str(r.get("key")), str(r.get("key"))), cur_rank
+            )
+            for r in scalar_rows
+        ]
+        return jsonify(
+            {
+                "kind": "node_count",
+                "count": len(rows),
+                "rows": rows,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_node_count_batch: error: %s", exc
+        )
+        return jsonify(_has_node_count_batch_fallback())
+
+
 def _has_bundle_fallback(axis: str, tokens: list[str]) -> dict:
     """OSS-free / never-5xx envelope for the plural ``/api/entitlement/has-features``
     and ``/api/entitlement/has-runtimes`` endpoints.
