@@ -5422,7 +5422,7 @@ def has_feature_at(perspective_tier: str, feature: str) -> bool:
     bind ONE boolean per cell off ONE URL each instead of fetching the
     full :func:`feature_catalog_at` payload and pulling out the
     ``allowed`` field client-side. Scalar-precise complement of
-    :func:`feature_spec_at`\ 's ``allowed`` bit -- a callsite that only
+    :func:`feature_spec_at`'s ``allowed`` bit -- a callsite that only
     needs the boolean does not have to hydrate the full spec row.
 
     Semantics diverge from the perspective-independent
@@ -5450,7 +5450,7 @@ def has_feature_at(perspective_tier: str, feature: str) -> bool:
       same ``.strip().lower()`` normalisation :func:`has_feature` uses.
       Unknown / empty / non-string -> ``False``.
     * All-free feature on any real tier -> ``True`` (the free floor is
-      part of :func:`_hypothetical_entitlement`\ 's synthesis).
+      part of :func:`_hypothetical_entitlement`'s synthesis).
     * Never raises: any hypothetical-build failure logs a warning and
       returns ``False`` so a pricing matrix cell keeps rendering.
     """
