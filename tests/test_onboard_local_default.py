@@ -72,6 +72,7 @@ def onboard_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_start_daemon", lambda *a, **k: state.__setitem__("start_daemon", state["start_daemon"] + 1))
     monkeypatch.setattr(cli, "_stop_existing_daemon", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_maybe_apply_nemoclaw_preset", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_maybe_offer_secure", lambda *a, **k: None)
     monkeypatch.setattr("clawmetry.sync.save_config", lambda *a, **k: None)
     # Make stdin look like a TTY so onboard uses input() (which we control)
     # instead of opening /dev/tty.
