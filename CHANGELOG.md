@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Fix: Agents-tab empty state on fresh self-host installs (2026-08-02)
+- **Why:** a just-activated self-host machine with 523 Claude Code sessions showed the generic "No agents yet, and that is fine. Nothing to configure." The empty-state guidance detects runtimes via the adapter registry, which cannot see paid runtimes (Claude Code, Cursor, and friends) until the clawmetry-pro wheel installs after activation, and the client never re-polled an empty roster, so one transient empty stuck until the tab was re-clicked.
+- **What:** the /api/inventory empty branch falls back to the filesystem lite detector, so the "Claude Code detected, sync is starting up" guidance renders in exactly the pre-activation window it was designed for; the empty state retries every 20 seconds while the inventory tab is active and visible; the copy drops the stale "10 more runtimes" count (key renamed to inventory.empty_body_v2 so all locales fall back to correct English).
+
 ### Fix: removed the two-runtime "No OpenClaw or NVIDIA NemoClaw detected" banner (2026-08-02)
 - **Why:** the banner predates multi-runtime ClawMetry. With 16 observed runtimes it told users running any of the other 14 (the triggering report: a Claude Code node with 521 live sessions) to install OpenClaw or NemoClaw, and it rendered permanently on cloud node pages, where the server can never filesystem-detect a runtime.
 - **What:** removed the banner markup, the `checkAgentPresence` 60s poller (one fewer background request), and its five locale keys across all 36 locales. `GET /api/agent-presence` and the heartbeat `agent_install` mirror stay: cloud consumers still read them. Regression guards pin the removal so the two-runtime framing cannot quietly return.
