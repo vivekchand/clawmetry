@@ -2678,6 +2678,29 @@ class OpenClawAdapter(AgentAdapter):
                             _abytes = obj.get("audio_bytes") or obj.get("audioBytes")
                             if _abytes is not None:
                                 extra["audio_bytes"] = _abytes
+                            # Fish Audio TTS fields (#4429): S2.1 hosted streaming
+                            # synthesis and S2 Pro local reference-voice. Aliases
+                            # follow harness naming conventions; isLocal routes S2
+                            # Pro events to the $0 cost path in providers_pricing.
+                            _fa_stream = (
+                                obj.get("streamState")
+                                or obj.get("streaming_state")
+                                or obj.get("isStreaming")
+                            )
+                            if _fa_stream is not None:
+                                extra["streamState"] = _fa_stream
+                            _fa_tel = (
+                                obj.get("telephonyCallId")
+                                or obj.get("telephony_call_id")
+                            )
+                            if _fa_tel is not None:
+                                extra["telephonyCallId"] = _fa_tel
+                            _fa_model = obj.get("ttsModel") or obj.get("fishModel")
+                            if _fa_model is not None:
+                                extra["ttsModel"] = _fa_model
+                            _fa_local = obj.get("isLocal") or obj.get("is_local")
+                            if _fa_local is not None:
+                                extra["isLocal"] = bool(_fa_local)
                             # Fast-mode state (#3322): PR #85104 emits fastMode on
                             # event blobs; try all three spellings in precedence order.
                             for _fmkey in ("fastMode", "isFastMode", "talkFastMode"):

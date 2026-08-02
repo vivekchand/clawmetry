@@ -373,6 +373,9 @@ TTS_PROVIDER_RATES: dict[str, float] = {
     "azure":      0.016,   # Azure Cognitive Services Neural TTS
     "amazon":     0.016,   # Amazon Polly Neural voices
     "polly":      0.016,
+    "fish-audio": 0.015,   # Fish Audio S2.1 hosted streaming TTS (~$0.015/1K chars, #4429)
+    "fish":       0.015,   # Short alias
+    "fish-s2-pro": 0.0,    # Fish S2 Pro local reference-voice (self-hosted, no per-call API cost)
 }
 
 
