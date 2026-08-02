@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Feature: expired-trial banner with a buy path on the local dashboard (2026-08-02)
+- **Why:** once a self-host trial ended, the local dashboard had no honest purchase path: the paywall modal pitches "Start 7-day free trial" (one per account, so a dead end post-trial) and the selfhost modal's ended-step only appears on a re-signup attempt.
+- **What:** a banner keyed off the entitlement's expired flag (expired trial or expired paid license, tier-aware copy) with "Get a license" pointing at self-host pricing and "I have a license key" opening the existing paste surface. One entitlement fetch on load, no poller; dismiss lasts 24 hours.
+
 ### Fix: Agents-tab empty state on fresh self-host installs (2026-08-02)
 - **Why:** a just-activated self-host machine with 523 Claude Code sessions showed the generic "No agents yet, and that is fine. Nothing to configure." The empty-state guidance detects runtimes via the adapter registry, which cannot see paid runtimes (Claude Code, Cursor, and friends) until the clawmetry-pro wheel installs after activation, and the client never re-polled an empty roster, so one transient empty stuck until the tab was re-clicked.
 - **What:** the /api/inventory empty branch falls back to the filesystem lite detector, so the "Claude Code detected, sync is starting up" guidance renders in exactly the pre-activation window it was designed for; the empty state retries every 20 seconds while the inventory tab is active and visible; the copy drops the stale "10 more runtimes" count (key renamed to inventory.empty_body_v2 so all locales fall back to correct English).
