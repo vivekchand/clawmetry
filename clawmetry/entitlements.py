@@ -95,6 +95,7 @@ PAID_RUNTIMES = frozenset(
         "deepagents",
         "n8n",
         "antigravity",
+        "copilot",
     }
 )
 
@@ -118,6 +119,7 @@ RUNTIME_LABELS = {
     "deepagents": "Deep Agents",
     "n8n": "n8n",
     "antigravity": "Antigravity",
+    "copilot": "GitHub Copilot",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the

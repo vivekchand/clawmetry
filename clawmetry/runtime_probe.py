@@ -79,6 +79,8 @@ RUNTIME_PROBES: tuple = (
                  ("~/.gemini/antigravity", "~/.gemini/antigravity-cli",
                   "~/.gemini/antigravity-ide", "~/.gemini/jetski"),
                  env="CLAWMETRY_ANTIGRAVITY_HOME"),
+    RuntimeProbe("copilot", "GitHub Copilot", ("~/.copilot/session-state",),
+                 env="CLAWMETRY_COPILOT_HOME"),
 )
 
 

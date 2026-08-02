@@ -1,3 +1,16 @@
+## 0.12.636
+
+- **GitHub Copilot is the 17th observed runtime.** Copilot CLI sessions under
+  `~/.copilot/session-state/` now show up across the dashboard: conversations +
+  bash/edit/view tool calls from `events.jsonl`, model routing (auto-mode picks
+  surface as model-change events), cache-aware token split, and **vendor-billed
+  cost** from the `session-store.db` per-call usage ledger (nano-AIU credits at
+  GitHub's published $0.04/credit overage price — exact, not estimated), plus
+  repository/branch attribution. Adapter lives in clawmetry-pro (0.7.2).
+- Approval policies match Copilot tool names (`bash`, `powershell`, `view`,
+  `edit`, `create`, `grep`, `rg`, `glob`, `web_fetch`, `web_search`) via the
+  canonical tool categories.
+
 ## 0.12.613
 
 - **Antigravity is the 16th observed runtime.** Google Antigravity (IDE + CLI, all

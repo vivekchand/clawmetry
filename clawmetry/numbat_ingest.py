@@ -64,6 +64,7 @@ _AGENT_TO_RUNTIME = {
     "qwen-code": "qwen_code",
     "hermes": "hermes",
     "antigravity": "antigravity",
+    "copilot": "copilot",
     "pi": "pi",
 }
 
