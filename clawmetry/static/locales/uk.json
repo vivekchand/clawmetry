@@ -692,7 +692,6 @@
   "inventory.owner_default": "я",
   "inventory.cost_na_tip": "Цей рантайм ще не повідомляє про витрати.",
   "inventory.empty_title": "Агентів поки немає, і це нормально.",
-  "inventory.empty_body": "ClawMetry відстежує OpenClaw, NVIDIA NemoClaw та ще 10 рантаймів одразу після їх запуску. Нічого налаштовувати не потрібно.",
   "inventory.expand_brain": "Подивитись, що воно думає",
   "inventory.expand_cost": "Подивитись витрати",
   "inventory.expand_flow": "Спостерігати в реальному часі",

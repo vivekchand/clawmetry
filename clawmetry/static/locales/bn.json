@@ -692,7 +692,6 @@
   "inventory.owner_default": "আমি",
   "inventory.cost_na_tip": "এই রানটাইম এখনো খরচ জানায় না।",
   "inventory.empty_title": "এখনো কোনো এজেন্ট নেই, এটা ঠিক আছে।",
-  "inventory.empty_body": "ClawMetry, OpenClaw, NVIDIA NemoClaw এবং আরো ১০টি রানটাইম চালু হওয়ার সাথে সাথে পর্যবেক্ষণ করে। কোনো কনফিগারেশনের প্রয়োজন নেই।",
   "inventory.expand_brain": "এটি কী ভাবছে দেখুন",
   "inventory.expand_cost": "এটি কত খরচ করেছে দেখুন",
   "inventory.expand_flow": "সরাসরি দেখুন",

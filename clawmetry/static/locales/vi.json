@@ -692,7 +692,6 @@
   "inventory.owner_default": "tôi",
   "inventory.cost_na_tip": "Runtime này chưa báo cáo chi phí.",
   "inventory.empty_title": "Chưa có agent nào, không sao cả.",
-  "inventory.empty_body": "ClawMetry theo dõi OpenClaw, NVIDIA NemoClaw, và hơn 10 runtime khác ngay khi chúng chạy. Không cần cấu hình gì.",
   "inventory.expand_brain": "Xem nó đang nghĩ gì",
   "inventory.expand_cost": "Xem chi phí của nó",
   "inventory.expand_flow": "Theo dõi trực tiếp",

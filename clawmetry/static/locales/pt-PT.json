@@ -692,7 +692,6 @@
   "inventory.owner_default": "eu",
   "inventory.cost_na_tip": "Este runtime ainda não reporta custos.",
   "inventory.empty_title": "Sem agentes por agora, e está tudo bem.",
-  "inventory.empty_body": "O ClawMetry monitoriza o OpenClaw, o NVIDIA NemoClaw e mais 10 runtimes assim que são executados. Sem nada para configurar.",
   "inventory.expand_brain": "Ver o que está a pensar",
   "inventory.expand_cost": "Ver o que custou",
   "inventory.expand_flow": "Observar em direto",
