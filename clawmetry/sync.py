@@ -845,6 +845,38 @@ def save_config(data: dict) -> None:
     os.replace(tmp_path, CONFIG_FILE)
 
 
+def ensure_local_config() -> bool:
+    """Write a local-only config if none exists so run_daemon() can boot.
+
+    Every daemon spawn path (dashboard trial/license activation, the CLI's
+    local onboard) requires CONFIG_FILE to exist — load_config() raises
+    otherwise and the daemon crash-loops without ever creating the DuckDB
+    store (live-hit 2026-08-01: trial activated from the gate on a fresh
+    machine left `clawmetry status` at "Daemon: Not running" and the
+    dashboard with no family runtimes). Shape mirrors cli._finish_local:
+    empty api_key is safe because is_cloud_disabled() gates all egress.
+
+    Returns True if a config was written, False if one already existed or
+    the write failed (best-effort; never raises).
+    """
+    try:
+        if CONFIG_FILE.exists():
+            return False
+        import platform as _plat
+        import socket as _sock
+
+        save_config({
+            "api_key": "",
+            "node_id": _sock.gethostname() or "local",
+            "platform": _plat.system(),
+            "connected_at": datetime.now().isoformat(),
+            "local_only": True,
+        })
+        return True
+    except Exception:
+        return False
+
+
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
