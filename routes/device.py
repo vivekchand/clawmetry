@@ -243,3 +243,192 @@ def api_device_snapshot():
             "approval": None,
         })
 
+
+@bp_device.route("/device-preview")
+def device_preview():
+    """A browser stand-in for the physical device — proves the whole data path
+    (DuckDB → /api/device/snapshot → rendered gauge) with no hardware. The same
+    JSON later drives the ESP32 firmware."""
+    return _DEVICE_PREVIEW_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+# A single self-contained page (no build step, matching the repo convention).
+# It polls the snapshot, renders the all-runtime metrics, a health "LED", and —
+# when an approval is pending — Approve / Deny buttons that POST the decision,
+# the physical-button behaviour rendered in software.
+_DEVICE_PREVIEW_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClawMetry Device Preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center;
+         justify-content:center; background:#0b0d12; font-family:-apple-system,
+         BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:#e8eaf0; }
+  .device { width:280px; border-radius:28px; padding:22px 20px 26px;
+            background:linear-gradient(160deg,#181b22,#0e1015);
+            box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
+            border:1px solid #23262f; }
+  .top { display:flex; align-items:center; justify-content:space-between; }
+  .brand { font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+           color:#7c8190; }
+  .led { width:14px; height:14px; border-radius:50%; background:#3a3f4b;
+         transition:background .4s, box-shadow .4s; }
+  .led.green { background:#34d399; box-shadow:0 0 14px #34d39988; }
+  .led.amber { background:#fbbf24; box-shadow:0 0 14px #fbbf2488; }
+  .led.red   { background:#f87171; box-shadow:0 0 16px #f87171aa;
+               animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.45; } }
+  .mascot { font-size:62px; text-align:center; margin:14px 0 6px;
+            transition:transform .3s; }
+  .state { text-align:center; font-size:12px; color:#9aa0ad; margin-bottom:16px;
+           min-height:14px; }
+  .cost { text-align:center; font-size:40px; font-weight:700; letter-spacing:-.02em; }
+  .costlabel { text-align:center; font-size:10px; letter-spacing:.12em;
+               text-transform:uppercase; color:#7c8190; margin-top:2px; }
+  .grid { display:flex; gap:10px; margin:18px 0 4px; }
+  .cell { flex:1; background:#13161d; border:1px solid #23262f; border-radius:14px;
+          padding:10px 8px; text-align:center; }
+  .cell .v { font-size:18px; font-weight:600; }
+  .cell .k { font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+             color:#7c8190; margin-top:3px; }
+  .runtimes { font-size:10px; color:#9aa0ad; text-align:center; margin-top:10px;
+              min-height:12px; word-break:break-word; }
+  .alert { margin-top:14px; background:#2a1d12; border:1px solid #5a3a1c;
+           color:#fcd9a8; border-radius:12px; padding:9px 11px; font-size:11px;
+           display:none; }
+  .approval { margin-top:14px; background:#161b2a; border:1px solid #2d3550;
+              border-radius:14px; padding:12px; display:none; }
+  .approval .ask { font-size:12px; margin-bottom:3px; }
+  .approval .tool { font-weight:700; }
+  .approval .meta { font-size:10px; color:#8a90a0; margin-bottom:10px; }
+  .btns { display:flex; gap:8px; }
+  .btns button { flex:1; border:0; border-radius:10px; padding:9px 0; font-size:12px;
+                 font-weight:600; cursor:pointer; }
+  .approve { background:#34d399; color:#06231a; }
+  .deny    { background:#f87171; color:#2a0c0c; }
+  .foot { text-align:center; font-size:9px; color:#5a5f6c; margin-top:16px; }
+  .foot b { color:#8a90a0; }
+</style>
+</head>
+<body>
+  <div class="device">
+    <div class="top">
+      <div class="brand">ClawMetry</div>
+      <div id="led" class="led"></div>
+    </div>
+    <div id="mascot" class="mascot">😴</div>
+    <div id="state" class="state">connecting…</div>
+    <div id="cost" class="cost">$0.00</div>
+    <div class="costlabel">spent today · all runtimes</div>
+    <div class="grid">
+      <div class="cell"><div id="tokens" class="v">0</div><div class="k">tokens</div></div>
+      <div class="cell"><div id="active" class="v">0</div><div class="k">active</div></div>
+      <div class="cell"><div id="rtcount" class="v">0</div><div class="k">runtimes</div></div>
+    </div>
+    <div id="runtimes" class="runtimes"></div>
+    <div id="alert" class="alert"></div>
+    <div id="approval" class="approval">
+      <div class="ask">Approve <span id="apTool" class="tool"></span>?</div>
+      <div id="apMeta" class="meta"></div>
+      <div class="btns">
+        <button class="approve" onclick="decide('approve')">Approve</button>
+        <button class="deny" onclick="decide('deny')">Deny</button>
+      </div>
+    </div>
+    <div class="foot">one device · <b>all 14 runtimes</b></div>
+  </div>
+<script>
+const MOODS = {
+  idle:   {emoji:'😺', text:'idle'},
+  busy:   {emoji:'😼', text:'working…'},
+  alert:  {emoji:'🙀', text:'needs you'},
+  approve:{emoji:'🐱', text:'waiting for approval'},
+  sleep:  {emoji:'😴', text:'sleeping'},
+};
+function fmtTokens(n){
+  if(n>=1e9) return (n/1e9).toFixed(1)+'B';
+  if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(1)+'k';
+  return String(n||0);
+}
+let last = null;
+let decided = {};  // approval ids already decided from this page
+async function tick(){
+  try{
+    const r = await fetch('/api/device/snapshot');
+    const d = await r.json();
+    last = d;
+    document.getElementById('led').className = 'led ' + (d.health||'green');
+    document.getElementById('cost').textContent =
+      '$' + (Number(d.cost_today_usd)||0).toFixed(2);
+    document.getElementById('tokens').textContent = fmtTokens(d.tokens_today);
+    document.getElementById('active').textContent = d.active_sessions||0;
+    const rts = d.runtimes_active||[];
+    document.getElementById('rtcount').textContent = rts.length;
+    document.getElementById('runtimes').textContent = rts.join(' · ');
+
+    const al = document.getElementById('alert');
+    if(d.alert){ al.style.display='block'; al.textContent='⚠ '+d.alert.message; }
+    else al.style.display='none';
+
+    const ap = document.getElementById('approval');
+    // A just-decided id can linger in the snapshot for one cache TTL (5 s);
+    // don't resurrect the buttons for a decision that's already been made.
+    if(d.approval && !decided[d.approval.id]){
+      ap.style.display='block';
+      document.getElementById('apTool').textContent = d.approval.action;
+      const w = d.approval.waiting_seconds;
+      document.getElementById('apMeta').textContent =
+        d.approval.runtime + (w!=null ? ' · waiting '+w+'s' : '');
+    } else ap.style.display='none';
+
+    let mood = 'idle';
+    if(d.approval) mood='approve';
+    else if(d.alert) mood='alert';
+    else if((d.active_sessions||0)>0) mood='busy';
+    else if((d.tokens_today||0)===0) mood='sleep';
+    document.getElementById('mascot').textContent = MOODS[mood].emoji;
+    document.getElementById('state').textContent = MOODS[mood].text;
+  }catch(e){
+    document.getElementById('state').textContent = 'daemon offline';
+  }
+}
+async function decide(decision){
+  // The physical Approve/Deny button. Writes through the same endpoint the
+  // dashboard queue uses — POST /api/approvals/<id>/decide with a JSON
+  // {"decision": "approve"|"deny"} body (routes/policy.py) — so a button
+  // press really flips the row. Success (or an already-decided row, which
+  // the endpoint reports idempotently) clears the card; a failure keeps it
+  // up and says why, so the button is never a silent no-op.
+  if(!last || !last.approval) return;
+  const id = last.approval.id;
+  const state = document.getElementById('state');
+  try{
+    const r = await fetch('/api/approvals/'+encodeURIComponent(id)+'/decide',
+      {method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({decision:decision, reason:'device button'})});
+    let d = {};
+    try{ d = await r.json(); }catch(e){}
+    if(r.ok && d.ok){
+      decided[id] = true;
+      document.getElementById('approval').style.display='none';
+      state.textContent = d.already
+        ? ('already '+d.status) : (decision==='approve'?'approved':'denied');
+      tick();
+    }else{
+      state.textContent =
+        'decision failed: '+(d.error || ('HTTP '+r.status));
+    }
+  }catch(e){
+    state.textContent = 'decision failed: daemon offline';
+  }
+}
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>"""
