@@ -23621,3 +23621,42 @@ function _renderAgentGraph(nodes, edges) {
     statsEl.style.display = 'block';
   }
 }
+
+
+// === Expired-License / Expired-Trial Banner =================================
+// The paywall modal pitches "Start 7-day free trial" — a dead end once the
+// trial has already ended. This banner is the honest post-expiry step: buy a
+// license, or paste the key you already have. One fetch on load (the
+// entitlement endpoint is cheap and cached server-side); no poller.
+function dismissLicenseExpiredBanner() {
+  try { localStorage.setItem('cm_license_expired_dismissed', String(Date.now())); } catch (e) {}
+  var b = document.getElementById('license-expired-banner');
+  if (b) b.style.display = 'none';
+}
+async function checkLicenseExpiry() {
+  var banner = document.getElementById('license-expired-banner');
+  if (!banner) return;
+  try {
+    var dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
+    if (dismissedAt && (Date.now() - dismissedAt) < 24 * 3600 * 1000) return;
+  } catch (e) {}
+  try {
+    var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
+    var expiredTrial = !!(e && e.expired && e.tier === 'trial');
+    var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
+    if (!expiredTrial && !expiredPaid) { banner.style.display = 'none'; return; }
+    var msg = document.getElementById('license-expired-msg');
+    if (msg && expiredPaid) {
+      var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
+      msg.textContent = t('banners.license_expired_msg', null,
+        'Your license has expired. Renew to keep every runtime.');
+    }
+    // Hide the paste-a-key link when the selfhost modal is not on this page.
+    var haveKey = document.getElementById('license-expired-have-key');
+    if (haveKey && !window.shmShowLicense) haveKey.style.display = 'none';
+    banner.style.display = 'flex';
+  } catch (e) {
+    // Transient failure: never surface a network blip as a paywall.
+  }
+}
+setTimeout(checkLicenseExpiry, 1200);
