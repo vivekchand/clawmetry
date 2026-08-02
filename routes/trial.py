@@ -56,6 +56,16 @@ def _ensure_local_daemon() -> None:
         # real daemon out of the test runner's sandbox.
         return
     try:
+        # A daemon spawned without a config crash-loops: run_daemon() ->
+        # load_config() raises FileNotFoundError, so the trial activates but
+        # the DuckDB store is never created and every family runtime stays
+        # invisible (live-hit 2026-08-01). Bootstrap a local-only config
+        # first; no-op when one already exists.
+        try:
+            from clawmetry.sync import ensure_local_config
+            ensure_local_config()
+        except Exception:
+            pass
         log_dir = os.path.expanduser("~/.clawmetry")
         try:
             os.makedirs(log_dir, exist_ok=True)
@@ -63,7 +73,13 @@ def _ensure_local_daemon() -> None:
             pass
         log_fh = open(os.path.join(log_dir, "sync.log"), "a")
         kwargs = {"stdin": subprocess.DEVNULL, "stdout": log_fh,
-                  "stderr": subprocess.STDOUT, "close_fds": True}
+                  "stderr": subprocess.STDOUT, "close_fds": True,
+                  # `python -m clawmetry.sync` puts the CWD on sys.path. When
+                  # the dashboard was launched from a clawmetry source
+                  # checkout, the spawned daemon silently ran the (possibly
+                  # stale) repo copy instead of the installed wheel — pin the
+                  # CWD to a neutral directory so imports resolve normally.
+                  "cwd": os.path.expanduser("~")}
         if os.name == "nt":
             kwargs["creationflags"] = (
                 subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

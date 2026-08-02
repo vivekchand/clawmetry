@@ -267,7 +267,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.628"
+__version__ = "0.12.630"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -18744,7 +18744,17 @@ def _start_daemon_background():
     import subprocess
     import pathlib as _pl
 
-    spawn_kwargs = {}
+    # Without a config the spawned daemon crash-loops (load_config raises)
+    # and the local store never fills; and `python -m` puts the CWD on
+    # sys.path, so a dashboard launched from a source checkout would spawn
+    # the repo's (possibly stale) sync.py instead of the installed wheel.
+    # Same two hazards as routes/trial.py _ensure_local_daemon.
+    try:
+        from clawmetry.sync import ensure_local_config
+        ensure_local_config()
+    except Exception:
+        pass
+    spawn_kwargs = {"cwd": os.path.expanduser("~")}
     if os.name == "nt":
         # start_new_session is POSIX-only and silently no-ops on Windows:
         # the daemon stayed tied to this console (killed when it closes)

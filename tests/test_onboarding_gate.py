@@ -137,6 +137,34 @@ def test_activate_license_happy_path(ob, client, monkeypatch):
     assert pings == ["selfhost_license"]
 
 
+def test_activate_license_kicks_ingestion(ob, client, monkeypatch):
+    """A license without a running daemon is a dashboard with no data — the
+    handler must kick _ensure_local_daemon after a successful activation."""
+    import types
+    import routes.trial as T
+
+    fake_lic = types.SimpleNamespace(
+        activate=lambda key, actor="": (True, "activated"))
+    monkeypatch.setitem(sys.modules, "clawmetry.license", fake_lic)
+    import clawmetry
+    monkeypatch.setattr(clawmetry, "license", fake_lic, raising=False)
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_license")
+    kicks = []
+    monkeypatch.setattr(T, "_ensure_local_daemon", lambda: kicks.append(1))
+
+    r = client.post("/api/onboarding/activate-license",
+                    json={"key": "CLAW1.aaa.bbb"})
+    assert r.get_json()["ok"] is True
+    assert kicks == [1], "activation must start local ingestion"
+
+    # A failed activation must NOT spawn a daemon.
+    kicks.clear()
+    fake_lic.activate = lambda key, actor="": (False, "bad key")
+    r = client.post("/api/onboarding/activate-license",
+                    json={"key": "CLAW1.aaa.bbb"})
+    assert r.status_code == 400 and kicks == []
+
+
 def test_state_endpoint_fails_open(ob, client, monkeypatch):
     def boom():
         raise RuntimeError("disk on fire")

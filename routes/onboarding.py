@@ -226,4 +226,14 @@ def api_onboarding_activate_license():
     _write_choice_file(state)
     _apply_marker_semantics(state)
     _ping_onboarded(state)
+    # A license without a running daemon is a dashboard with no data: on a
+    # fresh machine nothing ever ingests into DuckDB and every runtime tab
+    # stays empty (live-hit 2026-08-01, trial twin fixed the same day).
+    # _ensure_local_daemon bootstraps a local-only config when missing and
+    # no-ops if a daemon already holds the pid lock.
+    try:
+        from routes.trial import _ensure_local_daemon
+        _ensure_local_daemon()
+    except Exception:
+        log.debug("onboarding: daemon kick after activation failed", exc_info=True)
     return jsonify({"ok": True, "state": state, "message": msg})
