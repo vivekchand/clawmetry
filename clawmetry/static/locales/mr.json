@@ -692,7 +692,6 @@
   "inventory.owner_default": "मी",
   "inventory.cost_na_tip": "हा रनटाइम अद्याप खर्च नोंदवत नाही.",
   "inventory.empty_title": "अद्याप कोणतेही एजंट नाहीत, आणि ते ठीक आहे.",
-  "inventory.empty_body": "ClawMetry, OpenClaw, NVIDIA NemoClaw आणि आणखी 10 रनटाइम्स चालू होताच त्यांचे निरीक्षण करते. कोणतेही कॉन्फिगरेशन नाही.",
   "inventory.expand_brain": "ते काय विचार करत आहे ते पाहा",
   "inventory.expand_cost": "किती खर्च झाला ते पाहा",
   "inventory.expand_flow": "थेट पाहा",

@@ -692,7 +692,6 @@
   "inventory.owner_default": "我",
   "inventory.cost_na_tip": "此執行環境尚未回報費用。",
   "inventory.empty_title": "目前尚無代理程式，沒關係。",
-  "inventory.empty_body": "ClawMetry 會在 OpenClaw、NVIDIA NemoClaw 及其他 10 種執行環境啟動時立即監控，無需任何設定。",
   "inventory.expand_brain": "查看其思考內容",
   "inventory.expand_cost": "查看費用明細",
   "inventory.expand_flow": "即時監看",

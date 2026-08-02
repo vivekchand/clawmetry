@@ -151,6 +151,57 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
     " data-i18n="common.dismiss">Dismiss</button>
 </div>
 
+<!-- Expired-License / Expired-Trial Banner -->
+<!-- Shown when /api/entitlement reports an EXPIRED trial or paid license. -->
+<!-- The paywall modal's CTA is "Start 7-day free trial", which is a dead -->
+<!-- end for someone whose trial already ended; this banner is the honest -->
+<!-- next step: buy a license (or paste one they already bought). -->
+<!-- Trigger: checkLicenseExpiry() in app.js. Dismiss lasts 24h. -->
+<div id="license-expired-banner" style="
+  display:none;
+  padding:14px 18px;
+  border-bottom:2px solid #E5443A;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:14px;
+  background:linear-gradient(90deg,#3a0d0b 0%,#1a1a2e 100%);
+  color:#fca5a5;
+  flex-wrap:wrap;
+  ">
+  <span style="font-size:18px;">&#9203;</span>
+  <span id="license-expired-msg" style="flex:1;min-width:240px;" data-i18n="banners.trial_expired_msg">
+    Your 7-day trial has ended. Keep every runtime with a Pro license.
+  </span>
+  <a id="license-expired-cta" href="https://clawmetry.com/pricing?deploy=self&source=expired-banner" target="_blank" rel="noopener" style="
+    background:#E5443A;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:6px 14px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    white-space:nowrap;
+    " data-i18n="banners.get_license">Get a license</a>
+  <a id="license-expired-have-key" href="#" onclick="if(window.shmShowLicense){shmShowLicense();}return false;" style="
+    color:#94a3b8;
+    font-size:12px;
+    text-decoration:underline;
+    white-space:nowrap;
+    " data-i18n="banners.have_license_key">I have a license key</a>
+  <button onclick="dismissLicenseExpiredBanner()" style="
+    background:transparent;
+    color:#94a3b8;
+    border:1px solid #334155;
+    border-radius:6px;
+    padding:5px 12px;
+    font-size:12px;
+    cursor:pointer;
+    " data-i18n="common.dismiss">Dismiss</button>
+</div>
+
 <!-- Onboarding / First-Heartbeat Banner (closes #1604) -->
 <!-- Shown on fresh signup until the first heartbeat lands. Auto-refreshes -->
 <!-- every 5s. After 90s with no heartbeat we switch to an actionable error -->

@@ -692,7 +692,6 @@
   "inventory.owner_default": "أنا",
   "inventory.cost_na_tip": "هذه البيئة لا تُبلِّغ عن التكلفة بعد.",
   "inventory.empty_title": "لا وكلاء بعد، وهذا مقبول تماماً.",
-  "inventory.empty_body": "ClawMetry تراقب OpenClaw وNVIDIA NemoClaw و10 بيئات أخرى فور تشغيلها. لا شيء يحتاج إلى إعداد.",
   "inventory.expand_brain": "اطَّلع على ما يُفكِّر فيه",
   "inventory.expand_cost": "اطَّلع على ما كلَّفه",
   "inventory.expand_flow": "تابعه مباشرةً",

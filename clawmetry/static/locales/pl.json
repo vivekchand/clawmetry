@@ -692,7 +692,6 @@
   "inventory.owner_default": "ja",
   "inventory.cost_na_tip": "To środowisko uruchomieniowe nie raportuje jeszcze kosztów.",
   "inventory.empty_title": "Brak agentów, i to jest w porządku.",
-  "inventory.empty_body": "ClawMetry obserwuje OpenClaw, NVIDIA NemoClaw i 10 innych środowisk uruchomieniowych od razu po ich uruchomieniu. Brak konfiguracji.",
   "inventory.expand_brain": "Zobacz, co myśli",
   "inventory.expand_cost": "Zobacz, ile kosztuje",
   "inventory.expand_flow": "Obserwuj na żywo",

@@ -692,7 +692,6 @@
   "inventory.owner_default": "ako",
   "inventory.cost_na_tip": "Ang runtime na ito ay hindi pa nag-uulat ng gastos.",
   "inventory.empty_title": "Wala pang mga agent, at okay lang iyon.",
-  "inventory.empty_body": "Binibigyang-pansin ng ClawMetry ang OpenClaw, NVIDIA NemoClaw, at 10 pang runtime sa sandaling tumakbo ang mga ito. Walang kailangang i-configure.",
   "inventory.expand_brain": "Tingnan kung ano ang iniisip nito",
   "inventory.expand_cost": "Tingnan ang nagastos nito",
   "inventory.expand_flow": "Panoorin nang live",

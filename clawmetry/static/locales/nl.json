@@ -692,7 +692,6 @@
   "inventory.owner_default": "ik",
   "inventory.cost_na_tip": "Deze runtime rapporteert nog geen kosten.",
   "inventory.empty_title": "Nog geen agents, en dat is prima.",
-  "inventory.empty_body": "ClawMetry bewaakt OpenClaw, NVIDIA NemoClaw en 10 andere runtimes zodra ze draaien. Niets te configureren.",
   "inventory.expand_brain": "Zie wat hij denkt",
   "inventory.expand_cost": "Zie wat het heeft gekost",
   "inventory.expand_flow": "Volg hem live",

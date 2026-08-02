@@ -692,7 +692,6 @@
   "inventory.owner_default": "yo",
   "inventory.cost_na_tip": "Este entorno de ejecución aún no reporta costos.",
   "inventory.empty_title": "Aún no hay agentes, y eso está bien.",
-  "inventory.empty_body": "ClawMetry monitorea OpenClaw, NVIDIA NemoClaw y 10 entornos de ejecución más en cuanto se ejecutan. No se necesita configuración.",
   "inventory.expand_brain": "Ver qué está pensando",
   "inventory.expand_cost": "Ver cuánto costó",
   "inventory.expand_flow": "Verlo en vivo",
