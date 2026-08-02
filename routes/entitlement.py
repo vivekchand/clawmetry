@@ -4289,6 +4289,211 @@ def api_entitlement_has_runtimes():
         return jsonify(_has_bundle_fallback("runtimes", _parse_csv_arg("runtimes")))
 
 
+def _has_bundle_at_fallback(axis: str, tier: str, tokens: list[str]) -> dict:
+    """OSS-free / never-5xx envelope for the plural what-if endpoints
+    ``/api/entitlement/has-features-at`` and ``/has-runtimes-at``.
+
+    What-if sibling of :func:`_has_bundle_fallback`, in the same relationship
+    :func:`_has_axis_at_fallback` has to :func:`_has_axis_fallback`. On any
+    resolver / helper blowup the endpoint still returns 200 with the same
+    15-key envelope as the happy path, but with ``has_<axis>_at`` and
+    ``allowed`` strict-``False`` (matches the fail-closed posture the sibling
+    ``/has-feature-at`` / ``/has-runtime-at`` fallback uses -- a paywall
+    matrix tile that lost the resolver never silently renders a bundle grant
+    it can't verify). ``tier`` and ``tokens`` echo the caller's canonicalised
+    input so the UI can still surface both in a diagnostics tooltip.
+    """
+    key = f"has_{axis}_at"
+    return {
+        "tier": tier,
+        axis: [],
+        "unknown": list(tokens),
+        "kind": axis,
+        "count": 0,
+        key: False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "perspective_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_bundle_at_body(axis: str) -> dict:
+    """Happy-path body builder for the plural what-if endpoints
+    ``/api/entitlement/has-features-at`` and ``/has-runtimes-at``.
+
+    Perspective-shaped sibling of :func:`_has_bundle_body`: where the live
+    variant folds :func:`has_features` / :func:`has_runtimes` against the
+    resolved entitlement, this folds :func:`has_features_at` /
+    :func:`has_runtimes_at` against a caller-supplied ``tier=`` perspective
+    so a pricing matrix that gates on a bundle ("does Starter grant fleet +
+    otel_export + sso? Pro? Enterprise?") can bind ONE boolean per cell off
+    ONE URL each, instead of hydrating the full ``/feature-catalog-at``
+    payload and AND-folding the ``allowed`` fields client-side.
+
+    Envelope shape (15 keys, byte-stable across every input branch)::
+
+        {
+          "tier":                  "<perspective tier id>" | "",
+          "features"/"runtimes":   [<known ids>],       # known-only, dedup, first-seen
+          "unknown":               [<tokens>],           # dropped tokens, echoed raw
+          "kind":                  "features"/"runtimes",
+          "count":                 <int>,               # len(known)
+          "has_<axis>_at":         <bool>,              # scalar over the ORIGINAL CSV
+          "allowed":               <bool>,              # alias of has_<axis>_at
+          "required_tier":         "<tier id>" | null,  # min_tier_for_<axis>(known)
+          "required_tier_label":   "<label>"  | null,
+          "required_tier_rank":    <int>,               # -1 when null
+          "perspective_tier_rank": <int>,               # -1 when tier unknown/blank
+          "current_tier":          "<live tier id>",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,              # LIVE resolver grace bit
+          "enforced":              <bool>,
+        }
+
+    Runtime-axis alias canonicalisation is applied per-token upstream of the
+    strict scalar (:func:`has_runtimes_at` does not resolve aliases -- see
+    the scalar docstring), matching the sibling :func:`_has_bundle_body`
+    posture on the ``/has-runtimes`` endpoint exactly.
+
+    Never 4xxs (missing / blank / unknown tier or all-unknown CSV -> 200
+    with ``has_<axis>_at=false``, matching the sibling ``/has-features``
+    posture -- a paywall matrix tile binds ``allowed`` directly without a
+    pre-validation round-trip). The ``perspective_tier_rank`` slot is ``-1``
+    for an unknown perspective so a UI can distinguish "typo perspective"
+    from "valid perspective that just doesn't grant this bundle". Never
+    5xxs.
+    """
+    from clawmetry import entitlements as _ent
+
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    param = "features" if axis == "features" else "runtimes"
+    tokens = _parse_csv_arg(param)
+
+    known: list[str] = []
+    unknown: list[str] = []
+    if axis == "features":
+        for fid in tokens:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            elif fid not in unknown:
+                unknown.append(fid)
+        required = _ent.min_tier_for_features(known) if known else None
+    else:
+        for rid_raw in tokens:
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known:
+                    known.append(rid)
+            elif rid not in unknown:
+                unknown.append(rid_raw)
+        required = _ent.min_tier_for_runtimes(known) if known else None
+
+    # Scalar what-if: only ``True`` when every input token resolved to a
+    # granted known id under ``tier``'s static grant map. ``unknown`` tokens
+    # collapse the bundle to ``False`` for the same typo-catches-at-callsite
+    # reason the singular ``has_feature_at("pro", "BOGUS")`` returns ``False``
+    # -- a UI can still surface the offending set via the ``unknown`` slot.
+    if tokens and not unknown and known and tier and tier in _ent._TIER_ORDER:
+        has_flag = (
+            _ent.has_features_at(tier, known)
+            if axis == "features"
+            else _ent.has_runtimes_at(tier, known)
+        )
+    else:
+        has_flag = False
+
+    ent = _ent.get_entitlement()
+    cur_rank = _ent.tier_rank(ent.tier)
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+    persp_rank = _ent.tier_rank(tier) if tier and tier in _ent._TIER_ORDER else -1
+    return {
+        "tier": tier,
+        axis: known,
+        "unknown": unknown,
+        "kind": axis,
+        "count": len(known),
+        f"has_{axis}_at": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "perspective_tier_rank": persp_rank,
+        "current_tier": ent.tier,
+        "current_tier_rank": cur_rank,
+        "grace": bool(ent.grace),
+        "enforced": _ent.is_enforced(),
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-features-at")
+def api_entitlement_has_features_at():
+    """``GET /api/entitlement/has-features-at?tier=<perspective>&features=a,b,c``
+    -- plural what-if boolean-gate scalar sibling of
+    ``/api/entitlement/has-features``.
+
+    Returns ONE boolean (``has_features_at``) plus a what-if envelope that
+    tells the caller which perspective they asked about, whether the whole
+    bundle is admitted by that perspective, the cheapest tier that would
+    unlock it (``required_tier``, byte-parity with the sibling
+    ``/api/entitlement/min-tier-for-features`` answer), and the LIVE
+    resolver context (``current_tier`` / ``grace`` / ``enforced``) so a
+    pricing matrix can render "you are here" alongside "would tier X grant
+    this bundle?" off ONE URL per cell.
+
+    Unlike the live ``/has-features`` sibling this endpoint is
+    perspective-shaped: even in grace ``has_features_at?tier=oss&features=fleet,sso``
+    is ``False`` (because OSS-free does not statically grant ``fleet`` /
+    ``sso``), whereas ``/has-features?features=fleet,sso`` in grace returns
+    ``True``. That is the whole point of the ``_at`` slot -- render the
+    would-be-locked state alongside the live grant.
+
+    Never 4xxs (missing / blank / unknown tier or all-unknown CSV -> 200
+    with ``has_features_at=false``, matching the sibling ``/has-features``
+    posture). Never 5xxs: any helper blowup collapses to
+    :func:`_has_bundle_at_fallback`.
+    """
+    try:
+        return jsonify(_has_bundle_at_body("features"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_features_at: error: %s", exc)
+        tier = (request.args.get("tier") or "").strip().lower()
+        return jsonify(
+            _has_bundle_at_fallback("features", tier, _parse_csv_arg("features"))
+        )
+
+
+@bp_entitlement.route("/api/entitlement/has-runtimes-at")
+def api_entitlement_has_runtimes_at():
+    """``GET /api/entitlement/has-runtimes-at?tier=<perspective>&runtimes=x,y,z``
+    -- runtime-axis twin of ``/api/entitlement/has-features-at``.
+
+    Same 15-key envelope with ``runtimes`` / ``has_runtimes_at`` in the
+    axis-specific slots. Runtime-alias canonicalisation
+    (``claude-code`` -> ``claude_code``) is applied per-token upstream at
+    the endpoint layer so ``?runtimes=claude-code,openclaw`` collapses to
+    the granted ``claude_code,openclaw`` -- matches the sibling
+    ``/has-runtimes`` endpoint's own upstream-canonicalise pattern.
+    Never 4xxs; never 5xxs.
+    """
+    try:
+        return jsonify(_has_bundle_at_body("runtimes"))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_runtimes_at: error: %s", exc)
+        tier = (request.args.get("tier") or "").strip().lower()
+        return jsonify(
+            _has_bundle_at_fallback("runtimes", tier, _parse_csv_arg("runtimes"))
+        )
+
+
 def _missing_bundle_fallback(axis: str, tokens: list) -> dict:
     """OSS-free / never-5xx envelope for the ``/api/entitlement/missing-features``
     and ``/api/entitlement/missing-runtimes`` endpoints.

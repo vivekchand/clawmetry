@@ -5802,6 +5802,133 @@ def has_runtimes(runtimes) -> bool:
         return False
 
 
+def has_features_at(perspective_tier: str, features) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_features`: would tier
+    ``perspective_tier`` grant **all** ``features``?
+
+    Plural-fold twin of :func:`has_feature_at` on the same axis, in the same
+    relationship :func:`has_features` has to :func:`has_feature`. Fills the
+    plural ``_at`` slot in the grant-axis boolean-gate family so a pricing
+    matrix that gates on a BUNDLE (``fleet + otel_export + sso -- Available
+    in Enterprise``) can bind ONE boolean per (perspective, bundle) cell off
+    ONE URL each, instead of walking the singular :func:`has_feature_at` per
+    item and AND-ing on the client.
+
+    Fold rule mirrors :func:`has_features` exactly: returns ``True`` iff
+    :func:`has_feature_at` returns ``True`` for **every** item in the
+    iterable, i.e. the tightest single-item denial wins. Consequences of
+    that fold, all deliberate:
+
+    * Empty / ``None`` / non-iterable ``features`` -- returns ``False``.
+      The vacuous-truth answer would silently render "granted" on a caller
+      who forgot to pass the bundle, which is exactly the callsite-typo
+      posture the singular :func:`has_feature_at` catches with its empty-id
+      ``False``. Matches the plural :func:`has_features` empty-fold posture
+      byte-for-byte.
+    * Unknown / empty / non-string ``perspective_tier`` -- returns ``False``.
+      Perspective validation lives on the OUTER helper (once per call) rather
+      than folding into per-item :func:`has_feature_at` calls, so a bogus
+      perspective fails-closed in one place instead of re-parsing the tier
+      per item. Same fail-closed posture as :func:`has_feature_at` on an
+      unknown perspective.
+    * Unknown / empty / non-string item id -- returns ``False``. The singular
+      :func:`has_feature_at` fails-closed on typos so the bundle fold
+      inherits that: ``has_features_at("pro", ["fleet", "Fleeet"])`` is
+      ``False`` even in grace, surfacing the typo instead of silently
+      granting the bundle.
+    * Grace-independence: the answer is derived from the static per-tier
+      grant map via :func:`has_feature_at`'s :func:`_hypothetical_entitlement`
+      backing, so the returned bit is IDENTICAL under grace vs enforce for
+      the same (perspective, bundle) pair. Diverges deliberately from
+      :func:`has_features` (which reports ``True`` for every fully-known
+      bundle in grace via the live resolver's grace pass-through) -- the
+      whole point of the ``_at`` slot is to render the would-be-locked
+      state alongside the live grant.
+
+    Never raises: any delegate failure logs a warning and returns ``False``
+    so a pricing-matrix cell keeps rendering instead of breaking.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        if features is None:
+            return False
+        items = list(features)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for f in items:
+            if not has_feature_at(p, f):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_features_at(%r, %r) failed: %s",
+            perspective_tier,
+            features,
+            exc,
+        )
+        return False
+
+
+def has_runtimes_at(perspective_tier: str, runtimes) -> bool:
+    """Runtime-axis twin of :func:`has_features_at`: would tier
+    ``perspective_tier`` grant **all** ``runtimes``?
+
+    Same relationship to :func:`has_runtime_at` that :func:`has_features_at`
+    has to :func:`has_feature_at`. Delegates to :func:`has_runtime_at` per
+    item, so the strict alias posture the singular helper carries (no
+    :func:`canonical_runtime` resolution at scalar layer; a raw
+    ``"claude-code"`` collapses to ``False`` because it is not in
+    :data:`ALL_RUNTIMES` after ``.strip().lower()``) is inherited. Alias
+    tolerance belongs to the endpoint, which canonicalises per-token upstream
+    -- matching the sibling :func:`has_runtimes` scalar / ``/has-runtimes``
+    endpoint split exactly.
+
+    Fold semantics mirror :func:`has_features_at` byte-for-byte: perspective
+    validated once against :data:`_TIER_ORDER` (fail-closed on empty /
+    unknown / non-string); empty / ``None`` / non-iterable bundle collapses
+    to ``False``; unknown / empty / non-string item collapses the whole fold
+    to ``False``; grace-independent by construction (backed by
+    :func:`_hypothetical_entitlement` via the singular delegate).
+
+    Never raises: delegate failure -> logged warning -> ``False``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        if runtimes is None:
+            return False
+        items = list(runtimes)
+    except TypeError:
+        return False
+    if not items:
+        return False
+    try:
+        for rt in items:
+            if not has_runtime_at(p, rt):
+                return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_runtimes_at(%r, %r) failed: %s",
+            perspective_tier,
+            runtimes,
+            exc,
+        )
+        return False
+
+
 def missing_features(features) -> list:
     """Row-level complement of :func:`has_features`: return the subset of
     ``features`` NOT granted by the resolved entitlement.
