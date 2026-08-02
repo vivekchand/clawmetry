@@ -5802,6 +5802,251 @@ def has_runtimes(runtimes) -> bool:
         return False
 
 
+def missing_features(features) -> list:
+    """Row-level complement of :func:`has_features`: return the subset of
+    ``features`` NOT granted by the resolved entitlement.
+
+    Where the plural fold in :func:`has_features` collapses a bundle to ONE
+    boolean ("does the whole set pass?"), this preserves the per-item detail
+    so a paywall diagnostics tile ("you're missing these -- upgrade to unlock")
+    can bind the exact denial list off ONE scalar without walking the
+    :func:`has_batch` matrix and filtering on ``has=False`` client-side.
+    Symmetric to :func:`has_features` at row level in the same way
+    :func:`has_batch` is symmetric at envelope level.
+
+    Rules, all deliberate:
+
+    * Empty / ``None`` iterable / non-iterable input -- returns ``[]``. Nothing
+      to check, nothing missing. (:func:`has_features` collapses these to
+      ``False`` for the boolean-gate seat; the complement here is naturally
+      empty because there is no bundle to invert.)
+    * Grace pass-through: while ``ent.grace`` is ``True`` and every item is a
+      known id, each :func:`has_feature` reports ``True`` so the returned list
+      is ``[]``. Wiring this into a diagnostics tile today surfaces NOTHING
+      (matches the ``has_features=True`` grace answer on the same bundle).
+    * Unknown / non-string / empty-string ids -- **included** in the missing
+      list in their canonicalised form (``.strip().lower()`` for strings;
+      ``""`` for non-strings). The singular :func:`has_feature` fails-closed
+      on typos, so the complement fold reflects that: a typo like
+      ``missing_features(["fleet", "Fleeet"])`` in grace returns ``["fleeet"]``
+      (only the typo), surfacing it at the callsite instead of silently
+      reporting a fully-granted bundle.
+    * Order: first-seen; dedup on the canonicalised key so a repeated id (or
+      an equivalent alias for runtimes) collapses to one row.
+
+    Never raises: a delegate blowup logs a warning and returns ``[]`` (matches
+    the "no info to surface" posture; the endpoint fallback carries the same
+    empty-missing shape so a UI wired off this scalar cannot silently render a
+    denial banner on a resolver hiccup).
+    """
+    try:
+        if features is None:
+            return []
+        items = list(features)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Probe the resolver up front: if it blows up we have no idea what's
+    # granted, so we can't report what's missing. Return [] (fail-open on
+    # the diagnostic) rather than marking every id missing off a
+    # false-negative delegate, which would render a spurious denial
+    # banner. Mirrors the endpoint's own fail-closed fallback envelope.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_features(%r) resolver probe failed: %s",
+            features,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for f in items:
+            if isinstance(f, str):
+                fid = f.strip().lower()
+            else:
+                fid = ""
+            if fid in seen:
+                continue
+            seen.add(fid)
+            if not has_feature(f):
+                out.append(fid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_features(%r) failed: %s", features, exc)
+        return []
+
+
+def missing_runtimes(runtimes) -> list:
+    """Row-level complement of :func:`has_runtimes`: return the subset of
+    ``runtimes`` NOT granted by the resolved entitlement.
+
+    Runtime-axis twin of :func:`missing_features`. Delegates to
+    :func:`has_runtime` per item, so the same fail-closed unknown /
+    non-string / empty posture is inherited.
+
+    Alias posture matches the sibling :func:`has_runtimes` scalar
+    exactly: the delegate :func:`has_runtime` does **not** alias-resolve
+    (``has_runtime("claude-code")`` is ``False`` because ``"claude-code"``
+    is not in :data:`ALL_RUNTIMES` after ``strip().lower()``), so an
+    alias input at this scalar layer collapses to "missing" too. Callers
+    who want alias tolerance should canonicalise upstream via
+    :func:`canonical_runtime` (which is what the paired
+    ``/api/entitlement/missing-runtimes`` endpoint does before delegating
+    to this scalar, matching the ``/has-runtimes`` endpoint's own
+    upstream-canonicalise pattern).
+
+    Fold semantics mirror :func:`missing_features` exactly: empty / ``None``
+    iterable / non-iterable input returns ``[]``; grace pass-through returns
+    ``[]`` for fully-known (canonical) bundles; unknown / non-string /
+    empty / alias ids are INCLUDED in the returned list in their
+    ``.strip().lower()`` form; first-seen dedup on that key; never raises.
+    """
+    try:
+        if runtimes is None:
+            return []
+        items = list(runtimes)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    # Same resolver-probe as :func:`missing_features` -- see rationale
+    # there.
+    try:
+        get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_runtimes(%r) resolver probe failed: %s",
+            runtimes,
+            exc,
+        )
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for rt in items:
+            if isinstance(rt, str):
+                rid = rt.strip().lower()
+            else:
+                rid = ""
+            if rid in seen:
+                continue
+            seen.add(rid)
+            if not has_runtime(rt):
+                out.append(rid)
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_runtimes(%r) failed: %s", runtimes, exc)
+        return []
+
+
+def has_all(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> bool:
+    """Boolean-gate scalar: does the CURRENT install grant **every** supplied
+    axis in ONE mixed-bundle fold?
+
+    Aggregate boolean sibling of :func:`min_tier_for_all` (which folds the
+    same five kwargs to ONE tier id). A paywall diagnostics tile that gates
+    on the full subscription state ("fleet + claude_code + 5 channels +
+    30-day retention + 2 nodes -- does the resolved entitlement grant all
+    of this right now?") gets ONE boolean back off ONE call instead of
+    five singular ``has_*`` round-trips + a client-side AND-chain, and
+    reads symmetric to :func:`min_tier_for_all`: min-tier picks the most-
+    constraining axis, this one picks the most-restrictive per-axis grant.
+
+    Fold rule: returns ``True`` iff every SUPPLIED axis' per-item
+    ``has_*`` gate returns ``True``. Delegates per axis to the singular
+    scalars (:func:`has_features` / :func:`has_runtimes` /
+    :func:`has_channel_count` / :func:`has_retention_window` /
+    :func:`has_node_count`) so each axis inherits that scalar's typo /
+    empty / non-int posture without a divergent code path here. Grace
+    pass-through: while ``ent.grace`` is ``True`` every delegate returns
+    ``True`` for its fully-known input, so this scalar reports ``True``
+    for every fully-known mixed bundle -- wiring this into a gate today
+    changes NO current behavior.
+
+    Kwarg semantics (mirror :func:`min_tier_for_all` exactly so a caller
+    can pass the same kwargs to both helpers without a re-normalise):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to the fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty. This
+      COLLAPSES the fold to ``False`` for the same callsite-typo posture
+      :func:`has_features` / :func:`has_runtimes` carry on their empty
+      inputs (a caller who passed an empty iterable was asking about
+      something and the answer to "does the install grant this empty
+      bundle?" is deliberately ``False``, not vacuous-``True``).
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically, ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- asking about the unlimited-
+      retention grant is the singular :func:`has_retention_window`
+      (``days=None``) call's job and would mis-route the aggregate to
+      Enterprise-only through a wrong delegate.
+    * Non-int capacity value (str, list, ...) on ``channels`` / ``nodes``
+      / ``retention_days`` -- collapses the fold to ``False`` (mirrors
+      the singular capacity scalars' strict-``False`` typo posture).
+    * No axes supplied at all -- returns ``False``. Matches
+      :func:`has_features` / :func:`has_runtimes` empty-``False`` posture
+      so a caller who forgot to pass any of the five kwargs sees the
+      typo at the callsite instead of a silent grant. Distinct from
+      :func:`min_tier_for_all` which returns ``None`` on the same input
+      (nothing-to-compute); here the boolean seat collapses to strict
+      ``False``.
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses the whole fold to ``False`` via the singular
+      :func:`has_features` / :func:`has_runtimes` typo posture. A UI
+      wanting to distinguish "denied by tier" from "typo" should call
+      the per-axis scalars (or :func:`min_tier_for_all_breakdown`) for
+      the per-axis story.
+
+    Post-enforcement: returns ``True`` iff every supplied axis' delegate
+    would return ``True`` under the resolved entitlement's live grant --
+    an expired paid tier that collapses the fleet cap to 1 (per
+    :func:`has_node_count`'s free-floor fallback) will flip this scalar
+    to ``False`` the moment the license lapses if the caller supplied
+    ``nodes >= 2``.
+
+    Never raises: any delegate failure logs a warning and returns
+    ``False`` so a caller can bind this into a boolean AND-chain without
+    a try/except.
+    """
+    try:
+        supplied_any = False
+        if features is not None:
+            supplied_any = True
+            if not has_features(features):
+                return False
+        if runtimes is not None:
+            supplied_any = True
+            if not has_runtimes(runtimes):
+                return False
+        if channels is not None:
+            supplied_any = True
+            if not has_channel_count(channels):
+                return False
+        if retention_days is not None:
+            supplied_any = True
+            if not has_retention_window(retention_days):
+                return False
+        if nodes is not None:
+            supplied_any = True
+            if not has_node_count(nodes):
+                return False
+        return supplied_any
+    except Exception as exc:
+        logger.warning("entitlements: has_all failed: %s", exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,

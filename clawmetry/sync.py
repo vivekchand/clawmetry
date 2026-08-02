@@ -12823,6 +12823,11 @@ def _build_runtime_summary(limit: int = 20000):
                 "total_turns": total,
                 "models": models_out,
                 "switch_count": rt_switches.get(rt, 0),
+                # Newest event / session-activity timestamp (epoch ms) so the
+                # Overview hero can say "working" for MAIN sessions too —
+                # /api/subagents only covers spawned children, so a node whose
+                # terminals were busy read as idle (founder report 2026-08-02).
+                "last_activity_ms": int(totals.get("last_activity_ms") or 0),
             }
         # Fold in foreign OTLP / OpenLLMetry apps (#2822/#2853 follow-up). These
         # derive ``agent_type`` from the resource ``service.name`` and have NO

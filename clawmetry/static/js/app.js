@@ -2968,7 +2968,8 @@ var _LOADALL_COALESCE_MS = 2000;
 // Human-first Overview hero (FLYWHEEL vision). Answers, in plain words a
 // first-timer gets in ~5s: is my agent alive, what did it just do, is it
 // healthy, what did it cost. Reads only already-fetched state (no new request):
-// alive-state from /api/subagents (window._cmAgentBusy), last reply from the
+// alive-state from /api/subagents (window._cmAgentBusy) plus main-session
+// recency from /api/runtime-summary (window._cmRtAct), last reply from the
 // transcript loadActivityStream already pulled (window._cmLastAgentSay), model
 // + session count from the cached /api/overview, cost from the rendered stat.
 // Idempotent + self-healing: called after each overview/active-tasks refresh.
@@ -3089,12 +3090,58 @@ function _renderOutLoopSources() {
   }).catch(function(){});
 }
 
+// Alive-state truthfulness: /api/subagents only lists SPAWNED children, so a
+// node whose main terminal sessions are hard at work read "It's idle right
+// now" (founder report 2026-08-02). Complement it with per-runtime recency
+// from /api/runtime-summary (`last_activity_ms`, snapshot-served on cloud):
+// working = an active subagent OR a main-session event within the last 3
+// minutes (window absorbs ingest + snapshot lag, stays honest after stop).
+var _CM_RT_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+function _cmNoteRtActivity(runtimes) {
+  try {
+    var map = {}, mx = 0;
+    Object.keys(runtimes || {}).forEach(function (k) {
+      var v = Number(runtimes[k] && runtimes[k].last_activity_ms) || 0;
+      map[k] = v; if (v > mx) mx = v;
+    });
+    window._cmRtAct = { ts: Date.now(), map: map, max: mx };
+  } catch (e) {}
+}
+function _cmRtRecentlyActive() {
+  var a = window._cmRtAct;
+  if (!a || !a.map) return false;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var ts = (rt && rt !== 'all') ? (a.map[rt] || 0) : (a.max || 0);
+  return ts > 0 && (Date.now() - ts) < _CM_RT_ACTIVE_WINDOW_MS;
+}
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
   if (!hero) return;
   function _txt(id) { var e = document.getElementById(id); return e ? e.textContent.trim() : ''; }
   var ov = window._cmOverview || {};
-  var busy = !!window._cmAgentBusy;
+  var busy = !!window._cmAgentBusy || _cmRtRecentlyActive();
+  // Recency cache cold/stale → kick ONE runtime-summary load and repaint on
+  // arrival (same guard pattern as the efficiency chip below: the fresh
+  // cache never re-enters, so no render loop).
+  try {
+    var _ra = window._cmRtAct;
+    // Error entries retry after 5s (the cold-load request burst can time this
+    // fetch out; a 30s empty cache would pin the hero on "idle"), and keep any
+    // previously-good map rather than blanking it.
+    var _raTtl = (_ra && _ra.err) ? 5000 : 30000;
+    if (!(_ra && (Date.now() - _ra.ts) < _raTtl) && !window._cmRtActWait) {
+      window._cmRtActWait = true;
+      fetchJsonWithTimeout('/api/runtime-summary', 8000).then(function (d) {
+        _cmNoteRtActivity((d && d.runtimes) || {});
+      }).catch(function () {
+        var _old = window._cmRtAct || {};
+        window._cmRtAct = { ts: Date.now(), map: _old.map || {}, max: _old.max || 0, err: true };
+      }).then(function () {
+        window._cmRtActWait = false;
+        try { _renderOverviewHero(); } catch (e) {}
+      });
+    }
+  } catch (_e_act) {}
   var stateWord = busy ? 'working' : 'idle';
   var dot = busy ? '#22c55e' : '#3b82f6';
   // When a runtime is selected, the hero must mirror the (runtime-scoped) stat
@@ -3146,11 +3193,16 @@ function _renderOverviewHero() {
   // matches `clawmetry status --live`. Shown only while the agent is producing.
   try {
     var _nowMs = Date.now(), _tt = Number(window._cmTodayTokensRaw || 0), _prevT = window._cmHeroTpsPrev;
-    if (busy && _prevT && _nowMs > _prevT.t) {
+    var _tpsRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // Same-scope samples only, plus a sanity ceiling: a runtime switch (or a
+    // node-wide -> scoped repaint) swaps the counter's SOURCE, so the delta is
+    // a scope jump, not throughput ("23,058,079 tok/s" shipped from exactly
+    // that once busy started being true for main sessions).
+    if (busy && _prevT && _prevT.rt === _tpsRt && _nowMs > _prevT.t) {
       var _tps = (_tt - _prevT.k) / ((_nowMs - _prevT.t) / 1000);
-      if (_tps > 0.5) stats.push('⚡ <strong style="color:var(--text-primary);">' + Math.round(_tps) + '</strong> tok/s');
+      if (_tps > 0.5 && _tps < 50000) stats.push('⚡ <strong style="color:var(--text-primary);">' + Math.round(_tps) + '</strong> tok/s');
     }
-    window._cmHeroTpsPrev = { k: _tt, t: _nowMs };
+    window._cmHeroTpsPrev = { k: _tt, t: _nowMs, rt: _tpsRt };
   } catch (_e) {}
 
   hero.innerHTML =
@@ -3354,6 +3406,9 @@ async function loadMiniWidgets(overview, usage) {
     var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     if (_ovRt && _ovRt !== 'all') {
       var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
+      // Keep the hero's alive-state recency cache warm from this fetch so the
+      // scoped path never issues a second /api/runtime-summary request.
+      try { if (typeof _cmNoteRtActivity === 'function') _cmNoteRtActivity((_rsd && _rsd.runtimes) || {}); } catch (_e_act) {}
       var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
       _ovModel = (_rs && _rs.primary_model) ? _rs.primary_model : '—';
       // The SESSIONS card must match what the runtime switcher promises
