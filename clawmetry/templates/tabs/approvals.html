@@ -68,6 +68,11 @@
     <div id="approvals-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:12px;">
     </div>
 
+    <!-- Custom (non-preset) rules — OSS-local mode lists them here so a
+         rule saved via "+ New Rule" is visible and removable, not a
+         write-only YAML entry. -->
+    <div id="approvals-custom-rules" style="margin-bottom:12px;"></div>
+
     <!-- Create custom rule form (hidden by default) -->
     <div id="create-rule-form" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;">
       <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;" data-i18n="approvals.create_custom_rule">Create Custom Rule</div>
@@ -433,8 +438,14 @@
     var c = statusColors[r.status] || '#6b7280';
     var argsPretty = '';
     try {
-      argsPretty = JSON.stringify(r.args || {}, null, 2);
-      if (argsPretty.length > 800) argsPretty = argsPretty.slice(0, 800) + '\n…';
+      if (r.args === undefined && r.args_preview) {
+        // Local-queue rows carry a compact preview string, not the full
+        // args blob — show it as-is instead of a misleading empty "{}".
+        argsPretty = String(r.args_preview).slice(0, 800);
+      } else {
+        argsPretty = JSON.stringify(r.args || {}, null, 2);
+        if (argsPretty.length > 800) argsPretty = argsPretty.slice(0, 800) + '\n…';
+      }
     } catch(e) {
       try { argsPretty = JSON.stringify(r.args || {}).slice(0, 800); } catch(e2) {}
     }
@@ -470,7 +481,9 @@
       html += '<div style="display:flex;gap:8px;margin-top:8px;">';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_2">Approve</button>';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
-      html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      if (r.expires_at) {
+        html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      }
       html += '</div>';
     } else if (r.decided_by) {
       html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19));
@@ -483,31 +496,72 @@
     return html;
   }
 
+  /* ── OSS-local row mapping ──
+   * The local queue (routes/policy.py, backed by the DuckDB approvals
+   * table the policy watcher + pre-tool hooks write) uses different field
+   * names than the cloud API. Normalise to what _renderRow expects.
+   * `action` is "tool_name: command preview". */
+  function _mapLocalPending(r) {
+    var action = r.action || '';
+    var i = action.indexOf(':');
+    return {
+      id: r.id,
+      tool_name: i > 0 ? action.slice(0, i) : (action || '?'),
+      context: i > 0 ? action.slice(i + 1).trim() : '',
+      status: r.status || 'pending',
+      requested_at: r.created_at,
+      session_id: r.requestor_session_id,
+      args_preview: r.args_preview
+    };
+  }
+  function _mapLocalDecision(r) {
+    var m = _mapLocalPending(r);
+    m.decided_by = r.resolver || 'local';
+    m.decided_at = r.resolved_at || '';
+    m.decision_reason = r.decision_reason;
+    return m;
+  }
+
   /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
     try {
       var ossMode = _isOssMode();
       var [pending, history, policies, integrations] = await Promise.all([
+        // OSS-local: the REAL local queue — the same approvals table the
+        // policy watcher and pre-tool hooks (Claude Code PreToolUse,
+        // OpenClaw exec preset) block on. Deciding here unblocks them.
         fetchJsonWithTimeout(
-          ossMode ? '/api/nemoclaw/pending-approvals'
+          ossMode ? '/api/approvals?status=pending&limit=50'
                   : '/api/cloud/approvals?status=pending&limit=50' + _q(),
           6000).catch(function(){return {approvals:[]};}),
-        ossMode ? Promise.resolve({approvals:[]})
+        ossMode ? fetchJsonWithTimeout('/api/approvals-audit?limit=50', 6000).catch(function(){return {decisions:[]};})
                 : fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
         fetchJsonWithTimeout(
-          ossMode ? '/api/nemoclaw/rules'
+          ossMode ? '/api/approvals/policies'
                   : '/api/cloud/policies?' + _q().replace(/^&/,''),
           6000).catch(function(){return {policies:[]};}),
         ossMode ? Promise.resolve({integrations:[]})
                 : fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
       ]);
-      var p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
-      var h = ossMode ? [] : (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      var p, h;
+      if (ossMode) {
+        p = (pending.approvals || []).filter(function(r){return (r.status||'pending')==='pending';}).map(_mapLocalPending);
+        h = (history.decisions || []).filter(function(r){return r.status!=='pending';}).map(_mapLocalDecision);
+        _ossPolicies = policies.policies || [];
+      } else {
+        p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
+        h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      }
 
       // Pending
       var pe = document.getElementById('approvals-pending-list');
       if (p.length === 0) {
-        pe.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
+        pe.innerHTML = ossMode
+          ? '<div style="padding:16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.6;">'
+            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;" data-i18n="approvals.oss_empty_title">No pending approvals.</div>'
+            + '<span data-i18n="approvals.oss_empty_how">How this works: the local daemon watches every agent\'s tool calls against your Protection Rules and parks matches here for a decision. For runtimes with a native pre-execution gate (Claude Code via a PreToolUse hook, OpenClaw via its exec-policy preset — installed automatically when a rule needs them), the call is paused <b>before</b> it runs until you approve or deny it here. Other runtimes are detected reactively: a denied call stops the offending session. Enable a rule on the right to start.</span>'
+            + '</div>'
+          : '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
         // Drop selections for IDs that are no longer pending (decided
         // elsewhere, expired, etc.) so the bulk header doesn't lie.
         _approvalsBulkSelected.clear();
@@ -532,6 +586,7 @@
 
       // Policies
       renderPresets(policies.policies || []);
+      if (ossMode) renderCustomRules(policies.policies || []);
 
       // Integrations
       renderIntegrations(integrations.integrations || []);
@@ -551,6 +606,63 @@
     } catch(e) {
       document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;" data-i18n="app.failed_to_load_eschtml_string_e">Failed to load: ' + escHtml(String(e)) + '</div>';
     }
+  };
+
+  /* ── OSS-local rules state + writer ──
+   * The whole rule list lives in ~/.clawmetry/policies.yml; the server
+   * validates and rewrites it atomically on PUT (routes/policy.py). The
+   * daemon watcher re-reads it within ~2 s, including installing/removing
+   * runtime pre-tool gates (Claude Code hook, OpenClaw exec preset). */
+  var _ossPolicies = [];
+
+  async function _putOssPolicies(newList) {
+    var r = await fetch('/api/approvals/policies', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({policies: newList})
+    });
+    if (!r.ok) {
+      var d = await r.json().catch(function(){return {};});
+      var msg = d.error || ('HTTP ' + r.status);
+      if (d.errors && d.errors.length) msg += ': ' + d.errors.join('; ');
+      throw new Error(msg);
+    }
+    _ossPolicies = newList;
+    return r;
+  }
+
+  function _isPresetRow(p) {
+    if (p.preset_key) return PRESETS.some(function(x){return x.key === p.preset_key;});
+    return PRESETS.some(function(x){return x.name === p.name;});
+  }
+
+  /* ── Render custom (non-preset) rules — OSS mode only ── */
+  function renderCustomRules(savedPolicies) {
+    var el = document.getElementById('approvals-custom-rules');
+    if (!el) return;
+    var custom = (savedPolicies || []).filter(function(p){return !_isPresetRow(p);});
+    if (!custom.length) { el.innerHTML = ''; return; }
+    var html = '<div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin:2px 0 6px 2px;">Custom rules</div>';
+    html += custom.map(function(p, idx) {
+      var scope = (p.tool ? p.tool : 'any tool') + (p.runtime ? ' · ' + p.runtime : '');
+      return '<div style="display:flex;align-items:center;gap:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:6px;">'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name || '(unnamed)') + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(scope) + '</span>'
+        + (p.pattern ? '<code style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.pattern) + '</code>' : '')
+        + '<button onclick="removeCustomRule(' + idx + ')" style="margin-left:auto;background:transparent;color:#ef4444;border:1px solid #ef444444;padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Remove</button>'
+        + '</div>';
+    }).join('');
+    el.innerHTML = html;
+  }
+
+  window.removeCustomRule = async function(customIdx) {
+    var custom = (_ossPolicies || []).filter(function(p){return !_isPresetRow(p);});
+    var target = custom[customIdx];
+    if (!target) return;
+    if (!confirm('Remove rule "' + (target.name || '(unnamed)') + '"? The daemon stops enforcing it within seconds.')) return;
+    try {
+      await _putOssPolicies(_ossPolicies.filter(function(p){return p !== target;}));
+      loadApprovalsTab();
+    } catch(e) { alert('Failed to remove rule: ' + e); }
   };
 
   /* ── Toggle preset policy ── */
@@ -575,24 +687,21 @@
     try {
       var r;
       if (ossMode) {
+        // ~/.clawmetry/policies.yml is the single source of truth: PUT the
+        // whole validated list (routes/policy.py writes it atomically; the
+        // daemon watcher — and any pre-tool gates — pick it up in ~2 s).
+        var next = (_ossPolicies || []).filter(function(p) {
+          return !(p.preset_key === presetKey || (!p.preset_key && p.name === preset.name));
+        });
         if (enabled) {
-          // Enable: upsert into ~/.clawmetry/policies.yml
-          r = await fetch('/api/nemoclaw/rules', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              name: preset.name, tool: preset.tool,
-              pattern_type: 'command_regex', pattern: preset.pattern,
-              action: 'require_approval', timeout: preset.timeout,
-              on_timeout: preset.on_timeout, preset_key: preset.key
-            })
-          });
-        } else {
-          // Disable: remove from YAML so the local daemon stops enforcing it.
-          // (The daemon enforces all YAML entries regardless of enabled flag.)
-          r = await fetch('/api/nemoclaw/rules/' + encodeURIComponent(presetKey), {
-            method: 'DELETE', headers: {'Content-Type': 'application/json'}
+          next.push({
+            name: preset.name, tool: preset.tool,
+            pattern_type: 'command_regex', pattern: preset.pattern,
+            action: 'require_approval', timeout: preset.timeout,
+            on_timeout: preset.on_timeout, preset_key: preset.key
           });
         }
+        r = await _putOssPolicies(next);
       } else {
         r = await fetch('/api/cloud/policies', {
           method: 'POST', headers: _authHeaders(),
@@ -632,20 +741,25 @@
     if (!patternRaw) { alert('Please enter at least one keyword to match.'); return; }
     // Convert comma-separated keywords to regex alternation
     var pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    var rule = {
+      name: name, tool: tool, pattern_type: 'command_regex',
+      pattern: pattern, action: 'require_approval',
+      timeout: timeout, on_timeout: onTimeout
+    };
     try {
-      var url = ossMode ? '/api/nemoclaw/rules' : '/api/cloud/policies';
-      var headers = ossMode ? {'Content-Type': 'application/json'} : _authHeaders();
-      var r = await fetch(url, {
-        method: 'POST', headers: headers,
-        body: JSON.stringify({
-          name: name, tool: tool, pattern_type: 'command_regex',
-          pattern: pattern, action: 'require_approval',
-          timeout: timeout, on_timeout: onTimeout
-        })
-      });
-      if (!r.ok) {
-        var d = await r.json().catch(function(){return {};});
-        throw new Error(d.error || ('HTTP ' + r.status));
+      if (ossMode) {
+        // Append to the local YAML rule list (replace same-name rule).
+        await _putOssPolicies(
+          (_ossPolicies || []).filter(function(p){return p.name !== name;}).concat([rule]));
+      } else {
+        var r = await fetch('/api/cloud/policies', {
+          method: 'POST', headers: _authHeaders(),
+          body: JSON.stringify(rule)
+        });
+        if (!r.ok) {
+          var d = await r.json().catch(function(){return {};});
+          throw new Error(d.error || ('HTTP ' + r.status));
+        }
       }
       document.getElementById('rule-name').value = '';
       document.getElementById('rule-pattern').value = '';
@@ -705,13 +819,25 @@
       var reasonEl = document.getElementById('dec-reason-' + id);
       reason = reasonEl && reasonEl.value ? reasonEl.value.trim() : '';
     }
-    var body = {action: action};
-    if (reason) body.decision_reason = reason;
     try {
-      var r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
-        method: 'POST', headers: _authHeaders(),
-        body: JSON.stringify(body)
-      });
+      var r;
+      if (_isOssMode()) {
+        // Local queue decision — flips the DuckDB row; the blocked watcher
+        // thread / pre-tool hook long-poll sees it within ~3 s.
+        var localBody = {decision: action};
+        if (reason) localBody.reason = reason;
+        r = await fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(localBody)
+        });
+      } else {
+        var body = {action: action};
+        if (reason) body.decision_reason = reason;
+        r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
+          method: 'POST', headers: _authHeaders(),
+          body: JSON.stringify(body)
+        });
+      }
       var d = await r.json();
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
       if (!opts.skipReload) loadApprovalsTab();
@@ -793,7 +919,9 @@
     if (typeof document !== 'undefined' && document.hidden) return;
     var pg = document.getElementById('page-approvals');
     if (pg && pg.classList.contains('active')) return;
-    fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
+    fetchJsonWithTimeout(_isOssMode()
+        ? '/api/approvals?status=pending&limit=10'
+        : '/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
       .then(function(d){
         var n = (d.approvals || []).length;
         var nav = document.getElementById('nav-approvals-badge');

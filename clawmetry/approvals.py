@@ -88,6 +88,70 @@ def register_kill_handler(runtime: str, fn: Callable[[str], bool]) -> None:
     are logged + swallowed by ``_kill_session``, never propagated."""
     KILL_HANDLERS[(runtime or "").strip().lower()] = fn
 
+
+# ── Pre-tool gate-handler registry ──────────────────────────────────────────
+#
+# Mirror of KILL_HANDLERS for the PRE-execution side. A "gate" is a
+# runtime-native mechanism that pauses a tool call BEFORE it runs (OpenClaw's
+# `exec-policy preset cautious`, Claude Code's PreToolUse hook, …) — the
+# reactive watcher below can only detect-and-kill AFTER the fact.
+#
+# Each handler is ``fn(want_gate: bool, policies: list[dict]) -> None`` and
+# MUST be:
+#   * idempotent — the watcher calls it every ~2 s with the current posture;
+#   * conservative — only undo what IT installed (state-file pattern, see
+#     _EXEC_POLICY_STATE / claude_code_gate._STATE_PATH), never clobbering a
+#     posture or hook the operator set by hand.
+# Exceptions raised inside a handler are logged and swallowed by
+# ``sync_runtime_gates`` — a broken gate plugin degrades to "no gate", it
+# never crashes the watcher thread.
+GATE_HANDLERS: dict[str, Callable[[bool, list], None]] = {}
+
+# Optional per-runtime "do the active policies want this runtime gated?"
+# predicate (receives the policies already filtered to that runtime).
+# Runtimes without an entry use the default: any require_approval policy.
+GATE_WANT_PREDICATES: dict[str, Callable[[list], bool]] = {}
+
+
+def register_gate_handler(runtime: str, fn: Callable[[bool, list], None],
+                          want_fn: "Optional[Callable[[list], bool]]" = None,
+                          ) -> None:
+    """Register a runtime-specific pre-tool gate callable. Idempotent
+    overwrite, same contract as :func:`register_kill_handler`.
+
+    ``fn(want_gate, policies)`` installs/refreshes the runtime's native
+    pre-execution gate when ``want_gate`` is True and removes ONLY what it
+    previously installed when False. ``want_fn(policies) -> bool`` optionally
+    overrides the default "any require_approval policy" want computation
+    (OpenClaw uses this to stay exec-only)."""
+    key = (runtime or "").strip().lower()
+    GATE_HANDLERS[key] = fn
+    if want_fn is not None:
+        GATE_WANT_PREDICATES[key] = want_fn
+
+
+def _policies_for_runtime(policies, runtime: str) -> list:
+    """Policies that apply to ``runtime``: explicit match or unset ('')."""
+    rt = (runtime or "").strip().lower()
+    out = []
+    for p in policies or []:
+        if not isinstance(p, dict):
+            continue
+        prt = str(p.get("runtime") or "").strip().lower()
+        if prt in ("", rt):
+            out.append(p)
+    return out
+
+
+def _default_want_gate(policies) -> bool:
+    """Default want-predicate: any active require_approval policy."""
+    for p in policies or []:
+        if not isinstance(p, dict):
+            continue
+        if (p.get("action") or "require_approval") == "require_approval":
+            return True
+    return False
+
 POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 
 # Default poll interval when waiting on a decision; cloud has 60-300 s timeouts
@@ -197,6 +261,12 @@ def _compile_policy(p: dict) -> Optional[dict]:
         return {
             "name": p.get("name") or "(unnamed)",
             "tool": tool,
+            # Optional per-runtime scoping ('' = applies to every runtime).
+            # Drives the pre-tool gate seam (sync_runtime_gates): a policy
+            # with runtime "claude_code" installs the Claude Code PreToolUse
+            # hook but never flips OpenClaw's exec preset, and vice versa.
+            "runtime": str(p.get("runtime")
+                           or match.get("runtime") or "").strip().lower(),
             "command_regex": re.compile(cmd_re_str) if cmd_re_str else None,
             "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
             "args_regex": re.compile(args_re) if args_re else None,
@@ -1549,11 +1619,21 @@ def sync_openclaw_exec_policy(policies) -> None:
     Only touches OpenClaw when the desired posture CHANGES, and only restores
     `yolo` if a prior run was the one that set `cautious` (state file), so a
     hand-configured posture is never clobbered. No-op when openclaw isn't on
-    this host."""
+    this host.
+
+    Kept as a public one-arg entry point (existing tests/callers); the
+    registered gate handler ``_openclaw_gate_handler`` feeds it the
+    pre-computed ``want_gate`` from ``sync_runtime_gates``."""
+    _openclaw_gate_handler(_policies_want_exec_gate(policies), policies)
+
+
+def _openclaw_gate_handler(want_gate: bool, policies) -> None:
+    """GATE_HANDLERS entry for runtime 'openclaw' — the historical exec
+    preset flip, body unchanged from sync_openclaw_exec_policy."""
     ocbin, _ = _openclaw_env_and_bin()
     if not ocbin:
         return  # not an OpenClaw box — nothing to gate
-    want = "cautious" if _policies_want_exec_gate(policies) else "yolo"
+    want = "cautious" if want_gate else "yolo"
     try:
         prev = _EXEC_POLICY_STATE.read_text().strip() if _EXEC_POLICY_STATE.exists() else ""
     except Exception:
@@ -1586,6 +1666,59 @@ def sync_openclaw_exec_policy(policies) -> None:
                     "next retry in %ds", _EXEC_POLICY_BACKOFF["fails"], delay)
 
 
+# ── Generic runtime pre-tool gate sync ──────────────────────────────────────
+
+_default_gates_registered = False
+
+
+def _register_default_gate_handlers() -> None:
+    """Idempotently register the built-in gate handlers.
+
+    * openclaw     → native exec-policy preset flip (exec-only want
+                     predicate, preserving the historical behaviour).
+    * claude_code  → PreToolUse hook installer (clawmetry/claude_code_gate).
+
+    ``setdefault`` so a plugin (clawmetry-pro) that registered its own
+    handler for either runtime earlier keeps winning."""
+    global _default_gates_registered
+    if _default_gates_registered:
+        return
+    GATE_HANDLERS.setdefault("openclaw", _openclaw_gate_handler)
+    GATE_WANT_PREDICATES.setdefault("openclaw", _policies_want_exec_gate)
+    try:
+        from clawmetry.claude_code_gate import gate_handler as _cc_gate
+        GATE_HANDLERS.setdefault("claude_code", _cc_gate)
+    except Exception as e:  # never let a broken module kill the watcher
+        log.debug("claude_code gate handler unavailable: %s", e)
+    _default_gates_registered = True
+
+
+def sync_runtime_gates(policies) -> None:
+    """Drive every registered runtime pre-tool gate from the active policy
+    set. Called once per watcher iteration, right where the openclaw-only
+    ``sync_openclaw_exec_policy`` call used to live.
+
+    Per runtime: filter the policies to those scoped to it (explicit
+    ``runtime:`` field or unset = all runtimes), compute ``want_gate`` via
+    the runtime's want-predicate (default: any require_approval policy),
+    and hand both to the handler. Handler exceptions are logged and
+    swallowed — one bad gate must not starve the others or the watcher."""
+    _register_default_gate_handlers()
+    for runtime, fn in list(GATE_HANDLERS.items()):
+        scoped = _policies_for_runtime(policies, runtime)
+        want_fn = GATE_WANT_PREDICATES.get(runtime, _default_want_gate)
+        try:
+            want = bool(want_fn(scoped))
+        except Exception as e:
+            log.warning("gate want-predicate for runtime=%r raised: %s",
+                        runtime, e)
+            continue
+        try:
+            fn(want, scoped)
+        except Exception as e:
+            log.warning("gate handler for runtime=%r raised: %s", runtime, e)
+
+
 def watcher_loop(api_key: str, node_id: str,
                  interval_sec: float = 2.0, stop_event: Optional[threading.Event] = None):
     """Long-running loop. Reloads policies on disk every iteration so users
@@ -1607,13 +1740,15 @@ def watcher_loop(api_key: str, node_id: str,
             return
         try:
             policies = load_policies(api_key=api_key)
-            # Drive OpenClaw's native pre-execution gate from the same policy
-            # set (the reactive watcher below can't PREVENT a command, only
-            # catch it after the fact — see sync_openclaw_exec_policy).
+            # Drive every runtime's native pre-execution gate from the same
+            # policy set (the reactive watcher below can't PREVENT a command,
+            # only catch it after the fact). openclaw's exec preset flip and
+            # claude_code's PreToolUse hook both hang off this seam — see
+            # sync_runtime_gates / register_gate_handler.
             try:
-                sync_openclaw_exec_policy(policies)
+                sync_runtime_gates(policies)
             except Exception as _pe:
-                log.debug("exec-policy sync skipped: %s", _pe)
+                log.debug("runtime gate sync skipped: %s", _pe)
             n = watch_iteration(api_key, node_id, policies=policies)
             if n:
                 log.debug(f"approvals: scanned {n} new toolCalls")

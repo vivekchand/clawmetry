@@ -6127,6 +6127,16 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "hooks":
         from clawmetry.hooks_claude_code import cli_main as _hooks_cli
         raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # FAST PATH — `clawmetry hook claude-code --base <url>`: the LOCAL-first
+    # PreToolUse gate client (auto-installed by the policy watcher — see
+    # clawmetry/claude_code_gate.py). Runs on every gated Claude Code tool
+    # call; POSTs the stdin event to the local dashboard's
+    # /api/hooks/claude-code/pretooluse receiver and prints the decision
+    # JSON. ALWAYS exits 0 — any failure means "no opinion" (fail-open),
+    # never a blocked agent. Stdlib-only imports.
+    if len(sys.argv) > 1 and sys.argv[1] == "hook":
+        from clawmetry.claude_code_gate import hook_main as _hook_cli
+        raise SystemExit(_hook_cli(sys.argv[2:]))
     # FAST PATH — agent-facing read CLI (`clawmetry sessions|activity|waste|
     # progress|usage|selfevolve`, see docs/CLI.md + clawmetry/cli_cmds/).
     # Dispatches BEFORE the dashboard import (~300ms) and before this process
@@ -7064,6 +7074,16 @@ def main() -> None:
         help="Claude Code approval hooks: install | uninstall | status | "
              "run {pretooluse|notification} (pre-execution gate + phone push)")
     p_hooks.add_argument("hooks_cmd", nargs="*")
+
+    # `hook` (singular) is likewise intercepted by its fast path in main();
+    # this parser entry exists only for --help discovery. It is the
+    # LOCAL-first PreToolUse gate client the policy watcher auto-installs
+    # into Claude Code's settings.json (clawmetry/claude_code_gate.py).
+    p_hook = sub.add_parser(
+        "hook",
+        help="Runtime pre-tool hook client (auto-installed): "
+             "hook claude-code --base <dashboard url>")
+    p_hook.add_argument("hook_cmd", nargs="*")
 
     _subcmds = (
         "onboard",
