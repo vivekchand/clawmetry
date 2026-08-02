@@ -1,3 +1,11 @@
+## 0.12.637
+
+- Re-publish of 0.12.636: the published 0.12.636 wheel raced the merge commit
+  and was built without the GitHub Copilot runtime changes (the release
+  workflow self-bumped from pre-merge main). 0.12.637 is the first PyPI
+  artifact actually containing the 17th-runtime support described under
+  0.12.636 below.
+
 ## 0.12.636
 
 - **GitHub Copilot is the 17th observed runtime.** Copilot CLI sessions under
