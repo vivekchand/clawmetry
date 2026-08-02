@@ -5828,6 +5828,110 @@ def missing_runtimes(runtimes) -> list:
         return []
 
 
+def has_all(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> bool:
+    """Boolean-gate scalar: does the CURRENT install grant **every** supplied
+    axis in ONE mixed-bundle fold?
+
+    Aggregate boolean sibling of :func:`min_tier_for_all` (which folds the
+    same five kwargs to ONE tier id). A paywall diagnostics tile that gates
+    on the full subscription state ("fleet + claude_code + 5 channels +
+    30-day retention + 2 nodes -- does the resolved entitlement grant all
+    of this right now?") gets ONE boolean back off ONE call instead of
+    five singular ``has_*`` round-trips + a client-side AND-chain, and
+    reads symmetric to :func:`min_tier_for_all`: min-tier picks the most-
+    constraining axis, this one picks the most-restrictive per-axis grant.
+
+    Fold rule: returns ``True`` iff every SUPPLIED axis' per-item
+    ``has_*`` gate returns ``True``. Delegates per axis to the singular
+    scalars (:func:`has_features` / :func:`has_runtimes` /
+    :func:`has_channel_count` / :func:`has_retention_window` /
+    :func:`has_node_count`) so each axis inherits that scalar's typo /
+    empty / non-int posture without a divergent code path here. Grace
+    pass-through: while ``ent.grace`` is ``True`` every delegate returns
+    ``True`` for its fully-known input, so this scalar reports ``True``
+    for every fully-known mixed bundle -- wiring this into a gate today
+    changes NO current behavior.
+
+    Kwarg semantics (mirror :func:`min_tier_for_all` exactly so a caller
+    can pass the same kwargs to both helpers without a re-normalise):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to the fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty. This
+      COLLAPSES the fold to ``False`` for the same callsite-typo posture
+      :func:`has_features` / :func:`has_runtimes` carry on their empty
+      inputs (a caller who passed an empty iterable was asking about
+      something and the answer to "does the install grant this empty
+      bundle?" is deliberately ``False``, not vacuous-``True``).
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically, ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- asking about the unlimited-
+      retention grant is the singular :func:`has_retention_window`
+      (``days=None``) call's job and would mis-route the aggregate to
+      Enterprise-only through a wrong delegate.
+    * Non-int capacity value (str, list, ...) on ``channels`` / ``nodes``
+      / ``retention_days`` -- collapses the fold to ``False`` (mirrors
+      the singular capacity scalars' strict-``False`` typo posture).
+    * No axes supplied at all -- returns ``False``. Matches
+      :func:`has_features` / :func:`has_runtimes` empty-``False`` posture
+      so a caller who forgot to pass any of the five kwargs sees the
+      typo at the callsite instead of a silent grant. Distinct from
+      :func:`min_tier_for_all` which returns ``None`` on the same input
+      (nothing-to-compute); here the boolean seat collapses to strict
+      ``False``.
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses the whole fold to ``False`` via the singular
+      :func:`has_features` / :func:`has_runtimes` typo posture. A UI
+      wanting to distinguish "denied by tier" from "typo" should call
+      the per-axis scalars (or :func:`min_tier_for_all_breakdown`) for
+      the per-axis story.
+
+    Post-enforcement: returns ``True`` iff every supplied axis' delegate
+    would return ``True`` under the resolved entitlement's live grant --
+    an expired paid tier that collapses the fleet cap to 1 (per
+    :func:`has_node_count`'s free-floor fallback) will flip this scalar
+    to ``False`` the moment the license lapses if the caller supplied
+    ``nodes >= 2``.
+
+    Never raises: any delegate failure logs a warning and returns
+    ``False`` so a caller can bind this into a boolean AND-chain without
+    a try/except.
+    """
+    try:
+        supplied_any = False
+        if features is not None:
+            supplied_any = True
+            if not has_features(features):
+                return False
+        if runtimes is not None:
+            supplied_any = True
+            if not has_runtimes(runtimes):
+                return False
+        if channels is not None:
+            supplied_any = True
+            if not has_channel_count(channels):
+                return False
+        if retention_days is not None:
+            supplied_any = True
+            if not has_retention_window(retention_days):
+                return False
+        if nodes is not None:
+            supplied_any = True
+            if not has_node_count(nodes):
+                return False
+        return supplied_any
+    except Exception as exc:
+        logger.warning("entitlements: has_all failed: %s", exc)
+        return False
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,

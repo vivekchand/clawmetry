@@ -4289,6 +4289,267 @@ def api_entitlement_missing_runtimes():
         return jsonify(_missing_bundle_fallback("runtimes", _parse_csv_arg("runtimes")))
 
 
+def _has_all_fallback() -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all``.
+
+    Mirrors the fail-closed posture the sibling ``_has_bundle_fallback``
+    carries: on a resolver blowup the endpoint still returns 200 with the
+    same envelope shape as the happy path, but ``has_all`` / ``allowed``
+    ``False`` and every axis marked ``supplied=False`` so a paywall tile
+    that lost the resolver doesn't silently grant a mixed bundle it can
+    no longer evaluate.
+    """
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": [],
+        "unknown_runtimes": [],
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "has_all": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+        "upgrade_required": False,
+    }
+
+
+def _has_all_body() -> dict:
+    """Happy-path body builder for ``/api/entitlement/has-all``.
+
+    Aggregate mixed-axis fold sibling of ``_has_bundle_body`` (which folds
+    ONE single-axis CSV). Applies the same per-axis normalisation each
+    single-axis endpoint already does -- CSV known/unknown split for
+    features and runtimes (runtime-alias canonicalisation upstream so
+    ``claude-code`` -> ``claude_code``); capacity axes parsed via
+    :func:`_parse_capacity_arg` so a blank / non-int value collapses the
+    axis to ``False`` in the fold rather than short-circuiting through
+    the underlying scalar's ``retention_days=None`` "unlimited" branch
+    (which would mis-route the aggregate to Enterprise-only).
+
+    Every axis is OPTIONAL -- a caller can supply any non-empty subset
+    of the five kwargs and the fold answers off just those axes. The
+    envelope always carries every axis' slot for byte-stable shape
+    across every URL branch (``None`` / ``[]`` for unsupplied axes).
+
+    The scalar boolean ``has_all`` is delegated to
+    :func:`clawmetry.entitlements.has_all` against the SUPPLIED axis
+    values (unsupplied axes pass ``None`` verbatim), so this endpoint
+    stays byte-parity with the module scalar. Unknown feature / runtime
+    tokens collapse ``has_all`` to ``False`` (matches
+    :func:`has_features` / :func:`has_runtimes` typo posture); a caller
+    can still surface the offending tokens via ``unknown_features`` /
+    ``unknown_runtimes``. Missing / blank / non-int capacity value on a
+    SUPPLIED axis collapses ``has_all`` to ``False`` (matches the
+    singular capacity scalars' strict-``False`` typo posture); a UI can
+    distinguish "supplied but blank" from "unsupplied" via the
+    ``supplied_axes`` list.
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the same
+    supplied axes (known ids only on the grant axes) for parity with
+    the singular ``/api/entitlement/required-tier`` envelope.
+    """
+    from clawmetry import entitlements as _ent
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        _channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        _retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        _nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    # Endpoint-layer short-circuits to ``False`` (matches the singular
+    # scalars' strict-``False`` typo posture without handing the module
+    # scalar a sentinel):
+    #   * a supplied-but-unparseable capacity axis
+    #   * unknown feature / runtime tokens on a supplied grant axis
+    #   * a supplied grant axis whose CSV was empty / all-unknown
+    # Otherwise delegate to the module scalar off the CANONICALISED
+    # known-only lists so envelope-vs-scalar parity holds byte-exact
+    # (runtime-alias canonicalisation is an endpoint-layer concern; the
+    # singular :func:`has_runtime` scalar strict-checks against
+    # :data:`ALL_RUNTIMES` and would otherwise reject ``claude-code``).
+    if (
+        (channels_present and not channels_ok)
+        or (retention_present and not retention_ok)
+        or (nodes_present and not nodes_ok)
+        or (features_supplied and (unknown_features or not known_features))
+        or (runtimes_supplied and (unknown_runtimes or not known_runtimes))
+    ):
+        has_flag = False
+    else:
+        has_flag = _ent.has_all(
+            features=known_features if features_supplied else None,
+            runtimes=known_runtimes if runtimes_supplied else None,
+            channels=channels_n if channels_present else None,
+            retention_days=retention_n if retention_present else None,
+            nodes=nodes_n if nodes_present else None,
+        )
+
+    # ``required_tier`` folds through ``min_tier_for_all`` against the
+    # KNOWN-only subsets for parity with ``/api/entitlement/required-tier``
+    # (which resolves off the known/unknown split, not raw input).
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    cur_rank = env["current_tier_rank"]
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+
+    return {
+        "features": known_features,
+        "runtimes": known_runtimes,
+        "channels": channels_n if channels_present and channels_ok else None,
+        "retention_days": (
+            retention_n if retention_present and retention_ok else None
+        ),
+        "nodes": nodes_n if nodes_present and nodes_ok else None,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "has_all": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": cur_rank,
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-all")
+def api_entitlement_has_all():
+    """``GET /api/entitlement/has-all?features=a,b&runtimes=x,y&channels=5&retention_days=30&nodes=2``
+    -- aggregate mixed-axis boolean-gate scalar.
+
+    Aggregate boolean sibling of ``/api/entitlement/required-tier`` (which
+    resolves the cheapest tier that covers a mixed bundle across all five
+    axes) and ``/api/entitlement/has-features`` / ``/has-runtimes`` (which
+    fold ONE single-axis CSV to ONE boolean). A paywall diagnostics tile
+    that gates on the full subscription state ("fleet + claude_code + 5
+    channels + 30-day retention + 2 nodes -- does the resolved
+    entitlement grant everything?") binds ``allowed`` directly off this
+    URL without five singular ``/has-*`` round-trips + a client-side
+    AND-chain.
+
+    Every axis is OPTIONAL. Supply any non-empty subset; the fold
+    answers off just those axes and every unsupplied axis is skipped
+    (contributes ``True`` to the fold). Runtime-alias canonicalisation
+    (``claude-code`` -> ``claude_code``) is applied per token before the
+    known/unknown split. Capacity axes accept a single int (``5``);
+    blank / non-int values collapse ``has_all`` to ``False`` (matches
+    the singular capacity scalars' strict-``False`` typo posture).
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) ``has_all`` reports ``True`` for every fully-known
+    bundle, so wiring this into a gate today changes NO current
+    behavior. Never 4xxs (no axes supplied -> 200 with ``has_all=False``,
+    matching the singular ``/has-features`` empty-``False`` posture).
+    Never 5xxs (resolver blowup -> fallback envelope with
+    ``has_all=False``).
+
+    Envelope shape (19 keys, byte-stable across every input branch)::
+
+        {
+          "features":            ["fleet"],           # known ids only
+          "runtimes":            ["claude_code"],     # canonicalised, known only
+          "channels":            5 | null,            # parsed int or null
+          "retention_days":      30 | null,
+          "nodes":               2 | null,
+          "unknown_features":    ["bogus"],           # tokens not in ALL_FEATURES
+          "unknown_runtimes":    [],                  # tokens not in ALL_RUNTIMES
+          "supplied_axes":       ["features", "channels"],
+          "supplied_count":      2,
+          "has_all":             true,                # aggregate boolean
+          "allowed":             true,                # alias of has_all
+          "required_tier":       "cloud_pro" | null,
+          "required_tier_label": "Pro" | null,
+          "required_tier_rank":  <int>,               # -1 when null
+          "current_tier":        "oss",
+          "current_tier_rank":   0,
+          "grace":               true,
+          "enforced":            false,
+          "upgrade_required":    <bool>
+        }
+    """
+    try:
+        return jsonify(_has_all_body())
+    except Exception as exc:
+        logger.warning("api_entitlement_has_all: error: %s", exc)
+        return jsonify(_has_all_fallback())
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:
