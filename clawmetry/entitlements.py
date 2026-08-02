@@ -5601,6 +5601,90 @@ def has_node_count(count) -> bool:
         return False
 
 
+def has_node_count_at(perspective_tier: str, count) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_node_count`: would tier
+    ``perspective_tier`` admit ``count`` registered fleet nodes concurrently?
+
+    Node-capacity twin of :func:`has_feature_at` / :func:`has_runtime_at`.
+    Fills the ``_at`` slot on the ``nodes`` capacity axis so a pricing
+    matrix ("does Starter admit 5 nodes? Pro? Enterprise?") can bind ONE
+    boolean per cell off ONE URL each instead of hydrating the full
+    :func:`capacity_headroom_at` payload and pulling out the delta
+    client-side. Scalar-precise complement of the capacity-axis
+    ``_at`` catalogs.
+
+    Backed directly by the static :data:`_TIER_NODE_LIMIT` table (not by
+    :func:`_hypothetical_entitlement`, which always synthesises
+    ``node_limit=1`` regardless of the requested tier and would defeat
+    the whole point of this scalar). The perspective's cap comes from
+    ``_TIER_NODE_LIMIT[perspective_tier]``; ``None`` there means
+    unlimited (every paid tier today), any integer is the hard cap.
+
+    Semantics diverge from the perspective-independent
+    :func:`min_tier_for_node_count_at` deliberately: the boolean answer
+    *is* perspective-shaped -- the whole point of the ``_at`` slot is
+    to answer "would THIS tier admit ``count``?" per pricing matrix
+    cell.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature_at` on
+      an unknown perspective: the strict validity gate catches a typo
+      like ``has_node_count_at("Pro", 5)`` (uppercase P after
+      strip-lower normalises to ``"pro"``, so that specific input IS
+      valid; ``"Pro+"`` collapses to ``False``).
+    * ``count`` is parsed via ``int(count)`` with the same strict
+      callsite-typo posture as :func:`has_node_count`: non-int
+      (``None``, ``"five"``, ``list``, ...) -> ``False``. A caller that
+      passes non-int here has a bug -- fail-closed instead of silently
+      granting.
+    * ``count <= 0`` -- ``True``. A zero/negative count is either "no
+      nodes registered yet" or trivially satisfied by the free floor
+      (matches :func:`min_tier_for_node_count`'s ``TIER_OSS`` fallback
+      and :func:`has_node_count`'s free-floor branch).
+    * Positive int -- ``True`` iff the perspective's cap in
+      :data:`_TIER_NODE_LIMIT` is ``None`` (unlimited) or ``>= count``.
+      Unknown perspective already failed above, so a ``dict.get``
+      fallback to :data:`_FREE_NODE_LIMIT` here is defensive only.
+
+    Grace-independence (perspective-shaped by design): the answer
+    depends only on the static per-tier cap, not on ``ent.grace`` /
+    :func:`is_enforced` / the resolved entitlement. That means, unlike
+    :func:`has_node_count` (which returns ``True`` for every finite
+    count in grace via :meth:`Entitlement.allows_node_count`'s
+    grace-passthrough), ``has_node_count_at("oss", 5)`` returns
+    ``False`` even in grace -- the whole point of a what-if scalar.
+
+    Never raises: any lookup / parse failure logs a warning and
+    returns ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0:
+        return True
+    try:
+        cap = _TIER_NODE_LIMIT.get(p, _FREE_NODE_LIMIT)
+        return cap is None or n <= int(cap)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_node_count_at(%r, %r) failed: %s",
+            perspective_tier,
+            count,
+            exc,
+        )
+        return False
+
+
 def has_features(features) -> bool:
     """Boolean-gate scalar: does the CURRENT install allow **all** ``features``?
 

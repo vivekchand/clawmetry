@@ -3924,6 +3924,167 @@ def api_entitlement_has_node_count():
         return jsonify(_has_node_count_fallback(count_raw))
 
 
+def _has_node_count_at_fallback(tier: str, count_raw: str) -> dict:
+    """OSS-free / never-5xx shape for ``/api/entitlement/has-node-count-at``.
+
+    What-if sibling of :func:`_has_node_count_fallback`. On any resolver /
+    helper blowup the endpoint still returns 200 with the same 13-key
+    envelope as the happy-path branch, but with ``has_node_count_at`` and
+    ``allowed`` strict-``False`` (matches the fail-closed posture the
+    sibling ``/has-feature-at`` / ``/has-runtime-at`` and
+    ``/has-node-count`` fallbacks use -- a fleet pricing matrix tile that
+    lost the resolver never silently reports a grant it cannot verify).
+    ``tier`` and ``count_raw`` echo the caller's canonicalised inputs so
+    the UI can still surface both in a diagnostics tooltip.
+    """
+    return {
+        "tier": tier,
+        "count": None,
+        "count_raw": count_raw,
+        "has_node_count_at": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "perspective_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-node-count-at")
+def api_entitlement_has_node_count_at():
+    """``GET /api/entitlement/has-node-count-at?tier=<perspective>&count=<N>``
+    -- what-if capacity-axis boolean-gate scalar sibling of
+    ``/api/entitlement/has-node-count``.
+
+    Node-capacity twin of ``/api/entitlement/has-feature-at`` /
+    ``/api/entitlement/has-runtime-at``. Returns ONE boolean
+    (``has_node_count_at``) plus a what-if envelope that tells the
+    caller which perspective they asked about, whether that perspective
+    admits ``count`` nodes, the cheapest tier that would admit it
+    (``required_tier``, byte-parity with the sibling
+    ``/api/entitlement/required-tier?nodes=<N>`` answer), and the LIVE
+    resolver context (``current_tier`` / ``grace`` / ``enforced``) so a
+    fleet pricing matrix can render "you are here" alongside "would tier
+    X admit this?" off ONE URL per cell.
+
+    Unlike the live ``/has-node-count`` sibling this endpoint is
+    perspective-shaped: even in grace
+    ``/has-node-count-at?tier=oss&count=5`` returns ``allowed=false``
+    (because the OSS-free tier statically caps at 1 node), whereas
+    ``/has-node-count?count=5`` in grace returns ``true`` via
+    :meth:`Entitlement.allows_node_count`'s grace-passthrough. That is
+    the whole point of the ``_at`` slot -- render the would-be-locked
+    state alongside the live grant.
+
+    13-key envelope (adds ``tier`` + ``perspective_tier_rank`` + ``grace``
+    / ``enforced`` on top of the sibling ``/has-node-count`` shape, drops
+    ``upgrade_required`` since the perspective is the what-if tier, not
+    the actual current one)::
+
+        {
+          "tier":                  "<perspective tier id>" | "",
+          "count":                 <int> | null,        # parsed, null on missing/unparseable
+          "count_raw":             "<stripped raw>",
+          "has_node_count_at":     <bool>,
+          "allowed":               <bool>,               # alias of has_node_count_at
+          "required_tier":         "<tier id>" | null,  # min_tier_for_node_count(count)
+          "required_tier_label":   "<label>"   | null,
+          "required_tier_rank":    <int>,               # -1 when required_tier null
+          "perspective_tier_rank": <int>,               # -1 when tier unknown/blank
+          "current_tier":          "<live tier id>",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,              # live resolver grace bit
+          "enforced":              <bool>,
+        }
+
+    Input semantics mirror the sibling ``/has-feature-at`` +
+    ``/has-node-count`` endpoints:
+
+    * ``?tier=`` missing / blank / whitespace / unknown perspective ->
+      ``has_node_count_at=false``, ``perspective_tier_rank=-1``. Never 4xx.
+    * ``?count=`` missing / blank / whitespace / unparseable -> ``count=null``,
+      ``has_node_count_at=false``, ``required_tier=null``. Never 4xx.
+    * ``count <= 0`` on a valid perspective -> ``has_node_count_at=true``,
+      ``required_tier="oss"`` (trivially satisfied by the free floor --
+      mirrors :func:`min_tier_for_node_count`).
+    * Positive int on a valid perspective -> ``has_node_count_at``
+      reflects the static per-tier cap in :data:`_TIER_NODE_LIMIT`;
+      ``required_tier`` is the cheapest tier admitting ``count`` per
+      :func:`min_tier_for_node_count` (perspective-independent; matches
+      the ``/has-node-count`` sibling byte-for-byte).
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_node_count_at_fallback`.
+    """
+    raw_tier = request.args.get("tier")
+    tier = (raw_tier or "").strip().lower()
+    count_raw = (request.args.get("count") or "").strip()
+    try:
+        from clawmetry import entitlements as _ent
+
+        try:
+            n = int(count_raw)
+            parsed_ok = True
+        except (TypeError, ValueError):
+            n = None
+            parsed_ok = False
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        persp_rank = (
+            _ent.tier_rank(tier) if tier and tier in _ent._TIER_ORDER else -1
+        )
+
+        if not parsed_ok:
+            return jsonify(
+                {
+                    "tier": tier,
+                    "count": None,
+                    "count_raw": count_raw,
+                    "has_node_count_at": False,
+                    "allowed": False,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                    "perspective_tier_rank": persp_rank,
+                    "current_tier": cur_tier,
+                    "current_tier_rank": cur_rank,
+                    "grace": bool(ent.grace),
+                    "enforced": _ent.is_enforced(),
+                }
+            )
+
+        has_flag = _ent.has_node_count_at(tier, n)
+        required = _ent.min_tier_for_node_count(n)
+        req_rank = _ent.tier_rank(required) if required else -1
+        required_label = _ent.tier_label(required) if required else None
+        return jsonify(
+            {
+                "tier": tier,
+                "count": n,
+                "count_raw": count_raw,
+                "has_node_count_at": bool(has_flag),
+                "allowed": bool(has_flag),
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "perspective_tier_rank": persp_rank,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_node_count_at: error: %s", exc)
+        return jsonify(_has_node_count_at_fallback(tier, count_raw))
+
+
 def _has_bundle_fallback(axis: str, tokens: list[str]) -> dict:
     """OSS-free / never-5xx envelope for the plural ``/api/entitlement/has-features``
     and ``/api/entitlement/has-runtimes`` endpoints.
