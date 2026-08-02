@@ -4222,13 +4222,24 @@ class LocalStore:
         since: float | None = None,
         until: float | None = None,
         limit: int = 500,
+        runtime: str | None = None,
     ) -> dict:
         """Cross-session agent spawn graph for the Agents tab (#1012).
 
         Aggregates per-(agent_type, agent_id) node stats from all spans,
         then derives spawn edges from ``agent.spawn`` spans joined to their
         parent span.  Returns ``{nodes, edges, count, _shape}``.
+
+        ``runtime`` (WS-A) scopes both nodes and edges to one runtime's
+        spans via ``COALESCE(agent_type,'openclaw') = ?`` — so
+        ``runtime='openclaw'`` also matches legacy rows whose
+        ``agent_type`` is NULL, and family runtimes (``'claude_code'``,
+        …) match the spans ``span_reconstruct`` stamps with their real id.
+        ``None`` / ``''`` / ``'all'`` return the unfiltered graph.
         """
+        rt = (str(runtime).strip().lower() or None) if runtime else None
+        if rt == "all":
+            rt = None
         ts_clauses: list[str] = []
         ts_params: list[Any] = []
         if since is not None:
@@ -4237,6 +4248,9 @@ class LocalStore:
         if until is not None:
             ts_clauses.append("start_ts <= ?")
             ts_params.append(float(until))
+        if rt is not None:
+            ts_clauses.append("COALESCE(agent_type,'openclaw') = ?")
+            ts_params.append(rt)
         ts_where = ("WHERE " + " AND ".join(ts_clauses)) if ts_clauses else ""
 
         nodes: list[dict] = []
@@ -4268,10 +4282,22 @@ class LocalStore:
         edges: list[dict] = []
         try:
             spawn_parts = ["cs.name = 'agent.spawn'"]
+            spawn_params: list[Any] = []
             if since is not None:
                 spawn_parts.append("cs.start_ts >= ?")
+                spawn_params.append(float(since))
             if until is not None:
                 spawn_parts.append("cs.start_ts <= ?")
+                spawn_params.append(float(until))
+            if rt is not None:
+                # Both endpoints must belong to the selected runtime —
+                # reconstructed spawn spans and their parent session span
+                # always share one agent_type, so this never drops a real
+                # in-runtime edge; it only hides cross-runtime noise.
+                spawn_parts.append("COALESCE(cs.agent_type,'openclaw') = ?")
+                spawn_params.append(rt)
+                spawn_parts.append("COALESCE(ps.agent_type,'openclaw') = ?")
+                spawn_params.append(rt)
             spawn_sql = f"""
                 SELECT DISTINCT
                     COALESCE(ps.agent_type,'openclaw'), COALESCE(ps.agent_id,'main'),
@@ -4281,7 +4307,7 @@ class LocalStore:
                 WHERE {" AND ".join(spawn_parts)}
                 LIMIT 200
             """
-            for r in self._fetch(spawn_sql, ts_params):
+            for r in self._fetch(spawn_sql, spawn_params):
                 src, dst = f"{r[0]}:{r[1]}", f"{r[2]}:{r[3]}"
                 if src != dst:
                     edges.append({"from": src, "to": dst})

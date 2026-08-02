@@ -257,6 +257,7 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "agent_graph":
         return {
+            "runtime": raw.get("runtime") or None,
             "since": raw.get("since"),
             "until": raw.get("until"),
             "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=2000),

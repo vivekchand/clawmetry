@@ -65,3 +65,43 @@ def test_loader_handles_cloud_410_honestly():
         "loadAgentGraph must show the honest local-only message on the cloud's "
         "410, not an empty-data state"
     )
+
+
+# ── runtime filter wiring (WS-A: Agent Graph spans for all runtimes) ────────
+#
+# The read path grew a ``runtime`` arg (query_agent_graph WHERE
+# COALESCE(agent_type,'openclaw') = ?). These guards pin the plumbing so the
+# arg can't silently fall out of any of its three layers: the query contract,
+# the route's arg coercion, and the store method signature.
+
+
+def test_agent_graph_contract_lists_runtime_arg():
+    from clawmetry.query_contract import QUERY_CONTRACT
+
+    assert "runtime" in QUERY_CONTRACT["agent_graph"]["args"], (
+        "agent_graph contract entry must declare the 'runtime' arg - "
+        "without it the drift CI and the coercion allowlist disagree"
+    )
+
+
+def test_agent_graph_coercion_passes_runtime_through():
+    import routes.local_query as lq
+
+    coerced = lq._coerce_args("agent_graph", {"runtime": "claude_code"})
+    assert coerced.get("runtime") == "claude_code"
+    # Absent/blank runtime coerces to None (unfiltered graph), never "".
+    assert lq._coerce_args("agent_graph", {})["runtime"] is None
+    assert lq._coerce_args("agent_graph", {"runtime": ""})["runtime"] is None
+
+
+def test_query_agent_graph_accepts_runtime_kwarg():
+    import inspect
+
+    from clawmetry.local_store import LocalStore
+
+    params = inspect.signature(LocalStore.query_agent_graph).parameters
+    assert "runtime" in params, (
+        "LocalStore.query_agent_graph must accept runtime= - the coerced "
+        "route arg is passed as **kwargs and would TypeError otherwise"
+    )
+    assert params["runtime"].default is None
