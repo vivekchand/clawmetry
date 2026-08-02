@@ -42,6 +42,47 @@ class Capability(str, Enum):
 
 
 @dataclass
+class LogSource:
+    """One place an adapter's runtime logs can be read from.
+
+    ``kind`` is ``"file"`` (tail/follow ``path``) or ``"command"`` (run
+    ``command`` and capture stdout). Command args may contain the literal
+    placeholder ``"{lines}"`` which the log reader substitutes with the
+    requested tail line count (e.g. ``["docker", "logs", "--tail",
+    "{lines}", name]``). ``follow_command`` is an optional follow-style
+    variant (``--follow`` / ``-f``) used by the SSE stream; command
+    sources without one cannot be live-followed and the stream falls
+    back to the file ``path`` when present.
+
+    ``format`` is a rendering hint only: ``"text"`` (plain lines) or
+    ``"jsonl"`` (one JSON object per line).
+
+    HONESTY CONTRACT: adapters must only return sources that actually
+    exist / are runnable right now — a missing log file means an empty
+    list, never an invented path.
+    """
+
+    id: str
+    label: str
+    kind: str  # 'file' | 'command'
+    path: str | None = None
+    command: list[str] | None = None
+    follow_command: list[str] | None = None
+    format: str = "text"  # 'text' | 'jsonl'
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "kind": self.kind,
+            "path": self.path,
+            "command": self.command,
+            "followCommand": self.follow_command,
+            "format": self.format,
+        }
+
+
+@dataclass
 class Session:
     """A conversation with an agent.
 
@@ -217,6 +258,17 @@ class AgentAdapter(ABC):
         fall back to polling :meth:`list_events`.
         """
         return iter(())
+
+    def log_sources(self) -> list[LogSource]:
+        """Return the runtime's readable log sources, best-first.
+
+        Default: none — the Logs tab shows an honest "no log stream"
+        state. Adapters that return a non-empty list should also include
+        :attr:`Capability.LOGS` in :meth:`capabilities` so the UI gates
+        the tab correctly. Must be cheap and must never raise; only
+        return sources that exist right now (see :class:`LogSource`).
+        """
+        return []
 
     @abstractmethod
     def capabilities(self) -> set[Capability]:
