@@ -5413,6 +5413,121 @@ def has_runtime(runtime: str) -> bool:
         return False
 
 
+def has_feature_at(perspective_tier: str, feature: str) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_feature`: would tier
+    ``perspective_tier`` grant ``feature``?
+
+    Fills the missing ``_at`` slot in the boolean-gate family so a pricing
+    matrix ("does Starter grant fleet? does Pro? does Enterprise?") can
+    bind ONE boolean per cell off ONE URL each instead of fetching the
+    full :func:`feature_catalog_at` payload and pulling out the
+    ``allowed`` field client-side. Scalar-precise complement of
+    :func:`feature_spec_at`'s ``allowed`` bit -- a callsite that only
+    needs the boolean does not have to hydrate the full spec row.
+
+    Semantics diverge from the perspective-independent
+    :func:`min_tier_for_features_at` / :func:`tiers_for_feature_at`
+    convention deliberately: the boolean answer *is*
+    perspective-shaped. Backed by :func:`_hypothetical_entitlement`,
+    which forces ``grace`` off so the returned bit reflects the static
+    per-tier grant in :data:`_TIER_FEATURES` rather than the live
+    resolver's grace pass-through. That means, unlike :func:`has_feature`
+    (which returns ``True`` for every known feature in grace),
+    ``has_feature_at`` returns ``False`` even in grace for a
+    ``perspective_tier`` that does not statically grant ``feature`` --
+    the whole point of a what-if scalar.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``False``. Same fail-closed posture as :func:`has_feature` on an
+      unknown ``feature``: the strict validity gate catches a typo like
+      ``has_feature_at("Pro", "fleet")`` (uppercase P, dropped by the
+      strip-lower) at the callsite instead of silently masquerading as
+      a grant.
+    * ``feature`` is validated against :data:`ALL_FEATURES` with the
+      same ``.strip().lower()`` normalisation :func:`has_feature` uses.
+      Unknown / empty / non-string -> ``False``.
+    * All-free feature on any real tier -> ``True`` (the free floor is
+      part of :func:`_hypothetical_entitlement`'s synthesis).
+    * Never raises: any hypothetical-build failure logs a warning and
+      returns ``False`` so a pricing matrix cell keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        f = (feature or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not f or f not in ALL_FEATURES:
+        return False
+    try:
+        return bool(_hypothetical_entitlement(p).allows_feature(f))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_feature_at(%r, %r) failed: %s",
+            perspective_tier,
+            feature,
+            exc,
+        )
+        return False
+
+
+def has_runtime_at(perspective_tier: str, runtime: str) -> bool:
+    """Runtime-axis twin of :func:`has_feature_at`: would tier
+    ``perspective_tier`` grant ``runtime``?
+
+    Same relationship to :func:`has_runtime` that :func:`has_feature_at`
+    has to :func:`has_feature`. Backed by
+    :func:`_hypothetical_entitlement` (grace off), so the returned bit
+    reflects the static per-tier runtime grant -- runtimes in
+    :data:`FREE_RUNTIMES` always ``True``; runtimes in
+    :data:`PAID_RUNTIMES` ``True`` iff ``perspective_tier`` is one of
+    the paid tiers (:data:`_TIER_PAID_RUNTIMES`).
+
+    Alias posture matches the sibling :func:`has_runtime` scalar
+    exactly: no :func:`canonical_runtime` resolution here -- an alias
+    input (``has_runtime_at("pro", "claude-code")``) collapses to
+    ``False`` because ``"claude-code"`` is not in :data:`ALL_RUNTIMES`
+    after ``.strip().lower()``. Callers who want alias tolerance should
+    canonicalise upstream (which is what the paired
+    ``/api/entitlement/has-runtime-at`` endpoint does before delegating
+    to this scalar, matching the ``/has-runtime`` endpoint's own
+    upstream posture).
+
+    Contract otherwise mirrors :func:`has_feature_at`: perspective /
+    runtime validated fail-closed, hypothetical-build failure logged
+    and collapsed to ``False``, never raises.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        rt = (runtime or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not rt or rt not in ALL_RUNTIMES:
+        return False
+    try:
+        return bool(_hypothetical_entitlement(p).allows_runtime(rt))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_runtime_at(%r, %r) failed: %s",
+            perspective_tier,
+            runtime,
+            exc,
+        )
+        return False
+
+
 def has_channel_count(count) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit ``count`` chat-channel
     adapters concurrently?

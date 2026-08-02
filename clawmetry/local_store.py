@@ -4464,7 +4464,8 @@ class LocalStore:
         Returns::
 
             {
-              "by_runtime": {rt: {sessions, tokens, cost_usd, events}},
+              "by_runtime": {rt: {sessions, tokens, cost_usd, events,
+                                  last_activity_ms}},
               "by_runtime_model": [
                   {runtime, model, turns, tokens, cost_usd, sessions}, ...
               ],  # model-bearing rows only
@@ -4511,7 +4512,8 @@ class LocalStore:
                 ev AS (
                     SELECT session_id,
                            SUM(COALESCE(token_count, 0)) AS tok,
-                           SUM(COALESCE(cost_usd, 0.0))  AS cost
+                           SUM(COALESCE(cost_usd, 0.0))  AS cost,
+                           MAX(epoch_ms(TRY_CAST(ts AS TIMESTAMPTZ))) AS last_ms
                     FROM deduped GROUP BY session_id
                 ),
                 combined AS (
@@ -4519,14 +4521,19 @@ class LocalStore:
                            GREATEST(COALESCE(s.total_tokens, 0),
                                     COALESCE(ev.tok, 0))         AS tokens,
                            GREATEST(COALESCE(s.cost_usd, 0.0),
-                                    COALESCE(ev.cost, 0.0))      AS cost_usd
+                                    COALESCE(ev.cost, 0.0))      AS cost_usd,
+                           GREATEST(
+                               COALESCE(ev.last_ms, 0),
+                               COALESCE(epoch_ms(TRY_CAST(s.last_active_at AS TIMESTAMPTZ)), 0)
+                           ) AS last_ms
                     FROM sessions s
                     FULL OUTER JOIN ev ON s.session_id = ev.session_id
                 )
                 SELECT {rt_case} AS runtime,
                        COUNT(*)      AS sessions,
                        SUM(tokens)   AS tokens,
-                       SUM(cost_usd) AS cost_usd
+                       SUM(cost_usd) AS cost_usd,
+                       MAX(last_ms)  AS last_activity_ms
                 FROM combined
                 GROUP BY 1
             """
@@ -4538,6 +4545,11 @@ class LocalStore:
                     "cost_usd": float(r[3] or 0.0),
                     "cost_24h_usd": 0.0,
                     "tokens_24h": 0,
+                    # Newest event ts / session last_active_at for this runtime
+                    # (epoch ms). Main terminal sessions never appear in
+                    # /api/subagents, so the Overview alive-state needs a
+                    # recency signal that covers ALL of a runtime's sessions.
+                    "last_activity_ms": int(r[4] or 0),
                 }
             # Rolling LAST-24h cost/tokens per runtime, from events in the trailing
             # 24 hours. (A rolling window, not a calendar "today" — a calendar day

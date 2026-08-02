@@ -2951,10 +2951,19 @@ def api_runtime_summary():
             for ev in evs:
                 rt = _runtime_of(ev.get("session_id"))
                 a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
-                                        "models": {}, "sessions": set()})
+                                        "models": {}, "sessions": set(),
+                                        "last_ms": 0})
                 sid = ev.get("session_id") or ""
                 if sid:
                     a["sessions"].add(sid)
+                ts = str(ev.get("ts") or "")
+                if ts:
+                    try:
+                        _p = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        a["last_ms"] = max(a["last_ms"],
+                                           int(_p.timestamp() * 1000))
+                    except (ValueError, OSError, OverflowError):
+                        pass
                 try:
                     a["tokens"] += int(ev.get("token_count") or 0)
                 except (TypeError, ValueError):
@@ -2976,6 +2985,9 @@ def api_runtime_summary():
                     "cost_usd": round(a["cost"], 4),
                     "primary_model": sorted_models[0][0] if sorted_models else "",
                     "total_turns": sum(a["models"].values()),
+                    # Epoch-ms recency for the Overview hero alive-state (main
+                    # sessions don't appear in /api/subagents).
+                    "last_activity_ms": a["last_ms"],
                 }
         except Exception:
             out = {}
