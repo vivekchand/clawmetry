@@ -7410,6 +7410,162 @@ def api_entitlement_min_tier_batch():
         )
 
 
+def _has_batch_fallback() -> dict:
+    """OSS-free / never-5xx envelope for ``/api/entitlement/has-batch``.
+
+    Fail-closed on the ``has_all`` rollup (matches the singular
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` fallbacks): a paywall
+    matrix that lost the resolver must not silently render every row as
+    granted. All axis slots collapse to the "not supplied" sentinel so a UI
+    can still diff against the request shape.
+    """
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "has_all": False,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_batch_rollup(batch: dict) -> bool:
+    """Fold every emitted row in ``batch`` to ONE ``has_all`` boolean.
+
+    ``True`` iff every emitted row is ``has=True`` AND ``unknown=False`` --
+    matches the strict-typo-fail-closed posture of :func:`has_features` /
+    :func:`has_runtimes` in the plural fold sibling (a single unknown-id
+    row flips the rollup to ``False`` so a typo does not silently render
+    as granted). A batch with no rows at all (every axis was "not
+    supplied") returns ``True`` vacuously -- the endpoint 400s on that
+    input before this rollup runs, so callers never see the vacuous case
+    on a live URL.
+    """
+    for axis in ("features", "runtimes"):
+        for row in batch.get(axis) or []:
+            if row.get("unknown") or not row.get("has"):
+                return False
+    for axis in ("channels", "retention_days", "nodes"):
+        row = batch.get(axis)
+        if row is None:
+            continue
+        if row.get("unknown") or not row.get("has"):
+            return False
+    return True
+
+
+@bp_entitlement.route("/api/entitlement/has-batch")
+def api_entitlement_has_batch():
+    """``GET /api/entitlement/has-batch?features=a,b,c&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-item plural sibling of
+    ``/api/entitlement/has-feature`` / ``/has-runtime`` /
+    ``/has-channel-count``.
+
+    Where ``/api/entitlement/has-features`` / ``/has-runtimes`` fold a
+    bundle to ONE boolean, this preserves the per-item detail so a
+    paywall MATRIX UI ("show every requested feature + runtime + capacity
+    row with its individual granted flag AND the cheapest tier that
+    would unlock it") renders off ONE round-trip instead of N calls to
+    ``/has-feature`` / ``/has-runtime`` / ``/has-channel-count``. Wraps
+    :func:`clawmetry.entitlements.has_batch` and appends the same
+    ``current_tier`` / ``grace`` / ``enforced`` resolver envelope
+    ``/min-tier-batch`` and ``/lock-reasons-batch`` return so a caller
+    sees the same resolver context alongside the per-item answers.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation). ``features=`` / ``runtimes=`` take
+    comma-separated tokens (whitespace and duplicates are normalised
+    away; runtime aliases like ``claude-code`` canonicalise to
+    ``claude_code``; unknown ids contribute a fail-closed
+    ``unknown=True`` / ``has=False`` row -- they do NOT silently render
+    as granted the way ``/lock-reasons-batch``'s ``allowed`` slot does).
+    The three capacity axes take a single int each; a blank or non-int
+    value is treated as "not supplied" (matches the singular endpoint's
+    never-crash posture rather than fabricating a row for garbage
+    input). Never 5xxs: the fail-closed envelope is returned on any
+    resolver failure.
+
+    Response shape (10 keys, byte-stable across every input branch)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "has_all":            <bool>,   # True iff every emitted row is has=True AND unknown=False
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``has``, ``unknown``,
+    ``required_tier``, ``required_tier_label`` and ``required_tier_rank``
+    (``-1`` when ``required_tier`` is ``None``). Per-row parity with the
+    singular ``/has-feature?feature=`` / ``/has-runtime?runtime=`` /
+    ``/has-channel-count?count=`` endpoints is pinned in the test suite
+    so the batch cannot silently drift from the scalar.
+
+    ``has_all`` cross-consistency with the sibling
+    ``/api/entitlement/has-features`` / ``/has-runtimes`` plural-fold
+    endpoints is pinned: for a single-axis batch of features, this
+    endpoint's ``has_all`` byte-equals the ``/has-features`` endpoint's
+    ``has_features`` for the same bundle; ditto for runtimes.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg("retention_days")
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.has_batch(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        ent = _ent.get_entitlement()
+        batch["has_all"] = _has_batch_rollup(batch)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_has_batch: error: %s", exc)
+        return jsonify(_has_batch_fallback())
+
+
 @bp_entitlement.route("/api/entitlement/min-tier-batch-at")
 def api_entitlement_min_tier_batch_at():
     """``GET /api/entitlement/min-tier-batch-at?tier=<perspective>

@@ -18744,7 +18744,16 @@ def _start_daemon_background():
     import subprocess
     import pathlib as _pl
 
-    spawn_kwargs = {}
+    # Without a config the spawned daemon crash-loops (load_config raises)
+    # and the local store never fills; and `python -m` puts the CWD on
+    # sys.path, so a dashboard launched from a source checkout would spawn
+    # the repo's (possibly stale) sync.py instead of the installed wheel.
+    try:
+        from clawmetry.sync import ensure_local_config
+        ensure_local_config()
+    except Exception:
+        pass
+    spawn_kwargs = {"cwd": os.path.expanduser("~")}
     if os.name == "nt":
         # start_new_session is POSIX-only and silently no-ops on Windows:
         # the daemon stayed tied to this console (killed when it closes)
