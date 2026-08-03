@@ -84,6 +84,12 @@ jobs:
           # as non-blocking in most workflows; we accept them here too).
           PASSING = {"success", "skipped", "neutral"}
 
+          # 'cancelled' means the concurrency group replaced this run with a
+          # newer one (e.g. a rapid second push to the same PR). The gate
+          # should wait for the replacement run rather than fast-failing on a
+          # stale cancellation. Treat as pending, not failed.
+          WAIT_FOR_REPLACEMENT = {"cancelled"}
+
           HEADERS = {
               "Authorization": f"Bearer {TOKEN}",
               "Accept": "application/vnd.github+json",
@@ -123,29 +129,46 @@ jobs:
           def best_run_by_name(runs):
               """For each check name, pick the most informative run.
 
-              Priority: completed > in_progress > queued.
-              Among completed runs, prefer the most recent (highest id).
+              Priority (highest to lowest):
+              1. completed with a definitive conclusion (success/failure/timed_out/
+                 action_required/startup_failure) -- we know the real result.
+              2. in_progress or queued -- a replacement run is underway; prefer
+                 this over a stale cancelled run so the gate waits for the real
+                 result rather than fast-failing on the cancellation.
+              3. completed/cancelled (or completed/neutral/skipped) -- lowest
+                 priority because a replacement run may already be in_progress.
+
+              Within each tier, prefer the most recent run (highest id).
+
+              This ordering closes the cancel-in-progress race: when a rapid
+              second push to a PR cancels the in-flight OSS golden path and a
+              replacement run starts, the gate now tracks the replacement
+              (in_progress) instead of the stale cancelled run.
+              (Tracking: vivekchand/clawmetry#3970 C6)
               """
+              DEFINITIVE = {
+                  "success", "failure", "timed_out",
+                  "action_required", "startup_failure",
+              }
+
+              def _priority(run):
+                  status = run.get("status")
+                  conclusion = run.get("conclusion") or ""
+                  run_id = run.get("id", 0)
+                  if status == "completed" and conclusion in DEFINITIVE:
+                      return (2, run_id)
+                  if status in ("in_progress", "queued"):
+                      return (1, run_id)
+                  # completed/cancelled, completed/skipped, completed/neutral
+                  return (0, run_id)
+
               by_name = {}
               for run in runs:
                   name = run.get("name", "")
                   if name not in REQUIRED_NAMES:
                       continue
                   existing = by_name.get(name)
-                  if existing is None:
-                      by_name[name] = run
-                      continue
-                  # completed beats anything else
-                  if (
-                      run.get("status") == "completed"
-                      and existing.get("status") != "completed"
-                  ):
-                      by_name[name] = run
-                  elif (
-                      run.get("status") == "completed"
-                      and existing.get("status") == "completed"
-                      and run.get("id", 0) > existing.get("id", 0)
-                  ):
+                  if existing is None or _priority(run) > _priority(existing):
                       by_name[name] = run
               return by_name
 
@@ -185,13 +208,18 @@ jobs:
                       print(f"  [{elapsed}s] {name!r}: {new_s}")
                       last_status[name] = new_s
 
-              # Fail fast on any failed check.
+              # Fail fast on any definitively failed check.
+              # 'cancelled' is excluded: best_run_by_name now prefers the
+              # in_progress replacement over a stale cancelled run. If only a
+              # cancelled run exists (no replacement yet), it stays as pending
+              # and the gate waits up to MAX_WAIT for a re-run.
               failed = [
                   name for name in REQUIRED_NAMES
                   if (
                       (r := by_name.get(name)) is not None
                       and r.get("status") == "completed"
                       and r.get("conclusion") not in PASSING
+                      and r.get("conclusion") not in WAIT_FOR_REPLACEMENT
                   )
               ]
               if failed:
@@ -237,8 +265,10 @@ jobs:
                       status = run["status"] if run else "not started"
                       print(f"  - {name!r}: {status}")
                   print(
-                      "If E2E is consistently slower than 8 min, raise"
+                      "If E2E is consistently slower than 15 min, raise"
                       " MAX_WAIT in the workflow."
+                      " If checks are stuck as 'cancelled' with no replacement"
+                      " run starting, push a new commit or re-run manually."
                   )
                   sys.exit(1)
 
@@ -270,3 +300,4 @@ jobs:
             echo "[Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches)"
             echo "This single check replaces the need to add all 4 individual check names."
           } >> "$GITHUB_STEP_SUMMARY"
+# ci-trigger
