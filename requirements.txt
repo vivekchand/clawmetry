@@ -1,6 +1,6 @@
 flask>=3.1.3,<4
 duckdb>=1.5.5  # local event store (epic #964 phase 1)
-truststore>=0.8; python_version >= "3.10"  # OS trust store for corporate TLS-interception CAs
+truststore>=0.10.4; python_version >= "3.10"  # OS trust store for corporate TLS-interception CAs
 
 # Testing dependencies
 pytest>=9.1.1
