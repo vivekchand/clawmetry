@@ -12215,7 +12215,26 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     openclaw_spawned_claude = _openclaw_spawned_claude_ids()
 
     _ingest_rev = _family_ingest_rev()
-    for cls in _family_adapter_classes():
+    # Starvation-proof ordering: rotate the adapter start position every pass.
+    # A daemon that dies mid-pass (live-hit 2026-08-03: duckdb SIGTRAP crash
+    # loop, launchd KeepAlive respawn every ~8 min) used to restart the walk
+    # from the SAME fixed order each run — adapters early in the list
+    # (claude_code, with hundreds of sessions) always ingested while adapters
+    # at the tail (copilot, antigravity) were NEVER reached: their sessions
+    # silently missing, per-runtime rollups/alerts reading $0. Rotating the
+    # start index each pass guarantees every adapter is first-in-line within
+    # N passes, so even a chronically bounced daemon converges on full
+    # coverage. The rotation cursor lives in daemon state (survives restarts
+    # via sync-state.json).
+    _classes = list(_family_adapter_classes())
+    if _classes:
+        try:
+            _rot = int(state.get("family_adapter_rotation") or 0) % len(_classes)
+        except (TypeError, ValueError):
+            _rot = 0
+        state["family_adapter_rotation"] = _rot + 1
+        _classes = _classes[_rot:] + _classes[:_rot]
+    for cls in _classes:
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
             if not adapter.detect().detected:

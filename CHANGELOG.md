@@ -1,4 +1,4 @@
-## 0.12.643
+## 0.12.644
 
 - **Where the money goes: a spend flow for the whole node.** The Cost tab now
   opens with a flow chart tracing spend from what your agents read (your
@@ -11,6 +11,46 @@
   derived estimate, never invented. New `GET /api/spend-flow` endpoint
   (respects the runtime switcher and the free 24h history window) and a
   `spendFlow` snapshot slice for the hosted dashboard.
+
+## 0.12.643
+
+- **Family ingest is starvation-proof.** The per-cycle adapter walk now
+  rotates its start position (cursor persisted in daemon state), so a daemon
+  that keeps dying mid-pass — e.g. a native crash loop under launchd
+  KeepAlive — still reaches every runtime within a few passes. Previously a
+  bounced daemon restarted the walk in the same fixed order every run:
+  runtimes early in the list kept ingesting while the tail (Copilot,
+  Antigravity) silently never landed, leaving their sessions missing and
+  per-runtime rollups/scoped alerts reading $0.
+
+## 0.12.643
+
+- **Free deterministic checks now actually run.** The zero-LLM-cost structural
+  evaluators (tool errors, JSON validity, required tool args, length bounds)
+  were pruned in #4436 as an unintegrated orphan; the real gap was that they
+  never understood stored event rows. They are back, bridged to the real
+  DuckDB shapes, and the sync daemon scores every completed session with them
+  on the eval cadence at zero cost, no key needed
+  (CLAWMETRY_DETERMINISTIC_CHECKS, default no-tool-errors). Verdicts land in
+  the new per-metric eval_metrics table and are served by
+  GET /api/evals/metrics. Also fixes a double-count that reported every tool
+  call twice to the extractors.
+- **Optional DeepEval metric engine.** `pip install "clawmetry[deepeval]"`
+  (Python 3.10+) adds two judge-backed agent metrics from the Apache-2.0
+  DeepEval library: "Did the agent use its tools right?" (argument
+  correctness) and "Did the conversation get finished?" (conversation
+  completeness). Runs fully locally: DeepEval telemetry is force-disabled in
+  code before the library ever imports, no vendor account is used, and every
+  judge call goes through ClawMetry's own provider-direct judge (your key,
+  your provider, transcripts redacted first; keyless local servers like
+  Ollama work too). Off by default; enable by naming metrics in
+  CLAWMETRY_DEEPEVAL_METRICS. The evaluator library shows honest per-box
+  states: "Needs install" without the extra, "Needs key" without a judge key.
+  See docs/EVALS_DEEPEVAL.md.
+- **Golden suites grade with YOUR rubric.** `clawmetry eval --suite` judged
+  with the shipped default rubric even when ~/.clawmetry/evals.yaml had a
+  tuned one; the suite judge now uses the same merged rubric as the
+  production judge.
 
 ## 0.12.641
 
