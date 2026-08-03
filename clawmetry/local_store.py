@@ -8367,6 +8367,7 @@ class LocalStore:
         self,
         *,
         window_minutes: int = 60,
+        runtime: str | None = None,
     ) -> dict[str, Any]:
         """Quality snapshot over a recent window for the eval->monitor alert
         loop (``eval_score_below`` + ``outcome_failure_rate`` rule types).
@@ -8399,6 +8400,11 @@ class LocalStore:
             window_minutes = 60
         now_ms = int(time.time() * 1000)
         cutoff_ms = now_ms - window_minutes * 60 * 1000
+        # Optional per-runtime scope (runtime-scoped alert rules): reuse the
+        # shared session-id prefix clause so scoped quality reconciles with
+        # the other per-runtime slices by construction.
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        _rt_sql = f" AND {_rt_clause}" if _rt_clause else ""
 
         # ── Eval-score window ────────────────────────────────────────────────
         eval_scores: list[float] = []
@@ -8409,9 +8415,9 @@ class LocalStore:
                   FROM sessions
                  WHERE eval_score IS NOT NULL
                    AND eval_scored_at IS NOT NULL
-                   AND eval_scored_at >= ?
+                   AND eval_scored_at >= ?""" + _rt_sql + """
                 """,
-                [cutoff_ms],
+                [cutoff_ms, *_rt_params],
             )
             for r in rows:
                 if r and r[0] is not None:
@@ -8440,10 +8446,10 @@ class LocalStore:
                  WHERE outcome IS NOT NULL
                    AND outcome <> 'ongoing'
                    AND outcome_classified_at IS NOT NULL
-                   AND outcome_classified_at >= ?
+                   AND outcome_classified_at >= ?""" + _rt_sql + """
                  GROUP BY outcome
                 """,
-                [cutoff_ms],
+                [cutoff_ms, *_rt_params],
             )
             for r in rows:
                 label = (r[0] or "").strip()

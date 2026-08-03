@@ -102,11 +102,42 @@ DEFAULT_QUALITY_MIN_SESSIONS = 3
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+# Session-id prefix -> runtime scoping (founder 2026-08-03: rules are
+# runtime-scoped by default). Pure helper: a namespaced session id like
+# "copilot:<uuid>" belongs to that runtime; anything without a known family
+# prefix is OpenClaw. The known-prefix set comes from
+# ``clawmetry.entitlements.ALL_RUNTIMES`` (a constants frozenset, no I/O);
+# if that import ever fails the helper degrades to "prefix as-is".
+def _session_runtime(sid: Any) -> str:
+    sid = str(sid or "")
+    if ":" not in sid:
+        return "openclaw"
+    head = sid.split(":", 1)[0]
+    try:
+        from clawmetry.entitlements import ALL_RUNTIMES
+        return head if head in ALL_RUNTIMES else "openclaw"
+    except ImportError:
+        return head or "openclaw"
+
+
+def _rule_runtime(raw_rule: dict[str, Any]) -> str:
+    """A rule's runtime scope: the row's ``runtime`` column (local SQLite
+    bridge) or ``condition_json.runtime`` (cloud-authored), else 'all'."""
+    rt = raw_rule.get("runtime")
+    if not rt:
+        cond = raw_rule.get("condition_json")
+        if isinstance(cond, dict):
+            rt = cond.get("runtime")
+    rt = str(rt or "all").strip().lower()
+    return rt or "all"
+
+
 def evaluate(
     rules: list[dict[str, Any]] | None,
     events: list[dict[str, Any]] | None,
     last_eval_state: dict[str, Any] | None,
     quality: dict[str, Any] | None = None,
+    quality_by_runtime: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure evaluator. Walks ``events`` against ``rules``, returns matches.
 
@@ -175,8 +206,22 @@ def evaluate(
             # protects channels from notification storms.
             continue
 
+        rule_rt = _rule_runtime(raw_rule)
+        if rule_rt != "all":
+            rule_events = [e for e in events_chrono
+                           if _session_runtime(e.get("session_id")) == rule_rt]
+            # Quality slices are AGGREGATES (no session ids), so a scoped
+            # rule needs a per-runtime slice pre-fetched by the caller.
+            # Missing slice -> None -> quality rule types no-fire for that
+            # tick (honest under-fire; never a node-wide number under a
+            # runtime label).
+            rule_quality = (quality_by_runtime or {}).get(rule_rt)
+        else:
+            rule_events = events_chrono
+            rule_quality = quality
+
         try:
-            match = _evaluate_one(rule, events_chrono, quality)
+            match = _evaluate_one(rule, rule_events, rule_quality)
         except Exception as e:
             log.warning("alerts: rule %s evaluator errored: %s", rid, e)
             continue

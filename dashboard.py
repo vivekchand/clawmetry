@@ -626,6 +626,7 @@ def _budget_init_db():
             channels TEXT NOT NULL,
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
+            runtime TEXT DEFAULT 'all',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -645,6 +646,13 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    try:
+        # Pre-0.12.639 DBs lack the per-runtime scope column. SQLite has no
+        # IF-NOT-EXISTS for columns; the duplicate-column error is the no-op.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN runtime TEXT DEFAULT 'all'")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -2076,6 +2084,10 @@ def _budget_monitor_loop():
                 threshold = rule["threshold"]
                 channels = json.loads(rule.get("channels", '["banner"]'))
                 cooldown = rule.get("cooldown_min", 30) * 60
+                # Per-runtime scope: 'all' (node-wide) or one runtime id.
+                # Scoped rules read per-runtime slices from DuckDB via the
+                # daemon proxy; node-wide rules keep the legacy aggregates.
+                rt_scope = str(rule.get("runtime") or "all").lower()
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
@@ -2085,8 +2097,12 @@ def _budget_monitor_loop():
                 msg = ""
 
                 if rtype == "threshold":
-                    if status["daily_spent"] >= threshold:
-                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
+                    _spent = status["daily_spent"]
+                    if rt_scope != "all":
+                        _spent = _runtime_daily_spend(rt_scope)
+                    if _spent is not None and _spent >= threshold:
+                        _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                        msg = f"Daily spending{_scope_lbl} ${_spent:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
                 elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
@@ -2110,20 +2126,29 @@ def _budget_monitor_loop():
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
                 elif rtype == "token_spike":
-                    try:
-                        vel = _compute_velocity_status()
-                    except Exception:
-                        vel = None
-                    if vel:
-                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
-                        if tokens_per_min >= threshold:
-                            sid = vel.get("triggeringSession") or ""
-                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                    if rt_scope != "all":
+                        _tpm = _runtime_tokens_per_min(rt_scope)
+                        if _tpm is not None and _tpm >= threshold:
                             msg = (
-                                f"Token spike: {int(tokens_per_min):,} tokens/min "
-                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                f"Token spike [{rt_scope}]: {int(_tpm):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min)"
                             )
                             fired = True
+                    else:
+                        try:
+                            vel = _compute_velocity_status()
+                        except Exception:
+                            vel = None
+                        if vel:
+                            tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                            if tokens_per_min >= threshold:
+                                sid = vel.get("triggeringSession") or ""
+                                sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                                msg = (
+                                    f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                    f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                )
+                                fired = True
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta
@@ -2141,6 +2166,9 @@ def _budget_monitor_loop():
                         worst = None
                         for r in rows:
                             try:
+                                if rt_scope != "all" and _session_runtime_of(
+                                        r.get("session_id") or "") != rt_scope:
+                                    continue
                                 if float(r.get("ratio") or 0) >= float(threshold):
                                     if worst is None or r["ratio"] > worst["ratio"]:
                                         worst = r
@@ -9516,6 +9544,7 @@ def _budget_init_db():
             channels TEXT NOT NULL,
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
+            runtime TEXT DEFAULT 'all',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -9535,6 +9564,13 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    try:
+        # Pre-0.12.639 DBs lack the per-runtime scope column. SQLite has no
+        # IF-NOT-EXISTS for columns; the duplicate-column error is the no-op.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN runtime TEXT DEFAULT 'all'")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -10098,6 +10134,54 @@ def _dispatch_alert_to_all_sinks(alert_data: dict) -> list[str]:
     return sent
 
 
+
+
+def _session_runtime_of(sid):
+    """Runtime id for a namespaced session id ('copilot:...' -> 'copilot');
+    anything without a known family prefix is OpenClaw."""
+    sid = str(sid or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except ImportError:
+            pass
+    return "openclaw"
+
+
+def _runtime_daily_spend(runtime):
+    """Today's spend (USD) for ONE runtime from the per-(day, runtime)
+    DuckDB rollup, via the daemon proxy. None on any failure so a scoped
+    rule silently skips a tick rather than firing on a node-wide number."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from routes.local_query import local_store_via_daemon
+        today = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+        rows = local_store_via_daemon(
+            "query_rollup_runtime_daily", since=today) or []
+        return float(sum(
+            (r.get("cost_usd") or 0) for r in rows
+            if r.get("day") == today and r.get("runtime") == runtime))
+    except Exception:
+        return None
+
+
+def _runtime_tokens_per_min(runtime):
+    """Tokens/min over the last 2 minutes for ONE runtime (DuckDB events
+    filtered by session-id prefix via the daemon proxy). None on failure."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        from routes.local_query import local_store_via_daemon
+        since = (_dt.now(_tz.utc) - _td(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = local_store_via_daemon(
+            "query_events", since=since, runtime=runtime, limit=20000) or []
+        return sum(int(r.get("token_count") or 0) for r in rows) / 2.0
+    except Exception:
+        return None
+
+
 def _get_alert_rules():
     """Get all alert rules."""
     try:
@@ -10457,6 +10541,10 @@ def _budget_monitor_loop():
                 threshold = rule["threshold"]
                 channels = json.loads(rule.get("channels", '["banner"]'))
                 cooldown = rule.get("cooldown_min", 30) * 60
+                # Per-runtime scope: 'all' (node-wide) or one runtime id.
+                # Scoped rules read per-runtime slices from DuckDB via the
+                # daemon proxy; node-wide rules keep the legacy aggregates.
+                rt_scope = str(rule.get("runtime") or "all").lower()
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
@@ -10466,8 +10554,12 @@ def _budget_monitor_loop():
                 msg = ""
 
                 if rtype == "threshold":
-                    if status["daily_spent"] >= threshold:
-                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
+                    _spent = status["daily_spent"]
+                    if rt_scope != "all":
+                        _spent = _runtime_daily_spend(rt_scope)
+                    if _spent is not None and _spent >= threshold:
+                        _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                        msg = f"Daily spending{_scope_lbl} ${_spent:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
                 elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
@@ -10491,20 +10583,29 @@ def _budget_monitor_loop():
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
                 elif rtype == "token_spike":
-                    try:
-                        vel = _compute_velocity_status()
-                    except Exception:
-                        vel = None
-                    if vel:
-                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
-                        if tokens_per_min >= threshold:
-                            sid = vel.get("triggeringSession") or ""
-                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                    if rt_scope != "all":
+                        _tpm = _runtime_tokens_per_min(rt_scope)
+                        if _tpm is not None and _tpm >= threshold:
                             msg = (
-                                f"Token spike: {int(tokens_per_min):,} tokens/min "
-                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                f"Token spike [{rt_scope}]: {int(_tpm):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min)"
                             )
                             fired = True
+                    else:
+                        try:
+                            vel = _compute_velocity_status()
+                        except Exception:
+                            vel = None
+                        if vel:
+                            tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                            if tokens_per_min >= threshold:
+                                sid = vel.get("triggeringSession") or ""
+                                sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                                msg = (
+                                    f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                    f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                )
+                                fired = True
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta
@@ -10522,6 +10623,9 @@ def _budget_monitor_loop():
                         worst = None
                         for r in rows:
                             try:
+                                if rt_scope != "all" and _session_runtime_of(
+                                        r.get("session_id") or "") != rt_scope:
+                                    continue
                                 if float(r.get("ratio") or 0) >= float(threshold):
                                     if worst is None or r["ratio"] > worst["ratio"]:
                                         worst = r

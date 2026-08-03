@@ -20466,6 +20466,7 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
         state["alerts_eval_memo"] = last_eval_state
 
     quality = None
+    quality_by_runtime = None
     try:
         quality_window = _alerts_quality_window_minutes(rules)
     except Exception:
@@ -20480,10 +20481,29 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
                 "alerts(local): query_session_quality_window failed: %s", e
             )
             quality = None
+        # Runtime-scoped rules read a per-runtime quality slice (the node
+        # slice is an aggregate a scoped rule must never fire on).
+        try:
+            scoped_rts = sorted({
+                alert_evaluator._rule_runtime(r) for r in rules
+            } - {"all"})
+            if scoped_rts:
+                quality_by_runtime = {}
+                for _rt in scoped_rts:
+                    try:
+                        quality_by_runtime[_rt] = (
+                            store.query_session_quality_window(
+                                window_minutes=quality_window, runtime=_rt,
+                            ))
+                    except Exception:
+                        continue
+        except Exception:
+            quality_by_runtime = None
 
     try:
         matches = alert_evaluator.evaluate(
-            rules, events, last_eval_state, quality
+            rules, events, last_eval_state, quality,
+            quality_by_runtime=quality_by_runtime,
         )
     except Exception as e:
         log.warning("alerts(local): evaluator errored: %s", e)

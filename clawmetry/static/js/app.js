@@ -9047,8 +9047,11 @@ var _CM_RT_AGGREGATE = {};
 // memory/skills are workspace-level, security is machine posture, self-evolve is
 // node findings. The runtime selector simply does not apply to these.
 var _CM_RT_NODEWIDE = {
-  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
-  alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
+  // approvals + alerts left this map 2026-08-03: approvals rows filter by
+  // the requesting session's runtime prefix, and alert rules carry their own
+  // per-rule scope (runtime column, node-wide chip when 'all').
+  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1,
+  policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
   clusters: 1, actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
   // log source (LOGS capability), version-impact correlates OpenClaw releases.
@@ -9109,8 +9112,9 @@ var _CM_CAP_TABS = {
   LOGS:        ['logs'],
   // approvals moved out of GATEWAY_RPC: the queue is local + runtime-agnostic
   // (event watcher covers every adapter; pre-tool gates are per-runtime
-  // handlers), so it is a node tab now. policy/selfevolve/version-impact stay
-  // OpenClaw gateway/admin concepts.
+  // handlers), so it is a node tab now — and it SCOPES its rows to the
+  // selected runtime via the requesting session-id prefix.
+  // policy/selfevolve/version-impact stay OpenClaw gateway/admin concepts.
   GATEWAY_RPC: ['policy','selfevolve','version-impact'],
   CHANNELS:    ['flow']
 };
