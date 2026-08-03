@@ -13980,6 +13980,9 @@ var _CM_EFF_IDEAS = {
   model_downgrade: { icon: '🔁', stem: 'model', evidenceTab: 'models' },
   context_trim: { icon: '✂️', stem: 'ctx', evidenceTab: 'context-economics' },
   cache_warm: { icon: '♻️', stem: 'reread', evidenceTab: 'context-economics' },
+  // feat/spend-actions: derived from the measured spend flow (thinking share
+  // of output spend); evidence is the "Where the money goes" chart.
+  thinking_trim: { icon: '🧠', stem: 'think', evidenceTab: 'usage' },
 };
 function _cmEffIdeaRowHtml(a) {
   var m = _CM_EFF_IDEAS[a.id];
@@ -13989,6 +13992,7 @@ function _cmEffIdeaRowHtml(a) {
     model: a.model || d.model || 'your main model',
     n: (d.calls != null ? d.calls : 'several'),
     target: d.target_model || 'a smaller model',
+    pct: (d.thinking_pct_of_output_cost != null ? d.thinking_pct_of_output_cost : ''),
   };
   var save = Math.max(1, Math.round(Number(a.savings_monthly_usd) || 0));
   var title = t('efficiency.idea_' + m.stem + '_title', null, '');

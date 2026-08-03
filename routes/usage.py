@@ -4488,6 +4488,18 @@ def api_efficiency():
                "cache_saved_monthly_usd": 0.0,
                "projected_monthly_cost_usd": 0.0,
                "actions": [], "byRuntime": {}}
+    # feat/spend-actions: fold in the spend-flow-derived savings ideas
+    # (thinking_trim) node-wide AND per-runtime, BEFORE the runtime branch
+    # below so a scoped request sees only its own runtime's actions. Uses
+    # the same cached 7d walk as the Cost-tab flow chart (no extra scan).
+    try:
+        from clawmetry.spend_flow import merge_spend_actions
+        _sf = _ls_call("query_spend_flow", days=7)
+        if isinstance(_sf, dict) and isinstance(_sf.get("result"), dict):
+            _sf = _sf["result"]
+        out = merge_spend_actions(out, _sf)
+    except Exception:
+        pass
     if runtime and runtime != "all":
         entry = (out.get("byRuntime") or {}).get(runtime)
         if entry is None:
