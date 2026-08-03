@@ -1,3 +1,20 @@
+## 0.12.648
+
+- **The savings ideas now read the spend flow.** The efficiency card on the
+  Cost tab gains a new idea, "Trim thinking on routine work", derived from
+  the measured "Where the money goes" flow: it appears only when thinking
+  makes up at least 40% of what your agents spend on output, shows the
+  measured share, and is always labeled as an estimate. Ideas are scoped
+  per runtime, so a runtime switcher selection only ever shows ideas
+  computed from that runtime's own numbers.
+
+## 0.12.647
+
+- **Check verdicts on the conversation view.** Opening a transcript now shows
+  the session's structural check chips (green pass, red fail, reason on
+  hover) in the metadata panel, the same verdicts the Evals tab lists, so
+  you can judge a conversation's health right where you read it.
+
 ## 0.12.646
 
 - **The free checks show their work.** The Evals tab's recently-scored table

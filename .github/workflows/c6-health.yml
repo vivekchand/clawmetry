@@ -10,7 +10,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # (can't verify) rather than "error" (broken). The health check gate
 # decision is based only on the clawmetry/main result (same-repo readable).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #4029
+# On failure: posts an @-mentioned reminder to tracking issue #3964
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6 (any of these paths -- all take under 2 minutes):
@@ -20,7 +20,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#4029
+# Tracking: vivekchand/clawmetry#3964
 
 on:
   schedule:
@@ -46,11 +46,11 @@ jobs:
           import sys
           import urllib.error
           import urllib.request
-          from datetime import datetime, timezone
+          from datetime import datetime, timedelta, timezone
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 4029
+          TRACKING_ISSUE = 3964
           MARKER = "<!-- c6-health-check -->"
           # Repo this workflow runs in. GITHUB_TOKEN is repo-scoped: it can
           # read clawmetry (same-repo) but returns 403 for other repos.
@@ -247,6 +247,7 @@ jobs:
               prior_green = count_green_streak(comments, today_utc)
               green_streak = prior_green + 1  # today counts
               stop_condition_met = green_streak >= 7
+              stop_date = (datetime.now(timezone.utc) + timedelta(days=7 - green_streak)).strftime("%Y-%m-%d")
 
               if stop_condition_met:
                   body = (
@@ -288,11 +289,11 @@ jobs:
                       f"{table}\n\n"
                       "clawmetry/main: `E2E Gate (required)` confirmed present. "
                       "clawmetry-cloud and clawmetry-landing: cannot verify cross-repo "
-                      "(private repos -- GITHUB_TOKEN scope limit is expected; "
-                      "they were configured by the same apply-required-checks run).\n\n"
+                      "(private repos -- GITHUB_TOKEN scope limit; "
+                      "verify manually at Settings > Branches).\n\n"
                       f"Day {green_streak}/7: all 7 criteria must hold green for "
                       "7 consecutive days for the stop-condition to trigger. "
-                      "Stop-condition countdown ends 2026-08-06 if no regression. "
+                      f"Stop-condition countdown ends {stop_date} if no regression. "
                       "Disable the cron at https://claude.ai/code/scheduled once done."
                   )
           else:
