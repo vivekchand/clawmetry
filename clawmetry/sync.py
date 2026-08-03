@@ -19020,6 +19020,16 @@ def run_daemon() -> None:
                                 )
                 except Exception as _de_e:
                     log.warning("evals: deterministic tick errored: %s", _de_e)
+                # Optional DeepEval metric engine, same cadence. OFF unless
+                # CLAWMETRY_DEEPEVAL_METRICS names metrics (judge spend is
+                # opt-in). All guards (installed/key/rate) live in the bridge.
+                try:
+                    from clawmetry import deepeval_bridge as _deb
+                    n_deep = _deb.score_pending_deepeval(batch_size=DEEPEVAL_BATCH)
+                    if n_deep:
+                        log.info("evals: deepeval metrics on %d session(s)", n_deep)
+                except Exception as _deb_e:
+                    log.warning("evals: deepeval tick errored: %s", _deb_e)
                 last_evals_run = now_evals
 
             # Re-mirror Docker data if running in Docker mode
@@ -20104,6 +20114,9 @@ DETERMINISTIC_CHECKS = [
     if s.strip()
 ]
 DETERMINISTIC_BATCH = int(os.environ.get("CLAWMETRY_DETERMINISTIC_BATCH", "25"))
+# DeepEval bridge batch: small because each session can cost several judge
+# calls. The engine itself is opt-in via CLAWMETRY_DEEPEVAL_METRICS.
+DEEPEVAL_BATCH = int(os.environ.get("CLAWMETRY_DEEPEVAL_BATCH", "5"))
 
 
 def _run_deterministic_checks_tick() -> int:

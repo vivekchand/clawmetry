@@ -411,9 +411,50 @@ def eval_input_from_stored_rows(rows: list) -> EvalInput:
     Rows come back newest-first from the store; "last output wins" needs
     chronological order, so sort ascending by ``ts`` when present (stable
     for ties / missing ts)."""
+    rows = _sorted_stored_rows(rows)
+    return eval_input_from_events([stored_row_to_event(r) for r in rows])
+
+
+def _sorted_stored_rows(rows: list) -> list[dict]:
     rows = [r for r in (rows or []) if isinstance(r, dict)]
     try:
         rows = sorted(rows, key=lambda r: str(r.get("ts") or ""))
     except Exception:
         pass
-    return eval_input_from_events([stored_row_to_event(r) for r in rows])
+    return rows
+
+
+# Event types that identify the speaker when ``data.role`` is absent.
+# Mirrors eval_runner's prompt/response unions (v3 + legacy shapes).
+_USER_TURN_TYPES = frozenset({"prompt.submitted", "user", "subagent:user"})
+_ASSISTANT_TURN_TYPES = frozenset({
+    "model.completed", "assistant", "message", "subagent:assistant",
+})
+
+
+def turns_from_stored_rows(rows: list) -> list[dict[str, Any]]:
+    """Chronological ``[{"role": "user"|"assistant", "content": str}, ...]``
+    from stored event rows: the conversation shape multi-turn evaluators
+    (and the DeepEval bridge) consume.
+
+    ``data.role`` wins when present (claude_code rows carry it); otherwise
+    the event type decides. Tool traffic and empty turns are dropped."""
+    turns: list[dict[str, Any]] = []
+    for row in _sorted_stored_rows(rows):
+        data = _parse_stored_field(row.get("data"))
+        if not isinstance(data, dict):
+            data = {}
+        content = data.get("content") or ""
+        if not isinstance(content, str) or not content.strip():
+            continue
+        role = str(data.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            etype = str(row.get("event_type") or "").lower()
+            if etype in _USER_TURN_TYPES:
+                role = "user"
+            elif etype in _ASSISTANT_TURN_TYPES:
+                role = "assistant"
+            else:
+                continue
+        turns.append({"role": role, "content": content})
+    return turns
