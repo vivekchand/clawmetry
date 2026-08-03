@@ -346,6 +346,87 @@ def test_category_ids_are_stable_contract():
                                  "builtin_tool_calls", "mcp_tool_calls")
 
 
+# ── spend-derived savings actions (feat/spend-actions) ──────────────────────
+
+def _slice_with_thinking(think_cost, out_cost, days=7, insufficient=False):
+    return {
+        "schema": 1,
+        "window_days": days,
+        "insufficient_data": insufficient,
+        "totals": {"calls": 50, "cost_usd": out_cost * 3,
+                   "input_cost_usd": out_cost * 2, "output_cost_usd": out_cost,
+                   "prompt_tokens": 1, "output_tokens": 1},
+        "input_categories": [],
+        "output_categories": [
+            {"id": "thinking", "tokens": 1000, "cost_usd": think_cost,
+             "pct_of_side_cost": 0, "basis": "residual"},
+            {"id": "assistant_text", "tokens": 1000,
+             "cost_usd": out_cost - think_cost, "pct_of_side_cost": 0,
+             "basis": "measured"},
+        ],
+    }
+
+
+def test_thinking_trim_emitted_when_dominant():
+    from clawmetry.spend_flow import spend_actions
+    acts = spend_actions(_slice_with_thinking(think_cost=6.0, out_cost=10.0))
+    assert len(acts) == 1
+    a = acts[0]
+    assert a["id"] == "thinking_trim"
+    assert a["estimate"] is True
+    # 6.0 window cost * 0.5 trim * (30/7) monthly scaling
+    assert a["savings_monthly_usd"] == pytest.approx(6.0 * 0.5 * 30 / 7, abs=1e-4)
+    assert a["data"]["thinking_pct_of_output_cost"] == 60.0
+    assert a["data"]["basis"] == "residual"
+
+
+def test_thinking_trim_silent_below_gates():
+    from clawmetry.spend_flow import spend_actions
+    # below the 40% share gate
+    assert spend_actions(_slice_with_thinking(3.0, 10.0)) == []
+    # below the $1 window floor
+    assert spend_actions(_slice_with_thinking(0.5, 1.0)) == []
+    # insufficient window never emits
+    assert spend_actions(_slice_with_thinking(6.0, 10.0, insufficient=True)) == []
+    # garbage never raises
+    assert spend_actions(None) == []
+    assert spend_actions({"totals": "x"}) == []
+
+
+def test_merge_spend_actions_node_and_per_runtime():
+    from clawmetry.spend_flow import merge_spend_actions
+    eff = {
+        "actions": [{"id": "context_trim", "savings_monthly_usd": 1.0}],
+        "byRuntime": {
+            "claude_code": {"actions": []},
+            "openclaw": {"actions": []},
+        },
+    }
+    sf = _slice_with_thinking(6.0, 10.0)
+    sf["byRuntime"] = {
+        "claude_code": _slice_with_thinking(6.0, 10.0),
+        "openclaw": _slice_with_thinking(0.0, 1.0),  # below gates
+    }
+    out = merge_spend_actions(eff, sf)
+    ids = [a["id"] for a in out["actions"]]
+    assert "thinking_trim" in ids and "context_trim" in ids
+    # sorted by savings desc: thinking_trim (12.86) before context_trim (1.0)
+    assert ids[0] == "thinking_trim"
+    assert [a["id"] for a in out["byRuntime"]["claude_code"]["actions"]] == ["thinking_trim"]
+    # per-runtime honesty: a runtime below the gates gets NO action
+    assert out["byRuntime"]["openclaw"]["actions"] == []
+    # idempotent-ish: merging again never duplicates the action id
+    out2 = merge_spend_actions(out, sf)
+    assert [a["id"] for a in out2["actions"]].count("thinking_trim") == 1
+
+
+def test_merge_spend_actions_bad_input_returns_eff():
+    from clawmetry.spend_flow import merge_spend_actions
+    eff = {"actions": []}
+    assert merge_spend_actions(eff, None) is eff
+    assert merge_spend_actions(None, {}) is None
+
+
 # ── endpoint ────────────────────────────────────────────────────────────────
 
 def _make_app(monkeypatch, payload):

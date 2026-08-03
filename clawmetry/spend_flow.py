@@ -341,6 +341,97 @@ def _empty_slice(days: int) -> dict[str, Any]:
     return out
 
 
+# ── Spend-derived savings actions (efficiency.actions shape) ────────────────
+# thinking_trim emission gates: thinking must dominate output spend and be
+# real money before we suggest touching it. The 0.5 trim fraction is the
+# hypothesis (routine sessions on a lower thinking setting), flagged
+# estimate=True exactly like efficiency's context_trim.
+_THINKING_SHARE_MIN = 0.40
+_THINKING_MIN_WINDOW_COST_USD = 1.0
+_THINKING_TRIM_FRACTION = 0.5
+_MONTH_DAYS = 30.0
+
+
+def spend_actions(slice_: Any) -> list[dict]:
+    """Savings actions derived from a spend-flow scope, in the shape of
+    :mod:`clawmetry.efficiency` ``actions`` (id / savings_monthly_usd /
+    estimate / data — numbers only, the frontend owns the copy).
+
+    Emits ``thinking_trim`` when thinking is at least
+    ``_THINKING_SHARE_MIN`` of the scope's output spend and above the
+    window-cost floor. The MCP-definition prune Opik ships is deliberately
+    NOT emitted: MCP tool-definition token cost is not measurable from our
+    stored events (it hides inside the input residual) and inventing a
+    dollar figure would break the no-fabrication contract.
+
+    Pure; never raises; ``[]`` on anything unexpected.
+    """
+    try:
+        if not isinstance(slice_, dict) or slice_.get("insufficient_data"):
+            return []
+        try:
+            days = max(1, int(slice_.get("window_days") or 7))
+        except (TypeError, ValueError):
+            days = 7
+        totals = slice_.get("totals") or {}
+        out_cost = _num(totals.get("output_cost_usd"))
+        think = next(
+            (c for c in (slice_.get("output_categories") or [])
+             if isinstance(c, dict) and c.get("id") == "thinking"),
+            None,
+        )
+        if think is None or out_cost <= 0:
+            return []
+        think_cost = _num(think.get("cost_usd"))
+        if think_cost < _THINKING_MIN_WINDOW_COST_USD:
+            return []
+        share = think_cost / out_cost
+        if share < _THINKING_SHARE_MIN:
+            return []
+        factor = _MONTH_DAYS / days
+        return [{
+            "id": "thinking_trim",
+            "savings_monthly_usd": round(
+                think_cost * _THINKING_TRIM_FRACTION * factor, 6),
+            "estimate": True,
+            "data": {
+                "thinking_window_cost_usd": round(think_cost, 6),
+                "thinking_pct_of_output_cost": round(share * 100.0, 1),
+                "trim_fraction": _THINKING_TRIM_FRACTION,
+                "window_days": days,
+                "basis": str(think.get("basis") or "measured"),
+            },
+        }]
+    except Exception:  # pragma: no cover - defensive, never-crash rule
+        return []
+
+
+def merge_spend_actions(eff: Any, spend_slice: Any) -> Any:
+    """Append spend-derived actions to an efficiency slice, node-wide AND
+    per-runtime (per-runtime honesty: each byRuntime entry only ever gets
+    actions computed from its OWN spend scope). Mutates and returns ``eff``;
+    a bad input returns ``eff`` unchanged. Never raises."""
+    try:
+        if not isinstance(eff, dict) or not isinstance(spend_slice, dict):
+            return eff
+        def _extend(scope_eff: dict, acts: list[dict]) -> None:
+            if not acts:
+                return
+            existing = scope_eff.setdefault("actions", [])
+            have = {a.get("id") for a in existing if isinstance(a, dict)}
+            existing.extend(a for a in acts if a["id"] not in have)
+            existing.sort(key=lambda a: -_num(a.get("savings_monthly_usd")))
+        _extend(eff, spend_actions(spend_slice))
+        by_rt = spend_slice.get("byRuntime") or {}
+        for rt, scope in by_rt.items():
+            entry = (eff.get("byRuntime") or {}).get(rt)
+            if isinstance(entry, dict):
+                _extend(entry, spend_actions(scope))
+        return eff
+    except Exception:  # pragma: no cover - defensive, never-crash rule
+        return eff
+
+
 def build_spend_flow_slice(events: list[dict], days: int = 7) -> dict:
     """Spend-flow slice for a node from a window of raw events.
 

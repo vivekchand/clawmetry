@@ -17425,6 +17425,16 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             _spend_flow_slice = _sf_store.query_spend_flow(days=7)
     except Exception as _e_sf:
         log.debug("snapshot: spend-flow slice failed: %s", _e_sf)
+    # feat/spend-actions: the hosted Cost tab reads efficiency actions from
+    # the `efficiency` snapshot slice, so fold the spend-derived ideas
+    # (thinking_trim) in here too — same merge the local /api/efficiency
+    # route does, keeping local and cloud action lists identical.
+    if _eff_slice is not None and _spend_flow_slice is not None:
+        try:
+            from clawmetry.spend_flow import merge_spend_actions as _msa
+            _eff_slice = _msa(_eff_slice, _spend_flow_slice)
+        except Exception as _e_msa:
+            log.debug("snapshot: spend-action merge failed: %s", _e_msa)
 
     # Per-session loops slice (Command River Phase-2). Built on the daemon's
     # OWN store handle (never a read_only re-open — FLYWHEEL §1) from the

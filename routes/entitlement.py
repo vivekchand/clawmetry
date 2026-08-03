@@ -15426,6 +15426,133 @@ def api_license_has_feature_at():
         }
     )
 
+
+@bp_entitlement.route("/api/license/has-feature-at-batch")
+def api_license_has_feature_at_batch():
+    """``GET /api/license/has-feature-at-batch?feature=<id>&epochs=<int>,<int>,...``
+    -- shared-``feature`` batch sibling of ``/api/license/has-feature-at``.
+
+    Where the singular endpoint folds ONE ``(feature, epoch)`` pair to
+    ONE "did the KEY claim feature <X> as-of epoch?" bool, this
+    preserves per-value rows for a fixed ``feature`` across a sequence
+    of perspective epochs so a scheduled-audit tile answering "was this
+    node entitled to feature <X> on each of these audit dates?" (e.g.
+    "did alerts fire on any of my quarterly review dates?") hydrates
+    the whole column in ONE round-trip instead of fanning out N calls
+    to ``/api/license/has-feature-at``. Wraps
+    :func:`clawmetry.license.has_feature_at_batch`. Same "shared
+    threshold applied to EVERY row, per-row epoch" shape as
+    ``/api/license/is-state-at-batch`` / ``/api/license/expiring-within-at-batch``
+    -- one gate query parameter plus a batch of epochs.
+
+    Query parameters:
+      * ``feature`` (str, required in-spirit) -- the feature id to
+        test against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.has_feature_at`. Missing / empty /
+        whitespace-only degrades EVERY row to ``has_feature=false``
+        (matches the never-mis-gate posture of the scalar) rather than
+        a 4xx -- a caller on a stale UI shouldn't have the whole batch
+        hidden behind a typo.
+      * ``epochs`` (CSV of ints, required) -- Missing / blank / only-
+        commas -> ``400 missing epochs``. Comma-separated tokens are
+        stripped, then handed to
+        :func:`clawmetry.license.has_feature_at_batch`, which dedupes
+        by parsed int key preserving first-seen order and collapses
+        non-int / ``bool`` / ``None`` tokens to a row with
+        ``has_feature=false`` (matches the ``has_feature_at`` scalar's
+        rejection of unusable epochs -- there is no features list to
+        search once the perspective is unusable, so the conservative
+        "no entitlement" fallback holds).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":              "has_feature_at",
+          "count":             <int>,               # len(rows)
+          "requested_feature": <str>,               # normalised echo of query
+          "rows":  [
+            {"epoch": <int|"<raw>">, "has_feature": <bool>},
+            ...
+          ],
+          "features":    [<id>, ...] | null,   # current-time features
+          "expires_at":  <int|null>,           # on-disk exp for comparison
+          "has_license": <bool>,
+          "valid":       <bool>                # signature-valid AND not expired NOW
+        }
+
+    Envelope carries the same current-time snapshot fields (``features`` /
+    ``expires_at`` / ``has_license`` / ``valid``) as the surrounding
+    ``/api/license/features-at{,-batch}`` / ``/api/license/has-feature-at``
+    trio so a UI binding several endpoints for the same install cannot
+    catch them disagreeing. Row shape mirrors
+    ``/api/license/is-state-at-batch`` /
+    ``/api/license/is-expired-at-batch`` so a caller assembling a
+    timeline can zip the responses index-for-index by epoch.
+
+    Per-row parity with ``/api/license/has-feature-at?feature=<X>&epoch=<n>``
+    is pinned in the test suite so the batch cannot silently drift from
+    the scalar endpoint. Shares :func:`_license_features_at_snapshot`
+    with ``/api/license/features-at{,-batch}`` /
+    ``/api/license/has-feature-at`` so the current-time reference fields
+    (``features`` / ``expires_at`` / ``has_license`` / ``valid``)
+    cannot disagree between the sibling endpoints for the same install.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This endpoint answers *"did the KEY carry this feature
+    id at each of <epochs>?"*, not *"was this feature enforced at each
+    of <epochs>?"*. For the resolved feature set actually enforced by
+    gates, read ``/api/entitlement`` (which layers this claim on top of
+    the FREE-tier baseline).
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (empty rows envelope with the OSS-free snapshot fields
+    intact), matching the never-crash posture of the surrounding
+    license endpoints.
+    """
+    raw_feature = request.args.get("feature", "") or ""
+    try:
+        requested_feature = str(raw_feature).strip().lower()
+    except Exception:
+        requested_feature = ""
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_features_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_has_feature_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "features": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.has_feature_at_batch(requested_feature, tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_has_feature_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "has_feature_at",
+            "count": len(rows),
+            "requested_feature": requested_feature,
+            "rows": rows,
+            "features": snap["features"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
 @bp_entitlement.route("/api/license/subject-at-batch")
 def api_license_subject_at_batch():
     """``GET /api/license/subject-at-batch?epochs=<int>,<int>,...`` --

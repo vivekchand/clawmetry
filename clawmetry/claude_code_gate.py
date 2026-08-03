@@ -196,11 +196,26 @@ def _entry_is_ours(entry: dict) -> bool:
     return False
 
 
+def _cmd_binary_exists(cmd: str) -> bool:
+    """Return True if the hook command's binary is runnable.
+
+    Only validates absolute paths — bare command names depend on PATH at
+    execution time and cannot be reliably pre-checked here.
+    """
+    if not cmd:
+        return False
+    first = cmd.split()[0]
+    if os.path.isabs(first):
+        return os.access(first, os.X_OK)
+    return True
+
+
 def _entry_is_foreign_clawmetry(entry: dict) -> bool:
     for h in (entry or {}).get("hooks") or []:
         cmd = h.get("command") or ""
         if any(m in cmd for m in _FOREIGN_CLAWMETRY_MARKERS):
-            return True
+            if _cmd_binary_exists(cmd):
+                return True
     return False
 
 
