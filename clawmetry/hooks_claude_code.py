@@ -403,12 +403,49 @@ def _write_settings(path: str, settings: dict) -> None:
     os.replace(tmp, path)
 
 
+def _cmd_binary_exists(cmd: str) -> bool:
+    """Return True if the hook command's binary is runnable.
+
+    Only validates absolute paths — bare command names depend on PATH at
+    execution time and cannot be reliably pre-checked here.
+    """
+    if not cmd:
+        return False
+    first = cmd.split()[0]
+    if os.path.isabs(first):
+        return os.access(first, os.X_OK)
+    return True
+
+
+def _drop_stale_our_hooks(entries: list) -> bool:
+    """Remove entries that carry our marker but whose binary is no longer
+    executable.  Returns True if anything was pruned."""
+    removed = False
+    for entry in list(entries):
+        hooks = entry.get("hooks") or []
+        stale = [
+            h for h in hooks
+            if any(m in (h.get("command") or "") for m in _HOOK_CMD_MARKERS)
+            and not _cmd_binary_exists(h.get("command") or "")
+        ]
+        if not stale:
+            continue
+        surviving = [h for h in hooks if h not in stale]
+        if surviving:
+            entry["hooks"] = surviving
+        else:
+            entries.remove(entry)
+        removed = True
+    return removed
+
+
 def _has_our_hook(entries: list) -> bool:
     for entry in entries or []:
         for h in (entry.get("hooks") or []):
             cmd = h.get("command") or ""
             if any(m in cmd for m in _HOOK_CMD_MARKERS):
-                return True
+                if _cmd_binary_exists(cmd):
+                    return True
     return False
 
 
@@ -446,8 +483,11 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
         settings = _read_settings(path)
         hooks = settings.setdefault("hooks", {})
         added = []
+        modified = False
 
         pretool = hooks.setdefault("PreToolUse", [])
+        if _drop_stale_our_hooks(pretool):
+            modified = True
         if not _has_our_hook(pretool):
             pretool.append({
                 "matcher": matcher,
@@ -456,8 +496,11 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
                            "timeout": _PRETOOL_TIMEOUT_S}],
             })
             added.append("PreToolUse")
+            modified = True
 
         notification = hooks.setdefault("Notification", [])
+        if _drop_stale_our_hooks(notification):
+            modified = True
         if not _has_our_hook(notification):
             notification.append({
                 "hooks": [{"type": "command",
@@ -465,10 +508,13 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
                            "timeout": _NOTIFICATION_TIMEOUT_S}],
             })
             added.append("Notification")
+            modified = True
 
         # Stop = bookkeeping only (clears the "needs you at the desk" row
         # for the session; no push) — see main_stop.
         stop = hooks.setdefault("Stop", [])
+        if _drop_stale_our_hooks(stop):
+            modified = True
         if not _has_our_hook(stop):
             stop.append({
                 "hooks": [{"type": "command",
@@ -476,8 +522,9 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
                            "timeout": _NOTIFICATION_TIMEOUT_S}],
             })
             added.append("Stop")
+            modified = True
 
-        if added:
+        if modified:
             _write_settings(path, settings)
         _write_marker(["PreToolUse", "Notification", "Stop"])
         return {"status": "installed" if added else "already_present",
