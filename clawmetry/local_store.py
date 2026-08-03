@@ -1013,6 +1013,29 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_eval_regression_replayed_at ON eval_regression_runs(replayed_at)",
     "CREATE INDEX IF NOT EXISTS idx_eval_regression_status     ON eval_regression_runs(status, replayed_at)",
+    # Issue #2862 (resurrected) — per-session, per-metric eval results.
+    # ``sessions.eval_score`` stays the single headline judge score; this
+    # table holds the OTHER metric verdicts on the same session (the free
+    # deterministic checks now, judge-backed named metrics later). One row
+    # per (session, metric), latest-only: a rescore overwrites in place,
+    # mirroring the sessions.eval_* upsert semantics. ``engine`` says who
+    # computed it (builtin / pro / deepeval) so the UI can label honestly.
+    """
+    CREATE TABLE IF NOT EXISTS eval_metrics (
+        session_id  VARCHAR NOT NULL,
+        metric_slug VARCHAR NOT NULL,
+        score       DOUBLE,
+        passed      BOOLEAN,
+        reason      VARCHAR,
+        detail      VARCHAR,
+        engine      VARCHAR NOT NULL,
+        judge_model VARCHAR,
+        scored_at   BIGINT  NOT NULL,
+        PRIMARY KEY (session_id, metric_slug)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_metrics_scored_at ON eval_metrics(scored_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_metrics_slug      ON eval_metrics(metric_slug, scored_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -8589,6 +8612,126 @@ class LocalStore:
         }
 
     # ── Issue #1619 Phase 2 — golden test suite runs ────────────────────────
+
+    # ── Issue #2862 (resurrected) — per-metric eval results ────────────────
+
+    def persist_eval_metric(
+        self,
+        *,
+        session_id: str,
+        metric_slug: str,
+        score: float | None,
+        passed: bool | None,
+        reason: str,
+        detail: str = "",
+        engine: str = "builtin",
+        judge_model: str = "",
+        scored_at: int = 0,
+    ) -> None:
+        """Upsert one metric verdict for one session. Latest-only on
+        ``(session_id, metric_slug)`` — a rescore overwrites in place."""
+        if not session_id or not metric_slug:
+            return
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_metrics
+                        (session_id, metric_slug, score, passed, reason,
+                         detail, engine, judge_model, scored_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        session_id,
+                        metric_slug,
+                        None if score is None else float(score),
+                        None if passed is None else bool(passed),
+                        (reason or "")[:500],
+                        (detail or "")[:2000],
+                        (engine or "builtin")[:40],
+                        (judge_model or "")[:80],
+                        int(scored_at) or int(time.time() * 1000),
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_metric failed for %s/%s",
+                    session_id, metric_slug,
+                )
+
+    def query_eval_metrics(
+        self,
+        *,
+        session_id: str | None = None,
+        metric_slug: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return metric verdicts, newest first, optionally filtered by
+        session and/or metric. Drives ``GET /api/evals/metrics``."""
+        where: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if metric_slug:
+            where.append("metric_slug = ?")
+            params.append(metric_slug)
+        sql = (
+            "SELECT session_id, metric_slug, score, passed, reason, detail, "
+            "engine, judge_model, scored_at FROM eval_metrics"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY scored_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        cols = ["session_id", "metric_slug", "score", "passed", "reason",
+                "detail", "engine", "judge_model", "scored_at"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception as e:
+            log.warning("local store: query_eval_metrics failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_sessions_missing_eval_metrics(
+        self,
+        *,
+        engine: str = "builtin",
+        limit: int = 25,
+        lookback_hours: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Completed recent sessions with NO ``eval_metrics`` row from
+        ``engine`` yet. Drives the deterministic-checks scheduler tick
+        (same completed/lookback filter as ``query_unscored_sessions``)."""
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
+        except Exception:
+            cutoff = ""
+        sql = """
+            SELECT s.session_id, s.agent_type, s.status, s.total_tokens
+              FROM sessions s
+             WHERE s.total_tokens IS NOT NULL
+               AND s.total_tokens > 0
+               AND (
+                    s.ended_at IS NOT NULL
+                    OR s.status IN ('completed', 'failed', 'escalated', 'success', 'error')
+               )
+               AND (? = '' OR COALESCE(s.last_active_at, s.started_at, '') >= ?)
+               AND NOT EXISTS (
+                    SELECT 1 FROM eval_metrics m
+                     WHERE m.session_id = s.session_id AND m.engine = ?
+               )
+             ORDER BY COALESCE(s.last_active_at, s.started_at) DESC NULLS LAST
+             LIMIT ?
+        """
+        try:
+            rows = self._fetch(sql, [cutoff, cutoff, engine or "builtin", int(limit)])
+        except Exception as e:
+            log.warning("local store: query_sessions_missing_eval_metrics failed: %s", e)
+            return []
+        cols = ["session_id", "agent_type", "status", "total_tokens"]
+        return [dict(zip(cols, r)) for r in rows]
 
     def persist_eval_suite_run(
         self,
