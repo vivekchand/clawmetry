@@ -1,3 +1,17 @@
+## 0.12.643
+
+- **Where the money goes: a spend flow for the whole node.** The Cost tab now
+  opens with a flow chart tracing spend from what your agents read (your
+  messages, earlier replies, tool results, and the derived system prompt and
+  tool definitions overhead) through each runtime into what they write
+  (thinking, replies, built-in and MCP tool calls), with real dollars and
+  tokens on every band. Shares are measured from actual session content and
+  reconciled against model-reported usage per call, so category sums always
+  match the cost of record; anything content cannot explain is labeled as a
+  derived estimate, never invented. New `GET /api/spend-flow` endpoint
+  (respects the runtime switcher and the free 24h history window) and a
+  `spendFlow` snapshot slice for the hosted dashboard.
+
 ## 0.12.641
 
 - Re-publish of 0.12.640 (same ghost-wheel race as 0.12.636: the release
