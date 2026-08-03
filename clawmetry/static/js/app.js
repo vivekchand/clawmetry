@@ -16015,16 +16015,36 @@ async function viewTranscript(sessionId) {
   window._replayFilter = 'all';
   try {
     // Fetch transcript, compaction markers, config-drift, lexical drift, and policy events in parallel
-    var [data, compactionsData, driftData, lexicalDriftData, policyData] = await Promise.all([
+    var [data, compactionsData, driftData, lexicalDriftData, policyData, evalMetricsData] = await Promise.all([
       fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
       fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []})),
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false})),
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/lexical-drift').then(r => r.json()).catch(() => null),
-      fetch('/api/security/policy-events?session_id=' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null)
+      fetch('/api/security/policy-events?session_id=' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null),
+      // Per-metric eval verdicts (#2862). Node-local data; on the hosted
+      // dashboard the container has no metrics table, so skip the fetch.
+      window.CLOUD_MODE ? Promise.resolve(null)
+        : fetch('/api/evals/metrics?session_id=' + encodeURIComponent(sessionId) + '&limit=8').then(r => r.json()).catch(() => null)
     ]);
     var compactions = compactionsData.compactions || [];
+    var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
+    // Family runtimes store metrics under the canonical prefixed id
+    // (claude_code:<uuid>); a bare transcript id needs a suffix match.
+    if (!evalChips.length && !window.CLOUD_MODE && sessionId.indexOf(':') === -1) {
+      try {
+        var _em = await fetch('/api/evals/metrics?limit=300').then(r => r.json());
+        evalChips = ((_em && _em.metrics) || []).filter(function(m) {
+          var msid = String(m.session_id || '');
+          return msid.length > sessionId.length + 1 &&
+                 msid.slice(-(sessionId.length + 1)) === (':' + sessionId);
+        });
+      } catch (e) { /* chips are optional decoration */ }
+    }
     // Metadata
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
+    if (evalChips.length) {
+      metaHtml += '<div class="stat-row"><span class="stat-label">' + t("evals.col_checks", null, "Checks") + '</span><span class="stat-val">' + _evalMetricChips(evalChips) + '</span></div>';
+    }
     metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + data.messageCount + '</span></div>';
     if (data.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(data.model) + '</span></span></div>';
     if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
