@@ -1693,6 +1693,94 @@ def _register_default_gate_handlers() -> None:
     _default_gates_registered = True
 
 
+_MAX_ORPHAN_AGE_S = 7 * 24 * 3600  # matches the max policy timeout ceiling
+
+
+def _reconcile_stale_pending() -> int:
+    """Expire ``pending`` approval rows orphaned by a daemon restart (#4491).
+
+    ``process_tool_call`` writes a ``pending`` row then blocks in-process on
+    a poll loop.  When the daemon restarts those poll threads die; nothing
+    previously swept rows whose deadline had already passed.  This function
+    runs once at watcher startup so the cloud Approvals inbox drains without
+    requiring a human bulk-approve.
+
+    * PreToolUse-hook rows store ``deadline_ms`` and ``on_timeout`` inside
+      their ``args`` JSON — both are used directly.
+    * Blocking-path rows (``process_tool_call``) store raw tool args without
+      a deadline.  Those fall back to ``_MAX_ORPHAN_AGE_S`` (7 days) measured
+      from ``created_at`` and are marked ``expired`` because the original
+      policy timeout is not recoverable from the stored row.
+
+    Returns the number of rows transitioned.
+    """
+    swept = 0
+    try:
+        from clawmetry import local_store as _lsm
+        store = _lsm.get_store(read_only=True)
+        rows = store._conn.execute(
+            "SELECT id, args, created_at FROM approvals WHERE status = 'pending'"
+        ).fetchall()
+    except Exception as exc:
+        log.warning("approvals reconcile: query failed: %s", exc)
+        return 0
+
+    if not rows:
+        return 0
+
+    from datetime import datetime, timezone
+    now_ms = int(time.time() * 1000)
+
+    for row_id, args_raw, created_at in rows:
+        try:
+            args_dict = (
+                json.loads(args_raw)
+                if isinstance(args_raw, (str, bytes)) and args_raw
+                else {}
+            )
+        except Exception:
+            args_dict = {}
+
+        deadline_ms = args_dict.get("deadline_ms")
+        if deadline_ms is not None:
+            expired = now_ms > int(deadline_ms)
+        else:
+            try:
+                ca = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                expired = (datetime.now(timezone.utc) - ca).total_seconds() > _MAX_ORPHAN_AGE_S
+            except Exception:
+                expired = False
+
+        if not expired:
+            continue
+
+        ot = (args_dict.get("on_timeout") or "deny").strip().lower()
+        if ot in ("allow", "approve", "approved"):
+            decision = "approve"
+        elif ot in ("deny", "kill", "denied", "block"):
+            decision = "deny"
+        else:
+            decision = "expired"
+
+        try:
+            from clawmetry import local_store as _lsm
+            n = _lsm.get_store().update_approval_decision(
+                row_id, decision, "timeout", "boot-reconciliation"
+            )
+            if n:
+                swept += 1
+                log.info(
+                    "approvals reconcile: %s expired → %s (on_timeout=%r)",
+                    row_id, decision, ot,
+                )
+        except Exception as exc:
+            log.warning("approvals reconcile: failed to expire %s: %s", row_id, exc)
+
+    if swept:
+        log.info("approvals reconcile: %d stale pending row(s) swept", swept)
+    return swept
+
+
 def sync_runtime_gates(policies) -> None:
     """Drive every registered runtime pre-tool gate from the active policy
     set. Called once per watcher iteration, right where the openclaw-only
@@ -1734,6 +1822,10 @@ def watcher_loop(api_key: str, node_id: str,
     paths.
     """
     log.info(f"approvals watcher started (kick + {interval_sec}s heartbeat) for node {node_id}")
+    try:
+        _reconcile_stale_pending()
+    except Exception as _re:
+        log.warning("approvals reconcile on start failed: %s", _re)
     while True:
         if stop_event and stop_event.is_set():
             log.info("approvals watcher stop signal received")
