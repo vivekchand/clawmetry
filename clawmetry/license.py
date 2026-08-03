@@ -4565,3 +4565,98 @@ def has_feature_at(feature: str, epoch: int) -> bool:
     if not isinstance(feats, list):
         return False
     return requested in feats
+
+
+def has_feature_at_batch(feature: str, epochs) -> list[dict]:
+    """Per-value perspective-epoch "did the installed license claim
+    feature ``<X>`` at each of these epochs?" gate for N epochs in ONE
+    round-trip.
+
+    Shared-``feature`` batch sibling of :func:`has_feature_at`. Where the
+    singular scalar folds ONE ``(feature, epoch)`` pair to ONE bool, this
+    preserves per-value rows for a fixed ``feature`` across a sequence of
+    perspective epochs so a scheduled-audit tile answering "was this node
+    entitled to feature <X> on each of these dates?" (e.g. "did alerts
+    fire during each of my quarterly reviews?") hydrates the whole column
+    in ONE round-trip instead of fanning out N calls to
+    :func:`has_feature_at`. Same "shared threshold applied to EVERY row,
+    per-row epoch" shape as :func:`is_state_at_batch` /
+    :func:`is_expiring_within_at_batch` -- one gate parameter plus a
+    batch of epochs.
+
+    ``feature`` is compared case-insensitively (after strip) against the
+    normalised ``features`` claim, matching :func:`has_feature_at`.
+    Missing / empty / non-string ``feature`` collapses EVERY row to
+    ``has_feature=False`` while preserving row slots so the output length
+    still matches N. A caller cannot silently mis-gate on an empty
+    feature id, and the batch matches the "empty query -> always False"
+    posture of the scalar.
+
+    Row shape::
+
+        {
+          "epoch":       <int> | "<raw>",
+          "has_feature": <bool>,
+        }
+
+    Semantics per row mirror :func:`has_feature_at`: ``True`` iff a
+    license is installed, signature-valid, NOT expired at ``epoch``,
+    carries a ``features`` claim, AND that claim (after normalisation)
+    contains ``feature``. Every other state (no license, invalid
+    signature, lapsed-at-epoch key, ``features`` claim missing / non-
+    list, feature not itemised, ``bool`` / non-numeric epoch, empty
+    ``feature``) -> ``False``. Row shape mirrors
+    :func:`is_state_at_batch` so a caller assembling an audit timeline
+    can zip the responses index-for-index.
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``has_feature=False`` so the batch
+    keeps building. Matches the never-mis-gate posture used by
+    :func:`has_feature_at` -- a bad row cannot silently claim a feature
+    that would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now" and ``feature`` is a non-empty
+    string, this predicate must agree with :func:`has_feature` for the
+    same install and the same requested ``feature`` at that row -- both
+    derive from the same signed ``features`` claim via
+    :func:`license_features_at` / :func:`license_features`, so a caller
+    binding both the singular and the batch cannot catch them
+    disagreeing at the boundary.
+
+    Note: the ``features`` claim is a SUPPLEMENTAL string list carried
+    on the license token; it is NOT the canonical open-core feature
+    catalogue. This batch answers *"did the KEY carry this feature id
+    at each of <epochs>?"*, not *"was this feature enforced at each of
+    <epochs>?"*. For the resolved feature set actually enforced by
+    gates, callers should read
+    :func:`clawmetry.entitlements.get_entitlement` (which layers this
+    claim on top of the FREE-tier baseline).
+    """
+    try:
+        requested = str(feature).strip().lower() if feature is not None else ""
+    except Exception:
+        requested = ""
+    valid_query = bool(requested)
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "has_feature": False})
+            continue
+        if not valid_query:
+            out.append({"epoch": parsed, "has_feature": False})
+            continue
+        try:
+            matched = has_feature_at(requested, parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: has_feature_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append({"epoch": parsed, "has_feature": bool(matched)})
+    return out
