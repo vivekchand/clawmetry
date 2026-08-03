@@ -1,3 +1,10 @@
+## 0.12.647
+
+- **Check verdicts on the conversation view.** Opening a transcript now shows
+  the session's structural check chips (green pass, red fail, reason on
+  hover) in the metadata panel, the same verdicts the Evals tab lists, so
+  you can judge a conversation's health right where you read it.
+
 ## 0.12.646
 
 - **The free checks show their work.** The Evals tab's recently-scored table
