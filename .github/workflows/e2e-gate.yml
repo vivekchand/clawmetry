@@ -48,12 +48,14 @@ jobs:
     # Auto-bump PRs (auto-bump/*) only change __version__ in dashboard.py.
     # Full E2E is guaranteed green by the [RELEASE] PR that preceded them.
     # Running the gate again adds no safety value and is structurally
-    # broken: the release bot's branch-update cancels in-progress OSS
-    # golden path and C4 runs (concurrency cancel-in-progress), GitHub
-    # records cancelled as failure, and the gate fast-fails.
+    # broken: the release bot's branch-update push cancels the in-progress
+    # OSS golden path and C4 runs (cancel-in-progress: true on their
+    # concurrency groups), GitHub records cancelled as failure, and the
+    # gate fast-fails. Branch protection requires the gate, so auto-bump
+    # PRs can never merge.
     # GitHub treats a job-level skip (via if:) as "passing" for required
     # status checks -- distinct from a workflow-level [skip ci] skip which
-    # is NOT treated as passing.
+    # is NOT treated as passing. This is the correct fix.
     if: "!startsWith(github.head_ref, 'auto-bump/')"
 
     steps:
