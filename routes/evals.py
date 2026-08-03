@@ -12,6 +12,7 @@ Routes:
   GET   /api/evals/rubric              — raw rubric YAML text
   POST  /api/evals/rubric              — replace rubric YAML text (validates parse)
   GET   /api/evals/regression-summary  — Phase 3: aggregate replay outcomes
+  GET   /api/evals/metrics             — per-session per-metric verdicts (#2862)
 
 All endpoints degrade gracefully when the local store or eval runner is
 unavailable — the dashboard treats an empty payload as "evals not yet
@@ -146,6 +147,25 @@ def evals_recent():
         limit = 50
     rows = _store_via_daemon_or_direct("query_recent_evals", limit=limit) or []
     return jsonify({"evals": rows, "limit": limit})
+
+
+@bp_evals.route("/api/evals/metrics", methods=["GET"])
+def evals_metrics():
+    """Per-session, per-metric verdicts (#2862 resurrected). The built-in
+    deterministic checks are free-tier (they run on the user's box at zero
+    LLM cost), so this read is ungated — mirroring ``/api/evaluators``.
+    Filters: ``?session_id=`` and/or ``?metric=``; ``?limit=`` capped at 500."""
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", "100"))))
+    except (TypeError, ValueError):
+        limit = 100
+    session_id = (request.args.get("session_id") or "").strip() or None
+    metric = (request.args.get("metric") or "").strip() or None
+    rows = _store_via_daemon_or_direct(
+        "query_eval_metrics",
+        session_id=session_id, metric_slug=metric, limit=limit,
+    ) or []
+    return jsonify({"metrics": rows, "limit": limit})
 
 
 @bp_evals.route("/api/evals/summary", methods=["GET"])

@@ -41,6 +41,7 @@ def test_catalogue_shape_and_tiers():
         "agent-efficiency", "agent-tool-error-detector",
         "pii-detector", "secrets-detector", "prompt-injection-detector",
         "hallucination-risk", "faithfulness",
+        "argument-correctness", "conversation-completeness",
     ):
         assert slug in slugs, f"missing evaluator {slug}"
     for e in cat:

@@ -12215,7 +12215,26 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     openclaw_spawned_claude = _openclaw_spawned_claude_ids()
 
     _ingest_rev = _family_ingest_rev()
-    for cls in _family_adapter_classes():
+    # Starvation-proof ordering: rotate the adapter start position every pass.
+    # A daemon that dies mid-pass (live-hit 2026-08-03: duckdb SIGTRAP crash
+    # loop, launchd KeepAlive respawn every ~8 min) used to restart the walk
+    # from the SAME fixed order each run — adapters early in the list
+    # (claude_code, with hundreds of sessions) always ingested while adapters
+    # at the tail (copilot, antigravity) were NEVER reached: their sessions
+    # silently missing, per-runtime rollups/alerts reading $0. Rotating the
+    # start index each pass guarantees every adapter is first-in-line within
+    # N passes, so even a chronically bounced daemon converges on full
+    # coverage. The rotation cursor lives in daemon state (survives restarts
+    # via sync-state.json).
+    _classes = list(_family_adapter_classes())
+    if _classes:
+        try:
+            _rot = int(state.get("family_adapter_rotation") or 0) % len(_classes)
+        except (TypeError, ValueError):
+            _rot = 0
+        state["family_adapter_rotation"] = _rot + 1
+        _classes = _classes[_rot:] + _classes[:_rot]
+    for cls in _classes:
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
             if not adapter.detect().detected:
@@ -17391,6 +17410,22 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_eff:
         log.debug("snapshot: efficiency slice failed: %s", _e_eff)
 
+    # Spend-flow slice (feat/spend-flow): input categories -> runtime ->
+    # output categories with tokens + dollars, for the hosted Cost tab's
+    # "Where the money goes" flow (served by the cm-cloud-spend-flow
+    # interceptor). Computed on the daemon's OWN store handle (never a
+    # read_only re-open — FLYWHEEL §1); the store method TTL-caches the
+    # event walk, so this adds ~0 cost per snapshot cycle. Best-effort:
+    # None on any failure and the consumer omits honestly.
+    _spend_flow_slice = None
+    try:
+        from clawmetry import local_store as _ls_sf
+        _sf_store = _ls_sf.get_store()
+        if _sf_store is not None:
+            _spend_flow_slice = _sf_store.query_spend_flow(days=7)
+    except Exception as _e_sf:
+        log.debug("snapshot: spend-flow slice failed: %s", _e_sf)
+
     # Per-session loops slice (Command River Phase-2). Built on the daemon's
     # OWN store handle (never a read_only re-open — FLYWHEEL §1) from the
     # loop_signals rows the detector/stuck pass already wrote (no recompute).
@@ -17535,6 +17570,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # back to its honest empty state).
     if _eff_slice is not None:
         payload["efficiency"] = _eff_slice
+    # Spend-flow slice (feat/spend-flow): served to the hosted Cost tab by
+    # the cm-cloud-spend-flow interceptor. Omitted on failure (the tab
+    # renders its honest collecting state, never a silent blank).
+    if _spend_flow_slice is not None:
+        payload["spendFlow"] = _spend_flow_slice
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.
@@ -19005,6 +19045,31 @@ def run_daemon() -> None:
                             )
                 except Exception as _ee:
                     log.warning("evals: scheduler tick errored: %s", _ee)
+                # Free deterministic checks on the same cadence (#2862).
+                # Separate try so a judge failure never starves them and
+                # vice versa. Uses the daemon's own writer store handle.
+                try:
+                    if DETERMINISTIC_CHECKS:
+                        from clawmetry import eval_runner as _eval_runner
+                        if _eval_runner.is_enabled():
+                            n_checked = _run_deterministic_checks_tick()
+                            if n_checked:
+                                log.info(
+                                    "evals: deterministic checks on %d session(s)",
+                                    n_checked,
+                                )
+                except Exception as _de_e:
+                    log.warning("evals: deterministic tick errored: %s", _de_e)
+                # Optional DeepEval metric engine, same cadence. OFF unless
+                # CLAWMETRY_DEEPEVAL_METRICS names metrics (judge spend is
+                # opt-in). All guards (installed/key/rate) live in the bridge.
+                try:
+                    from clawmetry import deepeval_bridge as _deb
+                    n_deep = _deb.score_pending_deepeval(batch_size=DEEPEVAL_BATCH)
+                    if n_deep:
+                        log.info("evals: deepeval metrics on %d session(s)", n_deep)
+                except Exception as _deb_e:
+                    log.warning("evals: deepeval tick errored: %s", _deb_e)
                 last_evals_run = now_evals
 
             # Re-mirror Docker data if running in Docker mode
@@ -20078,6 +20143,72 @@ STUCK_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_STUCK_INTERVAL_SEC", "60
 # self-throttles regardless of interval.
 EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_EVALS_INTERVAL_SEC", "300"))
 EVAL_BATCH = int(os.environ.get("CLAWMETRY_EVALS_BATCH", "10"))
+# Issue #2862 (resurrected) — free deterministic checks that ride the same
+# tick. Zero LLM cost, so the batch can be larger than the judge's. The
+# check list is a comma-separated set of BUILTIN_EVALUATORS slugs; configless
+# slugs only by design (configured checks belong to eval suites). Empty
+# string disables the pass entirely.
+DETERMINISTIC_CHECKS = [
+    s.strip()
+    for s in os.environ.get("CLAWMETRY_DETERMINISTIC_CHECKS", "no-tool-errors").split(",")
+    if s.strip()
+]
+DETERMINISTIC_BATCH = int(os.environ.get("CLAWMETRY_DETERMINISTIC_BATCH", "25"))
+# DeepEval bridge batch: small because each session can cost several judge
+# calls. The engine itself is opt-in via CLAWMETRY_DEEPEVAL_METRICS.
+DEEPEVAL_BATCH = int(os.environ.get("CLAWMETRY_DEEPEVAL_BATCH", "5"))
+
+
+def _run_deterministic_checks_tick() -> int:
+    """One scheduler pass of the free deterministic checks (#2862).
+
+    Picks completed sessions with no ``builtin``-engine metric rows yet,
+    bridges their stored event rows to an ``EvalInput``, runs the configured
+    checks, and upserts one ``eval_metrics`` row per (session, check).
+    Runs on the daemon's own writer store handle; returns sessions touched.
+    """
+    from clawmetry import deterministic_evaluators as _de
+    from clawmetry import local_store as _ls
+
+    store = _ls.get_store()
+    if store is None:
+        return 0
+    checks = [{"slug": slug} for slug in DETERMINISTIC_CHECKS
+              if slug in _de.BUILTIN_EVALUATORS]
+    if not checks:
+        return 0
+    pending = store.query_sessions_missing_eval_metrics(
+        engine="builtin", limit=DETERMINISTIC_BATCH, lookback_hours=24,
+    )
+    touched = 0
+    now_ms = int(time.time() * 1000)
+    for sess in pending:
+        sid = sess.get("session_id")
+        if not sid:
+            continue
+        try:
+            rows = store.query_events(session_id=sid, limit=500)
+            eval_input = _de.eval_input_from_stored_rows(rows or [])
+            for result in _de.run_checks(eval_input, checks):
+                detail = ""
+                try:
+                    detail = json.dumps(result.detail) if result.detail else ""
+                except (TypeError, ValueError):
+                    detail = ""
+                store.persist_eval_metric(
+                    session_id=sid,
+                    metric_slug=result.slug,
+                    score=result.score,
+                    passed=result.passed,
+                    reason=result.reason,
+                    detail=detail,
+                    engine="builtin",
+                    scored_at=now_ms,
+                )
+            touched += 1
+        except Exception as e:
+            log.warning("evals: deterministic checks failed for %s: %s", sid, e)
+    return touched
 # Window for the events read from DuckDB on each tick. Wider than the
 # evaluation interval so a slow tick doesn't drop events on the floor.
 _ALERTS_EVENT_LOOKBACK_SEC = 600

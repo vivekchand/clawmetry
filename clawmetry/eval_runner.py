@@ -1021,12 +1021,16 @@ def _judge_request(
     return choices[0].get("message", {}).get("content", "") or ""
 
 
-def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
+def _call_judge(
+    model: str, prompt: str, *, timeout: float = 30.0, max_tokens: int = 200,
+) -> str:
     """Call the configured judge provider with the user's own key.
 
     Back-compat entry point (clawmetry-pro's faithfulness evaluator calls
     this with ``(model, prompt, timeout=...)``). Provider comes from the
     rubric's ``judge_provider`` when set, else is inferred from the model id.
+    ``max_tokens`` defaults to the classic SCORE/REASON budget; structured
+    judges (the DeepEval bridge) pass a larger cap for JSON replies.
     """
     rubric = load_rubric("default")
     if str(rubric.get("judge_model") or "") == (model or ""):
@@ -1039,6 +1043,7 @@ def _call_judge(model: str, prompt: str, *, timeout: float = 30.0) -> str:
         prompt,
         api_key=_judge_api_key_for_provider(provider),
         timeout=timeout,
+        max_tokens=max_tokens,
     )
 
 
