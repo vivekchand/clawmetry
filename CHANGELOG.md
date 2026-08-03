@@ -1,3 +1,12 @@
+## 0.12.646
+
+- **The free checks show their work.** The Evals tab's recently-scored table
+  gains a Checks column: one chip per structural verdict (green pass, red
+  fail, the reason on hover). Sessions scored only by the free checks are
+  listed too, so evals visibly work out of the box before any judge key is
+  added. Fail chips say what happened ("tool errors"), never a double
+  negative. Hosted dashboards are unchanged (the verdicts live on the node).
+
 ## 0.12.644
 
 - **Where the money goes: a spend flow for the whole node.** The Cost tab now
