@@ -55,13 +55,13 @@ setup(
         # dashboard's GROUP BY/time-window workloads (epic #964).
         "duckdb>=0.10",
         # Cloud cold-data relay tunnel (epic #964 phase 3b). ~100 KB pure
-        # Python. Was previously in extras_require["relay"]; the opt-in
+        # Python. Was previously in extras_require[\"relay\"]; the opt-in
         # made cloud users silently miss the relay. Now base install so
-        # `pip install clawmetry && clawmetry connect` "just works".
+        # `pip install clawmetry && clawmetry connect` \"just works\".
         "websocket-client>=1.6",
         # OS trust store for TLS (Windows CryptoAPI / macOS Security /
         # Linux CA dir) -- makes corporate TLS-interception root CAs
-        # (Zscaler/Netskope/Palo Alto) "just work" without certifi hacks.
+        # (Zscaler/Netskope/Palo Alto) \"just work\" without certifi hacks.
         # Needs 3.10+; on 3.8/3.9 clawmetry.net falls back to stock trust.
         'truststore>=0.8; python_version >= "3.10"',
     ],
@@ -74,7 +74,7 @@ setup(
     entry_points={
         "console_scripts": [
             "clawmetry=clawmetry.cli:main",
-            # legacy: "clawmetry=dashboard:main",
+            # legacy: \"clawmetry=dashboard:main\",
         ],
     },
     classifiers=[
@@ -98,4 +98,4 @@ setup(
         "Source": "https://github.com/vivekchand/clawmetry",
     },
 )
-# ci-trigger
+# ci-trigger-rerun
