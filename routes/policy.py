@@ -219,6 +219,225 @@ def _approvals_audit_payload(status=None, limit=100):
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
 
 
+def _policy_summary(compiled: dict) -> dict:
+    """JSON-safe summary of one compiled policy (regexes → pattern strings)."""
+    def _pat(rx):
+        return getattr(rx, "pattern", None)
+    return {
+        "name": compiled.get("name"),
+        "tool": compiled.get("tool"),
+        "runtime": compiled.get("runtime") or "",
+        "action": compiled.get("action"),
+        "timeout": compiled.get("timeout"),
+        "on_timeout": compiled.get("on_timeout"),
+        "command_regex": _pat(compiled.get("command_regex")),
+        "command_not_regex": _pat(compiled.get("command_not_regex")),
+        "args_regex": _pat(compiled.get("args_regex")),
+    }
+
+
+_VALID_ACTIONS = ("require_approval", "approve", "monitor")
+_VALID_ON_TIMEOUT = ("deny", "kill", "approve", "allow", "ask")
+# Keys we serialise back to policies.yml (whitelist keeps junk out of the
+# file). ``match`` is handled separately (nested block).
+_POLICY_SCALAR_KEYS = ("name", "tool", "runtime", "pattern_type", "pattern",
+                       "action", "timeout", "on_timeout", "preset_key",
+                       "enabled")
+_MATCH_SCALAR_KEYS = ("tool", "command_regex", "command_not_regex",
+                      "args_regex", "runtime")
+
+
+def _yaml_quote(value):
+    """Serialise one scalar for the policies.yml subset. Returns the string
+    to write, or raises ValueError for values the subset can't round-trip
+    (newlines, or strings containing BOTH quote kinds)."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    s = str(value)
+    if "\n" in s or "\r" in s:
+        raise ValueError("newlines are not allowed in policy values")
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    raise ValueError("a policy value may not contain both ' and \" quotes")
+
+
+def _serialize_policies_yaml(policies: list[dict]) -> str:
+    """Emit the exact YAML subset ``approvals._load_yaml`` documents (flat
+    keys + one optional nested ``match`` block), so the file round-trips
+    through BOTH the pyyaml path and the hand-rolled fallback parser."""
+    lines: list[str] = [
+        "# ClawMetry approval policies — managed by the Approvals tab.",
+        "# Docs: README 'Approval policies'. Hand edits are preserved on",
+        "# the next dashboard save only if they use this same flat format.",
+    ]
+    for p in policies:
+        first = True
+        for k in _POLICY_SCALAR_KEYS:
+            if k not in p or p[k] is None:
+                continue
+            prefix = "- " if first else "  "
+            lines.append(f"{prefix}{k}: {_yaml_quote(p[k])}")
+            first = False
+        match = p.get("match")
+        if isinstance(match, dict) and match:
+            if first:
+                lines.append("- match:")
+                first = False
+            else:
+                lines.append("  match:")
+            for mk in _MATCH_SCALAR_KEYS:
+                if mk in match and match[mk] is not None:
+                    lines.append(f"    {mk}: {_yaml_quote(match[mk])}")
+        if first:
+            # Nothing serialisable — shouldn't happen post-validation.
+            raise ValueError("policy has no serialisable fields")
+    return "\n".join(lines) + "\n"
+
+
+def _validate_policies(policies) -> "tuple[list[dict], list[str]]":
+    """Validate a candidate policy list. Returns (normalised, errors)."""
+    from clawmetry import approvals as ap
+    errors: list[str] = []
+    normalised: list[dict] = []
+    if not isinstance(policies, list):
+        return [], ["'policies' must be a list"]
+    for i, p in enumerate(policies):
+        label = f"policies[{i}]"
+        if not isinstance(p, dict):
+            errors.append(f"{label}: must be an object")
+            continue
+        if p.get("name"):
+            label = f"policy '{p['name']}'"
+        action = str(p.get("action") or "require_approval").strip()
+        if action not in _VALID_ACTIONS:
+            errors.append(f"{label}: action must be one of "
+                          f"{', '.join(_VALID_ACTIONS)} (got '{action}')")
+        on_timeout = str(p.get("on_timeout") or "deny").strip()
+        if on_timeout not in _VALID_ON_TIMEOUT:
+            errors.append(f"{label}: on_timeout must be one of "
+                          f"{', '.join(_VALID_ON_TIMEOUT)} "
+                          f"(got '{on_timeout}')")
+        if p.get("timeout") is not None:
+            try:
+                if int(p["timeout"]) <= 0:
+                    errors.append(f"{label}: timeout must be > 0 seconds")
+            except (TypeError, ValueError):
+                errors.append(f"{label}: timeout must be an integer "
+                              "(seconds)")
+        compiled = None
+        try:
+            compiled = ap._compile_policy(p)
+        except Exception as e:
+            errors.append(f"{label}: {e}")
+        if compiled is None:
+            errors.append(f"{label}: invalid policy (bad regex or shape)")
+        # Serialisability check (quotes/newlines) before we promise a write.
+        try:
+            _serialize_policies_yaml([p])
+        except ValueError as e:
+            errors.append(f"{label}: {e}")
+        normalised.append(p)
+    return normalised, errors
+
+
+@bp_policy.route("/api/approvals/policies", methods=["GET"])
+@gate("approval_queue")
+def api_approvals_policies_get():
+    """The local approval-policy list (``~/.clawmetry/policies.yml``) as the
+    Approvals tab consumes it: the raw rows plus a compiled summary (regex
+    patterns as strings, defaults resolved) so the UI can render toggles
+    without re-implementing the engine's parsing rules.
+
+    Returns ``{policies: [...], compiled: [...], path, exists}``. A missing
+    or unreadable file is an empty list, never a 500 — the daemon treats it
+    the same way."""
+    from clawmetry import approvals as ap
+    path = ap.POLICIES_PATH
+    raw_list: list[dict] = []
+    exists = False
+    try:
+        if path.exists():
+            exists = True
+            for p in ap._load_yaml(path.read_text(errors="replace")):
+                if isinstance(p, dict):
+                    raw_list.append(p)
+    except Exception:
+        raw_list = []
+    compiled = []
+    for p in raw_list:
+        c = ap._compile_policy(p)
+        if c:
+            compiled.append(_policy_summary(c))
+    return jsonify({"policies": raw_list, "compiled": compiled,
+                    "path": str(path), "exists": exists})
+
+
+@bp_policy.route("/api/approvals/policies", methods=["PUT"])
+@gate("approval_queue")
+def api_approvals_policies_put():
+    """Replace the local policy file with the submitted list, atomically,
+    after validating EVERY row (action/on_timeout/timeout/regexes and
+    YAML-subset serialisability). Any error → 400 with per-policy messages
+    and NO write, so a fat-fingered regex can't silently disable the file's
+    other rules.
+
+    Body: ``{"policies": [ {name, tool, pattern_type, pattern, action,
+    timeout, on_timeout, runtime?, preset_key?, match?{...}}, ... ]}``.
+    The daemon's watcher re-reads the file every iteration (~2 s), so a
+    successful PUT is live within seconds — including pre-tool gate
+    install/removal via ``approvals.sync_runtime_gates``.
+
+    Returns ``{ok, count, compiled}`` (the same compiled summary shape as
+    GET, post-write ground truth)."""
+    from clawmetry import approvals as ap
+    body = request.get_json(silent=True) or {}
+    if "policies" not in body:
+        return jsonify({"ok": False,
+                        "error": "body must include 'policies' (list)"}), 400
+    normalised, errors = _validate_policies(body.get("policies"))
+    if errors:
+        return jsonify({"ok": False, "error": "validation failed",
+                        "errors": errors}), 400
+
+    text = _serialize_policies_yaml(normalised) if normalised else (
+        "# ClawMetry approval policies — none configured.\n")
+    path = ap.POLICIES_PATH
+    try:
+        import os as _os
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text)
+        _os.replace(tmp, path)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"write failed: {e}"}), 500
+
+    # Post-write ground truth: parse + compile what actually landed.
+    compiled = []
+    try:
+        for p in ap._load_yaml(path.read_text(errors="replace")):
+            if isinstance(p, dict):
+                c = ap._compile_policy(p)
+                if c:
+                    compiled.append(_policy_summary(c))
+    except Exception:
+        pass
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event("approvals.policies_updated", actor="local",
+                           target=str(path), result="ok", source="dashboard",
+                           metadata={"count": len(normalised)})
+    except Exception:
+        pass
+    return jsonify({"ok": True, "count": len(normalised),
+                    "compiled": compiled, "path": str(path)})
+
+
 @bp_policy.route("/api/policy/replay", methods=["POST"])
 def api_policy_replay():
     """Replay a CANDIDATE approval policy over recent tool-call history.

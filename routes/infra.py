@@ -94,6 +94,16 @@ bp_config = Blueprint('config', __name__)
 
 @bp_logs.route("/api/logs")
 def api_logs():
+    # Runtime-aware dispatch: ?runtime=<rt> for any non-openclaw runtime is
+    # served via the adapter registry's log_sources() contract. Absent or
+    # 'openclaw' -> the legacy dated-file path below, byte-for-byte
+    # backward compatible.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and runtime != "openclaw":
+        from helpers.logs import read_runtime_logs
+        lines_count = int(request.args.get("lines", 100))
+        return jsonify(read_runtime_logs(runtime, lines_count))
+
     import dashboard as _d
     lines_count = int(request.args.get("lines", 100))
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -948,10 +958,180 @@ def _generate_openclaw_json_logs(started_at, sse_max_seconds, release_fn):
         release_fn()
 
 
+def _generate_runtime_log_stream(runtime, started_at, sse_max_seconds, release_fn):
+    """SSE generator for /api/logs-stream?runtime=<rt> (non-openclaw).
+
+    Source preference:
+      1. file source        -> initial tail (last 50) + pure-Python follow
+      2. follow_command     -> Popen + PipeLineReader (docker logs -f style)
+      3. command w/ path    -> poll-tail the file (same as 1)
+      4. nothing            -> ONE honest {"available": false, "reason"} event,
+                               then a clean ``done`` — never an HTTP error.
+    Event shapes:
+      event: log-meta  data: {"runtime", "available": true, "label", "source"}
+      data: {"line": "..."}                       (each log line)
+      data: {"available": false, "runtime", "reason"}   (no source case)
+      event: done      data: {"reason": "..."}
+    """
+    from helpers.logs import (
+        _read_source_tail,
+        _source_display,
+        resolve_runtime_log_sources,
+    )
+
+    try:
+        adapter, sources, reason = resolve_runtime_log_sources(runtime)
+        if not sources:
+            yield "data: " + json.dumps(
+                {"available": False, "runtime": runtime, "reason": reason}
+            ) + "\n\n"
+            yield 'event: done\ndata: {"reason":"no_log_source"}\n\n'
+            return
+
+        # Pick the followable source per the preference order above.
+        file_src = next(
+            (
+                s for s in sources
+                if s.kind == "file" and s.path and os.path.isfile(s.path)
+            ),
+            None,
+        )
+        cmd_src = next((s for s in sources if s.follow_command), None)
+        path_fallback = next(
+            (s for s in sources if s.path and os.path.isfile(s.path)), None
+        )
+
+        if file_src is not None or (cmd_src is None and path_fallback is not None):
+            src = file_src or path_fallback
+            yield "event: log-meta\ndata: " + json.dumps(
+                {
+                    "runtime": runtime,
+                    "available": True,
+                    "label": src.label,
+                    "source": src.path,
+                    "format": src.format,
+                }
+            ) + "\n\n"
+            initial = _read_source_tail(src, 50) or []
+            for line in initial:
+                yield f"data: {json.dumps({'line': line})}\n\n"
+            try:
+                fh = open(src.path, "r", encoding="utf-8", errors="replace")
+            except OSError:
+                yield 'event: done\ndata: {"reason":"log_file_unreadable"}\n\n'
+                return
+            fh.seek(0, 2)
+            try:
+                while True:
+                    if time.time() - started_at > sse_max_seconds:
+                        yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
+                        break
+                    line = fh.readline()
+                    if not line:
+                        time.sleep(1.0)
+                        continue
+                    yield f"data: {json.dumps({'line': line.rstrip()})}\n\n"
+            finally:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            return
+
+        if cmd_src is not None:
+            from clawmetry.process_control import PipeLineReader
+
+            yield "event: log-meta\ndata: " + json.dumps(
+                {
+                    "runtime": runtime,
+                    "available": True,
+                    "label": cmd_src.label,
+                    "source": _source_display(cmd_src),
+                    "format": cmd_src.format,
+                }
+            ) + "\n\n"
+            try:
+                proc = subprocess.Popen(
+                    list(cmd_src.follow_command),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # docker logs writes to stderr
+                    text=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                yield "data: " + json.dumps(
+                    {
+                        "available": False,
+                        "runtime": runtime,
+                        "reason": f"follow command failed to start: {exc}",
+                    }
+                ) + "\n\n"
+                yield 'event: done\ndata: {"reason":"follow_command_failed"}\n\n'
+                return
+            reader = PipeLineReader(proc.stdout)
+            try:
+                while True:
+                    if time.time() - started_at > sse_max_seconds:
+                        yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
+                        break
+                    raw_line = reader.readline(1.0)
+                    if raw_line is None:
+                        if reader.eof:
+                            yield 'event: done\ndata: {"reason":"stream_ended"}\n\n'
+                            break
+                        continue
+                    yield f"data: {json.dumps({'line': raw_line.rstrip()})}\n\n"
+            finally:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return
+
+        # Sources exist on paper but nothing is followable right now.
+        yield "data: " + json.dumps(
+            {
+                "available": False,
+                "runtime": runtime,
+                "reason": "log source(s) present but not followable "
+                          "(no readable file, no follow-style command)",
+            }
+        ) + "\n\n"
+        yield 'event: done\ndata: {"reason":"no_followable_source"}\n\n'
+    except GeneratorExit:
+        pass
+    finally:
+        release_fn()
+
+
 @bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""
     import shutil
+
+    # Runtime-aware dispatch: any non-openclaw runtime streams via its
+    # adapter's log_sources(). Kept ahead of the openclaw fast path so the
+    # legacy behaviour (absent / 'openclaw') is untouched.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and runtime != "openclaw":
+        try:
+            import dashboard as _d
+            if not _d._acquire_stream_slot("log"):
+                return jsonify({"error": "Too many active log streams"}), 429
+            _release = lambda: _d._release_stream_slot("log")  # noqa: E731
+            _max_secs = _d.SSE_MAX_SECONDS
+        except Exception:
+            # Hermetic contexts (blueprint mounted without dashboard):
+            # degrade to no slot accounting rather than 500.
+            _release = lambda: None  # noqa: E731
+            _max_secs = 3600
+        return Response(
+            _generate_runtime_log_stream(
+                runtime, time.time(), _max_secs, _release
+            ),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     import dashboard as _d
     if not _d._acquire_stream_slot("log"):
         return jsonify({"error": "Too many active log streams"}), 429
@@ -1754,11 +1934,17 @@ def api_security_signatures():
 
 @bp_security.route("/api/security/posture")
 def api_security_posture():
-    """Scan OpenClaw configuration for security misconfigurations and return a posture score."""
-    import dashboard as _d
+    """Runtime-aware security posture scan.
+
+    ``?runtime=<rt>`` selects the provider (clawmetry.security_posture
+    registry); absent -> 'openclaw' for backward compatibility. Runtimes
+    without a provider return an honest ``status: not_available`` envelope
+    with HTTP 200 — "no checks yet" is a state, not an error.
+    """
+    runtime = (request.args.get("runtime") or "openclaw").strip().lower()
     try:
-        result = _d._scan_security_posture()
-        return jsonify(result)
+        from clawmetry.security_posture import get_posture
+        return jsonify(get_posture(runtime))
     except Exception as e:
         return jsonify({"error": str(e), "score": "U", "checks": []}), 500
 

@@ -2909,7 +2909,9 @@ class OpenClawAdapter(AgentAdapter):
         return hashlib.sha256(session_id.encode()).hexdigest()[:32]
 
     @staticmethod
-    def _build_spans_from_events(events: list, session_id: str) -> list:
+    def _build_spans_from_events(
+        events: list, session_id: str, agent_type: str = "openclaw"
+    ) -> list:
         """Map raw JSONL objects to OTel-shaped span dicts.
 
         Mapping per issue #1010:
@@ -2922,6 +2924,15 @@ class OpenClawAdapter(AgentAdapter):
         - ``subagent_spawn``           → agent.spawn span (INTERNAL, link to child trace)
         - ``commentary`` / ``progress`` → commentary/progress span (INTERNAL,
           child of root) preserving the narration text + subtype (#3015).
+
+        ``agent_type`` stamps every span's runtime identity (Agent Graph
+        WS-A). It defaults to ``'openclaw'`` but callers ingesting the same
+        transcript shape for another runtime (NemoClaw sandbox batches via
+        ``sync._flush_session_batch(..., agent_type='nemoclaw')``) pass their
+        own id so the Agent Graph doesn't mislabel their nodes. Spawn spans
+        additionally carry ``agent_id=<child label>`` (subagent/agent label
+        off the spawn event, fallback ``'subagent'``) so the graph's
+        ``main → child`` edge survives the ``src == dst`` self-edge filter.
 
         Span IDs are deterministic SHA-256 prefixes so re-ingesting is idempotent.
         """
@@ -2958,7 +2969,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "attributes": {"session.version": obj.get("version"), "session.id": session_id},
                 })
 
@@ -3092,7 +3103,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "CLIENT",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "model": model or None,
                     "tokens_input": tok_in or None,
                     "tokens_output": tok_out or None,
@@ -3144,7 +3155,7 @@ class OpenClawAdapter(AgentAdapter):
                             "kind": "CLIENT",
                             "start_ts": ts,
                             "session_id": session_id,
-                            "agent_type": "openclaw",
+                            "agent_type": agent_type,
                             "tool_name": tool_name,
                             "input": blk_input,
                             "attributes": attrs or None,
@@ -3159,6 +3170,26 @@ class OpenClawAdapter(AgentAdapter):
                     obj.get("subagent_id") or obj.get("agentId") or obj.get("agent_id") or ""
                 )
                 child_trace = hashlib.sha256(sub_id.encode()).hexdigest()[:32] if sub_id else ""
+                # Child agent label (Agent Graph WS-A): the spawn span must
+                # carry a DIFFERENT agent_id than the parent's 'main' or the
+                # graph's src==dst filter drops the edge and the runtime
+                # renders as one self-node. Prefer an explicit subagent/agent
+                # type label off the event; fall back to the literal
+                # 'subagent' — never the raw sub_id UUID (one node per spawn
+                # would explode the graph).
+                _child_label = (
+                    obj.get("subagent_type") or obj.get("subagentType")
+                    or obj.get("agentType") or obj.get("agent")
+                    or obj.get("label") or ""
+                )
+                _child_label = (
+                    str(_child_label).strip()
+                    if isinstance(_child_label, str) and _child_label.strip()
+                    else "subagent"
+                )
+                _spawn_attrs: dict = {"subagent.label": _child_label}
+                if sub_id:
+                    _spawn_attrs["subagent_id"] = sub_id
                 spans.append({
                     "span_id": _sid("spawn", session_id, str(raw_ts), sub_id),
                     "trace_id": trace_id,
@@ -3167,9 +3198,10 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
+                    "agent_id": _child_label,
                     "links": [{"trace_id": child_trace, "span_id": "0" * 16}] if child_trace else None,
-                    "attributes": {"subagent_id": sub_id} if sub_id else None,
+                    "attributes": _spawn_attrs,
                 })
 
             elif t in ("commentary", "progress"):
@@ -3207,7 +3239,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "attributes": comment_attrs,
                 })
 
@@ -3239,7 +3271,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "attributes": fa_attrs or None,
                 })
 
@@ -3278,7 +3310,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "attributes": comp_attrs,
                 })
 
@@ -3313,7 +3345,7 @@ class OpenClawAdapter(AgentAdapter):
                     "kind": "INTERNAL",
                     "start_ts": ts,
                     "session_id": session_id,
-                    "agent_type": "openclaw",
+                    "agent_type": agent_type,
                     "attributes": retry_attrs,
                 })
 

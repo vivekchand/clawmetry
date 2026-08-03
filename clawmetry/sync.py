@@ -3543,10 +3543,15 @@ def _local_ingest_session_batch(
     if rows:
         store.ingest_many(rows)
     # Reconstruct OTel-compatible spans from this batch (issue #1010 / Trace 4).
+    # ``agent_type`` rides through so a non-OpenClaw batch on this transcript
+    # shape (NemoClaw sandbox sessions, agent_type='nemoclaw') stamps its REAL
+    # runtime on the spans instead of mislabeling the Agent Graph 'openclaw'.
     # Non-fatal: span failures never block event ingest.
     try:
         from clawmetry.adapters.openclaw import OpenClawAdapter
-        for sp in OpenClawAdapter._build_spans_from_events(batch, session_id):
+        for sp in OpenClawAdapter._build_spans_from_events(
+            batch, session_id, agent_type=agent_type
+        ):
             store.ingest_span(sp)
     except Exception as _e:
         log.debug("span reconstruction skipped (non-fatal): %s", _e)
@@ -12375,6 +12380,30 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         # child is permanently skipped and its lane never appears
                         # in the Command River even after the store recovers.
                         log.debug("family subagent ingest failed (%s): %s", ns_id, _sae)
+                    # Agent Graph spans (WS-A): stamp the child node + the
+                    # main→child spawn edge into the spans table. The spawn
+                    # span parents onto the PARENT session's deterministic
+                    # root-span id (emitted when the parent session syncs)
+                    # and is keyed on extra.toolUseId when the adapter
+                    # carried it, so it upserts into the same row a parent-
+                    # side Task tool_call would produce. Best-effort: never
+                    # blocks the subagent row / watermark logic.
+                    try:
+                        from clawmetry import span_reconstruct as _sr
+                        for _sp in _sr.build_family_spans(
+                            runtime, s, [], node_id=node_id
+                        ):
+                            store.ingest_span(_sp)
+                        _spawn = _sr.build_subagent_spawn_span(
+                            runtime, s, node_id=node_id
+                        )
+                        if _spawn:
+                            store.ingest_span(_spawn)
+                    except Exception as _spe:
+                        log.debug(
+                            "family spawn-span ingest failed (%s): %s",
+                            ns_id, _spe,
+                        )
                 # Sub-agent children stop here: they ride the snapshot
                 # ``subagents[]`` slice (river lanes), not the top-level
                 # Sessions list (local: excluded in ``query_sessions_table``;
@@ -12490,6 +12519,25 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     # No event rows (e.g. an empty/metadata-only session): still
                     # mark it seen so we don't re-scan it every cycle forever.
                     _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                # Agent Graph spans (WS-A): reconstruct runtime-stamped spans
+                # from the SAME normalized events already in hand so the
+                # Agent Graph shows real runtimes + main→child edges instead
+                # of one 'openclaw:main' blob. Deterministic span ids make
+                # the re-ingest of an advanced session an upsert no-op for
+                # unchanged spans; the session-level high-water skip above
+                # keeps this path entirely off idle sessions. Best-effort:
+                # span failures never block event ingest or the watermark.
+                try:
+                    from clawmetry import span_reconstruct as _sr
+                    for _sp in _sr.build_family_spans(
+                        runtime, s, _events, node_id=node_id
+                    ):
+                        store.ingest_span(_sp)
+                except Exception as _spe:
+                    log.debug(
+                        "family span reconstruction failed (%s): %s",
+                        ns_id, _spe,
+                    )
         except Exception as exc:
             log.warning(
                 "family runtime ingest failed for %s: %s",

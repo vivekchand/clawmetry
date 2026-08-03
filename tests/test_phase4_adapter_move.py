@@ -27,7 +27,7 @@ def test_oss_only_keeps_base_registry_openclaw_nemo():
     for name in (
         "claude_code", "codex", "cursor", "aider", "goose",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
-        "pi", "deepagents",
+        "pi", "deepagents", "n8n", "antigravity",
     ):
         try:
             importlib.import_module(f"clawmetry.adapters.{name}")
@@ -61,7 +61,7 @@ def test_family_adapter_classes_empty_when_pro_absent(monkeypatch):
     for name in (
         "claude_code", "codex", "cursor", "aider", "goose",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
-        "pi", "deepagents",
+        "pi", "deepagents", "n8n", "antigravity",
     ):
         monkeypatch.setitem(sys.modules, f"clawmetry_pro.adapters.{name}", None)
 

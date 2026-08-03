@@ -8444,7 +8444,16 @@ async function loadSecurityPosture() {
     return;
   }
   try {
-    var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
+    // Posture is per-runtime: scan the SELECTED runtime's config, not
+    // OpenClaw's regardless of selection ("No openclaw.json found" while
+    // Claude Code was selected — the founder screenshot, 2026-08-02).
+    // 'all' keeps the node default (openclaw) for backward compatibility.
+    var prt = 'openclaw';
+    try {
+      var pf = _cmClientFilterRt(_cmRuntimeFilter());
+      if (pf && pf !== 'all') prt = pf;
+    } catch (e) {}
+    var data = await fetchJsonWithTimeout('/api/security/posture?runtime=' + encodeURIComponent(prt), 25000);
     var badge = document.getElementById('posture-score-badge');
     if (!badge) return;
     var label = document.getElementById('posture-score-label');
@@ -8453,9 +8462,24 @@ async function loadSecurityPosture() {
     var warnEl = document.getElementById('posture-warnings');
     var failedEl = document.getElementById('posture-failed');
     var listEl = document.getElementById('posture-checks-list');
+    if (data && data.status === 'not_available') {
+      // Honest neutral state: no posture checks exist for this runtime yet.
+      // Neither a red failure nor a fake score.
+      badge.textContent = '—';
+      badge.style.background = '#64748b';
+      if (label) label.textContent = _cmRuntimeLabel(prt) + ' · ' +
+        (data.detail || 'No security posture checks for this runtime yet');
+      if (bar) { bar.style.width = '0%'; }
+      if (passedEl) passedEl.textContent = '0';
+      if (warnEl) warnEl.textContent = '0';
+      if (failedEl) failedEl.textContent = '0';
+      if (listEl) listEl.innerHTML = '<div style="padding:12px 14px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;">' +
+        escHtml(data.detail || ('Posture checks for ' + _cmRuntimeLabel(prt) + ' are not implemented yet.')) + '</div>';
+      return;
+    }
     badge.textContent = data.score || '?';
     badge.style.background = data.score_color || '#64748b';
-    var labelTxt = (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
+    var labelTxt = _cmRuntimeLabel(data.runtime || prt) + ' · ' + (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
     label.innerHTML = escHtml(labelTxt) + (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
     bar.style.width = (data.score_pct || 0) + '%';
     bar.style.background = data.score_color || '#64748b';
@@ -9025,7 +9049,10 @@ var _CM_RT_AGGREGATE = {};
 var _CM_RT_NODEWIDE = {
   crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
   alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
-  'version-impact': 1, clusters: 1, logs: 1, actions: 1,
+  clusters: 1, actions: 1,
+  // logs + version-impact are NOT node-wide: logs stream a specific runtime's
+  // log source (LOGS capability), version-impact correlates OpenClaw releases.
+  // Both are capability-gated below instead of carrying a false scope note.
   // Inventory is a ROSTER (node/all-agents view): it never hides rows when a
   // runtime is selected. Instead it highlights the selected runtime's row and
   // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
@@ -9046,7 +9073,7 @@ var _CM_RT_NODEWIDE = {
 var _CM_RT_CAPS = {
   openclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'],
   nemoclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'], // sandboxed OpenClaw
-  claude_code: ['SESSIONS','EVENTS','COST'],
+  claude_code: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   codex:       ['SESSIONS','EVENTS','COST'],
   aider:       ['SESSIONS','EVENTS','COST'],
   goose:       ['SESSIONS','EVENTS','COST'],
@@ -9069,22 +9096,33 @@ var _CM_CAP_TABS = {
   // context-economics moved COST → EVENTS with the LLM Context merge: the
   // utilization gauge reads per-turn usage tokens (an EVENTS concern), so
   // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
-  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics'],
-  COST:        ['cost'],
+  // 'agents' (Agent Graph) is EVENTS-derived: spans are reconstructed from
+  // every runtime's normalized events at family-ingest time.
+  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics','agents'],
+  // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
+  // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
+  COST:        ['usage'],
   SUBAGENTS:   ['subagents'],
   CRONS:       ['crons'],
   SKILLS:      ['skills'],
   MEMORY:      ['memory'],
-  GATEWAY_RPC: ['approvals','policy','selfevolve'],
+  LOGS:        ['logs'],
+  // approvals moved out of GATEWAY_RPC: the queue is local + runtime-agnostic
+  // (event watcher covers every adapter; pre-tool gates are per-runtime
+  // handlers), so it is a node tab now. policy/selfevolve/version-impact stay
+  // OpenClaw gateway/admin concepts.
+  GATEWAY_RPC: ['policy','selfevolve','version-impact'],
   CHANNELS:    ['flow']
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
-var _CM_NODE_TABS = ['alerts','notifications','security'];
+// approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','alerts','cost','dives','crons','memory',
-  'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
+  'context-economics','approvals','alerts','usage','dives','crons','memory',
+  'notifications','security','policy','skills','selfevolve','subagents',
+  'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
 // EVENTS + COST tabs (Brain/Tracing/Models/Context/Turn-anatomy/Cost), plus the
 // roster; OpenClaw-only concepts (Crons/Memory/Skills/Channels/Subagents) do not
@@ -9281,6 +9319,37 @@ async function _cmLoadDetectedRuntimes() {
     });
     _cmRunningRuntimes = run;
   } catch (e) { /* non-fatal — switcher just omits the "detected here" hint */ }
+}
+
+// Server-authoritative capability override. _CM_RT_CAPS above is a
+// hand-mirrored FALLBACK that drifts from the adapters (aider/nanoclaw
+// compute COST dynamically; new runtimes ship in pro before this map learns
+// them). /api/agents serves each loaded adapter's DECLARED capabilities()
+// straight from the Python contract — override the static entries with it so
+// tab visibility can never lie about what an adapter actually supports. The
+// static map still covers cloud mode (no local registry) and locked/absent
+// runtimes.
+async function _cmLoadDeclaredCaps() {
+  if (window.CLOUD_MODE) return;
+  try {
+    var resp = await fetch('/api/agents', { credentials: 'same-origin' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; });
+    var list = resp && resp.agents;
+    if (!Array.isArray(list)) return;
+    var changed = false;
+    list.forEach(function(a) {
+      if (!a || !a.name) return;
+      if (!Array.isArray(a.capabilities) || !a.capabilities.length) return;
+      _CM_RT_CAPS[a.name] = a.capabilities.map(function(c) {
+        return String(c).toUpperCase();
+      });
+      changed = true;
+    });
+    if (changed) {
+      try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+    }
+  } catch (e) { /* non-fatal: the static fallback map applies */ }
 }
 
 function _cmPopulateGlobalRuntime(counts) {
@@ -10038,6 +10107,9 @@ async function _cmInitGlobalRuntimeSwitcher() {
   try {
     await _cmLoadRuntimeCatalog();
   } catch (e) { /* non-fatal */ }
+  // Fire-and-forget: declared-capability override re-applies tab visibility
+  // itself when it lands; the switcher must not block on it.
+  try { _cmLoadDeclaredCaps(); } catch (e) { /* non-fatal */ }
   try {
     await _cmLoadDetectedRuntimes();
   } catch (e) { /* non-fatal */ }
@@ -11746,6 +11818,16 @@ function cronToHuman(expr) {
   return '';
 }
 
+// Runtime whose logs we're viewing: the selected runtime, falling back to
+// openclaw for 'all' (the node's own gateway logs — the pre-runtime-aware
+// behavior). OTLP selections collapse to 'all' via _cmClientFilterRt.
+function _cmLogsRuntime() {
+  try {
+    var f = _cmClientFilterRt(_cmRuntimeFilter());
+    if (f && f !== 'all') return f;
+  } catch (e) {}
+  return 'openclaw';
+}
 async function loadLogs() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('logs-full');
@@ -11753,8 +11835,27 @@ async function loadLogs() {
     return;
   }
   var lines = document.getElementById('log-lines').value;
-  var data = await fetch('/api/logs?lines=' + lines).then(r => r.json());
-  renderLogs('logs-full', data.lines);
+  var rt = _cmLogsRuntime();
+  var titleEl = document.getElementById('log-stream-title');
+  if (titleEl) titleEl.textContent = 'Live ' + _cmRuntimeLabel(rt) + ' log stream';
+  var data = await fetch('/api/logs?lines=' + lines + '&runtime=' + encodeURIComponent(rt))
+    .then(r => r.json()).catch(function() { return null; });
+  var srcEl = document.getElementById('log-source-path');
+  if (data && data.available === false) {
+    // Honest gating: this runtime has no log source — say so instead of
+    // silently streaming another runtime's logs underneath its name.
+    var el2 = document.getElementById('logs-full');
+    if (el2) el2.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">' +
+      escapeHtml(data.reason || (_cmRuntimeLabel(rt) + ' does not expose a log stream.')) + '</div>';
+    if (srcEl) srcEl.textContent = '';
+  } else if (data) {
+    if (srcEl && data.source) srcEl.textContent = data.source;
+    renderLogs('logs-full', data.lines);
+  }
+  // Follow the selected runtime with the live stream too.
+  if (typeof _logStreamRt !== 'undefined' && _logStreamRt !== rt) {
+    try { startLogStream(); } catch (e) {}
+  }
 }
 
 async function loadMemoryAnalytics() {
@@ -17393,13 +17494,24 @@ function _stopLogStream() {
   _hideLogConnectionLostBanner();
 }
 
+var _logStreamRt = null;          // runtime the current EventSource follows
+var _logStreamUnavailable = false; // server said "no source" \u2014 don't reconnect-loop
 function startLogStream() {
   if (window.CLOUD_MODE) return;
   if (logStream) logStream.close();
   streamBuffer = [];
+  _logStreamUnavailable = false;
   var statusEl = document.getElementById('log-stream-status');
   if (statusEl) statusEl.textContent = t("app.dot_connecting", null, "\u25cf Connecting\u2026");
-  logStream = new EventSource('/api/logs-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
+  var rt = (typeof _cmLogsRuntime === 'function') ? _cmLogsRuntime() : 'openclaw';
+  _logStreamRt = rt;
+  var qs = [];
+  try {
+    var tok = localStorage.getItem('clawmetry-token');
+    if (tok) qs.push('token=' + encodeURIComponent(tok));
+  } catch (e) {}
+  if (rt && rt !== 'openclaw') qs.push('runtime=' + encodeURIComponent(rt));
+  logStream = new EventSource('/api/logs-stream' + (qs.length ? '?' + qs.join('&') : ''));
   logStream.onopen = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = t("app.dot_live", null, "\u25cf Live"); s.style.color = '#22c55e'; }
@@ -17408,6 +17520,15 @@ function startLogStream() {
   };
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
+    if (data && data.available === false) {
+      // Honest terminal state: this runtime has no live log source. Stop the
+      // reconnect chain instead of hammering an endpoint that said no.
+      _logStreamUnavailable = true;
+      var su = document.getElementById('log-stream-status');
+      if (su) { su.textContent = '● No live stream'; su.style.color = 'var(--text-muted)'; }
+      try { logStream.close(); } catch (ex) {}
+      return;
+    }
     streamBuffer.push(data.line);
     if (streamBuffer.length > MAX_STREAM_LINES) streamBuffer.shift();
     appendLogLine('ov-logs', data.line);
@@ -17439,6 +17560,7 @@ function startLogStream() {
     } catch(ex) {}
   });
   logStream.onerror = function() {
+    if (_logStreamUnavailable) { try { logStream.close(); } catch (ex) {} return; }
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = t("app.dot_reconnecting", null, "\u25cf Reconnecting\u2026"); s.style.color = '#f59e0b'; }
     // Sibling of #1610 - replace one-shot reconnect with exponential
@@ -23548,7 +23670,16 @@ function loadAgentGraph() {
   var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
   var now   = Math.floor(Date.now() / 1000);
   var since = now - win;
-  fetch('/api/local/agent-graph?since=' + since + '&until=' + now)
+  // Scope to the selected runtime: spans are stamped with their real
+  // agent_type at family-ingest time, so the graph genuinely filters
+  // (OTLP selections collapse to 'all' — foreign spans carry their own
+  // agent_type, not a native runtime id).
+  var rtq = '';
+  try {
+    var grt = _cmClientFilterRt(_cmRuntimeFilter());
+    if (grt && grt !== 'all') rtq = '&runtime=' + encodeURIComponent(grt);
+  } catch (e) {}
+  fetch('/api/local/agent-graph?since=' + since + '&until=' + now + rtq)
     .then(function(r) {
       // The cloud disables /api/local/* (no local DuckDB) with HTTP 410.
       // Say so honestly instead of pretending there is no data.
