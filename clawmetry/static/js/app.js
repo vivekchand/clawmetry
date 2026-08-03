@@ -3837,6 +3837,34 @@ async function loadEvalsTabSummary() {
   }
 }
 
+// One small chip per structural-check verdict (#2862): green pass, red fail.
+// Free tier: these render even with no judge key, so the Evals tab shows the
+// zero-cost checks working out of the box instead of an empty table.
+// Fail-state labels: a red "✗ no tool errors" is a double negative a
+// first-timer misreads; say what actually happened instead.
+var _EVAL_CHIP_FAIL_LABELS = {
+  'no-tool-errors': 'tool errors',
+  'json-parseable': 'not valid JSON',
+  'required-tool-args': 'missing tool args',
+  'output-length-bounds': 'length out of bounds',
+};
+
+function _evalMetricChips(list) {
+  if (!list || !list.length) return '';
+  var out = '';
+  list.slice(0, 4).forEach(function(m) {
+    var slug = String(m.metric_slug || '');
+    var ok = (m.passed === true);
+    var bad = (m.passed === false);
+    var name = (bad && _EVAL_CHIP_FAIL_LABELS[slug]) || slug.replace(/-/g, ' ');
+    var color = ok ? '#22c55e' : (bad ? '#ef4444' : 'var(--text-muted)');
+    var bg = ok ? 'rgba(34,197,94,0.10)' : (bad ? 'rgba(239,68,68,0.10)' : 'var(--bg-primary)');
+    var mark = ok ? '✓' : (bad ? '✗' : '·');
+    out += '<span title="' + escHtml(m.reason || '') + '" style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;white-space:nowrap;color:' + color + ';background:' + bg + ';border:1px solid ' + color + '33;">' + mark + ' ' + escHtml(name) + '</span>';
+  });
+  return out;
+}
+
 async function loadEvalsRecent() {
   var el = document.getElementById('evals-recent-body');
   if (!el) return;
@@ -3844,6 +3872,34 @@ async function loadEvalsRecent() {
   if (r && r.status === 402) { el.innerHTML = _evalsLockedHtml(); return; }
   var data = r ? await r.json().catch(function(){return null;}) : null;
   var rows = (data && data.evals) || [];
+  // Per-metric verdicts (deterministic checks + optional DeepEval engine).
+  // Node-local data only: on the hosted dashboard the container has no
+  // metrics table, so skip the fetch and keep the existing honest states.
+  var chipsBySid = {};
+  if (!window.CLOUD_MODE) {
+    var mr = await fetch('/api/evals/metrics?limit=300').catch(function(){return null;});
+    var mdata = mr && mr.ok ? await mr.json().catch(function(){return null;}) : null;
+    ((mdata && mdata.metrics) || []).forEach(function(m) {
+      var k = String(m.session_id || '');
+      if (!k) return;
+      (chipsBySid[k] = chipsBySid[k] || []).push(m);
+    });
+  }
+  // No judge scores yet, but the free checks have verdicts: list those
+  // sessions anyway (score stays "--") so the table is never blank while
+  // real scoring is happening.
+  if (!rows.length) {
+    var seen = {};
+    Object.keys(chipsBySid).forEach(function(sid) {
+      if (rows.length >= 20 || seen[sid]) return;
+      seen[sid] = true;
+      var latest = 0;
+      chipsBySid[sid].forEach(function(m) { if (m.scored_at > latest) latest = m.scored_at; });
+      rows.push({ session_id: sid, eval_score: null, eval_reason: '',
+                  eval_scored_at: latest, agent_type: sid.indexOf(':') > 0 ? sid.split(':')[0] : '' });
+    });
+    rows.sort(function(a, b) { return (b.eval_scored_at || 0) - (a.eval_scored_at || 0); });
+  }
   if (!rows.length) {
     el.innerHTML = '<div style="color:var(--text-muted);">' +
       t("evals.recent_empty", null, "No scored sessions yet. Once the judge has a key, finished sessions show up here with their score and the judge's one-line reason.") + '</div>';
@@ -3853,6 +3909,7 @@ async function loadEvalsRecent() {
   html += '<tr style="text-align:left;color:var(--text-muted);">' +
     '<th style="padding:6px 8px;">' + t("evals.col_session", null, "Session") + '</th>' +
     '<th style="padding:6px 8px;">' + t("evals.col_score", null, "Score") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_checks", null, "Checks") + '</th>' +
     '<th style="padding:6px 8px;">' + t("evals.col_reason", null, "Judge's reason") + '</th>' +
     '<th style="padding:6px 8px;">' + t("evals.col_when", null, "When") + '</th>' +
     '<th style="padding:6px 8px;"></th></tr>';
@@ -3866,6 +3923,7 @@ async function loadEvalsRecent() {
     html += '<td style="padding:6px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(sid) + '">' +
       (row.agent_type ? '<span style="color:var(--text-muted);">' + escHtml(row.agent_type) + '</span> ' : '') + escHtml(label) + '</td>';
     html += '<td style="padding:6px 8px;font-weight:700;color:' + sc + ';">' + score + '</td>';
+    html += '<td style="padding:6px 8px;max-width:240px;">' + _evalMetricChips(chipsBySid[sid]) + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(row.eval_reason || '') + '">' + escHtml(row.eval_reason || '') + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">' + (row.eval_scored_at ? timeAgo(row.eval_scored_at) : '') + '</td>';
     html += '<td style="padding:6px 8px;"><button onclick="evalsRescore(\'' + escHtml(sid).replace(/'/g, "\\'") + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
