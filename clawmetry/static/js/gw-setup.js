@@ -548,7 +548,11 @@ function _cmProfileFetchState() {
       who: lic.sub || '',
       tier: (lic.tier || '').toLowerCase(),
       daysLeft: (typeof lic.days_left === 'number') ? lic.days_left : null,
-      licenseValid: !!lic.valid
+      licenseValid: !!lic.valid,
+      // Cloud links (billing/settings on app.clawmetry.com) only make sense
+      // when this node is actually linked to a cloud account — a license-only
+      // self-hosted install has no account there to manage.
+      accountLinked: !!cta.account_linked
     };
     return _cmProfile.state;
   });
@@ -593,11 +597,20 @@ function _cmProfileRender(st) {
   }
   h += '</div>';
   if (st.signedIn) {
-    h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/settings?utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
-      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>'
-      + t('profile.billing', null, 'Billing & plan') + '</button>';
+    // "Billing & plan" lives on app.clawmetry.com, so it is only offered when
+    // a cloud account is actually linked; a license-only self-hosted node has
+    // nothing to manage there (founder report 2026-08-04).
+    if (st.accountLinked) {
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/settings?utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>'
+        + t('profile.billing', null, 'Billing & plan') + '</button>';
+    }
     if (st.tier === 'trial') {
-      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/upgrade?source=profile-menu\',\'_blank\')">'
+      // Self-hosted upgrades are sold on clawmetry.com/pricing (?deploy=self
+      // preselects the self-hosted buy modal). The /upgrade route on the
+      // cloud app is the CLOUD-account funnel — for a self-hosted trial it
+      // either bounces through a login wall or silently starts a cloud trial.
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://clawmetry.com/pricing?deploy=self&utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
         + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>'
         + t('profile.upgrade', null, 'Upgrade plan') + '</button>';
     }
@@ -606,9 +619,10 @@ function _cmProfileRender(st) {
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
       + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
   }
-  h += '<button class="cm-profile-item" onclick="cmProfileClose();var o=document.getElementById(\'gw-setup-overlay\');if(o){o.dataset.mandatory=\'false\';var c=document.getElementById(\'gw-setup-close\');if(c)c.style.display=\'\';o.style.display=\'flex\'}">'
-    + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
-    + t('profile.gateway_settings', null, 'Gateway settings') + '</button>';
+  // No "Gateway settings" item: the gw-setup overlay is a first-run wizard
+  // for the OpenClaw gateway token, not an ongoing settings surface — it
+  // auto-opens whenever the gateway is unconfigured, which is the only time
+  // it has anything to offer (founder call 2026-08-04, removed everywhere).
   // Sign out clears this browser's dashboard session (the gateway token in
   // localStorage) — mirror the #logout-btn visibility contract set by
   // auth-bootstrap.js: only shown when token auth is actually active.
