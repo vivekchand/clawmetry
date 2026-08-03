@@ -141,6 +141,36 @@ def test_bridge_never_raises_on_garbage():
     assert inp.tool_calls == []
 
 
+def test_turns_from_stored_rows_roles_and_order():
+    from clawmetry.deterministic_evaluators import turns_from_stored_rows
+    rows = [
+        _real_message_row("the answer", ts="2026-08-03T12:00:05+00:00"),
+        _real_tool_call_row(ts="2026-08-03T12:00:03+00:00"),   # no content -> dropped
+        {"event_type": "message", "ts": "2026-08-03T12:00:01+00:00",
+         "data": {"_runtime": "claude_code", "content": "the question",
+                  "role": "user"}},
+    ]
+    turns = turns_from_stored_rows(rows)
+    assert turns == [
+        {"role": "user", "content": "the question"},
+        {"role": "assistant", "content": "the answer"},
+    ]
+
+
+def test_turns_role_inferred_from_event_type_when_absent():
+    from clawmetry.deterministic_evaluators import turns_from_stored_rows
+    rows = [
+        {"event_type": "prompt.submitted", "ts": "1",
+         "data": {"content": "do the thing"}},
+        {"event_type": "model.completed", "ts": "2",
+         "data": {"content": "did the thing"}},
+        {"event_type": "gateway.metric", "ts": "3",
+         "data": {"content": "not a turn"}},
+    ]
+    turns = turns_from_stored_rows(rows)
+    assert [t["role"] for t in turns] == ["user", "assistant"]
+
+
 def test_adapter_event_shape_unchanged():
     """The original adapter-Event path (dicts with top-level type/content/
     tool_calls) still extracts — the bridge is additive."""

@@ -3561,6 +3561,8 @@ async function loadEvaluators() {
       statusLabel = t("evaluators.status_partial", null, "Early"); statusColor = '#f59e0b';
     } else if (e.status === 'needs_key') {
       statusLabel = t("evaluators.status_needs_key", null, "Needs key"); statusColor = '#f59e0b';
+    } else if (e.status === 'needs_extra') {
+      statusLabel = t("evaluators.status_needs_extra", null, "Needs install"); statusColor = '#f59e0b';
     } else {
       statusLabel = t("evaluators.status_soon", null, "With Pro"); statusColor = 'var(--text-muted)';
     }
@@ -3585,6 +3587,10 @@ async function loadEvaluators() {
     if (e.status === 'needs_key') {
       html += '<div style="margin-top:8px;font-size:11px;"><a href="#" onclick="openEvalRubricModal();return false;" style="color:#f59e0b;font-weight:600;text-decoration:none;">' +
         t("evaluators.set_key", null, "Add a judge API key to turn this on") + ' &rarr;</a></div>';
+    }
+    if (e.status === 'needs_extra') {
+      html += '<div style="margin-top:8px;font-size:11px;color:#f59e0b;font-weight:600;">' +
+        t("evaluators.needs_extra_hint", null, "Turn on with: pip install clawmetry[deepeval]") + '</div>';
     }
     html += '</div>';
   });
