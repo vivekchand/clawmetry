@@ -78,6 +78,27 @@ def test_gw_setup_module_wiring():
         assert needle in js, f"gw-setup.js missing: {needle}"
 
 
+def test_sign_out_sticks_and_offers_local_signin():
+    """Explicit sign-out must survive the zero-click loopback auto-login
+    (otherwise Sign out is a no-op on localhost), and the wall must offer
+    the one-click local re-login instead."""
+    js = (STATIC / "js" / "auth-bootstrap.js").read_text()
+    for needle in (
+        "cm-signed-out",
+        "function clawmetryLocalSignin",
+        "function offerLocalSignin",
+        "login-local-btn",
+    ):
+        assert needle in js, f"auth-bootstrap.js missing: {needle}"
+    overlay = (
+        ROOT / "clawmetry" / "templates" / "partials" / "overlays.html"
+    ).read_text()
+    assert 'id="login-local-btn"' in overlay
+    assert "clawmetryLocalSignin()" in overlay
+    catalog = json.loads((STATIC / "locales" / "en.json").read_text())
+    assert "login.local_signin" in catalog
+
+
 def test_en_catalog_has_every_profile_key_the_module_uses():
     js = (STATIC / "js" / "gw-setup.js").read_text()
     used = set(re.findall(r"[t(\"']+(profile\.[a-z_]+)", js))

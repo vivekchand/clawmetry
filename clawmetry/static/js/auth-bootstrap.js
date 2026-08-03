@@ -1,6 +1,18 @@
 (function(){
   var stored = localStorage.getItem('clawmetry-token');
   var triedZeroClick = false;
+  // Explicit sign-out (profile menu → Sign out) must stick: without this
+  // marker the zero-click loopback login below signs the user straight back
+  // in on reload, making Sign out a no-op on the very machine it runs on.
+  // The marker only bites while there is NO stored token — any token stored
+  // after sign-out (manual login, the one-click /auth?token= URL) is an
+  // intentional sign-in, so it self-clears.
+  var signedOut = false;
+  try { signedOut = localStorage.getItem('cm-signed-out') === '1'; } catch(e) {}
+  if(signedOut && stored){
+    try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
+    signedOut = false;
+  }
 
   // Zero-click localhost auto-login: ask the server for the on-disk token
   // (only returned on loopback), persist it, and continue inline by
@@ -31,7 +43,27 @@
       .catch(function(){ done(null); });
   }
 
-  if(!stored){
+  // After an explicit sign-out the wall still offers a one-click way back
+  // on the machine itself: probe the loopback-only detected-token endpoint
+  // and, if it answers, reveal the "Sign back in (this machine)" button.
+  // The probe never stores the token — signing back in stays a user action
+  // (clawmetryLocalSignin below).
+  function offerLocalSignin(){
+    var btn = document.getElementById('login-local-btn');
+    if(!btn) return;
+    fetch('/api/auth/detected-token')
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if(d && d.token){ btn.style.display=''; } })
+      .catch(function(){});
+  }
+
+  if(signedOut){
+    // Suppress BOTH zero-click paths (fresh and stale-token retry); route
+    // through checkAuth(null) so needsSetup / authRequired:false still
+    // resolve to their own overlays instead of the login wall.
+    triedZeroClick = true;
+    checkAuth(null);
+  } else if(!stored){
     tryZeroClick(checkAuth);
   } else {
     checkAuth(stored);
@@ -58,6 +90,7 @@
         }
         if(d.valid){
           document.getElementById('login-overlay').style.display='none';
+          try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
           var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
           return;
         }
@@ -72,6 +105,7 @@
           return;
         }
         document.getElementById('login-overlay').style.display='flex';
+        if(signedOut) offerLocalSignin();
       })
       .catch(function(){document.getElementById('login-overlay').style.display='none';});
   }
@@ -84,6 +118,7 @@ function clawmetryLogin(){
     .then(function(d){
       if(d.valid){
         localStorage.setItem('clawmetry-token',tok);
+        try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
         document.getElementById('login-overlay').style.display='none';
         var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
         location.reload();
@@ -93,8 +128,33 @@ function clawmetryLogin(){
     });
 }
 function clawmetryLogout(){
+  // Marker makes the sign-out stick: the bootstrap suppresses zero-click
+  // auto-login until the user signs back in on purpose.
+  try { localStorage.setItem('cm-signed-out','1'); } catch(e) {}
   localStorage.removeItem('clawmetry-token');
   location.reload();
+}
+// One-click sign-in on the machine itself after an explicit sign-out. The
+// button is hidden unless the loopback-only detected-token probe answered,
+// so this is the same trust boundary as zero-click auto-login — just gated
+// on a deliberate click.
+function clawmetryLocalSignin(){
+  fetch('/api/auth/detected-token')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(d && d.token){
+        try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
+        localStorage.setItem('clawmetry-token', d.token);
+        location.reload();
+      } else {
+        var err=document.getElementById('login-error');
+        if(err) err.style.display='block';
+      }
+    })
+    .catch(function(){
+      var err=document.getElementById('login-error');
+      if(err) err.style.display='block';
+    });
 }
 // Inject auth header into all fetch calls
 (function(){

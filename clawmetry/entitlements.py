@@ -6460,6 +6460,173 @@ def missing_runtimes(runtimes) -> list:
         return []
 
 
+def missing_features_at(perspective_tier: str, features) -> list:
+    """Hypothetical-perspective sibling of :func:`missing_features`: which
+    subset of ``features`` would tier ``perspective_tier`` NOT grant?
+
+    Fills the perspective-shaped ``_at`` slot in the row-detail complement
+    family so a pricing matrix that gates on a BUNDLE ("Starter grants
+    fleet + sso? which of these would still be locked at Starter?") can
+    bind the per-item denial list off ONE call per (perspective, bundle)
+    cell -- symmetric to :func:`has_features_at`'s boolean fold, in the
+    same relationship :func:`missing_features` has to :func:`has_features`.
+
+    Fold rule: returns the subset of ``features`` for which
+    :func:`has_feature_at` returns ``False`` under ``perspective_tier``,
+    canonicalised via ``.strip().lower()``, first-seen dedup on the
+    canonical key. Consequences of that fold, all deliberate:
+
+    * Empty / ``None`` / non-iterable ``features`` -- returns ``[]``.
+      Nothing to check, nothing missing. Mirrors :func:`missing_features`
+      on the same input byte-for-byte.
+    * Unknown / empty / non-string ``perspective_tier`` -- returns ``[]``.
+      Perspective validation lives on the OUTER helper (once per call)
+      rather than folding into per-item :func:`has_feature_at` calls, so
+      a bogus perspective fails-open on the diagnostic (no info to
+      surface) instead of marking every id missing off a validity gate
+      the caller can already read from ``perspective_tier_rank == -1``
+      on the paired endpoint. Same posture as :func:`has_features_at`'s
+      perspective validation, applied to the complement seat.
+    * Unknown / non-string / empty-string ``features`` item -- **included**
+      in the returned list in canonicalised form. The singular
+      :func:`has_feature_at` fails-closed on typos, so the complement fold
+      reflects that: a typo like
+      ``missing_features_at("pro", ["fleet", "Fleeet"])`` returns
+      ``["fleeet"]`` (only the typo) even though ``fleet`` is granted at
+      Pro, surfacing the typo at the callsite instead of a silent grant.
+      Matches :func:`missing_features` typo posture.
+    * Grace-independence: the answer is derived from the static per-tier
+      grant map via :func:`has_feature_at`'s :func:`_hypothetical_entitlement`
+      backing, so the returned list is IDENTICAL under grace vs enforce
+      for the same (perspective, bundle) pair. Diverges deliberately
+      from :func:`missing_features` (which reports ``[]`` for every
+      fully-known bundle in grace via the live resolver's grace
+      pass-through) -- the whole point of the ``_at`` slot is to render
+      the would-be-locked state alongside the live grant.
+    * Order: first-seen; dedup on canonical key.
+
+    Complement invariant with :func:`has_features_at`:
+    ``missing_features_at(p, b) == []`` iff ``has_features_at(p, b) is
+    True`` for every non-empty ``b`` -- pins the row-detail seat as the
+    exact perspective-shaped negation of the boolean fold.
+
+    Never raises: any delegate failure logs a warning and returns ``[]``
+    (matches the diagnostic fail-open posture the sibling
+    :func:`missing_features` carries; the endpoint fallback carries the
+    same empty-missing shape so a UI wired off this scalar cannot
+    silently render a denial banner on a resolver hiccup).
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return []
+    if not p or p not in _TIER_ORDER:
+        return []
+    try:
+        if features is None:
+            return []
+        items = list(features)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for f in items:
+            if isinstance(f, str):
+                fid = f.strip().lower()
+            else:
+                fid = ""
+            if fid in seen:
+                continue
+            seen.add(fid)
+            if not has_feature_at(p, f):
+                out.append(fid)
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_features_at(%r, %r) failed: %s",
+            perspective_tier,
+            features,
+            exc,
+        )
+        return []
+
+
+def missing_runtimes_at(perspective_tier: str, runtimes) -> list:
+    """Runtime-axis twin of :func:`missing_features_at`: which subset of
+    ``runtimes`` would tier ``perspective_tier`` NOT grant?
+
+    Same relationship to :func:`has_runtimes_at` that
+    :func:`missing_features_at` has to :func:`has_features_at`.
+    Delegates to :func:`has_runtime_at` per item, so the strict alias
+    posture the singular helper carries (no :func:`canonical_runtime`
+    resolution at scalar layer; a raw ``"claude-code"`` collapses to
+    ``False`` because it is not in :data:`ALL_RUNTIMES` after
+    ``.strip().lower()``, so an alias input surfaces in ``missing`` in
+    its ``.strip().lower()`` form) is inherited. Alias tolerance belongs
+    to the paired ``/api/entitlement/missing-runtimes-at`` endpoint,
+    which canonicalises per-token upstream before delegating -- matches
+    the sibling :func:`missing_runtimes` / ``/missing-runtimes`` split
+    exactly.
+
+    Fold semantics mirror :func:`missing_features_at` byte-for-byte:
+    perspective validated once against :data:`_TIER_ORDER` (fail-open on
+    empty / unknown / non-string -> ``[]``); empty / ``None`` /
+    non-iterable bundle returns ``[]``; unknown / non-string / empty /
+    alias item ids are INCLUDED in the returned list in canonical form;
+    first-seen dedup on canonical key; grace-independent by construction
+    (backed by :func:`_hypothetical_entitlement` via the singular
+    delegate).
+
+    Complement invariant with :func:`has_runtimes_at`:
+    ``missing_runtimes_at(p, b) == []`` iff ``has_runtimes_at(p, b) is
+    True`` for every non-empty canonical ``b`` -- alias-scalar inputs are
+    not part of the invariant (both scalars fail-closed on aliases; the
+    endpoint's upstream canonicalise is what re-establishes the
+    invariant at URL level).
+
+    Never raises: delegate failure -> logged warning -> ``[]``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return []
+    if not p or p not in _TIER_ORDER:
+        return []
+    try:
+        if runtimes is None:
+            return []
+        items = list(runtimes)
+    except TypeError:
+        return []
+    if not items:
+        return []
+    out: list = []
+    seen: set = set()
+    try:
+        for rt in items:
+            if isinstance(rt, str):
+                rid = rt.strip().lower()
+            else:
+                rid = ""
+            if rid in seen:
+                continue
+            seen.add(rid)
+            if not has_runtime_at(p, rt):
+                out.append(rid)
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_runtimes_at(%r, %r) failed: %s",
+            perspective_tier,
+            runtimes,
+            exc,
+        )
+        return []
+
+
 def has_all(
     *,
     features=None,

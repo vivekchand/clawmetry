@@ -613,6 +613,11 @@ def _get_api_key_interactive() -> str:
         except OSError:
             pass
 
+    if _tty is None and not sys.stdin.isatty():
+        print("\n  ❌  Interactive sign-in needs a terminal.")
+        print("  Run this in your own shell, or pass --key cm_xxx to skip the prompt.\n")
+        sys.exit(1)
+
     def _input(prompt):
         """input() that reads from /dev/tty when stdin is a pipe."""
         if _tty is not None:
@@ -620,7 +625,12 @@ def _get_api_key_interactive() -> str:
             sys.stdout.flush()
             line = _tty.readline()
             return line.rstrip("\n")
-        return input(prompt)
+        try:
+            return input(prompt)
+        except EOFError:
+            print("\n  ❌  Interactive sign-in needs a terminal.")
+            print("  Run this in your own shell, or pass --key cm_xxx to skip the prompt.\n")
+            sys.exit(1)
 
     from clawmetry.endpoints import ingest_url as _resolve_ingest_url
     INGEST_URL = _resolve_ingest_url()

@@ -88,6 +88,22 @@
       font-weight:600;
       cursor:pointer;
       " data-i18n="login.login">Login</button>
+    <!-- Shown only after an explicit sign-out AND only when the loopback
+         detected-token probe answers (auth-bootstrap.js offerLocalSignin) —
+         one deliberate click signs the machine's owner back in. -->
+    <button id="login-local-btn" onclick="clawmetryLocalSignin()" style="
+      display:none;
+      width:100%;
+      margin-top:10px;
+      padding:12px;
+      border-radius:8px;
+      border:1px solid #334155;
+      background:transparent;
+      color:#94a3b8;
+      font-size:14px;
+      font-weight:600;
+      cursor:pointer;
+      " data-i18n="login.local_signin">Sign back in (this machine)</button>
     <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;" data-i18n="login.invalid_token">Invalid token</p>
     <p style="color:#64748b;margin:16px 0 0;font-size:12px;" data-i18n="login.hint">Local installs sign in automatically. For remote access, use the gateway token from the machine running your agents.</p>
   </div>

@@ -22891,8 +22891,14 @@ async function bootDashboard() {
       // Stored token may simply be stale (gateway token rotated on disk).
       // Retry the zero-click loopback bootstrap before walling the user --
       // the server hands the fresh token to provably-local browsers.
+      // EXCEPT after an explicit sign-out (profile menu → Sign out sets
+      // cm-signed-out): recovering here would silently sign the user back
+      // in, making Sign out a no-op — auth-bootstrap.js suppresses its
+      // zero-click for the same reason, and this is the second such path.
+      var signedOutMarker = false;
+      try { signedOutMarker = localStorage.getItem('cm-signed-out') === '1'; } catch (e) {}
       var recovered = false;
-      try {
+      if (!signedOutMarker) try {
         var dtRes = await _withTimeout(fetch('/api/auth/detected-token'), 3000, 'auth-bootstrap');
         if (dtRes && dtRes.ok) {
           var dt = await dtRes.json();
@@ -22909,8 +22915,9 @@ async function bootDashboard() {
       } catch (e) { /* fall through to the manual login wall */ }
       if (!recovered) {
         // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
-        // so we measure fresh-install rejects, not session timeouts.
-        if (_shouldPingAuthFailFirstLoad(stored, authData)) {
+        // so we measure fresh-install rejects, not session timeouts — and on
+        // "not an explicit sign-out", which is intentional, not funnel loss.
+        if (!signedOutMarker && _shouldPingAuthFailFirstLoad(stored, authData)) {
           _pingAuthFailFirstLoad();
         }
         document.getElementById('login-overlay').style.display = 'flex';

@@ -759,6 +759,7 @@
   "inventory.title": "Your agents",
   "login.hint": "Local installs sign in automatically. For remote access, use the gateway token from the machine running your agents.",
   "login.invalid_token": "Invalid token",
+  "login.local_signin": "Sign back in (this machine)",
   "login.login": "Login",
   "login.prompt": "Enter your access token to open the dashboard",
   "login.token_placeholder": "Access token...",
