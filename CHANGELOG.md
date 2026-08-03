@@ -1,3 +1,10 @@
+## 0.12.641
+
+- Re-publish of 0.12.640 (same ghost-wheel race as 0.12.636: the release
+  workflow checked out the `main` ref before the merge commit propagated and
+  published without the runtime-scoped alerts/approvals code). Root cause
+  fixed: release-on-merge now builds the PR's merge_commit_sha exactly.
+
 ## 0.12.640
 
 - **Alerts and approvals are runtime-scoped by default.** Alert rules carry a
