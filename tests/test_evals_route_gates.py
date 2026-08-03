@@ -519,6 +519,14 @@ def test_evals_routes_wear_gate_decorator():
         "/api/evaluators (the shop-menu catalogue) must stay free; "
         "gating it would blank the upgrade CTA target under enforce."
     )
+    # Same for /api/evals/metrics (#2862): the built-in deterministic
+    # checks are free-tier by design (zero LLM cost, run on the user's
+    # box), so their read endpoint must stay ungated.
+    metrics_src = inspect.getsource(evals_module.evals_metrics)
+    assert '@gate' not in metrics_src, (
+        "/api/evals/metrics must stay free -- deterministic check "
+        "verdicts are the free tier of the evaluator library."
+    )
 
 
 def test_gate_symbol_is_shared():

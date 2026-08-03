@@ -54,13 +54,26 @@ STATUS_LIVE = "live"            # shipped + computed today
 STATUS_PARTIAL = "partial"     # computed, but heuristic / not yet content-grounded
 STATUS_PRO = "pro"             # value comes from the Pro plugin; locked without it
 STATUS_NEEDS_KEY = "needs_key"  # shipped, but idle on THIS box until a judge key is set
+STATUS_NEEDS_EXTRA = "needs_extra"  # idle until an optional pip extra is installed
 
 # Slugs whose compute path is the LLM-as-judge (clawmetry/eval_runner.py) and so
 # cannot produce a value without a judge API key on the box. Used by
 # catalogue_with_coverage to downgrade their per-box status honestly.
 # faithfulness (Pro) reuses eval_runner._call_judge + the same key, so a
 # registered hook without a key is still idle and must not badge "Live".
-_JUDGE_BACKED_SLUGS = frozenset({"answer-quality", "faithfulness"})
+_JUDGE_BACKED_SLUGS = frozenset({
+    "answer-quality", "faithfulness",
+    "argument-correctness", "conversation-completeness",
+})
+
+# Slugs computed by the optional DeepEval engine (clawmetry/deepeval_bridge.py,
+# pip install clawmetry[deepeval]). On a box where the extra is missing they
+# downgrade to needs_extra; installed-but-keyless downgrades to needs_key via
+# _JUDGE_BACKED_SLUGS above (needs_extra wins when both apply: installing the
+# engine is the first step).
+_DEEPEVAL_BACKED_SLUGS = frozenset({
+    "argument-correctness", "conversation-completeness",
+})
 
 
 # ── The catalogue — single source of truth ──────────────────────────────────────
@@ -214,6 +227,37 @@ EVALUATOR_CATALOGUE: list[dict[str, Any]] = [
         "value_field": None,
     },
     {
+        "slug": "argument-correctness",
+        "name": "Did the agent use its tools right?",
+        "description": (
+            "An LLM judge checks whether each tool call the agent made used "
+            "sensible inputs for the task at hand. Powered by the optional "
+            "DeepEval engine, running locally on your own key."
+        ),
+        "category": CATEGORY_AGENT,
+        "tier": TIER_FREE,
+        "status": STATUS_LIVE,
+        "computed_in": "DeepEval metric engine, local (pip install clawmetry[deepeval])",
+        "source": "clawmetry.deepeval_bridge:score_session_deepeval",
+        "value_field": None,
+    },
+    {
+        "slug": "conversation-completeness",
+        "name": "Did the conversation get finished?",
+        "description": (
+            "An LLM judge reads the whole back and forth and checks whether "
+            "what the user asked for was actually delivered by the end. "
+            "Powered by the optional DeepEval engine, running locally on your "
+            "own key."
+        ),
+        "category": CATEGORY_QUALITY,
+        "tier": TIER_FREE,
+        "status": STATUS_LIVE,
+        "computed_in": "DeepEval metric engine, local (pip install clawmetry[deepeval])",
+        "source": "clawmetry.deepeval_bridge:score_session_deepeval",
+        "value_field": None,
+    },
+    {
         "slug": "faithfulness",
         "name": "Was every claim backed by the evidence?",
         "description": (
@@ -337,6 +381,20 @@ def catalogue_with_coverage(
         for e in cat:
             if e["slug"] in _JUDGE_BACKED_SLUGS and e["status"] == STATUS_LIVE:
                 e["status"] = STATUS_NEEDS_KEY
+    if store is not None:
+        # DeepEval-backed entries need the optional extra ON THIS BOX before
+        # a judge key even matters; needs_extra therefore overrides needs_key.
+        # No store (the cloud container) keeps the static status, mirroring
+        # the needs_key rule above.
+        try:
+            from clawmetry import deepeval_bridge
+            deepeval_ok = deepeval_bridge.is_available()
+        except Exception:
+            deepeval_ok = False
+        if not deepeval_ok:
+            for e in cat:
+                if e["slug"] in _DEEPEVAL_BACKED_SLUGS:
+                    e["status"] = STATUS_NEEDS_EXTRA
     payload: dict[str, Any] = {
         "evaluators": cat,
         "total": len(cat),

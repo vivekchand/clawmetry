@@ -70,6 +70,12 @@ setup(
         # Kept for back-compat with `pip install clawmetry[relay]` calls
         # in old install scripts. No-op in 0.12.166+.
         "relay": [],
+        # Optional DeepEval metric engine (clawmetry/deepeval_bridge.py).
+        # Heavy on purpose-built installs only: deepeval pulls ~70 transitive
+        # packages, so it must never move into install_requires. <5 pins out
+        # the fast-moving major; 3.10+ marker because deepeval needs >=3.9
+        # and its posthog pin needs >=3.10.
+        "deepeval": ['deepeval>=4.1,<5; python_version >= "3.10"'],
     },
     entry_points={
         "console_scripts": [
