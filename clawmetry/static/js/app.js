@@ -13943,6 +13943,189 @@ function _cmEffIdeaRowHtml(a) {
     + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">' + escHtml(t('efficiency.save_mo', { amt: '$' + save }, 'save about $' + save + '/mo')) + '</div>'
     + '</div>';
 }
+// ── Spend Flow (feat/spend-flow): where the money goes ─────────────────────
+// Three-column flow: input context categories -> runtime -> output categories,
+// ribbon width proportional to dollars. Data: /api/spend-flow (locally the
+// daemon-cached DuckDB walk; on cloud the cm-cloud-spend-flow interceptor
+// serves the `spendFlow` snapshot slice). Category token shares are measured
+// from real event content and reconciled to the model-reported usage; the
+// `overhead` bucket is the residual (system prompt + skill/MCP definitions
+// + truncated tool output), so its copy says "estimated".
+// Palettes validated with the dataviz six-checks script (light + dark).
+var _CM_SF_IN = {
+  user_prompts:    { c: '#2563eb', k: 'usage.sf_user_prompts',    f: 'Your messages' },
+  prior_assistant: { c: '#9333ea', k: 'usage.sf_prior_assistant', f: 'Earlier replies (context)' },
+  tool_results:    { c: '#0d9488', k: 'usage.sf_tool_results',    f: 'Tool results' },
+  overhead:        { c: '#d97706', k: 'usage.sf_overhead',        f: 'System prompt and tool definitions' }
+};
+var _CM_SF_OUT = {
+  thinking:           { c: '#7c3aed', k: 'usage.sf_thinking',  f: 'Thinking' },
+  assistant_text:     { c: '#059669', k: 'usage.sf_text',      f: 'Replies' },
+  builtin_tool_calls: { c: '#0284c7', k: 'usage.sf_builtin',   f: 'Tool calls' },
+  mcp_tool_calls:     { c: '#ea580c', k: 'usage.sf_mcp',       f: 'MCP tool calls' }
+};
+function _sfCost(c) { return c >= 10 ? '$' + c.toFixed(0) : c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+function _sfLabel(meta, id) {
+  var m = meta[id];
+  return m ? t(m.k, null, m.f) : id;
+}
+async function loadSpendFlow() {
+  var title = document.getElementById('spend-flow-title');
+  var card = document.getElementById('spend-flow-card');
+  var box = document.getElementById('spend-flow-content');
+  if (!card || !box) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = '?days=7' + ((rt && rt !== 'all') ? ('&runtime=' + encodeURIComponent(rt)) : '');
+  var data = null;
+  try {
+    var r = await fetch('/api/spend-flow' + q);
+    if (r.ok) data = await r.json();
+  } catch (_e) {}
+  if (!data || !data.totals) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+  if (title) title.style.display = '';
+  card.style.display = '';
+  var winEl = document.getElementById('spend-flow-window');
+  if (winEl) {
+    winEl.textContent = data.capped_at_24h
+      ? t('usage.sf_window_24h', null, 'last 24 hours · context in, output out')
+      : t('usage.sf_window_7d', null, 'last 7 days · context in, output out');
+  }
+  if (data.insufficient_data) {
+    box.innerHTML = '<div style="padding:10px 4px;font-size:13px;color:var(--text-secondary);">'
+      + escHtml(t('usage.sf_collecting', null, 'Not enough model calls recorded yet. This chart appears once your agents have some activity.'))
+      + '</div>';
+    return;
+  }
+  try { box.innerHTML = _sfRender(data); }
+  catch (e) { if (title) title.style.display = 'none'; card.style.display = 'none'; }
+}
+function _sfRender(data) {
+  var W = 960, H = 340, PAD = 10, NODE_W = 14, TOP = 26, BOT = 12;
+  var LX = 216, MX = 473, RX = 730; // node bar x positions
+  var inCats = (data.input_categories || []).filter(function (c) { return c.cost_usd > 0; });
+  var outCats = (data.output_categories || []).filter(function (c) { return c.cost_usd > 0; });
+  var rts = (data.runtimes || []).filter(function (r) { return r.cost_usd > 0; });
+  var links = data.links || [];
+  if (!inCats.length || !rts.length) {
+    return '<div style="padding:10px 4px;font-size:13px;color:var(--text-secondary);">'
+      + escHtml(t('usage.sf_collecting', null, 'Not enough model calls recorded yet. This chart appears once your agents have some activity.')) + '</div>';
+  }
+  var inTotal = data.totals.input_cost_usd || 0;
+  var outTotal = data.totals.output_cost_usd || 0;
+  var midTotal = 0;
+  rts.forEach(function (r) { midTotal += Math.max(r.input_cost_usd || 0, r.output_cost_usd || 0); });
+  var maxSide = Math.max(inTotal, outTotal, midTotal, 1e-9);
+  var usable = H - TOP - BOT - PAD * Math.max(inCats.length, outCats.length, rts.length);
+  var s = usable / maxSide; // dollars -> px
+  function hOf(c) { return Math.max(6, c * s); }
+
+  // Stack nodes per column, remembering y + running ribbon offsets.
+  var nodes = {}; // id -> {x, y, h, color, in: offset, out: offset}
+  function stack(items, x, idOf, colorOf) {
+    var y = TOP;
+    items.forEach(function (it) {
+      var h = hOf(it.cost_usd);
+      nodes[idOf(it)] = { x: x, y: y, h: h, color: colorOf(it), inOff: 0, outOff: 0, cost: it.cost_usd };
+      y += h + PAD;
+    });
+  }
+  stack(inCats, LX, function (c) { return c.id; }, function (c) { return (_CM_SF_IN[c.id] || {}).c || '#64748b'; });
+  stack(rts, MX, function (r) { return 'runtime:' + r.runtime; }, function () { return 'var(--text-muted, #94a3b8)'; });
+  stack(outCats, RX, function (c) { return c.id; }, function (c) { return (_CM_SF_OUT[c.id] || {}).c || '#64748b'; });
+
+  var svg = [];
+  // Ribbons first (under the node bars). Left->mid use the source category
+  // color; mid->right use the target category color. Deterministic order:
+  // category display order within runtime display order.
+  function ribbon(a, b, aSide, bSide, thickness, color, tip) {
+    if (!a || !b || thickness <= 0) return;
+    var th = Math.max(1.5, thickness * s);
+    var x1 = a.x + (aSide === 'out' ? NODE_W : 0);
+    var x2 = b.x + (bSide === 'in' ? 0 : NODE_W);
+    var y1 = a.y + (aSide === 'out' ? a.outOff : a.inOff);
+    var y2 = b.y + (bSide === 'in' ? b.inOff : b.outOff);
+    if (aSide === 'out') a.outOff += th; else a.inOff += th;
+    if (bSide === 'in') b.inOff += th; else b.outOff += th;
+    var mx = (x1 + x2) / 2;
+    svg.push('<path d="M' + x1 + ',' + y1
+      + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2
+      + ' l0,' + th.toFixed(1)
+      + ' C' + mx + ',' + (y2 + th).toFixed(1) + ' ' + mx + ',' + (y1 + th).toFixed(1) + ' ' + x1 + ',' + (y1 + th).toFixed(1)
+      + ' Z" fill="' + color + '" fill-opacity="0.32"><title>' + escHtml(tip) + '</title></path>');
+  }
+  var linkIdx = {};
+  links.forEach(function (l) { linkIdx[l.source + '>' + l.target] = l; });
+  inCats.forEach(function (c) {
+    rts.forEach(function (r) {
+      var l = linkIdx[c.id + '>runtime:' + r.runtime];
+      if (!l) return;
+      ribbon(nodes[c.id], nodes['runtime:' + r.runtime], 'out', 'in', l.cost_usd,
+        (_CM_SF_IN[c.id] || {}).c || '#64748b',
+        _sfLabel(_CM_SF_IN, c.id) + ' → ' + _cmRuntimeLabel(r.runtime) + ': ' + _sfCost(l.cost_usd));
+    });
+  });
+  rts.forEach(function (r) {
+    outCats.forEach(function (c) {
+      var l = linkIdx['runtime:' + r.runtime + '>' + c.id];
+      if (!l) return;
+      ribbon(nodes['runtime:' + r.runtime], nodes[c.id], 'out', 'in', l.cost_usd,
+        (_CM_SF_OUT[c.id] || {}).c || '#64748b',
+        _cmRuntimeLabel(r.runtime) + ' → ' + _sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(l.cost_usd));
+    });
+  });
+  // Node bars + direct labels (text wears text tokens, marks carry color).
+  function pct(v, tot) { return tot > 0 ? ' · ' + (v / tot * 100).toFixed(0) + '%' : ''; }
+  // Two-line labels stack top-down; when a node is thinner than its label
+  // block, push the label below the previous one so small categories
+  // ("Replies", "MCP tool calls") never overlap.
+  var _lastLblBottom = { left: -1e9, right: -1e9 };
+  function labelY(n, side) {
+    var ly = Math.max(n.y + 11, Math.min(n.y + n.h / 2 + 4, n.y + n.h + 8));
+    if (ly < _lastLblBottom[side] + 15) ly = _lastLblBottom[side] + 15;
+    _lastLblBottom[side] = ly + 13;
+    return ly;
+  }
+  inCats.forEach(function (c) {
+    var n = nodes[c.id];
+    var est = c.basis && c.basis !== 'measured';
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_IN, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    var ly = labelY(n, 'left');
+    svg.push('<text x="' + (n.x - 10) + '" y="' + ly.toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</text>');
+    svg.push('<text x="' + (n.x - 10) + '" y="' + (ly + 13).toFixed(1) + '" text-anchor="end" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.input_cost_usd)) + '</text>');
+  });
+  rts.forEach(function (r) {
+    var n = nodes['runtime:' + r.runtime];
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="var(--text-secondary,#64748b)"><title>' + escHtml(_cmRuntimeLabel(r.runtime) + ': ' + _sfCost(r.cost_usd)) + '</title></rect>');
+    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y - 6).toFixed(1) + '" text-anchor="middle" font-size="12" font-weight="600" fill="var(--text-primary,#1e293b)">' + escHtml(_cmRuntimeLabel(r.runtime)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y + n.h + 14).toFixed(1) + '" text-anchor="middle" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml(_sfCost(r.cost_usd)) + '</text>');
+  });
+  outCats.forEach(function (c) {
+    var n = nodes[c.id];
+    var est = c.basis && c.basis !== 'measured';
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    var ly = labelY(n, 'right');
+    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + ly.toFixed(1) + '" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + (ly + 13).toFixed(1) + '" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.output_cost_usd)) + '</text>');
+  });
+  // Column headers.
+  svg.push('<text x="' + (LX + NODE_W) + '" y="14" text-anchor="end" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_in', null, 'What the agent reads') + ' · ' + _sfCost(inTotal)) + '</text>');
+  svg.push('<text x="' + RX + '" y="14" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_out', null, 'What the agent writes') + ' · ' + _sfCost(outTotal)) + '</text>');
+
+  // Accessible table view of the same numbers (details/summary, collapsed).
+  var tbl = '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">'
+    + escHtml(t('usage.sf_table', null, 'View as table')) + '</summary>'
+    + '<table class="usage-table" style="margin-top:6px;"><tbody>';
+  inCats.forEach(function (c) {
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+  });
+  outCats.forEach(function (c) {
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+  });
+  tbl += '</tbody></table></details>';
+
+  return '<div style="overflow-x:auto;"><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;min-width:640px;display:block;" role="img" aria-label="'
+    + escHtml(t('usage.spend_flow_title', null, 'Where the money goes')) + '">' + svg.join('') + '</svg></div>' + tbl;
+}
 function renderEfficiencyCard() {
   var card = document.getElementById('efficiency-card');
   if (!card) return;
@@ -14047,6 +14230,7 @@ async function loadUsage() {
   // state even when an unrelated usage loader throws below (on nodes where
   // /api/usage fails, the tail of the try block never runs).
   try { renderEfficiencyCard(); } catch (_eEff) {}
+  try { loadSpendFlow(); } catch (_eSf) {}
   try { _cmUpdateUsageFleetNote(); } catch (_eFleet) {}
   try {
     // Append the global runtime filter so Cost/Tokens scopes to the selected

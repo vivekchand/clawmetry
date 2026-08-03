@@ -17391,6 +17391,22 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_eff:
         log.debug("snapshot: efficiency slice failed: %s", _e_eff)
 
+    # Spend-flow slice (feat/spend-flow): input categories -> runtime ->
+    # output categories with tokens + dollars, for the hosted Cost tab's
+    # "Where the money goes" flow (served by the cm-cloud-spend-flow
+    # interceptor). Computed on the daemon's OWN store handle (never a
+    # read_only re-open — FLYWHEEL §1); the store method TTL-caches the
+    # event walk, so this adds ~0 cost per snapshot cycle. Best-effort:
+    # None on any failure and the consumer omits honestly.
+    _spend_flow_slice = None
+    try:
+        from clawmetry import local_store as _ls_sf
+        _sf_store = _ls_sf.get_store()
+        if _sf_store is not None:
+            _spend_flow_slice = _sf_store.query_spend_flow(days=7)
+    except Exception as _e_sf:
+        log.debug("snapshot: spend-flow slice failed: %s", _e_sf)
+
     # Per-session loops slice (Command River Phase-2). Built on the daemon's
     # OWN store handle (never a read_only re-open — FLYWHEEL §1) from the
     # loop_signals rows the detector/stuck pass already wrote (no recompute).
@@ -17535,6 +17551,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # back to its honest empty state).
     if _eff_slice is not None:
         payload["efficiency"] = _eff_slice
+    # Spend-flow slice (feat/spend-flow): served to the hosted Cost tab by
+    # the cm-cloud-spend-flow interceptor. Omitted on failure (the tab
+    # renders its honest collecting state, never a silent blank).
+    if _spend_flow_slice is not None:
+        payload["spendFlow"] = _spend_flow_slice
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.

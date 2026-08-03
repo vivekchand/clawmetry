@@ -1358,6 +1358,28 @@ except ValueError:
     _AGG_CACHE_TTL = 20.0
 
 
+# Spend-flow (feat/spend-flow): the query_spend_flow event-content walk is
+# the heaviest read we cache — its own longer TTL keeps the daemon inside the
+# FLYWHEEL 1e CPU budget while the tab polls freely. Shares _AGG_CACHE_LOCK.
+_SPEND_FLOW_CACHE: dict = {}
+try:
+    _SPEND_FLOW_CACHE_TTL = float(
+        os.environ.get("CLAWMETRY_SPEND_FLOW_CACHE_TTL", "60") or "0")
+except ValueError:
+    _SPEND_FLOW_CACHE_TTL = 60.0
+# Hard row cap for one spend-flow walk. Hitting it sets ``row_cap_hit`` on
+# the result (never a silent truncation).
+_SPEND_FLOW_ROW_CAP = 200_000
+# Event types that carry either usage envelopes or attributable content —
+# both ingest worlds (OpenClaw v3 rows + family per-block rows).
+_SPEND_FLOW_EVENT_TYPES = (
+    "message", "assistant", "user", "thinking",
+    "tool_call", "tool_use", "tool.call",
+    "tool_result", "tool-result", "tool.result",
+    "prompt.submitted", "model.completed",
+)
+
+
 def invalidate_aggregate_cache() -> None:
     """Drop the query_aggregates TTL cache. Reads tolerate <=TTL staleness, so
     this is only needed when a caller wants sub-TTL freshness after an ingest."""
@@ -5574,6 +5596,82 @@ class LocalStore:
             return out
         except Exception:
             return []
+
+    def query_spend_flow(self, *, days: int = 7, runtime: str | None = None) -> dict:
+        """Node-wide spend-flow slice (feat/spend-flow): walks the window's
+        renderable events and hands them to the pure engine in
+        :mod:`clawmetry.spend_flow`, which attributes each model call's
+        prompt volume to input categories (user prompts / prior assistant
+        context / tool results / residual overhead) and its output to
+        thinking / text / tool-call categories, priced from the stored
+        ``cost_usd`` (cost-of-record) with a pricing-table fallback.
+
+        This is an event-content walk (blob decode), so it is result-cached
+        for ``_SPEND_FLOW_CACHE_TTL`` seconds per (days, runtime) key — the
+        daemon recomputes at most once per TTL regardless of how often the
+        tab polls (FLYWHEEL 1e CPU budget). The row cap is surfaced as
+        ``row_cap_hit`` (never a silent truncation). Best-effort: any
+        failure yields the engine's honest empty shape.
+        """
+        from clawmetry.spend_flow import build_spend_flow_slice
+        try:
+            days_i = max(1, min(90, int(days)))
+        except (TypeError, ValueError):
+            days_i = 7
+        rt_key = (runtime or "").strip().lower()
+        _ck = ("spend_flow", days_i, rt_key)
+        if _SPEND_FLOW_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                hit = _SPEND_FLOW_CACHE.get(_ck)
+                if hit is not None and (time.monotonic() - hit[0]) < _SPEND_FLOW_CACHE_TTL:
+                    return hit[1]
+        try:
+            from datetime import timedelta, timezone as _tz
+            cutoff = (datetime.now(_tz.utc) - timedelta(days=days_i)).isoformat()
+            clauses = ["ts >= ?"]
+            params: list[Any] = [cutoff]
+            _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+            if _rt_clause:
+                clauses.append(_rt_clause)
+                params.extend(_rt_params)
+            placeholders = ", ".join(["?"] * len(_SPEND_FLOW_EVENT_TYPES))
+            clauses.append(f"event_type IN ({placeholders})")
+            params.extend(_SPEND_FLOW_EVENT_TYPES)
+            params.append(_SPEND_FLOW_ROW_CAP)
+            rows = self._fetch(
+                f"""
+                SELECT id, session_id, event_type, ts, data, model, cost_usd
+                FROM events
+                WHERE {" AND ".join(clauses)}
+                ORDER BY session_id, ts, id
+                LIMIT ?
+                """,
+                params,
+            )
+            cols = ["id", "session_id", "event_type", "ts", "data", "model", "cost_usd"]
+            non_oc = set(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            events: list[dict[str, Any]] = []
+            for r in rows:
+                ev = _row_to_event(r, cols)
+                sid = str(ev.get("session_id") or "")
+                prefix = sid.split(":", 1)[0]
+                ev["runtime"] = prefix if prefix in non_oc else "openclaw"
+                events.append(ev)
+            out = build_spend_flow_slice(events, days=days_i)
+            if len(rows) >= _SPEND_FLOW_ROW_CAP:
+                out["row_cap_hit"] = True
+                log.warning(
+                    "query_spend_flow: hit the %d-row cap for days=%s runtime=%s; "
+                    "categories cover a partial window",
+                    _SPEND_FLOW_ROW_CAP, days_i, rt_key or "all",
+                )
+        except Exception as exc:
+            log.warning("query_spend_flow failed: %s", exc)
+            out = build_spend_flow_slice([], days=days_i)
+        if _SPEND_FLOW_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                _SPEND_FLOW_CACHE[_ck] = (time.monotonic(), out)
+        return out
 
     def query_rollup_runtime_daily(
         self,

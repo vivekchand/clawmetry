@@ -139,6 +139,7 @@ from routes.policy import bp_policy
 from routes.turn_anatomy import bp_turn_anatomy
 from routes.tool_catalog import bp_tool_catalog
 from routes.context_economics import bp_context_economics
+from routes.spend_flow import bp_spend_flow
 from routes.entitlement import bp_entitlement
 from routes.extensions import bp_extensions
 from routes.otel_export import bp_otel_export
@@ -11902,6 +11903,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_turn_anatomy)
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)
+    app.register_blueprint(bp_spend_flow)
     app.register_blueprint(bp_entitlement)
     app.register_blueprint(bp_extensions)
     app.register_blueprint(bp_audit)

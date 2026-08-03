@@ -781,6 +781,10 @@ _DAEMON_METHODS = frozenset({
     # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
     # the daemon owns the writer lock).
     "query_efficiency_rollup",
+    # Spend flow (feat/spend-flow): the cached event-content walk behind
+    # GET /api/spend-flow (input categories -> runtime -> output categories).
+    # Read-only; computed + TTL-cached inside the daemon (writer-lock owner).
+    "query_spend_flow",
     # Issue #2861 -- version-aware health regression. Read-only join of
     # sessions + heartbeats; routed through the daemon proxy so the
     # dashboard process never opens DuckDB writable.
