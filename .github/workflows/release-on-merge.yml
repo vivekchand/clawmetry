@@ -19,7 +19,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: main
+          # The MERGE COMMIT, not the branch ref: on pull_request-closed the
+          # `main` ref can lag the merge (replication race) — building it
+          # published GHOST wheels twice (0.12.636 + 0.12.640: version stamped,
+          # feature code absent). The merge_commit_sha is exact by definition.
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - uses: actions/setup-python@v7
         with:

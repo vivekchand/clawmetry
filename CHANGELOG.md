@@ -1,3 +1,25 @@
+## 0.12.641
+
+- Re-publish of 0.12.640 (same ghost-wheel race as 0.12.636: the release
+  workflow checked out the `main` ref before the merge commit propagated and
+  published without the runtime-scoped alerts/approvals code). Root cause
+  fixed: release-on-merge now builds the PR's merge_commit_sha exactly.
+
+## 0.12.640
+
+- **Alerts and approvals are runtime-scoped by default.** Alert rules carry a
+  per-rule scope: creating a rule while the runtime switcher is set inherits
+  that runtime, and "All runtimes (node-wide)" is the explicit opt-in (rule
+  rows show a scope chip either way). Scoped rules evaluate per-runtime
+  slices end to end: daily-spend and token-velocity read the per-runtime
+  DuckDB rollups, event-stream rules filter by the session-id prefix, and
+  quality rules (score drop / failure rate) read a per-runtime quality
+  window — a scoped rule never fires on a node-wide number.
+- **The Approvals tab now shows for every runtime** (it was hidden behind the
+  OpenClaw gateway capability) and scopes its pending + history rows to the
+  selected runtime; /api/approvals and /api/approvals-audit accept
+  ?runtime=. The stale "node-wide" banner is gone from both tabs.
+
 ## 0.12.639
 
 - **Runtime feature parity: the dashboard stops being OpenClaw-first.** Every

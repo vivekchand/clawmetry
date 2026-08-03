@@ -271,8 +271,16 @@
     // alert_type so the toggle reflects its real state; an OFF row uses the
     // example template and creates the rule on toggle-on. This keeps all
     // types visible after you enable one (the old render hid the rest).
+    const activeRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    const ruleRt = r => String(r.runtime || 'all').toLowerCase();
+    const rtLabel = rt => (typeof _CM_RT_LABEL === 'object' && _CM_RT_LABEL[rt]) || rt;
     wrap.innerHTML = EXAMPLE_RULES.map(ex => {
-      const real = alertsState.rules.find(r => r.alert_type === ex.alert_type);
+      // Per-runtime scope: under a runtime filter, that runtime's own rule
+      // wins the row; a node-wide rule still shows but is labeled as such.
+      const candidates = alertsState.rules.filter(r => r.alert_type === ex.alert_type
+        && (activeRt === 'all' || ruleRt(r) === activeRt || ruleRt(r) === 'all'));
+      const real = candidates.find(r => activeRt !== 'all' && ruleRt(r) === activeRt)
+        || candidates[0];
       const on = !!(real && real.enabled);
       const id = real ? real.id : ex.id;
       const meta = RULE_TYPE_LABELS[ex.alert_type] || { icon: '🔔', verb: ex.alert_type };
@@ -293,11 +301,16 @@
           }).join('')
         : `<span class="alerts-chan-pill off">${ex._exampleChannels}</span>`;
       const badge = real ? '' : '<span class="alerts-rule-example-badge">example</span>';
+      const scopeChip = real
+        ? (ruleRt(real) === 'all'
+            ? '<span class="alerts-chan-pill off" title="Evaluates across all runtimes on this node">node-wide</span>'
+            : '<span class="alerts-chan-pill" title="Evaluates only this runtime">' + escape(rtLabel(ruleRt(real))) + '</span>')
+        : '';
       return `
         <div class="alerts-rule-row${real ? '' : ' alerts-rule-example'}" data-rule-id="${id}">
           <div class="alerts-rule-dot ${on ? 'on' : 'off'}" title="${on ? 'Enabled' : 'Disabled'}"></div>
           <div class="alerts-rule-main">
-            <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge}</div>
+            <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge} ${scopeChip}</div>
             <div class="alerts-rule-meta">${metaLine}</div>
           </div>
           <div class="alerts-rule-chan">${channelPills || '<span class="alerts-chan-pill off">no channels</span>'}</div>
@@ -640,6 +653,16 @@
     };
     const p = presets[t] || { unit: '', placeholder: 0, label: 'Threshold', name: 'Custom alert' };
     const val = r.threshold_value ?? p.placeholder;
+    // Scope: runtime-scoped by default (founder 2026-08-03) — a new rule
+    // inherits the active runtime filter; node-wide is the explicit opt-in.
+    const activeRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    const curScope = String(r.runtime || (activeRt !== 'all' ? activeRt : 'all')).toLowerCase();
+    const rtLabel = rt => (typeof _CM_RT_LABEL === 'object' && _CM_RT_LABEL[rt]) || rt;
+    const known = (typeof _CM_RT_LABEL === 'object') ? Object.keys(_CM_RT_LABEL) : [];
+    const scopeOpts = ['all'].concat(known).map(rt => {
+      const label = rt === 'all' ? 'All runtimes (node-wide)' : rtLabel(rt);
+      return `<option value="${rt}" ${rt === curScope ? 'selected' : ''}>${escape(label)}</option>`;
+    }).join('');
     document.getElementById('alerts-editor-form').innerHTML = `
       <div class="alerts-form-row">
         <label>Name</label>
@@ -649,6 +672,10 @@
         <label>${p.label}</label>
         <input type="number" id="alerts-rule-threshold" value="${val}" step="any" style="width:120px;" />
         <span class="alerts-form-unit">${p.unit}</span>
+      </div>
+      <div class="alerts-form-row">
+        <label>Applies to</label>
+        <select id="alerts-rule-scope">${scopeOpts}</select>
       </div>
     `;
   }
@@ -693,6 +720,10 @@
       return openPaywall();
     }
 
+    const scopeSel = document.getElementById('alerts-rule-scope');
+    const runtime = scopeSel ? (scopeSel.value || 'all')
+      : ((typeof _cmRuntimeFilter === 'function' && _cmRuntimeFilter() !== 'all')
+          ? _cmRuntimeFilter() : 'all');
     const body = {
       alert_type: alertsState.editorType,
       name,
@@ -700,6 +731,7 @@
       enabled: true,
       channel_ids: channelIds,
       re_alert_policy: policy,
+      runtime,
     };
 
     const isEdit = !!alertsState.editorRule;

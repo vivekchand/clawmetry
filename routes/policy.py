@@ -141,7 +141,32 @@ def api_approvals_audit():
         limit = 100
     status = (request.args.get("status") or "").strip() or None
 
-    return jsonify(_approvals_audit_payload(status=status, limit=limit))
+    return jsonify(_approvals_audit_payload(
+        status=status, limit=limit, runtime=request.args.get("runtime")))
+
+
+def _session_runtime(sid):
+    """Runtime id from a namespaced session id; no known prefix -> openclaw."""
+    sid = str(sid or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except ImportError:
+            return head
+    return "openclaw"
+
+
+def _filter_rows_by_runtime(rows, runtime):
+    """Scope approval rows to one runtime via requestor_session_id prefix.
+    runtime in (None, '', 'all') -> unfiltered."""
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return rows
+    return [r for r in rows
+            if _session_runtime(r.get("requestor_session_id")) == rt]
 
 
 @bp_policy.route("/api/approvals")
@@ -160,6 +185,7 @@ def api_approvals_queue():
     except (TypeError, ValueError):
         limit = 50
     rows = _coerce_rows(_ls_call("query_approvals", status="pending", limit=limit))
+    rows = _filter_rows_by_runtime(rows, request.args.get("runtime"))
     approvals = [
         {
             "id":                   r.get("id"),
@@ -175,11 +201,13 @@ def api_approvals_queue():
     return jsonify({"approvals": approvals, "count": len(approvals), "_source": "local_store"})
 
 
-def _approvals_audit_payload(status=None, limit=100):
+def _approvals_audit_payload(status=None, limit=100, runtime=None):
     """Exec-approval decision audit payload, shared by the HTTP route and the
     cloud snapshot builder (trial-bug #22: the Policy tab audit was blank on the
-    hosted dashboard). Returns {decisions, summary, _source}."""
+    hosted dashboard). Returns {decisions, summary, _source}. ``runtime``
+    scopes rows to one runtime via the session-id prefix (None/'all' = node)."""
     rows = _coerce_rows(_ls_call("query_approvals", status=status, limit=limit))
+    rows = _filter_rows_by_runtime(rows, runtime)
 
     decisions = []
     pending = approved = denied = simulated = 0

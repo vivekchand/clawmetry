@@ -552,6 +552,17 @@
         p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
         h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
       }
+      // Runtime scope (founder 2026-08-03): approvals are per-runtime by
+      // default — rows carry the requesting session id, whose prefix names
+      // the runtime. BOTH renders (pending + history) filter identically.
+      var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+      if (_rt && _rt !== 'all' && typeof _cmRuntimeOf === 'function') {
+        var _match = function(r){
+          return _cmRuntimeOf({session_id: r.session_id || r.requestor_session_id}) === _rt;
+        };
+        p = p.filter(_match);
+        h = h.filter(_match);
+      }
 
       // Pending
       var pe = document.getElementById('approvals-pending-list');

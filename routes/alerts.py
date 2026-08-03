@@ -689,6 +689,18 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
+        # Per-runtime scope (founder 2026-08-03): rules are runtime-scoped by
+        # default — the Alerts tab sends the active runtime filter — and
+        # "all" is the explicit node-wide opt-in. Unknown runtime ids are
+        # rejected rather than silently widened to node-wide.
+        runtime = str(data.get("runtime") or "all").strip().lower()
+        if runtime != "all":
+            try:
+                from clawmetry.entitlements import ALL_RUNTIMES
+                if runtime not in ALL_RUNTIMES:
+                    return jsonify({"error": f"Unknown runtime '{runtime}'"}), 400
+            except ImportError:
+                pass
         # Self-hosted bridge (founder 2026-07-28: "alerts should work in the
         # self-hosted setup"): the Alerts tab speaks the cloud vocabulary
         # (alert_type / threshold_value / channel_ids). A locally-entitled
@@ -720,8 +732,8 @@ def api_alert_rules():
         with _d._fleet_db_lock:
             db = _d._fleet_db()
             db.execute(
-                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, runtime, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rule_id,
                     rtype,
@@ -729,6 +741,7 @@ def api_alert_rules():
                     json.dumps(channels),
                     cooldown,
                     1 if enabled else 0,
+                    runtime,
                     now,
                     now,
                 ),
@@ -738,7 +751,8 @@ def api_alert_rules():
         _audit("alert_rule.create", actor=_actor(), target=rule_id,
                result="created", source="dashboard",
                metadata={"type": rtype, "threshold": threshold,
-                         "channels": channels, "enabled": bool(enabled)})
+                         "channels": channels, "enabled": bool(enabled),
+                         "runtime": runtime})
         return jsonify({"ok": True, "id": rule_id})
     # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
     # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
@@ -798,6 +812,17 @@ def api_alert_rule(rule_id):
     if "channels" in data:
         sets.append("channels = ?")
         vals.append(json.dumps(data["channels"]))
+    if "runtime" in data:
+        _rt = str(data.get("runtime") or "all").strip().lower()
+        if _rt != "all":
+            try:
+                from clawmetry.entitlements import ALL_RUNTIMES
+                if _rt not in ALL_RUNTIMES:
+                    return jsonify({"error": f"Unknown runtime '{_rt}'"}), 400
+            except ImportError:
+                pass
+        sets.append("runtime = ?")
+        vals.append(_rt)
     if not sets:
         return jsonify({"error": "No fields to update"}), 400
     sets.append("updated_at = ?")
@@ -812,7 +837,7 @@ def api_alert_rule(rule_id):
            result="updated", source="dashboard",
            metadata={"fields": {k: data[k] for k in data
                                  if k in ("threshold", "cooldown_min",
-                                          "enabled", "channels")}})
+                                          "enabled", "channels", "runtime")}})
     return jsonify({"ok": True})
 
 
