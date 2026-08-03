@@ -1013,6 +1013,29 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_eval_regression_replayed_at ON eval_regression_runs(replayed_at)",
     "CREATE INDEX IF NOT EXISTS idx_eval_regression_status     ON eval_regression_runs(status, replayed_at)",
+    # Issue #2862 (resurrected) — per-session, per-metric eval results.
+    # ``sessions.eval_score`` stays the single headline judge score; this
+    # table holds the OTHER metric verdicts on the same session (the free
+    # deterministic checks now, judge-backed named metrics later). One row
+    # per (session, metric), latest-only: a rescore overwrites in place,
+    # mirroring the sessions.eval_* upsert semantics. ``engine`` says who
+    # computed it (builtin / pro / deepeval) so the UI can label honestly.
+    """
+    CREATE TABLE IF NOT EXISTS eval_metrics (
+        session_id  VARCHAR NOT NULL,
+        metric_slug VARCHAR NOT NULL,
+        score       DOUBLE,
+        passed      BOOLEAN,
+        reason      VARCHAR,
+        detail      VARCHAR,
+        engine      VARCHAR NOT NULL,
+        judge_model VARCHAR,
+        scored_at   BIGINT  NOT NULL,
+        PRIMARY KEY (session_id, metric_slug)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_metrics_scored_at ON eval_metrics(scored_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_metrics_slug      ON eval_metrics(metric_slug, scored_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -1356,6 +1379,28 @@ try:
     _AGG_CACHE_TTL = float(os.environ.get("CLAWMETRY_AGG_CACHE_TTL", "20") or "0")
 except ValueError:
     _AGG_CACHE_TTL = 20.0
+
+
+# Spend-flow (feat/spend-flow): the query_spend_flow event-content walk is
+# the heaviest read we cache — its own longer TTL keeps the daemon inside the
+# FLYWHEEL 1e CPU budget while the tab polls freely. Shares _AGG_CACHE_LOCK.
+_SPEND_FLOW_CACHE: dict = {}
+try:
+    _SPEND_FLOW_CACHE_TTL = float(
+        os.environ.get("CLAWMETRY_SPEND_FLOW_CACHE_TTL", "60") or "0")
+except ValueError:
+    _SPEND_FLOW_CACHE_TTL = 60.0
+# Hard row cap for one spend-flow walk. Hitting it sets ``row_cap_hit`` on
+# the result (never a silent truncation).
+_SPEND_FLOW_ROW_CAP = 200_000
+# Event types that carry either usage envelopes or attributable content —
+# both ingest worlds (OpenClaw v3 rows + family per-block rows).
+_SPEND_FLOW_EVENT_TYPES = (
+    "message", "assistant", "user", "thinking",
+    "tool_call", "tool_use", "tool.call",
+    "tool_result", "tool-result", "tool.result",
+    "prompt.submitted", "model.completed",
+)
 
 
 def invalidate_aggregate_cache() -> None:
@@ -5575,6 +5620,82 @@ class LocalStore:
         except Exception:
             return []
 
+    def query_spend_flow(self, *, days: int = 7, runtime: str | None = None) -> dict:
+        """Node-wide spend-flow slice (feat/spend-flow): walks the window's
+        renderable events and hands them to the pure engine in
+        :mod:`clawmetry.spend_flow`, which attributes each model call's
+        prompt volume to input categories (user prompts / prior assistant
+        context / tool results / residual overhead) and its output to
+        thinking / text / tool-call categories, priced from the stored
+        ``cost_usd`` (cost-of-record) with a pricing-table fallback.
+
+        This is an event-content walk (blob decode), so it is result-cached
+        for ``_SPEND_FLOW_CACHE_TTL`` seconds per (days, runtime) key — the
+        daemon recomputes at most once per TTL regardless of how often the
+        tab polls (FLYWHEEL 1e CPU budget). The row cap is surfaced as
+        ``row_cap_hit`` (never a silent truncation). Best-effort: any
+        failure yields the engine's honest empty shape.
+        """
+        from clawmetry.spend_flow import build_spend_flow_slice
+        try:
+            days_i = max(1, min(90, int(days)))
+        except (TypeError, ValueError):
+            days_i = 7
+        rt_key = (runtime or "").strip().lower()
+        _ck = ("spend_flow", days_i, rt_key)
+        if _SPEND_FLOW_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                hit = _SPEND_FLOW_CACHE.get(_ck)
+                if hit is not None and (time.monotonic() - hit[0]) < _SPEND_FLOW_CACHE_TTL:
+                    return hit[1]
+        try:
+            from datetime import timedelta, timezone as _tz
+            cutoff = (datetime.now(_tz.utc) - timedelta(days=days_i)).isoformat()
+            clauses = ["ts >= ?"]
+            params: list[Any] = [cutoff]
+            _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+            if _rt_clause:
+                clauses.append(_rt_clause)
+                params.extend(_rt_params)
+            placeholders = ", ".join(["?"] * len(_SPEND_FLOW_EVENT_TYPES))
+            clauses.append(f"event_type IN ({placeholders})")
+            params.extend(_SPEND_FLOW_EVENT_TYPES)
+            params.append(_SPEND_FLOW_ROW_CAP)
+            rows = self._fetch(
+                f"""
+                SELECT id, session_id, event_type, ts, data, model, cost_usd
+                FROM events
+                WHERE {" AND ".join(clauses)}
+                ORDER BY session_id, ts, id
+                LIMIT ?
+                """,
+                params,
+            )
+            cols = ["id", "session_id", "event_type", "ts", "data", "model", "cost_usd"]
+            non_oc = set(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            events: list[dict[str, Any]] = []
+            for r in rows:
+                ev = _row_to_event(r, cols)
+                sid = str(ev.get("session_id") or "")
+                prefix = sid.split(":", 1)[0]
+                ev["runtime"] = prefix if prefix in non_oc else "openclaw"
+                events.append(ev)
+            out = build_spend_flow_slice(events, days=days_i)
+            if len(rows) >= _SPEND_FLOW_ROW_CAP:
+                out["row_cap_hit"] = True
+                log.warning(
+                    "query_spend_flow: hit the %d-row cap for days=%s runtime=%s; "
+                    "categories cover a partial window",
+                    _SPEND_FLOW_ROW_CAP, days_i, rt_key or "all",
+                )
+        except Exception as exc:
+            log.warning("query_spend_flow failed: %s", exc)
+            out = build_spend_flow_slice([], days=days_i)
+        if _SPEND_FLOW_CACHE_TTL > 0:
+            with _AGG_CACHE_LOCK:
+                _SPEND_FLOW_CACHE[_ck] = (time.monotonic(), out)
+        return out
+
     def query_rollup_runtime_daily(
         self,
         *,
@@ -8589,6 +8710,126 @@ class LocalStore:
         }
 
     # ── Issue #1619 Phase 2 — golden test suite runs ────────────────────────
+
+    # ── Issue #2862 (resurrected) — per-metric eval results ────────────────
+
+    def persist_eval_metric(
+        self,
+        *,
+        session_id: str,
+        metric_slug: str,
+        score: float | None,
+        passed: bool | None,
+        reason: str,
+        detail: str = "",
+        engine: str = "builtin",
+        judge_model: str = "",
+        scored_at: int = 0,
+    ) -> None:
+        """Upsert one metric verdict for one session. Latest-only on
+        ``(session_id, metric_slug)`` — a rescore overwrites in place."""
+        if not session_id or not metric_slug:
+            return
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_metrics
+                        (session_id, metric_slug, score, passed, reason,
+                         detail, engine, judge_model, scored_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        session_id,
+                        metric_slug,
+                        None if score is None else float(score),
+                        None if passed is None else bool(passed),
+                        (reason or "")[:500],
+                        (detail or "")[:2000],
+                        (engine or "builtin")[:40],
+                        (judge_model or "")[:80],
+                        int(scored_at) or int(time.time() * 1000),
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_metric failed for %s/%s",
+                    session_id, metric_slug,
+                )
+
+    def query_eval_metrics(
+        self,
+        *,
+        session_id: str | None = None,
+        metric_slug: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return metric verdicts, newest first, optionally filtered by
+        session and/or metric. Drives ``GET /api/evals/metrics``."""
+        where: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if metric_slug:
+            where.append("metric_slug = ?")
+            params.append(metric_slug)
+        sql = (
+            "SELECT session_id, metric_slug, score, passed, reason, detail, "
+            "engine, judge_model, scored_at FROM eval_metrics"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY scored_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        cols = ["session_id", "metric_slug", "score", "passed", "reason",
+                "detail", "engine", "judge_model", "scored_at"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception as e:
+            log.warning("local store: query_eval_metrics failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_sessions_missing_eval_metrics(
+        self,
+        *,
+        engine: str = "builtin",
+        limit: int = 25,
+        lookback_hours: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Completed recent sessions with NO ``eval_metrics`` row from
+        ``engine`` yet. Drives the deterministic-checks scheduler tick
+        (same completed/lookback filter as ``query_unscored_sessions``)."""
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
+        except Exception:
+            cutoff = ""
+        sql = """
+            SELECT s.session_id, s.agent_type, s.status, s.total_tokens
+              FROM sessions s
+             WHERE s.total_tokens IS NOT NULL
+               AND s.total_tokens > 0
+               AND (
+                    s.ended_at IS NOT NULL
+                    OR s.status IN ('completed', 'failed', 'escalated', 'success', 'error')
+               )
+               AND (? = '' OR COALESCE(s.last_active_at, s.started_at, '') >= ?)
+               AND NOT EXISTS (
+                    SELECT 1 FROM eval_metrics m
+                     WHERE m.session_id = s.session_id AND m.engine = ?
+               )
+             ORDER BY COALESCE(s.last_active_at, s.started_at) DESC NULLS LAST
+             LIMIT ?
+        """
+        try:
+            rows = self._fetch(sql, [cutoff, cutoff, engine or "builtin", int(limit)])
+        except Exception as e:
+            log.warning("local store: query_sessions_missing_eval_metrics failed: %s", e)
+            return []
+        cols = ["session_id", "agent_type", "status", "total_tokens"]
+        return [dict(zip(cols, r)) for r in rows]
 
     def persist_eval_suite_run(
         self,

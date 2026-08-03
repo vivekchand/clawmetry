@@ -728,6 +728,19 @@ _DAEMON_METHODS = frozenset({
     "query_recent_evals",
     "query_eval_summary",
     "persist_eval_score",
+    # Issue #2862 (resurrected) — per-metric eval verdicts (deterministic
+    # checks now, named metric engines later). Same daemon-proxy rationale
+    # as the judge surface above.
+    "query_eval_metrics",
+    "query_sessions_missing_eval_metrics",
+    "persist_eval_metric",
+    # Drive-by (make lint-daemon-allowlist was red on main): both methods
+    # exist on LocalStore and are already called through the proxy from
+    # routes/usage.py and routes/channels.py; the allowlist entries were
+    # simply never added, so those proxy calls silently returned None on
+    # daemon installs.
+    "query_cache_metrics",
+    "query_channel_delivery_health",
     # Eval->monitor loop: per-session eval/outcome fields for the two runs in
     # /api/run-compare's quality rows. Read-only; routed through the daemon
     # proxy so the dashboard process never opens the writer-locked DuckDB.
@@ -781,6 +794,10 @@ _DAEMON_METHODS = frozenset({
     # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
     # the daemon owns the writer lock).
     "query_efficiency_rollup",
+    # Spend flow (feat/spend-flow): the cached event-content walk behind
+    # GET /api/spend-flow (input categories -> runtime -> output categories).
+    # Read-only; computed + TTL-cached inside the daemon (writer-lock owner).
+    "query_spend_flow",
     # Issue #2861 -- version-aware health regression. Read-only join of
     # sessions + heartbeats; routed through the daemon proxy so the
     # dashboard process never opens DuckDB writable.
