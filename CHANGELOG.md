@@ -1,5 +1,16 @@
 ## 0.12.643
 
+- **Family ingest is starvation-proof.** The per-cycle adapter walk now
+  rotates its start position (cursor persisted in daemon state), so a daemon
+  that keeps dying mid-pass — e.g. a native crash loop under launchd
+  KeepAlive — still reaches every runtime within a few passes. Previously a
+  bounced daemon restarted the walk in the same fixed order every run:
+  runtimes early in the list kept ingesting while the tail (Copilot,
+  Antigravity) silently never landed, leaving their sessions missing and
+  per-runtime rollups/scoped alerts reading $0.
+
+## 0.12.643
+
 - **Free deterministic checks now actually run.** The zero-LLM-cost structural
   evaluators (tool errors, JSON validity, required tool args, length bounds)
   were pruned in #4436 as an unintegrated orphan; the real gap was that they
