@@ -1,4 +1,4 @@
-<!-- i18n-src:191e9094d7fa -->
+<!-- i18n-src:0e34918f8f2e -->
 > தமிழ் translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -29,7 +29,7 @@ pip install clawmetry && clawmetry
 
 ClawMetry, OpenClaw-க்கான கண்காணிப்பாக தொடங்கியது, இப்போது உங்கள் **முழு ஏஜென்ட் கூட்டத்தையும்** ஒரே டாஷ்போர்டில் அளவிடுகிறது, உங்கள் கணினியில் உள்ள ஒவ்வொரு ரன்டைமையும் தானாகவே கண்டறிந்து:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot**
 
 OpenClaw மற்றும் NemoClaw ஓப்பன்-சோர்ஸ் ஆப்பில் இலவசம்; மற்ற ரன்டைம்கள் ClawMetry Cloud அல்லது சுய-ஹோஸ்ட் செய்யப்பட்ட Pro உரிமத்துடன் இயங்கும். ஹெடரிலிருந்து ரன்டைம்களை மாற்றவும், ஒவ்வொரு டேபும் - செலவு, டோக்கன்கள், கருவிகள், ட்ரேஸ்கள் - அந்த ரன்டைமிற்கு மீண்டும் வரம்பிடப்படும். சரியான இலவச/கட்டண பிரிவு, டையர் மேட்ரிக்ஸ், `/api/entitlement` வடிவம், மற்றும் `clawmetry license` CLI ஆகியவற்றுக்கு **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** ஐப் பார்க்கவும்.
 
@@ -165,6 +165,7 @@ ClawMetry, OpenClaw மட்டுமல்லாமல் பல AI-ஏஜெ�
 | **Deep Agents** | பீட்டா அடாப்டர் | SQLite `~/.deepagents/.state/sessions.db`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன்கள் + செலவு. |
 | **n8n** | பீட்டா அடாப்டர் | SQLite `~/.n8n/database.sqlite`. Workflow நிறைவேற்றங்கள், node இயக்கங்கள், AI Agent prompts, n8n பதிவு செய்யும் இடங்களில் மாடல் + டோக்கன்கள். |
 | **Antigravity** | பீட்டா அடாப்டர் | `~/.gemini/<flavor>/brain/` இன் கீழ் Brain JSONL. உரையாடல்கள், கருவி படிகள், சிந்தனை, ஒவ்வொரு-தலைமுறை Gemini டோக்கன் பிரிவு + செலவு, பின்னணி-தலைமுறை எரிப்பு. |
+| **GitHub Copilot** | பீட்டா அடாப்டர் | `~/.copilot/session-state/` இன் கீழ் Copilot CLI இன் `events.jsonl` + ஒவ்வொரு-அழைப்பு பயன்பாட்டு லெட்ஜர் `session-store.db`. உரையாடல்கள், கருவி அழைப்புகள், மாடல் திசைவழி, கேச்-விழிப்புணர்வு டோக்கன் பிரிவு, விற்பனையாளர்-பில் செய்யப்பட்ட AI-கிரெடிட் செலவு. |
 
 "பீட்டா அடாப்டர்" என்பது அந்த ரன்டைமின் உண்மையான டிஸ்க்-ஆன் வடிவத்திற்கான ரீடரை ClawMetry வழங்குகிறது என்பதைக் குறிக்கிறது, ஒவ்வொன்றும் ஒரு உண்மையான கணினியில் உள்ள உண்மையான நிறுவலுக்கு எதிராக உருவாக்கப்பட்டு + சரிபார்க்கப்பட்டுள்ளது (`tests/fixtures/runtimes/<rt>/` ஐப் பார்க்கவும்). அடாப்டர்கள் படிக்க-மட்டும்; ஒவ்வொன்றும் அதன் ரன்டைம் உண்மையில் என்ன சேமிக்கிறது என்பதில் நேர்மையாக இருக்கும் (எ.கா., PicoClaw/NanoClaw/Cursor டோக்கன் செலவை டிஸ்க்கில் எழுதாது). ஒரு நோட்டில் பல ரன்டைம்கள் இயங்கும்போது, ரன்டைம் மாற்றி sessions காட்சியை ஒரு தூய்மையான ஆழமான-டைவிற்காக ஒன்றுக்கு வரம்பிடுகிறது.
 
@@ -295,7 +296,7 @@ services:
 
 - Python 3.8+
 - Flask (pip வழியாக தானாகவே நிறுவப்படும்)
-- அதே கணினியில் ஒரு AI ஏஜென்ட் ரன்டைம்: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, அல்லது Antigravity (அல்லது Docker-க்கான மவுன்ட் செய்யப்பட்ட வால்யூம்கள்)
+- அதே கணினியில் ஒரு AI ஏஜென்ட் ரன்டைம்: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, அல்லது GitHub Copilot (அல்லது Docker-க்கான மவுன்ட் செய்யப்பட்ட வால்யூம்கள்)
 - Linux அல்லது macOS
 
 ## NemoClaw / OpenShell ஆதரவு

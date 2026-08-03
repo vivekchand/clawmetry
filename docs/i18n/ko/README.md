@@ -1,4 +1,4 @@
-<!-- i18n-src:191e9094d7fa -->
+<!-- i18n-src:0e34918f8f2e -->
 > 한국어 translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -27,54 +27,54 @@ pip install clawmetry && clawmetry
 
 ## 14개의 에이전트 런타임과 함께 작동합니다
 
-ClawMetry는 OpenClaw를 위한 관측 가능성 도구로 시작했으며, 이제는 여러분의 **전체 에이전트 플릿**을 하나의 대시보드에서 계측하며, 여러분의 머신에 있는 각 런타임을 자동으로 감지합니다.
+ClawMetry는 OpenClaw를 위한 관측 가능성 도구로 시작했으며, 지금은 여러분의 **전체 에이전트 플릿**을 하나의 대시보드에서 계측하며, 여러분의 머신에서 각 런타임을 자동으로 감지합니다:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot**
 
-OpenClaw와 NemoClaw는 오픈소스 앱에서 무료이며, 다른 런타임들은 ClawMetry Cloud 또는 자체 호스팅 Pro 라이선스로 활성화됩니다. 헤더에서 런타임을 전환하면 비용, 토큰, 도구, 트레이스 등 모든 탭이 해당 런타임 범위로 다시 조정됩니다. 정확한 무료/유료 구분, 등급 매트릭스, `/api/entitlement` 형태, `clawmetry license` CLI에 대해서는 **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** 를 참조하세요.
+OpenClaw와 NemoClaw는 오픈소스 앱에서 무료이며, 다른 런타임들은 ClawMetry Cloud 또는 자체 호스팅 Pro 라이선스로 활성화됩니다. 헤더에서 런타임을 전환하면 비용, 토큰, 도구, 트레이스 등 모든 탭이 해당 런타임 범위로 다시 조정됩니다. 정확한 무료/유료 구분, 등급 매트릭스, `/api/entitlement` 형태, `clawmetry license` CLI에 대해서는 **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)**를 참조하세요.
 
 ## 제공되는 기능
 
-- **Flow** — 채널, 브레인, 도구를 거쳐 다시 돌아오는 메시지 흐름을 보여주는 실시간 애니메이션 다이어그램
-- **Overview** — 헬스 체크, 활동 히트맵, 세션 수, 모델 정보
-- **Usage** — 일간/주간/월간 세분화가 포함된 토큰 및 비용 추적
-- **Sessions** — 모델, 토큰, 마지막 활동이 표시되는 활성 에이전트 세션
-- **Crons** — 상태, 다음 실행, 소요 시간이 포함된 예약된 작업
-- **Logs** — 색상으로 구분된 실시간 로그 스트리밍
-- **Memory** — SOUL.md, MEMORY.md, AGENTS.md, 일일 노트 탐색
-- **Transcripts** — 세션 기록을 읽기 위한 채팅 버블 UI
-- **Alerts** — 예산 상한, 오류율 트리거, 에이전트 오프라인 감지; Slack, Discord, PagerDuty, Telegram, Email로 라우팅
-- **Approvals** — 파괴적인 삭제, 강제 푸시, DB 변경, sudo, 패키지 설치, 네트워크 호출을 원클릭 승인 뒤에 게이트
+- **Flow**: 채널, 브레인, 도구를 거쳐 다시 돌아오는 메시지 흐름을 보여주는 실시간 애니메이션 다이어그램
+- **Overview**: 헬스 체크, 활동 히트맵, 세션 수, 모델 정보
+- **Usage**: 일간/주간/월간 세분화가 포함된 토큰 및 비용 추적
+- **Sessions**: 모델, 토큰, 마지막 활동이 표시되는 활성 에이전트 세션
+- **Crons**: 상태, 다음 실행, 소요 시간이 포함된 예약된 작업
+- **Logs**: 색상으로 구분된 실시간 로그 스트리밍
+- **Memory**: SOUL.md, MEMORY.md, AGENTS.md, 일일 노트 탐색
+- **Transcripts**: 세션 기록을 읽기 위한 채팅 버블 UI
+- **Alerts**: 예산 상한, 오류율 트리거, 에이전트 오프라인 감지; Slack, Discord, PagerDuty, Telegram, Email로 라우팅
+- **Approvals**: 파괴적인 삭제, 강제 푸시, DB 변경, sudo, 패키지 설치, 네트워크 호출을 원클릭 승인 뒤에 게이트
 
 ## 스크린샷
 
-### 🧠 Brain — 실시간 에이전트 이벤트 스트림
+### 🧠 Brain: 실시간 에이전트 이벤트 스트림
 ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
-### 📊 Overview — 토큰 사용량 및 세션 요약
+### 📊 Overview: 토큰 사용량 및 세션 요약
 ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-### ⚡ Flow — 실시간 도구 호출 피드
+### ⚡ Flow: 실시간 도구 호출 피드
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 Tokens — 모델 및 세션별 비용 분석
+### 💰 Tokens: 모델 및 세션별 비용 분석
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
-### 🧬 Memory — 워크스페이스 파일 브라우저
+### 🧬 Memory: 워크스페이스 파일 브라우저
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 Security — 보안 태세 및 감사 로그
+### 🔐 Security: 보안 태세 및 감사 로그
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 Alerts — 예산 상한, 오류율 트리거, Slack / Discord / PagerDuty / Email로의 웹훅
+### 🚨 Alerts: 예산 상한, 오류율 트리거, Slack / Discord / PagerDuty / Email로의 웹훅
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals — 위험한 도구 호출을 수동 승인 뒤에 게이트; 정책 기반 보호 규칙
+### ✋ Approvals: 위험한 도구 호출을 수동 승인 뒤에 게이트; 정책 기반 보호 규칙
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**Claude Code를 위한 실행 전 차단** — 하나의 명령으로 일치하는 도구 호출을
+**Claude Code를 위한 실행 전 차단**: 하나의 명령으로 일치하는 도구 호출을
 실제로 실행되기 *전에* 일시 정지하고 여러분의 결정을 기다리는 PreToolUse
-훅을 설치합니다 ([클라우드 푸시 알림](https://app.clawmetry.com/push)을
+훅을 설치합니다([클라우드 푸시 알림](https://app.clawmetry.com/push)을
 활성화하면 휴대폰에서 탭 한 번으로 처리 가능):
 
 ```bash
@@ -83,7 +83,7 @@ clawmetry hooks status      # what's wired + how many policies are active
 clawmetry hooks uninstall   # removes only ClawMetry's entries
 ```
 
-거부(deny)는 해당 도구 호출 하나만 차단합니다. 에이전트는 세션을 유지하며
+거부(deny)는 해당 도구 호출 하나만 차단하며, 에이전트는 세션을 유지한 채
 다른 방법을 시도할 수 있습니다. 휴대폰에서 승인하면 Claude Code 자체의
 권한 프롬프트를 건너뜁니다(이미 답변했으므로). 일치하지 않는 도구는 약
 40ms의 비용이 들며 Claude Code의 일반적인 권한 흐름으로 그대로
@@ -114,7 +114,7 @@ cd clawmetry && pip install flask && python3 dashboard.py
 v2 React 앱은 `frontend/`에 있으며, v2가 활성화된 상태로 Flask 서버가
 시작되면 `/v2`에서 제공됩니다.
 
-개발 중에는 두 개의 터미널을 사용하세요.
+개발 중에는 두 개의 터미널을 사용하세요:
 
 ```bash
 # Terminal 1: Flask API/server on :8900
@@ -165,12 +165,13 @@ ClawMetry는 OpenClaw뿐만 아니라 여러 AI 에이전트 런타임을 관측
 | **Deep Agents** | 베타 어댑터 | SQLite `~/.deepagents/.state/sessions.db`. 대화 기록, 모델, 도구 호출, 토큰 + 비용. |
 | **n8n** | 베타 어댑터 | SQLite `~/.n8n/database.sqlite`. 워크플로우 실행, 노드 실행, AI Agent 프롬프트, n8n이 기록하는 경우의 모델 + 토큰. |
 | **Antigravity** | 베타 어댑터 | `~/.gemini/<flavor>/brain/` 아래의 Brain JSONL. 대화, 도구 단계, 사고 과정, 세대별 Gemini 토큰 분할 + 비용, 백그라운드 생성 소모량. |
+| **GitHub Copilot** | 베타 어댑터 | `~/.copilot/session-state/` 아래의 Copilot CLI `events.jsonl` + 호출별 사용량 대장인 `session-store.db`. 대화, 도구 호출, 모델 라우팅, 캐시를 고려한 토큰 분할, 벤더 청구 AI 크레딧 비용. |
 
 "베타 어댑터"는 ClawMetry가 해당 런타임의 실제 디스크상 형식을 위한 리더를 제공한다는 의미이며, 각각 실제 머신에 대한 실제 설치를 기반으로 구축 및 검증되었습니다(`tests/fixtures/runtimes/<rt>/` 참조). 어댑터는 읽기 전용이며, 각각 해당 런타임이 실제로 디스크에 저장하는 내용에 대해 정확합니다(예: PicoClaw/NanoClaw/Cursor는 토큰 비용을 디스크에 기록하지 않습니다). 하나의 노드에서 여러 런타임이 실행 중일 때, 런타임 전환기는 세션 뷰를 하나로 좁혀 깔끔하게 살펴볼 수 있게 해줍니다.
 
-## 모든 SDK 에이전트 추적하기 — 아웃루프 비용 귀속
+## 모든 SDK 에이전트 추적: 아웃루프 비용 귀속
 
-위의 런타임들은 모두 세션을 디스크에 기록합니다. 여러분이 직접 구축한 **프로덕션 에이전트**, 즉 OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, 또는 순수한 `httpx` 루프로 만든 에이전트는 그렇지 않습니다. ClawMetry의 설정 필요 없는 인터셉터는 `httpx`/`requests`를 몽키패치하여 해당 에이전트의 LLM 호출(비용, 토큰, 지연 시간, 오류)을 여전히 캡처합니다.
+위의 런타임들은 모두 세션을 디스크에 기록합니다. 여러분이 직접 구축한 **프로덕션 에이전트**(OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, 또는 순수한 `httpx` 루프로 만든 에이전트)는 그렇지 않습니다. ClawMetry의 설정 필요 없는 인터셉터는 `httpx`/`requests`를 몽키패치하여 해당 에이전트의 LLM 호출(비용, 토큰, 지연 시간, 오류)을 여전히 캡처합니다:
 
 ```python
 import clawmetry.track            # activate the interceptor
@@ -187,11 +188,11 @@ CLAWMETRY_SOURCE=billing-agent python my_agent.py
 
 이는 런타임 어댑터가 공급하는 것과 동일한 데이터 레이어(DuckDB → 클라우드 스냅샷)이므로, 아웃루프 소스도 나머지 모든 것과 마찬가지로 E2E 암호화된 상태로 클라우드 대시보드에 동기화됩니다.
 
-## OpenTelemetry — 벤더 중립적, 여러분의 트레이스를 어디로든 전송
+## OpenTelemetry: 벤더 중립적, 여러분의 트레이스를 어디로든 전송
 
 ClawMetry는 **GenAI 시맨틱 컨벤션**을 사용하여 양방향으로 **OpenTelemetry**를 지원하므로, 여러분의 에이전트 트레이스가 하나의 도구에 절대 종속되지 않습니다.
 
-**내보내기(Export)** — 모든 세션(LLM 호출, 도구, 서브 에이전트, 토큰, 비용)을 OTLP/HTTP GenAI 스팬으로 어떤 컬렉터로도 전송합니다(Datadog, Grafana, Honeycomb, 또는 자체 OTel Collector).
+**내보내기(Export)**: 모든 세션(LLM 호출, 도구, 서브 에이전트, 토큰, 비용)을 OTLP/HTTP GenAI 스팬으로 어떤 컬렉터로도 전송합니다(Datadog, Grafana, Honeycomb, 또는 자체 OTel Collector):
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -199,20 +200,20 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-인증 헤더와 폴링 간격은 선택적 환경 변수입니다.
+인증 헤더와 폴링 간격은 선택적 환경 변수입니다:
 
 ```bash
 CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**수집(Ingest)** — 내장된 OTLP 리시버는 `/v1/traces` 및 `/v1/metrics`에서 다른 곳으로부터의 트레이스와 메트릭을 수용합니다(protobuf 수집을 위해서는 `pip install clawmetry[otel]`).
+**수집(Ingest)**: 내장된 OTLP 리시버는 `/v1/traces` 및 `/v1/metrics`에서 다른 곳으로부터의 트레이스와 메트릭을 수용합니다(protobuf 수집을 위해서는 `pip install clawmetry[otel]`).
 
 여러분은 설정이 필요 없는 로컬 우선의 ClawMetry 대시보드**와** 여러분의 팀이 이미 운영 중인 백엔드에 있는 데이터를 동시에 얻습니다. 종속(lock-in)도 없고, 설치할 두 번째 에이전트도 없습니다.
 
 ## 구성
 
-대부분의 사람들은 별도의 설정이 필요하지 않습니다. ClawMetry는 여러분의 워크스페이스, 로그, 세션, 크론을 자동으로 감지합니다.
+대부분의 사람들은 별도의 설정이 필요하지 않습니다. ClawMetry는 여러분의 워크스페이스, 로그, 세션, cron을 자동으로 감지합니다.
 
 커스터마이즈가 필요하다면:
 
@@ -295,7 +296,7 @@ services:
 
 - Python 3.8 이상
 - Flask (pip을 통해 자동으로 설치됨)
-- 동일한 머신에서 실행 중인 AI 에이전트 런타임: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, 또는 Antigravity(또는 Docker용 마운트된 볼륨)
+- 동일한 머신에서 실행 중인 AI 에이전트 런타임: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, 또는 GitHub Copilot(또는 Docker용 마운트된 볼륨)
 - Linux 또는 macOS
 
 ## NemoClaw / OpenShell 지원
@@ -306,10 +307,10 @@ ClawMetry는 샌드박스 처리된 OpenShell 컨테이너 내부에서 에이�
 
 ### 작동 방식
 
-ClawMetry는 두 가지 방법으로 NemoClaw를 감지합니다.
+ClawMetry는 두 가지 방법으로 NemoClaw를 감지합니다:
 
-1. **바이너리 감지** — `nemoclaw` CLI를 확인하고 `nemoclaw status`를 실행하여 샌드박스 정보를 가져옵니다
-2. **컨테이너 감지** — 실행 중인 Docker 컨테이너를 스캔하여 `openshell`, `nemoclaw`, 또는 `ghcr.io/nvidia/` 이미지를 찾은 다음, 볼륨 마운트 또는 `docker cp`를 통해 세션을 읽습니다
+1. **바이너리 감지**: `nemoclaw` CLI를 확인하고 `nemoclaw status`를 실행하여 샌드박스 정보를 가져옵니다
+2. **컨테이너 감지**: 실행 중인 Docker 컨테이너를 스캔하여 `openshell`, `nemoclaw`, 또는 `ghcr.io/nvidia/` 이미지를 찾은 다음, 볼륨 마운트 또는 `docker cp`를 통해 세션을 읽습니다
 
 NemoClaw 컨테이너에서 동기화된 세션 파일은 클라우드 대시보드에서 `runtime=nemoclaw` 및 `container_id` 메타데이터로 태그되므로, 한눈에 표준 OpenClaw 세션과 구별할 수 있습니다.
 
@@ -328,7 +329,7 @@ clawmetry sync
 
 ### 선택 사항: 명시적인 샌드박스 이름
 
-자동 감지가 작동하지 않는 경우, ClawMetry가 올바른 샌드박스를 가리키도록 지정하세요.
+자동 감지가 작동하지 않는 경우, ClawMetry가 올바른 샌드박스를 가리키도록 지정하세요:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
@@ -337,7 +338,7 @@ clawmetry sync
 
 ### 샌드박스 내부에서 실행하기 (고급)
 
-동기화 데몬을 OpenShell 샌드박스 **내부**에서 반드시 실행해야 한다면, ClawMetry 수집 API에 도달할 수 있도록 NemoClaw 네트워크 정책에 다음 이그레스 규칙을 추가하세요.
+동기화 데몬을 OpenShell 샌드박스 **내부**에서 반드시 실행해야 한다면, ClawMetry 수집 API에 도달할 수 있도록 NemoClaw 네트워크 정책에 다음 이그레스 규칙을 추가하세요:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -348,7 +349,7 @@ network:
       protocol: https
 ```
 
-다음으로 적용하세요.
+다음으로 적용하세요:
 
 ```bash
 nemoclaw policy apply --file nemoclaw-policy.yaml
@@ -360,7 +361,7 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 |---|---|---|---|
 | `ingest.clawmetry.com` | 443 | HTTPS | 예 (동기화 데몬 → 클라우드) |
 | `localhost:8900` | 8900 | HTTP | 예 (로컬 대시보드 UI) |
-| Docker 소켓 (`/var/run/docker.sock`) | — | 유닉스 소켓 | 컨테이너 세션 검색용 |
+| Docker 소켓 (`/var/run/docker.sock`) | - | 유닉스 소켓 | 컨테이너 세션 검색용 |
 
 동기화 데몬은 `ingest.clawmetry.com`으로만 아웃바운드 HTTPS 호출을 합니다. 인바운드 포트는 필요하지 않습니다.
 
@@ -368,7 +369,7 @@ nemoclaw policy apply --file nemoclaw-policy.yaml
 
 ## 클라우드 배포
 
-SSH 터널, 리버스 프록시, Docker에 대해서는 **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** 를 참조하세요.
+SSH 터널, 리버스 프록시, Docker에 대해서는 **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)**를 참조하세요.
 
 ## 테스트
 
@@ -388,7 +389,7 @@ ClawMetry는 익명의 설치 라이프사이클 핑을
 버전을 파악합니다.
 
 **버전당 라이프사이클 이벤트마다 최대 한 번의 POST**로, 다음을
-포함합니다.
+포함합니다:
 
 | 필드 | 예시 | 이유 |
 |---|---|---|
@@ -419,7 +420,7 @@ touch ~/.clawmetry/notelemetry                 # persistent file marker
 핑은 3초 타임아웃을 가진 데몬 스레드에서 발사 후 잊는(fire-and-forget)
 방식으로 전송됩니다.
 
-## Star History
+## 스타 히스토리
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
