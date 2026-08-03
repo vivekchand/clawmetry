@@ -656,6 +656,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
     const gwOverlayState = { display: '', dataset: {} };
     const gwCloseState = { display: '' };
     const logoutBtnState = { display: 'none' };
+    const localSigninBtnState = { display: 'none' };
     let reloadCount = 0;
 
     const elements = {
@@ -663,6 +664,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
       'gw-setup-overlay': { style: gwOverlayState, dataset: gwOverlayState.dataset },
       'gw-setup-close': { style: gwCloseState },
       'logout-btn': { style: logoutBtnState },
+      'login-local-btn': { style: localSigninBtnState },
     };
 
     const sandbox = {
@@ -721,6 +723,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
               overlayDisplay: overlayState.display,
               gwOverlayDisplay: gwOverlayState.display,
               logoutDisplay: logoutBtnState.display,
+              localSigninDisplay: localSigninBtnState.display,
               reloadCount: reloadCount,
             });
           });
@@ -884,6 +887,90 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
        'E: overlay shown when network error prevents auto-detect');
     eq(result.reloadCount, 0,
        'E: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario F: explicit sign-out sticks — no zero-click re-login ──
+  //
+  // Profile-menu Sign out sets cm-signed-out=1 and wipes the token. On the
+  // next load the bootstrap MUST NOT silently re-login via detected-token
+  // (that would make Sign out a no-op on localhost). It goes straight to
+  // /api/auth/check with no token, shows the wall, and — because loopback
+  // still answers the detected-token PROBE — reveals the one-click
+  // "Sign back in (this machine)" button WITHOUT storing the token.
+  (async function scenarioF() {
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1' },
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: true, json: function() { return Promise.resolve({ token: 'feedface'.repeat(6), source: 'openclaw.json' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/check',
+       'F: signed-out marker routes straight to /api/auth/check (no token)');
+    truthy(!result.lsStore['clawmetry-token'],
+       'F: detected token is NEVER stored while signed out (probe only)');
+    eq(result.lsStore['cm-signed-out'], '1',
+       'F: marker survives the bootstrap — only a real sign-in clears it');
+    eq(result.overlayDisplay, 'flex',
+       'F: login wall is shown after explicit sign-out');
+    eq(result.localSigninDisplay, '',
+       'F: one-click local sign-in button revealed (loopback probe answered)');
+    eq(result.reloadCount, 0,
+       'F: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario G: signed-out marker + non-loopback — wall only, no button ──
+  (async function scenarioG() {
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1' },
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: false, status: 403, json: function() { return Promise.resolve({ error: 'localhost only' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.overlayDisplay, 'flex',
+       'G: wall shown for signed-out remote viewer');
+    eq(result.localSigninDisplay, 'none',
+       'G: local sign-in button stays hidden when the loopback probe 403s');
+    eq(result.reloadCount, 0,
+       'G: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario H: token stored AFTER sign-out (one-click /auth?token= URL,
+  // manual login on another tab) — the marker self-clears and the stored
+  // token wins. Sign-out must never wall a user who explicitly signed back in.
+  (async function scenarioH() {
+    const STORED = 'cafebabe'.repeat(6);
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1', 'clawmetry-token': STORED },
+      fetchHandler: function(url) {
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: true }); } };
+        }
+        return { ok: false, status: 500, json: function() { return Promise.resolve({}); } };
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/check?token=' + STORED,
+       'H: stored token wins over a stale signed-out marker');
+    truthy(!result.lsStore['cm-signed-out'],
+       'H: marker self-clears when a token was stored after sign-out');
+    eq(result.overlayDisplay, 'none',
+       'H: no wall — user explicitly signed back in');
+    eq(result.reloadCount, 0,
+       'H: no location.reload() during bootstrap (E2E-fixture-safe)');
   })();
 }
 
