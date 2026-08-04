@@ -4660,3 +4660,106 @@ def has_feature_at_batch(feature: str, epochs) -> list[dict]:
             matched = False
         out.append({"epoch": parsed, "has_feature": bool(matched)})
     return out
+
+
+def is_subject_at_batch(subject, epochs) -> list[dict]:
+    """Per-value perspective-epoch "was the installed license issued to
+    subject ``<X>`` at each of these epochs?" gate for N epochs in ONE
+    round-trip.
+
+    Shared-``subject`` batch sibling of :func:`is_subject_at`. Where the
+    singular scalar folds ONE ``(subject, epoch)`` pair to ONE bool,
+    this preserves per-value rows for a fixed ``subject`` and a
+    sequence of perspective epochs so a scheduled-audit tile that wants
+    to answer "was this node licensed to <account> on each of these
+    audit dates?" (e.g. "bound to <acct> on any of my quarterly review
+    dates?") hydrates the whole column in ONE round-trip instead of
+    fanning out N calls to the scalar. Same "shared threshold applied
+    to EVERY row, per-row epoch" shape as :func:`is_state_at_batch` /
+    :func:`is_tier_at_batch` / :func:`has_feature_at_batch` -- one
+    gate parameter plus a batch of epochs.
+
+    ``subject`` is normalised (``str().strip().lower()``) the same way
+    :func:`is_subject_at` normalises it -- so ``"Acct_Test"``,
+    ``"acct_test"``, and ``"  ACCT_TEST "`` collapse to the same
+    query. A missing / empty / non-string ``subject`` collapses EVERY
+    row to ``is_subject=False`` while preserving row slots so the
+    output length still matches N. A caller cannot silently mis-gate
+    on an empty subject id.
+
+    Unlike :func:`is_state_at_batch` (which validates against the
+    closed :data:`LICENSE_STATES` set), the subject axis is
+    deliberately open-ended -- a subject typically encodes an account
+    id / email / tenant handle that the code here has no business
+    whitelisting, matching :func:`is_subject_at` / :func:`is_subject`
+    posture. A typo like ``"acct_test_"`` simply doesn't match any
+    real subject and collapses every row to ``False``.
+
+    Row shape::
+
+        {
+          "epoch":      <int> | "<raw>",
+          "is_subject": <bool>,
+        }
+
+    Semantics per row mirror :func:`is_subject_at`: ``True`` iff the
+    perspective-epoch subject byte-equals the (normalised) ``subject``
+    requested. For a bad epoch token (``bool`` / non-numeric /
+    ``None``) the scalar collapses :func:`license_subject_at` to
+    ``None`` so the row's ``is_subject`` is ``False`` -- exactly
+    matching the conservative "no entitlement" fallback of
+    :func:`license_subject_at` (like :func:`is_tier_at_batch`, there
+    is no meaningful "no-license subject" the caller could ask for,
+    since :func:`license_subject` already returns ``None`` -- not a
+    sentinel string -- on that branch).
+
+    Duplicates by normalised int key (or ``repr(raw)`` for bad inputs)
+    are dropped preserving first-seen order for byte-stable output.
+    ``epochs is None`` or non-iterable -- returns ``[]``. Never raises:
+    per-row failures short-circuit to ``is_subject=False`` so the batch
+    keeps building. Matches the never-mis-gate posture used by
+    :func:`is_subject_at` -- a bad row cannot silently claim a subject
+    that would grant unearned entitlement.
+
+    When any row's ``epoch`` equals "now" and ``subject`` is a
+    normalisable string, this predicate must agree with
+    :func:`is_subject` for the same install and the same requested
+    ``subject`` at that row -- both derive from the same signed
+    ``sub`` claim via :func:`license_subject_at` /
+    :func:`license_subject`, so a caller binding both the singular
+    and the batch cannot catch them disagreeing at the boundary.
+
+    Pairs with :func:`is_state_at_batch`, :func:`is_tier_at_batch`,
+    :func:`is_expired_at_batch`, and :func:`is_expiring_within_at_batch`
+    on the perspective-epoch predicate-batch axis: for the same
+    ``epochs`` sequence, a caller can zip the boolean gates
+    index-for-index and render a whole entitlement audit column for
+    one install without the gates catching each other disagreeing on
+    the perspective-epoch classification.
+    """
+    try:
+        requested = str(subject).strip().lower() if subject is not None else ""
+    except Exception:
+        requested = ""
+    have_query = bool(requested)
+    out: list[dict] = []
+    for raw, _key, parsed in _license_epoch_batch_keys(epochs):
+        if parsed is None:
+            try:
+                token = str(raw)
+            except Exception:
+                token = repr(raw)
+            out.append({"epoch": token, "is_subject": False})
+            continue
+        if not have_query:
+            out.append({"epoch": parsed, "is_subject": False})
+            continue
+        try:
+            matched = is_subject_at(requested, parsed)
+        except Exception as exc:
+            logger.debug(
+                "license: is_subject_at_batch per-row failed: %s", exc
+            )
+            matched = False
+        out.append({"epoch": parsed, "is_subject": bool(matched)})
+    return out
