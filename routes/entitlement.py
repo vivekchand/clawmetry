@@ -5852,6 +5852,285 @@ def api_entitlement_missing_runtimes_at_batch():
         )
 
 
+def _has_bundle_at_batch_fallback(
+    axis: str, tier_tokens: list, feature_or_runtime_tokens: list
+) -> dict:
+    """OSS-free / never-5xx envelope for
+    ``/api/entitlement/has-features-at-batch`` /
+    ``/api/entitlement/has-runtimes-at-batch``.
+
+    Boolean-fold sibling of :func:`_missing_bundle_at_batch_fallback`. On
+    any resolver / helper blowup the endpoint still returns 200 with the
+    same envelope shape as the happy path but with ``tiers=[]`` and every
+    fold-rollup fail-closed (``allowed_count=0`` / ``all_allowed=False`` /
+    ``any_allowed=False``) so a pricing-matrix column that lost the
+    resolver never silently renders a bundle grant it can't verify --
+    matches the sibling ``/has-features-at`` fallback's fail-closed
+    posture byte-for-byte. Caller-supplied tier and axis tokens echo
+    into ``unknown_tiers`` / ``unknown`` for debugging.
+    """
+    return {
+        axis: [],
+        "unknown": list(feature_or_runtime_tokens),
+        "unknown_tiers": list(tier_tokens),
+        "kind": axis,
+        "count": 0,
+        "tiers": [],
+        "allowed_count": 0,
+        "all_allowed": False,
+        "any_allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_bundle_at_batch_body(axis: str) -> dict:
+    """Happy-path body builder for
+    ``/api/entitlement/has-features-at-batch`` /
+    ``/api/entitlement/has-runtimes-at-batch``.
+
+    Batch what-if sibling of :func:`_has_bundle_at_body`: where the
+    ``_at`` variant folds ONE (perspective, bundle) pair, this fixes the
+    bundle and sweeps across N perspective tiers, returning one row per
+    tier with the fold boolean plus the surrounding tier envelope so a
+    pricing-matrix column ("does OSS grant {fleet, sso}? Cloud Starter?
+    Cloud Pro? Enterprise?") hydrates the whole column off ONE URL
+    instead of N calls to ``/has-features-at``. Boolean-fold complement
+    of :func:`_missing_bundle_at_batch_body` (per-item denial list); the
+    two share the envelope shape (same tier normalisation, same
+    known / unknown split, same required-tier rollup) so a UI can render
+    "is this granted?" and "which items are still locked?" side by side
+    off the two paired endpoints.
+
+    Envelope shape (byte-stable across every input branch)::
+
+        {
+          "features"/"runtimes":  [<known ids>],          # known-only, dedup, first-seen
+          "unknown":              [<feature/runtime tokens dropped>],
+          "unknown_tiers":        [<tier tokens dropped>],
+          "kind":                 "features"/"runtimes",
+          "count":                <int>,                  # len(known)
+          "tiers": [
+            {
+              "tier":                  "<id>",
+              "tier_label":            "...",
+              "tier_rank":             <int>,
+              "has_<axis>_at":         <bool>,            # fold vs ROW's tier
+              "allowed":               <bool>,            # alias of has_<axis>_at
+              "required_tier":         "<id>" | null,     # min_tier_for_<axis>(known)
+              "required_tier_label":   "<label>" | null,
+              "required_tier_rank":    <int>,             # -1 when null
+              "upgrade_required":      <bool>,            # required_rank > tier_rank
+            },
+            ...
+          ],
+          "allowed_count":         <int>,                 # #rows with has_<axis>_at=true
+          "all_allowed":           <bool>,                # every row granted
+          "any_allowed":           <bool>,                # at least one row granted
+          "required_tier":         "<id>" | null,         # bundle-level rollup
+          "required_tier_label":   "<label>" | null,
+          "required_tier_rank":    <int>,
+          "current_tier":          "<live tier id>",
+          "current_tier_rank":     <int>,
+          "grace":                 <bool>,                # LIVE resolver grace bit
+          "enforced":              <bool>,
+        }
+
+    Runtime-axis alias canonicalisation is applied per-token upstream of
+    the strict scalar (:func:`has_runtimes_at_batch` inherits the
+    strict-scalar posture from :func:`has_runtimes_at`), matching the
+    sibling :func:`_missing_bundle_at_batch_body` /
+    ``/missing-runtimes-at-batch`` upstream-canonicalise pattern
+    byte-for-byte (an alias-and-canonical pair dedups to ONE row before
+    the scalar sees it).
+
+    Per-row ``upgrade_required`` compares ``required_tier`` against each
+    ROW's tier rank (not the live current rank) so a pricing-matrix row
+    that binds this field reads "no upgrade needed at this tier" vs
+    "upgrade needed beyond this tier" -- matches the sibling
+    :func:`_missing_bundle_at_batch_body` convention.
+
+    ``all_allowed`` folds row.allowed AND-wise (empty ``tiers`` -> False
+    to inherit the fail-closed fold posture the singular
+    :func:`has_features_at` uses on empty input). ``any_allowed`` folds
+    OR-wise (empty ``tiers`` -> False). ``allowed_count`` is the sum of
+    per-row boolean grants so a pricing-matrix header can render "3 of 5
+    tiers grant this bundle" off one field.
+
+    Never 4xxs (missing / blank / unknown tiers or all-unknown CSV -> 200
+    with ``tiers=[]``, matching the sibling ``/has-features-at`` posture).
+    Never 5xxs.
+    """
+    from clawmetry import entitlements as _ent
+
+    tier_tokens = _parse_csv_arg("tiers")
+    param = "features" if axis == "features" else "runtimes"
+    tokens = _parse_csv_arg(param)
+
+    known: list = []
+    unknown: list = []
+    if axis == "features":
+        for fid in tokens:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            elif fid not in unknown:
+                unknown.append(fid)
+        scalar_tokens = tokens
+        required = _ent.min_tier_for_features(known) if known else None
+        batch = _ent.has_features_at_batch(tier_tokens, scalar_tokens)
+    else:
+        # Canonicalise upstream of the strict scalar so an alias input
+        # (``claude-code``) collapses to the granted runtime
+        # (``claude_code``) here instead of collapsing the row to
+        # ``False`` -- matches the sibling ``_missing_bundle_at_batch_body``
+        # upstream-canonicalise pattern for the ``/missing-runtimes-at-batch``
+        # endpoint, and dedups an alias-and-canonical pair to ONE entry
+        # before the scalar sees it.
+        canon_tokens: list = []
+        canon_seen: set = set()
+        for rid_raw in tokens:
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in canon_seen:
+                continue
+            canon_seen.add(rid)
+            canon_tokens.append(rid)
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known:
+                    known.append(rid)
+            elif rid not in unknown:
+                unknown.append(rid_raw)
+        scalar_tokens = canon_tokens
+        required = _ent.min_tier_for_runtimes(known) if known else None
+        batch = _ent.has_runtimes_at_batch(tier_tokens, scalar_tokens)
+
+    env = _resolver_envelope(_ent)
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+
+    tiers_out: list[dict] = []
+    fold_key = f"has_{axis}_at"
+    for row in batch.get("tiers", []) or []:
+        try:
+            tid = row.get("tier")
+            row_allowed = bool(row.get(fold_key, False))
+        except AttributeError:
+            continue
+        row_rank = row.get("tier_rank", _ent.tier_rank(tid))
+        upgrade_required = (
+            bool(required) and row_rank >= 0 and req_rank > row_rank
+        )
+        # An unknown token in the bundle collapses the endpoint-level fold
+        # to ``False`` on EVERY row (matches the singular
+        # ``_has_bundle_at_body`` posture: ``unknown != []`` -> ``allowed=False``).
+        endpoint_allowed = row_allowed and not unknown and bool(known)
+        tiers_out.append(
+            {
+                "tier": tid,
+                "tier_label": row.get("tier_label", _ent.tier_label(tid)),
+                "tier_rank": row_rank,
+                fold_key: endpoint_allowed,
+                "allowed": endpoint_allowed,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "upgrade_required": upgrade_required,
+            }
+        )
+
+    allowed_count = sum(1 for r in tiers_out if r["allowed"])
+    all_allowed = bool(tiers_out) and all(r["allowed"] for r in tiers_out)
+    any_allowed = any(r["allowed"] for r in tiers_out)
+
+    return {
+        axis: known,
+        "unknown": unknown,
+        "unknown_tiers": list(batch.get("unknown", []) or []),
+        "kind": axis,
+        "count": len(known),
+        "tiers": tiers_out,
+        "allowed_count": allowed_count,
+        "all_allowed": all_allowed,
+        "any_allowed": any_allowed,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-features-at-batch")
+def api_entitlement_has_features_at_batch():
+    """``GET /api/entitlement/has-features-at-batch?tiers=<a,b,...>&features=<x,y,...>``
+    -- batch what-if sibling of ``/api/entitlement/has-features-at``.
+
+    Fixes ONE feature bundle and sweeps across N perspective tiers,
+    returning one row per tier with the fold boolean plus the surrounding
+    tier envelope. Boolean-fold complement of
+    ``/api/entitlement/missing-features-at-batch`` (per-item denial list);
+    the two paired endpoints share the tier envelope so a UI can render
+    "is this granted?" and "which items are still locked?" side by side
+    without a second round of tier normalisation.
+
+    Envelope shape is fully documented on :func:`_has_bundle_at_batch_body`.
+    Never 4xxs (missing / blank / unknown tiers or all-unknown CSV -> 200
+    with ``tiers=[]``, matching the sibling ``/has-features-at`` posture --
+    a paywall matrix binds ``tiers`` directly without a pre-validation
+    round-trip). Never 5xxs: any helper blowup collapses to
+    :func:`_has_bundle_at_batch_fallback`.
+    """
+    try:
+        return jsonify(_has_bundle_at_batch_body("features"))
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_features_at_batch: error: %s", exc
+        )
+        return jsonify(
+            _has_bundle_at_batch_fallback(
+                "features",
+                _parse_csv_arg("tiers"),
+                _parse_csv_arg("features"),
+            )
+        )
+
+
+@bp_entitlement.route("/api/entitlement/has-runtimes-at-batch")
+def api_entitlement_has_runtimes_at_batch():
+    """``GET /api/entitlement/has-runtimes-at-batch?tiers=<a,b,...>&runtimes=<x,y,...>``
+    -- runtime-axis twin of ``/api/entitlement/has-features-at-batch``.
+
+    Same envelope with ``runtimes`` in the axis-specific slot. Runtime-
+    alias canonicalisation (``claude-code`` -> ``claude_code``) is
+    applied per-token upstream at the endpoint layer so
+    ``?runtimes=claude-code,openclaw`` collapses to the canonical
+    ``claude_code,openclaw`` before hitting the strict batch scalar --
+    matches the sibling ``/has-runtimes-at`` endpoint's own upstream-
+    canonicalise pattern. Alias-and-canonical pair dedups to ONE row in
+    both ``runtimes`` and every per-tier fold. Never 4xxs; never 5xxs.
+    """
+    try:
+        return jsonify(_has_bundle_at_batch_body("runtimes"))
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_runtimes_at_batch: error: %s", exc
+        )
+        return jsonify(
+            _has_bundle_at_batch_fallback(
+                "runtimes",
+                _parse_csv_arg("tiers"),
+                _parse_csv_arg("runtimes"),
+            )
+        )
+
+
 def _missing_bundle_at_path_fallback(
     axis: str,
     from_tier: str,
