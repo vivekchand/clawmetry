@@ -43,6 +43,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
 | `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
+| `routes/runtime_ingest.py` | ~87 | `bp_runtime_ingest` — custom runtime HTTP ingest API (`/api/v1/runtimes`, `/api/v1/runs/*`; Pro feature) |
 | `routes/__init__.py` | — | Package marker |
 
 ### Package (`clawmetry/`)
@@ -147,16 +148,16 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.577` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.650` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
-- `ci.yml` — Lint + test matrix on push/PR
-- `publish.yml` — PyPI publish on git tag `v*`
-- `release-on-merge.yml` — Auto-release when version bumped on main
-- `sync-test.yml` — Cloud sync daemon tests
-- `install-test.yml` — Cross-platform pip install smoke tests
-- `auto-deploy-cloud.yml` — Cloud deployment
-- `browserstack.yml` — Cross-browser E2E testing
+- `.github/workflows/ci.yml` — Lint + test matrix on push/PR
+- `.github/workflows/publish.yml` — PyPI publish on git tag `v*`
+- `.github/workflows/release-on-merge.yml` — Auto-release when version bumped on main
+- `.github/workflows/sync-test.yml` — Cloud sync daemon tests
+- `.github/workflows/install-test.yml` — Cross-platform pip install smoke tests
+- `.github/workflows/auto-deploy-cloud.yml` — Cloud deployment
+- `.github/workflows/browserstack.yml` — Cross-browser E2E testing
 
 ## Environment Variables
 ```bash
@@ -174,7 +175,7 @@ DEBUG=1                                # Enable debug logging
 
 ## Conventions
 - **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
-- **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`static/css/dashboard.css`, `static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
+- **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`clawmetry/static/css/dashboard.css`, `clawmetry/static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
 - **Read-only by default** — ClawMetry observes, it doesn't modify agent behavior (except cron management via gateway RPC).
 - **Auto-detect everything** — users should never need to configure anything manually.
