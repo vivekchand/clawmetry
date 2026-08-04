@@ -6319,6 +6319,150 @@ def has_runtimes_at(perspective_tier: str, runtimes) -> bool:
         return False
 
 
+def has_features_at_batch(perspective_tiers, features) -> dict:
+    """Batch what-if sibling of :func:`has_features_at`: would each caller-
+    supplied hypothetical tier grant **all** ``features``, in ONE round-trip.
+
+    Fixes ONE feature bundle and sweeps across N perspective tiers, returning
+    one row per tier with the fold boolean. Boolean-fold complement of
+    :func:`missing_features_at_batch` (per-item denial list) in the same
+    relationship :func:`has_features_at` has to :func:`missing_features_at`:
+    a pricing matrix that gates on a bundle ("does OSS grant {fleet, sso}?
+    Starter? Cloud Pro? Enterprise?") hydrates the whole column off ONE call
+    instead of N calls to :func:`has_features_at`, and pairs with
+    :func:`missing_features_at_batch` so a single row can render both "is
+    this granted?" and "which item is still locked?" side by side.
+
+    Per-tier row shape mirrors :func:`missing_features_at_batch` with the
+    per-item denial list swapped for the fold boolean::
+
+        {
+          "tier":            "<id>",
+          "tier_label":      "...",
+          "tier_rank":       <int>,
+          "has_features_at": <bool>,
+        }
+
+    Each ``has_features_at`` byte-equals :func:`has_features_at` for the same
+    ``(tier, features)`` pair -- a parity test pins this so the scalar and
+    batch what-if boolean-fold helpers cannot drift.
+
+    Envelope::
+
+        {
+          "tiers":   [<row>, ...],
+          "unknown": [<tier tokens dropped as unknown>, ...],
+        }
+
+    Tier normalisation is delegated to :func:`_normalise_csv` (whitespace
+    stripped, lowercased, dedup preserving first-seen; ``trial`` IS accepted --
+    it lives in :data:`_TIER_ORDER`). Unknown tier ids are echoed in
+    ``unknown[]`` instead of short-circuiting so a partially-bad caller still
+    gets rows for the valid tiers alongside a list of what was dropped --
+    matches :func:`missing_features_at_batch` posture byte-for-byte.
+
+    Empty / ``None`` / non-iterable ``perspective_tiers`` returns
+    ``{"tiers": [], "unknown": []}``. Empty / ``None`` ``features`` still
+    walks every valid perspective tier and emits ``has_features_at=False``
+    for each (matches :func:`has_features_at` on empty bundle byte-for-byte:
+    the vacuous-truth fold is refused so a caller who forgot the bundle
+    doesn't silently render "granted").
+
+    Grace-independent by construction: delegates per-tier to
+    :func:`has_features_at`, which is backed by
+    :func:`_hypothetical_entitlement`. Never raises: a per-tier delegate
+    failure short-circuits that id into ``unknown[]`` and the rest of the
+    batch keeps building.
+    """
+    ids = _normalise_csv(perspective_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            allowed = has_features_at(tid, features)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_features_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "has_features_at": bool(allowed),
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def has_runtimes_at_batch(perspective_tiers, runtimes) -> dict:
+    """Runtime-axis twin of :func:`has_features_at_batch`: would each caller-
+    supplied hypothetical tier grant **all** ``runtimes``, in ONE round-trip.
+
+    Pairs with :func:`has_features_at_batch` the same way
+    :func:`missing_runtimes_at_batch` pairs with
+    :func:`missing_features_at_batch`. Together the two boolean-fold batch
+    what-if helpers let a pricing-matrix column ("does OSS admit
+    {claude_code, cursor}? Starter? Cloud Pro?") hydrate every tier column
+    off TWO calls instead of 2 * N calls to :func:`has_runtimes_at`.
+
+    Per-tier row shape mirrors :func:`has_features_at_batch` with
+    ``has_runtimes_at`` in the fold slot::
+
+        {
+          "tier":            "<id>",
+          "tier_label":      "...",
+          "tier_rank":       <int>,
+          "has_runtimes_at": <bool>,
+        }
+
+    Runtime-alias posture is inherited from :func:`has_runtimes_at`: no
+    scalar-level canonicalisation -- a raw ``"claude-code"`` surfaces as
+    ``False`` on every row because the strict scalar sees it as an unknown
+    id. Alias tolerance belongs to the paired
+    ``/api/entitlement/has-runtimes-at-batch`` endpoint, which canonicalises
+    per-token upstream before delegating -- matches the sibling
+    :func:`missing_runtimes_at_batch` /
+    ``/api/entitlement/missing-runtimes-at-batch`` split exactly.
+
+    Tier / unknown / grace-independence / never-raise contract mirror
+    :func:`has_features_at_batch` byte-for-byte.
+    """
+    ids = _normalise_csv(perspective_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            allowed = has_runtimes_at(tid, runtimes)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_runtimes_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "has_runtimes_at": bool(allowed),
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def missing_features(features) -> list:
     """Row-level complement of :func:`has_features`: return the subset of
     ``features`` NOT granted by the resolved entitlement.
