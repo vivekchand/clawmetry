@@ -78,6 +78,41 @@ def test_gw_setup_module_wiring():
         assert needle in js, f"gw-setup.js missing: {needle}"
 
 
+def test_selfhosted_upgrade_goes_to_selfhosted_pricing():
+    """A self-hosted trial's "Upgrade plan" must sell the self-hosted license
+    (clawmetry.com/pricing?deploy=self preselects the buy modal), never the
+    cloud-account funnel: app.clawmetry.com/upgrade either hits a login wall
+    or silently starts a CLOUD trial for the wrong product."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "clawmetry.com/pricing?deploy=self" in js
+    assert "app.clawmetry.com/upgrade" not in js
+
+
+def test_cloud_billing_link_gated_on_linked_account():
+    """"Billing & plan" opens app.clawmetry.com/settings, so it may only
+    render when the node is linked to a cloud account — a license-only
+    install has no account there to manage."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "accountLinked" in js
+    settings_pos = js.index("app.clawmetry.com/settings")
+    gate_pos = js.index("st.accountLinked")
+    assert gate_pos < settings_pos, "settings link must sit behind the accountLinked gate"
+
+
+def test_gateway_settings_entry_points_removed():
+    """The gw-setup overlay is a first-run wizard, not a settings surface:
+    no "Gateway settings" gear in the topbar, no profile-menu item, no
+    orphaned i18n keys (founder call 2026-08-04)."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "profile.gateway_settings" not in js
+    html = _dashboard_html()
+    assert 'title="Gateway settings"' not in html
+    assert "topbar.gateway_settings" not in html
+    catalog = json.loads((STATIC / "locales" / "en.json").read_text())
+    assert "profile.gateway_settings" not in catalog
+    assert "topbar.gateway_settings" not in catalog
+
+
 def test_sign_out_sticks_and_offers_local_signin():
     """Explicit sign-out must survive the zero-click loopback auto-login
     (otherwise Sign out is a no-op on localhost), and the wall must offer

@@ -1,3 +1,13 @@
+## 0.12.650
+
+- **The profile menu now respects that you're self-hosted.** "Upgrade plan"
+  on a trial license opens the self-hosted pricing flow on clawmetry.com
+  (the buy modal preselected) instead of the cloud app's account funnel,
+  and "Billing & plan" only appears when the node is actually linked to a
+  cloud account. The old "Gateway settings" gear and menu item are gone:
+  the gateway wizard is first-run setup and still opens itself whenever
+  the gateway is unconfigured, which is the only time it can help.
+
 ## 0.12.648
 
 - **The savings ideas now read the spend flow.** The efficiency card on the

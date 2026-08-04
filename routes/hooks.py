@@ -37,6 +37,7 @@ would surface as "no opinion" anyway), an unentitled node gets an explicit
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -139,6 +140,12 @@ def _ls_read(method_name: str, **kwargs):
         return None
 
 
+def _input_hash(tool_input: dict) -> str:
+    return hashlib.md5(
+        json.dumps(tool_input, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
 def _ls_write(method_name: str, **kwargs) -> bool:
     """Writer call: daemon proxy first (it owns the DuckDB writer lock),
     direct writable store as the single-process fallback."""
@@ -152,6 +159,10 @@ def _ls_write(method_name: str, **kwargs) -> bool:
     try:
         from clawmetry import local_store
         store = local_store.get_store()
+        if getattr(store, "_read_only", False):
+            # _ProxyStore (daemon registered but its write no-ops) or an
+            # explicit read-only LocalStore — nothing will persist.
+            return False
         getattr(store, method_name)(**kwargs)
         return True
     except Exception:
@@ -294,13 +305,34 @@ def api_hook_claude_code_pretooluse():
         return _decided("allow", f"policy action '{action}' does not gate")
 
     # ── park a pending row in the local queue ────────────────────────────
-    # Dedup: a client whose first POST timed out client-side retries
-    # without approval_id — reuse the pending row keyed by tool_use_id.
+    # Dedup: a client whose first POST timed out client-side retries without
+    # approval_id.  Primary key: tool_use_id.  Fallback (tool_use_id absent):
+    # (session_id, tool_name, md5(tool_input)) within a 30 s window.
     if tool_use_id:
         for r in _rows(_ls_read("query_approvals", status="pending",
                                 limit=100)):
             if _args_meta(r).get("tool_use_id") == tool_use_id:
                 return _wait_on_row(str(r.get("id")), r, tool_name)
+    elif session_id:
+        ih = _input_hash(tool_input)
+        req_sid = f"claude_code:{session_id}"
+        cutoff_ms = int(time.time() * 1000) - 30_000
+        for r in _rows(_ls_read("query_approvals", status="pending",
+                                limit=100)):
+            m = _args_meta(r)
+            if (m.get("tool_use_id") is None
+                    and m.get("input_hash") == ih
+                    and m.get("tool_name") == tool_name
+                    and r.get("requestor_session_id") == req_sid):
+                try:
+                    import datetime as _dt
+                    row_ms = int(_dt.datetime.fromisoformat(
+                        (r.get("created_at") or "").replace("Z", "+00:00")
+                    ).timestamp() * 1000)
+                except Exception:
+                    row_ms = 0
+                if row_ms >= cutoff_ms:
+                    return _wait_on_row(str(r.get("id")), r, tool_name)
 
     approval_id = uuid.uuid4().hex
     now_ms = int(time.time() * 1000)
@@ -324,6 +356,7 @@ def api_hook_claude_code_pretooluse():
             "tool_input": tool_input,
             "cwd": cwd,
             "tool_use_id": tool_use_id or None,
+            "input_hash": None if tool_use_id else _input_hash(tool_input),
             "policy": policy.get("name"),
             "timeout": timeout_s,
             "on_timeout": policy.get("on_timeout") or "deny",
