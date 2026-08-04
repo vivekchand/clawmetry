@@ -184,10 +184,16 @@ async function shoot(browser, baseUrl, view, tab, file) {
     // Polling until the overlay is hidden (up to 5s) eliminates the race
     // and also guarantees window.switchTab is available before we call it,
     // because app.js only registers switchTab after a successful auth check.
+    //
+    // All 4 overlay IDs are checked here to match _BLOCKING_OVERLAY_IDS in
+    // tests/test_e2e_oss_all_tabs.py. Previously only login-overlay and
+    // gw-setup-overlay were checked, leaving auth-overlay and setup-overlay
+    // undetected -- tabs showing those overlays were silently screenshotted
+    // as content and the bot exited 0 (false green).
     try {
       await page.waitForFunction(
         () => {
-          for (const id of ["login-overlay", "gw-setup-overlay"]) {
+          for (const id of ["login-overlay", "gw-setup-overlay", "auth-overlay", "setup-overlay"]) {
             const el = document.getElementById(id);
             if (!el) continue;
             const cs = getComputedStyle(el);
@@ -230,16 +236,19 @@ async function shoot(browser, baseUrl, view, tab, file) {
 
     // Auth-gap canary #2: overlay still visible after the explicit wait
     // confirms a real token mismatch, not a timing race.
+    // Checks all 4 overlay IDs (matches _BLOCKING_OVERLAY_IDS in
+    // tests/test_e2e_oss_all_tabs.py) so auth-overlay and setup-overlay
+    // variants are also detected as auth failures.
     const overlayBlocking = await page.evaluate(() => {
       const seen = [];
-      for (const id of ["login-overlay", "gw-setup-overlay"]) {
+      for (const id of ["login-overlay", "gw-setup-overlay", "auth-overlay", "setup-overlay"]) {
         const el = document.getElementById(id);
         if (!el) continue;
         const cs = getComputedStyle(el);
         if (cs.display !== "none" && cs.visibility !== "hidden") {
           seen.push(id);
         }
-      }  
+      }
       return seen;
     });
     if (overlayBlocking.length > 0) {
@@ -357,8 +366,8 @@ async function main() {
       // Sanity gate: '/' must return HTTP 200 AND no auth overlay must be
       // visible. A non-200 means the SPA didn't render. ok=false with HTTP 200
       // means an overlay was visible after token injection (shoot() sets
-      // ok=false when #login-overlay / #gw-setup-overlay is visible, but the
-      // old code never added that to authGaps -- fixed here).
+      // ok=false when any blocking overlay is visible, but the old code never
+      // added that to authGaps -- fixed here).
       for (const [label, res] of [["base", baseRes], ["head", headRes]]) {
         if (res.status !== 200) {
           authGaps.push(
