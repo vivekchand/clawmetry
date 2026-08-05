@@ -12,6 +12,12 @@ name: C6 auto-heal (required-checks application)
 # already provides equivalent status information, so the push trigger is
 # redundant. See issue #4029 for context.
 #
+# PHANTOM-RUN FIX (2026-08-05): When a PR modifies this file, GitHub creates
+# a workflow run with event=push even though no push trigger is defined.
+# Previously that produced a 0-job failure (red PR badge). The job-level
+# `if` guard below causes the job to be SKIPPED on push, so the run concludes
+# as success (skipped) rather than failure. See PR #4553.
+#
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
 #   - if clawmetry/main checks already configured: exits 0 (C6 green)
@@ -72,6 +78,12 @@ jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
     runs-on: ubuntu-latest
+    # Guard: only execute on the events this workflow actually declares (schedule
+    # and workflow_dispatch). When a PR touches this file, GitHub creates a
+    # phantom run with event=push (no push trigger is defined). Without this
+    # guard that 0-job run concludes as "failure". With it the job is SKIPPED
+    # and the run concludes as "success" (skipped), eliminating PR badge noise.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
