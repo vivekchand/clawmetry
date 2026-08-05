@@ -52,6 +52,8 @@ name: C6 auto-heal (required-checks application)
 #     This workflow picks it up within 2 hours and closes C6.
 #
 # Tracking: vivekchand/clawmetry#4029
+# Schedule-resume push: 2026-08-05 (workflow auto-paused Jul 2026 after pre-C6
+# failures; C6 now green since 2026-07-31; see #4542)
 
 on:
   schedule:
