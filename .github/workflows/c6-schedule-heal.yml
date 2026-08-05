@@ -1,1 +1,324 @@
-bmFtZTogQzYgYXV0by1oZWFsIChyZXF1aXJlZC1jaGVja3MgYXBwbGljYXRpb24pCgojIEFwcGxpZXMgcmVxdWlyZWQgRTJFIHN0YXR1cyBjaGVja3MgdG8gbWFpbiBicmFuY2ggcHJvdGVjdGlvbi4KIyBSdW5zIGV2ZXJ5IDIgaG91cnMgYW5kIG9uY2UgZGFpbHkgYXQgMTA6MTVhbSBVVEMuCiMgU2VsZi1oZWFscyBDNiB3aXRoaW4gMiBob3VycyBhZnRlciBFMkVfQURNSU5fUEFUIHNlY3JldCBpcyBhZGRlZC4KIwojIE5PVEU6IFB1c2ggdHJpZ2dlciBpbnRlbnRpb25hbGx5IHJlbW92ZWQgKDIwMjYtMDgtMDEpLiBJdCB3YXMgaW5mb3JtYXRpb25hbC0KIyBvbmx5IChleGl0IDAgcmVnYXJkbGVzcyBvZiBzdGF0ZSBwZXIgdGhlIGV2ZW50X25hbWUgIT0gJ3B1c2gnIGd1YXJkIG9uIHRoZQojIEVycm9yIHN0ZXApLCBidXQgY2F1c2VkIHBlcnNpc3RlbnQgMC1qb2IgZmFpbHVyZXMgb24gdGhlIENJIGRhc2hib2FyZAojIHdoZW5ldmVyIG1hbnkgUFJzIG1lcmdlZCB0byBtYWluIGluIHF1aWNrIHN1Y2Nlc3Npb24sIGR1ZSB0byBHaXRIdWIKIyByZXBvc2l0b3J5LWxldmVsIHdvcmtmbG93IHF1ZXVlIHByZXNzdXJlLiBUaGUgMi1ob3VybHkgc2NoZWR1bGUgdHJpZ2dlcgojIGFscmVhZHkgcHJvdmlkZXMgZXF1aXZhbGVudCBzdGF0dXMgaW5mb3JtYXRpb24sIHNvIHRoZSBwdXNoIHRyaWdnZXIgaXMKIyByZWR1bmRhbnQuIFNlZSBpc3N1ZSAjNDAyOSBmb3IgY29udGV4dC4KIwojIFdoZW4gRTJFX0FETUlOX1BBVCBpcyBOT1Qgc2V0OgojICAgLSByZWFkcyBjdXJyZW50IGJyYW5jaCBwcm90ZWN0aW9uIHN0YXRlIChyZWFkLW9ubHksIG5vIGFkbWluIG5lZWRlZCkKIyAgIC0gaWYgY2xhd21ldHJ5L21haW4gY2hlY2tzIGFscmVhZHkgY29uZmlndXJlZDogZXhpdHMgMCAoQzYgZ3JlZW4pCiMgICAtIGlmIGNoZWNrcyBub3QgeWV0IGNvbmZpZ3VyZWQgb24gc2NoZWR1bGU6IGVtaXRzIDo6ZXJyb3I6OiBhbm5vdGF0aW9uIGFuZCBleGl0cyAxCiMgICAgIChyZWQgYmFkZ2UgYWN0cyBhcyBhIGZvcmNpbmcgc2lnbmFsIHVudGlsIHRoZSBhZG1pbiBhY3RzKQojCiMgV2hlbiBFMkVfQURNSU5fUEFUIElTIHNldDoKIyAgIC0gcnVucyBzY3JpcHRzL2FwcGx5X3JlcXVpcmVkX3N0YXR1c19jaGVja3MucHkgdG8gY29uZmlndXJlIGNoZWNrcwojICAgLSB3cml0ZXMgYSBwb3N0LWFwcGx5IHN1bW1hcnkKIwojIENyb3NzLXJlcG8gcmVhZHMgKGNsYXdtZXRyeS1jbG91ZCwgY2xhd21ldHJ5LWxhbmRpbmcpOgojICAgR0lUSFVCX1RPS0VOIHJldHVybnMgNDAzIGZvciBwcml2YXRlIGNyb3NzLXJlcG8gcmVhZHMuIFRoaXMgaXMgZXhwZWN0ZWQsCiMgICBOT1QgYSBidWcuIFRob3NlIHJlcG9zIGFyZSBzaG93biBhcyAiY2Fubm90IHZlcmlmeSIgaW4gdGhlIHN1bW1hcnkgYW5kCiMgICBkbyBOT1QgYWZmZWN0IHRoZSBBTExfT0sgZ2F0ZS4gT25seSBjbGF3bWV0cnkvbWFpbiAoc2FtZS1yZXBvLCByZWFkYWJsZSkKIyAgIGRyaXZlcyB0aGUgcGFzcy9mYWlsIGRlY2lzaW9uLiBNaXJyb3JzIGM2LWhlYWx0aC55bWwgcmVhZF9wcm90ZWN0aW9uKCkuCiMKIyBGYXN0ZXN0IGNsb3NlIHBhdGhzIChubyB3YWl0aW5nIGZvciB0aGlzIHNjaGVkdWxlKToKIwojICAgT3B0aW9uIEEgKFNldHRpbmdzIFVJLCA2MCBzLCBicm93c2VyIG9ubHkpOgojICAgICBodHRwczovL2dpdGh1Yi5jb20vdml2ZWtjaGFuZC9jbGF3bWV0cnkvc2V0dGluZ3MvYnJhbmNoZXMKIyAgICAgPiBlZGl0IG1haW4gPiBSZXF1aXJlIHN0YXR1cyBjaGVja3MgPiBhZGQ6CiMgICAgICAgRTJFIEdhdGUgKHJlcXVpcmVkKQojICAgICBBbHNvIHVwZGF0ZSBjbGF3bWV0cnktY2xvdWQvbWFpbiBhbmQgY2xhd21ldHJ5LWxhbmRpbmcvbWFpbi4KIwojICAgT3B0aW9uIEIgKEFjdGlvbnMgb25lLXNob3QsIFBBVCBwYXN0ZSk6CiMgICAgIEFjdGlvbnMgPiAiQXBwbHkgcmVxdWlyZWQgRTJFIHN0YXR1cyBjaGVja3MgKEM2IC0tIG9uZS1zaG90KSIKIyAgICAgY29uZmlybT1BUFBMWSwgcGF0X3Rva2VuPTxQQVQ+ID4gUnVuIHdvcmtmbG93CiMgICAgIFBBVCBjcmVhdGlvbjogaHR0cHM6Ly9naXRodWIuY29tL3NldHRpbmdzL3BlcnNvbmFsLWFjY2Vzcy10b2tlbnMvbmV3P25hbWU9Y2xhd21ldHJ5LWM2CiMgICAgIFBlcm1pc3Npb25zOiBBZG1pbmlzdHJhdGlvbiByZWFkK3dyaXRlIG9uIGNsYXdtZXRyeS9jbGF3bWV0cnktY2xvdWQvY2xhd21ldHJ5LWxhbmRpbmcKIwojICAgT3B0aW9uIEMgKHRlcm1pbmFsLCAzMCBzLCBub3cgemVyby1wcmVyZXF1aXNpdGVzKToKIyAgICAgYmFzaCBzY3JpcHRzL2Nsb3NlLWM2LnNoCiMgICAgIChhdXRvLWluc3RhbGxzIGdoIENMSSBvbiBtYWNPUy9VYnVudHUgaWYgbmVlZGVkKQojCiMgICBPcHRpb24gRCAoc2V0LWFuZC1mb3JnZXQgLS0gdGhpcyB3b3JrZmxvdyBkb2VzIHRoZSByZXN0KToKIyAgICAgU2V0dGluZ3MgPiBTZWNyZXRzID4gQWN0aW9ucyA+IE5ldyBzZWNyZXQ6IEUyRV9BRE1JTl9QQVQKIyAgICAgVmFsdWU6IHNhbWUgUEFUIGZyb20gT3B0aW9uIEIKIyAgICAgVGhpcyB3b3JrZmxvdyBwaWNrcyBpdCB1cCB3aXRoaW4gMiBob3VycyBhbmQgY2xvc2VzIEM2LgojCiMgVHJhY2tpbmc6IHZpdmVrY2hhbmQvY2xhd21ldHJ5IzQwMjkKCm9uOgogIHNjaGVkdWxlOgogICAgLSBjcm9uOiAnMCAqLzIgKiAqIConICAgIyBldmVyeSAyIGhvdXJzOyByZS1lbmFibGVkIDIwMjYtMDgtMDUgKHdhcyBwYXVzZWQgc2luY2UgMjAyNi0wNy0yMCBkdWUgdG8gcHJlLUM2LWdyZWVuIGZhaWx1cmVzKQogICAgLSBjcm9uOiAnMTUgMTAgKiAqIConICAgIyAxMDoxNWFtIFVUQyBkYWlseSAoa2VwdCBmb3IgcHJlZGljdGFiaWxpdHkpCiAgd29ya2Zsb3dfZGlzcGF0Y2g6CgojIFByZXZlbnQgdHdvIHNjaGVkdWxlL2Rpc3BhdGNoIHJ1bnMgZnJvbSBvdmVybGFwcGluZy4KY29uY3VycmVuY3k6CiAgZ3JvdXA6IGM2LXNjaGVkdWxlLWhlYWwtJHt7IGdpdGh1Yi5ldmVudF9uYW1lIH19LSR7eyBnaXRodWIucmVmIH19CiAgY2FuY2VsLWluLXByb2dyZXNzOiB0cnVlCgpwZXJtaXNzaW9uczoKICBjb250ZW50czogcmVhZAogIGlzc3Vlczogd3JpdGUKCmpvYnM6CiAgYzYtYXV0by1oZWFsOgogICAgbmFtZTogQzYgYXV0by1oZWFsIChhcHBseSByZXF1aXJlZCBjaGVja3MgaWYgRTJFX0FETUlOX1BBVCBpcyBzZXQpCiAgICBydW5zLW9uOiB1YnVudHUtbGF0ZXN0CiAgICBzdGVwczoKICAgICAgLSB1c2VzOiBhY3Rpb25zL2NoZWNrb3V0QHY3CgogICAgICAtIG5hbWU6IENoZWNrIGZvciBhZG1pbiB0b2tlbgogICAgICAgIGlkOiBwYXQtY2hlY2sKICAgICAgICBlbnY6CiAgICAgICAgICBBRE1JTl9QQVQ6ICR7eyBzZWNyZXRzLkUyRV9BRE1JTl9QQVQgfX0KICAgICAgICBydW46IHwKICAgICAgICAgIGlmIFsgLXogIiR7QURNSU5fUEFUfSIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICJoYXNfcGF0PWZhbHNlIiA+PiAiJEdJVEhVQl9PVVRQVVQiCiAgICAgICAgICBlbHNlCiAgICAgICAgICAgIGVjaG8gImhhc19wYXQ9dHJ1ZSIgPj4gIiRHSVRIVUJfT1VUUFVUIgogICAgICAgICAgICBlY2hvICJFMkVfQURNSU5fUEFUIGZvdW5kIC0tIGFwcGx5aW5nIHJlcXVpcmVkIEUyRSBzdGF0dXMgY2hlY2tzLiIKICAgICAgICAgIGZpCgogICAgICAjIFJlYWQtb25seSBhdWRpdDogdmVyaWZ5IGNsYXdtZXRyeS9tYWluIGhhcyB0aGUgcmVxdWlyZWQgRTJFIHN0YXR1cwogICAgICAjIGNoZWNrcyBjb25maWd1cmVkLiBSZWFkcyBmcm9tIGJvdGggJ2NvbnRleHRzJyAobGVnYWN5LCB3cml0dGVuIGJ5CiAgICAgICMgQVBJL3NjcmlwdCkgQU5EICdjaGVja3MnIChjdXJyZW50LCB3cml0dGVuIGJ5IEdpdEh1YiBTZXR0aW5ncyBVSSkuCiAgICAgICMKICAgICAgIyBPbmx5IGNsYXdtZXRyeS9tYWluIChzYW1lLXJlcG8pIGRyaXZlcyBBTExfT0suIGNsYXdtZXRyeS1jbG91ZCBhbmQKICAgICAgIyBjbGF3bWV0cnktbGFuZGluZyBhcmUgcHJpdmF0ZSByZXBvcyAtLSBHSVRIVUJfVE9LRU4gcmV0dXJucyA0MDMgZm9yCiAgICAgICMgY3Jvc3MtcmVwbyBicmFuY2gtcHJvdGVjdGlvbiByZWFkcy4gVHJlYXRpbmcgdGhlbSBhcyAibWlzc2luZyIgd2FzCiAgICAgICMgYSBmYWxzZS1uZWdhdGl2ZSBidWc6IEFMTF9PSyB3YXMgYWx3YXlzIGZhbHNlIGV2ZW4gYWZ0ZXIgdGhlIGFkbWluCiAgICAgICMgY29uZmlndXJlZCBjbGF3bWV0cnkvbWFpbiwgc28gdGhlICJDNiBhbHJlYWR5IGNvbmZpZ3VyZWQiIHN0ZXAgYmVsb3cKICAgICAgIyBjb3VsZCBuZXZlciBmaXJlIGFuZCB0aGUgc2NoZWR1bGUgcHJvZHVjZWQgcGVycGV0dWFsIHJlZCBub2lzZS4KICAgICAgIyBGaXggKG1pcnJvcnMgYzYtaGVhbHRoLnltbCByZWFkX3Byb3RlY3Rpb24oKSk6IGNyb3NzLXJlcG8gcmVwb3MgYXJlCiAgICAgICMgc2hvd24gYXMgIjpncmV5X3F1ZXN0aW9uOiBjYW5ub3QgdmVyaWZ5IiBpbiB0aGUgc3VtbWFyeSBhbmQgZG8gTk9UCiAgICAgICMgc2V0IEFMTF9PSz1mYWxzZS4KICAgICAgLSBuYW1lOiBSZWFkIGN1cnJlbnQgcmVxdWlyZWQtY2hlY2sgc3RhdGUgKHJlYWQtb25seSkKICAgICAgICBpZDogcmVhZC1zdGF0ZQogICAgICAgIGVudjoKICAgICAgICAgIEdIX1RPS0VOOiAke3sgZ2l0aHViLnRva2VuIH19CiAgICAgICAgICBPV05FUjogdml2ZWtjaGFuZAogICAgICAgIHJ1bjogfAogICAgICAgICAgc2V0ICtlCgogICAgICAgICAgIyBjbGF3bWV0cnkvbWFpbjogc2FtZS1yZXBvLCBHSVRIVUJfVE9LRU4gY2FuIHJlYWQgaXQgLS0gYXV0aG9yaXRhdGl2ZS4KICAgICAgICAgICMgY2xhd21ldHJ5LWNsb3VkL2NsYXdtZXRyeS1sYW5kaW5nOiBwcml2YXRlIHJlcG9zLCA0MDMgZXhwZWN0ZWQgLS0KICAgICAgICAgICMgc2hvd24gYXMgImNhbm5vdCB2ZXJpZnkiIGJ1dCBkbyBOT1QgYWZmZWN0IEFMTF9PSy4KICAgICAgICAgIFJFUE9TX0FVVEg9ImNsYXdtZXRyeSIKICAgICAgICAgIFJFUE9TX0NST1NTPSJjbGF3bWV0cnktY2xvdWQgY2xhd21ldHJ5LWxhbmRpbmciCgogICAgICAgICAgIyBFeHBlY3RlZCByZXF1aXJlZCBjaGVja3MgcGVyIHJlcG8gKGtlZXAgaW4gc3luYyB3aXRoCiAgICAgICAgICAjIHNjcmlwdHMvYXBwbHlfcmVxdWlyZWRfc3RhdHVzX2NoZWNrcy5weSBhbmQgYzYtaGVhbHRoLnltbCkuCiAgICAgICAgICAjICJFMkUgR2F0ZSAocmVxdWlyZWQpIiBhZ2dyZWdhdGVzIHRoZSA0IHVuZGVybHlpbmcgT1NTIEUyRSBjaGVja3MKICAgICAgICAgICMgKFBSICM0MTExLCBtZXJnZWQgMjAyNi0wNy0yNykuIE9uZSBlbnRyeSByZXBsYWNlcyBmb3VyLgogICAgICAgICAgZGVjbGFyZSAtQSBFWFBFQ1RFRAogICAgICAgICAgRVhQRUNURURbY2xhd21ldHJ5XT0iRTJFIEdhdGUgKHJlcXVpcmVkKSIKICAgICAgICAgIEVYUEVDVEVEW2NsYXdtZXRyeS1jbG91ZF09IkNsb3VkIGdvbGRlbi1wYXRoIGJyb3dzZXIgRTJFIgogICAgICAgICAgRVhQRUNURURbY2xhd21ldHJ5LWxhbmRpbmddPSJMYW5kaW5nIGdvbGRlbiBwYXRoIChDMykiCgogICAgICAgICAgQUxMX09LPXRydWUKICAgICAgICAgIFNVTU1BUllfUk9XUz0iIgoKICAgICAgICAgICMgQXV0aG9yaXRhdGl2ZSBsb29wOiBvbmx5IGNsYXdtZXRyeS9tYWluIGRyaXZlcyBBTExfT0suCiAgICAgICAgICBmb3IgUkVQTyBpbiAkUkVQT1NfQVVUSDsgZG8KICAgICAgICAgICAgUFJPVEVDVElPTj0kKGdoIGFwaSAiL3JlcG9zLyR7T1dORVJ9LyR7UkVQT30vYnJhbmNoZXMvbWFpbiIgMj4vZGV2L251bGwgfCBcCiAgICAgICAgICAgICAgcHl0aG9uMyAtYyAiCmltcG9ydCBqc29uLCBzeXMKdHJ5OgogICAgZGF0YSA9IGpzb24ubG9hZChzeXMuc3RkaW4pCiAgICBwcm90ID0gKGRhdGEuZ2V0KCdwcm90ZWN0aW9uJykgb3Ige30pCiAgICByc2MgPSAocHJvdC5nZXQoJ3JlcXVpcmVkX3N0YXR1c19jaGVja3MnKSBvciB7fSkKICAgIGN0eCA9IHNldChyc2MuZ2V0KCdjb250ZXh0cycpIG9yIFtdKQogICAgZm9yIGl0ZW0gaW4gKHJzYy5nZXQoJ2NoZWNrcycpIG9yIFtdKToKICAgICAgICBpZiBpc2luc3RhbmNlKGl0ZW0sIGRpY3QpIGFuZCBpdGVtLmdldCgnY29udGV4dCcpOgogICAgICAgICAgICBjdHguYWRkKGl0ZW1bJ2NvbnRleHQnXSkKICAgIHByaW50KGpzb24uZHVtcHMoc29ydGVkKGN0eCkpKQpleGNlcHQgRXhjZXB0aW9uOgogICAgcHJpbnQoJ1tdJykKIiB8fCBlY2hvICJbXSIpCiAgICAgICAgICAgICMgQWxzbyBnYXRoZXIgY2hlY2tzIGZyb20gdGhlIFJ1bGVzZXRzIEFQSS4KICAgICAgICAgICAgIyBjNi1hcHBseS1ydWxlc2V0LnltbCBlbmZvcmNlcyByZXF1aXJlZCBjaGVja3MgdmlhIHRoZSBSdWxlc2V0cyBBUEkKICAgICAgICAgICAgIyB3aGVuIEdJVEhVQl9UT0tFTiBoYXMgcnVsZXNldC13cml0ZSByaWdodHMsIGJ5cGFzc2luZyB0aGUgYWRtaW4tUEFUCiAgICAgICAgICAgICMgcmVxdWlyZW1lbnQgb2YgY2xhc3NpYyBicmFuY2ggcHJvdGVjdGlvbi4gVW5pb24gYm90aCBzb3VyY2VzIHNvIGEKICAgICAgICAgICAgIyBjaGVjayBjb25maWd1cmVkIHZpYSBFSVRIRVIgcGF0aCBjb3VudHMgYXMgcHJlc2VudC4KICAgICAgICAgICAgX1JVTEVTRVRfQ0hFQ0tTPSQoX0NVUlJfUkVQTz0iJHtSRVBPfSIgcHl0aG9uMyAtIDI+L2Rldi9udWxsIDw8IlJTUFkiCmltcG9ydCBqc29uLCBvcywgc3VicHJvY2VzcwpPV05FUiA9IG9zLmVudmlyb24uZ2V0KCdPV05FUicsICd2aXZla2NoYW5kJykKUkVQTyAgPSBvcy5lbnZpcm9uLmdldCgnX0NVUlJfUkVQTycsICdjbGF3bWV0cnknKQpjdHggICA9IHNldCgpCmhkcnMgID0gWyctLWhlYWRlcicsICdBY2NlcHQ6IGFwcGxpY2F0aW9uL3ZuZC5naXRodWIranNvbiddCnRyeToKICAgIHIgPSBzdWJwcm9jZXNzLnJ1bihbJ2doJywgJ2FwaScsIGYnL3JlcG9zL3tPV05FUn0ve1JFUE99L3J1bGVzZXRzJ10gKyBoZHJzLAogICAgICAgICAgICAgICAgICAgICAgIGNhcHR1cmVfb3V0cHV0PVRydWUsIHRleHQ9VHJ1ZSwgdGltZW91dD0xNSkKICAgIGlmIHIucmV0dXJuY29kZSA9PSAwOgogICAgICAgIGZvciBycyBpbiBqc29uLmxvYWRzKHIuc3Rkb3V0KToKICAgICAgICAgICAgaWYgcnMuZ2V0KCdlbmZvcmNlbWVudCcpID09ICdhY3RpdmUnOgogICAgICAgICAgICAgICAgcjIgPSBzdWJwcm9jZXNzLnJ1bigKICAgICAgICAgICAgICAgICAgICBbJ2doJywgJ2FwaScsIGYiL3JlcG9zL3tPV05FUn0ve1JFUE99L3J1bGVzZXRzL3tyc1snaWQnXX0iXSArIGhkcnMsCiAgICAgICAgICAgICAgICAgICAgY2FwdHVyZV9vdXRwdXQ9VHJ1ZSwgdGV4dD1UcnVlLCB0aW1lb3V0PTE1KQogICAgICAgICAgICAgICAgaWYgcjIucmV0dXJuY29kZSA9PSAwOgogICAgICAgICAgICAgICAgICAgIGRldGFpbCA9IGpzb24ubG9hZHMocjIuc3Rkb3V0KQogICAgICAgICAgICAgICAgICAgIGZvciBydWxlIGluIChkZXRhaWwuZ2V0KCdydWxlcycpIG9yIFtdKToKICAgICAgICAgICAgICAgICAgICAgICAgaWYgcnVsZS5nZXQoJ3R5cGUnKSA9PSAncmVxdWlyZWRfc3RhdHVzX2NoZWNrcyc6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmb3IgYyBpbiAocnVsZS5nZXQoJ3BhcmFtZXRlcnMnLCB7fSkKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLmdldCgncmVxdWlyZWRfc3RhdHVzX2NoZWNrcycpIG9yIFtdKToKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBpZiBjLmdldCgnY29udGV4dCcpOgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBjdHguYWRkKGNbJ2NvbnRleHQnXSkKZXhjZXB0IEV4Y2VwdGlvbjoKICAgIHBhc3MKcHJpbnQoanNvbi5kdW1wcyhzb3J0ZWQoY3R4KSkpClJTUFkKKQogICAgICAgICAgICBQUk9URUNUSU9OPSQocHl0aG9uMyAtYyAiCmltcG9ydCBqc29uLCBzeXMKYSA9IGpzb24ubG9hZHMoc3lzLmFyZ3ZbMV0pOyBiID0ganNvbi5sb2FkcyhzeXMuYXJndlsyXSkKcHJpbnQoanNvbi5kdW1wcyhzb3J0ZWQoc2V0KGEpIHwgc2V0KGIpKSkpCiIgIiRQUk9URUNUSU9OIiAiJHtfUlVMRVNFVF9DSEVDS1M6LVtdfSIgMj4vZGV2L251bGwgfHwgZWNobyAiJFBST1RFQ1RJT04iKQogICAgICAgICAgICBJRlM9J3wnIHJlYWQgLXJhIEVYUEVDVEVEX0NIRUNLUyA8PDwgIiR7RVhQRUNURURbJFJFUE9dfSIKICAgICAgICAgICAgZm9yIENIRUNLIGluICIke0VYUEVDVEVEX0NIRUNLU1tAXX0iOyBkbwogICAgICAgICAgICAgIGlmIGVjaG8gIiRQUk9URUNUSU9OIiB8IHB5dGhvbjMgLWMgXAogICAgICAgICAgICAgICAgImltcG9ydCBqc29uLHN5czsgZD1qc29uLmxvYWQoc3lzLnN0ZGluKTsgZXhpdCgwIGlmICQocHl0aG9uMyAtYyAiaW1wb3J0IGpzb247IHByaW50KHJlcHIoJyR7Q0hFQ0t9JykpIiAyPi9kZXYvbnVsbCB8fCBlY2hvICInJHtDSEVDS30nIikgaW4gZCBlbHNlIDEpIiAyPi9kZXYvbnVsbDsgdGhlbgogICAgICAgICAgICAgICAgSUNPTj0iOndoaXRlX2NoZWNrX21hcms6IgogICAgICAgICAgICAgIGVsc2UKICAgICAgICAgICAgICAgIElDT049Ijp4OiIKICAgICAgICAgICAgICAgIEFMTF9PSz1mYWxzZQogICAgICAgICAgICAgIGZpCiAgICAgICAgICAgICAgU1VNTUFSWV9ST1dTPSIke1NVTU1BUllfUk9XU318ICR7UkVQT30gfCAke0NIRUNLfSB8ICR7SUNPTn0gfFxuIgogICAgICAgICAgICBkb25lCiAgICAgICAgICBkb25lCgogICAgICAgICAgIyBDcm9zcy1yZXBvIGxvb3A6IEdJVEhVQl9UT0tFTiByZXR1cm5zIDQwMyBmb3IgcHJpdmF0ZSByZXBvcy4KICAgICAgICAgICMgTWFyayBhcyAiY2Fubm90IHZlcmlmeSIgLS0gZG8gTk9UIHNldCBBTExfT0s9ZmFsc2UuCiAgICAgICAgICBmb3IgUkVQTyBpbiAkUkVQT1NfQ1JPU1M7IGRvCiAgICAgICAgICAgIElGUz0nfCcgcmVhZCAtcmEgRVhQRUNURURfQ0hFQ0tTIDw8PCAiJHtFWFBFQ1RFRFskUkVQT119IgogICAgICAgICAgICBmb3IgQ0hFQ0sgaW4gIiR7RVhQRUNURURfQ0hFQ0tTW0BdfSI7IGRvCiAgICAgICAgICAgICAgU1VNTUFSWV9ST1dTPSIke1NVTU1BUllfUk9XU318ICR7UkVQT30gfCAke0NIRUNLfSB8IDpncmV5X3F1ZXN0aW9uOiBjYW5ub3QgdmVyaWZ5IChjcm9zcy1yZXBvKSB8XG4iCiAgICAgICAgICAgIGRvbmUKICAgICAgICAgIGRvbmUKCiAgICAgICAgICB7CiAgICAgICAgICAgIGVjaG8gIiMjIEM2OiBSZXF1aXJlZCBFMkUgU3RhdHVzIENoZWNrcyIKICAgICAgICAgICAgZWNobyAiIgogICAgICAgICAgICBpZiBbICIkQUxMX09LIiA9ICJ0cnVlIiBdOyB0aGVuCiAgICAgICAgICAgICAgZWNobyAiPiA6d2hpdGVfY2hlY2tfbWFyazogKipjbGF3bWV0cnkvbWFpbjogYWxsIHJlcXVpcmVkIGNoZWNrcyBjb25maWd1cmVkLioqIEM2IGdhdGUgaXMgR1JFRU4uIgogICAgICAgICAgICAgIGVjaG8gIj4iCiAgICAgICAgICAgICAgZWNobyAiPiBjbGF3bWV0cnktY2xvdWQgYW5kIGNsYXdtZXRyeS1sYW5kaW5nIGNhbm5vdCBiZSB2ZXJpZmllZCBjcm9zcy1yZXBvIChwcml2YXRlIHJlcG9zIC0tIgogICAgICAgICAgICAgIGVjaG8gIj4gR0lUSFVCX1RPS0VOIHNjb3BlIGxpbWl0KS4gVXNlIFxgYmFzaCBzY3JpcHRzL2Nsb3NlLWM2LnNoXGAgb3IgdGhlIFNldHRpbmdzIFVJIgogICAgICAgICAgICAgIGVjaG8gIj4gdG8gY29uZmlybSB0aG9zZSByZXBvcyBhcmUgYWxzbyBjb3ZlcmVkLiIKICAgICAgICAgICAgZWxzZQogICAgICAgICAgICAgIGVjaG8gIj4gOng6ICoqY2xhd21ldHJ5L21haW46IG9uZSBvciBtb3JlIHJlcXVpcmVkIGNoZWNrcyBhcmUgbm90IHlldCBlbmZvcmNlZC4qKiIKICAgICAgICAgICAgICBlY2hvICI+IgogICAgICAgICAgICAgIGVjaG8gIj4gRTJFIHRlc3RzIHBhc3MgYnV0IFBScyBjYW4gc3RpbGwgbWVyZ2UgaWYgdGhleSBmYWlsIC0tIHRoZSBjaGVja3MgYXJlIG5vdCByZXF1aXJlZC4iCiAgICAgICAgICAgIGZpCiAgICAgICAgICAgIGVjaG8gIiIKICAgICAgICAgICAgZWNobyAifCBSZXBvIHwgQ2hlY2sgfCBTdGF0dXMgfCIKICAgICAgICAgICAgZWNobyAifC0tLS0tLXwtLS0tLS0tfC0tLS0tLS0tfCIKICAgICAgICAgICAgcHJpbnRmICIlYiIgIiRTVU1NQVJZX1JPV1MiCiAgICAgICAgICAgIGVjaG8gIiIKICAgICAgICAgICAgaWYgWyAiJEFMTF9PSyIgIT0gInRydWUiIF07IHRoZW4KICAgICAgICAgICAgICBlY2hvICIjIyMgQ2xvc2UgQzYgbm93IChwaWNrIG9uZSkiCiAgICAgICAgICAgICAgZWNobyAiIgogICAgICAgICAgICAgIGVjaG8gIioqT3B0aW9uIEEgLS0gR2l0SHViIFNldHRpbmdzIFVJIChubyBQQVQsIG5vIHRvb2xzLCB+NjAgcyk6KioiCiAgICAgICAgICAgICAgZWNobyAiQWRkIHRoZSBjaGVjayBuYW1lIGRpcmVjdGx5IGluIFNldHRpbmdzID4gQnJhbmNoZXMuIEdpdEh1YiBhdXRvY29tcGxldGVzIGZyb20gcmVjZW50IENJIHJ1bnMuIgogICAgICAgICAgICAgIGVjaG8gIjEuIFtjbGF3bWV0cnkgU2V0dGluZ3MgPiBCcmFuY2hlc10oaHR0cHM6Ly9naXRodWIuY29tL3ZpdmVrY2hhbmQvY2xhd21ldHJ5L3NldHRpbmdzL2JyYW5jaGVzKSIKICAgICAgICAgICAgICBlY2hvICIgICAtLSBlZGl0IG1haW4sIGVuYWJsZSBcIlJlcXVpcmUgc3RhdHVzIGNoZWNrcyB0byBwYXNzXCIsIGFkZDoiCiAgICAgICAgICAgICAgZWNobyAiICAgLSBcYEUyRSBHYXRlIChyZXF1aXJlZClcYCIKICAgICAgICAgICAgICBlY2hvICIyLiBbY2xhd21ldHJ5LWNsb3VkIFNldHRpbmdzID4gQnJhbmNoZXNdKGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS1jbG91ZC9zZXR0aW5ncy9icmFuY2hlcykiCiAgICAgICAgICAgICAgZWNobyAiICAgLS0gYWRkIFxgQ2xvdWQgZ29sZGVuLXBhdGggYnJvd3NlciBFMkVcYCIKICAgICAgICAgICAgICBlY2hvICIzLiBbY2xhd21ldHJ5LWxhbmRpbmcgU2V0dGluZ3MgPiBCcmFuY2hlc10oaHR0cHM6Ly9naXRodWIuY29tL3ZpdmVrY2hhbmQvY2xhd21ldHJ5LWxhbmRpbmcvc2V0dGluZ3MvYnJhbmNoZXMpIgogICAgICAgICAgICAgIGVjaG8gIiAgIC0tIGFkZCBcYExhbmRpbmcgZ29sZGVuIHBhdGggKEMzKVxgIgogICAgICAgICAgICAgIGVjaG8gIiIKICAgICAgICAgICAgICBlY2hvICIqKk9wdGlvbiBCIC0tIG9uZS1zaG90IHZpYSBBY3Rpb25zIHdvcmtmbG93IChmaW5lLWdyYWluZWQgUEFUIHdpdGggQWRtaW5pc3RyYXRpb246IHdyaXRlKToqKiIKICAgICAgICAgICAgICBlY2hvICIxLiBbQ3JlYXRlIFBBVF0oaHR0cHM6Ly9naXRodWIuY29tL3NldHRpbmdzL3BlcnNvbmFsLWFjY2Vzcy10b2tlbnMvbmV3P25hbWU9Y2xhd21ldHJ5LWM2KSIKICAgICAgICAgICAgICBlY2hvICIgICAocmVwb3M6IGNsYXdtZXRyeS9jbGF3bWV0cnktY2xvdWQvY2xhd21ldHJ5LWxhbmRpbmcsIHBlcm1pc3Npb246IEFkbWluaXN0cmF0aW9uIHJlYWQrd3JpdGUpIgogICAgICAgICAgICAgIGVjaG8gIjIuIFtSdW4gQXBwbHkgd29ya2Zsb3ddKGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS9hY3Rpb25zL3dvcmtmbG93cy9hcHBseS1yZXF1aXJlZC1jaGVja3MueW1sKSIKICAgICAgICAgICAgICBlY2hvICIgICAtLSBcYGNvbmZpcm09QVBQTFlcYCwgXGBwYXRfdG9rZW49PFBBVD5cYCAtLSBjbG9zZXMgYWxsIDMgcmVwb3MgaW4gb25lIHJ1biIKICAgICAgICAgICAgICBlY2hvICIiCiAgICAgICAgICAgICAgZWNobyAiKipPcHRpb24gQyAtLSB0ZXJtaW5hbCAoemVybyBwcmVyZXF1aXNpdGVzLCBhdXRvLWluc3RhbGxzIGdoIENMSSBvbiBtYWNPUy9VYnVudHUpOioqIgogICAgICAgICAgICAgIGVjaG8gJ2BgYGJhc2gnCiAgICAgICAgICAgICAgZWNobyAiYmFzaCBzY3JpcHRzL2Nsb3NlLWM2LnNoIgogICAgICAgICAgICAgIGVjaG8gJ2BgYCcKICAgICAgICAgICAgICBlY2hvICIiCiAgICAgICAgICAgICAgZWNobyAiKipPcHRpb24gRCAtLSBzdG9yZSBQQVQgYXMgc2VjcmV0ICh0aGlzIHdvcmtmbG93IGhlYWxzIHdpdGhpbiAyIGhvdXJzKToqKiIKICAgICAgICAgICAgICBlY2hvICItIFtTZXR0aW5ncyA+IFNlY3JldHMgPiBOZXcgc2VjcmV0XShodHRwczovL2dpdGh1Yi5jb20vdml2ZWtjaGFuZC9jbGF3bWV0cnkvc2V0dGluZ3Mvc2VjcmV0cy9hY3Rpb25zL25ldykiCiAgICAgICAgICAgICAgZWNobyAiICBOYW1lOiBcYEUyRV9BRE1JTl9QQVRcYCwgVmFsdWU6IHNhbWUgUEFUIGZyb20gT3B0aW9uIEIiCiAgICAgICAgICAgICAgZWNobyAiIgogICAgICAgICAgICAgIGVjaG8gIlRyYWNraW5nOiBbIzQwMjldKGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS9pc3N1ZXMvNDAyOSkiCiAgICAgICAgICAgIGZpCiAgICAgICAgICB9ID4+ICIkR0lUSFVCX1NURVBfU1VNTUFSWSIKCiAgICAgICAgICAjIEV4cG9ydCBmb3IgZG93bnN0cmVhbSBzdGVwcy4KICAgICAgICAgIGVjaG8gImNoZWNrc19vaz0ke0FMTF9PS30iID4+ICIkR0lUSFVCX09VVFBVVCIKCiAgICAgICMgRmlyZXMgd2hlbiBjbGF3bWV0cnkvbWFpbiBoYXMgYWxsIHJlcXVpcmVkIGNoZWNrcyBjb25maWd1cmVkLgogICAgICAtIG5hbWU6IEM2IGFscmVhZHkgY29uZmlndXJlZCAobm8gUEFUIG5lZWRlZCkKICAgICAgICBpZjogc3RlcHMucmVhZC1zdGF0ZS5vdXRwdXRzLmNoZWNrc19vayA9PSAndHJ1ZScKICAgICAgICBydW46IHwKICAgICAgICAgIGVjaG8gIkM2IGlzIEdSRUVOIC0tIGFsbCByZXF1aXJlZCBFMkUgc3RhdHVzIGNoZWNrcyBhcmUgY29uZmlndXJlZCBvbiBjbGF3bWV0cnkvbWFpbi4iCiAgICAgICAgICBlY2hvICJCcmFuY2ggcHJvdGVjdGlvbiBpcyBjb3JyZWN0bHkgc2V0LiBFMkVfQURNSU5fUEFUIGlzIG5vdCBuZWVkZWQuIgogICAgICAgICAgZWNobyAiVHJhY2tpbmc6IGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS9pc3N1ZXMvNDAyOSIKCiAgICAgICMgRGFpbHkgcGluZyBvbiB0aGUgdHJhY2tpbmcgaXNzdWUgd2hlbiBDNiBpcyBzdGlsbCB1bmNsb3NlZC4KICAgICAgIyBSdW5zIG9ubHkgb24gdGhlIDEwOjE1IFVUQyBkYWlseSBzY2hlZHVsZSAobm90IGV2ZXJ5IDItaG91ciBydW4pCiAgICAgICMgc28gdGhlIGlzc3VlIHRocmVhZCBkb2VzIG5vdCBmbG9vZCB3aXRoIGhvdXJseSBub2lzZS4KICAgICAgIyBjb250aW51ZS1vbi1lcnJvcjogdHJ1ZSBzbyBhIEdpdEh1YiBBUEkgaGljY3VwIGRvZXMgbm90IHNoYWRvdwogICAgICAjIHRoZSBtYW5kYXRvcnkgZXhpdC0xIGJlbG93LgogICAgICAtIG5hbWU6IERhaWx5IHBpbmcgb24gdHJhY2tpbmcgaXNzdWUgKEM2IHN0aWxsIHVuY2xvc2VkKQogICAgICAgIGlmOiB8CiAgICAgICAgICBnaXRodWIuZXZlbnRfbmFtZSA9PSAnc2NoZWR1bGUnCiAgICAgICAgICAmJiBnaXRodWIuZXZlbnQuc2NoZWR1bGUgPT0gJzE1IDEwICogKiAqJwogICAgICAgICAgJiYgc3RlcHMucGF0LWNoZWNrLm91dHB1dHMuaGFzX3BhdCA9PSAnZmFsc2UnCiAgICAgICAgICAmJiBzdGVwcy5yZWFkLXN0YXRlLm91dHB1dHMuY2hlY2tzX29rICE9ICd0cnVlJwogICAgICAgIGNvbnRpbnVlLW9uLWVycm9yOiB0cnVlCiAgICAgICAgZW52OgogICAgICAgICAgR0hfVE9LRU46ICR7eyBnaXRodWIudG9rZW4gfX0KICAgICAgICBydW46IHwKICAgICAgICAgIFRPREFZPSQoZGF0ZSAtdSArJVktJW0tJWQpCiAgICAgICAgICBCT0RZPSI8IS0tIGM2LWRhaWx5LXBpbmcgLS0+ICoqQzYgZGFpbHkgcGluZyAke1RPREFZfToqKiBjbGF3bWV0cnkvbWFpbiBicmFuY2ggcHJvdGVjdGlvbiBkb2VzIG5vdCB5ZXQgcmVxdWlyZSBFMkUgY2hlY2tzLiA2LzcgY3JpdGVyaWEgZ3JlZW4uIEZhc3Rlc3QgY2xvc2U6IFtTZXR0aW5ncyA+IEJyYW5jaGVzID4gbWFpbl0oaHR0cHM6Ly9naXRodWIuY29tL3ZpdmVrY2hhbmQvY2xhd21ldHJ5L3NldHRpbmdzL2JyYW5jaGVzKSA+IFJlcXVpcmVkIHN0YXR1cyBjaGVja3MgPiBhZGQgXGBFMkUgR2F0ZSAocmVxdWlyZWQpXGAgKDYwIHMsIG5vIHRva2VuIG5lZWRlZCkuIE9yIHJ1biBcYGJhc2ggc2NyaXB0cy9jbG9zZS1jNi5zaFxgIGZyb20gYSB0ZXJtaW5hbC4iCiAgICAgICAgICBnaCBpc3N1ZSBjb21tZW50IDQwMjkgLS1yZXBvIHZpdmVrY2hhbmQvY2xhd21ldHJ5IC0tYm9keSAiJEJPRFkiCgogICAgICAjIEV4aXQgMSBvbmx5IG9uIHNjaGVkdWxlIChuZXZlciBvbiBwdXNoIC0tIHRoaXMgd29ya2Zsb3cgaXMgaW5mb3JtYXRpb25hbCBvbiBwdXNoKS4KICAgICAgIyBTaWduYWxzIHRvIHRoZSBhZG1pbiB0aGF0IEUyRV9BRE1JTl9QQVQgaXMgbmVlZGVkIHRvIGF1dG8taGVhbCBDNi4KICAgICAgLSBuYW1lOiBFcnJvcjogRTJFX0FETUlOX1BBVCBub3Qgc2V0CiAgICAgICAgaWY6IHwKICAgICAgICAgIHN0ZXBzLnBhdC1jaGVjay5vdXRwdXRzLmhhc19wYXQgPT0gJ2ZhbHNlJwogICAgICAgICAgJiYgc3RlcHMucmVhZC1zdGF0ZS5vdXRwdXRzLmNoZWNrc19vayAhPSAndHJ1ZScKICAgICAgICAgICYmIGdpdGh1Yi5ldmVudF9uYW1lICE9ICdwdXNoJwogICAgICAgIHJ1bjogfAogICAgICAgICAgZWNobyAiOjplcnJvcjo6RTJFX0FETUlOX1BBVCBzZWNyZXQgaXMgbm90IHNldCAtLSBDNiAocmVxdWlyZWQtc3RhdHVzLWNoZWNrcykgY2Fubm90IGJlIGFwcGxpZWQgYXV0b21hdGljYWxseS4iCiAgICAgICAgICBlY2hvICIiCiAgICAgICAgICBlY2hvICJBQ1RJT04gUkVRVUlSRUQ6IEFkZCBFMkVfQURNSU5fUEFUIHRvIGNsb3NlIEM2LiIKICAgICAgICAgIGVjaG8gIlNlZSB0aGUgam9iIHN1bW1hcnkgYWJvdmUgZm9yIGEgZm9ybWF0dGVkIHN0YXR1cyByZXBvcnQgYW5kIGNsb3NlIG9wdGlvbnMuIgogICAgICAgICAgZWNobyAiVHJhY2tpbmc6IGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS9pc3N1ZXMvNDAyOSIKICAgICAgICAgIGV4aXQgMQoKICAgICAgLSBuYW1lOiBBcHBseSByZXF1aXJlZCBFMkUgc3RhdHVzIGNoZWNrcyAoQzYpCiAgICAgICAgaWY6IHN0ZXBzLnBhdC1jaGVjay5vdXRwdXRzLmhhc19wYXQgPT0gJ3RydWUnICYmIHN0ZXBzLnJlYWQtc3RhdGUub3V0cHV0cy5jaGVja3Nfb2sgIT0gJ3RydWUnCiAgICAgICAgZW52OgogICAgICAgICAgR0lUSFVCX1RPS0VOOiAke3sgc2VjcmV0cy5FMkVfQURNSU5fUEFUIH19CiAgICAgICAgcnVuOiBweXRob24zIHNjcmlwdHMvYXBwbHlfcmVxdWlyZWRfc3RhdHVzX2NoZWNrcy5weQoKICAgICAgLSBuYW1lOiBQb3N0LWFwcGx5IHN1bW1hcnkKICAgICAgICBpZjogc3RlcHMucGF0LWNoZWNrLm91dHB1dHMuaGFzX3BhdCA9PSAndHJ1ZScgJiYgc3RlcHMucmVhZC1zdGF0ZS5vdXRwdXRzLmNoZWNrc19vayAhPSAndHJ1ZScKICAgICAgICBydW46IHwKICAgICAgICAgIHsKICAgICAgICAgICAgZWNobyAiIyMgQzYgYXV0by1oZWFsOiByZXF1aXJlZCBjaGVja3MgYXBwbGllZCIKICAgICAgICAgICAgZWNobyAiIgogICAgICAgICAgICBlY2hvICI+IDp3aGl0ZV9jaGVja19tYXJrOiBFMkVfQURNSU5fUEFUIHdhcyBwcmVzZW50LiBcYGFwcGx5X3JlcXVpcmVkX3N0YXR1c19jaGVja3MucHlcYCByYW4uIgogICAgICAgICAgICBlY2hvICI+IEJyYW5jaCBwcm90ZWN0aW9uIGlzIG5vdyBjb25maWd1cmVkIG9uIFxgbWFpblxgIGZvciBhbGwgMyByZXBvcy4iCiAgICAgICAgICAgIGVjaG8gIiIKICAgICAgICAgICAgZWNobyAiVmVyaWZ5IGF0OiIKICAgICAgICAgICAgZWNobyAiLSBbY2xhd21ldHJ5IGJyYW5jaCBwcm90ZWN0aW9uXShodHRwczovL2dpdGh1Yi5jb20vdml2ZWtjaGFuZC9jbGF3bWV0cnkvc2V0dGluZ3MvYnJhbmNoZXMpIgogICAgICAgICAgICBlY2hvICItIFtjbGF3bWV0cnktY2xvdWQgYnJhbmNoIHByb3RlY3Rpb25dKGh0dHBzOi8vZ2l0aHViLmNvbS92aXZla2NoYW5kL2NsYXdtZXRyeS1jbG91ZC9zZXR0aW5ncy9icmFuY2hlcykiCiAgICAgICAgICAgIGVjaG8gIi0gW2NsYXdtZXRyeS1sYW5kaW5nIGJyYW5jaCBwcm90ZWN0aW9uXShodHRwczovL2dpdGh1Yi5jb20vdml2ZWtjaGFuZC9jbGF3bWV0cnktbGFuZGluZy9zZXR0aW5ncy9icmFuY2hlcykiCiAgICAgICAgICAgIGVjaG8gIiIKICAgICAgICAgICAgZWNobyAiVHJhY2tpbmc6IFsjNDAyOV0oaHR0cHM6Ly9naXRodWIuY29tL3ZpdmVrY2hhbmQvY2xhd21ldHJ5L2lzc3Vlcy80MDI5KSIKICAgICAgICAgIH0gPj4gIiRHSVRIVUJfU1RFUF9TVU1NQVJZIgogICAgICAgICAgZWNobyAiQzYgYXV0by1oZWFsIGNvbXBsZXRlLiBUcmFja2luZzogaHR0cHM6Ly9naXRodWIuY29tL3ZpdmVrY2hhbmQvY2xhd21ldHJ5L2lzc3Vlcy80MDI5Igo=
+name: C6 auto-heal (required-checks application)
+
+# Applies required E2E status checks to main branch protection.
+# Runs every 2 hours and once daily at 10:15am UTC.
+# Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
+#
+# NOTE: Push trigger intentionally removed (2026-08-01). It was informational-
+# only (exit 0 regardless of state per the event_name != 'push' guard on the
+# Error step), but caused persistent 0-job failures on the CI dashboard
+# whenever many PRs merged to main in quick succession, due to GitHub
+# repository-level workflow queue pressure. The 2-hourly schedule trigger
+# already provides equivalent status information, so the push trigger is
+# redundant. See issue #4029 for context.
+#
+# When E2E_ADMIN_PAT is NOT set:
+#   - reads current branch protection state (read-only, no admin needed)
+#   - if clawmetry/main checks already configured: exits 0 (C6 green)
+#   - if checks not yet configured on schedule: emits ::error:: annotation and exits 1
+#     (red badge acts as a forcing signal until the admin acts)
+#
+# When E2E_ADMIN_PAT IS set:
+#   - runs scripts/apply_required_status_checks.py to configure checks
+#   - writes a post-apply summary
+#
+# Cross-repo reads (clawmetry-cloud, clawmetry-landing):
+#   GITHUB_TOKEN returns 403 for private cross-repo reads. This is expected,
+#   NOT a bug. Those repos are shown as "cannot verify" in the summary and
+#   do NOT affect the ALL_OK gate. Only clawmetry/main (same-repo, readable)
+#   drives the pass/fail decision. Mirrors c6-health.yml read_protection().
+#
+# Fastest close paths (no waiting for this schedule):
+#
+#   Option A (Settings UI, 60 s, browser only):
+#     https://github.com/vivekchand/clawmetry/settings/branches
+#     > edit main > Require status checks > add:
+#       E2E Gate (required)
+#     Also update clawmetry-cloud/main and clawmetry-landing/main.
+#
+#   Option B (Actions one-shot, PAT paste):
+#     Actions > "Apply required E2E status checks (C6 -- one-shot)"
+#     confirm=APPLY, pat_token=<PAT> > Run workflow
+#     PAT creation: https://github.com/settings/personal-access-tokens/new?name=clawmetry-c6
+#     Permissions: Administration read+write on clawmetry/clawmetry-cloud/clawmetry-landing
+#
+#   Option C (terminal, 30 s, now zero-prerequisites):
+#     bash scripts/close-c6.sh
+#     (auto-installs gh CLI on macOS/Ubuntu if needed)
+#
+#   Option D (set-and-forget -- this workflow does the rest):
+#     Settings > Secrets > Actions > New secret: E2E_ADMIN_PAT
+#     Value: same PAT from Option B
+#     This workflow picks it up within 2 hours and closes C6.
+#
+# Tracking: vivekchand/clawmetry#4029
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # every 2 hours; re-enabled 2026-08-05 (was paused since 2026-07-20 due to pre-C6-green failures)
+    - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
+  workflow_dispatch:
+
+# Prevent two schedule/dispatch runs from overlapping.
+concurrency:
+  group: c6-schedule-heal-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  c6-auto-heal:
+    name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for admin token
+        id: pat-check
+        env:
+          ADMIN_PAT: ${{ secrets.E2E_ADMIN_PAT }}
+        run: |
+          if [ -z "${ADMIN_PAT}" ]; then
+            echo "has_pat=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_pat=true" >> "$GITHUB_OUTPUT"
+            echo "E2E_ADMIN_PAT found -- applying required E2E status checks."
+          fi
+
+      # Read-only audit: verify clawmetry/main has the required E2E status
+      # checks configured. Reads from both 'contexts' (legacy, written by
+      # API/script) AND 'checks' (current, written by GitHub Settings UI).
+      #
+      # Only clawmetry/main (same-repo) drives ALL_OK. clawmetry-cloud and
+      # clawmetry-landing are private repos -- GITHUB_TOKEN returns 403 for
+      # cross-repo branch-protection reads. Treating them as "missing" was
+      # a false-negative bug: ALL_OK was always false even after the admin
+      # configured clawmetry/main, so the "C6 already configured" step below
+      # could never fire and the schedule produced perpetual red noise.
+      # Fix (mirrors c6-health.yml read_protection()): cross-repo repos are
+      # shown as ":grey_question: cannot verify" in the summary and do NOT
+      # set ALL_OK=false.
+      - name: Read current required-check state (read-only)
+        id: read-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: vivekchand
+        run: |
+          set +e
+
+          # clawmetry/main: same-repo, GITHUB_TOKEN can read it -- authoritative.
+          # clawmetry-cloud/clawmetry-landing: private repos, 403 expected --
+          # shown as "cannot verify" but do NOT affect ALL_OK.
+          REPOS_AUTH="clawmetry"
+          REPOS_CROSS="clawmetry-cloud clawmetry-landing"
+
+          # Expected required checks per repo (keep in sync with
+          # scripts/apply_required_status_checks.py and c6-health.yml).
+          # "E2E Gate (required)" aggregates the 4 underlying OSS E2E checks
+          # (PR #4111, merged 2026-07-27). One entry replaces four.
+          declare -A EXPECTED
+          EXPECTED[clawmetry]="E2E Gate (required)"
+          EXPECTED[clawmetry-cloud]="Cloud golden-path browser E2E"
+          EXPECTED[clawmetry-landing]="Landing golden path (C3)"
+
+          ALL_OK=true
+          SUMMARY_ROWS=""
+
+          # Authoritative loop: only clawmetry/main drives ALL_OK.
+          for REPO in $REPOS_AUTH; do
+            PROTECTION=$(gh api "/repos/${OWNER}/${REPO}/branches/main" 2>/dev/null | \
+              python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    prot = (data.get('protection') or {})
+    rsc = (prot.get('required_status_checks') or {})
+    ctx = set(rsc.get('contexts') or [])
+    for item in (rsc.get('checks') or []):
+        if isinstance(item, dict) and item.get('context'):
+            ctx.add(item['context'])
+    print(json.dumps(sorted(ctx)))
+except Exception:
+    print('[]')
+" || echo "[]")
+            # Also gather checks from the Rulesets API.
+            # c6-apply-ruleset.yml enforces required checks via the Rulesets API
+            # when GITHUB_TOKEN has ruleset-write rights, bypassing the admin-PAT
+            # requirement of classic branch protection. Union both sources so a
+            # check configured via EITHER path counts as present.
+            _RULESET_CHECKS=$(_CURR_REPO="${REPO}" python3 - 2>/dev/null <<"RSPY"
+import json, os, subprocess
+OWNER = os.environ.get('OWNER', 'vivekchand')
+REPO  = os.environ.get('_CURR_REPO', 'clawmetry')
+ctx   = set()
+hdrs  = ['--header', 'Accept: application/vnd.github+json']
+try:
+    r = subprocess.run(['gh', 'api', f'/repos/{OWNER}/{REPO}/rulesets'] + hdrs,
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode == 0:
+        for rs in json.loads(r.stdout):
+            if rs.get('enforcement') == 'active':
+                r2 = subprocess.run(
+                    ['gh', 'api', f"/repos/{OWNER}/{REPO}/rulesets/{rs['id']}"] + hdrs,
+                    capture_output=True, text=True, timeout=15)
+                if r2.returncode == 0:
+                    detail = json.loads(r2.stdout)
+                    for rule in (detail.get('rules') or []):
+                        if rule.get('type') == 'required_status_checks':
+                            for c in (rule.get('parameters', {})
+                                       .get('required_status_checks') or []):
+                                if c.get('context'):
+                                    ctx.add(c['context'])
+except Exception:
+    pass
+print(json.dumps(sorted(ctx)))
+RSPY
+)
+            PROTECTION=$(python3 -c "
+import json, sys
+a = json.loads(sys.argv[1]); b = json.loads(sys.argv[2])
+print(json.dumps(sorted(set(a) | set(b))))
+" "$PROTECTION" "${_RULESET_CHECKS:-[]}" 2>/dev/null || echo "$PROTECTION")
+            IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
+            for CHECK in "${EXPECTED_CHECKS[@]}"; do
+              if echo "$PROTECTION" | python3 -c \
+                "import json,sys; d=json.load(sys.stdin); exit(0 if $(python3 -c "import json; print(repr('${CHECK}'))" 2>/dev/null || echo "'${CHECK}'") in d else 1)" 2>/dev/null; then
+                ICON=":white_check_mark:"
+              else
+                ICON=":x:"
+                ALL_OK=false
+              fi
+              SUMMARY_ROWS="${SUMMARY_ROWS}| ${REPO} | ${CHECK} | ${ICON} |\n"
+            done
+          done
+
+          # Cross-repo loop: GITHUB_TOKEN returns 403 for private repos.
+          # Mark as "cannot verify" -- do NOT set ALL_OK=false.
+          for REPO in $REPOS_CROSS; do
+            IFS='|' read -ra EXPECTED_CHECKS <<< "${EXPECTED[$REPO]}"
+            for CHECK in "${EXPECTED_CHECKS[@]}"; do
+              SUMMARY_ROWS="${SUMMARY_ROWS}| ${REPO} | ${CHECK} | :grey_question: cannot verify (cross-repo) |\n"
+            done
+          done
+
+          {
+            echo "## C6: Required E2E Status Checks"
+            echo ""
+            if [ "$ALL_OK" = "true" ]; then
+              echo "> :white_check_mark: **clawmetry/main: all required checks configured.** C6 gate is GREEN."
+              echo ">"
+              echo "> clawmetry-cloud and clawmetry-landing cannot be verified cross-repo (private repos --"
+              echo "> GITHUB_TOKEN scope limit). Use \`bash scripts/close-c6.sh\` or the Settings UI"
+              echo "> to confirm those repos are also covered."
+            else
+              echo "> :x: **clawmetry/main: one or more required checks are not yet enforced.**"
+              echo ">"
+              echo "> E2E tests pass but PRs can still merge if they fail -- the checks are not required."
+            fi
+            echo ""
+            echo "| Repo | Check | Status |"
+            echo "|------|-------|--------|"
+            printf "%b" "$SUMMARY_ROWS"
+            echo ""
+            if [ "$ALL_OK" != "true" ]; then
+              echo "### Close C6 now (pick one)"
+              echo ""
+              echo "**Option A -- GitHub Settings UI (no PAT, no tools, ~60 s):**"
+              echo "Add the check name directly in Settings > Branches. GitHub autocompletes from recent CI runs."
+              echo "1. [clawmetry Settings > Branches](https://github.com/vivekchand/clawmetry/settings/branches)"
+              echo "   -- edit main, enable \"Require status checks to pass\", add:"
+              echo "   - \`E2E Gate (required)\`"
+              echo "2. [clawmetry-cloud Settings > Branches](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
+              echo "   -- add \`Cloud golden-path browser E2E\`"
+              echo "3. [clawmetry-landing Settings > Branches](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
+              echo "   -- add \`Landing golden path (C3)\`"
+              echo ""
+              echo "**Option B -- one-shot via Actions workflow (fine-grained PAT with Administration: write):**"
+              echo "1. [Create PAT](https://github.com/settings/personal-access-tokens/new?name=clawmetry-c6)"
+              echo "   (repos: clawmetry/clawmetry-cloud/clawmetry-landing, permission: Administration read+write)"
+              echo "2. [Run Apply workflow](https://github.com/vivekchand/clawmetry/actions/workflows/apply-required-checks.yml)"
+              echo "   -- \`confirm=APPLY\`, \`pat_token=<PAT>\` -- closes all 3 repos in one run"
+              echo ""
+              echo "**Option C -- terminal (zero prerequisites, auto-installs gh CLI on macOS/Ubuntu):**"
+              echo '```bash'
+              echo "bash scripts/close-c6.sh"
+              echo '```'
+              echo ""
+              echo "**Option D -- store PAT as secret (this workflow heals within 2 hours):**"
+              echo "- [Settings > Secrets > New secret](https://github.com/vivekchand/clawmetry/settings/secrets/actions/new)"
+              echo "  Name: \`E2E_ADMIN_PAT\`, Value: same PAT from Option B"
+              echo ""
+              echo "Tracking: [#4029](https://github.com/vivekchand/clawmetry/issues/4029)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Export for downstream steps.
+          echo "checks_ok=${ALL_OK}" >> "$GITHUB_OUTPUT"
+
+      # Fires when clawmetry/main has all required checks configured.
+      - name: C6 already configured (no PAT needed)
+        if: steps.read-state.outputs.checks_ok == 'true'
+        run: |
+          echo "C6 is GREEN -- all required E2E status checks are configured on clawmetry/main."
+          echo "Branch protection is correctly set. E2E_ADMIN_PAT is not needed."
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+
+      # Daily ping on the tracking issue when C6 is still unclosed.
+      # Runs only on the 10:15 UTC daily schedule (not every 2-hour run)
+      # so the issue thread does not flood with hourly noise.
+      # continue-on-error: true so a GitHub API hiccup does not shadow
+      # the mandatory exit-1 below.
+      - name: Daily ping on tracking issue (C6 still unclosed)
+        if: |
+          github.event_name == 'schedule'
+          && github.event.schedule == '15 10 * * *'
+          && steps.pat-check.outputs.has_pat == 'false'
+          && steps.read-state.outputs.checks_ok != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          BODY="<!-- c6-daily-ping --> **C6 daily ping ${TODAY}:** clawmetry/main branch protection does not yet require E2E checks. 6/7 criteria green. Fastest close: [Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches) > Required status checks > add \`E2E Gate (required)\` (60 s, no token needed). Or run \`bash scripts/close-c6.sh\` from a terminal."
+          gh issue comment 4029 --repo vivekchand/clawmetry --body "$BODY"
+
+      # Exit 1 only on schedule (never on push -- this workflow is informational on push).
+      # Signals to the admin that E2E_ADMIN_PAT is needed to auto-heal C6.
+      - name: Error: E2E_ADMIN_PAT not set
+        if: |
+          steps.pat-check.outputs.has_pat == 'false'
+          && steps.read-state.outputs.checks_ok != 'true'
+          && github.event_name != 'push'
+        run: |
+          echo "::error::E2E_ADMIN_PAT secret is not set -- C6 (required-status-checks) cannot be applied automatically."
+          echo ""
+          echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6."
+          echo "See the job summary above for a formatted status report and close options."
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+          exit 1
+
+      - name: Apply required E2E status checks (C6)
+        if: steps.pat-check.outputs.has_pat == 'true' && steps.read-state.outputs.checks_ok != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.E2E_ADMIN_PAT }}
+        run: python3 scripts/apply_required_status_checks.py
+
+      - name: Post-apply summary
+        if: steps.pat-check.outputs.has_pat == 'true' && steps.read-state.outputs.checks_ok != 'true'
+        run: |
+          {
+            echo "## C6 auto-heal: required checks applied"
+            echo ""
+            echo "> :white_check_mark: E2E_ADMIN_PAT was present. \`apply_required_status_checks.py\` ran."
+            echo "> Branch protection is now configured on \`main\` for all 3 repos."
+            echo ""
+            echo "Verify at:"
+            echo "- [clawmetry branch protection](https://github.com/vivekchand/clawmetry/settings/branches)"
+            echo "- [clawmetry-cloud branch protection](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
+            echo "- [clawmetry-landing branch protection](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
+            echo ""
+            echo "Tracking: [#4029](https://github.com/vivekchand/clawmetry/issues/4029)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "C6 auto-heal complete. Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
