@@ -6,6 +6,25 @@
   the dashboard unlocks within one 60s cycle with no restart. Set
   `CLAWMETRY_HARD_BLOCK=0` to opt out (support only). Details:
   `docs/TRIAL_ENFORCEMENT.md`.
+- **xAI Grok is the 18th observed runtime.** The Grok Build CLI (Rust binary
+  at `~/.grok/bin/grok`, installed via `curl x.ai/cli/install.sh`) now shows
+  up across the dashboard when Pro is licensed. Token accounting reads the
+  global `~/.grok/logs/unified.jsonl` (VERIFIED `shell.turn.inference_done`
+  row shape from the cereblab wire-level analysis + openusage#646); session
+  listing walks `~/.grok/sessions/<encoded-cwd>/<uuid>/`; cost derives via
+  the freshly-added `providers_pricing.xai` rates (grok-4 $3/$15, grok-3
+  $3/$15, grok-3-mini $0.30/$0.50, grok-code-fast-1 $0.20/$1.50, grok-2
+  $2/$10). Adapter lives in clawmetry-pro (0.7.4). Undocumented msg-name
+  branches parse defensively, so a wrong field guess produces NO data,
+  never fabricated data.
+- **Grok's outbound repo-upload panel.** The pro adapter surfaces the raw
+  `repo_state.upload.enqueued` manifests from `unified.jsonl` on
+  `Session.extra.uploadedPayloads` (fileId, size_bytes, file_count,
+  repo_path) plus a `uploadedBytesTotal` aggregate. The Grok tab can
+  render "what left your machine to xAI this session", a differentiated
+  view no other runtime needs, and the direct answer to the July 2026
+  disclosure that Grok Build silently uploaded entire repos to a
+  `grok-code-session-traces` GCS bucket.
 
 ## 0.12.650
 
