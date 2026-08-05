@@ -82,7 +82,7 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("copilot", "GitHub Copilot", ("~/.copilot/session-state",),
                  env="CLAWMETRY_COPILOT_HOME"),
     RuntimeProbe("grok", "Grok",
-                 ("~/.grok/logs", "~/.grok-cli", "~/.grok/session-state"),
+                 ("~/.grok/logs", "~/.grok/sessions", "~/.grok/bin/grok"),
                  env="CLAWMETRY_GROK_HOME"),
 )
 

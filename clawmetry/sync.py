@@ -6326,8 +6326,8 @@ def _runtime_data_paths(rid: str) -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
-        "grok": [os.path.join(home, d) for d in
-                 (".grok", ".grok-cli")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     return _M.get(rid, [])
 
@@ -6457,8 +6457,8 @@ def _detect_runtimes_lite() -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
-        "grok": [os.path.join(home, d) for d in
-                 (".grok", ".grok-cli")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     for rid, paths in _present.items():
         try:

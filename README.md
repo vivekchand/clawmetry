@@ -163,7 +163,7 @@ Running [Perplexity's numbat](https://github.com/perplexityai/numbat) agent-secu
 | **n8n** | Beta adapter | SQLite `~/.n8n/database.sqlite`. Workflow executions, node runs, AI Agent prompts, model + tokens where n8n records them. |
 | **Antigravity** | Beta adapter | Brain JSONL under `~/.gemini/<flavor>/brain/`. Conversations, tool steps, thinking, per-generation Gemini token split + cost, background-generation burn. |
 | **GitHub Copilot** | Beta adapter | Copilot CLI `events.jsonl` under `~/.copilot/session-state/` + the `session-store.db` per-call usage ledger. Conversations, tool calls, model routing, cache-aware token split, vendor-billed AI-credit cost. |
-| **Grok** | Beta adapter | xAI Grok Build CLI: unified JSONL under `~/.grok/logs/unified.jsonl` + `~/.grok-cli/session.db`. Conversations, tool calls, model routing. Also surfaces the CLI's outbound repo payload uploaded to xAI so you can see what left your machine. |
+| **Grok** | Beta adapter | xAI Grok Build CLI (Rust binary under `~/.grok/bin/grok`): global event log `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}`. Conversations, per-turn token split, model routing, and the CLI's outbound repo payload staged under `~/.grok/upload_queue/` so you can see what left your machine. |
 
 "Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
 
