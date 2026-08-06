@@ -26,7 +26,7 @@ Opens at **http://localhost:8900** and you're done.
 
 ClawMetry started as observability for OpenClaw, and now meters your **whole agent fleet** in one dashboard, auto-detecting each runtime on your machine:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok**
 
 OpenClaw and NemoClaw are free in the open-source app; the other runtimes light up with ClawMetry Cloud or a self-hosted Pro license. Switch runtimes from the header and every tab — cost, tokens, tools, traces — re-scopes to that runtime. See **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** for the exact free/paid split, tier matrix, `/api/entitlement` shape, and the `clawmetry license` CLI.
 
@@ -163,6 +163,7 @@ Running [Perplexity's numbat](https://github.com/perplexityai/numbat) agent-secu
 | **n8n** | Beta adapter | SQLite `~/.n8n/database.sqlite`. Workflow executions, node runs, AI Agent prompts, model + tokens where n8n records them. |
 | **Antigravity** | Beta adapter | Brain JSONL under `~/.gemini/<flavor>/brain/`. Conversations, tool steps, thinking, per-generation Gemini token split + cost, background-generation burn. |
 | **GitHub Copilot** | Beta adapter | Copilot CLI `events.jsonl` under `~/.copilot/session-state/` + the `session-store.db` per-call usage ledger. Conversations, tool calls, model routing, cache-aware token split, vendor-billed AI-credit cost. |
+| **Grok** | Beta adapter | xAI Grok Build CLI (Rust binary under `~/.grok/bin/grok`): global event log `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}`. Conversations, per-turn token split, model routing, and the CLI's outbound repo payload staged under `~/.grok/upload_queue/` so you can see what left your machine. |
 
 "Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
 
@@ -293,7 +294,7 @@ services:
 
 - Python 3.8+
 - Flask (installed automatically via pip)
-- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, or GitHub Copilot (or mounted volumes for Docker)
+- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, GitHub Copilot, or Grok (or mounted volumes for Docker)
 - Linux or macOS
 
 ## NemoClaw / OpenShell Support

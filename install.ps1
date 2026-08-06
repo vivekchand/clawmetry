@@ -2,7 +2,7 @@
 # Usage: irm https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-Write-Host "🔭 Installing Clawmetry — OpenClaw Observability Dashboard" -ForegroundColor Cyan
+Write-Host "🦞 ClawMetry  Real-time observability & governance for AI agents" -ForegroundColor Cyan
 Write-Host ""
 
 # Check for Python

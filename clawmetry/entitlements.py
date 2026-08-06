@@ -96,6 +96,7 @@ PAID_RUNTIMES = frozenset(
         "n8n",
         "antigravity",
         "copilot",
+        "grok",
     }
 )
 
@@ -120,6 +121,7 @@ RUNTIME_LABELS = {
     "n8n": "n8n",
     "antigravity": "Antigravity",
     "copilot": "GitHub Copilot",
+    "grok": "Grok",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
