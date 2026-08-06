@@ -1,21 +1,22 @@
 # Trial-end hard block
 
-> **Status: OSS-side enforcement shipped default-ON as of 2026-08-06. Cloud-side email + heartbeat payload extensions land alongside. Legitimate paying customers with valid signed licenses are unaffected — only unpaid / expired installs hit the block.**
+> **Status: OSS-side enforcement shipped default-ON as of 2026-08-06, corrected 2026-08-06 to exempt the free tier. Cloud-side email + heartbeat payload extensions land alongside. Legitimate paying customers with valid signed licenses are unaffected. A plain OSS/cloud_free install that never had a trial or license is ALSO unaffected: only a source that was actually on a paid or trial tier and has since passed its expiry hits the block.**
 >
 > This document is the design-note for the paywall enforcement layer added
 > alongside [`clawmetry/trial_enforcement.py`](../clawmetry/trial_enforcement.py).
 > Its companion, [`docs/ENTITLEMENTS.md`](./ENTITLEMENTS.md), documents the
 > tier + resolver model. This file is only about what happens *when* the
-> resolver reports an unpaid / expired install.
+> resolver reports a lapsed paid/trial install.
 
 ## What ships in OSS today
 
-**Default ON.** Every install whose entitlement resolves to unpaid (OSS /
-cloud_free) or expired (trial past deadline, or a paid tier that lapsed)
-will hit the block. Explicitly set `CLAWMETRY_HARD_BLOCK=0` (or `false` /
-`no` / `off`) to opt out — kept as a support lever for the rare case of a
-legitimate paying customer whose license file corrupted mid-renewal. Under
-default-ON, a ClawMetry install in this state will:
+**Default ON, scoped to a lapsed paid/trial state only.** An install whose
+entitlement resolves to a source that WAS on a paid or trial tier and has
+now passed its `expiry` will hit the block. Explicitly set
+`CLAWMETRY_HARD_BLOCK=0` (or `false` / `no` / `off`) to opt out, kept as a
+support lever for the rare case of a legitimate paying customer whose
+license file corrupted mid-renewal. Under default-ON, a ClawMetry install
+in the expired state will:
 
 1. Return HTTP `402 Payment Required` with header `X-Clawmetry-Trial-Blocked: 1`
    for **every** request outside the small allowlist defined in
@@ -25,18 +26,25 @@ default-ON, a ClawMetry install in this state will:
    ```json
    {
      "hard_blocked": true,
-     "tier": "oss",
-     "source": "oss",
-     "expired": false,
-     "expiry": null,
-     "days_until_expiry": null,
-     "reason": "ClawMetry Pro is required to continue using this install.",
+     "tier": "trial",
+     "source": "license",
+     "expired": true,
+     "expiry": 1785937657.06,
+     "days_until_expiry": 0,
+     "reason": "Your ClawMetry trial has ended.",
      "upgrade_url": "https://app.clawmetry.com/upgrade",
      "activation_endpoint": "/api/license/activate",
      "refresh_endpoint": "/api/trial/refresh-license",
      "status_endpoint": "/api/trial/status"
    }
    ```
+
+   A plain OSS/`cloud_free` install (`tier: "oss"`, `source: "oss"`, never
+   entitled) never reaches this block: `is_hard_blocked()` returns `False`
+   for it regardless of `CLAWMETRY_HARD_BLOCK`. Corrected 2026-08-06 (was
+   shipped blocking this case too for a few hours; live-verified before the
+   fix that a fresh `pip install clawmetry` with no license/trial never
+   finished booting, since every `/api/*` call it depends on 402'd).
 
 2. Render a **full-viewport, un-dismissable modal** (`static/js/app.js` top-
    of-file IIFE, `#cm-hard-block-overlay`) that shows the block reason, a
@@ -92,9 +100,14 @@ are the specific loophole this closes.
 
 Paying customers with a valid signed Ed25519 license file on disk are
 NOT affected — the resolver returns `is_paid=True` + unexpired, which
-short-circuits the block predicate. Only unpaid (OSS / cloud_free) and
-expired (trial past deadline, or a paid subscription that lapsed) installs
-hit the paywall.
+short-circuits the block predicate. Only a source that WAS on a paid or
+trial tier and has since passed its `expiry` (trial past deadline, or a
+paid subscription that lapsed) hits the paywall. Plain OSS / `cloud_free`
+(never entitled at all) is exempt: it was never the loophole this closes,
+and the original shipped predicate over-applied "not currently paid" to
+mean "block", instead of "was paid/trialing and lapsed, block". Corrected
+the same day once the live symptom (a fresh free install stuck forever on
+"Initializing ClawMetry") surfaced.
 
 The `CLAWMETRY_HARD_BLOCK=0` opt-out exists solely as a support lever for
 the rare case of a legitimate paying customer whose license file
