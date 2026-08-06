@@ -2949,6 +2949,7 @@ def _cmd_status(args) -> None:
         # 2026-07-28).
         _entitled = False
         _plan = ""
+        _e = None
         try:
             from clawmetry import entitlements as _ent_st
             _e = _ent_st.get_entitlement(force=True)
@@ -2968,6 +2969,40 @@ def _cmd_status(args) -> None:
                     _entitled = _plan not in ("", "cloud_free", "free")
             except Exception:
                 pass
+
+        # Plan: — one unambiguous line for Free / Trial / Trial Expired /
+        # Starter / Pro / Enterprise, unlike the old License: block below
+        # (silent unless a local key FILE exists, so a cloud-only Free/Trial
+        # account showed nothing at all here). `_e.tier` + `_e.expired`
+        # already carry an expired trial correctly — the resolver preserves
+        # tier="trial" with expiry in the past rather than silently falling
+        # through to oss (entitlements.py's own allows_runtime/allows_feature
+        # rely on that same distinction to deny paid access even in GRACE
+        # mode) — so no new plumbing is needed here, just an honest label.
+        if _e is not None:
+            _tier_lc = (_e.tier or "").strip().lower()
+            if _tier_lc == "trial" and _e.expired:
+                _plan_label = "Trial Expired"
+            else:
+                _plan_label = {
+                    "oss": "Free",
+                    "cloud_free": "Free",
+                    "trial": "Trial",
+                    "cloud_starter": "Starter",
+                    "cloud_pro": "Pro",
+                    "pro": "Pro",
+                    "enterprise": "Enterprise",
+                }.get(_tier_lc, (_e.tier or "Free").capitalize())
+            if _tier_lc == "trial" and _e.expired:
+                print(f"  Plan:        ⚠️  {_plan_label} — upgrade at "
+                      f"https://clawmetry.com/pricing to keep paid runtimes")
+            elif _tier_lc == "trial":
+                _left = _e.days_until_expiry()
+                _left_txt = f", {_left}d left" if isinstance(_left, int) else ""
+                print(f"  Plan:        {_plan_label}{_left_txt}")
+            else:
+                print(f"  Plan:        {_plan_label}")
+
         _prover = None
         try:
             from clawmetry.license import _pro_installed_version as _pv
