@@ -110,12 +110,12 @@ def register_launchd(config: dict) -> bool:
         uid = os.getuid()
         r = subprocess.run(
             ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-            capture_output=True, check=False,
+            capture_output=True, check=False, timeout=8,
         )
         if r.returncode != 0:
             subprocess.run(
                 ["launchctl", "load", "-w", str(plist_path)],
-                capture_output=True, check=False,
+                capture_output=True, check=False, timeout=8,
             )
         return True
     except Exception:
@@ -161,13 +161,22 @@ WantedBy={wanted_by}
     try:
         service_dir.mkdir(parents=True, exist_ok=True)
         (service_dir / f"{label}.service").write_text(unit)
+        # Root cause of a real CI regression (2026-08-06): these three calls
+        # had no timeout, and this whole function runs synchronously inside
+        # the onboarding-complete HTTP handler. A CI/container runner with no
+        # user systemd instance / dbus session can make `systemctl --user
+        # enable --now` hang rather than fail fast, which blocked the
+        # browser's onboarding-complete request indefinitely -- the visible
+        # symptom was the dashboard stuck forever on "Initializing
+        # ClawMetry". Bound every call so the worst case is a few seconds,
+        # never a hang.
         subprocess.run(["systemctl", *scope, "daemon-reload"],
-                        check=False, capture_output=True)
+                        check=False, capture_output=True, timeout=8)
         subprocess.run(["systemctl", *scope, "enable", "--now", label],
-                        check=False, capture_output=True)
+                        check=False, capture_output=True, timeout=8)
         time.sleep(1.0)
         chk = subprocess.run(["systemctl", *scope, "is-active", label],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=8)
         return chk.stdout.strip() == "active" or _is_sync_running()
     except Exception:
         return False
@@ -231,7 +240,7 @@ def register_windows_task(config: dict) -> bool:
             r = subprocess.run(
                 ["schtasks", "/create", "/tn", WINDOWS_TASK_NAME,
                  "/xml", xml_path, "/f"],
-                capture_output=True, check=False,
+                capture_output=True, check=False, timeout=8,
             )
             created = r.returncode == 0
             if created:
@@ -239,7 +248,7 @@ def register_windows_task(config: dict) -> bool:
                 # run it now so the daemon starts this session too, not just
                 # after the next logon.
                 subprocess.run(["schtasks", "/run", "/tn", WINDOWS_TASK_NAME],
-                                capture_output=True, check=False)
+                                capture_output=True, check=False, timeout=8)
             return created
         finally:
             try:
@@ -258,7 +267,7 @@ def windows_task_registered() -> bool:
     try:
         r = subprocess.run(
             ["schtasks", "/query", "/tn", WINDOWS_TASK_NAME],
-            capture_output=True, check=False,
+            capture_output=True, check=False, timeout=8,
         )
         return r.returncode == 0
     except Exception:

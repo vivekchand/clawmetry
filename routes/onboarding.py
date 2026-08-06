@@ -36,6 +36,7 @@ chose managed by signing up.
 import json
 import logging
 import os
+import threading
 import time
 
 from flask import Blueprint, jsonify, request
@@ -189,13 +190,28 @@ def _ensure_daemon_for_choice(choice: str) -> None:
     sleep, reboot, crash) -- silently and permanently halting auto-update
     until the user manually relaunches `clawmetry`. Best-effort: never let a
     registration failure break onboarding completion itself.
-    """
-    try:
-        from clawmetry.daemon_registration import ensure_persistent_daemon
 
-        ensure_persistent_daemon({"local_only": choice != "managed"})
+    Dispatched off the request thread on purpose (2026-08-06 CI regression):
+    ``ensure_persistent_daemon`` shells out to systemctl/launchctl/schtasks,
+    and even with a bounded per-call timeout that's still real, synchronous
+    latency this HTTP handler's caller (the browser) is waiting on. Running
+    it in a background thread means a slow or flaky OS registration can
+    never delay -- let alone hang -- the onboarding-complete response the
+    dashboard's init sequence is blocked on.
+    """
+    def _run() -> None:
+        try:
+            from clawmetry.daemon_registration import ensure_persistent_daemon
+
+            ensure_persistent_daemon({"local_only": choice != "managed"})
+        except Exception as exc:
+            log.warning("onboarding: daemon registration failed: %s", exc)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
     except Exception as exc:
-        log.warning("onboarding: daemon registration failed: %s", exc)
+        log.warning("onboarding: daemon registration dispatch failed: %s", exc)
+        _run()
 
 
 @bp_onboarding.route("/api/onboarding/state")

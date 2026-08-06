@@ -101,6 +101,49 @@ def test_windows_task_registered_reflects_schtasks_query(monkeypatch):
     assert dreg.windows_task_registered() is False
 
 
+def test_register_systemd_bounds_every_subprocess_call(monkeypatch, tmp_path):
+    """2026-08-06 CI regression: these calls had no timeout, and this whole
+    function runs synchronously inside the onboarding-complete HTTP handler.
+    A runner with no user systemd/dbus session can make `systemctl --user
+    enable --now` hang instead of failing fast -- visible live as the
+    dashboard stuck forever on "Initializing ClawMetry" for mobile E2E
+    screenshots. Every systemctl call here must be bounded."""
+    monkeypatch.setattr(dreg, "_is_root", lambda: False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/systemctl")
+    calls = []
+
+    def _run(cmd, *a, **k):
+        calls.append((cmd, k))
+        return _Res(0, "active")
+
+    monkeypatch.setattr("subprocess.run", _run)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    assert dreg.register_systemd({}) is True
+    assert len(calls) == 3, "daemon-reload, enable --now, is-active"
+    for cmd, kwargs in calls:
+        assert kwargs.get("timeout") is not None, f"no timeout on {cmd}"
+
+
+def test_register_launchd_bounds_every_subprocess_call(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    calls = []
+
+    def _run(cmd, *a, **k):
+        calls.append((cmd, k))
+        return _Res(1)  # force the fallback `launchctl load` branch too
+
+    monkeypatch.setattr("subprocess.run", _run)
+    monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+
+    dreg.register_launchd({})
+
+    assert len(calls) == 2, "bootstrap + the load -w fallback"
+    for cmd, kwargs in calls:
+        assert kwargs.get("timeout") is not None, f"no timeout on {cmd}"
+
+
 def test_ensure_persistent_daemon_dispatches_by_platform(monkeypatch):
     monkeypatch.setattr("clawmetry.sync.ensure_local_config", lambda: None, raising=False)
 

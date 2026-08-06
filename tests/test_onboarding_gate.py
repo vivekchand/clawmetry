@@ -352,12 +352,28 @@ def test_activate_license_registers_persistent_daemon(ob, client, monkeypatch):
     assert calls == ["selfhost_license"]
 
 
+class _SyncThread:
+    """Runs the target immediately on .start() instead of on a real thread,
+    so tests can assert on _run()'s side effects deterministically -- the
+    production code dispatches via threading.Thread on purpose (see
+    _ensure_daemon_for_choice's docstring: onboarding-complete must never
+    block the HTTP response on a slow/hanging systemctl/launchctl/schtasks
+    call), but that async dispatch is exactly what these tests don't want."""
+
+    def __init__(self, target, daemon=True):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
 def test_ensure_daemon_for_choice_calls_shared_registration(monkeypatch):
     """selfhost_* choices must register a LOCAL-ONLY daemon (no cloud
     egress), managed must not."""
     import routes.onboarding as mod
     import clawmetry.daemon_registration as dreg
 
+    monkeypatch.setattr(mod.threading, "Thread", _SyncThread)
     calls = []
     monkeypatch.setattr(dreg, "ensure_persistent_daemon", lambda cfg: calls.append(cfg))
     mod._ensure_daemon_for_choice("selfhost_trial")
@@ -374,7 +390,28 @@ def test_ensure_daemon_for_choice_never_raises(monkeypatch):
     import routes.onboarding as mod
     import clawmetry.daemon_registration as dreg
 
+    monkeypatch.setattr(mod.threading, "Thread", _SyncThread)
+
     def boom(cfg):
         raise RuntimeError("no supervisor available here")
     monkeypatch.setattr(dreg, "ensure_persistent_daemon", boom)
     mod._ensure_daemon_for_choice("selfhost_license")  # must not raise
+
+
+def test_ensure_daemon_for_choice_dispatches_off_request_thread(monkeypatch):
+    """The real regression this closes (2026-08-06 CI): registration used to
+    run synchronously inside the onboarding-complete handler, so a hanging
+    systemctl/launchctl call blocked the HTTP response the browser's init
+    sequence was waiting on (visible as the dashboard stuck forever on
+    "Initializing ClawMetry"). Must be dispatched via threading.Thread, not
+    called inline."""
+    import routes.onboarding as mod
+
+    calls = []
+    monkeypatch.setattr(
+        mod.threading, "Thread",
+        lambda target, daemon=True: calls.append((target, daemon)) or _SyncThread(target),
+    )
+    mod._ensure_daemon_for_choice("selfhost_trial")
+    assert len(calls) == 1
+    assert calls[0][1] is True, "must be a daemon thread so it never blocks process exit"
