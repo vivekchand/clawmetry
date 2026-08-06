@@ -40,6 +40,30 @@ def _is_root() -> bool:
 
 
 def _is_sync_running() -> bool:
+    """Liveness probe for the sync daemon.
+
+    Prefers the daemon's own PID lock (``~/.clawmetry/sync.pid`` +
+    ``process_control.is_alive``) over a ``pgrep -f`` substring match:
+    ``pgrep -f "clawmetry.*sync"`` matches against a process's *entire*
+    command line, so it false-positives on anything that merely mentions
+    both words — a shell wrapper, an editor, a CI step, even an unrelated
+    diagnostic command — not just a genuinely running daemon. A false
+    positive here makes ``register_systemd``'s post-registration check
+    silently report success on containers without systemd (the exact case
+    this module exists to cover), leaving nothing actually supervising the
+    daemon. Fall back to pgrep only if the PID file is unreadable.
+    """
+    try:
+        from clawmetry.sync import _pid_file
+        from clawmetry.process_control import is_alive
+
+        pid_path = _pid_file()
+        if pid_path.exists():
+            return is_alive(int(pid_path.read_text().strip()))
+        return False
+    except Exception:
+        pass
+
     import subprocess
     try:
         r = subprocess.run(
