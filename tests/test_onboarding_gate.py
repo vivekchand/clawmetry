@@ -232,6 +232,55 @@ def test_selfhost_modal_is_in_live_dashboard_html():
         "selfhost-modal must be included after #zoom-wrapper closes (fixed overlay rule)"
 
 
+# ── _cloud_connected() must not confuse identity-linking with "chose managed" ──
+#
+# Live-hit 2026-08-06: the self-host Google/GitHub sign-in flow
+# (_selfhost_signin_with_key in dashboard.py) writes the SAME cloud token as
+# the managed-connect flow purely to carry identity into the trial-signup
+# call, and touches the nocloud marker FIRST. When the trial-signup half of
+# that flow then failed silently, the account was linked (token on disk) but
+# no license/trial was ever activated -- yet _cloud_connected() only checked
+# whether a token existed, so _resolve_state() reported the install as
+# already onboarded ("managed") on every later page load, with no license
+# and everything locked, and no way to see an error or retry the trial.
+
+def test_cloud_connected_ignores_token_under_nocloud_marker(monkeypatch, tmp_path):
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud"
+    marker.write_text("")
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_faketoken")
+
+    assert mod._cloud_connected() is False, (
+        "a cloud token written under self-host intent (nocloud marker set) "
+        "must not be read as 'chose managed' -- it strands a failed trial "
+        "attempt on a permanently-skipped onboarding gate"
+    )
+
+
+def test_cloud_connected_true_without_nocloud_marker(monkeypatch, tmp_path):
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud-not-written"
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_faketoken")
+
+    assert mod._cloud_connected() is True, (
+        "a real managed-connect token (no self-host marker) must still "
+        "satisfy the gate -- this is the grandfather path for pre-gate "
+        "managed installs"
+    )
+
+
 def test_marker_semantics_selfhost_writes_nocloud(monkeypatch, tmp_path):
     """NOCLOUD_MARKER_PATH is a plain str; the old .parent/.touch calls
     raised AttributeError into the broad except, so the marker was silently

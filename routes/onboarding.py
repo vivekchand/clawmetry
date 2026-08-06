@@ -94,9 +94,30 @@ def _license_state() -> str:
 
 
 def _cloud_connected() -> bool:
+    """A cloud token alone means "chose managed" ONLY when self-host was
+    never the intent. ``_selfhost_signin_with_key`` (dashboard.py) writes
+    the SAME cloud token as the managed-connect flow purely to carry
+    identity for the trial-signup call -- it touches the nocloud marker
+    FIRST, before persisting that token. If the trial-signup half of that
+    flow then fails (network error, cloud-side rejection, anything caught
+    by its broad ``except Exception: pass``), the account is linked but no
+    license/trial was ever activated -- yet this fallback used to report
+    "already onboarded, state=managed" on every later page load anyway,
+    because it only checked for the token's existence, not what it was
+    for. That silently stranded a failed self-host trial attempt on the
+    live dashboard with everything locked and no way to see the error or
+    retry (live-hit 2026-08-06: linked account showed plan "free", no
+    license file, but the gate never required a choice again). Self-host
+    intent (the nocloud marker) takes precedence: a token minted under it
+    is identity-only until an explicit choice or a license is on record,
+    both of which are already checked earlier in ``_resolve_state()``.
+    """
     try:
         import dashboard as _d
+        from clawmetry.config import is_cloud_disabled as _icd
 
+        if _icd():
+            return False
         return bool(_d._read_cloud_token())
     except Exception:
         return False
