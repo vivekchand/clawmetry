@@ -73,6 +73,8 @@ _ALLOWED_PATH_PREFIXES = (
     "/api/version",             # diagnostics
     "/api/heartbeat",           # cloud liveness probe
     "/api/extensions",          # "is clawmetry-pro loaded?" probe
+    "/api/auth/",               # OSS auth-check + zero-click bootstrap
+    "/auth",                    # legacy auth endpoint sibling of /api/auth
     "/static/",                 # overlay JS/CSS must load
     "/favicon",                 # tab icon
 )
@@ -80,6 +82,7 @@ _ALLOWED_PATH_EXACT = frozenset({
     "/",                        # dashboard shell renders overlay on top
     "/robots.txt",
     "/api/entitlement",         # exact, also matched by prefix — belt & braces
+    "/api/health",              # k8s / docker / cURL liveness probe
 })
 
 # Default upgrade destination when the cloud hasn't handed us a signed

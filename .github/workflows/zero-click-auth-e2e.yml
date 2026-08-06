@@ -36,6 +36,12 @@ jobs:
     name: Zero-click localhost auto-login (positive + XFF refuse)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
+    # This job tests the unrelated zero-click localhost auth flow; opt out so
+    # the dashboard shell serves cleanly without a license. Hard-block behavior
+    # has its own dedicated coverage in tests/test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
       - uses: actions/checkout@v7
