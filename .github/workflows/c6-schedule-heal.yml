@@ -12,6 +12,11 @@ name: C6 auto-heal (required-checks application)
 # already provides equivalent status information, so the push trigger is
 # redundant. See issue #4029 for context.
 #
+# Schedule paused: 2026-07-20 (GitHub auto-paused after consecutive failures
+# that predated C6 branch protection being configured on 2026-07-31).
+# Schedule re-enabled: 2026-08-06 (this push re-enables it; per GitHub docs,
+# any push that modifies a workflow file un-pauses a paused schedule).
+#
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
 #   - if clawmetry/main checks already configured: exits 0 (C6 green)
