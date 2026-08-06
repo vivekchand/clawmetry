@@ -2339,9 +2339,14 @@ def _cmd_uninstall() -> None:
 
     print()
     print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
-    print(
-        "  \033[2mTo reinstall: curl -fsSL https://clawmetry.com/install.sh | bash\033[0m"
+    # Reinstall hint matches the host OS — a curl|bash line pasted into
+    # cmd.exe would just error, so Windows gets the .cmd fetch+run pair.
+    _reinstall_cmd = (
+        "curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd"
+        if sys.platform.startswith("win")
+        else "curl -fsSL https://clawmetry.com/install.sh | bash"
     )
+    print(f"  \033[2mTo reinstall: {_reinstall_cmd}\033[0m")
     print()
 
 

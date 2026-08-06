@@ -6285,6 +6285,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
+    "grok": "Grok",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6325,6 +6326,8 @@ def _runtime_data_paths(rid: str) -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     return _M.get(rid, [])
 
@@ -6454,6 +6457,8 @@ def _detect_runtimes_lite() -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     for rid, paths in _present.items():
         try:
@@ -11620,6 +11625,7 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.n8n", "N8nAdapter"),
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
+    ("clawmetry_pro.adapters.grok", "GrokAdapter"),
 )
 
 
@@ -12799,7 +12805,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot",
+    "antigravity", "copilot", "grok",
 })
 
 
