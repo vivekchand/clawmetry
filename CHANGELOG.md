@@ -7,9 +7,10 @@
   with the judge's one-line reason on hover. If no judge key is set the
   button flips into "Set judge key →" that opens the rubric + key modal on
   the spot, so the setup lives where you first need it instead of behind
-  the small ⚙ icon on the Evals tab. Works both on the local dashboard
-  and via `app.clawmetry.com/node/*?runtime=openclaw` (cloud already
-  allowlisted the route).
+  the small ⚙ icon on the Evals tab. On `app.clawmetry.com/node/*` the
+  live-Score button is replaced with a stored-score badge computed by the
+  daemon on the machine that has the judge key + session DuckDB, since
+  scoring can't run on the cloud proxy.
 
 - **Trial ends → paid.** ClawMetry now blocks the dashboard UI + sync when
   the trial period ends, prompting checkout with an un-dismissable modal.
