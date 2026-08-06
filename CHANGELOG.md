@@ -23,6 +23,17 @@
   no path back to `True`. The update-check worker now heals a stale unset
   `False` for every role/tier on boot, while a real, explicit user opt-out
   (`POST /api/update-check/config`) is now tracked and never overridden.
+- **Fixed an onboarding-complete request hang introduced by the daemon-registration
+  fix above.** `register_systemd`/`register_launchd` shelled out to
+  systemctl/launchctl with no timeout, synchronously inside the
+  `/api/onboarding/complete` HTTP handler the browser's init sequence waits
+  on. A runner or container with no working user systemd/dbus session can
+  make those commands hang instead of failing fast, blocking the response
+  indefinitely (caught live via a PR's own visual-diff bot: mobile
+  screenshots stuck forever on "Initializing ClawMetry"). Every
+  `daemon_registration.py` subprocess call is now bounded to a few seconds,
+  and the registration call itself is dispatched on a background thread so
+  onboarding-complete never blocks on it at all.
 - **Retired the legacy "ClawMetry Setup" gateway-token modal.** It auto-popped
   on every dashboard load regardless of whether onboarding had already
   completed (v0.1-era UX from before the product detected 17+ non-OpenClaw
