@@ -131,10 +131,13 @@ def _escape_hatch_active() -> bool:
 
 
 def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
-    """True when the resolved entitlement is either OSS / cloud_free or has
-    passed its ``expiry`` timestamp. Fail-closed: an unreadable entitlement
-    is treated as unpaid so we err on the side of the paywall showing rather
-    than silently letting an install through."""
+    """True only when the resolved entitlement WAS on a paid/trial tier and
+    has now passed its ``expiry`` timestamp -- never for an install that was
+    simply never entitled in the first place (plain OSS / cloud_free is the
+    permanent free tier documented in docs/ENTITLEMENTS.md, not a lapsed
+    trial). Fail-closed only on a genuinely unreadable entitlement: we would
+    rather leak into the paywall on an internal error than silently keep
+    serving an install we can't positively classify."""
     if ent is None:
         return True
     try:
@@ -148,7 +151,7 @@ def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
                 return time.time() > float(expiry)
             except (TypeError, ValueError):
                 return True
-        # Cloud plan cache: paid tier + unexpired → NOT blocked.
+        # Cloud plan cache: paid tier (incl. trial) + unexpired → NOT blocked.
         if getattr(ent, "is_paid", False):
             expiry = getattr(ent, "expiry", None)
             if expiry is None:
@@ -157,8 +160,12 @@ def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
                 return time.time() > float(expiry)
             except (TypeError, ValueError):
                 return True
-        # Anything else (OSS free, cloud_free, unknown) → blocked.
-        return True
+        # Plain OSS / cloud_free: no license, no cloud plan, never paid or
+        # trialed. That's the permanent free tier, not an expired one -- do
+        # NOT block it. (Regression fixed 2026-08-06: this used to fall
+        # through to `return True` here, hard-blocking every fresh
+        # `pip install clawmetry` with no license/trial at all.)
+        return False
     except Exception as exc:
         logger.warning("trial_enforcement: resolver check failed, defaulting "
                        "to blocked: %s", exc)

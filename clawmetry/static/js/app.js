@@ -10133,6 +10133,31 @@ async function _invSaveOwner(rt, owner) {
   try { renderInventory(); } catch (e) {}
 }
 
+// Cross-checks the inventory empty-state's detected-but-not-ingesting
+// runtimes against entitlement, and replaces the (misleading, for a locked
+// runtime) "sync starting up" copy with an upgrade nudge + the existing
+// runtime-paywall trial flow (_cmShowRuntimePaywall) when any of them are
+// found but not allowed on this account's plan.
+function _invCheckLockedDetected(detected, bodyEl) {
+  fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var probes = (d && d.probes) || [];
+      var detectedIds = {};
+      detected.forEach(function (r) { detectedIds[r.name] = true; });
+      var locked = probes.filter(function (p) { return p.found && !p.allowed && detectedIds[p.id]; });
+      if (!locked.length || !bodyEl) return;
+      var tier = (d && d.actionable_tier_label) || 'Starter';
+      var names = locked.map(function (p) { return p.label || p.id; }).join(', ');
+      var first = locked[0];
+      bodyEl.innerHTML = 'ClawMetry found <b>' + escHtml(names) + '</b> on this machine, but watching '
+        + (locked.length === 1 ? 'it' : 'them') + ' is part of ' + escHtml(tier) + '. '
+        + '<a href="#" onclick="_cmShowRuntimePaywall(\'' + escHtml(first.id) + '\',\''
+        + escHtml(first.label || first.id) + '\');return false;" style="color:var(--text-accent,#0af);">'
+        + 'Start a free trial</a> to turn it on.';
+    }).catch(function () {});
+}
+
 async function renderInventory() {
   var inv = await _invFetchData();
   var agents = (inv && inv.agents) || [];
@@ -10164,6 +10189,11 @@ async function renderInventory() {
           : rtNames + ' is running, but the sync daemon is not ingesting yet.'
             + ' Run: <code>clawmetry connect</code> (or <code>clawmetry sync</code>).';
         bodyEl.innerHTML = msg;
+        // A detected-but-LOCKED (not entitled) runtime will never start
+        // ingesting no matter how long you wait, so "sync is starting up"
+        // is actively misleading there — surface the upgrade nudge that
+        // used to live in the retired gateway-setup modal instead.
+        _invCheckLockedDetected(detected, bodyEl);
       }
       emptyEl.style.display = '';
     }
@@ -23248,11 +23278,12 @@ async function bootDashboard() {
     );
     var authData = await authRes.json();
     if (authData.needsSetup) {
+      // No gateway token configured. The legacy "ClawMetry Setup" wizard
+      // used to force itself open here on every load; the dashboard works
+      // fine with no gateway configured (onboarding.js owns the first-run
+      // managed/self-host choice, and a real OpenClaw gateway can still be
+      // configured opt-in from the Developer tab).
       document.getElementById('login-overlay').style.display = 'none';
-      var gwo = document.getElementById('gw-setup-overlay');
-      gwo.dataset.mandatory = 'true';
-      document.getElementById('gw-setup-close').style.display = 'none';
-      gwo.style.display = 'flex';
       _safeFinishBoot();
       return;
     }

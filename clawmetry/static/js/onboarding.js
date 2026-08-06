@@ -13,8 +13,8 @@
 // Every way out is recorded via POST /api/onboarding/complete (or the
 // combined activate-license endpoint).
 //
-// Never runs on the hosted cloud dashboard (window.CLOUD_MODE) and defers
-// to the mandatory gateway-setup overlay when that is on screen.
+// Never runs on the hosted cloud dashboard (window.CLOUD_MODE) — that
+// account signing up WAS the onboarding choice.
 
 (function () {
   'use strict';
@@ -42,12 +42,6 @@
   function _err(id, msg) {
     var e = $(id);
     if (e) { e.textContent = msg || ''; e.style.display = msg ? 'block' : 'none'; }
-  }
-
-  function _gwSetupMandatoryVisible() {
-    var gw = $('gw-setup-overlay');
-    return !!(gw && gw.style.display && gw.style.display !== 'none'
-      && gw.dataset && gw.dataset.mandatory === 'true');
   }
 
   function _complete(choice, onFail) {
@@ -306,9 +300,6 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d || !d.required) return;
-        // The gateway-setup overlay (no auth configured) is more
-        // fundamental; let it win this page load — we gate the next one.
-        if (_gwSetupMandatoryVisible()) return;
         var m = $('obg-managed-btn');
         if (m) m.addEventListener('click', _startManaged);
         var s = $('obg-selfhost-btn');
@@ -320,12 +311,8 @@
   }
 
   if (document.readyState === 'loading') {
-    // Run after gw-setup's own DOMContentLoaded check so the mandatory
-    // gateway overlay is already visible when we look for it.
-    document.addEventListener('DOMContentLoaded', function () {
-      setTimeout(_boot, 400);
-    });
+    document.addEventListener('DOMContentLoaded', _boot);
   } else {
-    setTimeout(_boot, 400);
+    _boot();
   }
 })();

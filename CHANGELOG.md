@@ -1,5 +1,35 @@
 ## Unreleased
 
+- **Retired the legacy "ClawMetry Setup" gateway-token modal.** It auto-popped
+  on every dashboard load regardless of whether onboarding had already
+  completed (v0.1-era UX from before the product detected 17+ non-OpenClaw
+  runtimes). The existing onboarding-gate modal (managed cloud vs self-host,
+  which already tracks completion correctly via `/api/onboarding/state`) is
+  now the only first-run gate. A new opt-in "Gateway" tab under the
+  Developer drawer still lets real OpenClaw users paste a gateway token
+  manually. The Agents (Inventory) tab now shows an upgrade nudge for a
+  detected-but-not-yet-entitled runtime instead of a "sync starting up"
+  message that would never resolve.
+- **`clawmetry status` shows an explicit `Plan:` line** (Free / Trial /
+  Trial Expired / Starter / Pro), unconditional unlike the old `License:`
+  block, which stayed silent whenever no local key file existed.
+- **Expired trials now actually stop ingesting new paid-runtime data.**
+  `sync_family_runtimes` checks `entitlements.allows_runtime()` per adapter
+  per sync cycle. Previously only an install-time "is the pro wheel on
+  disk" check gated ingestion, so a trial that later expired kept
+  ingesting new Claude Code/Codex/etc. sessions indefinitely once the
+  wheel had landed once.
+- **Fixed a same-day regression in the trial-end hard-block gate**
+  (`clawmetry/trial_enforcement.py`, shipped default-on earlier the same
+  day): it was hard-blocking (HTTP 402) every plain OSS/free install, not
+  just an expired trial or subscription. Verified live before the fix: a
+  fresh `pip install clawmetry` with no license or cloud account returned
+  `hard_blocked: true, source: "oss"` on `/api/sessions` and
+  `/api/overview` and never finished booting the dashboard. Now only a
+  source that was actually on a paid or trial tier and has since passed
+  its expiry is blocked; a never-entitled install passes through
+  untouched. See `docs/TRIAL_ENFORCEMENT.md`.
+
 - **Score any conversation, right where you read it.** Every row in the
   Conversations tab gets a small **Score** button that runs the same judge
   the daemon uses (via `POST /api/evals/rescore/<session_id>`). Result

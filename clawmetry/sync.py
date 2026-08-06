@@ -12371,12 +12371,31 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
             _rot = 0
         state["family_adapter_rotation"] = _rot + 1
         _classes = _classes[_rot:] + _classes[:_rot]
+    # Live per-runtime entitlement check, not just an install-time decision.
+    # `_family_adapter_classes()` keeps successfully importing an
+    # already-installed clawmetry-pro wheel forever -- nothing uninstalls it
+    # -- so without this, a lapsed trial (or an account that was never
+    # entitled in the first place) kept ingesting NEW Claude Code/Codex/etc.
+    # sessions indefinitely once the wheel had landed once. allows_runtime()
+    # already denies an EXPIRED entitlement even while the rest of the
+    # engine runs in GRACE mode (founder directive 2026-07-28: "it should
+    # stop working after the trial period") -- this just wires that existing
+    # resolver rule into the ingest loop that skipped it. Free runtimes
+    # (OpenClaw/NemoClaw) are never in `_classes` (a separate, always-on
+    # ingest path), so this only ever gates paid ones.
+    try:
+        from clawmetry import entitlements as _ent_fam
+        _ent_for_ingest = _ent_fam.get_entitlement()
+    except Exception:
+        _ent_for_ingest = None
     for cls in _classes:
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
             if not adapter.detect().detected:
                 continue
             runtime = adapter.name
+            if _ent_for_ingest is not None and not _ent_for_ingest.allows_runtime(runtime):
+                continue
             for s in adapter.list_sessions(limit=_effective_family_limit(runtime)):
                 # A deep pass (runtime_backfill) makes this loop run for
                 # minutes; keep the relay responsive between sessions.
