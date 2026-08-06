@@ -1,5 +1,16 @@
 ## Unreleased
 
+- **Score any conversation, right where you read it.** Every row in the
+  Conversations tab gets a small **Score** button that runs the same judge
+  the daemon uses (via `POST /api/evals/rescore/<session_id>`). Result
+  renders inline as a colored badge — green ≥ 4, amber ≥ 2.5, red below —
+  with the judge's one-line reason on hover. If no judge key is set the
+  button flips into "Set judge key →" that opens the rubric + key modal on
+  the spot, so the setup lives where you first need it instead of behind
+  the small ⚙ icon on the Evals tab. Works both on the local dashboard
+  and via `app.clawmetry.com/node/*?runtime=openclaw` (cloud already
+  allowlisted the route).
+
 - **Trial ends → paid.** ClawMetry now blocks the dashboard UI + sync when
   the trial period ends, prompting checkout with an un-dismissable modal.
   Signed licenses land automatically over the heartbeat after payment, so
