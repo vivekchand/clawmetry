@@ -804,9 +804,15 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
 
   // ── Scenario C: detected-token returns 404 (server has no GATEWAY_TOKEN) ──
   //
-  // Same as B but exercising the "no token detected" branch. Server should
-  // surface needsSetup via /api/auth/check, and the bootstrap must promote
-  // the gateway-setup overlay (not the login overlay).
+  // Same as B but exercising the "no token detected" branch. Server
+  // surfaces needsSetup via /api/auth/check. The bootstrap used to promote
+  // a mandatory "ClawMetry Setup" gateway-token overlay here (close button
+  // hidden) on EVERY page load, regardless of whether the machine had ever
+  // run OpenClaw. That overlay was retired outright (2026-08-06): needsSetup
+  // is now informational only, the dashboard opens straight through, and
+  // first-run choice is onboarding.js's job (gated on
+  // /api/onboarding/state, which — unlike this needsSetup check — actually
+  // remembers a completed choice).
   (async function scenarioC() {
     const result = await runBootstrap({
       initialLocalStorage: {},
@@ -824,9 +830,9 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
     eq(result.calls[0], '/api/auth/detected-token',
        'C: detected-token attempted even when server has no token');
     eq(result.overlayDisplay, 'none',
-       'C: login overlay is hidden (gateway-setup overlay takes over)');
-    eq(result.gwOverlayDisplay, 'flex',
-       'C: gateway-setup overlay is shown when needsSetup=true');
+       'C: login overlay is hidden — the dashboard opens straight through');
+    eq(result.gwOverlayDisplay, '',
+       'C: needsSetup no longer promotes any gateway-setup overlay (retired)');
     eq(result.reloadCount, 0,
        'C: no location.reload() during bootstrap (E2E-fixture-safe)');
   })();
