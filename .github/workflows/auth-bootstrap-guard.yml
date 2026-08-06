@@ -14,6 +14,10 @@ jobs:
     name: Auth bootstrap no-reload smoke
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    # Trial-end hard block is default-ON in code — opt out for this
+    # auth-bootstrap smoke; hard-block coverage in test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
       - uses: actions/checkout@v7

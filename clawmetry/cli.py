@@ -1201,6 +1201,20 @@ def _cmd_connect(args) -> None:
     print()
     print(f"  Connected as: {node_id}")
 
+    # Every successful sign-in mints-or-reuses the account's 7-day trial
+    # license and activates it HERE (idempotent server-side) — including the
+    # keep-local path, where the license is the entire reason to sign in.
+    # Must run BEFORE the entitlement probe below: on a brand-new signup the
+    # account is still FREE until this trial is minted, so a probe that ran
+    # first would see "not entitled", install nothing, and print nothing —
+    # even though the trial (unlocking every runtime) was about to activate
+    # a moment later. (2026-08-06 Straive Windows onboarding: OTP verified,
+    # `clawmetry status` correctly showed the trial active, but Runtimes
+    # stayed "NOT syncing" because the wheel was probed-for before it existed
+    # to be entitled to, and only the 30-min pro-entitlement watcher in
+    # sync.py ever caught up.)
+    _trial_activated = _activate_signup_trial()
+
     # Auto-provision clawmetry-pro for entitled cloud accounts (Starter/Pro/
     # Trial/Enterprise). The cloud is the single source of truth: license.py
     # probes /api/license/entitlement with this cm_ key first and only then
@@ -1217,13 +1231,15 @@ def _cmd_connect(args) -> None:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
             print(f"  Note: {_pro_msg}")
+        elif _trial_activated:
+            # The trial just activated (see message above) but this probe still
+            # came back empty-handed - e.g. entitlement propagation lag rather
+            # than an error. Don't leave the terminal looking like nothing
+            # happened; the pro-entitlement watcher retries every ~30 min.
+            print("  Pro runtimes are activating - run `clawmetry status` in "
+                  "a few minutes to check, or they'll pick up automatically.")
     except Exception:
         pass  # connect must never fail because of pro provisioning
-
-    # Every successful sign-in mints-or-reuses the account's 7-day trial
-    # license and activates it HERE (idempotent server-side) — including the
-    # keep-local path, where the license is the entire reason to sign in.
-    _activate_signup_trial()
 
     if _keep_local_signin:
         # Belt-and-braces: the marker was never removed on this path, but a
@@ -2933,6 +2949,7 @@ def _cmd_status(args) -> None:
         # 2026-07-28).
         _entitled = False
         _plan = ""
+        _e = None
         try:
             from clawmetry import entitlements as _ent_st
             _e = _ent_st.get_entitlement(force=True)
@@ -2952,6 +2969,40 @@ def _cmd_status(args) -> None:
                     _entitled = _plan not in ("", "cloud_free", "free")
             except Exception:
                 pass
+
+        # Plan: — one unambiguous line for Free / Trial / Trial Expired /
+        # Starter / Pro / Enterprise, unlike the old License: block below
+        # (silent unless a local key FILE exists, so a cloud-only Free/Trial
+        # account showed nothing at all here). `_e.tier` + `_e.expired`
+        # already carry an expired trial correctly — the resolver preserves
+        # tier="trial" with expiry in the past rather than silently falling
+        # through to oss (entitlements.py's own allows_runtime/allows_feature
+        # rely on that same distinction to deny paid access even in GRACE
+        # mode) — so no new plumbing is needed here, just an honest label.
+        if _e is not None:
+            _tier_lc = (_e.tier or "").strip().lower()
+            if _tier_lc == "trial" and _e.expired:
+                _plan_label = "Trial Expired"
+            else:
+                _plan_label = {
+                    "oss": "Free",
+                    "cloud_free": "Free",
+                    "trial": "Trial",
+                    "cloud_starter": "Starter",
+                    "cloud_pro": "Pro",
+                    "pro": "Pro",
+                    "enterprise": "Enterprise",
+                }.get(_tier_lc, (_e.tier or "Free").capitalize())
+            if _tier_lc == "trial" and _e.expired:
+                print(f"  Plan:        ⚠️  {_plan_label} — upgrade at "
+                      f"https://clawmetry.com/pricing to keep paid runtimes")
+            elif _tier_lc == "trial":
+                _left = _e.days_until_expiry()
+                _left_txt = f", {_left}d left" if isinstance(_left, int) else ""
+                print(f"  Plan:        {_plan_label}{_left_txt}")
+            else:
+                print(f"  Plan:        {_plan_label}")
+
         _prover = None
         try:
             from clawmetry.license import _pro_installed_version as _pv

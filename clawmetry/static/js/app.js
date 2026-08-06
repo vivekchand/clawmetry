@@ -1,4 +1,276 @@
 // ─────────────────────────────────────────────────────────────────────────
+// Trial-end hard-block overlay.
+//
+// Fires when ``/api/trial/status`` returns ``hard_blocked: true`` (the daemon
+// has ``CLAWMETRY_HARD_BLOCK=1`` set AND the resolver reports an unpaid /
+// expired entitlement). Renders a full-viewport, un-dismissable modal that
+// takes the user straight to checkout, offers a paste-in field for a license
+// key they already own, and polls ``/api/trial/refresh-license`` in the
+// background so the moment the daemon writes a fresh license file the
+// overlay auto-clears and the dashboard resumes.
+//
+// This runs at the very top of app.js so:
+//   * it beats every other tab-init call to the ``/api/*`` surface (which
+//     would 402 anyway and dump errors into the console),
+//   * it survives a stale cached copy of app.js — the poll is defensive
+//     and never assumes any other function exists yet.
+// ─────────────────────────────────────────────────────────────────────────
+(function initClawMetryHardBlockOverlay() {
+  var POLL_MS_ACTIVE = 15000;    // while blocked: retry auto-refresh every 15s
+  var POLL_MS_IDLE   = 60000;    // while unblocked: sanity-check every 60s
+  var OVERLAY_ID     = 'cm-hard-block-overlay';
+  var STYLE_ID       = 'cm-hard-block-overlay-style';
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var st = document.createElement('style');
+    st.id = STYLE_ID;
+    st.textContent = ''
+      + '#' + OVERLAY_ID + ' {'
+      + '  position: fixed; inset: 0; z-index: 2147483647;'
+      + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
+      + '  -webkit-backdrop-filter: blur(6px);'
+      + '  display: flex; align-items: center; justify-content: center;'
+      + '  padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-card {'
+      + '  max-width: 480px; width: 100%; background: #1a1d22;'
+      + '  border: 1px solid #2a2f36; border-radius: 14px;'
+      + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
+      + '  padding: 32px; color: #e8eaed;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
+      + '  color: #ffb020; font-size: 12px; font-weight: 700;'
+      + '  text-transform: uppercase; letter-spacing: 1.4px;'
+      + '  margin: 0 0 10px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' h2 {'
+      + '  margin: 0 0 12px 0; font-size: 22px; line-height: 1.25;'
+      + '  color: #ffffff; font-weight: 700;'
+      + '}'
+      + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
+      + '  margin: 0 0 22px 0; font-size: 14px; line-height: 1.55;'
+      + '  color: #b5b8be;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
+      + '  display: block; width: 100%; padding: 13px 18px;'
+      + '  border-radius: 10px; border: 0; background: #ff9500;'
+      + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
+      + '  cursor: pointer; text-align: center; text-decoration: none;'
+      + '  box-sizing: border-box; margin: 0 0 14px 0;'
+      + '  transition: background 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
+      + '  display: flex; align-items: center; gap: 10px;'
+      + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
+      + '  letter-spacing: 1.2px; margin: 18px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
+      + '  content: ""; flex: 1; height: 1px; background: #2a2f36;'
+      + '}'
+      + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
+      + '  display: block; font-size: 12px; color: #b5b8be;'
+      + '  margin: 0 0 8px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
+      + '  width: 100%; min-height: 96px; padding: 10px 12px;'
+      + '  border-radius: 8px; border: 1px solid #2a2f36;'
+      + '  background: #12141a; color: #e8eaed;'
+      + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
+      + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
+      + '  margin-top: 10px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #e8eaed;'
+      + '  font-size: 14px; font-weight: 600; cursor: pointer;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status {'
+      + '  min-height: 20px; margin-top: 12px; font-size: 12px;'
+      + '  color: #b5b8be; text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.ok  { color: #59d18d; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot {'
+      + '  margin-top: 18px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot code {'
+      + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
+      + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
+      + '  border-radius: 3px;'
+      + '}';
+    document.head.appendChild(st);
+  }
+
+  function buildOverlay(state) {
+    var el = document.createElement('div');
+    el.id = OVERLAY_ID;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'cm-hbo-title');
+    el.setAttribute('data-cm-locked', '1');
+    var upgradeUrl = (state && state.upgrade_url) || 'https://app.clawmetry.com/upgrade';
+    var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
+    var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
+    var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
+    var subline = daysLeft !== null && daysLeft > 0
+      ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
+      : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    el.innerHTML = ''
+      + '<div class="cm-hbo-card">'
+      + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
+      + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
+      + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
+      + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
+      + '    Continue to payment  →'
+      + '  </a>'
+      + '  <div class="cm-hbo-divider">or</div>'
+      + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
+      + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
+      + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
+      + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
+      + '</div>';
+
+    // Emit paywall telemetry so the fleet dashboard sees a "user hit hard block"
+    // count. Fire-and-forget; failure never blocks the render.
+    try {
+      fetch('/api/paywall/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'hard_block_view',
+          tier: state && state.tier,
+          source: state && state.source,
+          expired: state && state.expired,
+        }),
+      }).catch(function () {});
+    } catch (e) { /* noop */ }
+
+    // Wire activate button — POSTs to /api/license/activate (allowlisted),
+    // then forces a refresh + snapshot. The overlay auto-removes itself if
+    // the fresh snapshot reports hard_blocked=false.
+    var activateBtn = el.querySelector('.cm-hbo-activate');
+    var statusEl = el.querySelector('.cm-hbo-status');
+    activateBtn.addEventListener('click', function () {
+      var ta = el.querySelector('#cm-hbo-key');
+      var key = (ta && ta.value || '').trim();
+      if (!key) {
+        statusEl.className = 'cm-hbo-status err';
+        statusEl.textContent = 'Paste a license key first.';
+        return;
+      }
+      statusEl.className = 'cm-hbo-status';
+      statusEl.textContent = 'Verifying key…';
+      activateBtn.disabled = true;
+      fetch('/api/license/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          activateBtn.disabled = false;
+          if (resp && resp.ok === false) {
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = resp.message || resp.error || 'License activation failed.';
+            return;
+          }
+          statusEl.className = 'cm-hbo-status ok';
+          statusEl.textContent = 'License installed — reloading…';
+          return refreshAndMaybeUnblock(true);
+        })
+        .catch(function (err) {
+          activateBtn.disabled = false;
+          statusEl.className = 'cm-hbo-status err';
+          statusEl.textContent = 'Activation failed: ' + (err && err.message || err);
+        });
+    });
+
+    // Belt & braces: block ESC / TAB-out / right-click chrome from letting
+    // the user reach controls behind the overlay while it's mounted.
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    });
+    return el;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;');
+  }
+
+  function mount(state) {
+    injectStyles();
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    var el = buildOverlay(state);
+    document.body.appendChild(el);
+    try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
+  }
+
+  function unmount() {
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
+  }
+
+  function refreshAndMaybeUnblock(force) {
+    var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    var opts = force ? { method: 'POST' } : { method: 'GET' };
+    return fetch(endpoint, opts)
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (state) {
+        applyState(state);
+        return state;
+      })
+      .catch(function () { /* noop — retry next tick */ });
+  }
+
+  var _lastBlocked = null;
+  function applyState(state) {
+    if (!state) return;
+    var blocked = !!state.hard_blocked;
+    if (blocked && !_lastBlocked) mount(state);
+    else if (!blocked && _lastBlocked) unmount();
+    else if (blocked) {
+      // still blocked — refresh the copy in case reason / countdown changed
+      var existing = document.getElementById(OVERLAY_ID);
+      if (!existing) mount(state);
+    }
+    _lastBlocked = blocked;
+    var delay = blocked ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
+    window.__cmHardBlockTimer = setTimeout(tick, delay);
+  }
+
+  function tick() {
+    refreshAndMaybeUnblock(false);
+  }
+
+  // First tick: read status ASAP (before any other tab hits an /api/* that
+  // would 402 and pollute the console). If the document isn't ready yet,
+  // defer until it is.
+  function boot() {
+    try { tick(); } catch (e) { /* noop */ }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+
+// ─────────────────────────────────────────────────────────────────────────
 // Response-shape tolerance helpers (epic #1032 Phase 2-5 forward-compat)
 //
 // As routes migrate to the local-DuckDB fast path (`_source: "local_store"`)
@@ -9861,6 +10133,31 @@ async function _invSaveOwner(rt, owner) {
   try { renderInventory(); } catch (e) {}
 }
 
+// Cross-checks the inventory empty-state's detected-but-not-ingesting
+// runtimes against entitlement, and replaces the (misleading, for a locked
+// runtime) "sync starting up" copy with an upgrade nudge + the existing
+// runtime-paywall trial flow (_cmShowRuntimePaywall) when any of them are
+// found but not allowed on this account's plan.
+function _invCheckLockedDetected(detected, bodyEl) {
+  fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var probes = (d && d.probes) || [];
+      var detectedIds = {};
+      detected.forEach(function (r) { detectedIds[r.name] = true; });
+      var locked = probes.filter(function (p) { return p.found && !p.allowed && detectedIds[p.id]; });
+      if (!locked.length || !bodyEl) return;
+      var tier = (d && d.actionable_tier_label) || 'Starter';
+      var names = locked.map(function (p) { return p.label || p.id; }).join(', ');
+      var first = locked[0];
+      bodyEl.innerHTML = 'ClawMetry found <b>' + escHtml(names) + '</b> on this machine, but watching '
+        + (locked.length === 1 ? 'it' : 'them') + ' is part of ' + escHtml(tier) + '. '
+        + '<a href="#" onclick="_cmShowRuntimePaywall(\'' + escHtml(first.id) + '\',\''
+        + escHtml(first.label || first.id) + '\');return false;" style="color:var(--text-accent,#0af);">'
+        + 'Start a free trial</a> to turn it on.';
+    }).catch(function () {});
+}
+
 async function renderInventory() {
   var inv = await _invFetchData();
   var agents = (inv && inv.agents) || [];
@@ -9892,6 +10189,11 @@ async function renderInventory() {
           : rtNames + ' is running, but the sync daemon is not ingesting yet.'
             + ' Run: <code>clawmetry connect</code> (or <code>clawmetry sync</code>).';
         bodyEl.innerHTML = msg;
+        // A detected-but-LOCKED (not entitled) runtime will never start
+        // ingesting no matter how long you wait, so "sync is starting up"
+        // is actively misleading there — surface the upgrade nudge that
+        // used to live in the retired gateway-setup modal instead.
+        _invCheckLockedDetected(detected, bodyEl);
       }
       emptyEl.style.display = '';
     }
@@ -15490,6 +15792,22 @@ function applyTranscriptCustomRange() {
 
 async function loadTranscripts() {
   try {
+    // In cloud mode we can't score live (no key, no session DuckDB) but the
+    // snapshot carries recent scores at /api/evals/recent. Refetch each
+    // load and build a sid→{score,reason} map the row renderer reads.
+    // Failure is silent — the rows just render without a badge.
+    if (window.CLOUD_MODE) {
+      try {
+        var _rec = await fetch('/api/evals/recent').then(function(r) { return r.ok ? r.json() : null; });
+        var _byId = {};
+        if (_rec && Array.isArray(_rec.evals)) {
+          _rec.evals.forEach(function(e) {
+            if (e && e.session_id) _byId[e.session_id] = {score: e.score, reason: e.reason || ''};
+          });
+        }
+        window._cmEvalScoresByRow = _byId;
+      } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
+    }
     var data = await fetch('/api/transcripts').then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
@@ -15550,7 +15868,33 @@ async function loadTranscripts() {
       if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
       html += '<span>' + timeAgo(t.modified) + '</span>';
       html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
+      // Score-this-conversation button (#4562): runs the same judge the daemon
+      // uses via /api/evals/rescore. Empty judge key → button flips to
+      // "Set judge key →" which opens the rubric+key modal in place. Stops
+      // propagation so the click doesn't also open the transcript viewer.
+      //
+      // Cloud-mode carve-out: scoring runs on the machine that has the
+      // judge key + the session DuckDB. Cloud renders the SAME JS but has
+      // neither, so a Score button here would hit cloud's clawmetry install
+      // and return a not-useful skip. Instead we show the stored score
+      // from the snapshot if one exists (populated by _cmEvalScoresByRow
+      // from /api/evals/recent), and nothing otherwise — the message
+      // "scores are computed on the machine your agent runs on" already
+      // lives on the cloud Evals tab.
+      if (window.CLOUD_MODE) {
+        var _stored = (window._cmEvalScoresByRow && window._cmEvalScoresByRow[raw]) || null;
+        if (_stored && (_stored.score !== null && _stored.score !== undefined)) {
+          var _sn = Number(_stored.score);
+          var _sc = _scoreBadgeColor(_sn);
+          var _sr = String(_stored.reason || '');
+          html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + _sc + '22;color:' + _sc + ';font-size:11px;font-weight:700;" title="' + escHtml(_sr) + '">' + _sn.toFixed(_sn % 1 === 0 ? 0 : 1) + '/5</span>';
+        }
+      } else {
+        html += '<span class="transcript-score-slot" id="tx-score-' + escHtml(raw) + '" data-sid="' + escHtml(raw) + '" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted,#888);">';
+        html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
+        html += '</span>';
+      }
+      html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
     var plumbCountEl = document.getElementById('transcript-plumbing-count');
@@ -15591,6 +15935,59 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+}
+
+// #4562 — score-this-conversation button. Wraps POST /api/evals/rescore
+// (which is already synchronous). Renders the returned score + reason in
+// place of the button. Skips due to a missing judge key flip the slot into
+// a "Set judge key →" affordance that opens the existing rubric modal —
+// the ⚙ icon top-right of the Evals page is unfindably small otherwise.
+function _scoreBadgeColor(n) {
+  if (n === null || n === undefined) return 'var(--text-muted,#888)';
+  if (n >= 4) return '#22c55e';
+  if (n >= 2.5) return '#f59e0b';
+  return '#ef4444';
+}
+async function scoreTranscript(sid) {
+  var slot = document.getElementById('tx-score-' + sid);
+  if (!slot) return;
+  var busyLabel = t('transcripts.scoring', null, 'Scoring…');
+  slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);">' + escHtml(busyLabel) + '</span>';
+  try {
+    var resp = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), {method: 'POST'});
+    var body = await resp.json().catch(function() { return {}; });
+    if (!resp.ok) {
+      // 409 = evals disabled, 402/403 = gated, 5xx = judge blew up
+      var msg = (body && body.error) || ('HTTP ' + resp.status);
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(msg) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+      return;
+    }
+    if (body.skipped) {
+      var reason = String(body.skip_reason || '');
+      if (/key/i.test(reason)) {
+        // The pivotal fix — no judge key is the most common blocker AND
+        // the current UI's least discoverable state. Turn it into an
+        // action right where the user tried to score.
+        slot.innerHTML = '<button type="button" onclick="event.stopPropagation();openEvalRubricModal()" style="background:transparent;color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + escHtml(t('transcripts.set_judge_key', null, 'Set judge key →')) + '</button>';
+        return;
+      }
+      slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);" title="' + escHtml(reason) + '">' + escHtml(t('transcripts.score_skipped', null, 'Skipped')) + '</span>';
+      return;
+    }
+    if (body.score === null || body.score === undefined) {
+      // Judge unreachable — server returned a non-skipped null-score row.
+      var jm = body.judge_model || '';
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml('Judge (' + jm + ') did not return a score') + '">' + escHtml(t('transcripts.judge_unavailable', null, 'Judge unavailable')) + '</span>';
+      return;
+    }
+    var n = Number(body.score);
+    var color = _scoreBadgeColor(n);
+    var reasonText = String(body.reason || '');
+    var badge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + color + '22;color:' + color + ';font-size:11px;font-weight:700;" title="' + escHtml(reasonText) + '">' + n.toFixed(n % 1 === 0 ? 0 : 1) + '/5</span>';
+    slot.innerHTML = badge;
+  } catch (e) {
+    slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(String(e && e.message || e)) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+  }
 }
 
 // ── Session Replay State ────────────────────────────────────────────────────
@@ -22881,11 +23278,12 @@ async function bootDashboard() {
     );
     var authData = await authRes.json();
     if (authData.needsSetup) {
+      // No gateway token configured. The legacy "ClawMetry Setup" wizard
+      // used to force itself open here on every load; the dashboard works
+      // fine with no gateway configured (onboarding.js owns the first-run
+      // managed/self-host choice, and a real OpenClaw gateway can still be
+      // configured opt-in from the Developer tab).
       document.getElementById('login-overlay').style.display = 'none';
-      var gwo = document.getElementById('gw-setup-overlay');
-      gwo.dataset.mandatory = 'true';
-      document.getElementById('gw-setup-close').style.display = 'none';
-      gwo.style.display = 'flex';
       _safeFinishBoot();
       return;
     }

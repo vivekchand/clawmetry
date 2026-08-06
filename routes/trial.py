@@ -181,3 +181,108 @@ def api_trial_activate():
         "expiry": expiry,
         "message": msg,
     })
+
+
+# ── Trial-end hard-block surface ───────────────────────────────────────────
+# The three routes below back the un-dismissable overlay in
+# ``clawmetry/static/js/app.js`` (top-of-file IIFE
+# ``initClawMetryHardBlockOverlay``). See ``docs/TRIAL_ENFORCEMENT.md`` and
+# ``clawmetry/trial_enforcement.py`` for the full policy.
+#
+#   GET  /api/trial/status           — snapshot { hard_blocked, tier, source,
+#                                                 expired, expiry,
+#                                                 days_until_expiry, reason,
+#                                                 upgrade_url, ... }
+#   POST /api/trial/refresh-license  — invalidate entitlement cache so a
+#                                     freshly-installed license lands NOW
+#   POST /api/trial/mark-warned      — daemon-fired bookkeeping so a duplicate
+#                                     "trial ending" toast doesn't double-fire
+#
+# All three are defensive — a resolver failure returns the safe not-blocked
+# shape rather than 500-ing, so the overlay never has to handle a mid-flight
+# resolver bug by locking the user out on its own.
+
+import logging as _hb_logging
+import time as _hb_time
+
+_hb_log = _hb_logging.getLogger("clawmetry.routes.trial")
+_HB_WARNINGS_PATH = os.path.expanduser("~/.clawmetry/trial_warnings.json")
+
+
+def _hb_snapshot() -> dict:
+    """Build the ``/api/trial/status`` payload. Never raises."""
+    try:
+        from clawmetry import trial_enforcement as _te
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        blocked = _te.is_hard_blocked(ent)
+        payload = _te.block_payload(ent)
+        payload["hard_blocked"] = bool(blocked)
+        payload["hard_block_enabled"] = bool(_te.hard_block_enabled())
+        payload["warning_window_days"] = int(_te.warning_window_days())
+        return payload
+    except Exception as exc:
+        _hb_log.warning("trial.status: resolver failed: %s", exc)
+        return {
+            "hard_blocked": False,
+            "hard_block_enabled": False,
+            "warning_window_days": 2,
+            "tier": "oss",
+            "reason": "",
+            "upgrade_url": "https://app.clawmetry.com/upgrade",
+            "activation_endpoint": "/api/license/activate",
+            "refresh_endpoint": "/api/trial/refresh-license",
+            "status_endpoint": "/api/trial/status",
+        }
+
+
+@bp_trial.route("/api/trial/status", methods=["GET"])
+def api_trial_status():
+    """Read the current hard-block state."""
+    return jsonify(_hb_snapshot())
+
+
+@bp_trial.route("/api/trial/refresh-license", methods=["POST"])
+def api_trial_refresh_license():
+    """Invalidate the entitlement cache so a freshly-arrived license file
+    gets picked up immediately. Returns the post-refresh snapshot."""
+    try:
+        from clawmetry import entitlements as _ent
+        _ent.invalidate()
+    except Exception as exc:
+        _hb_log.warning("trial.refresh: invalidate failed: %s", exc)
+    return jsonify(_hb_snapshot())
+
+
+@bp_trial.route("/api/trial/mark-warned", methods=["POST"])
+def api_trial_mark_warned():
+    """Record that the user has been notified of imminent expiry today.
+    Payload: ``{"days_left": <int>}``. Best-effort; never raises."""
+    try:
+        body = request.get_json(silent=True) or {}
+    except Exception:
+        body = {}
+    try:
+        days_left = int(body.get("days_left", -1))
+    except Exception:
+        days_left = -1
+    try:
+        os.makedirs(os.path.dirname(_HB_WARNINGS_PATH), exist_ok=True)
+        today = _hb_time.strftime("%Y-%m-%d", _hb_time.gmtime())
+        existing: dict = {}
+        if os.path.isfile(_HB_WARNINGS_PATH):
+            try:
+                with open(_HB_WARNINGS_PATH, encoding="utf-8") as fh:
+                    existing = json.load(fh) or {}
+            except Exception:
+                existing = {}
+        existing[today] = days_left
+        tmp = _HB_WARNINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh)
+        os.replace(tmp, _HB_WARNINGS_PATH)
+        return jsonify({"ok": True, "recorded": today, "days_left": days_left})
+    except Exception as exc:
+        _hb_log.warning("trial.mark_warned: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 200
