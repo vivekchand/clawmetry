@@ -26,6 +26,12 @@ jobs:
     name: OSS golden path (wheel + OpenClaw + 9 tabs)
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # Trial-end hard block is default-ON — see clawmetry/trial_enforcement.py.
+    # The golden-path test drives /api/sessions and 8 other observability tabs
+    # without installing a license; opt out at the job level. Hard-block
+    # coverage stays in tests/test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
       - uses: actions/checkout@v7
