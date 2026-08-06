@@ -448,6 +448,12 @@ _MINIMAL_OSS_FREE_SNAPSHOT = {
     "prev_tier_unlocks": None,
     "next_tier_locks": None,
     "prev_tier_locks": None,
+    # Parity with Entitlement.to_dict()'s ``hard_blocked`` field (see
+    # clawmetry/trial_enforcement.py). This snapshot is the fall-through
+    # for a resolver import failure — if we can't import the entitlements
+    # module we also can't compute the block state, so default to False
+    # (fail-open, matching :func:`trial_enforcement._hard_block_flag_safe`).
+    "hard_blocked": False,
 }
 
 

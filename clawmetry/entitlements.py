@@ -545,6 +545,20 @@ def _capacity_transition(before: int | None, after: int | None) -> dict:
         }
 
 
+def _hard_block_flag_safe(ent) -> bool:
+    """True when the trial-end hard-block layer is currently forcing this
+    install into paywall-only mode. Wraps the import + call in belt-and-braces
+    try/except so a bug in :mod:`clawmetry.trial_enforcement` can never break
+    :meth:`Entitlement.to_dict` — the dict-shaped payload is load-bearing for
+    the dashboard's very first render and must always resolve, even if the
+    hard-block module has a stale attribute. Fail-open (returns False)."""
+    try:
+        from clawmetry import trial_enforcement as _te
+        return bool(_te.is_hard_blocked(ent))
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class Entitlement:
     """Resolved entitlement for this install. Immutable; rebuild via
@@ -2326,6 +2340,14 @@ class Entitlement:
             "prev_tier_unlocks": self.previous_tier_unlocks(),
             "next_tier_locks": self.next_tier_locks(),
             "prev_tier_locks": self.previous_tier_locks(),
+            # Trial-end hard-block signal. See ``clawmetry.trial_enforcement``
+            # for the full policy. Included here (not on a separate endpoint)
+            # so the frontend overlay can read it off the same
+            # ``/api/entitlement`` payload it already polls; a locked install
+            # gets ``hard_blocked=True`` here AND a 402 on every non-allowlisted
+            # request, so a UI that missed the flag still fails closed. Imported
+            # late to avoid a circular import at module-load time.
+            "hard_blocked": _hard_block_flag_safe(self),
         }
 
 

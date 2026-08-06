@@ -59,6 +59,11 @@ jobs:
     timeout-minutes: 20
     # Non-blocking: the bot is allowed to fail without holding up a merge.
     continue-on-error: true
+    # Trial-end hard block is default-ON in code — opt out so the screenshot
+    # bot can render the actual observability tabs instead of the paywall
+    # overlay. Hard-block coverage lives in tests/test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
       # -- 1. Check out PR head ------------------------------------------------

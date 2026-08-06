@@ -1,3 +1,12 @@
+## Unreleased
+
+- **Trial ends → paid.** ClawMetry now blocks the dashboard UI + sync when
+  the trial period ends, prompting checkout with an un-dismissable modal.
+  Signed licenses land automatically over the heartbeat after payment, so
+  the dashboard unlocks within one 60s cycle with no restart. Set
+  `CLAWMETRY_HARD_BLOCK=0` to opt out (support only). Details:
+  `docs/TRIAL_ENFORCEMENT.md`.
+
 ## 0.12.650
 
 - **The profile menu now respects that you're self-hosted.** "Upgrade plan"
