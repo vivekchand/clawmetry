@@ -112,6 +112,14 @@ jobs:
     name: API Tests (${{ matrix.os }})
     needs: lint
     runs-on: ${{ matrix.os }}
+    # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
+    # CI has no license file, so every non-allowlisted request would 402 and the
+    # dashboard readiness probe would time out. These jobs test unrelated
+    # feature APIs (channels/health/sessions/…) — dedicated hard-block coverage
+    # lives in tests/test_trial_hard_block.py. Opt out at the job level so both
+    # the pre-pytest server boot AND the pytest conftest spawn see it.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
     strategy:
       fail-fast: false
       matrix:
@@ -395,6 +403,9 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # Trial-end hard block is default-ON in code — see api-tests job.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
       - uses: actions/checkout@v7

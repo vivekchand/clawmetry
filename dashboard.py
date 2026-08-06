@@ -11905,6 +11905,43 @@ def detect_config(args=None):
     app.register_blueprint(bp_spend_flow)
     app.register_blueprint(bp_entitlement)
     app.register_blueprint(bp_extensions)
+
+    # ── Trial-end hard-block gate ───────────────────────────────────────────
+    # When the resolver reports an unpaid / expired entitlement, every non-
+    # allowlisted request 402s with a machine-readable body carrying
+    # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. See
+    # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
+    from clawmetry import trial_enforcement as _te_gate
+
+    @app.before_request
+    def _trial_hard_block_gate():
+        try:
+            path = request.path or ""
+            if _te_gate.allowlisted_path(path):
+                return None
+            if not _te_gate.is_hard_blocked():
+                return None
+            payload = _te_gate.block_payload()
+            resp = jsonify(payload)
+            resp.status_code = 402
+            resp.headers["X-Clawmetry-Trial-Blocked"] = "1"
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        except Exception as exc:
+            # Fail-open. A bug in the gate must never brick a paying customer;
+            # let the request through and log at warning so operators can spot
+            # it in the daemon log rather than in a "why is nothing loading?"
+            # support ticket.
+            try:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "trial_hard_block_gate: %s", exc
+                )
+            except Exception:
+                pass
+            return None
+
     app.register_blueprint(bp_audit)
     app.register_blueprint(bp_device)
 
