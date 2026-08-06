@@ -16,14 +16,14 @@ name: Apply E2E required checks via Rulesets API (C6)
 # Runs on every push to main so the ruleset self-heals if deleted.
 # On 403 (token lacks ruleset-write rights): emits a ::notice:: and
 # exits 0 -- a 403 is expected on this personal-repo plan and is
-# handled by apply-required-checks.yml's notification to #4029.
+# handled by apply-required-checks.yml's notification to #4552.
 #
 # NOTE: administration:write is NOT listed in the permissions block because
 # requesting it at the workflow level causes GitHub to kill the run with 0
 # jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
 # The Python script handles the 403 runtime error gracefully instead.
 #
-# Tracking: vivekchand/clawmetry#4029 (C6)
+# Tracking: vivekchand/clawmetry#4552 (live E2E epic; #4029 was C6 original)
 
 on:
   push:
@@ -105,7 +105,7 @@ jobs:
                       "Expected on this personal-repo plan. "
                       "Close C6 via the Settings UI (60 s) or "
                       "apply-required-checks.yml (confirm=APPLY + PAT). "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
                   )
                   set_output("created", "false")
                   sys.exit(0)
@@ -166,7 +166,7 @@ jobs:
                       f"{verb} ruleset returned 403 -- "
                       "GITHUB_TOKEN cannot manage rulesets on this plan/repo. "
                       "Use the PAT workflow or GitHub Settings UI instead. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
                   )
                   set_output("created", "false")
                   sys.exit(0)
@@ -274,7 +274,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           REPO = "clawmetry"
-          TRACKING_ISSUE = 4029
+          TRACKING_ISSUE = 4552
           MARKER = "<!-- c6-ruleset-applied -->"
           RUN_URL = (
               f"https://github.com/{OWNER}/{REPO}/actions/runs/"
