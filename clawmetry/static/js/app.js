@@ -15792,6 +15792,22 @@ function applyTranscriptCustomRange() {
 
 async function loadTranscripts() {
   try {
+    // In cloud mode we can't score live (no key, no session DuckDB) but the
+    // snapshot carries recent scores at /api/evals/recent. Refetch each
+    // load and build a sid→{score,reason} map the row renderer reads.
+    // Failure is silent — the rows just render without a badge.
+    if (window.CLOUD_MODE) {
+      try {
+        var _rec = await fetch('/api/evals/recent').then(function(r) { return r.ok ? r.json() : null; });
+        var _byId = {};
+        if (_rec && Array.isArray(_rec.evals)) {
+          _rec.evals.forEach(function(e) {
+            if (e && e.session_id) _byId[e.session_id] = {score: e.score, reason: e.reason || ''};
+          });
+        }
+        window._cmEvalScoresByRow = _byId;
+      } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
+    }
     var data = await fetch('/api/transcripts').then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
@@ -15852,7 +15868,33 @@ async function loadTranscripts() {
       if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
       html += '<span>' + timeAgo(t.modified) + '</span>';
       html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
+      // Score-this-conversation button (#4562): runs the same judge the daemon
+      // uses via /api/evals/rescore. Empty judge key → button flips to
+      // "Set judge key →" which opens the rubric+key modal in place. Stops
+      // propagation so the click doesn't also open the transcript viewer.
+      //
+      // Cloud-mode carve-out: scoring runs on the machine that has the
+      // judge key + the session DuckDB. Cloud renders the SAME JS but has
+      // neither, so a Score button here would hit cloud's clawmetry install
+      // and return a not-useful skip. Instead we show the stored score
+      // from the snapshot if one exists (populated by _cmEvalScoresByRow
+      // from /api/evals/recent), and nothing otherwise — the message
+      // "scores are computed on the machine your agent runs on" already
+      // lives on the cloud Evals tab.
+      if (window.CLOUD_MODE) {
+        var _stored = (window._cmEvalScoresByRow && window._cmEvalScoresByRow[raw]) || null;
+        if (_stored && (_stored.score !== null && _stored.score !== undefined)) {
+          var _sn = Number(_stored.score);
+          var _sc = _scoreBadgeColor(_sn);
+          var _sr = String(_stored.reason || '');
+          html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + _sc + '22;color:' + _sc + ';font-size:11px;font-weight:700;" title="' + escHtml(_sr) + '">' + _sn.toFixed(_sn % 1 === 0 ? 0 : 1) + '/5</span>';
+        }
+      } else {
+        html += '<span class="transcript-score-slot" id="tx-score-' + escHtml(raw) + '" data-sid="' + escHtml(raw) + '" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted,#888);">';
+        html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
+        html += '</span>';
+      }
+      html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
     var plumbCountEl = document.getElementById('transcript-plumbing-count');
@@ -15893,6 +15935,59 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+}
+
+// #4562 — score-this-conversation button. Wraps POST /api/evals/rescore
+// (which is already synchronous). Renders the returned score + reason in
+// place of the button. Skips due to a missing judge key flip the slot into
+// a "Set judge key →" affordance that opens the existing rubric modal —
+// the ⚙ icon top-right of the Evals page is unfindably small otherwise.
+function _scoreBadgeColor(n) {
+  if (n === null || n === undefined) return 'var(--text-muted,#888)';
+  if (n >= 4) return '#22c55e';
+  if (n >= 2.5) return '#f59e0b';
+  return '#ef4444';
+}
+async function scoreTranscript(sid) {
+  var slot = document.getElementById('tx-score-' + sid);
+  if (!slot) return;
+  var busyLabel = t('transcripts.scoring', null, 'Scoring…');
+  slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);">' + escHtml(busyLabel) + '</span>';
+  try {
+    var resp = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), {method: 'POST'});
+    var body = await resp.json().catch(function() { return {}; });
+    if (!resp.ok) {
+      // 409 = evals disabled, 402/403 = gated, 5xx = judge blew up
+      var msg = (body && body.error) || ('HTTP ' + resp.status);
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(msg) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+      return;
+    }
+    if (body.skipped) {
+      var reason = String(body.skip_reason || '');
+      if (/key/i.test(reason)) {
+        // The pivotal fix — no judge key is the most common blocker AND
+        // the current UI's least discoverable state. Turn it into an
+        // action right where the user tried to score.
+        slot.innerHTML = '<button type="button" onclick="event.stopPropagation();openEvalRubricModal()" style="background:transparent;color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + escHtml(t('transcripts.set_judge_key', null, 'Set judge key →')) + '</button>';
+        return;
+      }
+      slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);" title="' + escHtml(reason) + '">' + escHtml(t('transcripts.score_skipped', null, 'Skipped')) + '</span>';
+      return;
+    }
+    if (body.score === null || body.score === undefined) {
+      // Judge unreachable — server returned a non-skipped null-score row.
+      var jm = body.judge_model || '';
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml('Judge (' + jm + ') did not return a score') + '">' + escHtml(t('transcripts.judge_unavailable', null, 'Judge unavailable')) + '</span>';
+      return;
+    }
+    var n = Number(body.score);
+    var color = _scoreBadgeColor(n);
+    var reasonText = String(body.reason || '');
+    var badge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + color + '22;color:' + color + ';font-size:11px;font-weight:700;" title="' + escHtml(reasonText) + '">' + n.toFixed(n % 1 === 0 ? 0 : 1) + '/5</span>';
+    slot.innerHTML = badge;
+  } catch (e) {
+    slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(String(e && e.message || e)) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+  }
 }
 
 // ── Session Replay State ────────────────────────────────────────────────────
