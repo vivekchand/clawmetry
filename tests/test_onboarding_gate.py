@@ -28,6 +28,9 @@ def ob(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
     monkeypatch.setattr(mod, "_ping_onboarded", lambda choice: None)
     monkeypatch.setattr(mod, "_apply_marker_semantics", lambda choice: None)
+    # Must never actually register/spawn a real daemon during a unit test —
+    # see test_ensure_daemon_for_choice_* below for the real coverage.
+    monkeypatch.setattr(mod, "_ensure_daemon_for_choice", lambda choice: None)
     # Strip every env that legitimately suppresses the gate — including
     # the CI vars GitHub Actions itself sets, or the "fresh install
     # requires onboarding" tests would pass locally and fail in CI.
@@ -253,3 +256,76 @@ def test_marker_semantics_managed_clears_nocloud(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
     mod._apply_marker_semantics("managed")
     assert not marker.exists()
+
+
+# ── Persistent daemon registration on onboarding completion ────────────────
+#
+# Root cause: this gate is the DEFAULT onboarding path (browser, since the
+# 2026-07-31 hard-gate rollout) and used to complete a choice without ever
+# starting/registering a background sync daemon -- only the CLI paths
+# (`clawmetry connect` / `clawmetry onboard`) did that. Only the in-process
+# dashboard thread was left polling PyPI, which stops the moment that one
+# process exits. These tests pin that both completion endpoints now always
+# attempt daemon registration, and that _ensure_daemon_for_choice never lets
+# a registration failure break onboarding completion itself.
+
+def test_complete_managed_registers_persistent_daemon(ob, client, monkeypatch):
+    monkeypatch.setattr(ob, "_cloud_connected", lambda: True)
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/complete", json={"choice": "managed"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["managed"]
+
+
+def test_complete_selfhost_registers_persistent_daemon(ob, client, monkeypatch):
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_trial")
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/complete", json={"choice": "selfhost_trial"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["selfhost_trial"]
+
+
+def test_activate_license_registers_persistent_daemon(ob, client, monkeypatch):
+    import types
+    fake_lic = types.SimpleNamespace(
+        activate=lambda key, actor="": (True, "activated"))
+    monkeypatch.setitem(sys.modules, "clawmetry.license", fake_lic)
+    import clawmetry
+    monkeypatch.setattr(clawmetry, "license", fake_lic, raising=False)
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_license")
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/activate-license",
+                    json={"key": "CLAW1.aaa.bbb"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["selfhost_license"]
+
+
+def test_ensure_daemon_for_choice_calls_shared_registration(monkeypatch):
+    """selfhost_* choices must register a LOCAL-ONLY daemon (no cloud
+    egress), managed must not."""
+    import routes.onboarding as mod
+    import clawmetry.daemon_registration as dreg
+
+    calls = []
+    monkeypatch.setattr(dreg, "ensure_persistent_daemon", lambda cfg: calls.append(cfg))
+    mod._ensure_daemon_for_choice("selfhost_trial")
+    assert calls == [{"local_only": True}]
+
+    calls.clear()
+    mod._ensure_daemon_for_choice("managed")
+    assert calls == [{"local_only": False}]
+
+
+def test_ensure_daemon_for_choice_never_raises(monkeypatch):
+    """A registration failure (no systemd, schtasks unavailable, sandboxed
+    environment, ...) must never break onboarding completion."""
+    import routes.onboarding as mod
+    import clawmetry.daemon_registration as dreg
+
+    def boom(cfg):
+        raise RuntimeError("no supervisor available here")
+    monkeypatch.setattr(dreg, "ensure_persistent_daemon", boom)
+    mod._ensure_daemon_for_choice("selfhost_license")  # must not raise

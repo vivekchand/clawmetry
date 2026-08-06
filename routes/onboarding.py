@@ -153,6 +153,30 @@ def _apply_marker_semantics(choice: str) -> None:
         log.warning("onboarding: marker update failed: %s", exc)
 
 
+def _ensure_daemon_for_choice(choice: str) -> None:
+    """Every choice this gate can record must end with a PERSISTENT
+    background daemon, not just an in-process dashboard thread.
+
+    Root cause this closes: before this call, ``managed``/``selfhost_*``
+    completion here only touched the nocloud marker (_apply_marker_semantics)
+    -- nothing started or registered a background sync daemon. The CLI paths
+    (`clawmetry connect`, `clawmetry onboard` self-host) already register one
+    via `_start_daemon`, but this browser gate is the DEFAULT onboarding path
+    since the 2026-07-31 hard-gate rollout, and it registered nothing. The
+    only thing left polling PyPI was the foreground dashboard's in-thread
+    checker, which stops the moment that process exits (closed terminal,
+    sleep, reboot, crash) -- silently and permanently halting auto-update
+    until the user manually relaunches `clawmetry`. Best-effort: never let a
+    registration failure break onboarding completion itself.
+    """
+    try:
+        from clawmetry.daemon_registration import ensure_persistent_daemon
+
+        ensure_persistent_daemon({"local_only": choice != "managed"})
+    except Exception as exc:
+        log.warning("onboarding: daemon registration failed: %s", exc)
+
+
 @bp_onboarding.route("/api/onboarding/state")
 def api_onboarding_state():
     try:
@@ -201,6 +225,7 @@ def api_onboarding_complete():
                         "error": "Activate a license or trial first."}), 409
     _write_choice_file(choice)
     _apply_marker_semantics(choice)
+    _ensure_daemon_for_choice(choice)
     _ping_onboarded(choice)
     return jsonify({"ok": True, "state": choice})
 
@@ -225,5 +250,6 @@ def api_onboarding_activate_license():
     state = _license_state() or "selfhost_license"
     _write_choice_file(state)
     _apply_marker_semantics(state)
+    _ensure_daemon_for_choice(state)
     _ping_onboarded(state)
     return jsonify({"ok": True, "state": state, "message": msg})

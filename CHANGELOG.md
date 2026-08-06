@@ -1,5 +1,28 @@
 ## Unreleased
 
+- **Fixed the root cause of ClawMetry silently no longer auto-updating.**
+  The browser onboarding gate (`routes/onboarding.py`, the default
+  first-run path since the 2026-07-31 hard-gate rollout) completed a
+  `managed`/`selfhost_*` choice without ever starting or registering a
+  background sync daemon — only the CLI paths (`clawmetry connect`,
+  `clawmetry onboard`) did that. The only thing left polling PyPI was the
+  foreground dashboard's in-process checker thread, which stops the
+  moment that one process exits (closed terminal, sleep, reboot, crash),
+  silently and permanently halting auto-update until a human manually
+  relaunched `clawmetry`. Onboarding completion now always calls the new
+  `clawmetry/daemon_registration.py::ensure_persistent_daemon()`.
+  Windows also gets real persistence for the first time: previously it had
+  no launchd/systemd equivalent at all (`_start_daemon`'s Windows branch
+  fell straight to an unsupervised detached subprocess), so a Windows node
+  lost auto-update after any reboot/logoff/crash even when a daemon HAD
+  been registered — it now registers a logon-triggered, restart-on-failure
+  Task Scheduler task. Finally, `auto_update` self-healing (re-asserting
+  the default-on `True` after a stale persisted `False`) previously only
+  ran for entitled *paid* cloud accounts via the heartbeat
+  (`_sync_auto_update_with_plan`); self-hosted and free-tier installs had
+  no path back to `True`. The update-check worker now heals a stale unset
+  `False` for every role/tier on boot, while a real, explicit user opt-out
+  (`POST /api/update-check/config`) is now tracked and never overridden.
 - **Retired the legacy "ClawMetry Setup" gateway-token modal.** It auto-popped
   on every dashboard load regardless of whether onboarding had already
   completed (v0.1-era UX from before the product detected 17+ non-OpenClaw
