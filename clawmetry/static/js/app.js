@@ -15762,6 +15762,22 @@ function applyTranscriptCustomRange() {
 
 async function loadTranscripts() {
   try {
+    // In cloud mode we can't score live (no key, no session DuckDB) but the
+    // snapshot carries recent scores at /api/evals/recent. Refetch each
+    // load and build a sid→{score,reason} map the row renderer reads.
+    // Failure is silent — the rows just render without a badge.
+    if (window.CLOUD_MODE) {
+      try {
+        var _rec = await fetch('/api/evals/recent').then(function(r) { return r.ok ? r.json() : null; });
+        var _byId = {};
+        if (_rec && Array.isArray(_rec.evals)) {
+          _rec.evals.forEach(function(e) {
+            if (e && e.session_id) _byId[e.session_id] = {score: e.score, reason: e.reason || ''};
+          });
+        }
+        window._cmEvalScoresByRow = _byId;
+      } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
+    }
     var data = await fetch('/api/transcripts').then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
@@ -15826,9 +15842,28 @@ async function loadTranscripts() {
       // uses via /api/evals/rescore. Empty judge key → button flips to
       // "Set judge key →" which opens the rubric+key modal in place. Stops
       // propagation so the click doesn't also open the transcript viewer.
-      html += '<span class="transcript-score-slot" id="tx-score-' + escHtml(raw) + '" data-sid="' + escHtml(raw) + '" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted,#888);">';
-      html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
-      html += '</span>';
+      //
+      // Cloud-mode carve-out: scoring runs on the machine that has the
+      // judge key + the session DuckDB. Cloud renders the SAME JS but has
+      // neither, so a Score button here would hit cloud's clawmetry install
+      // and return a not-useful skip. Instead we show the stored score
+      // from the snapshot if one exists (populated by _cmEvalScoresByRow
+      // from /api/evals/recent), and nothing otherwise — the message
+      // "scores are computed on the machine your agent runs on" already
+      // lives on the cloud Evals tab.
+      if (window.CLOUD_MODE) {
+        var _stored = (window._cmEvalScoresByRow && window._cmEvalScoresByRow[raw]) || null;
+        if (_stored && (_stored.score !== null && _stored.score !== undefined)) {
+          var _sn = Number(_stored.score);
+          var _sc = _scoreBadgeColor(_sn);
+          var _sr = String(_stored.reason || '');
+          html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + _sc + '22;color:' + _sc + ';font-size:11px;font-weight:700;" title="' + escHtml(_sr) + '">' + _sn.toFixed(_sn % 1 === 0 ? 0 : 1) + '/5</span>';
+        }
+      } else {
+        html += '<span class="transcript-score-slot" id="tx-score-' + escHtml(raw) + '" data-sid="' + escHtml(raw) + '" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted,#888);">';
+        html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
+        html += '</span>';
+      }
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
