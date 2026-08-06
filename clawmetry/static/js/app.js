@@ -1,4 +1,276 @@
 // ─────────────────────────────────────────────────────────────────────────
+// Trial-end hard-block overlay.
+//
+// Fires when ``/api/trial/status`` returns ``hard_blocked: true`` (the daemon
+// has ``CLAWMETRY_HARD_BLOCK=1`` set AND the resolver reports an unpaid /
+// expired entitlement). Renders a full-viewport, un-dismissable modal that
+// takes the user straight to checkout, offers a paste-in field for a license
+// key they already own, and polls ``/api/trial/refresh-license`` in the
+// background so the moment the daemon writes a fresh license file the
+// overlay auto-clears and the dashboard resumes.
+//
+// This runs at the very top of app.js so:
+//   * it beats every other tab-init call to the ``/api/*`` surface (which
+//     would 402 anyway and dump errors into the console),
+//   * it survives a stale cached copy of app.js — the poll is defensive
+//     and never assumes any other function exists yet.
+// ─────────────────────────────────────────────────────────────────────────
+(function initClawMetryHardBlockOverlay() {
+  var POLL_MS_ACTIVE = 15000;    // while blocked: retry auto-refresh every 15s
+  var POLL_MS_IDLE   = 60000;    // while unblocked: sanity-check every 60s
+  var OVERLAY_ID     = 'cm-hard-block-overlay';
+  var STYLE_ID       = 'cm-hard-block-overlay-style';
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var st = document.createElement('style');
+    st.id = STYLE_ID;
+    st.textContent = ''
+      + '#' + OVERLAY_ID + ' {'
+      + '  position: fixed; inset: 0; z-index: 2147483647;'
+      + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
+      + '  -webkit-backdrop-filter: blur(6px);'
+      + '  display: flex; align-items: center; justify-content: center;'
+      + '  padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-card {'
+      + '  max-width: 480px; width: 100%; background: #1a1d22;'
+      + '  border: 1px solid #2a2f36; border-radius: 14px;'
+      + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
+      + '  padding: 32px; color: #e8eaed;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
+      + '  color: #ffb020; font-size: 12px; font-weight: 700;'
+      + '  text-transform: uppercase; letter-spacing: 1.4px;'
+      + '  margin: 0 0 10px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' h2 {'
+      + '  margin: 0 0 12px 0; font-size: 22px; line-height: 1.25;'
+      + '  color: #ffffff; font-weight: 700;'
+      + '}'
+      + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
+      + '  margin: 0 0 22px 0; font-size: 14px; line-height: 1.55;'
+      + '  color: #b5b8be;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
+      + '  display: block; width: 100%; padding: 13px 18px;'
+      + '  border-radius: 10px; border: 0; background: #ff9500;'
+      + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
+      + '  cursor: pointer; text-align: center; text-decoration: none;'
+      + '  box-sizing: border-box; margin: 0 0 14px 0;'
+      + '  transition: background 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
+      + '  display: flex; align-items: center; gap: 10px;'
+      + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
+      + '  letter-spacing: 1.2px; margin: 18px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
+      + '  content: ""; flex: 1; height: 1px; background: #2a2f36;'
+      + '}'
+      + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
+      + '  display: block; font-size: 12px; color: #b5b8be;'
+      + '  margin: 0 0 8px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
+      + '  width: 100%; min-height: 96px; padding: 10px 12px;'
+      + '  border-radius: 8px; border: 1px solid #2a2f36;'
+      + '  background: #12141a; color: #e8eaed;'
+      + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
+      + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
+      + '  margin-top: 10px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #e8eaed;'
+      + '  font-size: 14px; font-weight: 600; cursor: pointer;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status {'
+      + '  min-height: 20px; margin-top: 12px; font-size: 12px;'
+      + '  color: #b5b8be; text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.ok  { color: #59d18d; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot {'
+      + '  margin-top: 18px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot code {'
+      + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
+      + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
+      + '  border-radius: 3px;'
+      + '}';
+    document.head.appendChild(st);
+  }
+
+  function buildOverlay(state) {
+    var el = document.createElement('div');
+    el.id = OVERLAY_ID;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'cm-hbo-title');
+    el.setAttribute('data-cm-locked', '1');
+    var upgradeUrl = (state && state.upgrade_url) || 'https://app.clawmetry.com/upgrade';
+    var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
+    var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
+    var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
+    var subline = daysLeft !== null && daysLeft > 0
+      ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
+      : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    el.innerHTML = ''
+      + '<div class="cm-hbo-card">'
+      + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
+      + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
+      + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
+      + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
+      + '    Continue to payment  →'
+      + '  </a>'
+      + '  <div class="cm-hbo-divider">or</div>'
+      + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
+      + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
+      + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
+      + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
+      + '</div>';
+
+    // Emit paywall telemetry so the fleet dashboard sees a "user hit hard block"
+    // count. Fire-and-forget; failure never blocks the render.
+    try {
+      fetch('/api/paywall/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'hard_block_view',
+          tier: state && state.tier,
+          source: state && state.source,
+          expired: state && state.expired,
+        }),
+      }).catch(function () {});
+    } catch (e) { /* noop */ }
+
+    // Wire activate button — POSTs to /api/license/activate (allowlisted),
+    // then forces a refresh + snapshot. The overlay auto-removes itself if
+    // the fresh snapshot reports hard_blocked=false.
+    var activateBtn = el.querySelector('.cm-hbo-activate');
+    var statusEl = el.querySelector('.cm-hbo-status');
+    activateBtn.addEventListener('click', function () {
+      var ta = el.querySelector('#cm-hbo-key');
+      var key = (ta && ta.value || '').trim();
+      if (!key) {
+        statusEl.className = 'cm-hbo-status err';
+        statusEl.textContent = 'Paste a license key first.';
+        return;
+      }
+      statusEl.className = 'cm-hbo-status';
+      statusEl.textContent = 'Verifying key…';
+      activateBtn.disabled = true;
+      fetch('/api/license/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          activateBtn.disabled = false;
+          if (resp && resp.ok === false) {
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = resp.message || resp.error || 'License activation failed.';
+            return;
+          }
+          statusEl.className = 'cm-hbo-status ok';
+          statusEl.textContent = 'License installed — reloading…';
+          return refreshAndMaybeUnblock(true);
+        })
+        .catch(function (err) {
+          activateBtn.disabled = false;
+          statusEl.className = 'cm-hbo-status err';
+          statusEl.textContent = 'Activation failed: ' + (err && err.message || err);
+        });
+    });
+
+    // Belt & braces: block ESC / TAB-out / right-click chrome from letting
+    // the user reach controls behind the overlay while it's mounted.
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    });
+    return el;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;');
+  }
+
+  function mount(state) {
+    injectStyles();
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    var el = buildOverlay(state);
+    document.body.appendChild(el);
+    try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
+  }
+
+  function unmount() {
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
+  }
+
+  function refreshAndMaybeUnblock(force) {
+    var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    var opts = force ? { method: 'POST' } : { method: 'GET' };
+    return fetch(endpoint, opts)
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (state) {
+        applyState(state);
+        return state;
+      })
+      .catch(function () { /* noop — retry next tick */ });
+  }
+
+  var _lastBlocked = null;
+  function applyState(state) {
+    if (!state) return;
+    var blocked = !!state.hard_blocked;
+    if (blocked && !_lastBlocked) mount(state);
+    else if (!blocked && _lastBlocked) unmount();
+    else if (blocked) {
+      // still blocked — refresh the copy in case reason / countdown changed
+      var existing = document.getElementById(OVERLAY_ID);
+      if (!existing) mount(state);
+    }
+    _lastBlocked = blocked;
+    var delay = blocked ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
+    window.__cmHardBlockTimer = setTimeout(tick, delay);
+  }
+
+  function tick() {
+    refreshAndMaybeUnblock(false);
+  }
+
+  // First tick: read status ASAP (before any other tab hits an /api/* that
+  // would 402 and pollute the console). If the document isn't ready yet,
+  // defer until it is.
+  function boot() {
+    try { tick(); } catch (e) { /* noop */ }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+
+// ─────────────────────────────────────────────────────────────────────────
 // Response-shape tolerance helpers (epic #1032 Phase 2-5 forward-compat)
 //
 // As routes migrate to the local-DuckDB fast path (`_source: "local_store"`)

@@ -133,6 +133,27 @@ def load_plugins(app=None) -> None:
         _loaded_plugins.clear()
         _failed_plugins.clear()
 
+    # Trial-end hard block: refuse to load ``clawmetry-pro`` (or any other
+    # paid-tier plugin) when the resolver reports an unpaid / expired
+    # entitlement AND the operator has not opted out. This is belt-and-braces
+    # on top of the Flask 402 gate — even if a paid blueprint somehow bypasses
+    # the request-level gate, it never got a chance to register in the first
+    # place. Fail-open on any internal error so a bug in the enforcement
+    # module can never brick a legitimate paying customer. Documented in
+    # ``docs/TRIAL_ENFORCEMENT.md``.
+    try:
+        from clawmetry import trial_enforcement as _te
+        if _te.is_hard_blocked():
+            logger.warning(
+                "clawmetry.extensions: hard-block active — skipping plugin "
+                "load until a valid license lands (upgrade at %s)",
+                _te.resolved_upgrade_url(),
+            )
+            return
+    except Exception as _te_exc:
+        logger.debug("hard-block probe failed, proceeding with plugin load: %s",
+                     _te_exc)
+
     try:
         eps = _select_entry_points("clawmetry.extensions")
     except Exception:
