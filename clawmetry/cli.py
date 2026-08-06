@@ -1201,6 +1201,20 @@ def _cmd_connect(args) -> None:
     print()
     print(f"  Connected as: {node_id}")
 
+    # Every successful sign-in mints-or-reuses the account's 7-day trial
+    # license and activates it HERE (idempotent server-side) — including the
+    # keep-local path, where the license is the entire reason to sign in.
+    # Must run BEFORE the entitlement probe below: on a brand-new signup the
+    # account is still FREE until this trial is minted, so a probe that ran
+    # first would see "not entitled", install nothing, and print nothing —
+    # even though the trial (unlocking every runtime) was about to activate
+    # a moment later. (2026-08-06 Straive Windows onboarding: OTP verified,
+    # `clawmetry status` correctly showed the trial active, but Runtimes
+    # stayed "NOT syncing" because the wheel was probed-for before it existed
+    # to be entitled to, and only the 30-min pro-entitlement watcher in
+    # sync.py ever caught up.)
+    _trial_activated = _activate_signup_trial()
+
     # Auto-provision clawmetry-pro for entitled cloud accounts (Starter/Pro/
     # Trial/Enterprise). The cloud is the single source of truth: license.py
     # probes /api/license/entitlement with this cm_ key first and only then
@@ -1217,13 +1231,15 @@ def _cmd_connect(args) -> None:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
             print(f"  Note: {_pro_msg}")
+        elif _trial_activated:
+            # The trial just activated (see message above) but this probe still
+            # came back empty-handed - e.g. entitlement propagation lag rather
+            # than an error. Don't leave the terminal looking like nothing
+            # happened; the pro-entitlement watcher retries every ~30 min.
+            print("  Pro runtimes are activating - run `clawmetry status` in "
+                  "a few minutes to check, or they'll pick up automatically.")
     except Exception:
         pass  # connect must never fail because of pro provisioning
-
-    # Every successful sign-in mints-or-reuses the account's 7-day trial
-    # license and activates it HERE (idempotent server-side) — including the
-    # keep-local path, where the license is the entire reason to sign in.
-    _activate_signup_trial()
 
     if _keep_local_signin:
         # Belt-and-braces: the marker was never removed on this path, but a
