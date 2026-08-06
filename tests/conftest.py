@@ -168,6 +168,15 @@ def server(base_url, token):
     # Propagate the CI test token so the server accepts our requests
     if token:
         env["OPENCLAW_GATEWAY_TOKEN"] = token
+    # Trial-end hard block is default-ON (see clawmetry/trial_enforcement.py).
+    # CI runs have no license file → every non-allowlisted request would 402,
+    # and the entire api_test suite (which exercises /api/overview /api/sessions
+    # /api/usage etc. — all NOT on the block allowlist) would ERROR at fixture
+    # setup because the readiness probe fails. Opt this test process out so the
+    # legacy tests keep testing what they were written to test; the hard-block
+    # behaviour gets its own dedicated tests in test_trial_hard_block.py that
+    # explicitly re-enable it.
+    env.setdefault("CLAWMETRY_HARD_BLOCK", "0")
     # Derive port from base_url
     try:
         port = base_url.split(":")[-1].rstrip("/")
