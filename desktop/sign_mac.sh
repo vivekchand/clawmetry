@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Sign + (optionally) notarize + staple a ClawMetry.app produced by
-# desktop/build_mac.spec. Idempotent; safe to re-run.
+# Sign + notarize + staple a ClawMetry.app or the wrapping .dmg.
+# Idempotent; safe to re-run.
 #
 # Usage:
-#     desktop/sign_mac.sh path/to/ClawMetry.app
+#     desktop/sign_mac.sh path/to/ClawMetry.app       # or .dmg
 #
 # Environment variables the script reads:
 #     MACOS_SIGN_IDENTITY            (required)  Full codesign identity string, e.g.
@@ -13,16 +13,17 @@
 #                                                Otherwise it just signs and stops.
 #     ENTITLEMENTS                   (optional)  Path to entitlements.plist. Defaults
 #                                                to desktop/entitlements.plist next to
-#                                                this script.
-#
-# The CI workflow (.github/workflows/desktop-artifacts.yml) does the same
-# steps directly in YAML; this script is for local one-off signing.
+#                                                this script. Only used when signing a .app.
 
 set -euo pipefail
 
-APP="${1:-}"
-if [[ -z "$APP" || ! -d "$APP" ]]; then
-  echo "usage: $0 path/to/ClawMetry.app" >&2
+TARGET="${1:-}"
+if [[ -z "$TARGET" ]]; then
+  echo "usage: $0 path/to/ClawMetry.app-or-dmg" >&2
+  exit 2
+fi
+if [[ ! -e "$TARGET" ]]; then
+  echo "not found: $TARGET" >&2
   exit 2
 fi
 
@@ -30,40 +31,60 @@ fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENTITLEMENTS="${ENTITLEMENTS:-$HERE/entitlements.plist}"
-if [[ ! -f "$ENTITLEMENTS" ]]; then
-  echo "entitlements plist not found at $ENTITLEMENTS" >&2
-  exit 3
+
+kind="unknown"
+case "$TARGET" in
+  *.app)  kind="app" ;;
+  *.dmg)  kind="dmg" ;;
+esac
+if [[ "$kind" == "unknown" ]]; then
+  echo "target must end in .app or .dmg (got $TARGET)" >&2
+  exit 2
 fi
 
-echo "== codesign =="
-# --deep signs every embedded framework and dylib; --timestamp is
-# required for notarization; --options=runtime turns on Hardened
-# Runtime which the entitlements file then relaxes.
-codesign --force --deep --timestamp \
-  --options runtime \
-  --entitlements "$ENTITLEMENTS" \
-  --sign "$MACOS_SIGN_IDENTITY" \
-  "$APP"
+echo "== codesign ($kind) =="
+if [[ "$kind" == "app" ]]; then
+  if [[ ! -f "$ENTITLEMENTS" ]]; then
+    echo "entitlements plist not found at $ENTITLEMENTS" >&2
+    exit 3
+  fi
+  # --deep signs every embedded framework and dylib; --timestamp is
+  # required for notarization; --options=runtime turns on Hardened
+  # Runtime which the entitlements file then relaxes.
+  codesign --force --deep --timestamp \
+    --options runtime \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$MACOS_SIGN_IDENTITY" \
+    "$TARGET"
+else
+  # DMGs don't take entitlements; sign the container only.
+  codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$TARGET"
+fi
 
 echo "== verify =="
-codesign --verify --deep --strict --verbose=2 "$APP"
+codesign --verify --verbose=2 "$TARGET"
 
 if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
   echo "== notarize =="
-  TMPZIP="$(mktemp -d)/ClawMetry.zip"
-  ditto -c -k --keepParent "$APP" "$TMPZIP"
-  xcrun notarytool submit "$TMPZIP" \
+  if [[ "$kind" == "app" ]]; then
+    TMPZIP="$(mktemp -d)/$(basename "$TARGET").zip"
+    ditto -c -k --keepParent "$TARGET" "$TMPZIP"
+    SUBMIT="$TMPZIP"
+  else
+    SUBMIT="$TARGET"
+  fi
+  xcrun notarytool submit "$SUBMIT" \
     --apple-id "$APPLE_ID" \
     --team-id "$APPLE_TEAM_ID" \
     --password "$APPLE_APP_SPECIFIC_PASSWORD" \
     --wait
   echo "== staple =="
-  xcrun stapler staple "$APP"
-  xcrun stapler validate "$APP"
-  rm -f "$TMPZIP"
+  xcrun stapler staple "$TARGET"
+  xcrun stapler validate "$TARGET"
+  [[ "$kind" == "app" ]] && rm -f "$SUBMIT" || true
 else
   echo "== skipping notarization (APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD not all set) =="
-  echo "   The app is signed but will still trigger Gatekeeper warnings on first launch."
+  echo "   The $kind is signed but will still trigger Gatekeeper warnings."
 fi
 
 echo "== done =="

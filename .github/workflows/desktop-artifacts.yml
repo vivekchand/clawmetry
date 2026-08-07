@@ -88,14 +88,16 @@ jobs:
             -ov -format UDZO \
             "dist/ClawMetry-${VERSION}.dmg"
 
-      - name: Sign the .dmg itself
+      - name: Sign + notarize + staple the .dmg itself
         if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           for dmg in dist/*.dmg; do
-            codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$dmg"
-            codesign --verify --verbose=2 "$dmg"
+            desktop/sign_mac.sh "$dmg"
           done
 
       - uses: actions/upload-artifact@v4
