@@ -14,6 +14,13 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # actions: write is required by the "Kick tag-triggered workflows"
+      # step below — without it, `gh workflow run desktop-artifacts.yml`
+      # returns HTTP 403: Resource not accessible by integration. Verified
+      # 2026-08-07 on v0.12.658: dispatch step succeeded (because of `|| echo`)
+      # but silently 403'd, so desktop-artifacts had to be dispatched by hand
+      # to attach the .dmg to the release.
+      actions: write
 
     steps:
       - uses: actions/checkout@v7

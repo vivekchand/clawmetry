@@ -90,7 +90,16 @@ jobs:
 
       - name: Wrap into .dmg
         run: |
-          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          # Prefer the tag ref (v0.12.<n> → 0.12.<n>) over dashboard.py's
+          # __version__ because release-on-merge commits the version bump
+          # in a SEPARATE follow-up PR, so at the tag ref dashboard.py is
+          # still stale by one release. Falls back to dashboard.py for
+          # non-tag runs (manual dispatch on main, PR CI).
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          fi
           hdiutil create -volname "ClawMetry" \
             -srcfolder dist/ClawMetry.app \
             -ov -format UDZO \
@@ -133,8 +142,15 @@ jobs:
       - name: Zip distribution folder
         working-directory: dist
         shell: pwsh
+        # Same tag-first version selection as the macOS job — see comment
+        # there. Falls back to dashboard.py __version__ for non-tag runs.
         run: |
-          $version = (Select-String -Path ../dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
+          $refName = $Env:GITHUB_REF_NAME
+          if ($refName -and $refName -match '^v\d+\.\d+\.\d+$') {
+            $version = $refName.Substring(1)
+          } else {
+            $version = (Select-String -Path ../dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
+          }
           Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
 
       - uses: actions/upload-artifact@v4
@@ -169,8 +185,14 @@ jobs:
 
       - name: Tarball distribution folder
         working-directory: dist
+        # Same tag-first version selection as the macOS job — see comment
+        # there. Falls back to dashboard.py __version__ for non-tag runs.
         run: |
-          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('../dashboard.py').read()).group(1))")
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('../dashboard.py').read()).group(1))")
+          fi
           tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
 
       - uses: actions/upload-artifact@v4
