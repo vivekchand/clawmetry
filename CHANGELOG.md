@@ -1,5 +1,26 @@
 ## Unreleased
 
+- **Added qm as the 17th observable runtime.** qm
+  (github.com/yc-software/qm, qm.ycombinator.com) is YC's Postgres-
+  backed multiplayer agent harness (launched 2026-07-29 MIT). Because
+  qm delegates to Pi, OpenCode, Codex, and Claude Code (all already
+  Pro adapters), a qm user is definitionally a Pro user and skipping
+  qm meant every YC-portfolio deployment ran blind. Adapter reads qm's
+  own Postgres tables (sessions / session_entries / session_llm_requests /
+  turn_metrics / runs) in read-only mode via pg8000 (or psycopg2 /
+  psycopg if already installed). It reads DATABASE_URL with a
+  CLAWMETRY_QM_DATABASE_URL override for read-replica setups. Surfaces
+  the org-scope layer (who in the org ran what, cron health across
+  scopes, scope-level tokens) that Pi/OpenCode/Codex/Claude Code cannot
+  see individually. Ships across the 6-PR chain: clawmetry-pro#120
+  (QMAdapter + 14 tests), clawmetry#4582 (this repo — registration in
+  10 lists + runtime probe + README + 4 pin tests bumped to 17), 
+  clawmetry-cloud#1945 (runtime-locks FAM + Grok drift-fix),
+  clawmetry-landing#611 + #612 (17 to 18 counts + chip grid),
+  clawmetry-pro#121 (release 0.7.5), and clawmetry-cloud#1947 (wheel
+  0.7.5 baked into the served image so activated daemons auto-provision
+  QMAdapter on their next 30-min cycle).
+
 - **Fixed the root cause of ClawMetry silently no longer auto-updating.**
   The browser onboarding gate (`routes/onboarding.py`, the default
   first-run path since the 2026-07-31 hard-gate rollout) completed a
