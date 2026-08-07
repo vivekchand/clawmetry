@@ -44,8 +44,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from _lib import (  # noqa: E402
+    OPENCLAW_AVAILABLE,
     discover_dashboard_url,
     drive_openclaw_message,
+    exit_skip,
     extract_openclaw_usage,
     file_drift_issue_per_endpoint,
     http_delete_json,
@@ -54,7 +56,7 @@ from _lib import (  # noqa: E402
     wait_for_event,
 )
 
-# ─── Config ─────────────────────────────────────────────────────────────────
+# ─── Config ──────────────────────────────────────────────────────────────────
 
 TRIPPING_THRESHOLD_USD = 0.001          # any real opus turn blows past this
 FORCED_INJECT_USD = 0.01                # synthetic spend pushed through hook
@@ -64,7 +66,7 @@ WEBHOOK_WAIT_S = 10
 NATURAL_TICK_WAIT_S = 90                # fallback if hook disabled
 
 
-# ─── Data classes ───────────────────────────────────────────────────────────
+# ─── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
 class AlertGround:
@@ -142,7 +144,7 @@ class _WebhookCapture:
                 pass
 
 
-# ─── Drive ──────────────────────────────────────────────────────────────────
+# ─── Drive ─────────────────────────────────────────────────────────────────────
 
 def _estimate_cost_from_usage(usage: dict) -> float:
     """Estimate USD for the openclaw turn using the same pricing table the
@@ -209,7 +211,7 @@ def delete_rule(dashboard_url: str, rule_id: str) -> bool:
         return False
 
 
-# ─── Trip + wait ────────────────────────────────────────────────────────────
+# ─── Trip + wait ─────────────────────────────────────────────────────────────
 
 def force_trip_via_hook(dashboard_url: str, rule_id: str) -> dict | None:
     try:
@@ -249,7 +251,7 @@ def wait_for_webhook(capture: _WebhookCapture, timeout_s: float) -> dict | None:
                           timeout=timeout_s, interval=0.25, description="webhook")
 
 
-# ─── Asserts ────────────────────────────────────────────────────────────────
+# ─── Asserts ───────────────────────────────────────────────────────────────────
 
 def _eq(endpoint, stage, metric, ground, actual, notes="") -> CheckResult:
     return CheckResult(endpoint=endpoint, window_label=stage, metric=metric,
@@ -366,7 +368,7 @@ def assert_cleanup(dashboard_url, ground) -> list[CheckResult]:
     )]
 
 
-# ─── Drift issue body ──────────────────────────────────────────────────────
+# ─── Drift issue body ────────────────────────────────────────────────────────
 
 def _format_alerts_issue_body(endpoint, cs, ground, dashboard_url) -> str:
     rows = "\n".join(
@@ -400,7 +402,7 @@ def _format_alerts_issue_body(endpoint, cs, ground, dashboard_url) -> str:
     )
 
 
-# ─── Main ───────────────────────────────────────────────────────────────────
+# ─── Main ───────────────────────────────────────────────────────────────────────
 
 def run_harness(args) -> int:
     print(f"[harness] alerts accuracy audit — {datetime.now(timezone.utc).isoformat()}")
@@ -513,7 +515,7 @@ def run_harness(args) -> int:
     return 1
 
 
-# ─── CLI ────────────────────────────────────────────────────────────────────
+# ─── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
@@ -526,6 +528,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    if not OPENCLAW_AVAILABLE:
+        exit_skip("alerts",
+                  "openclaw binary not on PATH; set OPENCLAW_BIN_AVAILABLE=1 "
+                  "with the binary available to run this harness")
     args = parse_args()
     try:
         return run_harness(args)
