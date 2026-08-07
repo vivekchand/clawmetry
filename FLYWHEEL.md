@@ -126,6 +126,18 @@ Hold the line with:
 - **Poll in seconds-to-minutes, never sub-second.** The daemon wakes, works, then sleeps.
 - **Profile before shipping anything on the ingest / query / snapshot path.** `sample <pid> 4` (macOS) or py-spy. If it sustains more than ~1 core, it does not ship. Guard the caps + cache with a regression test so it stays mechanical.
 
+## 1f. Keep Software Factory in sync (Drift Bot)
+
+This repo (and `clawmetry-cloud` / `clawmetry-pro` / `clawmetry-mac` / `clawmetry-railway`) is tracked in [8090 Software Factory](https://factory.8090.ai) as the "ClawMetry" project: Requirements and Blueprints describing what the product does and how. A `drift-bot` GitHub status check runs on every PR and posts an inline comment when the code says something the Blueprints/Requirements don't. Real example: PR #4599 shipped the installer's stale-duplicate sweep and documented it in `CHANGELOG.md`, but no Blueprint said the installers clean up other Python interpreters on PATH, so Drift Bot failed the PR.
+
+**`CHANGELOG.md` is not enough.** Drift Bot reads Blueprints/Requirements, not the changelog. Before merging a change that alters documented (or should-be-documented) product behavior:
+- Check whether an existing Blueprint covers the area you touched; if your change makes it wrong or incomplete, update it.
+- If no Blueprint covers it yet, say so in the PR description so a human (or the next agent) creates one — don't let it merge silently undocumented.
+- The dashboard's "Sync Blueprint with Code" agent action (or the Software Factory MCP skill, `npx skills add 8090-inc/software-factory-plugin`) can do this for you; point it at the specific PR/CHANGELOG entry rather than asking for a blanket sync of everything.
+- A red `drift-bot` check is a real signal like any other CI failure (§4) — fix the documentation gap, don't merge past it.
+
+Separately, **check [Pending Work Orders](https://factory.8090.ai) regularly**, not just when drift-bot fires. Work Orders are the actual tickets Software Factory queues from Requirements/Blueprints; picking them up (not just reacting to drift after the fact) is how the docs and the code stay one thing instead of drifting apart again next week.
+
 ## 2. Make the change
 
 - New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. Shared helpers reach back via late `import dashboard as _d`.
@@ -183,7 +195,7 @@ gh pr create --title "feat: …" --body "…"    # explain WHY + the verificatio
 
 - **Never push directly to `main`. No exceptions.** Not for empty re-trigger commits. Not for `Dockerfile` cache-bust comments. Not for one-line CI tweaks. Not for typo fixes. Not even for reverts. Every change goes through a branch + PR + CI, including changes whose only purpose is to nudge CI itself. The 30 seconds a one-line PR costs is the price of every other agent and human being able to trust `main`. If a deploy is stuck and you think the fix is "obvious," that means it is a perfect 1-line PR, not a justification to bypass review. Burned 2026-05-28 on `clawmetry-landing`: I pushed two commits straight to `main` (`a2cfb7b` empty re-trigger and `acfa10e` 2-line Dockerfile cache-bust) framing the urgency of a stuck Cloud Run deploy as license to skip the rule. Both would have taken 30 seconds as PRs. The user rightly called it out.
 - End commit messages with the `Co-Authored-By` trailer; end PR bodies with the Claude Code footer.
-- **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install.
+- **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **`drift-bot`** (Software Factory blueprint/requirement sync, §1f — fix the doc gap, it is not a flaky check to retry).
 - A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it.
 - Merge with `gh pr merge <n> --squash --delete-branch`.
 - After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green."
