@@ -1,0 +1,37 @@
+name: close-bot-noise
+
+# Safety net: auto-close any issue whose title matches a known agent/scan/fixer
+# prefix. Internal tracking now lives in the 8090 Factory; the public GitHub
+# tracker is reserved for contributor-actionable work.
+#
+# See CONTRIBUTING.md — the noise streams (accuracy-audit, backlog-triage,
+# good-first-issue scan, obs-gap:*, intel-scout, triage-bot, weekly digests,
+# roadmap reconciliation) were flooding the tracker (~80% of open issues) and
+# made it impossible for contributors to find real work.
+
+on:
+  issues:
+    types: [opened, reopened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.event.issue.title, '[accuracy-audit]') ||
+      startsWith(github.event.issue.title, '[backlog-triage]') ||
+      startsWith(github.event.issue.title, '[good-first-issue scan]') ||
+      startsWith(github.event.issue.title, '[obs-gap:') ||
+      startsWith(github.event.issue.title, '[intel-scout]') ||
+      startsWith(github.event.issue.title, '[triage-bot]') ||
+      startsWith(github.event.issue.title, '[harness-audit]')
+    steps:
+      - name: Close as not-planned
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$NUM" --repo "${{ github.repository }}" --body "This issue matches an internal automation / scan stream that no longer files GitHub issues. Internal tracking moved to the 8090 Factory. See CONTRIBUTING.md."
+          gh issue close "$NUM" --repo "${{ github.repository }}" --reason "not planned"

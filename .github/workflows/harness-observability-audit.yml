@@ -24,9 +24,9 @@ on:
         required: false
         default: ""
       file_issues:
-        description: "Actually open issues (false = dry-run)"
+        description: "Actually open GitHub issues (default false — noise auto-close will re-close)"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -66,13 +66,16 @@ jobs:
       - name: Sync harness sources
         run: bash scripts/harness/sync.sh
 
-      - name: Audit observability coverage + file gap issues
+      - name: Audit observability coverage (summary-only; internal tracking in 8090 Factory)
         run: |
           ARGS=""
           [ -n "${{ github.event.inputs.runtime }}" ] && ARGS="--runtime ${{ github.event.inputs.runtime }}"
-          # default to filing issues on schedule; honor the dispatch toggle
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.file_issues }}" = "false" ]; then
-            echo "dry-run (no issues)"; python3 scripts/harness/audit.py $ARGS
-          else
+          # No longer files GitHub issues on the public repo — findings go to the
+          # workflow-run summary (and to the 8090 Factory once the router is wired).
+          # Reopen filing on manual dispatch only if you explicitly ask for it.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.file_issues }}" = "true" ]; then
+            echo "::warning::--file-issues was requested via dispatch; noise auto-close workflow will re-close them."
             python3 scripts/harness/audit.py --file-issues $ARGS
+          else
+            python3 scripts/harness/audit.py $ARGS
           fi

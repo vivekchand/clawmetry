@@ -1,0 +1,73 @@
+name: gfi-stale-flag
+
+# Flag `good first issue`s that have been idle for 3+ days with the
+# `stale-drive-by-candidate` label so a maintainer /loop (or an autonomous
+# fix-loop) can pick them up. The issue stays OPEN — drive-by contributors
+# are still welcome to claim it (drop a comment to signal intent).
+#
+# This is intentionally not the labeler bot (actions/stale) — it doesn't close,
+# it just labels, and only applies to a specific set of contributor labels.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # daily 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  flag-stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label stale good-first-issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          THRESHOLD_DAYS=3
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - THRESHOLD_DAYS * 86400))
+
+          # Only pick contributor-labeled issues, unassigned, without a linked PR.
+          gh issue list --repo "$REPO" \
+            --label "good first issue" \
+            --state open \
+            --limit 100 \
+            --json number,title,updatedAt,assignees,labels \
+            > /tmp/gfi.json
+
+          python3 - <<'PY'
+          import json, os, subprocess, time
+          from datetime import datetime
+          repo = os.environ["REPO"]
+          cutoff = int(os.environ.get("CUTOFF", "0"))
+          if not cutoff:
+              now = int(time.time())
+              cutoff = now - 3 * 86400
+          data = json.load(open("/tmp/gfi.json"))
+          flagged = 0
+          for it in data:
+              # Skip already flagged
+              lbls = [l["name"] for l in it.get("labels", [])]
+              if "stale-drive-by-candidate" in lbls:
+                  continue
+              # Skip assigned (someone is on it)
+              if it.get("assignees"):
+                  continue
+              ts = int(datetime.strptime(it["updatedAt"], "%Y-%m-%dT%H:%M:%SZ").timestamp())
+              if ts > cutoff:
+                  continue
+              n = it["number"]
+              subprocess.check_call(
+                  ["gh", "issue", "edit", str(n), "--repo", repo,
+                   "--add-label", "stale-drive-by-candidate"])
+              subprocess.check_call(
+                  ["gh", "issue", "comment", str(n), "--repo", repo,
+                   "--body", "This good-first-issue has been idle 3+ days and is now eligible for the autonomous fix-loop. **You can still claim it** — just drop a comment and open a PR. If nothing lands soon, an automated PR may be opened; the issue stays open until a PR merges."])
+              flagged += 1
+              print(f"flagged #{n}: {it['title'][:80]}")
+          print(f"---\ntotal flagged: {flagged}")
+          PY
+        # Nothing else — the /loop or the fix-loop picks up from this label.

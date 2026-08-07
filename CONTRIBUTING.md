@@ -1,8 +1,8 @@
-# Contributing to OpenClaw Dashboard
+# Contributing to ClawMetry
 
 Thanks for your interest in contributing! 🦞
 
-OpenClaw Dashboard is built to be **simple, fast, and useful** for personal AI agent observability. Contributions that align with these principles are always welcome.
+ClawMetry is the observability & governance layer for AI agents — 14+ runtimes (OpenClaw, Claude Code, Codex, Cursor, Hermes, NanoClaw & more) — built to be **simple, fast, and useful**. Contributions that align with these principles are always welcome.
 
 ---
 
@@ -58,6 +58,15 @@ See `CLAUDE.md` (`Key Files`) for the full per-module breakdown including line c
 ---
 
 ## 🎯 Contribution Guidelines
+
+### **Where the issue tracker used to be a swamp — and isn't anymore**
+
+Our GitHub Issues tracker is reserved for **work a contributor can actually pick up**. Internal automation (accuracy audits, backlog triage, observability gap scans, intel scouting, weekly digests, roadmap reconciliations) is tracked in the [8090 Software Factory](https://8090.ai) instead. If you see an issue prefixed with `[accuracy-audit]`, `[backlog-triage]`, `[good-first-issue scan]`, `[obs-gap:…]`, `[intel-scout]`, or `[triage-bot]` slip through, it will be auto-closed by `.github/workflows/close-bot-noise.yml`.
+
+**How to find contributor-ready work:**
+- Filter to [`good first issue`](https://github.com/vivekchand/clawmetry/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) — hand-curated, small scope, pointer file, clear acceptance criteria
+- [`help wanted`](https://github.com/vivekchand/clawmetry/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) — real bugs / feature asks
+- A `good first issue` idle >3 days may be picked up by an automated PR loop; the issue stays open until closed by a merge, so drive-by contributors are always welcome to jump in first (drop a comment to claim).
 
 ### **What We're Looking For**
 - 🐛 **Bug fixes** - especially around auto-detection, log parsing, or UI edge cases
@@ -222,7 +231,7 @@ How would you personally use this feature?
 
 ## 🏆 Recognition
 
-Contributors who help improve OpenClaw Dashboard will be:
+Contributors who help improve ClawMetry will be:
 - Added to a CONTRIBUTORS section in the README
 - Mentioned in release notes for significant contributions
 - Given credit in any blog posts or talks about the project
@@ -237,8 +246,8 @@ For testing against real cloud deployments or verifying ClawMetry Cloud integrat
 
 ## 📄 License
 
-By contributing to OpenClaw Dashboard, you agree that your contributions will be licensed under the same MIT License that covers the project.
+By contributing to ClawMetry, you agree that your contributions will be licensed under the same MIT License that covers the project.
 
 ---
 
-**Thanks for making OpenClaw Dashboard better! 🦞**
+**Thanks for making ClawMetry better! 🦞**

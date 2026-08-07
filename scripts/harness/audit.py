@@ -225,6 +225,12 @@ def _file_issue(runtime: str, gap: dict, fp: str, dry: bool) -> None:
     if dry:
         print(f"  [dry-run] would file: {title}  ({fp})")
         return
+    # Kill-switch: the public GitHub tracker is reserved for contributor-actionable
+    # issues. Internal audit findings go to the workflow-run summary / 8090 Factory.
+    # Default is ON (NO_GH_ISSUES=1); set NO_GH_ISSUES=0 to explicitly re-enable.
+    if os.environ.get("NO_GH_ISSUES", "1") != "0":
+        print(f"  [skip-github] {title}  (NO_GH_ISSUES=1; findings not filed)")
+        return
     try:
         subprocess.run(["gh", "issue", "create", "--title", title, "--body", body,
                         "--label", ",".join(labels)], check=True,

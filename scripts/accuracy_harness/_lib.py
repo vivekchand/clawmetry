@@ -498,6 +498,13 @@ def file_consolidated_issue(results: list) -> str | None:
     is set or when overall exit code is 0 (all PASS) — the meta runner
     in ``all.py`` enforces both conditions.
     """
+    # Kill-switch: the public GitHub tracker is reserved for contributor-actionable
+    # issues. Internal audit findings go to the workflow-run summary / 8090 Factory.
+    # Default is ON (NO_GH_ISSUES=1); set NO_GH_ISSUES=0 to explicitly re-enable.
+    if os.environ.get("NO_GH_ISSUES", "1") != "0":
+        print("[meta] NO_GH_ISSUES=1 — skipping GitHub filing (findings above).",
+              file=sys.stderr)
+        return None
     if not shutil.which("gh"):
         print("[meta] `gh` CLI not on PATH; cannot file consolidated issue.",
               file=sys.stderr)
