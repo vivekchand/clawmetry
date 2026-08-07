@@ -28,6 +28,9 @@ def ob(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
     monkeypatch.setattr(mod, "_ping_onboarded", lambda choice: None)
     monkeypatch.setattr(mod, "_apply_marker_semantics", lambda choice: None)
+    # Must never actually register/spawn a real daemon during a unit test —
+    # see test_ensure_daemon_for_choice_* below for the real coverage.
+    monkeypatch.setattr(mod, "_ensure_daemon_for_choice", lambda choice: None)
     # Strip every env that legitimately suppresses the gate — including
     # the CI vars GitHub Actions itself sets, or the "fresh install
     # requires onboarding" tests would pass locally and fail in CI.
@@ -229,6 +232,55 @@ def test_selfhost_modal_is_in_live_dashboard_html():
         "selfhost-modal must be included after #zoom-wrapper closes (fixed overlay rule)"
 
 
+# ── _cloud_connected() must not confuse identity-linking with "chose managed" ──
+#
+# Live-hit 2026-08-06: the self-host Google/GitHub sign-in flow
+# (_selfhost_signin_with_key in dashboard.py) writes the SAME cloud token as
+# the managed-connect flow purely to carry identity into the trial-signup
+# call, and touches the nocloud marker FIRST. When the trial-signup half of
+# that flow then failed silently, the account was linked (token on disk) but
+# no license/trial was ever activated -- yet _cloud_connected() only checked
+# whether a token existed, so _resolve_state() reported the install as
+# already onboarded ("managed") on every later page load, with no license
+# and everything locked, and no way to see an error or retry the trial.
+
+def test_cloud_connected_ignores_token_under_nocloud_marker(monkeypatch, tmp_path):
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud"
+    marker.write_text("")
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_faketoken")
+
+    assert mod._cloud_connected() is False, (
+        "a cloud token written under self-host intent (nocloud marker set) "
+        "must not be read as 'chose managed' -- it strands a failed trial "
+        "attempt on a permanently-skipped onboarding gate"
+    )
+
+
+def test_cloud_connected_true_without_nocloud_marker(monkeypatch, tmp_path):
+    import routes.onboarding as mod
+    from clawmetry import config as _cfg
+
+    marker = tmp_path / "nocloud-not-written"
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_read_cloud_token", lambda: "cm_faketoken")
+
+    assert mod._cloud_connected() is True, (
+        "a real managed-connect token (no self-host marker) must still "
+        "satisfy the gate -- this is the grandfather path for pre-gate "
+        "managed installs"
+    )
+
+
 def test_marker_semantics_selfhost_writes_nocloud(monkeypatch, tmp_path):
     """NOCLOUD_MARKER_PATH is a plain str; the old .parent/.touch calls
     raised AttributeError into the broad except, so the marker was silently
@@ -253,3 +305,113 @@ def test_marker_semantics_managed_clears_nocloud(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAWMETRY_NO_CLOUD", raising=False)
     mod._apply_marker_semantics("managed")
     assert not marker.exists()
+
+
+# ── Persistent daemon registration on onboarding completion ────────────────
+#
+# Root cause: this gate is the DEFAULT onboarding path (browser, since the
+# 2026-07-31 hard-gate rollout) and used to complete a choice without ever
+# starting/registering a background sync daemon -- only the CLI paths
+# (`clawmetry connect` / `clawmetry onboard`) did that. Only the in-process
+# dashboard thread was left polling PyPI, which stops the moment that one
+# process exits. These tests pin that both completion endpoints now always
+# attempt daemon registration, and that _ensure_daemon_for_choice never lets
+# a registration failure break onboarding completion itself.
+
+def test_complete_managed_registers_persistent_daemon(ob, client, monkeypatch):
+    monkeypatch.setattr(ob, "_cloud_connected", lambda: True)
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/complete", json={"choice": "managed"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["managed"]
+
+
+def test_complete_selfhost_registers_persistent_daemon(ob, client, monkeypatch):
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_trial")
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/complete", json={"choice": "selfhost_trial"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["selfhost_trial"]
+
+
+def test_activate_license_registers_persistent_daemon(ob, client, monkeypatch):
+    import types
+    fake_lic = types.SimpleNamespace(
+        activate=lambda key, actor="": (True, "activated"))
+    monkeypatch.setitem(sys.modules, "clawmetry.license", fake_lic)
+    import clawmetry
+    monkeypatch.setattr(clawmetry, "license", fake_lic, raising=False)
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_license")
+    calls = []
+    monkeypatch.setattr(ob, "_ensure_daemon_for_choice", calls.append)
+    r = client.post("/api/onboarding/activate-license",
+                    json={"key": "CLAW1.aaa.bbb"})
+    assert r.get_json()["ok"] is True
+    assert calls == ["selfhost_license"]
+
+
+class _SyncThread:
+    """Runs the target immediately on .start() instead of on a real thread,
+    so tests can assert on _run()'s side effects deterministically -- the
+    production code dispatches via threading.Thread on purpose (see
+    _ensure_daemon_for_choice's docstring: onboarding-complete must never
+    block the HTTP response on a slow/hanging systemctl/launchctl/schtasks
+    call), but that async dispatch is exactly what these tests don't want."""
+
+    def __init__(self, target, daemon=True):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def test_ensure_daemon_for_choice_calls_shared_registration(monkeypatch):
+    """selfhost_* choices must register a LOCAL-ONLY daemon (no cloud
+    egress), managed must not."""
+    import routes.onboarding as mod
+    import clawmetry.daemon_registration as dreg
+
+    monkeypatch.setattr(mod.threading, "Thread", _SyncThread)
+    calls = []
+    monkeypatch.setattr(dreg, "ensure_persistent_daemon", lambda cfg: calls.append(cfg))
+    mod._ensure_daemon_for_choice("selfhost_trial")
+    assert calls == [{"local_only": True}]
+
+    calls.clear()
+    mod._ensure_daemon_for_choice("managed")
+    assert calls == [{"local_only": False}]
+
+
+def test_ensure_daemon_for_choice_never_raises(monkeypatch):
+    """A registration failure (no systemd, schtasks unavailable, sandboxed
+    environment, ...) must never break onboarding completion."""
+    import routes.onboarding as mod
+    import clawmetry.daemon_registration as dreg
+
+    monkeypatch.setattr(mod.threading, "Thread", _SyncThread)
+
+    def boom(cfg):
+        raise RuntimeError("no supervisor available here")
+    monkeypatch.setattr(dreg, "ensure_persistent_daemon", boom)
+    mod._ensure_daemon_for_choice("selfhost_license")  # must not raise
+
+
+def test_ensure_daemon_for_choice_dispatches_off_request_thread(monkeypatch):
+    """The real regression this closes (2026-08-06 CI): registration used to
+    run synchronously inside the onboarding-complete handler, so a hanging
+    systemctl/launchctl call blocked the HTTP response the browser's init
+    sequence was waiting on (visible as the dashboard stuck forever on
+    "Initializing ClawMetry"). Must be dispatched via threading.Thread, not
+    called inline."""
+    import routes.onboarding as mod
+
+    calls = []
+    monkeypatch.setattr(
+        mod.threading, "Thread",
+        lambda target, daemon=True: calls.append((target, daemon)) or _SyncThread(target),
+    )
+    mod._ensure_daemon_for_choice("selfhost_trial")
+    assert len(calls) == 1
+    assert calls[0][1] is True, "must be a daemon thread so it never blocks process exit"

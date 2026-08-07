@@ -23851,8 +23851,8 @@ setTimeout(checkUpdateStatus, 5000);
       if (!it) return;
       var rt = it.getAttribute('data-rt');
       if (it.getAttribute('data-locked')) {
-        window.open('https://app.clawmetry.com/upgrade?source=runtime_chip', '_blank', 'noopener');
         _closeMenu();
+        try { _cmShowRuntimePaywall(rt, _label(rt)); } catch (e) {}
         return;
       }
       _closeMenu();
