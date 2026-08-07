@@ -17,7 +17,7 @@ on:
 
 jobs:
   macos:
-    name: macOS .app + .dmg
+    name: macOS .app + .dmg (signed + notarized when secrets are set)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -28,8 +28,10 @@ jobs:
       - name: Install build deps
         run: |
           pip install --upgrade pip wheel
+          # Thin shell: no clawmetry install needed here. Bundle only
+          # ships pywebview + PIL. Runtime pip-installs clawmetry on
+          # user's machine on first launch.
           pip install -r desktop/requirements-dev.txt
-          pip install -e .
 
       # PyInstaller (not py2app). py2app 0.28.x has a broken macOS
       # version check on Tahoe / macOS 26 and refuses to build; the
@@ -38,6 +40,46 @@ jobs:
       - name: Build .app
         run: pyinstaller --clean --noconfirm desktop/build_mac.spec
 
+      # --- Code-signing + notarization ---
+      # These steps NO-OP when the secrets aren't configured, so PRs
+      # from forks and unsigned dev builds still succeed. Add these
+      # repo secrets in Settings → Secrets and variables → Actions:
+      #   MACOS_CERT_P12_BASE64         Developer ID Application .p12 (base64)
+      #   MACOS_CERT_P12_PASSWORD       password used when exporting the .p12
+      #   MACOS_SIGN_IDENTITY           e.g. "Developer ID Application: InstaLabs LLC (8LVH596RA5)"
+      #   APPLE_ID                      Apple ID email
+      #   APPLE_TEAM_ID                 e.g. 8LVH596RA5
+      #   APPLE_APP_SPECIFIC_PASSWORD   from https://appleid.apple.com → App-Specific Passwords
+      - name: Import Developer ID cert into a build keychain
+        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
+        run: |
+          KEYCHAIN=$RUNNER_TEMP/build.keychain
+          PASS="build-${GITHUB_RUN_ID}"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$PASS" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASS" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Show what we imported (identities only — no keys)
+          security find-identity -p codesigning -v "$KEYCHAIN"
+
+      - name: Sign + notarize + staple .app
+        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: desktop/sign_mac.sh dist/ClawMetry.app
+
       - name: Wrap into .dmg
         run: |
           VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
@@ -45,6 +87,16 @@ jobs:
             -srcfolder dist/ClawMetry.app \
             -ov -format UDZO \
             "dist/ClawMetry-${VERSION}.dmg"
+
+      - name: Sign the .dmg itself
+        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          for dmg in dist/*.dmg; do
+            codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$dmg"
+            codesign --verify --verbose=2 "$dmg"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,7 +116,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip wheel
           pip install -r desktop/requirements-dev.txt
-          pip install -e .
 
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
@@ -102,7 +153,6 @@ jobs:
         run: |
           pip install --upgrade pip wheel
           pip install -r desktop/requirements-dev.txt
-          pip install -e .
 
       - name: Build tray binary
         run: pyinstaller --clean --noconfirm desktop/build_linux.spec
