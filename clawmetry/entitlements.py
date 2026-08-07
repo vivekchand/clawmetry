@@ -14935,6 +14935,236 @@ def previous_tier_capacity_diff_at_batch() -> list[dict]:
         return []
 
 
+def _capacity_headroom_at_envelope(
+    source: str,
+    target: str | None,
+    direction: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Private builder for the ``{next,previous}_tier_capacity_headroom_at_batch``
+    rows.
+
+    Headroom-shaped mirror of :func:`_capacity_diff_at_envelope`: where
+    that builder carries the capacity-transition triple from
+    :func:`capacity_diff_at`, this one carries the per-axis headroom
+    envelope from :func:`capacity_headroom_at` computed against the
+    ``target`` rung, pinned on both ``source`` and ``target`` and
+    labelled with a ``direction`` string echoing the batch's traversal
+    (``"upgrade"`` on the next-tier side, ``"downgrade"`` on the
+    previous-tier side).
+
+    Envelope shape matches :func:`_capacity_diff_at_envelope`
+    byte-for-key on the source / target metadata, with ``row`` renamed
+    to ``headroom`` and ``direction`` added so a UI can fold the diff
+    batch and the headroom batch into one pricing-comparison matrix
+    without re-keying::
+
+        ``{tier, tier_label, tier_rank, target, target_label, target_rank, direction, headroom}``
+
+    ``headroom`` collapses to ``None`` at the ladder ceiling / floor of
+    the source axis (``target is None``) and on a builder failure --
+    matching :func:`_capacity_diff_at_envelope`'s posture on ``row``.
+    Never raises: every fallback collapses to a fully-populated envelope
+    with ``headroom=None`` so the batch keeps the per-source row visible
+    even when its per-pair headroom could not be built.
+    """
+    src = (source or "").strip().lower()
+    headroom: dict | None = None
+    if target is not None:
+        try:
+            headroom = capacity_headroom_at(
+                target,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: _capacity_headroom_at_envelope builder failed for %s->%s: %s",
+                src,
+                target,
+                exc,
+            )
+            headroom = None
+    return {
+        "tier": src,
+        "tier_label": tier_label(src) if src in _TIER_ORDER else None,
+        "tier_rank": tier_rank(src) if src in _TIER_ORDER else -1,
+        "target": target,
+        "target_label": tier_label(target) if target else None,
+        "target_rank": tier_rank(target) if target else None,
+        "direction": direction,
+        "headroom": headroom,
+    }
+
+
+def next_tier_capacity_headroom_at_batch(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict]:
+    """Batch sibling of :func:`next_tier_capacity_headroom_at`: one
+    ``next-tier-capacity-headroom-at`` envelope per purchasable source
+    tier, in one pass, given the caller-supplied per-axis usage.
+
+    Headroom-shaped mirror of :func:`next_tier_capacity_diff_at_batch`:
+    where that batch returns the marginal capacity-transition triple
+    for each ``source -> next-above-source`` pair, this batch returns
+    the per-axis headroom envelope for the same pair, computed off the
+    static per-tier caps of the ``target`` rung and the caller-supplied
+    usage. Lets a pricing-comparison matrix UI render the "on the rung
+    above each rung, given my usage, here's what my gauges would look
+    like" upgrade-tooltip column off **one** round-trip instead of N
+    calls to :func:`next_tier_capacity_headroom_at`.
+
+    Per-envelope headroom is byte-identical to
+    ``capacity_headroom_at(_next_purchasable_tier_after(source),
+    channels=..., retention_days=..., nodes=...)`` for the same source
+    and usage -- pinned in the test suite so the batch what-if cannot
+    drift from the explicit composition.
+
+    Envelope metadata is byte-parallel to
+    :func:`next_tier_capacity_diff_at_batch`: same ``tier`` /
+    ``tier_label`` / ``tier_rank`` / ``target`` / ``target_label`` /
+    ``target_rank`` on the source-anchored envelope so a UI can fold the
+    diff batch and the headroom batch into one pricing-comparison matrix
+    row-for-row. This batch additionally carries ``direction="upgrade"``
+    on every envelope so the two families do not need separate
+    "direction" callers.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`next_tier_capacity_diff_at_batch` /
+    :func:`next_tier_diff_at_batch` / :func:`next_tier_unlocks_at_batch`
+    / :func:`next_tier_locks_at_batch` so a UI can fold the batches into
+    one matrix without re-sorting client-side. Same-rank sibling tiers
+    (``cloud_pro`` / ``pro`` both at rank 2) are both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching every other ``*_at_batch`` sibling. The source-side ceiling
+    (``enterprise`` as source -- no rung strictly above) surfaces with
+    ``target=None`` and ``headroom=None`` rather than being dropped, so
+    the matrix keeps a row for every purchasable rung. Same per-axis
+    "None means axis not supplied" posture as
+    :func:`capacity_headroom_at` and :func:`capacity_headroom_batch`:
+    an axis the caller didn't pass stays ``None`` on the inner
+    headroom row of every envelope.
+
+    Decoupled from the resolved entitlement (walks the static caps),
+    so grace vs enforce yields byte-identical envelope lists.
+
+    Never raises: a per-source builder failure collapses to
+    ``headroom=None`` on the populated envelope so the surrounding
+    envelope stays visible; an unexpected top-level failure short-
+    circuits to ``[]`` so the matrix keeps rendering instead of
+    breaking.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _next_purchasable_tier_after(tid)
+            out.append(
+                _capacity_headroom_at_envelope(
+                    tid,
+                    target,
+                    "upgrade",
+                    channels=channels,
+                    retention_days=retention_days,
+                    nodes=nodes,
+                )
+            )
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_capacity_headroom_at_batch failed: %s",
+            exc,
+        )
+        return []
+
+
+def previous_tier_capacity_headroom_at_batch(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict]:
+    """Batch sibling of :func:`previous_tier_capacity_headroom_at`: one
+    ``previous-tier-capacity-headroom-at`` envelope per purchasable
+    source tier, in one pass, given the caller-supplied per-axis usage.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_capacity_headroom_at_batch` and headroom-shaped
+    mirror of :func:`previous_tier_capacity_diff_at_batch`. Lets a
+    pricing-comparison matrix UI render the "on the rung below each
+    rung, given my usage, here's what would break" downgrade-tooltip
+    column off **one** round-trip instead of N calls to
+    :func:`previous_tier_capacity_headroom_at`. Axes whose inner
+    ``over_limit`` flips ``True`` on any envelope are exactly the ones
+    the caller would lose headroom on when stepping down from that rung.
+
+    Per-envelope headroom is byte-identical to
+    ``capacity_headroom_at(_previous_purchasable_tier_before(source),
+    channels=..., retention_days=..., nodes=...)`` for the same source
+    and usage -- pinned in the test suite so the batch what-if cannot
+    drift from the explicit composition.
+
+    Envelope metadata is byte-parallel to
+    :func:`previous_tier_capacity_diff_at_batch` on the source / target
+    fields, and every envelope carries ``direction="downgrade"``.
+
+    Envelopes are sorted by source ``(tier_rank, tier_id)`` ascending
+    -- byte-stable against :func:`previous_tier_capacity_diff_at_batch`
+    / :func:`previous_tier_diff_at_batch` /
+    :func:`previous_tier_unlocks_at_batch` /
+    :func:`previous_tier_locks_at_batch`. Same-rank sibling tiers are
+    both returned.
+
+    Source list is :data:`_PURCHASABLE_TIERS` (trial excluded),
+    matching every other ``*_at_batch`` sibling. The source-side floor
+    (``oss`` / ``cloud_free`` as source -- no rung strictly below)
+    surfaces with ``target=None`` and ``headroom=None`` rather than
+    being dropped. Same per-axis "None means axis not supplied" posture
+    as :func:`capacity_headroom_at`.
+
+    Decoupled from the resolved entitlement (walks the static caps),
+    so grace vs enforce yields byte-identical envelope lists.
+
+    Never raises: a per-source builder failure collapses to
+    ``headroom=None`` on the populated envelope; an unexpected top-
+    level failure short-circuits to ``[]``.
+    """
+    try:
+        out: list[dict] = []
+        ordered = sorted(
+            _PURCHASABLE_TIERS, key=lambda t: (_TIER_RANK.get(t, -1), t)
+        )
+        for tid in ordered:
+            target = _previous_purchasable_tier_before(tid)
+            out.append(
+                _capacity_headroom_at_envelope(
+                    tid,
+                    target,
+                    "downgrade",
+                    channels=channels,
+                    retention_days=retention_days,
+                    nodes=nodes,
+                )
+            )
+        return out
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_capacity_headroom_at_batch failed: %s",
+            exc,
+        )
+        return []
+
+
 def next_tier_spec_at(tier: str) -> dict | None:
     """Scalar what-if sibling of :meth:`Entitlement.next_tier_spec`:
     full :func:`tier_spec_at`-shape descriptor of the rung above the
