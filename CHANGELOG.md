@@ -1,5 +1,26 @@
 ## Unreleased
 
+- **Release: macOS desktop `.dmg` now ships signed + notarized on every tag push.**
+  - **Why:** the desktop-app scaffold landed in #4602 with the signing pipeline
+    wired but the six Apple credentials were not yet in the repo, so
+    `desktop-artifacts.yml` on a `v*.*.*` tag would still produce an unsigned
+    `.dmg` — Gatekeeper would warn on first launch and the app-store-quality
+    experience the desktop bundle was built for wouldn't actually reach users.
+  - **What:** `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`,
+    `APPLE_APP_SPECIFIC_PASSWORD`, `MACOS_CERT_P12_BASE64`, and
+    `MACOS_CERT_PASSWORD` are now set on `vivekchand/clawmetry`. On every
+    tag push, `desktop-artifacts.yml` codesigns and hardened-runtime-signs
+    `ClawMetry.app`, submits the wrapping `.dmg` to Apple's notary service via
+    `notarytool`, staples the ticket, and attaches the finished `.dmg` to the
+    GitHub Release alongside the Windows `.zip` and Linux `.tar.gz`.
+  - **Verified:** local proof — `~/Downloads/ClawMetry-signed.dmg` (7.3 MB) is
+    signed by `Developer ID Application: InstaLabs LLC (8LVH596RA5)` and
+    `spctl --assess --type open` reports `accepted, source=Notarized Developer
+    ID`; the six secrets are confirmed present via `gh secret list` at
+    2026-08-07T21:12Z. CI verification comes in this release: the tag push
+    for this version is the first end-to-end exercise of the notarization
+    path on GitHub-hosted runners.
+
 - **Fix: installers now sweep and remove stale clawmetry duplicates instead of only detecting them.**
   - **Why:** #4335 (`clawmetry/installs.py`) taught the CLI to *detect and
     warn* about a stale clawmetry copy elsewhere on PATH, but nothing
