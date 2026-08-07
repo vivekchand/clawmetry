@@ -77,6 +77,9 @@ def _daemon_supervised():
             unit = (Path.home() / ".config" / "systemd" / "user"
                     / "clawmetry-sync.service")
             return unit.exists() or bool(os.environ.get("INVOCATION_ID"))
+        if os.name == "nt":
+            from clawmetry.daemon_registration import windows_task_registered
+            return windows_task_registered()
     except Exception:
         pass
     return False
@@ -354,6 +357,17 @@ def _get_update_check_config():
         # nobody, and the hosted dashboard rendered blank cards against old
         # snapshots. An observability sidecar must keep itself current.
         "auto_update": True,
+        # True only once a human has actually POSTed a value for "auto_update"
+        # via /api/update-check/config (see api_update_check_config_post).
+        # Distinguishes a REAL opt-out from a stale row a self-hosted/free
+        # node never gets a chance to self-heal: _sync_auto_update_with_plan
+        # (clawmetry/sync.py) already re-asserts auto_update=True on every
+        # cloud heartbeat, but ONLY for entitled paid tiers -- a self-hosted
+        # or free-tier node with a leftover pre-0.12.494 auto_update=False
+        # row had no path back to True. _update_check_worker's boot-time
+        # heal (below) uses this flag to heal the stale case universally
+        # while still respecting an explicit user opt-out.
+        "auto_update_user_set": False,
         "dismissed_version": "",
         "last_check_at": 0,
     }
@@ -387,6 +401,26 @@ def _set_update_check_config(updates):
             )
         db.commit()
         db.close()
+
+
+def _heal_stale_auto_update_flag(config):
+    """Universal one-time self-heal for a stale ``auto_update=False`` row.
+
+    ``clawmetry/sync.py::_sync_auto_update_with_plan`` already re-asserts
+    auto_update=True on every cloud heartbeat, but ONLY for entitled paid
+    cloud tiers -- a self-hosted or free-tier node that picked up a stale
+    False (pre-0.12.494 default, or a long-gone UI toggle) had no path back
+    to the current True default, "self-hosted or cloud sync" be damned. This
+    runs for every role/tier on worker boot and heals the flag UNLESS a
+    human explicitly set it via POST /api/update-check/config
+    (auto_update_user_set), so a real opt-out is never overridden.
+    """
+    try:
+        if not config.get("auto_update") and not config.get("auto_update_user_set"):
+            _set_update_check_config({"auto_update": True})
+            config["auto_update"] = True
+    except Exception:
+        pass
 
 
 def _record_update_check(current, latest, update_available, changelog_url=""):
@@ -818,6 +852,7 @@ def _update_check_worker(stop_event):
         return
 
     config = _get_update_check_config()
+    _heal_stale_auto_update_flag(config)
     if config.get("check_on_startup", True):
         _check_for_update()
 
@@ -888,6 +923,11 @@ def api_update_check_config_post():
     data = request.get_json(silent=True) or {}
     allowed_keys = ["enabled", "check_on_startup", "check_daily", "auto_update", "dismissed_version"]
     updates = {k: v for k, v in data.items() if k in allowed_keys}
+    # A real POST here is the only thing that means "a human explicitly
+    # chose this" -- mark it so the universal self-heal in
+    # _update_check_worker never overwrites a deliberate auto_update=False.
+    if "auto_update" in updates:
+        updates["auto_update_user_set"] = True
     _set_update_check_config(updates)
     return jsonify({"ok": True})
 
