@@ -11066,6 +11066,88 @@ def sync_tool_policy(config: dict, state: dict, paths: dict) -> int:
     return n
 
 
+# Issue #4593 — process-lifetime dedup sentinel for device-pairing events.
+# Keyed by "device_id:approval_method"; value is the ISO timestamp of first
+# observation.  A manual→auto upgrade produces a distinct key and a second row.
+_SEEN_PAIRING_DEVICES: dict = {}
+
+
+def sync_device_pairing_events(config: dict, state: dict = None, paths: dict = None) -> int:
+    """Snapshot trusted-proxy device-pairing state and persist new rows to DuckDB.
+
+    Calls the existing ``_gateway_trusted_proxy_devices()`` adapter function
+    (introduced in #3885) which reads ``gateway.status`` / ``gateway.devices``
+    RPCs and normalises device pairing state.  For each device whose
+    ``device_id + approval_method`` hasn't been observed this process lifetime,
+    writes one audit row to ``device_pairing_events``.
+
+    Never raises; all errors are logged at DEBUG level.
+    """
+    global _SEEN_PAIRING_DEVICES
+    try:
+        from clawmetry.adapters.openclaw import _gateway_trusted_proxy_devices
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: adapter unavailable: %s", _e)
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: local_store unavailable: %s", _e)
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    try:
+        result = _gateway_trusted_proxy_devices()
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: RPC failed: %s", _e)
+        return 0
+
+    devices = result.get("gatewayTrustedProxyDevices") or []
+    if not devices:
+        return 0
+
+    import json as _json
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    n = 0
+    for dev in devices:
+        if not isinstance(dev, dict):
+            continue
+        device_id = str(dev.get("id") or "")
+        if not device_id:
+            continue
+        approval_method = "auto" if dev.get("autoApproved") else "manual"
+        seen_key = f"{device_id}:{approval_method}"
+        if seen_key in _SEEN_PAIRING_DEVICES:
+            continue
+        _SEEN_PAIRING_DEVICES[seen_key] = now_iso
+
+        approved_at = dev.get("approvedAt") or now_iso
+        scope_cap = dev.get("scopeCap")
+        scope_str = _json.dumps(scope_cap) if isinstance(scope_cap, (list, dict)) else scope_cap
+
+        try:
+            store.ingest_device_pairing_event({
+                "id": f"device-pairing:{device_id}:{approval_method}",
+                "ts": str(approved_at),
+                "device_id": device_id,
+                "label": dev.get("label"),
+                "approval_method": approval_method,
+                "scope_cap": scope_str,
+                "identity": dev.get("label"),
+                "node_id": node_id,
+            })
+            n += 1
+        except Exception as _e_in:
+            log.debug("sync_device_pairing_events: ingest failed for %s: %s", device_id, _e_in)
+
+    if n:
+        store.flush()
+        log.debug("sync_device_pairing_events: ingested %d new rows", n)
+    return n
+
+
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
@@ -18531,6 +18613,13 @@ def run_daemon() -> None:
             log.info(f"  Tool policy: {tp} agent rows ingested")
     except Exception as e:
         log.warning(f"  Tool-policy ingest error: {e}")
+    # Trusted-proxy device pairing audit events (#4593) — initial snapshot.
+    try:
+        dp = sync_device_pairing_events(config, state, paths)
+        if dp:
+            log.info(f"  Device pairing: {dp} new events ingested")
+    except Exception as e:
+        log.warning(f"  Device-pairing ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -19019,6 +19108,12 @@ def run_daemon() -> None:
                 except Exception as _e_tp:
                     log.debug("sync_tool_policy error (non-fatal): %s", _e_tp)
                 last_tool_policy = now_tp
+
+            # ── Trusted-proxy device pairing events (#4593) ──────────────
+            try:
+                sync_device_pairing_events(config, state, paths)
+            except Exception as _e_dp:
+                log.debug("sync_device_pairing_events error (non-fatal): %s", _e_dp)
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0

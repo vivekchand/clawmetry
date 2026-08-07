@@ -693,6 +693,25 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON audit_log(ts)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_actor  ON audit_log(actor, ts)",
     "CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, ts)",
+    # Issue #4593 — trusted-proxy device pairing audit events.
+    # One row per observed device-pairing state (new device or approval_method
+    # change).  approval_method is "auto" or "manual"; scope_cap is the
+    # non-admin scope list JSON.  Idempotent via PRIMARY KEY on id.
+    """
+    CREATE TABLE IF NOT EXISTS device_pairing_events (
+        id              VARCHAR PRIMARY KEY,
+        ts              VARCHAR NOT NULL,
+        device_id       VARCHAR NOT NULL,
+        label           VARCHAR,
+        approval_method VARCHAR NOT NULL,
+        scope_cap       VARCHAR,
+        identity        VARCHAR,
+        node_id         VARCHAR NOT NULL DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_dpe_ts              ON device_pairing_events(ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_dpe_device_id       ON device_pairing_events(device_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_dpe_approval_method ON device_pairing_events(approval_method, ts)",
     # Issue #2201 — asset registry. Evidence + review layer that turns
     # individual agent discoveries (Self-Evolve findings, useful prompts,
     # improved skills) into reviewable, reusable assets without auto-promoting
@@ -8093,6 +8112,68 @@ class LocalStore:
         """
         params.append(int(limit))
         cols = ["id", "ts", "actor", "action", "target", "session_id", "result"]
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    # ── Issue #4593 — trusted-proxy device pairing events ────────────────────
+
+    def ingest_device_pairing_event(self, event: dict) -> None:
+        """Upsert one trusted-proxy device-pairing audit row.
+
+        Required key: ``id`` (``"device-pairing:<device_id>:<approval_method>"``).
+        ``approval_method`` must be ``"auto"`` or ``"manual"``.
+        """
+        eid = event.get("id")
+        if not eid:
+            raise ValueError("device_pairing_event must include 'id'")
+        from datetime import datetime
+        ts = event.get("ts") or datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO device_pairing_events (
+                    id, ts, device_id, label, approval_method, scope_cap, identity, node_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    label           = COALESCE(excluded.label,           device_pairing_events.label),
+                    approval_method = COALESCE(excluded.approval_method, device_pairing_events.approval_method),
+                    scope_cap       = COALESCE(excluded.scope_cap,       device_pairing_events.scope_cap),
+                    identity        = COALESCE(excluded.identity,        device_pairing_events.identity)
+            """, [
+                str(eid),
+                ts,
+                event.get("device_id", ""),
+                event.get("label"),
+                event.get("approval_method", "manual"),
+                event.get("scope_cap"),
+                event.get("identity"),
+                event.get("node_id") or "",
+            ])
+
+    def query_device_pairing_events(
+        self,
+        *,
+        approval_method: str | None = None,
+        since: str | None = None,
+        limit: int = 200,
+    ) -> list:
+        """Read device-pairing-event rows, most-recent first."""
+        clauses: list = []
+        params: list = []
+        if approval_method:
+            clauses.append("approval_method = ?")
+            params.append(approval_method)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, ts, device_id, label, approval_method, scope_cap, identity, node_id
+            FROM device_pairing_events
+            {where}
+            ORDER BY ts DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "ts", "device_id", "label", "approval_method", "scope_cap", "identity", "node_id"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
     def query_routing_savings(
