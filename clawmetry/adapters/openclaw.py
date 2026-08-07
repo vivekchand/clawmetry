@@ -2503,6 +2503,19 @@ class OpenClawAdapter(AgentAdapter):
                 )
                 if _vad is not None:
                     extra["vadMode"] = str(_vad)
+            # Session classification facts (#4591): harness commit 2a0bbd23
+            # (#106832) attaches per-session classification metadata describing
+            # session type, purpose, and behavioural characteristics. Silently
+            # no-ops when absent so existing sessions are unaffected.
+            _clf = (
+                s.get("classificationFacts")
+                or s.get("classification_facts")
+                or s.get("sessionClassification")
+                or s.get("session_classification")
+                or s.get("sessionFacts")
+            )
+            if _clf is not None:
+                extra["classificationFacts"] = _clf
             tok_total = int(s.get("totalTokens") or 0)
             tok_in = int(s.get("inputTokens") or 0)
             tok_out = int(s.get("outputTokens") or 0)
