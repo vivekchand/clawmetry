@@ -4,13 +4,15 @@ name: C6 auto-heal (required-checks application)
 # Runs every 2 hours and once daily at 10:15am UTC.
 # Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
 #
-# NOTE: Push trigger intentionally removed (2026-08-01). It was informational-
-# only (exit 0 regardless of state per the event_name != 'push' guard on the
-# Error step), but caused persistent 0-job failures on the CI dashboard
-# whenever many PRs merged to main in quick succession, due to GitHub
-# repository-level workflow queue pressure. The 2-hourly schedule trigger
-# already provides equivalent status information, so the push trigger is
-# redundant. See issue #4029 for context.
+# NOTE: Push trigger scoped to this file only (paths: c6-schedule-heal.yml,
+# 2026-08-05). A push trigger is required for the job-level `if` guard to
+# take effect: without a push trigger in `on:`, GitHub creates a phantom
+# 0-job run on any push that touches this file, and that run concludes as
+# "failure". With the push trigger defined AND the job-level `if` guard
+# (schedule|workflow_dispatch only), the job is SKIPPED on push events and
+# the run concludes as "success" (skipped). The paths filter limits trigger
+# scope to modifications of this file only -- no queue pressure from normal
+# code pushes. See PR #4553 and issue #4029.
 #
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
@@ -58,6 +60,9 @@ on:
     - cron: '0 */2 * * *'   # every 2 hours -- heals within 2h of E2E_ADMIN_PAT being set
     - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/c6-schedule-heal.yml'
 
 # Prevent two schedule/dispatch runs from overlapping.
 concurrency:
@@ -72,6 +77,14 @@ jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
     runs-on: ubuntu-latest
+    # Guard: only execute on the events this workflow actively uses (schedule
+    # and workflow_dispatch). The push trigger is defined solely so that when
+    # a PR touches this file, GitHub runs the workflow with event=push and
+    # evaluates this `if:` -- which returns false, causing the job to be
+    # SKIPPED. A run with a skipped job concludes as "success", eliminating
+    # the phantom 0-job failure badge that occurred before the push trigger
+    # was added. See PR #4553.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 

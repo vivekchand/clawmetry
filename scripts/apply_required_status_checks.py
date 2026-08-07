@@ -46,7 +46,7 @@ Primary repo behaviour (clawmetry):
 When run locally (GITHUB_REPOSITORY not set), the script applies all 3
 checks and requires a token with cross-repo admin access.
 
-Tracking: vivekchand/clawmetry#4029 (C6)
+Tracking: vivekchand/clawmetry#4552 (C6)
 """
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ def _enable_status_checks_preserving(repo: str, contexts: list, token: str) -> N
 
     The PATCH sub-resource 404s with 'Required status checks not enabled'
     when main is protected (PR reviews, enforce_admins, ...) but the
-    status-check block was never switched on — the exact state all three
+    status-check block was never switched on -- the exact state all three
     repos were in (C6 audit red since #3970). PUT /protection REPLACES the
     whole rule, so read the current one and re-submit it faithfully with
     the status-check block added; nothing else may change.
@@ -309,7 +309,10 @@ def verify_required_checks_readonly(
     for repo in repos:
         actual = _get_branch_protection_contexts(repo, token)
         if actual is None:
-            print(f"  [{repo}] UNKNOWN: branch endpoint did not return protection info")
+            # Branch endpoint unavailable -- treat as unconfigured, not as OK.
+            # Silently continuing here would mask real C6 gaps.
+            print(f"  [{repo}] FAIL: branch endpoint unavailable -- treating as unconfigured")
+            ok = False
             continue
         required = {ctx for r, ctx in checks if r == repo}
         blocked = {ctx for r, ctx in deprecated if r == repo}
@@ -466,7 +469,7 @@ def main() -> None:
                 "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
                 "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
                 "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
-                "  Tracking: vivekchand/clawmetry#4029 (C6)"
+                "  Tracking: vivekchand/clawmetry#4552 (C6)"
             )
         # Read-only path: GITHUB_TOKEN cannot write branch protection rules.
         # Scope verification to the current repo only to avoid cross-repo 403s.
