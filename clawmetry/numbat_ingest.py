@@ -67,6 +67,7 @@ _AGENT_TO_RUNTIME = {
     "copilot": "copilot",
     "grok": "grok",
     "pi": "pi",
+    "qm": "qm",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

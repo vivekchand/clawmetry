@@ -6416,7 +6416,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
-    "grok": "Grok",
+    "grok": "Grok", "qm": "QM",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -11757,6 +11757,12 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
     ("clawmetry_pro.adapters.grok", "GrokAdapter"),
+    # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
+    # backed multiplayer agent harness. Meta-orchestrator like Hermes;
+    # delegates to Pi / OpenCode / Codex / Claude Code, so a qm user is
+    # definitionally a Pro user. Adapter reads DATABASE_URL /
+    # CLAWMETRY_QM_DATABASE_URL in read-only mode.
+    ("clawmetry_pro.adapters.qm", "QMAdapter"),
 )
 
 
@@ -12955,7 +12961,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok",
+    "antigravity", "copilot", "grok", "qm",
 })
 
 

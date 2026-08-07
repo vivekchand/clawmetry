@@ -26,7 +26,7 @@ Opens at **http://localhost:8900** and you're done.
 
 ClawMetry started as observability for OpenClaw, and now meters your **whole agent fleet** in one dashboard, auto-detecting each runtime on your machine:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok** · **QM**
 
 OpenClaw and NemoClaw are free in the open-source app; the other runtimes light up with ClawMetry Cloud or a self-hosted Pro license. Switch runtimes from the header and every tab — cost, tokens, tools, traces — re-scopes to that runtime. See **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** for the exact free/paid split, tier matrix, `/api/entitlement` shape, and the `clawmetry license` CLI.
 
@@ -294,7 +294,7 @@ services:
 
 - Python 3.8+
 - Flask (installed automatically via pip)
-- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, GitHub Copilot, or Grok (or mounted volumes for Docker)
+- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, GitHub Copilot, Grok, or QM (or mounted volumes for Docker)
 - Linux or macOS
 
 ## NemoClaw / OpenShell Support

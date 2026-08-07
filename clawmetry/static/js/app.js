@@ -9283,7 +9283,7 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
-  copilot: 'GitHub Copilot', grok: 'Grok'
+  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
