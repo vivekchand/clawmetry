@@ -1,5 +1,40 @@
 ## Unreleased
 
+- **Fix: macOS `.dmg` now actually builds — pyinstaller was excluded from macOS via a stray sys_platform marker; release-on-merge now kicks tag-triggered workflows the GITHUB_TOKEN can't cascade.**
+  - **Why:** two bugs in a row prevented v0.12.656 and v0.12.657 from
+    shipping desktop bundles even though PyPI got the wheels cleanly.
+    (1) `desktop/requirements-dev.txt` pinned pyinstaller with
+    `sys_platform != "darwin"` — literally excluding it on macOS. The
+    workflow's macOS job then runs `pyinstaller --clean --noconfirm
+    desktop/build_mac.spec` and dies with exit 127 ("command not
+    found"). The comment above the workflow step even says "PyInstaller
+    (not py2app)" but the requirements file thought it was
+    py2app-on-mac. (2) `release-on-merge.yml` creates the release tag
+    with the default GITHUB_TOKEN, and GitHub Actions deliberately
+    suppresses cascade triggers for GITHUB_TOKEN events — so the
+    `on: push: tags:` gate on `desktop-artifacts.yml` never fired even
+    after the workflow-file syntax fix in v0.12.657. Every release
+    since v0.12.656 has needed a manual `gh workflow run
+    desktop-artifacts.yml --ref v0.12.<n>` to build the bundles.
+  - **What:** (1) collapse the pyinstaller line in
+    `desktop/requirements-dev.txt` to a single unconditional
+    `pyinstaller>=6.0` and drop the unused py2app + `setuptools<70`
+    macOS pins — all three build specs are PyInstaller specs, py2app
+    is not on the shipping path. (2) add an explicit
+    `gh workflow run desktop-artifacts.yml --ref v0.12.<n>` step at
+    the end of `release-on-merge.yml` right after the `gh release
+    create` step, so every future release fires the desktop-bundle
+    build automatically. Non-blocking (`|| echo`) so a dispatch failure
+    never blocks the PyPI publish that already succeeded upstream.
+  - **Verified:** locally,
+    `pip install -r desktop/requirements-dev.txt` on macOS installs
+    pyinstaller (was previously silently skipped by the sys_platform
+    marker). The `gh workflow run` step is idempotent and safe on
+    re-runs. End-to-end verification is this release: the tag push
+    must produce a signed+notarized `.dmg` + Windows `.zip` + Linux
+    `.tar.gz` attached to the GitHub Release WITHOUT any manual
+    dispatch step from me.
+
 - **Fix: desktop-artifacts workflow now parses — signed `.dmg` ships on tag push instead of failing at the workflow-file level.**
   - **Why:** the wiring release (v0.12.656) attempted to gate the signing
     steps with `if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}` at step level.

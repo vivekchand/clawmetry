@@ -381,6 +381,26 @@ jobs:
             --notes "Released via PR: ${{ github.event.pull_request.title }}" \
             --latest || echo "Release tag already exists, skipping"
 
+      # GitHub deliberately suppresses `on: push: tags:` cascade triggers
+      # for anything created with the default GITHUB_TOKEN (see
+      # https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow).
+      # So the tag we just created will NOT auto-fire desktop-artifacts.yml,
+      # publish.yml, or any other tag-triggered workflow. Kick them
+      # explicitly here — matches the actual intent of "when we cut a
+      # release, build the desktop bundles." Verified 2026-08-07: without
+      # this step, v0.12.656 and v0.12.657 published to PyPI cleanly but
+      # left the GitHub Release with zero binary assets attached.
+      - name: Kick tag-triggered workflows the token can't cascade
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          echo "▸ Dispatching desktop-artifacts.yml against $NEW_TAG"
+          gh workflow run desktop-artifacts.yml \
+            --repo ${{ github.repository }} \
+            --ref "$NEW_TAG" \
+            || echo "⚠ desktop-artifacts dispatch failed (non-blocking)"
+
       - name: Open PR for version bump
         # Branch protection on main blocks direct pushes. The wheel is
         # already on PyPI + the release tag exists, so this step just keeps

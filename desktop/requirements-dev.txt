@@ -7,10 +7,9 @@ Pillow>=10.0
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
 pywebview>=5.0
-# macOS bundler. py2app<=0.28 still imports pkg_resources at load time,
-# which setuptools>=70 dropped from the default install. Pin setuptools
-# under 70 whenever py2app is in the build set.
-py2app>=0.28; sys_platform == "darwin"
-setuptools<70; sys_platform == "darwin"
-# Windows / Linux bundler
-pyinstaller>=6.0; sys_platform != "darwin"
+# Bundler for all three OSes. build_mac.spec / build_windows.spec /
+# build_linux.spec are all PyInstaller specs. py2app is intentionally
+# NOT the mac shipping path: py2app 0.28.x has a broken macOS version
+# check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
+# kept in-tree only for the day py2app catches up.
+pyinstaller>=6.0
