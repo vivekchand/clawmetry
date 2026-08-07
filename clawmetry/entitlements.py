@@ -14758,6 +14758,140 @@ def previous_tier_capacity_diff_at(tier: str) -> dict | None:
         return None
 
 
+def next_tier_capacity_headroom_at(
+    perspective_tier: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Scalar what-if sibling of :func:`next_tier_capacity_headroom`:
+    per-axis capacity-headroom envelope for the rung immediately above
+    the caller-supplied ``perspective_tier``, computed off the static
+    per-tier caps rather than the resolved entitlement the live helper
+    anchors to.
+
+    Composes :func:`_next_purchasable_tier_after` (the rung strictly
+    above ``perspective_tier``) with :func:`capacity_headroom_at` (per-
+    axis headroom against the static per-tier caps). Headroom-shaped
+    mirror of :func:`next_tier_capacity_diff_at`: same source-anchored
+    "if I were at A, one rung up" posture, headroom envelope instead of
+    the capacity-transition triple. Lets a pricing-comparison
+    tooltip render "on the rung above <hypothetical A>, given my
+    usage, here's what my gauges would look like" for any ``A`` off
+    **one** round-trip -- without first hitting ``/api/entitlement``
+    and without monkey-patching the entitlement context.
+
+    Row shape matches :func:`capacity_headroom_at` byte-for-byte
+    (``tier`` / ``tier_label`` / ``channels`` / ``retention_days`` /
+    ``nodes``) so any existing capacity-headroom renderer consumes the
+    envelope without reshaping. Per-axis "None means axis not supplied"
+    posture matches the singular helpers -- an axis the caller didn't
+    pass stays ``None`` on the envelope.
+
+    Byte-identical to
+    ``capacity_headroom_at(_next_purchasable_tier_after(perspective_tier),
+    channels=..., retention_days=..., nodes=...)`` for the same source /
+    usage -- pinned in the test suite so the convenience cannot drift
+    from the explicit composition.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture, since the source is hypothetical and
+    may legitimately answer "on the rung above Trial, would my usage
+    fit?".
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` and at the
+    ceiling (no rung strictly above -- ``enterprise`` as source). The
+    ``_at`` helper walks the static caps, so grace vs enforce yields
+    byte-identical envelopes. Never raises: a builder failure
+    short-circuits to ``None`` so the tooltip surface stays mute
+    instead of breaking.
+    """
+    try:
+        src = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _next_purchasable_tier_after(src)
+        if target is None:
+            return None
+        return capacity_headroom_at(
+            target,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: next_tier_capacity_headroom_at failed: %s", exc
+        )
+        return None
+
+
+def previous_tier_capacity_headroom_at(
+    perspective_tier: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Scalar what-if sibling of :func:`previous_tier_capacity_headroom`:
+    per-axis capacity-headroom envelope for the rung immediately below
+    the caller-supplied ``perspective_tier``.
+
+    Source-anchored downgrade-side mirror of
+    :func:`next_tier_capacity_headroom_at` and headroom-shaped mirror of
+    :func:`previous_tier_capacity_diff_at`. Composes
+    :func:`_previous_purchasable_tier_before` with
+    :func:`capacity_headroom_at`. Lets a downgrade-confirmation
+    tooltip render "on the rung below <hypothetical A>, given my usage,
+    here's what would break" for any ``A`` off **one** round-trip --
+    axes whose inner ``over_limit`` flips ``True`` are exactly the ones
+    the caller would lose headroom on.
+
+    Row shape matches :func:`capacity_headroom_at` byte-for-byte. Same
+    per-axis "None means unsupplied" posture and grace / enforce
+    invariance as :func:`next_tier_capacity_headroom_at`.
+
+    Byte-identical to
+    ``capacity_headroom_at(_previous_purchasable_tier_before(perspective_tier),
+    channels=..., retention_days=..., nodes=...)`` for the same source /
+    usage -- pinned in the test suite so the convenience cannot drift
+    from the explicit composition.
+
+    Accepts any id in :data:`_TIER_ORDER` (including :data:`TIER_TRIAL`)
+    -- the lenient ``_at`` posture.
+
+    Returns ``None`` for empty / unknown ``perspective_tier`` and at the
+    floor (no rung strictly below -- ``oss`` / ``cloud_free`` as
+    source). Never raises: a builder failure short-circuits to
+    ``None``.
+    """
+    try:
+        src = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not src or src not in _TIER_ORDER:
+        return None
+    try:
+        target = _previous_purchasable_tier_before(src)
+        if target is None:
+            return None
+        return capacity_headroom_at(
+            target,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: previous_tier_capacity_headroom_at failed: %s", exc
+        )
+        return None
+
+
 def _capacity_diff_at_envelope(source: str, target: str | None) -> dict:
     """Private builder for the ``{next,previous}_tier_capacity_diff_at_batch``
     rows.

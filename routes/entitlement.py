@@ -19577,6 +19577,207 @@ def api_entitlement_previous_tier_capacity_diff_at_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-headroom-at")
+def api_entitlement_next_tier_capacity_headroom_at():
+    """``GET /api/entitlement/next-tier-capacity-headroom-at?tier=<source>
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- scalar what-if
+    sibling of ``/api/entitlement/next-tier-capacity-headroom``: per-axis
+    capacity-headroom envelope for the rung immediately above the caller-
+    supplied ``tier``, given the caller-supplied per-axis usage.
+
+    Headroom-shaped mirror of
+    ``/api/entitlement/next-tier-capacity-diff-at``: same source-anchored
+    "if I were at A, one rung up" posture, headroom envelope instead of
+    the capacity-transition triple. Lets a pricing-comparison tooltip
+    render "on the rung above <hypothetical A>, given my usage, here's
+    what my gauges would look like" for any ``A`` off **one** round-trip
+    -- without first hitting ``/api/entitlement`` and without
+    monkey-patching the entitlement context.
+
+    Response shape (envelope keys mirror
+    ``/api/entitlement/next-tier-capacity-diff-at`` byte-for-key on the
+    source / target metadata, with ``row`` renamed to ``headroom`` to
+    match the neighbour-tier headroom envelope, plus ``direction`` echoing
+    ``"upgrade"``)::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "direction":    "upgrade",
+          "headroom":     {<capacity_headroom_at row>} | null,
+        }
+
+    ``headroom`` (when non-null) matches
+    ``/api/entitlement/capacity-headroom-at?tier=<target>&channels=...`` for
+    the resolved ``target`` byte-for-byte -- pinned in the test suite so
+    the convenience cannot drift from the explicit composition.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``), matching the other ``_at`` family endpoints. ``target`` /
+    ``headroom`` collapse to ``null`` at the ceiling (no rung strictly
+    above the source -- ``enterprise`` as source) -- the surface stays
+    200 with a populated envelope so callers can render "you're at the
+    top" copy without a status-code branch. Same per-axis "None means
+    axis not supplied" posture as ``/capacity-headroom-at`` -- an axis
+    the caller didn't pass stays ``None`` on the inner row; a blank /
+    non-int / negative value short-circuits that axis to ``None``.
+
+    Decoupled from grace vs enforce: the underlying helper walks the
+    static per-tier caps, so inner rows are byte-identical across modes.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``headroom=null``
+      on the same 200 envelope so the tooltip surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        target = _ent._next_purchasable_tier_after(tier_in)
+        headroom = _ent.next_tier_capacity_headroom_at(tier_in, **kwargs)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "direction": "upgrade",
+                "headroom": headroom,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_headroom_at: error: %s", exc
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "direction": "upgrade",
+                "headroom": None,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-headroom-at")
+def api_entitlement_previous_tier_capacity_headroom_at():
+    """``GET /api/entitlement/previous-tier-capacity-headroom-at?tier=<source>
+    &channels=<int>&retention_days=<int>&nodes=<int>`` -- scalar what-if
+    sibling of ``/api/entitlement/previous-tier-capacity-headroom``:
+    per-axis capacity-headroom envelope for the rung immediately below
+    the caller-supplied ``tier``, given the caller-supplied per-axis
+    usage.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-capacity-headroom-at`` and headroom-
+    shaped mirror of ``/api/entitlement/previous-tier-capacity-diff-at``.
+    Lets a downgrade-confirmation tooltip render "on the rung below
+    <hypothetical A>, given my usage, here's what would break" for any
+    ``A`` off **one** round-trip -- axes whose inner ``over_limit`` flips
+    ``True`` are exactly the ones the caller would lose headroom on.
+
+    Envelope shape matches
+    ``/api/entitlement/next-tier-capacity-headroom-at`` byte-for-key
+    with ``direction`` echoing ``"downgrade"``. Same per-axis "None means
+    unsupplied" posture, bad-arg short-circuit, and grace / enforce
+    invariance.
+
+    ``headroom`` (when non-null) matches
+    ``/api/entitlement/capacity-headroom-at?tier=<target>&channels=...`` for
+    the resolved ``target`` byte-for-byte.
+
+    Accepts any tier id in :data:`entitlements._TIER_ORDER` (including
+    ``trial``). ``target`` / ``headroom`` collapse to ``null`` at the
+    floor (no rung strictly below the source -- ``oss`` /
+    ``cloud_free``) -- the surface stays 200 with a populated envelope
+    so callers can render "you're at the bottom" copy without a
+    status-code branch.
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown. The body carries ``which`` so a
+      caller can render the right "unknown ..." message.
+    - **Never 5xxs**: builder failure short-circuits to ``headroom=null``
+      on the same 200 envelope so the tooltip surface stays mute.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        target = _ent._previous_purchasable_tier_before(tier_in)
+        headroom = _ent.previous_tier_capacity_headroom_at(tier_in, **kwargs)
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": _ent.tier_label(tier_in),
+                "tier_rank": _ent.tier_rank(tier_in),
+                "target": target,
+                "target_label": _ent.tier_label(target) if target else None,
+                "target_rank": _ent.tier_rank(target) if target else None,
+                "direction": "downgrade",
+                "headroom": headroom,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_headroom_at: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tier": tier_in,
+                "tier_label": None,
+                "tier_rank": -1,
+                "target": None,
+                "target_label": None,
+                "target_rank": None,
+                "direction": "downgrade",
+                "headroom": None,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-spec")
 def api_entitlement_next_tier_spec():
     """``GET /api/entitlement/next-tier-spec`` -- full
