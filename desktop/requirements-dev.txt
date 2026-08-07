@@ -1,0 +1,16 @@
+# Extra deps for the desktop wrapper only. Not required to run
+# clawmetry itself; only needed when running `python -m desktop.tray`
+# or building the .app / .exe bundles.
+pystray>=0.19
+Pillow>=10.0
+# Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
+# webkit2 on Linux). Uses the OS's own webview engine, so the bundle
+# stays small — no Chromium ships inside the .app.
+pywebview>=5.0
+# macOS bundler. py2app<=0.28 still imports pkg_resources at load time,
+# which setuptools>=70 dropped from the default install. Pin setuptools
+# under 70 whenever py2app is in the build set.
+py2app>=0.28; sys_platform == "darwin"
+setuptools<70; sys_platform == "darwin"
+# Windows / Linux bundler
+pyinstaller>=6.0; sys_platform != "darwin"
