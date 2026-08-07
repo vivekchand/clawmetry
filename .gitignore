@@ -38,3 +38,9 @@ Thumbs.db
 
 # Node (used only by tests/e2e/ for the cloud-contract spec runner)
 node_modules/
+
+# Desktop app build outputs (PyInstaller)
+desktop/build/
+desktop/dist/
+build/
+dist/
