@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+Hardened Runtime entitlements for the notarized ClawMetry.app.
+
+Notarized non-App-Store apps must ship with Hardened Runtime enabled
+(codesign --options=runtime). CPython's dynamic-loading behavior then
+trips the runtime unless we grant these:
+
+  allow-jit                          — Python's own interpreter loops
+  allow-unsigned-executable-memory   — cffi / ctypes-loaded stacks
+  disable-library-validation         — we load Python .dylibs from
+                                        Contents/Frameworks (unsigned
+                                        by the same team ID as the exe)
+  allow-dyld-environment-variables   — PyInstaller sets DYLD_* at boot
+                                        to point at bundled Python
+  network.client                     — pip install --upgrade clawmetry
+                                        on first launch hits PyPI
+                                        (and dashboard reaches
+                                        ingest.clawmetry.com later)
+
+App Sandbox is NOT enabled — Developer ID distribution outside the
+App Store does not require sandboxing, and enabling it would break
+the runtime venv bootstrap (subprocess + writing outside container).
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

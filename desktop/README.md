@@ -126,6 +126,55 @@ rsvg-convert -w 512 -h 512 clawmetry-logo.svg -o clawmetry-512.png
    is a hard belt-and-braces guard so the bundle stays clean even if
    REPO_ROOT does leak in.
 
+## Signing + notarization (macOS)
+
+**One-time setup in the Apple Developer portal** (you already have
+InstaLabs LLC, team `8LVH596RA5`):
+
+1. **Certificates → Create a new "Developer ID Application" cert.**
+   In Keychain Access on this Mac: Certificate Assistant → Request a
+   Certificate From a Certificate Authority → save the `.certSigningRequest`
+   to disk. Upload it to Apple, download the issued `.cer`, double-click
+   to import into your login keychain. **Do NOT pick "Apple Development"
+   or "Developer ID Installer" — only "Developer ID Application" works
+   for a notarized .app distributed outside the App Store.**
+2. **Registering the app ID (`com.clawmetry.desktop`) is NOT required**
+   for Developer ID distribution. Skip the Identifiers screen.
+3. **Create an app-specific password** at
+   [appleid.apple.com → Sign-In and Security → App-Specific Passwords](https://appleid.apple.com).
+   Name it `clawmetry-notarytool`. Copy the 4×4 password once — Apple
+   won't show it again.
+
+**Local signing** (one-off, after `pyinstaller`):
+
+```bash
+export MACOS_SIGN_IDENTITY="Developer ID Application: InstaLabs LLC (8LVH596RA5)"
+export APPLE_ID=vivek@...                        # your Apple ID email
+export APPLE_TEAM_ID=8LVH596RA5
+export APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
+desktop/sign_mac.sh dist/ClawMetry.app
+# then re-wrap the signed .app in a fresh .dmg
+```
+
+**CI signing** — add these six repo secrets in
+Settings → Secrets and variables → Actions → New repository secret,
+then the workflow signs + notarizes + staples every tag build:
+
+| Secret | What to paste |
+|--------|---------------|
+| `MACOS_CERT_P12_BASE64` | `security find-certificate -c "Developer ID Application" -p login.keychain \| base64` — or export the cert+key from Keychain Access as `.p12` and `base64 -i cert.p12 \| pbcopy` |
+| `MACOS_CERT_P12_PASSWORD` | Password you set when exporting the .p12 |
+| `MACOS_SIGN_IDENTITY` | `Developer ID Application: InstaLabs LLC (8LVH596RA5)` |
+| `APPLE_ID` | Your Apple ID email |
+| `APPLE_TEAM_ID` | `8LVH596RA5` |
+| `APPLE_APP_SPECIFIC_PASSWORD` | The 4×4 password from appleid.apple.com |
+
+The workflow steps are `if:`-guarded on secret presence, so PRs from
+forks (which can't see secrets) still build unsigned artifacts
+successfully. Everything hard-codes the entitlements at
+`desktop/entitlements.plist` (Hardened Runtime plus the CPython-friendly
+relaxations).
+
 ## Roadmap
 
 - Native app menu (Cmd-Q / Cmd-W / About, Preferences).
