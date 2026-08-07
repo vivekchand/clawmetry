@@ -1,11 +1,106 @@
 ## Unreleased
 
+- **Fixed the root cause of ClawMetry silently no longer auto-updating.**
+  The browser onboarding gate (`routes/onboarding.py`, the default
+  first-run path since the 2026-07-31 hard-gate rollout) completed a
+  `managed`/`selfhost_*` choice without ever starting or registering a
+  background sync daemon — only the CLI paths (`clawmetry connect`,
+  `clawmetry onboard`) did that. The only thing left polling PyPI was the
+  foreground dashboard's in-process checker thread, which stops the
+  moment that one process exits (closed terminal, sleep, reboot, crash),
+  silently and permanently halting auto-update until a human manually
+  relaunched `clawmetry`. Onboarding completion now always calls the new
+  `clawmetry/daemon_registration.py::ensure_persistent_daemon()`.
+  Windows also gets real persistence for the first time: previously it had
+  no launchd/systemd equivalent at all (`_start_daemon`'s Windows branch
+  fell straight to an unsupervised detached subprocess), so a Windows node
+  lost auto-update after any reboot/logoff/crash even when a daemon HAD
+  been registered — it now registers a logon-triggered, restart-on-failure
+  Task Scheduler task. Finally, `auto_update` self-healing (re-asserting
+  the default-on `True` after a stale persisted `False`) previously only
+  ran for entitled *paid* cloud accounts via the heartbeat
+  (`_sync_auto_update_with_plan`); self-hosted and free-tier installs had
+  no path back to `True`. The update-check worker now heals a stale unset
+  `False` for every role/tier on boot, while a real, explicit user opt-out
+  (`POST /api/update-check/config`) is now tracked and never overridden.
+- **Fixed an onboarding-complete request hang introduced by the daemon-registration
+  fix above.** `register_systemd`/`register_launchd` shelled out to
+  systemctl/launchctl with no timeout, synchronously inside the
+  `/api/onboarding/complete` HTTP handler the browser's init sequence waits
+  on. A runner or container with no working user systemd/dbus session can
+  make those commands hang instead of failing fast, blocking the response
+  indefinitely (caught live via a PR's own visual-diff bot: mobile
+  screenshots stuck forever on "Initializing ClawMetry"). Every
+  `daemon_registration.py` subprocess call is now bounded to a few seconds,
+  and the registration call itself is dispatched on a background thread so
+  onboarding-complete never blocks on it at all.
+- **Retired the legacy "ClawMetry Setup" gateway-token modal.** It auto-popped
+  on every dashboard load regardless of whether onboarding had already
+  completed (v0.1-era UX from before the product detected 17+ non-OpenClaw
+  runtimes). The existing onboarding-gate modal (managed cloud vs self-host,
+  which already tracks completion correctly via `/api/onboarding/state`) is
+  now the only first-run gate. A new opt-in "Gateway" tab under the
+  Developer drawer still lets real OpenClaw users paste a gateway token
+  manually. The Agents (Inventory) tab now shows an upgrade nudge for a
+  detected-but-not-yet-entitled runtime instead of a "sync starting up"
+  message that would never resolve.
+- **`clawmetry status` shows an explicit `Plan:` line** (Free / Trial /
+  Trial Expired / Starter / Pro), unconditional unlike the old `License:`
+  block, which stayed silent whenever no local key file existed.
+- **Expired trials now actually stop ingesting new paid-runtime data.**
+  `sync_family_runtimes` checks `entitlements.allows_runtime()` per adapter
+  per sync cycle. Previously only an install-time "is the pro wheel on
+  disk" check gated ingestion, so a trial that later expired kept
+  ingesting new Claude Code/Codex/etc. sessions indefinitely once the
+  wheel had landed once.
+- **Fixed a same-day regression in the trial-end hard-block gate**
+  (`clawmetry/trial_enforcement.py`, shipped default-on earlier the same
+  day): it was hard-blocking (HTTP 402) every plain OSS/free install, not
+  just an expired trial or subscription. Verified live before the fix: a
+  fresh `pip install clawmetry` with no license or cloud account returned
+  `hard_blocked: true, source: "oss"` on `/api/sessions` and
+  `/api/overview` and never finished booting the dashboard. Now only a
+  source that was actually on a paid or trial tier and has since passed
+  its expiry is blocked; a never-entitled install passes through
+  untouched. See `docs/TRIAL_ENFORCEMENT.md`.
+
+- **Score any conversation, right where you read it.** Every row in the
+  Conversations tab gets a small **Score** button that runs the same judge
+  the daemon uses (via `POST /api/evals/rescore/<session_id>`). Result
+  renders inline as a colored badge — green ≥ 4, amber ≥ 2.5, red below —
+  with the judge's one-line reason on hover. If no judge key is set the
+  button flips into "Set judge key →" that opens the rubric + key modal on
+  the spot, so the setup lives where you first need it instead of behind
+  the small ⚙ icon on the Evals tab. On `app.clawmetry.com/node/*` the
+  live-Score button is replaced with a stored-score badge computed by the
+  daemon on the machine that has the judge key + session DuckDB, since
+  scoring can't run on the cloud proxy.
+
 - **Trial ends → paid.** ClawMetry now blocks the dashboard UI + sync when
   the trial period ends, prompting checkout with an un-dismissable modal.
   Signed licenses land automatically over the heartbeat after payment, so
   the dashboard unlocks within one 60s cycle with no restart. Set
   `CLAWMETRY_HARD_BLOCK=0` to opt out (support only). Details:
   `docs/TRIAL_ENFORCEMENT.md`.
+- **xAI Grok is the 18th observed runtime.** The Grok Build CLI (Rust binary
+  at `~/.grok/bin/grok`, installed via `curl x.ai/cli/install.sh`) now shows
+  up across the dashboard when Pro is licensed. Token accounting reads the
+  global `~/.grok/logs/unified.jsonl` (VERIFIED `shell.turn.inference_done`
+  row shape from the cereblab wire-level analysis + openusage#646); session
+  listing walks `~/.grok/sessions/<encoded-cwd>/<uuid>/`; cost derives via
+  the freshly-added `providers_pricing.xai` rates (grok-4 $3/$15, grok-3
+  $3/$15, grok-3-mini $0.30/$0.50, grok-code-fast-1 $0.20/$1.50, grok-2
+  $2/$10). Adapter lives in clawmetry-pro (0.7.4). Undocumented msg-name
+  branches parse defensively, so a wrong field guess produces NO data,
+  never fabricated data.
+- **Grok's outbound repo-upload panel.** The pro adapter surfaces the raw
+  `repo_state.upload.enqueued` manifests from `unified.jsonl` on
+  `Session.extra.uploadedPayloads` (fileId, size_bytes, file_count,
+  repo_path) plus a `uploadedBytesTotal` aggregate. The Grok tab can
+  render "what left your machine to xAI this session", a differentiated
+  view no other runtime needs, and the direct answer to the July 2026
+  disclosure that Grok Build silently uploaded entire repos to a
+  `grok-code-session-traces` GCS bucket.
 
 ## 0.12.650
 

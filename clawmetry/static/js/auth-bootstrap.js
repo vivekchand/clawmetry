@@ -74,14 +74,14 @@
       .then(function(r){return r.json()})
       .then(function(d){
         if(d.needsSetup){
-          // No gateway token configured -- show the setup wizard. It starts
-          // mandatory, but gw-setup.js relaxes it (dismissible, token form
-          // hidden) when runtime detection finds no OpenClaw on the machine.
+          // No gateway token configured. This used to force the legacy
+          // "ClawMetry Setup" gateway-token wizard open on every load, even
+          // for installs that only run non-OpenClaw runtimes. The dashboard
+          // itself works fine with no gateway configured; the first-run
+          // choice (managed cloud vs self-host) is onboarding.js's job, and
+          // a real OpenClaw gateway can still be configured opt-in from the
+          // Developer tab.
           document.getElementById('login-overlay').style.display='none';
-          var overlay=document.getElementById('gw-setup-overlay');
-          overlay.dataset.mandatory='true';
-          document.getElementById('gw-setup-close').style.display='none';
-          overlay.style.display='flex';
           return;
         }
         if(!d.authRequired){
