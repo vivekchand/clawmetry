@@ -166,7 +166,34 @@ case "$OS" in
     echo -e "${RED}  ✗ Unsupported OS: $OS (macOS and Linux only)${NC}"
     exit 1
     ;;
-esac 
+esac
+
+# ── Stale-duplicate sweep ─────────────────────────────────────────────────
+# The venv at $INSTALL_DIR is the ONLY environment auto-update keeps current.
+# A clawmetry copy left behind in some OTHER interpreter (e.g. a plain
+# `pip install --user clawmetry` from before this installer switched to a
+# per-app venv, or a Homebrew/pyenv python that got `pip install`ed into
+# directly) never updates, and if it resolves first on PATH it shadows the
+# venv binary — `clawmetry --version` then reports a stale version while the
+# real install is current. Sweep every python3 interpreter reachable on PATH
+# and uninstall clawmetry from all of them except the venv we're about to
+# (re)build. Best-effort: never fail the install over a sweep miss.
+_cm_seen_pythons=""
+IFS=':' read -r -a _cm_path_dirs <<< "$PATH"
+for _cm_dir in "${_cm_path_dirs[@]}"; do
+  for _cm_name in python3 python; do
+    _cm_candidate="$_cm_dir/$_cm_name"
+    [ -x "$_cm_candidate" ] || continue
+    _cm_real=$(cd "$(dirname "$_cm_candidate")" 2>/dev/null && pwd -P)/$(basename "$_cm_candidate")
+    case " $_cm_seen_pythons " in *" $_cm_real "*) continue ;; esac
+    _cm_seen_pythons="$_cm_seen_pythons $_cm_real"
+    case "$_cm_real" in "$INSTALL_DIR"/*) continue ;; esac
+    if "$_cm_real" -m pip show clawmetry >/dev/null 2>&1; then
+      echo -e "  ${DIM}→ Removing stale clawmetry copy from $_cm_real...${NC}"
+      $USE_SUDO "$_cm_real" -m pip uninstall -y clawmetry >/dev/null 2>&1 || true
+    fi
+  done
+done
 
 # ── Early exit: already up to date ──────────────────────────────────────────
 if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then

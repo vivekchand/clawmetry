@@ -1,5 +1,38 @@
 ## Unreleased
 
+- **Fix: installers now sweep and remove stale clawmetry duplicates instead of only detecting them.**
+  - **Why:** #4335 (`clawmetry/installs.py`) taught the CLI to *detect and
+    warn* about a stale clawmetry copy elsewhere on PATH, but nothing
+    actually removed one — `install.ps1`/`install.sh` only ever cleaned up a
+    previous install at their OWN target directory, and `install.cmd` has no
+    dedicated venv at all, so re-running it (or switching between it and
+    `install.ps1`) leaves the old copy installed and dormant. Live-reproduced
+    2026-08-07: a plain `pip install --user` into a system Python left
+    clawmetry 0.11.99 dormant next to a current 0.12.655 dedicated-venv
+    install — harmless here only because PATH ordering happened to favor the
+    venv.
+  - **What:** all three canonical installers (`install.sh`, `install.ps1`,
+    `install.cmd`) now sweep every python/python3 interpreter reachable on
+    PATH before installing and `pip uninstall -y clawmetry` from every one of
+    them except the venv/target they're about to (re)build; best-effort,
+    never fails the install (`|| true` under install.sh's `set -e`).
+    `install.cmd` additionally removes a leftover `install.ps1`-created venv
+    at `%LOCALAPPDATA%\clawmetry` since it has no venv of its own and the two
+    would otherwise coexist and shadow each other. `clawmetry/doctor.py`'s
+    install census is unchanged and still catches whatever a sweep can't
+    reach (e.g. a copy on a PATH entry that wasn't scanned).
+  - **Verified:** 10 new tests (`tests/test_installer_stale_sweep.py`:
+    bash -n / PowerShell parser syntax checks, sweep ordering before the
+    install step, own-install-dir exclusion, best-effort-under-`set -e`), all
+    16 pre-existing `install.sh` tests still green; reproduced the exact live
+    scenario on the affected machine — reinstalled clawmetry into a second
+    system Python, confirmed both `install.cmd` and `install.ps1` detected
+    and removed it via `pip show`/`pip uninstall` before reinstalling fresh,
+    `clawmetry --version` correct afterward. `install.sh` not behaviorally
+    re-run beyond `bash -n` (Windows dev machine, no macOS/Linux box handy);
+    behavioral proof for all three lands in
+    `.github/workflows/install-test.yml`.
+
 - **Added qm as the 17th observable runtime.** qm
   (github.com/yc-software/qm, qm.ycombinator.com) is YC's Postgres-
   backed multiplayer agent harness (launched 2026-07-29 MIT). Because
