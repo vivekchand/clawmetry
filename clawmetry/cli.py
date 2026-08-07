@@ -1519,8 +1519,19 @@ def _start_daemon(config: dict, args) -> None:
         _register_launchd(config)
     elif system == "Linux":
         _register_systemd(config)
+    elif os.name == "nt":
+        # Windows has no launchd/systemd equivalent short of Task Scheduler.
+        # Without a registered task the daemon (and with it, all auto-update
+        # polling) does not survive a reboot/logoff/crash -- confirmed live
+        # on the founder's own Windows box (2026-07-28, CHANGELOG #4146).
+        # Register a logon-triggered, restart-on-failure scheduled task;
+        # fall back to the old unsupervised subprocess if schtasks fails
+        # (e.g. sandboxed/locked-down environments with no Task Scheduler
+        # access) so `clawmetry connect`/`onboard` never hard-fails here.
+        from clawmetry.daemon_registration import register_windows_task
+        if not register_windows_task(config):
+            _start_subprocess()
     else:
-        # Windows / fallback: subprocess
         _start_subprocess()
 
 
