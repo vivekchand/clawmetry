@@ -163,7 +163,7 @@ then the workflow signs + notarizes + staples every tag build:
 | Secret | What to paste |
 |--------|---------------|
 | `MACOS_CERT_P12_BASE64` | `security find-certificate -c "Developer ID Application" -p login.keychain \| base64` — or export the cert+key from Keychain Access as `.p12` and `base64 -i cert.p12 \| pbcopy` |
-| `MACOS_CERT_P12_PASSWORD` | Password you set when exporting the .p12 |
+| `MACOS_CERT_PASSWORD` | Password you set when exporting the .p12 |
 | `MACOS_SIGN_IDENTITY` | `Developer ID Application: InstaLabs LLC (8LVH596RA5)` |
 | `APPLE_ID` | Your Apple ID email |
 | `APPLE_TEAM_ID` | `8LVH596RA5` |

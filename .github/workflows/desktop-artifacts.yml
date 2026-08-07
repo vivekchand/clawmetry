@@ -41,21 +41,28 @@ jobs:
         run: pyinstaller --clean --noconfirm desktop/build_mac.spec
 
       # --- Code-signing + notarization ---
-      # These steps NO-OP when the secrets aren't configured, so PRs
-      # from forks and unsigned dev builds still succeed. Add these
-      # repo secrets in Settings → Secrets and variables → Actions:
+      # These steps NO-OP when the secrets aren't configured (fork PRs
+      # and unsigned dev builds), gated by shell checks inside `run:`.
+      # GitHub Actions does NOT allow `secrets.*` in workflow-level
+      # `if:` expressions (fails to parse the whole workflow), so the
+      # gate lives in the script itself.
+      #
+      # Add these repo secrets in Settings > Secrets and variables > Actions:
       #   MACOS_CERT_P12_BASE64         Developer ID Application .p12 (base64)
-      #   MACOS_CERT_P12_PASSWORD       password used when exporting the .p12
+      #   MACOS_CERT_PASSWORD           password used when exporting the .p12
       #   MACOS_SIGN_IDENTITY           e.g. "Developer ID Application: InstaLabs LLC (8LVH596RA5)"
       #   APPLE_ID                      Apple ID email
       #   APPLE_TEAM_ID                 e.g. 8LVH596RA5
-      #   APPLE_APP_SPECIFIC_PASSWORD   from https://appleid.apple.com → App-Specific Passwords
+      #   APPLE_APP_SPECIFIC_PASSWORD   from appleid.apple.com App-Specific Passwords
       - name: Import Developer ID cert into a build keychain
-        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
+          if [ -z "$MACOS_CERT_P12_BASE64" ]; then
+            echo "MACOS_CERT_P12_BASE64 not set — skipping cert import (unsigned build)."
+            exit 0
+          fi
           KEYCHAIN=$RUNNER_TEMP/build.keychain
           PASS="build-${GITHUB_RUN_ID}"
           echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
@@ -64,21 +71,24 @@ jobs:
           security unlock-keychain -p "$PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
-            -P "$MACOS_CERT_P12_PASSWORD" -T /usr/bin/codesign
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$PASS" "$KEYCHAIN"
           rm -f "$RUNNER_TEMP/cert.p12"
-          # Show what we imported (identities only — no keys)
           security find-identity -p codesigning -v "$KEYCHAIN"
 
       - name: Sign + notarize + staple .app
-        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: desktop/sign_mac.sh dist/ClawMetry.app
+        run: |
+          if [ -z "$MACOS_SIGN_IDENTITY" ]; then
+            echo "MACOS_SIGN_IDENTITY not set — skipping .app signing."
+            exit 0
+          fi
+          desktop/sign_mac.sh dist/ClawMetry.app
 
       - name: Wrap into .dmg
         run: |
@@ -89,13 +99,16 @@ jobs:
             "dist/ClawMetry-${VERSION}.dmg"
 
       - name: Sign + notarize + staple the .dmg itself
-        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
+          if [ -z "$MACOS_SIGN_IDENTITY" ]; then
+            echo "MACOS_SIGN_IDENTITY not set — skipping .dmg signing."
+            exit 0
+          fi
           for dmg in dist/*.dmg; do
             desktop/sign_mac.sh "$dmg"
           done
