@@ -58,16 +58,18 @@ APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
 POLL_INTERVAL_SECS = 0.4
 SHUTDOWN_WAIT_SECS = 5.0
-# Skip the pip-upgrade if we ran one this recently.
+# Blueprint "Desktop Application Distribution" contract: poll PyPI for
+# a newer clawmetry release every 6 hours. `_should_upgrade()` is the
+# gate on the actual pip call; the watcher's own tick is faster because
+# its other job (drift-detect + crash respawn) benefits from a shorter
+# interval — see WATCHER_TICK_SECS.
 UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
 # How often the watcher thread checks for drift and crashes while the
 # app is running. Short enough that clicking "Update now" in the
-# dashboard translates into a visible restart within ~a minute.
+# dashboard translates into a visible restart within ~a minute. The
+# 6h pip-upgrade cadence is enforced by _should_upgrade(), NOT by
+# this constant — do not read this as an upgrade frequency.
 WATCHER_TICK_SECS = 60
-# One in every N watcher ticks also runs a background pip upgrade
-# (60s * 30 = 30min) so users who never quit still eventually pull
-# fresh releases from PyPI.
-WATCHER_UPGRADE_EVERY_N_TICKS = 30
 
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
@@ -372,22 +374,33 @@ class RuntimeSupervisor:
             return None
 
     def _background_pip_upgrade(self) -> None:
-        """Non-blocking pip upgrade into the runtime venv. Errors are
-        logged and swallowed — a transient PyPI failure should never
-        take down the running app. Called from the watcher thread."""
+        """Non-blocking upgrade via the venv's `clawmetry update`
+        subcommand — this way we inherit the daemon's own
+        CLAWMETRY_AUTO_UPDATE kill switch and
+        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window without
+        reimplementing them here. Matches the blueprint contract
+        "the shell defers to the daemon's update policy rather than
+        shipping its own". Errors are logged and swallowed — a
+        transient PyPI failure should never take down the running app.
+        """
+        if os.environ.get("CLAWMETRY_AUTO_UPDATE") == "0":
+            self._log("watcher upgrade: CLAWMETRY_AUTO_UPDATE=0, skipping")
+            return
+        cli = self._venv_clawmetry()
+        if not cli.exists():
+            return
         try:
             r = subprocess.run(
-                [str(self._venv_python()), "-m", "pip", "install",
-                 "--upgrade", "--disable-pip-version-check", "clawmetry"],
+                [str(cli), "update"],
                 capture_output=True, text=True, timeout=300,
             )
-            self._log(f"watcher pip upgrade rc={r.returncode}")
+            self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
                 self._log(r.stderr[:2000])
             else:
                 self._mark_upgraded(self._get_installed_version())
         except subprocess.TimeoutExpired:
-            self._log("watcher pip upgrade timed out")
+            self._log("watcher clawmetry-update timed out")
 
     def restart_daemon(self) -> bool:
         """Stop the current daemon and spawn a fresh one on the same
@@ -410,20 +423,21 @@ class RuntimeSupervisor:
              "Update now" in the dashboard, or any other mechanism
              upgraded the venv), restart the daemon and invoke
              on_restart() so the caller can refresh the webview.
-          3. Every WATCHER_UPGRADE_EVERY_N_TICKS, also run a background
-             pip upgrade so users who never quit still eventually pull
-             fresh releases.
+             This is how the blueprint contract "auto-upgrade it in
+             place" is actually delivered end-to-end — the pip install
+             changes the venv, and this loop makes the running process
+             pick it up without a manual quit-and-relaunch.
+          3. If 6 hours have elapsed since the last stamped upgrade
+             (`_should_upgrade()`), run a background `clawmetry update`
+             so users who never quit still get PyPI releases on the
+             blueprint's 6h cadence. Any resulting version change is
+             caught by step 2 on the next tick.
         """
-        tick = 0
         while not self.shutting_down.is_set():
             if self.shutting_down.wait(WATCHER_TICK_SECS):
                 return
-            tick += 1
 
             if self.proc is not None and self.proc.poll() is not None:
-                # Daemon exited on its own — most likely crashed, or
-                # something inside it self-terminated to force a
-                # restart. Respawn silently.
                 self._log(f"daemon exited with code {self.proc.returncode}; respawning")
                 if self.restart_daemon():
                     on_restart()
@@ -440,10 +454,9 @@ class RuntimeSupervisor:
                     on_restart()
                 continue
 
-            if tick % WATCHER_UPGRADE_EVERY_N_TICKS == 0 and self._should_upgrade():
-                self._log("watcher: running periodic pip upgrade")
+            if self._should_upgrade():
+                self._log("watcher: 6h elapsed, running clawmetry update")
                 self._background_pip_upgrade()
-                # Drift, if any, is caught on the next tick.
 
 
 def _find_free_port() -> int:
