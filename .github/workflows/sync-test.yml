@@ -17,6 +17,10 @@ on:
       - '.github/workflows/sync-test.yml'
   workflow_dispatch:
 
+concurrency:
+  group: sync-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sync-test:
     strategy:
