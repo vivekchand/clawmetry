@@ -65,7 +65,9 @@ _AGENT_TO_RUNTIME = {
     "hermes": "hermes",
     "antigravity": "antigravity",
     "copilot": "copilot",
+    "grok": "grok",
     "pi": "pi",
+    "qm": "qm",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

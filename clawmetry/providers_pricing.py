@@ -73,6 +73,12 @@ PROVIDER_MAP: dict[str, dict] = {
         "input_per_1m": 2.50,
         "output_per_1m": 10.00,
     },
+    "api.x.ai": {
+        "name": "xai",
+        # grok-4 baseline; overrides below cover the mini / code-fast tiers
+        "input_per_1m": 3.00,
+        "output_per_1m": 15.00,
+    },
 }
 
 # Model-specific overrides (provider, model_prefix) -> (input_per_1m, output_per_1m)
@@ -121,6 +127,19 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("mistral", "mistral-medium"): (0.70, 2.10),
     ("mistral", "mistral-large"): (2.00, 6.00),
     ("mistral", "codestral"): (0.20, 0.60),
+    # xAI Grok family, per x.ai/pricing (2026-08). Longest-prefix wins in
+    # _get_rates so "grok-4-latest" hits "grok-4"; "grok-code-fast-1" hits
+    # its own dedicated entry rather than falling through to the grok-4 rate.
+    ("xai", "grok-4"): (3.00, 15.00),
+    ("xai", "grok-4-heavy"): (3.00, 15.00),
+    ("xai", "grok-4-latest"): (3.00, 15.00),
+    ("xai", "grok-3"): (3.00, 15.00),
+    ("xai", "grok-3-latest"): (3.00, 15.00),
+    ("xai", "grok-3-mini"): (0.30, 0.50),
+    ("xai", "grok-code-fast-1"): (0.20, 1.50),
+    ("xai", "grok-2"): (2.00, 10.00),
+    ("xai", "grok-2-vision"): (2.00, 10.00),
+    ("xai", "grok-2-latest"): (2.00, 10.00),
 }
 
 

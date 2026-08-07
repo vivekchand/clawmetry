@@ -4,7 +4,7 @@ REM Usage: curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && instal
 
 echo.
 echo   🦞 ClawMetry Installer
-echo   Real-time observability for OpenClaw agents
+echo   Real-time observability ^& governance for AI agents
 echo.
 
 REM Check for Python

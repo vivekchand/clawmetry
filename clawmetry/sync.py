@@ -1385,6 +1385,137 @@ def _update_trial_state(resp: dict) -> None:
                 _TRIAL_STATE["plan"],
             )
 
+    # Trial-end pipeline. Two concerns, both idempotent + best-effort:
+    #   1. Auto-install a signed license the cloud attached to this beat.
+    #      When a customer completes checkout, the cloud mints a fresh
+    #      Ed25519-signed key and attaches it as ``license_key`` on the very
+    #      next heartbeat response. We write it to ~/.clawmetry/license.key
+    #      and invalidate the entitlement cache so the dashboard picks it up
+    #      within one 60s cycle — no restart, no re-login.
+    #   2. Fire a "trial ends in N days" notification so the cloud can send
+    #      the customer an email + surface a soft banner in the dashboard,
+    #      once per UTC day, only within the operator-configured warning
+    #      window (default 2 days, ``CLAWMETRY_TRIAL_WARN_DAYS``).
+    try:
+        _maybe_install_license_from_heartbeat(resp)
+    except Exception as _le:
+        log.debug("license auto-install skipped: %s", _le)
+    try:
+        _maybe_send_trial_warning(resp)
+    except Exception as _we:
+        log.debug("trial warning skipped: %s", _we)
+
+
+_TRIAL_WARNING_STATE = {
+    "last_warn_day": "",   # YYYY-MM-DD of the last warning we sent
+}
+
+
+def _maybe_install_license_from_heartbeat(resp: dict) -> None:
+    """Persist a signed license key the cloud attached to this heartbeat.
+
+    Contract with the cloud (documented in
+    ``docs/TRIAL_ENFORCEMENT.md``): a heartbeat response for an account that
+    completed checkout carries a ``license_key`` string holding the raw
+    ``header.payload.signature`` Ed25519 token. We treat it as
+    authoritative — write it atomically to ``~/.clawmetry/license.key``,
+    invalidate the entitlements cache, and log once.
+
+    Idempotent: skips writing when the file already matches. Never raises.
+    """
+    if not isinstance(resp, dict):
+        return
+    key = resp.get("license_key")
+    if not isinstance(key, str) or not key.strip():
+        return
+    key = key.strip()
+    lic_path = os.path.expanduser("~/.clawmetry/license.key")
+    try:
+        existing = ""
+        if os.path.isfile(lic_path):
+            try:
+                with open(lic_path, encoding="utf-8") as fh:
+                    existing = fh.read().strip()
+            except Exception:
+                existing = ""
+        if existing == key:
+            return
+        os.makedirs(os.path.dirname(lic_path), exist_ok=True)
+        tmp = lic_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(key)
+        os.replace(tmp, lic_path)
+        try:
+            os.chmod(lic_path, 0o600)
+        except Exception:
+            pass
+        log.info(
+            "✓ ClawMetry license installed from cloud — dashboard will unlock "
+            "on the next resolver refresh (up to 60s)."
+        )
+        try:
+            from clawmetry import entitlements as _ent
+            _ent.invalidate()
+        except Exception:
+            pass
+    except Exception as exc:
+        log.warning("license auto-install failed: %s", exc)
+
+
+def _maybe_send_trial_warning(resp: dict) -> None:
+    """Ping the cloud once per day when the trial is inside its warning window.
+
+    The heartbeat response carries ``trial_days_left``; we compare it against
+    the operator-configured window (``CLAWMETRY_TRIAL_WARN_DAYS``, default 2
+    — see :mod:`clawmetry.trial_enforcement`) and, when we're inside it,
+    fire ``POST /ingest/trial-warning`` on the cloud so it can send the
+    customer a "your trial ends in N days — click to upgrade" email.
+
+    Rate-limited: at most one warning per UTC day per daemon process. The
+    cloud is authoritative on email throttling itself; this guard just
+    prevents a daemon that beats every 30s from spamming the cloud with 2880
+    identical warnings.
+
+    Never raises."""
+    if not isinstance(resp, dict):
+        return
+    days = resp.get("trial_days_left")
+    try:
+        days_i = int(days)
+    except Exception:
+        return
+    if days_i < 0:
+        return
+    try:
+        from clawmetry import trial_enforcement as _te
+        window = _te.warning_window_days()
+    except Exception:
+        window = 2
+    if days_i > window:
+        return
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _TRIAL_WARNING_STATE["last_warn_day"] == today:
+        return
+    _TRIAL_WARNING_STATE["last_warn_day"] = today
+    try:
+        cfg = load_config() or {}
+        api_key = cfg.get("api_key")
+        if not api_key:
+            log.debug("trial-warning skipped: no cloud api_key on this node")
+            return
+        _post("/ingest/trial-warning", {
+            "days_left": days_i,
+            "plan": _TRIAL_STATE.get("plan"),
+        }, api_key, timeout=6)
+        log.info(
+            "trial-ending notice queued (days_left=%d) — cloud will email "
+            "the account owner.", days_i,
+        )
+    except Exception as exc:
+        # Keep the last_warn_day set even on failure so we don't retry every
+        # 30s; the next daily beat will try again.
+        log.debug("trial-warning POST failed (will retry tomorrow): %s", exc)
+
 
 def _sync_allowed() -> bool:
     """Gate for large blob uploads. Heartbeats + approvals/alerts polls
@@ -6285,6 +6416,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
+    "grok": "Grok", "qm": "QM",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6325,6 +6457,8 @@ def _runtime_data_paths(rid: str) -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     return _M.get(rid, [])
 
@@ -6454,6 +6588,8 @@ def _detect_runtimes_lite() -> list:
         "antigravity": [os.path.join(home, ".gemini", f) for f in
                         ("antigravity", "antigravity-cli", "antigravity-ide", "jetski")],
         "copilot": [os.path.join(home, ".copilot", "session-state")],
+        "grok": [os.path.join(home, ".grok", d) for d in
+                 ("logs", "sessions")],
     }
     for rid, paths in _present.items():
         try:
@@ -11620,6 +11756,13 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.n8n", "N8nAdapter"),
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
+    ("clawmetry_pro.adapters.grok", "GrokAdapter"),
+    # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
+    # backed multiplayer agent harness. Meta-orchestrator like Hermes;
+    # delegates to Pi / OpenCode / Codex / Claude Code, so a qm user is
+    # definitionally a Pro user. Adapter reads DATABASE_URL /
+    # CLAWMETRY_QM_DATABASE_URL in read-only mode.
+    ("clawmetry_pro.adapters.qm", "QMAdapter"),
 )
 
 
@@ -12234,12 +12377,31 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
             _rot = 0
         state["family_adapter_rotation"] = _rot + 1
         _classes = _classes[_rot:] + _classes[:_rot]
+    # Live per-runtime entitlement check, not just an install-time decision.
+    # `_family_adapter_classes()` keeps successfully importing an
+    # already-installed clawmetry-pro wheel forever -- nothing uninstalls it
+    # -- so without this, a lapsed trial (or an account that was never
+    # entitled in the first place) kept ingesting NEW Claude Code/Codex/etc.
+    # sessions indefinitely once the wheel had landed once. allows_runtime()
+    # already denies an EXPIRED entitlement even while the rest of the
+    # engine runs in GRACE mode (founder directive 2026-07-28: "it should
+    # stop working after the trial period") -- this just wires that existing
+    # resolver rule into the ingest loop that skipped it. Free runtimes
+    # (OpenClaw/NemoClaw) are never in `_classes` (a separate, always-on
+    # ingest path), so this only ever gates paid ones.
+    try:
+        from clawmetry import entitlements as _ent_fam
+        _ent_for_ingest = _ent_fam.get_entitlement()
+    except Exception:
+        _ent_for_ingest = None
     for cls in _classes:
         try:
             adapter = cls()  # construct once (discovery globs/DB opens are not free)
             if not adapter.detect().detected:
                 continue
             runtime = adapter.name
+            if _ent_for_ingest is not None and not _ent_for_ingest.allows_runtime(runtime):
+                continue
             for s in adapter.list_sessions(limit=_effective_family_limit(runtime)):
                 # A deep pass (runtime_backfill) makes this loop run for
                 # minutes; keep the relay responsive between sessions.
@@ -12799,7 +12961,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot",
+    "antigravity", "copilot", "grok", "qm",
 })
 
 

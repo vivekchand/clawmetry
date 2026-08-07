@@ -225,12 +225,20 @@ def test_auth_check_no_openclaw_is_not_needs_setup(monkeypatch):
         "OpenClaw present without a token still needs the setup step"
 
 
-def test_gw_setup_suppresses_modal_when_all_watched():
+def test_gw_setup_modal_retired_not_just_suppressed():
+    """Guard 3 used to pin that the auto-popping setup modal suppressed
+    itself once every detected runtime was watched. That modal (and its
+    _gwApplyRuntimeDetection suppress logic) was retired outright
+    (2026-08-06): it had no awareness of onboarding-completion state and
+    kept reappearing regardless, which is the structural version of the
+    exact live-hit this file documents. The replacement --
+    onboarding-gate-overlay, gated on /api/onboarding/state -- already
+    never re-prompts a completed install (routes/onboarding.py
+    _resolve_state). Pin that the modal and its per-load runtime-detection
+    popup logic are gone, not just quieter."""
     src = _read("clawmetry/static/js/gw-setup.js")
-    assert "if (show === false) return;" in src, \
-        "checkGwConfig must honour the suppress signal"
-    assert "return false;" in src, \
-        "_gwApplyRuntimeDetection must return false when nothing needs setup"
+    assert "gw-setup-overlay" not in src
+    assert "_gwApplyRuntimeDetection" not in src
 
 
 def test_no_agent_banner_suppressed_for_entitled_runtimes():

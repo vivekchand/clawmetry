@@ -448,6 +448,12 @@ _MINIMAL_OSS_FREE_SNAPSHOT = {
     "prev_tier_unlocks": None,
     "next_tier_locks": None,
     "prev_tier_locks": None,
+    # Parity with Entitlement.to_dict()'s ``hard_blocked`` field (see
+    # clawmetry/trial_enforcement.py). This snapshot is the fall-through
+    # for a resolver import failure — if we can't import the entitlements
+    # module we also can't compute the block state, so default to False
+    # (fail-open, matching :func:`trial_enforcement._hard_block_flag_safe`).
+    "hard_blocked": False,
 }
 
 
@@ -16787,6 +16793,129 @@ def api_license_is_tier_at_batch():
             "requested_tier": requested_tier,
             "rows": rows,
             "tier": snap["tier"],
+            "expires_at": snap["expires_at"],
+            "has_license": snap["has_license"],
+            "valid": snap["valid"],
+        }
+    )
+
+
+@bp_entitlement.route("/api/license/is-subject-at-batch")
+def api_license_is_subject_at_batch():
+    """``GET /api/license/is-subject-at-batch?subject=<value>&epochs=<int>,<int>,...``
+    -- shared-``subject`` batch sibling of ``/api/license/is-subject-at``.
+
+    Where the singular endpoint folds ONE ``(subject, epoch)`` pair to
+    ONE "was this node licensed to <account> as-of epoch?" bool, this
+    preserves per-value rows for a fixed ``subject`` across a sequence
+    of perspective epochs so a scheduled-audit tile answering "was
+    this node bound to <account> on each of these audit dates?"
+    hydrates the whole column in ONE round-trip instead of fanning
+    out N calls to the scalar. Wraps
+    :func:`clawmetry.license.is_subject_at_batch`. Same "shared
+    threshold applied to EVERY row, per-row epoch" shape as
+    ``/api/license/is-state-at-batch`` /
+    ``/api/license/is-tier-at-batch`` -- one gate query parameter
+    plus a batch of epochs.
+
+    Query parameters:
+      * ``subject`` (str, required in-spirit) -- the subject to test
+        against. Compared case-insensitively after strip, matching
+        :func:`clawmetry.license.is_subject_at`. Missing / empty /
+        non-string value degrades EVERY row to ``is_subject=false``
+        (matches the never-mis-gate posture of the scalar) rather
+        than a 4xx -- a caller on a stale UI shouldn't have the whole
+        batch hidden behind a typo. Deliberately open-ended (no
+        ``LICENSE_STATES``-style whitelist) since a subject typically
+        encodes an account id / email / tenant handle that the code
+        here has no business whitelisting, matching :func:`is_subject`
+        / :func:`is_subject_at` posture on the singular axes.
+      * ``epochs`` (CSV of ints, required) -- Missing / blank /
+        only-commas -> ``400 missing epochs``. Comma-separated tokens
+        are stripped, then handed to
+        :func:`clawmetry.license.is_subject_at_batch`, which dedupes
+        by parsed int key preserving first-seen order and collapses
+        non-int / ``bool`` / ``None`` tokens to a row with
+        ``is_subject=false`` (unlike ``/api/license/is-state-at-batch``,
+        there is no meaningful "no-license subject" the caller could
+        ask for, since :func:`license_subject` already returns
+        ``None`` -- not a sentinel string -- on that branch).
+
+    Response shape (always HTTP 200)::
+
+        {
+          "kind":              "is_subject_at",
+          "count":             <int>,           # len(rows)
+          "requested_subject": <str>,           # normalised echo of query
+          "rows":  [
+            {"epoch": <int|"<raw>">, "is_subject": <bool>},
+            ...
+          ],
+          "subject":     <str|null>,            # current-time subject (case preserved)
+          "expires_at":  <int|null>,            # on-disk exp for comparison
+          "has_license": <bool>,
+          "valid":       <bool>                 # signature-valid AND not expired NOW
+        }
+
+    Envelope carries the same current-time snapshot fields
+    (``subject`` / ``expires_at`` / ``has_license`` / ``valid``) as
+    the surrounding ``/api/license/subject-at{,-batch}`` and
+    ``/api/license/is-subject-at`` endpoints so a UI binding several
+    endpoints for the same install cannot catch them disagreeing.
+    Row shape mirrors ``/api/license/is-tier-at-batch`` /
+    ``/api/license/is-state-at-batch`` so a caller assembling a
+    timeline can zip the responses index-for-index by epoch.
+
+    Per-row parity with
+    ``/api/license/is-subject-at?subject=<X>&epoch=<n>`` is pinned in
+    the test suite so the batch cannot silently drift from the scalar
+    endpoint.
+
+    Shares :func:`_license_subject_at_snapshot` with the sibling
+    ``/api/license/subject-at`` and ``/api/license/is-subject-at``
+    endpoints so the current-time reference fields cannot disagree
+    between siblings for the same install.
+
+    Never 5xxs -- any underlying failure degrades to the OSS-free
+    branch shape (empty rows envelope with the OSS-free snapshot
+    fields intact).
+    """
+    raw_subject = request.args.get("subject", "") or ""
+    try:
+        requested_subject = str(raw_subject).strip().lower()
+    except Exception:
+        requested_subject = ""
+    tokens, err = _parse_license_epochs_csv("epochs")
+    if err == "missing":
+        return jsonify({"error": "missing epochs"}), 400
+    try:
+        snap = _license_subject_at_snapshot()
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_subject_at_batch: snapshot error: %s", exc
+        )
+        snap = {
+            "subject": None,
+            "expires_at": None,
+            "has_license": False,
+            "valid": False,
+        }
+    try:
+        from clawmetry import license as _lic
+
+        rows = _lic.is_subject_at_batch(requested_subject, tokens)
+    except Exception as exc:
+        logger.warning(
+            "api_license_is_subject_at_batch: derive error: %s", exc
+        )
+        rows = []
+    return jsonify(
+        {
+            "kind": "is_subject_at",
+            "count": len(rows),
+            "requested_subject": requested_subject,
+            "rows": rows,
+            "subject": snap["subject"],
             "expires_at": snap["expires_at"],
             "has_license": snap["has_license"],
             "valid": snap["valid"],

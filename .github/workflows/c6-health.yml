@@ -10,7 +10,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # (can't verify) rather than "error" (broken). The health check gate
 # decision is based only on the clawmetry/main result (same-repo readable).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #3964
+# On failure: posts an @-mentioned reminder to tracking issue #4552
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6 (any of these paths -- all take under 2 minutes):
@@ -20,7 +20,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#3964
+# Tracking: vivekchand/clawmetry#4552
 
 on:
   schedule:
@@ -50,7 +50,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 3964
+          TRACKING_ISSUE = 4552
           MARKER = "<!-- c6-health-check -->"
           # Repo this workflow runs in. GITHUB_TOKEN is repo-scoped: it can
           # read clawmetry (same-repo) but returns 403 for other repos.
