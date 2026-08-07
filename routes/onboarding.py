@@ -36,6 +36,7 @@ chose managed by signing up.
 import json
 import logging
 import os
+import threading
 import time
 
 from flask import Blueprint, jsonify, request
@@ -94,9 +95,30 @@ def _license_state() -> str:
 
 
 def _cloud_connected() -> bool:
+    """A cloud token alone means "chose managed" ONLY when self-host was
+    never the intent. ``_selfhost_signin_with_key`` (dashboard.py) writes
+    the SAME cloud token as the managed-connect flow purely to carry
+    identity for the trial-signup call -- it touches the nocloud marker
+    FIRST, before persisting that token. If the trial-signup half of that
+    flow then fails (network error, cloud-side rejection, anything caught
+    by its broad ``except Exception: pass``), the account is linked but no
+    license/trial was ever activated -- yet this fallback used to report
+    "already onboarded, state=managed" on every later page load anyway,
+    because it only checked for the token's existence, not what it was
+    for. That silently stranded a failed self-host trial attempt on the
+    live dashboard with everything locked and no way to see the error or
+    retry (live-hit 2026-08-06: linked account showed plan "free", no
+    license file, but the gate never required a choice again). Self-host
+    intent (the nocloud marker) takes precedence: a token minted under it
+    is identity-only until an explicit choice or a license is on record,
+    both of which are already checked earlier in ``_resolve_state()``.
+    """
     try:
         import dashboard as _d
+        from clawmetry.config import is_cloud_disabled as _icd
 
+        if _icd():
+            return False
         return bool(_d._read_cloud_token())
     except Exception:
         return False
@@ -153,6 +175,45 @@ def _apply_marker_semantics(choice: str) -> None:
         log.warning("onboarding: marker update failed: %s", exc)
 
 
+def _ensure_daemon_for_choice(choice: str) -> None:
+    """Every choice this gate can record must end with a PERSISTENT
+    background daemon, not just an in-process dashboard thread.
+
+    Root cause this closes: before this call, ``managed``/``selfhost_*``
+    completion here only touched the nocloud marker (_apply_marker_semantics)
+    -- nothing started or registered a background sync daemon. The CLI paths
+    (`clawmetry connect`, `clawmetry onboard` self-host) already register one
+    via `_start_daemon`, but this browser gate is the DEFAULT onboarding path
+    since the 2026-07-31 hard-gate rollout, and it registered nothing. The
+    only thing left polling PyPI was the foreground dashboard's in-thread
+    checker, which stops the moment that process exits (closed terminal,
+    sleep, reboot, crash) -- silently and permanently halting auto-update
+    until the user manually relaunches `clawmetry`. Best-effort: never let a
+    registration failure break onboarding completion itself.
+
+    Dispatched off the request thread on purpose (2026-08-06 CI regression):
+    ``ensure_persistent_daemon`` shells out to systemctl/launchctl/schtasks,
+    and even with a bounded per-call timeout that's still real, synchronous
+    latency this HTTP handler's caller (the browser) is waiting on. Running
+    it in a background thread means a slow or flaky OS registration can
+    never delay -- let alone hang -- the onboarding-complete response the
+    dashboard's init sequence is blocked on.
+    """
+    def _run() -> None:
+        try:
+            from clawmetry.daemon_registration import ensure_persistent_daemon
+
+            ensure_persistent_daemon({"local_only": choice != "managed"})
+        except Exception as exc:
+            log.warning("onboarding: daemon registration failed: %s", exc)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception as exc:
+        log.warning("onboarding: daemon registration dispatch failed: %s", exc)
+        _run()
+
+
 @bp_onboarding.route("/api/onboarding/state")
 def api_onboarding_state():
     try:
@@ -201,6 +262,7 @@ def api_onboarding_complete():
                         "error": "Activate a license or trial first."}), 409
     _write_choice_file(choice)
     _apply_marker_semantics(choice)
+    _ensure_daemon_for_choice(choice)
     _ping_onboarded(choice)
     return jsonify({"ok": True, "state": choice})
 
@@ -225,5 +287,6 @@ def api_onboarding_activate_license():
     state = _license_state() or "selfhost_license"
     _write_choice_file(state)
     _apply_marker_semantics(state)
+    _ensure_daemon_for_choice(state)
     _ping_onboarded(state)
     return jsonify({"ok": True, "state": state, "message": msg})
