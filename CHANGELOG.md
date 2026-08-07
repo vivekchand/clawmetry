@@ -1,5 +1,20 @@
 ## Unreleased
 
+- **Release: auth pane hierarchy fix — GitHub/Google now primary, email tertiary.**
+  - **Why:** screenshot verification of v0.12.659 caught a visual bug —
+    the red "Sign in with email" button dominated GitHub/Google buttons
+    on the first-launch auth pane. That's the wrong signal: OAuth is
+    one-click while email is two-step (send OTP, verify). The CLI's
+    `clawmetry onboard` already presents `[1] GitHub  [2] Google` as
+    primary with email as fallback; the desktop pane didn't match.
+  - **What:** carrier `[RELEASE]` for the fix that landed in #4618.
+    No new code in this PR; the visual hierarchy fix rides along.
+  - **Verified:** side-by-side screenshots before/after in the #4618
+    description. End-to-end verification is this release: the tag push
+    must (a) auto-cascade to `desktop-artifacts.yml` (regression check
+    for the auto-cascade fix), (b) produce `ClawMetry-0.12.<n>.dmg`
+    with the corrected auth pane inside.
+
 - **Feature: Cache Hit Rate and Routing Advisor tiles land under the Usage tab, answering the two efficiency tactics Uber's CTO named on the Aug 6, 2026 earnings call.**
   - **Why:** Uber's CTO on the Q2 2026 call: "the next phase will not be characterized by who spends the most tokens, but about how people use them as efficiently as possible." Frontier-AI adoption at Uber quadrupled since January while cost per token trended down, thanks to prompt caching, default model selection, per-engineer visibility, and open-weight experiments. Every CFO on the S&P 500 now asks the same board question with a smaller budget and no internal GenAI Gateway. ClawMetry ships the two most CFO-legible answers off the shelf.
   - **What:** two tiles positioned directly under the Efficiency grade. Cache-Hit tile shows the current hit rate, the amount already saved from cached reads, and a conservative estimate of the amount left on the table (flagged as an estimate; cacheable-fraction constant exposed in the payload so the UI labels it honestly). Routing Advisor tile shows total potential monthly savings and the top five safe same-provider model downgrades, sourced from `providers_pricing.downgrade_model_name`'s guarded resolver (never cross-provider, never a bare-family splice that synthesises a non-existent id). Both tiles derive client-side from the shared `/api/efficiency` cache, so they add zero fetches per tab load and are cloud-safe by construction via the existing `cm-cloud-efficiency` interceptor. Two new public API endpoints (`/api/efficiency/cache-hit-rate`, `/api/efficiency/routing-advisor`) stay for external consumers and reconcile with `/api/efficiency` by construction, both honour `?days=` clamping, both never 500.
