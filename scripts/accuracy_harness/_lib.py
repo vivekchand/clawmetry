@@ -7,13 +7,14 @@ shims in one place means a future ``alerts.py`` / ``crons.py`` /
 and a fix to (e.g.) the daemon discovery flow only needs to land once.
 
 Public surface:
-    DEFAULT_DASHBOARD_PORTS, GH_REPO, OPENCLAW_BIN
+    DEFAULT_DASHBOARD_PORTS, GH_REPO, OPENCLAW_BIN, OPENCLAW_AVAILABLE
     http_get_json, http_post_json
     discover_dashboard_url, discover_daemon, daemon_event_count
     daemon_call (generic ``__local_query__/<method>`` proxy)
     drive_openclaw_message, extract_openclaw_usage
     file_drift_issue_per_endpoint, format_drift_issue_body
     file_consolidated_issue (meta-runner roll-up — one issue per day, idempotent)
+    exit_skip (early-exit helper for missing prerequisites)
 """
 from __future__ import annotations
 
@@ -35,6 +36,13 @@ DEFAULT_DASHBOARD_PORTS = (8900, 8903, 8905)
 GH_REPO = "vivekchand/clawmetry"
 OPENCLAW_BIN = shutil.which("openclaw") or "openclaw"
 LOCAL_QUERY_DISCOVERY = Path.home() / ".clawmetry" / "local_query.json"
+
+# True when the openclaw CLI is reachable. Set OPENCLAW_BIN_AVAILABLE=1 to
+# override (e.g. when the binary is on PATH but shutil.which misses it due
+# to PATH differences between an interactive shell and a cron/cloud sandbox).
+OPENCLAW_AVAILABLE: bool = (
+    bool(shutil.which("openclaw")) or bool(os.environ.get("OPENCLAW_BIN_AVAILABLE"))
+)
 
 
 # ─── HTTP shims ─────────────────────────────────────────────────────────────
@@ -104,6 +112,23 @@ def wait_for_event(predicate, *, timeout: float = 30.0,
             return last
         _time.sleep(interval)
     return last
+
+
+def exit_skip(harness_name: str, reason: str) -> None:
+    """Exit 0 with a parseable ``summary: 0 pass / 0 drift`` line when a
+    harness cannot run because its prerequisites are missing (no ``openclaw``
+    binary, no running daemon, etc.).
+
+    Exit code 0 is "PASS" to the meta-runner (``all.py``), so it won't file
+    a consolidated issue for a known-unavailable sandbox. The printed summary
+    line is what the meta-runner's ``SUMMARY_RE`` parses.
+
+    To force a harness to run when the binary is not on PATH, set
+    ``OPENCLAW_BIN_AVAILABLE=1`` in the environment.
+    """
+    print(f"[harness] {harness_name} SKIP — {reason}")
+    print("summary: 0 pass / 0 drift")
+    sys.exit(0)
 
 
 # ─── Discovery ──────────────────────────────────────────────────────────────
