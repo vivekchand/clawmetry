@@ -60,6 +60,14 @@ POLL_INTERVAL_SECS = 0.4
 SHUTDOWN_WAIT_SECS = 5.0
 # Skip the pip-upgrade if we ran one this recently.
 UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
+# How often the watcher thread checks for drift and crashes while the
+# app is running. Short enough that clicking "Update now" in the
+# dashboard translates into a visible restart within ~a minute.
+WATCHER_TICK_SECS = 60
+# One in every N watcher ticks also runs a background pip upgrade
+# (60s * 30 = 30min) so users who never quit still eventually pull
+# fresh releases from PyPI.
+WATCHER_UPGRADE_EVERY_N_TICKS = 30
 
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
@@ -182,6 +190,9 @@ class RuntimeSupervisor:
         self.venv = self.runtime / "venv"
         self.stamp_file = self.runtime / "last-upgrade.json"
         self.log_file = self.runtime / "bootstrap.log"
+        # Set to True by main() when the user closes the window so the
+        # watcher stops trying to respawn the daemon on the way out.
+        self.shutting_down = threading.Event()
 
     def _venv_python(self) -> Path:
         return self.venv / ("Scripts" if platform.system() == "Windows" else "bin") / (
@@ -348,6 +359,92 @@ class RuntimeSupervisor:
                 pass
         self.proc = None
 
+    def _get_running_daemon_version(self) -> Optional[str]:
+        """Ask the CHILD daemon what version it thinks it is via its own
+        /api/version endpoint. Returns None if the daemon is down or
+        unreachable — which is normal during restarts."""
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/version", timeout=1.5
+            ) as r:
+                return json.loads(r.read()).get("current")
+        except Exception:
+            return None
+
+    def _background_pip_upgrade(self) -> None:
+        """Non-blocking pip upgrade into the runtime venv. Errors are
+        logged and swallowed — a transient PyPI failure should never
+        take down the running app. Called from the watcher thread."""
+        try:
+            r = subprocess.run(
+                [str(self._venv_python()), "-m", "pip", "install",
+                 "--upgrade", "--disable-pip-version-check", "clawmetry"],
+                capture_output=True, text=True, timeout=300,
+            )
+            self._log(f"watcher pip upgrade rc={r.returncode}")
+            if r.returncode != 0:
+                self._log(r.stderr[:2000])
+            else:
+                self._mark_upgraded(self._get_installed_version())
+        except subprocess.TimeoutExpired:
+            self._log("watcher pip upgrade timed out")
+
+    def restart_daemon(self) -> bool:
+        """Stop the current daemon and spawn a fresh one on the same
+        port. Returns True if the new daemon binds and answers before
+        the startup timeout. Idempotent; safe to call repeatedly."""
+        self.stop()
+        # Give TCP TIME_WAIT a moment on the freed port; on most systems
+        # SO_REUSEADDR handles this, but on macOS a bare Popen can lose.
+        time.sleep(0.5)
+        self.start_daemon()
+        return self.wait_ready()
+
+    def watch(self, on_restart: Callable[[], None]) -> None:
+        """Blocking watcher loop, meant to run in a daemon thread.
+
+        Every WATCHER_TICK_SECS:
+          1. If the child crashed, respawn (unless shutting down).
+          2. Compare the venv's installed clawmetry version to what the
+             running daemon reports. If they differ (user clicked
+             "Update now" in the dashboard, or any other mechanism
+             upgraded the venv), restart the daemon and invoke
+             on_restart() so the caller can refresh the webview.
+          3. Every WATCHER_UPGRADE_EVERY_N_TICKS, also run a background
+             pip upgrade so users who never quit still eventually pull
+             fresh releases.
+        """
+        tick = 0
+        while not self.shutting_down.is_set():
+            if self.shutting_down.wait(WATCHER_TICK_SECS):
+                return
+            tick += 1
+
+            if self.proc is not None and self.proc.poll() is not None:
+                # Daemon exited on its own — most likely crashed, or
+                # something inside it self-terminated to force a
+                # restart. Respawn silently.
+                self._log(f"daemon exited with code {self.proc.returncode}; respawning")
+                if self.restart_daemon():
+                    on_restart()
+                continue
+
+            installed = self._get_installed_version()
+            running = self._get_running_daemon_version()
+            if installed and running and installed != running:
+                self._log(
+                    f"version drift: venv={installed} running={running}; restarting"
+                )
+                self.on_status(f"Applying update to v{installed}")
+                if self.restart_daemon():
+                    on_restart()
+                continue
+
+            if tick % WATCHER_UPGRADE_EVERY_N_TICKS == 0 and self._should_upgrade():
+                self._log("watcher: running periodic pip upgrade")
+                self._background_pip_upgrade()
+                # Drift, if any, is caught on the next tick.
+
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -487,6 +584,18 @@ def main() -> int:
     # Late-bind the real status hook now that window exists.
     sup.on_status = _set_status
 
+    dashboard_url = f"http://127.0.0.1:{port}/"
+
+    def _reload_window() -> None:
+        """Callback the watcher fires after a successful daemon
+        restart. Reloading the same URL is enough — the WebView picks
+        up whatever the fresh daemon serves, so users see the new
+        version immediately without having to quit and relaunch."""
+        try:
+            window.load_url(dashboard_url)
+        except Exception:
+            pass
+
     def _boot():
         # Phase 1: bootstrap the runtime venv.
         ok = sup.bootstrap()
@@ -554,6 +663,13 @@ def main() -> int:
             _set_status("Daemon did not come up. See bootstrap.log.")
             return
 
+        # Start the watcher after wait_ready so the initial startup exit
+        # is never mistaken for a crash. Handles version drift ("Update
+        # now") and unexpected exits by restarting + reloading the WebView.
+        threading.Thread(
+            target=sup.watch, args=(_reload_window,), daemon=True
+        ).start()
+
         # Phase 5: load the ready-gate spinner, poll /api/overview
         # from Python (avoids CORS from a load_html origin), then load
         # the real dashboard. Capped at 20s so an offline user is
@@ -569,6 +685,10 @@ def main() -> int:
             pass
 
     def _on_closed():
+        # Stop the watcher FIRST — otherwise it sees the daemon exit
+        # from our stop() call below and respawns it while we're
+        # trying to quit.
+        sup.shutting_down.set()
         sup.stop()
 
     window.events.closed += _on_closed
