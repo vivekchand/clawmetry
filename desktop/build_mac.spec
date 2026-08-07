@@ -41,6 +41,11 @@ extra_hidden = [
     'PIL',
     'webview',
     'webview.platforms.cocoa',
+    # onboarding is imported from app.py via `sys.path.insert(0, .)` and
+    # picked up by static analysis on macOS builds. Listed explicitly so
+    # a future refactor that moves the import behind a runtime guard
+    # doesn't silently drop it from the bundle.
+    'onboarding',
 ]
 
 a = Analysis(

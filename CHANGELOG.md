@@ -1,5 +1,44 @@
 ## Unreleased
 
+- **Feature: desktop app now onboards new users natively — sign-in pane, auto Pro trial, cross-sell carousel, dashboard-content-ready gate.**
+  - **Why:** a user who chose the `.dmg` over `pip install` is the highest-intent
+    surface we have; the old shell was a passive webview that dropped them on
+    the same anonymous empty dashboard a `pip install` would produce, wasting
+    that signal. Trial provisioning existed in the backend (`auto_provision_pro`
+    in `clawmetry/license.py`) but had no in-app trigger — the paywall CTA
+    just did `window.open('clawmetry.com/connect')` and users had to bring a
+    `cm_` key back manually. Result: desktop installs converted to trial at
+    single-digit rates.
+  - **What:** `desktop/onboarding.py` — a new self-contained module (stdlib only)
+    that renders three surfaces inside the pywebview window: (1) an auth pane
+    mirroring `clawmetry onboard`'s three paths (GitHub OAuth loopback,
+    Google OAuth loopback, email OTP — same server endpoints), (2) an
+    Ubuntu-installer-style cross-sell carousel that auto-advances through
+    Agent Builder, Desk device, and Enterprise SSO while the runtime venv
+    provisions, (3) a ready-gate spinner that keeps the pane up until
+    `/api/overview` returns content or 20s elapses. `desktop/app.py` gains a
+    `DesktopAPI` class exposed as `window.pywebview.api.*` so the pane's JS
+    can call into Python for OAuth, OTP send/verify, external-link opens, and
+    skip. Post-auth the shell shells out to
+    `runtime/venv/bin/clawmetry connect --key cm_… --start-sync-now` — no
+    duplication of key-validation, `auto_provision_pro`, or sync-daemon
+    start in the shell. First-launch state stamped in
+    `~/Library/Application Support/ClawMetry/runtime/onboarding-completed.json`
+    so relaunches skip the pane. Cloud sync is default-ON per product spec;
+    the header toggle to disable is a follow-up. `desktop/build_mac.spec` +
+    `build_windows.spec` + `build_linux.spec` explicitly list `onboarding`
+    in `hiddenimports` so a future refactor can't silently drop it from the
+    bundle. `desktop/README.md` and Software Factory Blueprint updated with
+    the new sequence.
+  - **Verified:** onboarding.py + app.py both parse (`python3 -c "import ast;
+    ast.parse(open(...).read())"`); DesktopAPI unit smoke tests pass (skip_auth
+    sets the event, open_external rejects non-https, start_oauth rejects
+    unknown providers, send_email_otp rejects invalid emails, verify_email_otp
+    rejects short codes). End-to-end verification is the next release: the
+    tag push must produce a `.dmg` that on first launch shows the auth pane,
+    completes GitHub OAuth via loopback, provisions the Pro wheel for a
+    trial-entitled account, and dismisses when `/api/overview` returns data.
+
 - **Fix: macOS `.dmg` now actually builds — pyinstaller was excluded from macOS via a stray sys_platform marker; release-on-merge now kicks tag-triggered workflows the GITHUB_TOKEN can't cascade.**
   - **Why:** two bugs in a row prevented v0.12.656 and v0.12.657 from
     shipping desktop bundles even though PyPI got the wheels cleanly.

@@ -46,6 +46,14 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+# Top-level import so PyInstaller's static analysis bundles onboarding.py
+# into the .app (lazy imports inside DesktopAPI methods otherwise get
+# missed by the analyser and 500 at runtime with ModuleNotFoundError).
+# onboarding.py sits next to app.py in the bundle (build_mac.spec's
+# pathex includes desktop/).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import onboarding  # noqa: E402  (must follow sys.path insert)
+
 APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
 POLL_INTERVAL_SECS = 0.4
@@ -347,14 +355,119 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+# ─── Boot orchestration ─────────────────────────────────────────────────
+# The first-launch onboarding flow is a small state machine driven from
+# a single worker thread. Phases:
+#
+#   1. bootstrap runtime venv + pip-install clawmetry (with the
+#      Ubuntu-installer-style carousel showing progress)
+#   2. if first launch AND cloud reachable: show sign-in pane and block
+#      the worker thread on `_auth_done` until user completes or skips
+#   3. if a cm_ key landed: run `clawmetry connect --key --start-sync-now`
+#      which validates, saves config, provisions the Pro wheel (only if
+#      the account is Trial/Starter/Pro/Enterprise entitled), and starts
+#      the sync daemon (cloud sync is default-ON per product spec)
+#   4. start the dashboard daemon on a free port
+#   5. load the ready-gate splash, which polls /api/overview and swaps
+#      to the real dashboard when there's content to show (capped at 20s)
+#
+# The DesktopAPI class below is what JS in the auth pane calls into via
+# ``window.pywebview.api.*``. Each method returns a small dict the pane
+# renders as inline status text.
+
+class DesktopAPI:
+    """pywebview JS bridge for the onboarding pane.
+
+    Methods are called synchronously from JS; the pywebview runtime
+    dispatches them onto a worker thread and marshals the return value
+    back. They must be idempotent-safe (a page reload can double-invoke)
+    and quick to return — long-running work (OAuth loopback, OTP) is
+    fine because pywebview never blocks the UI thread on them."""
+
+    def __init__(self, sup: "RuntimeSupervisor", app_base_override: Optional[str] = None):
+        self._sup = sup
+        self._app_base = app_base_override
+        self._auth_done = threading.Event()
+        self._captured_key: str = ""
+        self._captured_email: str = ""
+        self._captured_provider: str = ""
+
+    # ── OAuth (GitHub / Google) ──────────────────────────────────────
+    def start_oauth(self, provider: str) -> dict:
+        provider = (provider or "").lower()
+        if provider not in ("github", "google"):
+            return {"ok": False, "error": "unknown provider"}
+        ok, msg_or_key = onboarding.oauth_loopback_flow(
+            provider, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": msg_or_key}
+        self._captured_key = msg_or_key
+        self._captured_provider = provider
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Email OTP ────────────────────────────────────────────────────
+    def send_email_otp(self, email: str) -> dict:
+        ok, msg = onboarding.send_email_otp(email, app_base=self._app_base)
+        return {"ok": ok, "error": "" if ok else msg}
+
+    def verify_email_otp(self, email: str, otp: str) -> dict:
+        ok, key_or_err = onboarding.verify_email_otp(
+            email, otp, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": key_or_err}
+        self._captured_key = key_or_err
+        self._captured_email = email
+        self._captured_provider = "email"
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Skip (dismiss without auth) ──────────────────────────────────
+    def skip_auth(self) -> dict:
+        # No key captured; downstream `_apply_and_boot_daemon` will
+        # just skip the connect step and go straight to the dashboard.
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── External links (carousel CTAs) ───────────────────────────────
+    def open_external(self, url: str) -> dict:
+        # Restrict to https:// to keep the pane from being weaponised
+        # into launching arbitrary schemes if a slide is ever
+        # user-editable in the future.
+        if not (url or "").startswith("https://"):
+            return {"ok": False, "error": "only https:// URLs are opened"}
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+
 def main() -> int:
     import webview
 
     port = int(os.environ.get("CLAWMETRY_APP_PORT") or _find_free_port())
+    assets = _assets_dir()
+
+    # Open with the carousel HTML directly — no more static splash.
+    # bootstrap progress messages update the top-bar via `set_status`.
+    initial_html = onboarding.render_bootstrap_carousel(
+        assets_dir=assets, status="Preparing runtime",
+    )
+
+    # Instantiate API + supervisor before window so we can pass js_api
+    # in at create_window time (pywebview binds the API namespace on
+    # window creation, not after).
+    sup = RuntimeSupervisor(port, lambda _msg: None)  # placeholder; real hook set below
+    api = DesktopAPI(sup)
 
     window = webview.create_window(
         APP_TITLE,
-        html=_splash_html("Preparing runtime"),
+        html=initial_html,
+        js_api=api,
         width=1280,
         height=820,
         min_size=(900, 600),
@@ -362,27 +475,98 @@ def main() -> int:
     )
 
     def _set_status(msg: str) -> None:
+        """Push a progress line into the carousel's top bar. When the
+        pane isn't the carousel (e.g. we've swapped to the auth pane),
+        the JS call is a no-op and we swallow the exception — status
+        messages are hints, not load-bearing."""
         try:
-            window.load_html(_splash_html(msg))
+            window.evaluate_js(f"window.set_status && window.set_status({json.dumps(msg)});")
         except Exception:
             pass
 
-    sup = RuntimeSupervisor(port, _set_status)
+    # Late-bind the real status hook now that window exists.
+    sup.on_status = _set_status
 
     def _boot():
+        # Phase 1: bootstrap the runtime venv.
         ok = sup.bootstrap()
         if not ok:
-            return  # status HTML already shown
-        _set_status("Starting local daemon")
-        sup.start_daemon()
-        ready = sup.wait_ready()
-        if ready:
+            # bootstrap() already set a status message on failure; leave
+            # the carousel up with the failure text at the top so the
+            # user has something to read while filing a bug.
+            return
+
+        # Phase 2: onboarding — only on the very first launch.
+        runtime = sup.runtime
+        show_pane = onboarding.is_first_launch(runtime)
+        if show_pane:
+            _set_status("Ready — please sign in")
+            detected = onboarding.detect_runtimes_via_venv(sup._venv_python())
+            auth_html = onboarding.render_auth_pane(
+                assets_dir=assets, detected_runtimes=detected,
+            )
             try:
-                window.load_url(f"http://127.0.0.1:{port}/")
+                window.load_html(auth_html)
+            except Exception:
+                # Non-fatal: proceed to boot the dashboard anyway. The
+                # user can sign in from the dashboard later.
+                pass
+            # Block on the JS bridge until the user completes or skips.
+            # Cap at 5 minutes: a user who walks away shouldn't leave
+            # the app stuck on the pane forever.
+            api._auth_done.wait(timeout=300)
+
+        # Phase 3: apply the cm_ key if we captured one.
+        captured_key = api._captured_key
+        if captured_key:
+            # Swap back to the carousel while the connect subprocess
+            # runs — it's the more informative surface than a spinner.
+            try:
+                window.load_html(onboarding.render_bootstrap_carousel(
+                    assets_dir=assets, status="Setting up your account",
+                ))
             except Exception:
                 pass
-        else:
+            ok_key, msg_key = onboarding.apply_cm_key(
+                sup._venv_clawmetry(), captured_key,
+            )
+            if not ok_key:
+                _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
+            # Whether it worked or not, mark onboarding as completed so
+            # we don't re-prompt on relaunch. Users can re-sign-in from
+            # the dashboard's header.
+            onboarding.mark_onboarding_completed(
+                runtime,
+                signed_in=ok_key,
+                provider=api._captured_provider,
+                email=api._captured_email,
+            )
+        elif show_pane:
+            # User skipped — stamp so we don't re-prompt.
+            onboarding.mark_onboarding_completed(
+                runtime, signed_in=False, provider="", email="",
+            )
+
+        # Phase 4: start the dashboard daemon.
+        _set_status("Starting local daemon")
+        sup.start_daemon()
+        if not sup.wait_ready():
             _set_status("Daemon did not come up. See bootstrap.log.")
+            return
+
+        # Phase 5: load the ready-gate spinner, poll /api/overview
+        # from Python (avoids CORS from a load_html origin), then load
+        # the real dashboard. Capped at 20s so an offline user is
+        # never stuck on a spinner.
+        try:
+            window.load_html(onboarding.render_ready_gate())
+        except Exception:
+            pass  # spinner is polish, not a gate
+        onboarding.wait_for_dashboard_content(port, deadline_secs=20.0)
+        try:
+            window.load_url(f"http://127.0.0.1:{port}/")
+        except Exception:
+            pass
 
     def _on_closed():
         sup.stop()
@@ -390,6 +574,7 @@ def main() -> int:
     window.events.closed += _on_closed
     threading.Thread(target=_boot, daemon=True).start()
 
+    # js_api makes DesktopAPI methods callable as window.pywebview.api.*
     webview.start(private_mode=False)
     return 0
 

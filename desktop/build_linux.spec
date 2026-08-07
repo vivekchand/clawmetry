@@ -37,6 +37,7 @@ extra_hidden = [
     'webview',
     'webview.platforms.gtk',
     'webview.platforms.qt',
+    'onboarding',  # ships next to app.py; see build_mac.spec for rationale
 ]
 
 a = Analysis(

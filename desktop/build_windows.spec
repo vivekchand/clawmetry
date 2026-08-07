@@ -38,6 +38,7 @@ extra_hidden = [
     'webview',
     'webview.platforms.edgechromium',
     'webview.platforms.mshtml',
+    'onboarding',  # ships next to app.py; see build_mac.spec for rationale
 ]
 
 a = Analysis(

@@ -26,18 +26,32 @@ runtime/
   bootstrap.log         ← create/upgrade logs
 ```
 
-Sequence on first launch (~10 seconds on a fast connection):
+Sequence on first launch (~15 seconds on a fast connection):
 
-1. Splash: **"Preparing runtime"**
+1. Cross-sell **carousel** appears (Ubuntu-installer style) with a top-bar
+   status line: *"Preparing runtime"*
 2. `/usr/bin/python3 -m venv runtime/venv/`
-3. Splash: **"Installing ClawMetry from PyPI"**
+3. Status line updates: *"Installing ClawMetry from PyPI"*
 4. `runtime/venv/bin/python -m pip install --upgrade clawmetry`
-5. Splash: **"Starting local daemon"**
-6. Spawn `runtime/venv/bin/clawmetry --no-debug --port <free>`
-7. WKWebView loads `http://127.0.0.1:<port>/` — real dashboard renders
+5. **Auth pane** swaps in (`desktop/onboarding.py::render_auth_pane`):
+   headline personalised with any paid runtimes detected on this machine,
+   three buttons — GitHub / Google / Email OTP. User signs in (OAuth
+   goes out via system browser + loopback callback, OTP is in-window)
+   or clicks *"Skip for now"*.
+6. If a `cm_` key was captured: `runtime/venv/bin/clawmetry connect
+   --key cm_… --start-sync-now` — this validates the key, saves config,
+   calls `auto_provision_pro` (Pro wheel downloads iff Trial/Starter/
+   Pro/Enterprise entitled), and starts the sync daemon.
+7. Status line: *"Starting local daemon"*, spawn
+   `runtime/venv/bin/clawmetry --no-debug --port <free>`
+8. **Ready-gate spinner** appears while the shell polls
+   `/api/overview` from Python (avoids CORS from a `load_html` origin);
+   swaps to the real dashboard when there's content OR after 20s.
 
 Subsequent launches skip 2–3 if the venv exists and the last upgrade
-is under 6 hours old. Every launch, the daemon child is fresh.
+is under 6 hours old, AND skip 5–6 because
+`~/Library/Application Support/ClawMetry/runtime/onboarding-completed.json`
+is present. Every launch, the daemon child is fresh.
 
 **Why this shape and not "freeze clawmetry into the bundle":**
 
