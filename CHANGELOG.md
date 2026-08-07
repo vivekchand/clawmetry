@@ -1,5 +1,28 @@
 ## Unreleased
 
+- **Fix: desktop-artifacts workflow now parses — signed `.dmg` ships on tag push instead of failing at the workflow-file level.**
+  - **Why:** the wiring release (v0.12.656) attempted to gate the signing
+    steps with `if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}` at step level.
+    GitHub Actions rejects `secrets.*` inside `if:` — that context is only
+    legal in `env:`, `with:`, and `run:`. The parser refused the whole
+    workflow file, so every run (both the tag push and a manual dispatch
+    for retry) failed at "This run likely failed because of a workflow
+    file issue" before any job started. Net effect: `clawmetry 0.12.656`
+    published to PyPI cleanly but the GitHub Release for that tag had
+    zero binary assets attached.
+  - **What:** hoist the presence checks to job-level `env` and gate the
+    steps on `env.HAS_CERT` / `env.HAS_SIGN`, which is legal in `if:`.
+    Also declare `permissions: contents: write` on the release job so
+    `softprops/action-gh-release@v2` can attach files even when the org
+    default GITHUB_TOKEN scope is read-only. First tag on which the fix
+    lands is the one this release cuts.
+  - **Verified:** YAML parses locally (`python3 -c "import yaml; yaml.safe_load(...)"`);
+    no `secrets.*` references remain inside any `if:` conditional
+    (`grep -nE '^\s*if:.*secrets\.'` returns nothing). End-to-end
+    verification comes with this release's tag push — the macOS job
+    must import the cert, sign both the `.app` and the `.dmg`, and the
+    release job must attach all three OS bundles to the GitHub Release.
+
 - **Release: macOS desktop `.dmg` now ships signed + notarized on every tag push.**
   - **Why:** the desktop-app scaffold landed in #4602 with the signing pipeline
     wired but the six Apple credentials were not yet in the repo, so

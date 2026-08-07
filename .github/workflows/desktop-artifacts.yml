@@ -19,6 +19,14 @@ jobs:
   macos:
     name: macOS .app + .dmg (signed + notarized when secrets are set)
     runs-on: macos-latest
+    # The `secrets` context is not available in step-level `if:` conditionals
+    # (the workflow parser rejects it — GitHub restricts `secrets` to `env:`,
+    # `with:`, and `run:`). Hoist the presence checks into job-level `env` so
+    # steps can gate on `env.HAS_*`, which IS legal in `if:`. The values are
+    # 'true' / 'false' strings because that is what `!= ''` evaluates to.
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+      HAS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -51,7 +59,7 @@ jobs:
       #   APPLE_TEAM_ID                 e.g. 8LVH596RA5
       #   APPLE_APP_SPECIFIC_PASSWORD   from https://appleid.apple.com → App-Specific Passwords
       - name: Import Developer ID cert into a build keychain
-        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+        if: env.HAS_CERT == 'true'
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
@@ -72,7 +80,7 @@ jobs:
           security find-identity -p codesigning -v "$KEYCHAIN"
 
       - name: Sign + notarize + staple .app
-        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
+        if: env.HAS_SIGN == 'true'
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -89,7 +97,7 @@ jobs:
             "dist/ClawMetry-${VERSION}.dmg"
 
       - name: Sign + notarize + staple the .dmg itself
-        if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
+        if: env.HAS_SIGN == 'true'
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -175,6 +183,12 @@ jobs:
     needs: [macos, windows, linux]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # softprops/action-gh-release needs write access to the Contents API
+    # to attach files to the existing tag's Release. Default GITHUB_TOKEN
+    # scope is read-only when the org sets that as the default; declare
+    # explicitly so the step never silently 403s.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
