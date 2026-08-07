@@ -25,8 +25,12 @@ jobs:
       startsWith(github.event.issue.title, '[good-first-issue scan]') ||
       startsWith(github.event.issue.title, '[obs-gap:') ||
       startsWith(github.event.issue.title, '[intel-scout]') ||
+      startsWith(github.event.issue.title, '[intel/') ||
       startsWith(github.event.issue.title, '[triage-bot]') ||
-      startsWith(github.event.issue.title, '[harness-audit]')
+      startsWith(github.event.issue.title, '[harness-audit]') ||
+      startsWith(github.event.issue.title, '[docs-drift]') ||
+      startsWith(github.event.issue.title, '[roadmap/') ||
+      startsWith(github.event.issue.title, 'Weekly digest ')
     steps:
       - name: Close as not-planned
         env:
