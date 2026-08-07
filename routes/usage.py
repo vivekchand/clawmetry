@@ -4521,6 +4521,175 @@ def api_efficiency():
 
 
 # ---------------------------------------------------------------------------
+# Efficiency companion endpoints — Cache-Hit Rate + Routing Advisor.
+# Public API surface (v1 consumers, mobile). The dashboard tab derives both
+# card contents client-side from the shared /api/efficiency cache so they
+# work on cloud through the existing cm-cloud-efficiency interceptor without
+# needing per-endpoint interceptors. These handlers stay for external readers.
+# Both never 500 and reconcile with /api/efficiency by construction.
+# ---------------------------------------------------------------------------
+
+# "$ left on the table" is deliberately conservative: only a fraction of a
+# miss's input tokens is realistically cacheable, so the caller-visible number
+# is flagged as an estimate rather than a hard claim.
+_CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION = 0.5
+# Cache multiplier for Anthropic reads (mirror of providers_pricing._CACHE_READ_MULT;
+# inlined to avoid a routes<->core round-trip for one float).
+_CACHE_READ_MULT_FOR_ESTIMATE = 0.1
+
+
+def _cache_hit_shape(slice_dict, days):
+    """Reduce a build_efficiency_slice() scope to the Cache-Hit tile payload."""
+    metrics = (slice_dict or {}).get("metrics") or {}
+    tokens_in = int(metrics.get("tokens_in") or 0)
+    cache_read = int(metrics.get("cache_read") or 0)
+    denom = tokens_in + cache_read
+    hit_rate = round(cache_read / denom * 100.0, 2) if denom > 0 else None
+    saved_monthly = float((slice_dict or {}).get("cache_saved_monthly_usd") or 0.0)
+    window_cost = float(metrics.get("window_cost_usd") or 0.0)
+    projected = float((slice_dict or {}).get("projected_monthly_cost_usd") or 0.0)
+    left_on_table_monthly = 0.0
+    if hit_rate is not None and hit_rate < 100.0 and projected > 0 and tokens_in > 0:
+        cache_write = int(metrics.get("cache_write") or 0)
+        weight = (
+            tokens_in / (tokens_in + cache_read + cache_write)
+            if (tokens_in + cache_read + cache_write) > 0 else 0.0
+        )
+        monthly_input_cost = projected * weight
+        left_on_table_monthly = round(
+            monthly_input_cost
+            * _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION
+            * (1.0 - _CACHE_READ_MULT_FOR_ESTIMATE),
+            4,
+        )
+    return {
+        "cache_hit_rate_pct":        hit_rate,
+        "tokens_in":                 tokens_in,
+        "cache_read":                cache_read,
+        "cache_saved_monthly_usd":   round(saved_monthly, 4),
+        "left_on_table_monthly_usd": left_on_table_monthly,
+        "left_on_table_estimate":    True,
+        "cacheable_fraction_used":   _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION,
+        "window_cost_usd":           round(window_cost, 4),
+        "insufficient_data":         bool((slice_dict or {}).get("insufficient_data")),
+        "window_days":               days,
+    }
+
+
+@bp_usage.route("/api/efficiency/cache-hit-rate")
+def api_efficiency_cache_hit_rate():
+    """Prompt cache hit rate, $ saved, and conservative $ left on the table.
+
+    Reuses ``build_efficiency_slice`` so the node-wide number reconciles with
+    ``/api/efficiency`` by construction. Returns a node total plus a
+    ``byRuntime`` map. ``left_on_table_monthly_usd`` is flagged as an estimate
+    (underlying cacheable fraction exposed in the payload). Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty_scope = _cache_hit_shape({"insufficient_data": True}, days)
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify({"schema": 1, "window_days": days,
+                        "node": empty_scope, "byRuntime": {}})
+    node = _cache_hit_shape(slice_all, days)
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        by_rt[rt] = _cache_hit_shape(entry, days)
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
+
+
+def _extract_downgrade_suggestions(slice_dict):
+    """Pull the model_downgrade actions out of a scope, with target model + $."""
+    out = []
+    for a in ((slice_dict or {}).get("actions") or []):
+        if a.get("id") != "model_downgrade":
+            continue
+        data = a.get("data") or {}
+        savings = float(a.get("savings_monthly_usd") or 0.0)
+        if savings <= 0:
+            continue
+        out.append({
+            "current_model":                a.get("model") or "",
+            "suggested_model":              data.get("target_model") or "",
+            "calls":                        int(data.get("calls") or 0),
+            "avg_tokens_out":               float(data.get("avg_tokens_out") or 0.0),
+            "window_cost_usd":              float(data.get("window_cost_usd") or 0.0),
+            "target_window_cost_usd":       float(data.get("target_window_cost_usd") or 0.0),
+            "potential_savings_monthly_usd": round(savings, 4),
+        })
+    out.sort(key=lambda r: -r["potential_savings_monthly_usd"])
+    return out
+
+
+@bp_usage.route("/api/efficiency/routing-advisor")
+def api_efficiency_routing_advisor():
+    """Model-routing recommendations + already-realised routing savings.
+
+    Two numbers side by side from the same DuckDB store:
+      * ``potential`` — build_efficiency_slice's ``model_downgrade`` actions
+        (safe same-provider swaps only; the resolver in
+        ``providers_pricing.downgrade_model_name`` is guarded) reshaped as a
+        per-model advisor list.
+      * ``realised`` — the aggregate over ``auto_downgraded`` events that
+        actually ran (``query_routing_savings``).
+    Node total + ``byRuntime`` map. Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty = {"schema": 1, "window_days": days,
+             "node": {"suggestions": [], "potential_monthly_usd": 0.0,
+                      "realised": {"total_savings_usd": 0.0,
+                                   "total_substitutions": 0, "by_pair": []},
+                      "insufficient_data": True},
+             "byRuntime": {}}
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify(empty)
+    try:
+        realised = _ls_call("query_routing_savings", days=days) or {}
+    except Exception:
+        realised = {}
+    realised_shape = {
+        "total_savings_usd":   round(float(realised.get("total_savings_usd") or 0.0), 4),
+        "total_substitutions": int(realised.get("total_substitutions") or 0),
+        "by_pair":             realised.get("by_pair") or [],
+    }
+    node_sugg = _extract_downgrade_suggestions(slice_all)
+    node = {
+        "suggestions":           node_sugg,
+        "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                           for s in node_sugg), 4),
+        "realised":              realised_shape,
+        "insufficient_data":     bool(slice_all.get("insufficient_data")),
+    }
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        sugg = _extract_downgrade_suggestions(entry)
+        by_rt[rt] = {
+            "suggestions":           sugg,
+            "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                               for s in sugg), 4),
+            "insufficient_data":     bool(entry.get("insufficient_data")),
+        }
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
+
+
+# ---------------------------------------------------------------------------
 # Issue #2837 sub-task #1 — Compression Potential card
 # ---------------------------------------------------------------------------
 
