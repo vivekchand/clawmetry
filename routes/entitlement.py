@@ -19577,6 +19577,191 @@ def api_entitlement_previous_tier_capacity_diff_at_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/next-tier-capacity-headroom-at-batch")
+def api_entitlement_next_tier_capacity_headroom_at_batch():
+    """``GET /api/entitlement/next-tier-capacity-headroom-at-batch?
+    channels=<int>&retention_days=<int>&nodes=<int>`` -- batch sibling
+    of ``/api/entitlement/next-tier-capacity-headroom-at``: one
+    ``next-tier-capacity-headroom-at`` envelope per purchasable source
+    tier, in one round-trip, given the caller-supplied per-axis usage.
+
+    Headroom-shaped mirror of
+    ``/api/entitlement/next-tier-capacity-diff-at-batch``: where that
+    batch returns the marginal capacity-transition triple per source,
+    this batch returns the per-axis headroom envelope for the same
+    source -> next-above-source pair computed off the ``target`` rung's
+    static per-tier caps. Lets a pricing-comparison matrix UI render
+    the "on the rung above each rung, given my usage, here's what my
+    gauges would look like" upgrade-tooltip column off **one** call
+    instead of N calls to ``/next-tier-capacity-headroom-at``.
+
+    Response shape (envelope keys mirror
+    ``/api/entitlement/next-tier-capacity-diff-at-batch`` byte-for-key
+    on the source / target metadata, with each envelope's ``row``
+    replaced by ``headroom`` and augmented with ``direction`` echoing
+    ``"upgrade"``)::
+
+        {
+          "tiers":             [<envelope>, ...],
+          "current_tier":      "<resolved tier id>",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<envelope>`` carries::
+
+        {
+          "tier":         "<source tier id>",
+          "tier_label":   "<source label>",
+          "tier_rank":    <source rank>,
+          "target":       "<next-above tier id>" | null,
+          "target_label": "<next-above label>" | null,
+          "target_rank":  <next-above rank> | null,
+          "direction":    "upgrade",
+          "headroom":     {<capacity_headroom_at row>} | null,
+        }
+
+    ``headroom`` (when non-null) matches
+    ``/api/entitlement/capacity-headroom-at?tier=<target>&channels=...`` for
+    the resolved ``target`` byte-for-byte -- pinned in the test suite so
+    the batch what-if cannot drift from the singular ``_at`` sibling.
+    Envelope metadata is byte-parallel to
+    ``/api/entitlement/next-tier-capacity-diff-at-batch`` on the
+    source / target keys so a UI can fold the two batches into one
+    matrix row-for-row.
+
+    No source query param (batch walks
+    :data:`entitlements._PURCHASABLE_TIERS`, trial excluded). At the
+    source-side ceiling (``enterprise`` as source -- no rung strictly
+    above) the envelope carries ``target=null`` and ``headroom=null``
+    rather than being dropped, so the matrix keeps a row for every
+    purchasable rung.
+
+    Per-axis ``None`` on every envelope means "axis not supplied"
+    (matches ``/capacity-headroom-batch``'s posture). A blank / non-int
+    / negative / ``bool``-in-disguise value on any axis short-circuits
+    that axis to ``None`` on every envelope's inner headroom row -- a
+    stray query string cannot silently blank the whole matrix.
+
+    Decoupled from grace vs enforce: the underlying helper walks the
+    static per-tier caps, so ``tiers`` is byte-identical across modes.
+    The envelope's ``current_tier`` / ``grace`` / ``enforced`` still
+    track the live resolver so the UI can highlight the caller's
+    current rung.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        rows = _ent.next_tier_capacity_headroom_at_batch(**kwargs)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_next_tier_capacity_headroom_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/previous-tier-capacity-headroom-at-batch")
+def api_entitlement_previous_tier_capacity_headroom_at_batch():
+    """``GET /api/entitlement/previous-tier-capacity-headroom-at-batch?
+    channels=<int>&retention_days=<int>&nodes=<int>`` -- batch sibling
+    of ``/api/entitlement/previous-tier-capacity-headroom-at``: one
+    ``previous-tier-capacity-headroom-at`` envelope per purchasable
+    source tier, in one round-trip, given the caller-supplied per-axis
+    usage.
+
+    Source-anchored downgrade-side mirror of
+    ``/api/entitlement/next-tier-capacity-headroom-at-batch`` and
+    headroom-shaped mirror of
+    ``/api/entitlement/previous-tier-capacity-diff-at-batch``. Lets a
+    pricing-comparison matrix UI render the "on the rung below each
+    rung, given my usage, here's what would break" downgrade-tooltip
+    column off **one** call instead of N calls to
+    ``/previous-tier-capacity-headroom-at``.
+
+    Response shape mirrors
+    ``/api/entitlement/next-tier-capacity-headroom-at-batch``
+    byte-for-key; each envelope carries ``direction="downgrade"``.
+    ``headroom`` (when non-null) matches
+    ``/api/entitlement/capacity-headroom-at?tier=<target>&channels=...`` for
+    the resolved ``target`` byte-for-byte.
+
+    No source query param (batch walks
+    :data:`entitlements._PURCHASABLE_TIERS`, trial excluded). At the
+    source-side floor (``oss`` / ``cloud_free`` as source -- no rung
+    strictly below) the envelope carries ``target=null`` and
+    ``headroom=null`` rather than being dropped.
+
+    Same per-axis "None means axis not supplied" posture and bad-arg
+    short-circuits as
+    ``/api/entitlement/next-tier-capacity-headroom-at-batch``.
+    Grace / enforce yields byte-identical ``tiers`` payloads.
+
+    - **Never 5xxs**: a resolver failure yields an empty ``tiers`` list
+      and the grace-shape envelope so the matrix keeps rendering.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        kwargs: dict[str, int] = {}
+        for name in ("channels", "retention_days", "nodes"):
+            present, ok, val, _raw = _parse_capacity_arg(name)
+            if present and ok and val is not None and val >= 0:
+                kwargs[name] = val
+        rows = _ent.previous_tier_capacity_headroom_at_batch(**kwargs)
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "tiers": rows,
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_previous_tier_capacity_headroom_at_batch: error: %s",
+            exc,
+        )
+        return jsonify(
+            {
+                "tiers": [],
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/next-tier-spec")
 def api_entitlement_next_tier_spec():
     """``GET /api/entitlement/next-tier-spec`` -- full
