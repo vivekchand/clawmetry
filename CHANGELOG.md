@@ -1,5 +1,35 @@
 ## Unreleased
 
+- **Release: first `.dmg` that ships end-to-end signed + notarized + first-launch onboarding.**
+  - **Why:** the desktop bundle capability landed in stages this evening —
+    (a) the thin-shell PyInstaller `.app` (#4602), (b) signing pipeline
+    wiring (#4603), (c) workflow-file syntax fix (#4605), (d) `pyinstaller`
+    marker fix + release-on-merge tag cascade (#4608), (e) `actions: write`
+    permission + tag-derived VERSION (#4612), and (f) the first-launch
+    onboarding pane itself (#4614). Each release since v0.12.658 had one
+    or more of those pieces missing. This release is the first one where
+    the complete chain fires end-to-end from a single `[RELEASE]` merge:
+    PyPI wheel publishes, tag pushes, `desktop-artifacts.yml` auto-fires
+    on the tag (permission fix), macOS PyInstaller finds pyinstaller
+    (marker fix), signs and notarizes both `.app` and `.dmg` (secrets
+    wiring), and attaches everything to the GitHub Release named for the
+    right version (VERSION fix). And when the user opens the `.dmg`, the
+    first-launch onboarding pane runs — GitHub/Google/Email OTP sign-in,
+    auto Pro trial provisioning for entitled accounts, cross-sell
+    carousel during bootstrap, dashboard-content-ready gate — instead
+    of dropping them on an anonymous empty dashboard.
+  - **What:** no new code changes in THIS release — a `[RELEASE]` carrier
+    to fire the full pipeline for the first time end-to-end. The prior
+    `## Unreleased` entries describe the actual changes shipping.
+  - **Verified:** end-to-end verification IS this release. Success bar:
+    (1) `release-on-merge` bumps to `v0.12.<n>` and pushes tag WITHOUT
+    manual intervention, (2) `desktop-artifacts.yml` auto-fires on the
+    tag WITHOUT a manual `gh workflow run`, (3) all three OS jobs green,
+    (4) release attaches `ClawMetry-{correct_version}.dmg` (not stale
+    by one version), (5) `spctl --assess --type open` on the downloaded
+    `.dmg` returns `accepted, source=Notarized Developer ID`, (6) first
+    launch shows the onboarding pane.
+
 - **Feature: desktop app now onboards new users natively — sign-in pane, auto Pro trial, cross-sell carousel, dashboard-content-ready gate.**
   - **Why:** a user who chose the `.dmg` over `pip install` is the highest-intent
     surface we have; the old shell was a passive webview that dropped them on
