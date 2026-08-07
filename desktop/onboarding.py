@@ -365,6 +365,7 @@ def render_auth_pane(
       display: flex; align-items: center; justify-content: center; gap: 10px;
     }}
     .btn-primary:hover:not(:disabled) {{ background: #d63b39; }}
+    .btn-primary svg {{ width: 18px; height: 18px; }}
     .btn-oauth {{
       background: var(--bg); color: var(--text);
       border: 1px solid var(--border); width: 100%;
@@ -372,6 +373,19 @@ def render_auth_pane(
     }}
     .btn-oauth:hover:not(:disabled) {{ background: #1a2130; }}
     .btn-oauth svg {{ width: 18px; height: 18px; }}
+    /* Email is a tertiary CTA — subdued outlined below the OAuth pair.
+       Visual weight goes: GitHub (primary red) > Google (outlined) >
+       Email (thin outlined). Matches the CLI's `[1] GitHub [2] Google`
+       presentation with email as fallback. */
+    .btn-tertiary {{
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); width: 100%;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      font-weight: 500;
+    }}
+    .btn-tertiary:hover:not(:disabled) {{
+      color: var(--text); border-color: var(--muted);
+    }}
     .stack {{ display: flex; flex-direction: column; gap: 10px; }}
     .rule {{
       display: flex; align-items: center; gap: 12px;
@@ -406,7 +420,7 @@ def render_auth_pane(
     <p class="subline">{subline}</p>
 
     <div class="stack">
-      <button class="btn-oauth" id="btn-github" onclick="oauth('github')">
+      <button class="btn-primary" id="btn-github" onclick="oauth('github')">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 .5C5.65.5.5 5.65.5 12A11.5 11.5 0 0 0 8.36 22.94c.58.11.79-.25.79-.55v-2.02c-3.2.7-3.88-1.37-3.88-1.37-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.06 0 0 .97-.31 3.18 1.18a11.02 11.02 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.77.11 3.06.74.81 1.19 1.83 1.19 3.09 0 4.41-2.7 5.38-5.27 5.67.42.35.79 1.05.79 2.13v3.16c0 .3.21.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/>
         </svg>
@@ -426,8 +440,8 @@ def render_auth_pane(
     <div class="rule">or</div>
 
     <div class="stack">
-      <button class="btn-primary" id="btn-email" onclick="toggleEmail()">
-        Sign in with email
+      <button class="btn-tertiary" id="btn-email" onclick="toggleEmail()">
+        Continue with email
       </button>
     </div>
 
