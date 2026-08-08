@@ -218,11 +218,23 @@ window.addEventListener('focus', function(){
 function clawmetryOauthLogin(provider){
   var err = document.getElementById('login-error');
   if(err){ err.style.display='none'; }
-  fetch('/api/cloud-cta/oauth-start', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({provider: provider, mode: 'managed'}),
-  })
+  // Adaptive mode: on a self-hosted machine (nocloud marker present),
+  // the trial license flow is what /connect wants — mode=selfhost. On a
+  // fresh machine or one already using cloud sync, mode=managed registers
+  // the node and starts the sync daemon. Same choice `clawmetry onboard`
+  // and the desktop first-launch pane make. Probes /api/cloud-cta/status
+  // first so the OAuth start URL matches the machine's disposition.
+  fetch('/api/cloud-cta/status')
+    .then(function(r){ return r.ok ? r.json() : {local_only: false}; })
+    .catch(function(){ return {local_only: false}; })
+    .then(function(status){
+      var mode = (status && status.local_only) ? 'selfhost' : 'managed';
+      return fetch('/api/cloud-cta/oauth-start', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({provider: provider, mode: mode}),
+      });
+    })
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       if(d && d.url){
