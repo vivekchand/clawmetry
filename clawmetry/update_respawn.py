@@ -32,6 +32,11 @@ import sys
 import time
 
 _DETACHED = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+# This helper runs DETACHED (no console). Any console-subsystem child it
+# spawns WITHOUT this flag gets a brand-new VISIBLE console window — pip
+# runs for seconds-to-minutes, so users watch a mystery cmd window sit on
+# their screen (live-hit during an enterprise demo, 2026-08-08).
+_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
 
 
 def _wait_for_pid_exit(pid: int, timeout_secs: float = 60.0) -> bool:
@@ -106,10 +111,13 @@ def main(argv=None) -> int:
         # sibling process briefly holding the launcher exe. 10s+10s was too
         # short for either.
         for attempt, wait in ((1, 20), (2, 60), (3, 120)):
+            pip_kwargs = {"stdout": log, "stderr": log, "timeout": 300}
+            if os.name == "nt":
+                pip_kwargs["creationflags"] = _NO_WINDOW
             proc = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--upgrade",
                  "--no-cache-dir", spec],
-                stdout=log, stderr=log, timeout=300,
+                **pip_kwargs,
             )
             if proc.returncode == 0:
                 ok = True
