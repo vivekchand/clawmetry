@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Persistent memory files the agent reads on boot",
   "nav.models": "Models",
   "nav.notifications": "Notifications",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "Runtime extras",
   "nav.security": "Security",
   "nav.self_evolve": "Improvement tips",

@@ -2,9 +2,72 @@
   <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
     <div style="font-size:20px;font-weight:700;" id="harness-title">Harness</div>
     <div style="font-size:13px;color:var(--muted,#888);">
-      What this runtime uniquely exposes — beyond the generic tabs.
+      Everything wrapped around the model that turns "it can talk" into "it can work".
     </div>
     <button onclick="loadHarness()" style="margin-left:auto;" class="btn-ghost" title="Refresh">↻</button>
+  </div>
+
+  <!-- Anatomy of an AI harness: a plain-language map of the parts every agent
+       harness has, each linking to the ClawMetry tab where you can watch that
+       part live. Static content, no fetches: renders identically local + cloud. -->
+  <div class="card" style="padding:16px;margin-bottom:14px;" id="harness-anatomy">
+    <div style="font-size:15px;font-weight:700;margin-bottom:6px;">What is a harness?</div>
+    <div style="font-size:13px;color:var(--muted,#888);line-height:1.6;max-width:760px;">
+      An AI model on its own can only talk: you ask, it answers, it stops.
+      The <b>harness</b> is all the machinery wrapped around the model that lets it
+      actually do work: tools, memory, safety rails, and the loop that keeps it going
+      until the job is done. Claude Code, Cursor, and your agent runtimes are all
+      harnesses around the same few models. ClawMetry is a window into that machinery.
+      Each part below links to the tab where you can watch it live.
+      (Good primer: <a href="https://read.technically.dev/p/whats-harness-engineering"
+      target="_blank" rel="noopener" style="color:var(--accent,#6cf);">What's harness engineering?</a>)
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:14px;">
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🔁 The loop</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The agent reads, decides, acts, checks its own work, and goes again until the task is done. This loop is what makes it an agent instead of a chatbot.</div>
+        <a href="javascript:switchTab('brain')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Watch it live in Activity →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🔧 Tools</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Tools let the agent touch the world: read and edit files, run code, search the web, call other services. No tools, no work.</div>
+        <a href="javascript:switchTab('tool-catalog')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See its tools →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📚 Memory</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Models forget everything between sessions. The harness writes notes to files so your agent remembers you, your projects, and its own lessons.</div>
+        <a href="javascript:switchTab('memory')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Read its memory →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🪟 Context</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The model can only "see" a limited window of text at once. The harness keeps that window focused, trimming old noise so quality doesn't rot.</div>
+        <a href="javascript:switchTab('context-economics')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See context usage →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📦 Sandbox</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A safe room where the agent can run code and fail freely, without reaching things it shouldn't touch.</div>
+        <a href="javascript:switchTab('security')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Check its sandbox →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🚦 Guardrails</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The rules for what the agent may do on its own and what needs your OK first, like deleting files or spending money.</div>
+        <a href="javascript:switchTab('approvals')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Review approvals →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🤝 Teamwork</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">For big jobs, one agent leads and hands pieces to helper agents, then stitches the results together.</div>
+        <a href="javascript:switchTab('agents')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See who spawned whom →</a>
+      </div>
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">💬 Interfaces</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The same agent can meet you in a terminal, on Telegram or Slack, or in a browser. Different doors, one harness behind them.</div>
+        <a href="javascript:switchTab('flow')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Follow the message flow →</a>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size:13px;color:var(--muted,#888);margin:0 0 6px 2px;" id="harness-extras-label">
+    What this runtime uniquely exposes, beyond the generic tabs:
   </div>
   <!-- renderHarnessPanel() fills this from the selected runtime's template -->
   <div id="harness-container" class="card" style="padding:16px;">Loading harness view…</div>
