@@ -1,5 +1,173 @@
 ## Unreleased
 
+- **Release: auth pane hierarchy fix — GitHub/Google now primary, email tertiary.**
+  - **Why:** screenshot verification of v0.12.659 caught a visual bug —
+    the red "Sign in with email" button dominated GitHub/Google buttons
+    on the first-launch auth pane. That's the wrong signal: OAuth is
+    one-click while email is two-step (send OTP, verify). The CLI's
+    `clawmetry onboard` already presents `[1] GitHub  [2] Google` as
+    primary with email as fallback; the desktop pane didn't match.
+  - **What:** carrier `[RELEASE]` for the fix that landed in #4618.
+    No new code in this PR; the visual hierarchy fix rides along.
+  - **Verified:** side-by-side screenshots before/after in the #4618
+    description. End-to-end verification is this release: the tag push
+    must (a) auto-cascade to `desktop-artifacts.yml` (regression check
+    for the auto-cascade fix), (b) produce `ClawMetry-0.12.<n>.dmg`
+    with the corrected auth pane inside.
+
+- **Feature: Cache Hit Rate and Routing Advisor tiles land under the Usage tab, answering the two efficiency tactics Uber's CTO named on the Aug 6, 2026 earnings call.**
+  - **Why:** Uber's CTO on the Q2 2026 call: "the next phase will not be characterized by who spends the most tokens, but about how people use them as efficiently as possible." Frontier-AI adoption at Uber quadrupled since January while cost per token trended down, thanks to prompt caching, default model selection, per-engineer visibility, and open-weight experiments. Every CFO on the S&P 500 now asks the same board question with a smaller budget and no internal GenAI Gateway. ClawMetry ships the two most CFO-legible answers off the shelf.
+  - **What:** two tiles positioned directly under the Efficiency grade. Cache-Hit tile shows the current hit rate, the amount already saved from cached reads, and a conservative estimate of the amount left on the table (flagged as an estimate; cacheable-fraction constant exposed in the payload so the UI labels it honestly). Routing Advisor tile shows total potential monthly savings and the top five safe same-provider model downgrades, sourced from `providers_pricing.downgrade_model_name`'s guarded resolver (never cross-provider, never a bare-family splice that synthesises a non-existent id). Both tiles derive client-side from the shared `/api/efficiency` cache, so they add zero fetches per tab load and are cloud-safe by construction via the existing `cm-cloud-efficiency` interceptor. Two new public API endpoints (`/api/efficiency/cache-hit-rate`, `/api/efficiency/routing-advisor`) stay for external consumers and reconcile with `/api/efficiency` by construction, both honour `?days=` clamping, both never 500.
+  - **Verified:** 36/36 tests in `tests/test_efficiency.py` pass (5 new endpoint tests join the existing suite: shape, per-runtime scoping, `?days=` clamp, realised pull, never-500 on store failure). Served `static/js/app.js` contains `renderCacheHitRateCard` + `renderRoutingAdvisorCard`. Rendered `tabs/usage.html` (via Jinja) contains both card ids. FLYWHEEL Hard Gate 4 (No Dead UI) satisfied. Cloud parity satisfied without touching the cloud repo: both tiles read the same cached `/api/efficiency` blob that the existing `cm-cloud-efficiency` interceptor already serves from the snapshot. Blueprint and Requirement in 8090 Factory carry the new `CacheHitRate` and `RoutingAdvisor` components plus three new acceptance criteria (`AC-OBS-CEA-002.3` cache hit rate + estimate labelling, `AC-OBS-CEA-002.4` routing recommendation, `AC-OBS-CEA-002.5` realised vs potential); no drift. Carries #4610.
+
+- **Release: first `.dmg` that ships end-to-end signed + notarized + first-launch onboarding.**
+  - **Why:** the desktop bundle capability landed in stages this evening —
+    (a) the thin-shell PyInstaller `.app` (#4602), (b) signing pipeline
+    wiring (#4603), (c) workflow-file syntax fix (#4605), (d) `pyinstaller`
+    marker fix + release-on-merge tag cascade (#4608), (e) `actions: write`
+    permission + tag-derived VERSION (#4612), and (f) the first-launch
+    onboarding pane itself (#4614). Each release since v0.12.658 had one
+    or more of those pieces missing. This release is the first one where
+    the complete chain fires end-to-end from a single `[RELEASE]` merge:
+    PyPI wheel publishes, tag pushes, `desktop-artifacts.yml` auto-fires
+    on the tag (permission fix), macOS PyInstaller finds pyinstaller
+    (marker fix), signs and notarizes both `.app` and `.dmg` (secrets
+    wiring), and attaches everything to the GitHub Release named for the
+    right version (VERSION fix). And when the user opens the `.dmg`, the
+    first-launch onboarding pane runs — GitHub/Google/Email OTP sign-in,
+    auto Pro trial provisioning for entitled accounts, cross-sell
+    carousel during bootstrap, dashboard-content-ready gate — instead
+    of dropping them on an anonymous empty dashboard.
+  - **What:** no new code changes in THIS release — a `[RELEASE]` carrier
+    to fire the full pipeline for the first time end-to-end. The prior
+    `## Unreleased` entries describe the actual changes shipping.
+  - **Verified:** end-to-end verification IS this release. Success bar:
+    (1) `release-on-merge` bumps to `v0.12.<n>` and pushes tag WITHOUT
+    manual intervention, (2) `desktop-artifacts.yml` auto-fires on the
+    tag WITHOUT a manual `gh workflow run`, (3) all three OS jobs green,
+    (4) release attaches `ClawMetry-{correct_version}.dmg` (not stale
+    by one version), (5) `spctl --assess --type open` on the downloaded
+    `.dmg` returns `accepted, source=Notarized Developer ID`, (6) first
+    launch shows the onboarding pane.
+
+- **Feature: desktop app now onboards new users natively — sign-in pane, auto Pro trial, cross-sell carousel, dashboard-content-ready gate.**
+  - **Why:** a user who chose the `.dmg` over `pip install` is the highest-intent
+    surface we have; the old shell was a passive webview that dropped them on
+    the same anonymous empty dashboard a `pip install` would produce, wasting
+    that signal. Trial provisioning existed in the backend (`auto_provision_pro`
+    in `clawmetry/license.py`) but had no in-app trigger — the paywall CTA
+    just did `window.open('clawmetry.com/connect')` and users had to bring a
+    `cm_` key back manually. Result: desktop installs converted to trial at
+    single-digit rates.
+  - **What:** `desktop/onboarding.py` — a new self-contained module (stdlib only)
+    that renders three surfaces inside the pywebview window: (1) an auth pane
+    mirroring `clawmetry onboard`'s three paths (GitHub OAuth loopback,
+    Google OAuth loopback, email OTP — same server endpoints), (2) an
+    Ubuntu-installer-style cross-sell carousel that auto-advances through
+    Agent Builder, Desk device, and Enterprise SSO while the runtime venv
+    provisions, (3) a ready-gate spinner that keeps the pane up until
+    `/api/overview` returns content or 20s elapses. `desktop/app.py` gains a
+    `DesktopAPI` class exposed as `window.pywebview.api.*` so the pane's JS
+    can call into Python for OAuth, OTP send/verify, external-link opens, and
+    skip. Post-auth the shell shells out to
+    `runtime/venv/bin/clawmetry connect --key cm_… --start-sync-now` — no
+    duplication of key-validation, `auto_provision_pro`, or sync-daemon
+    start in the shell. First-launch state stamped in
+    `~/Library/Application Support/ClawMetry/runtime/onboarding-completed.json`
+    so relaunches skip the pane. Cloud sync is default-ON per product spec;
+    the header toggle to disable is a follow-up. `desktop/build_mac.spec` +
+    `build_windows.spec` + `build_linux.spec` explicitly list `onboarding`
+    in `hiddenimports` so a future refactor can't silently drop it from the
+    bundle. `desktop/README.md` and Software Factory Blueprint updated with
+    the new sequence.
+  - **Verified:** onboarding.py + app.py both parse (`python3 -c "import ast;
+    ast.parse(open(...).read())"`); DesktopAPI unit smoke tests pass (skip_auth
+    sets the event, open_external rejects non-https, start_oauth rejects
+    unknown providers, send_email_otp rejects invalid emails, verify_email_otp
+    rejects short codes). End-to-end verification is the next release: the
+    tag push must produce a `.dmg` that on first launch shows the auth pane,
+    completes GitHub OAuth via loopback, provisions the Pro wheel for a
+    trial-entitled account, and dismisses when `/api/overview` returns data.
+
+- **Fix: macOS `.dmg` now actually builds — pyinstaller was excluded from macOS via a stray sys_platform marker; release-on-merge now kicks tag-triggered workflows the GITHUB_TOKEN can't cascade.**
+  - **Why:** two bugs in a row prevented v0.12.656 and v0.12.657 from
+    shipping desktop bundles even though PyPI got the wheels cleanly.
+    (1) `desktop/requirements-dev.txt` pinned pyinstaller with
+    `sys_platform != "darwin"` — literally excluding it on macOS. The
+    workflow's macOS job then runs `pyinstaller --clean --noconfirm
+    desktop/build_mac.spec` and dies with exit 127 ("command not
+    found"). The comment above the workflow step even says "PyInstaller
+    (not py2app)" but the requirements file thought it was
+    py2app-on-mac. (2) `release-on-merge.yml` creates the release tag
+    with the default GITHUB_TOKEN, and GitHub Actions deliberately
+    suppresses cascade triggers for GITHUB_TOKEN events — so the
+    `on: push: tags:` gate on `desktop-artifacts.yml` never fired even
+    after the workflow-file syntax fix in v0.12.657. Every release
+    since v0.12.656 has needed a manual `gh workflow run
+    desktop-artifacts.yml --ref v0.12.<n>` to build the bundles.
+  - **What:** (1) collapse the pyinstaller line in
+    `desktop/requirements-dev.txt` to a single unconditional
+    `pyinstaller>=6.0` and drop the unused py2app + `setuptools<70`
+    macOS pins — all three build specs are PyInstaller specs, py2app
+    is not on the shipping path. (2) add an explicit
+    `gh workflow run desktop-artifacts.yml --ref v0.12.<n>` step at
+    the end of `release-on-merge.yml` right after the `gh release
+    create` step, so every future release fires the desktop-bundle
+    build automatically. Non-blocking (`|| echo`) so a dispatch failure
+    never blocks the PyPI publish that already succeeded upstream.
+  - **Verified:** locally,
+    `pip install -r desktop/requirements-dev.txt` on macOS installs
+    pyinstaller (was previously silently skipped by the sys_platform
+    marker). The `gh workflow run` step is idempotent and safe on
+    re-runs. End-to-end verification is this release: the tag push
+    must produce a signed+notarized `.dmg` + Windows `.zip` + Linux
+    `.tar.gz` attached to the GitHub Release WITHOUT any manual
+    dispatch step from me.
+
+- **Fix: desktop-artifacts workflow now parses — signed `.dmg` ships on tag push instead of failing at the workflow-file level.**
+  - **Why:** the wiring release (v0.12.656) attempted to gate the signing
+    steps with `if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}` at step level.
+    GitHub Actions rejects `secrets.*` inside `if:` — that context is only
+    legal in `env:`, `with:`, and `run:`. The parser refused the whole
+    workflow file, so every run (both the tag push and a manual dispatch
+    for retry) failed at "This run likely failed because of a workflow
+    file issue" before any job started. Net effect: `clawmetry 0.12.656`
+    published to PyPI cleanly but the GitHub Release for that tag had
+    zero binary assets attached.
+  - **What:** hoist the presence checks to job-level `env` and gate the
+    steps on `env.HAS_CERT` / `env.HAS_SIGN`, which is legal in `if:`.
+    Also declare `permissions: contents: write` on the release job so
+    `softprops/action-gh-release@v2` can attach files even when the org
+    default GITHUB_TOKEN scope is read-only. First tag on which the fix
+    lands is the one this release cuts.
+  - **Verified:** YAML parses locally (`python3 -c "import yaml; yaml.safe_load(...)"`);
+    no `secrets.*` references remain inside any `if:` conditional
+    (`grep -nE '^\s*if:.*secrets\.'` returns nothing). End-to-end
+    verification comes with this release's tag push — the macOS job
+    must import the cert, sign both the `.app` and the `.dmg`, and the
+    release job must attach all three OS bundles to the GitHub Release.
+
+- **Release: macOS desktop `.dmg` now ships signed + notarized on every tag push.**
+  - **Why:** the desktop-app scaffold landed in #4602 with the signing pipeline
+    wired but the six Apple credentials were not yet in the repo, so
+    `desktop-artifacts.yml` on a `v*.*.*` tag would still produce an unsigned
+    `.dmg` — Gatekeeper would warn on first launch and the app-store-quality
+    experience the desktop bundle was built for wouldn't actually reach users.
+  - **What:** `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`,
+    `APPLE_APP_SPECIFIC_PASSWORD`, `MACOS_CERT_P12_BASE64`, and
+    `MACOS_CERT_PASSWORD` are now set on `vivekchand/clawmetry`. On every
+    tag push, `desktop-artifacts.yml` codesigns and hardened-runtime-signs
+    `ClawMetry.app`, submits the wrapping `.dmg` to Apple's notary service via
+    `notarytool`, staples the ticket, and attaches the finished `.dmg` to the
+    GitHub Release alongside the Windows `.zip` and Linux `.tar.gz`.
+  - **Verified:** local proof — `~/Downloads/ClawMetry-signed.dmg` (7.3 MB) is
+    signed by `Developer ID Application: InstaLabs LLC (8LVH596RA5)` and
+    `spctl --assess --type open` reports `accepted, source=Notarized Developer
+    ID`; the six secrets are confirmed present via `gh secret list` at
+    2026-08-07T21:12Z. CI verification comes in this release: the tag push
+    for this version is the first end-to-end exercise of the notarization
+    path on GitHub-hosted runners.
+
 - **Fix: installers now sweep and remove stale clawmetry duplicates instead of only detecting them.**
   - **Why:** #4335 (`clawmetry/installs.py`) taught the CLI to *detect and
     warn* about a stale clawmetry copy elsewhere on PATH, but nothing

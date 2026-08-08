@@ -1,0 +1,229 @@
+name: Build desktop artifacts (.dmg / .exe / .AppImage)
+
+# Produces clickable, unsigned downloads for the ClawMetry menubar/tray
+# app on macOS, Windows, and Linux. Runs on:
+#   - manual dispatch (any branch — use to smoke test locally-built specs)
+#   - version tag push (v*.*.*) — attaches artifacts to the GitHub Release
+# Signing / notarization is a follow-up step; until Apple Developer ID
+# and a Windows EV cert are wired up as repo secrets, the artifacts are
+# unsigned and Gatekeeper / SmartScreen will warn on first launch. That
+# is intentional for the internal-distribution phase.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+jobs:
+  macos:
+    name: macOS .app + .dmg (signed + notarized when secrets are set)
+    runs-on: macos-latest
+    # The `secrets` context is not available in step-level `if:` conditionals
+    # (the workflow parser rejects it — GitHub restricts `secrets` to `env:`,
+    # `with:`, and `run:`). Hoist the presence checks into job-level `env` so
+    # steps can gate on `env.HAS_*`, which IS legal in `if:`. The values are
+    # 'true' / 'false' strings because that is what `!= ''` evaluates to.
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+      HAS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: |
+          pip install --upgrade pip wheel
+          # Thin shell: no clawmetry install needed here. Bundle only
+          # ships pywebview + PIL. Runtime pip-installs clawmetry on
+          # user's machine on first launch.
+          pip install -r desktop/requirements-dev.txt
+
+      # PyInstaller (not py2app). py2app 0.28.x has a broken macOS
+      # version check on Tahoe / macOS 26 and refuses to build; the
+      # setup_py2app.py spec is kept in-tree for the day py2app
+      # catches up but is not on the shipping path.
+      - name: Build .app
+        run: pyinstaller --clean --noconfirm desktop/build_mac.spec
+
+      # --- Code-signing + notarization ---
+      # These steps NO-OP when the secrets aren't configured, so PRs
+      # from forks and unsigned dev builds still succeed. Add these
+      # repo secrets in Settings → Secrets and variables → Actions:
+      #   MACOS_CERT_P12_BASE64         Developer ID Application .p12 (base64)
+      #   MACOS_CERT_P12_PASSWORD       password used when exporting the .p12
+      #   MACOS_SIGN_IDENTITY           e.g. "Developer ID Application: InstaLabs LLC (8LVH596RA5)"
+      #   APPLE_ID                      Apple ID email
+      #   APPLE_TEAM_ID                 e.g. 8LVH596RA5
+      #   APPLE_APP_SPECIFIC_PASSWORD   from https://appleid.apple.com → App-Specific Passwords
+      - name: Import Developer ID cert into a build keychain
+        if: env.HAS_CERT == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
+        run: |
+          KEYCHAIN=$RUNNER_TEMP/build.keychain
+          PASS="build-${GITHUB_RUN_ID}"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$PASS" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASS" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Show what we imported (identities only — no keys)
+          security find-identity -p codesigning -v "$KEYCHAIN"
+
+      - name: Sign + notarize + staple .app
+        if: env.HAS_SIGN == 'true'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: desktop/sign_mac.sh dist/ClawMetry.app
+
+      - name: Wrap into .dmg
+        run: |
+          # Prefer the tag ref (v0.12.<n> → 0.12.<n>) over dashboard.py's
+          # __version__ because release-on-merge commits the version bump
+          # in a SEPARATE follow-up PR, so at the tag ref dashboard.py is
+          # still stale by one release. Falls back to dashboard.py for
+          # non-tag runs (manual dispatch on main, PR CI).
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          fi
+          hdiutil create -volname "ClawMetry" \
+            -srcfolder dist/ClawMetry.app \
+            -ov -format UDZO \
+            "dist/ClawMetry-${VERSION}.dmg"
+
+      - name: Sign + notarize + staple the .dmg itself
+        if: env.HAS_SIGN == 'true'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          for dmg in dist/*.dmg; do
+            desktop/sign_mac.sh "$dmg"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawmetry-macos
+          path: dist/*.dmg
+
+  windows:
+    name: Windows .exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -r desktop/requirements-dev.txt
+
+      - name: Build tray .exe
+        run: pyinstaller --clean --noconfirm desktop/build_windows.spec
+
+      - name: Zip distribution folder
+        working-directory: dist
+        shell: pwsh
+        # Same tag-first version selection as the macOS job — see comment
+        # there. Falls back to dashboard.py __version__ for non-tag runs.
+        run: |
+          $refName = $Env:GITHUB_REF_NAME
+          if ($refName -and $refName -match '^v\d+\.\d+\.\d+$') {
+            $version = $refName.Substring(1)
+          } else {
+            $version = (Select-String -Path ../dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
+          }
+          Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawmetry-windows
+          path: dist/*.zip
+
+  linux:
+    name: Linux single-folder + AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          # GTK WebKit2 is the pywebview backend on Linux.
+          sudo apt-get install -y \
+            libgtk-3-0 libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 \
+            libayatana-appindicator3-1 libnotify4
+
+      - name: Install build deps
+        run: |
+          pip install --upgrade pip wheel
+          pip install -r desktop/requirements-dev.txt
+
+      - name: Build tray binary
+        run: pyinstaller --clean --noconfirm desktop/build_linux.spec
+
+      - name: Tarball distribution folder
+        working-directory: dist
+        # Same tag-first version selection as the macOS job — see comment
+        # there. Falls back to dashboard.py __version__ for non-tag runs.
+        run: |
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('../dashboard.py').read()).group(1))")
+          fi
+          tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawmetry-linux
+          path: dist/*.tar.gz
+
+  release:
+    name: Attach artifacts to Release
+    needs: [macos, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # softprops/action-gh-release needs write access to the Contents API
+    # to attach files to the existing tag's Release. Default GITHUB_TOKEN
+    # scope is read-only when the org sets that as the default; declare
+    # explicitly so the step never silently 403s.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/clawmetry-macos/*.dmg
+            artifacts/clawmetry-windows/*.zip
+            artifacts/clawmetry-linux/*.tar.gz
+          fail_on_unmatched_files: false

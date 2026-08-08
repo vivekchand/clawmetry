@@ -1,0 +1,716 @@
+"""ClawMetry desktop app — standalone native window (thin shell).
+
+Runs as a real desktop application (like Cursor, Claude Desktop): the
+dashboard renders inside a native window backed by the OS webview
+(WKWebView on macOS, WebView2 on Windows, GTK webkit2 on Linux). No
+browser tab, no menubar-only helper.
+
+**Architecture — thin shell, pip-managed clawmetry.**
+The .app bundles only the pywebview shell + this supervisor. The
+actual `clawmetry` package lives outside the bundle, in a private
+runtime venv the shell manages. On every launch the shell runs
+`pip install --upgrade clawmetry` in that venv, so the user always
+gets the current PyPI release without redownloading the .dmg.
+
+    ~/Library/Application Support/ClawMetry/runtime/          (macOS)
+    %LOCALAPPDATA%/ClawMetry/runtime/                         (Windows)
+    ~/.local/share/ClawMetry/runtime/                         (Linux)
+
+    runtime/
+      venv/                    ← created on first launch (python -m venv)
+        bin/clawmetry          ← spawned as the daemon child
+      last-upgrade.json        ← timestamp of the last pip upgrade
+      bootstrap.log            ← create/upgrade logs
+
+Threading:
+    main thread   → pywebview event loop (Cocoa needs the main thread)
+    worker thread → bootstrap runtime venv, pip install/upgrade
+                    clawmetry, spawn the daemon, wait for Flask to
+                    bind, then swap the window from splash to the
+                    real dashboard
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import platform
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from pathlib import Path
+from typing import Callable, Optional
+
+# Top-level import so PyInstaller's static analysis bundles onboarding.py
+# into the .app (lazy imports inside DesktopAPI methods otherwise get
+# missed by the analyser and 500 at runtime with ModuleNotFoundError).
+# onboarding.py sits next to app.py in the bundle (build_mac.spec's
+# pathex includes desktop/).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import onboarding  # noqa: E402  (must follow sys.path insert)
+
+APP_TITLE = "ClawMetry"
+STARTUP_TIMEOUT_SECS = 45.0
+POLL_INTERVAL_SECS = 0.4
+SHUTDOWN_WAIT_SECS = 5.0
+# Blueprint "Desktop Application Distribution" contract: poll PyPI for
+# a newer clawmetry release every 6 hours. `_should_upgrade()` is the
+# gate on the actual pip call; the watcher's own tick is faster because
+# its other job (drift-detect + crash respawn) benefits from a shorter
+# interval — see WATCHER_TICK_SECS.
+UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
+# How often the watcher thread checks for drift and crashes while the
+# app is running. Short enough that clicking "Update now" in the
+# dashboard translates into a visible restart within ~a minute. The
+# 6h pip-upgrade cadence is enforced by _should_upgrade(), NOT by
+# this constant — do not read this as an upgrade frequency.
+WATCHER_TICK_SECS = 60
+
+BRAND_RED = "#E94644"
+BRAND_BG_DARK = "#0b0e14"
+
+
+def _assets_dir() -> Path:
+    """Locate the desktop/assets directory in dev and frozen contexts."""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))
+        for candidate in (base / "desktop" / "assets", base / "assets"):
+            if candidate.is_dir():
+                return candidate
+        return base
+    return Path(__file__).resolve().parent / "assets"
+
+
+def _brand_logo_data_uri() -> str:
+    p = _assets_dir() / "clawmetry-logo-horizontal-darkbg.svg"
+    try:
+        b = p.read_bytes()
+    except OSError:
+        return ""
+    return "data:image/svg+xml;base64," + base64.b64encode(b).decode()
+
+
+def _splash_html(status: str = "Preparing runtime") -> str:
+    logo = _brand_logo_data_uri()
+    logo_block = (
+        f'<img class="logo" src="{logo}" alt="ClawMetry"/>'
+        if logo
+        else '<div class="title">ClawMetry</div>'
+    )
+    safe_status = status.replace("<", "&lt;")
+    return f"""
+<!doctype html>
+<html><head>
+  <meta charset="utf-8"/>
+  <title>ClawMetry</title>
+  <style>
+    html, body {{ margin:0; padding:0; height:100%;
+      background:{BRAND_BG_DARK}; color:#e2e8f0;
+      font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    .wrap {{ height:100%; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:22px; padding:24px; }}
+    .logo {{ width:min(360px, 60vw); height:auto; opacity:.98; }}
+    .title {{ font-size:22px; font-weight:600; letter-spacing:.4px; }}
+    .sub {{ font-size:12px; color:#94a3b8;
+      display:flex; align-items:center; gap:8px; }}
+    .dot {{ width:8px; height:8px; border-radius:50%;
+      background:{BRAND_RED};
+      box-shadow:0 0 12px {BRAND_RED}88;
+      animation:pulse 1.4s ease-in-out infinite; }}
+    @keyframes pulse {{ 0%,100% {{ transform:scale(.8); opacity:.5 }}
+      50% {{ transform:scale(1); opacity:1 }} }}
+  </style>
+</head><body>
+  <div class="wrap">
+    {logo_block}
+    <div class="sub"><span class="dot"></span>{safe_status}</div>
+  </div>
+</body></html>
+"""
+
+
+def _runtime_dir() -> Path:
+    """Where the shell keeps its runtime venv + logs. Standard OS
+    per-user app-data directory so nothing lives inside the .app."""
+    system = platform.system()
+    if system == "Darwin":
+        base = Path.home() / "Library" / "Application Support" / "ClawMetry"
+    elif system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ClawMetry"
+    else:
+        base = Path(
+            os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
+        ) / "ClawMetry"
+    d = base / "runtime"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _bootstrap_python() -> Optional[str]:
+    """A real Python interpreter the shell can use to create a venv.
+    PyInstaller's bundled interpreter can't (its `sys.executable` is
+    the bundle exe and `python -m venv` mispoints), so we use the
+    system Python. On macOS this is `/usr/bin/python3` (ships with the
+    OS since Big Sur). On Linux, `python3` on PATH. On Windows, `py`
+    or the Store Python."""
+    candidates = ["python3", "/usr/bin/python3", "python", "py"]
+    if platform.system() == "Windows":
+        candidates = ["py", "python", "python3"]
+    import shutil
+
+    for c in candidates:
+        p = shutil.which(c)
+        if p:
+            try:
+                r = subprocess.run(
+                    [p, "-c", "import sys,venv,pip; print(sys.version_info[:2])"],
+                    capture_output=True, text=True, timeout=6,
+                )
+                if r.returncode == 0:
+                    return p
+            except Exception:
+                continue
+    return None
+
+
+class RuntimeSupervisor:
+    """Owns the runtime venv, upgrade cadence, and the clawmetry child.
+
+    Not thread-safe against concurrent start/stop; fine because the UI
+    only drives it from the boot thread."""
+
+    def __init__(self, port: int, on_status: Callable[[str], None]):
+        self.port = port
+        self.on_status = on_status
+        self.proc: Optional[subprocess.Popen] = None
+        self.runtime = _runtime_dir()
+        self.venv = self.runtime / "venv"
+        self.stamp_file = self.runtime / "last-upgrade.json"
+        self.log_file = self.runtime / "bootstrap.log"
+        # Set to True by main() when the user closes the window so the
+        # watcher stops trying to respawn the daemon on the way out.
+        self.shutting_down = threading.Event()
+
+    def _venv_python(self) -> Path:
+        return self.venv / ("Scripts" if platform.system() == "Windows" else "bin") / (
+            "python.exe" if platform.system() == "Windows" else "python"
+        )
+
+    def _venv_clawmetry(self) -> Path:
+        return self.venv / ("Scripts" if platform.system() == "Windows" else "bin") / (
+            "clawmetry.exe" if platform.system() == "Windows" else "clawmetry"
+        )
+
+    def _log(self, line: str) -> None:
+        try:
+            with self.log_file.open("a") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+        except OSError:
+            pass
+
+    def _should_upgrade(self) -> bool:
+        if not self.stamp_file.exists():
+            return True
+        try:
+            ts = json.loads(self.stamp_file.read_text()).get("ts", 0)
+            return (time.time() - ts) > UPGRADE_CHECK_INTERVAL_SECS
+        except Exception:
+            return True
+
+    def _mark_upgraded(self, version: Optional[str]) -> None:
+        try:
+            self.stamp_file.write_text(
+                json.dumps({"ts": time.time(), "version": version})
+            )
+        except OSError:
+            pass
+
+    def _get_installed_version(self) -> Optional[str]:
+        py = self._venv_python()
+        if not py.exists():
+            return None
+        try:
+            r = subprocess.run(
+                [str(py), "-c",
+                 "import importlib.metadata as m; print(m.version('clawmetry'))"],
+                capture_output=True, text=True, timeout=8,
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    def bootstrap(self) -> bool:
+        """Create the venv if missing; pip-install/upgrade clawmetry.
+        Idempotent. Returns True if a runnable clawmetry ends up in
+        the venv; False on any hard failure."""
+        py = _bootstrap_python()
+        if not py:
+            self.on_status(
+                "System Python 3 not found. Install python.org 3.11+ then relaunch."
+            )
+            self._log("no system python3 available")
+            return False
+
+        if not self._venv_python().exists():
+            self.on_status("Creating runtime environment")
+            try:
+                subprocess.run(
+                    [py, "-m", "venv", str(self.venv)],
+                    check=True, capture_output=True, text=True, timeout=60,
+                )
+                self._log(f"venv created via {py}")
+            except subprocess.CalledProcessError as e:
+                self._log(f"venv creation failed: {e.stderr}")
+                self.on_status("Runtime setup failed. Check bootstrap.log.")
+                return False
+
+        needs_upgrade = self._should_upgrade()
+        currently_installed = self._get_installed_version()
+        if currently_installed is None or needs_upgrade:
+            action = "Installing" if currently_installed is None else "Checking for updates"
+            self.on_status(f"{action} ClawMetry from PyPI")
+            try:
+                r = subprocess.run(
+                    [str(self._venv_python()), "-m", "pip", "install",
+                     "--upgrade", "--disable-pip-version-check", "clawmetry"],
+                    capture_output=True, text=True, timeout=300,
+                )
+                self._log(f"pip install rc={r.returncode}")
+                if r.returncode != 0:
+                    self._log(r.stderr[:2000])
+                    # If we already have a version installed, keep it — a
+                    # transient PyPI failure shouldn't block launch.
+                    if currently_installed is None:
+                        self.on_status("PyPI install failed. See bootstrap.log.")
+                        return False
+                new_version = self._get_installed_version()
+                self._mark_upgraded(new_version)
+                self._log(f"clawmetry now at {new_version}")
+            except subprocess.TimeoutExpired:
+                self._log("pip install timed out")
+                if currently_installed is None:
+                    self.on_status("Install timed out. Check your connection.")
+                    return False
+
+        return self._venv_clawmetry().exists()
+
+    def start_daemon(self) -> None:
+        argv = [
+            str(self._venv_clawmetry()),
+            "--no-debug",
+            "--port", str(self.port),
+        ]
+        env = os.environ.copy()
+        # WERKZEUG_RUN_MAIN handled by --no-debug (waitress path).
+        env.pop("PYTHONHOME", None)
+        env.pop("PYTHONPATH", None)
+        kwargs: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+            "env": env,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        else:
+            kwargs["start_new_session"] = True
+        self.proc = subprocess.Popen(argv, **kwargs)
+
+    def wait_ready(self, deadline_secs: float = STARTUP_TIMEOUT_SECS) -> bool:
+        url = f"http://127.0.0.1:{self.port}/"
+        deadline = time.time() + deadline_secs
+        while time.time() < deadline:
+            if self.proc and self.proc.poll() is not None:
+                return False
+            try:
+                with urllib.request.urlopen(url, timeout=1.5) as r:
+                    if 200 <= r.status < 400:
+                        return True
+            except Exception:
+                pass
+            time.sleep(POLL_INTERVAL_SECS)
+        return False
+
+    def stop(self) -> None:
+        p = self.proc
+        if not p:
+            return
+        try:
+            if os.name == "nt":
+                p.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            else:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            p.wait(timeout=SHUTDOWN_WAIT_SECS)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "nt":
+                    p.kill()
+                else:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+        self.proc = None
+
+    def _get_running_daemon_version(self) -> Optional[str]:
+        """Ask the CHILD daemon what version it thinks it is via its own
+        /api/version endpoint. Returns None if the daemon is down or
+        unreachable — which is normal during restarts."""
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/version", timeout=1.5
+            ) as r:
+                return json.loads(r.read()).get("current")
+        except Exception:
+            return None
+
+    def _background_pip_upgrade(self) -> None:
+        """Non-blocking upgrade via the venv's `clawmetry update`
+        subcommand — this way we inherit the daemon's own
+        CLAWMETRY_AUTO_UPDATE kill switch and
+        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window without
+        reimplementing them here. Matches the blueprint contract
+        "the shell defers to the daemon's update policy rather than
+        shipping its own". Errors are logged and swallowed — a
+        transient PyPI failure should never take down the running app.
+        """
+        if os.environ.get("CLAWMETRY_AUTO_UPDATE") == "0":
+            self._log("watcher upgrade: CLAWMETRY_AUTO_UPDATE=0, skipping")
+            return
+        cli = self._venv_clawmetry()
+        if not cli.exists():
+            return
+        try:
+            r = subprocess.run(
+                [str(cli), "update"],
+                capture_output=True, text=True, timeout=300,
+            )
+            self._log(f"watcher clawmetry-update rc={r.returncode}")
+            if r.returncode != 0:
+                self._log(r.stderr[:2000])
+            else:
+                self._mark_upgraded(self._get_installed_version())
+        except subprocess.TimeoutExpired:
+            self._log("watcher clawmetry-update timed out")
+
+    def restart_daemon(self) -> bool:
+        """Stop the current daemon and spawn a fresh one on the same
+        port. Returns True if the new daemon binds and answers before
+        the startup timeout. Idempotent; safe to call repeatedly."""
+        self.stop()
+        # Give TCP TIME_WAIT a moment on the freed port; on most systems
+        # SO_REUSEADDR handles this, but on macOS a bare Popen can lose.
+        time.sleep(0.5)
+        self.start_daemon()
+        return self.wait_ready()
+
+    def watch(self, on_restart: Callable[[], None]) -> None:
+        """Blocking watcher loop, meant to run in a daemon thread.
+
+        Every WATCHER_TICK_SECS:
+          1. If the child crashed, respawn (unless shutting down).
+          2. Compare the venv's installed clawmetry version to what the
+             running daemon reports. If they differ (user clicked
+             "Update now" in the dashboard, or any other mechanism
+             upgraded the venv), restart the daemon and invoke
+             on_restart() so the caller can refresh the webview.
+             This is how the blueprint contract "auto-upgrade it in
+             place" is actually delivered end-to-end — the pip install
+             changes the venv, and this loop makes the running process
+             pick it up without a manual quit-and-relaunch.
+          3. If 6 hours have elapsed since the last stamped upgrade
+             (`_should_upgrade()`), run a background `clawmetry update`
+             so users who never quit still get PyPI releases on the
+             blueprint's 6h cadence. Any resulting version change is
+             caught by step 2 on the next tick.
+        """
+        while not self.shutting_down.is_set():
+            if self.shutting_down.wait(WATCHER_TICK_SECS):
+                return
+
+            if self.proc is not None and self.proc.poll() is not None:
+                self._log(f"daemon exited with code {self.proc.returncode}; respawning")
+                if self.restart_daemon():
+                    on_restart()
+                continue
+
+            installed = self._get_installed_version()
+            running = self._get_running_daemon_version()
+            if installed and running and installed != running:
+                self._log(
+                    f"version drift: venv={installed} running={running}; restarting"
+                )
+                self.on_status(f"Applying update to v{installed}")
+                if self.restart_daemon():
+                    on_restart()
+                continue
+
+            if self._should_upgrade():
+                self._log("watcher: 6h elapsed, running clawmetry update")
+                self._background_pip_upgrade()
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# ─── Boot orchestration ────────────────────────────────────────────────────────────────────
+# The first-launch onboarding flow is a small state machine driven from
+# a single worker thread. Phases:
+#
+#   1. bootstrap runtime venv + pip-install clawmetry (with the
+#      Ubuntu-installer-style carousel showing progress)
+#   2. if first launch AND cloud reachable: show sign-in pane and block
+#      the worker thread on `_auth_done` until user completes or skips
+#   3. if a cm_ key landed: run `clawmetry connect --key --start-sync-now`
+#      which validates, saves config, provisions the Pro wheel (only if
+#      the account is Trial/Starter/Pro/Enterprise entitled), and starts
+#      the sync daemon (cloud sync is default-ON per product spec)
+#   4. start the dashboard daemon on a free port
+#   5. load the ready-gate splash, which polls /api/overview and swaps
+#      to the real dashboard when there's content to show (capped at 20s)
+#
+# The DesktopAPI class below is what JS in the auth pane calls into via
+# ``window.pywebview.api.*``. Each method returns a small dict the pane
+# renders as inline status text.
+
+class DesktopAPI:
+    """pywebview JS bridge for the onboarding pane.
+
+    Methods are called synchronously from JS; the pywebview runtime
+    dispatches them onto a worker thread and marshals the return value
+    back. They must be idempotent-safe (a page reload can double-invoke)
+    and quick to return — long-running work (OAuth loopback, OTP) is
+    fine because pywebview never blocks the UI thread on them."""
+
+    def __init__(self, sup: "RuntimeSupervisor", app_base_override: Optional[str] = None):
+        self._sup = sup
+        self._app_base = app_base_override
+        self._auth_done = threading.Event()
+        self._captured_key: str = ""
+        self._captured_email: str = ""
+        self._captured_provider: str = ""
+
+    # ── OAuth (GitHub / Google) ────────────────────────────────────────────
+    def start_oauth(self, provider: str) -> dict:
+        provider = (provider or "").lower()
+        if provider not in ("github", "google"):
+            return {"ok": False, "error": "unknown provider"}
+        ok, msg_or_key = onboarding.oauth_loopback_flow(
+            provider, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": msg_or_key}
+        self._captured_key = msg_or_key
+        self._captured_provider = provider
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Email OTP ───────────────────────────────────────────────────────
+    def send_email_otp(self, email: str) -> dict:
+        ok, msg = onboarding.send_email_otp(email, app_base=self._app_base)
+        return {"ok": ok, "error": "" if ok else msg}
+
+    def verify_email_otp(self, email: str, otp: str) -> dict:
+        ok, key_or_err = onboarding.verify_email_otp(
+            email, otp, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": key_or_err}
+        self._captured_key = key_or_err
+        self._captured_email = email
+        self._captured_provider = "email"
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Skip (dismiss without auth) ──────────────────────────────────────────
+    def skip_auth(self) -> dict:
+        # No key captured; downstream `_apply_and_boot_daemon` will
+        # just skip the connect step and go straight to the dashboard.
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── External links (carousel CTAs) ──────────────────────────────────────
+    def open_external(self, url: str) -> dict:
+        # Restrict to https:// to keep the pane from being weaponised
+        # into launching arbitrary schemes if a slide is ever
+        # user-editable in the future.
+        if not (url or "").startswith("https://"):
+            return {"ok": False, "error": "only https:// URLs are opened"}
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+
+def main() -> int:
+    import webview
+
+    port = int(os.environ.get("CLAWMETRY_APP_PORT") or _find_free_port())
+    assets = _assets_dir()
+
+    # Open with the carousel HTML directly — no more static splash.
+    # bootstrap progress messages update the top-bar via `set_status`.
+    initial_html = onboarding.render_bootstrap_carousel(
+        assets_dir=assets, status="Preparing runtime",
+    )
+
+    # Instantiate API + supervisor before window so we can pass js_api
+    # in at create_window time (pywebview binds the API namespace on
+    # window creation, not after).
+    sup = RuntimeSupervisor(port, lambda _msg: None)  # placeholder; real hook set below
+    api = DesktopAPI(sup)
+
+    window = webview.create_window(
+        APP_TITLE,
+        html=initial_html,
+        js_api=api,
+        width=1280,
+        height=820,
+        min_size=(900, 600),
+        background_color=BRAND_BG_DARK,
+    )
+
+    def _set_status(msg: str) -> None:
+        """Push a progress line into the carousel's top bar. When the
+        pane isn't the carousel (e.g. we've swapped to the auth pane),
+        the JS call is a no-op and we swallow the exception — status
+        messages are hints, not load-bearing."""
+        try:
+            window.evaluate_js(f"window.set_status && window.set_status({json.dumps(msg)});")
+        except Exception:
+            pass
+
+    # Late-bind the real status hook now that window exists.
+    sup.on_status = _set_status
+
+    dashboard_url = f"http://127.0.0.1:{port}/"
+
+    def _reload_window() -> None:
+        """Callback the watcher fires after a successful daemon
+        restart. Reloading the same URL is enough — the WebView picks
+        up whatever the fresh daemon serves, so users see the new
+        version immediately without having to quit and relaunch."""
+        try:
+            window.load_url(dashboard_url)
+        except Exception:
+            pass
+
+    def _boot():
+        # Phase 1: bootstrap the runtime venv.
+        ok = sup.bootstrap()
+        if not ok:
+            # bootstrap() already set a status message on failure; leave
+            # the carousel up with the failure text at the top so the
+            # user has something to read while filing a bug.
+            return
+
+        # Phase 2: onboarding — only on the very first launch.
+        runtime = sup.runtime
+        show_pane = onboarding.is_first_launch(runtime)
+        if show_pane:
+            _set_status("Ready — please sign in")
+            detected = onboarding.detect_runtimes_via_venv(sup._venv_python())
+            auth_html = onboarding.render_auth_pane(
+                assets_dir=assets, detected_runtimes=detected,
+            )
+            try:
+                window.load_html(auth_html)
+            except Exception:
+                # Non-fatal: proceed to boot the dashboard anyway. The
+                # user can sign in from the dashboard later.
+                pass
+            # Block on the JS bridge until the user completes or skips.
+            # Cap at 5 minutes: a user who walks away shouldn't leave
+            # the app stuck on the pane forever.
+            api._auth_done.wait(timeout=300)
+
+        # Phase 3: apply the cm_ key if we captured one.
+        captured_key = api._captured_key
+        if captured_key:
+            # Swap back to the carousel while the connect subprocess
+            # runs — it's the more informative surface than a spinner.
+            try:
+                window.load_html(onboarding.render_bootstrap_carousel(
+                    assets_dir=assets, status="Setting up your account",
+                ))
+            except Exception:
+                pass
+            ok_key, msg_key = onboarding.apply_cm_key(
+                sup._venv_clawmetry(), captured_key,
+            )
+            if not ok_key:
+                _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
+            # Whether it worked or not, mark onboarding as completed so
+            # we don't re-prompt on relaunch. Users can re-sign-in from
+            # the dashboard's header.
+            onboarding.mark_onboarding_completed(
+                runtime,
+                signed_in=ok_key,
+                provider=api._captured_provider,
+                email=api._captured_email,
+            )
+        elif show_pane:
+            # User skipped — stamp so we don't re-prompt.
+            onboarding.mark_onboarding_completed(
+                runtime, signed_in=False, provider="", email="",
+            )
+
+        # Phase 4: start the dashboard daemon.
+        _set_status("Starting local daemon")
+        sup.start_daemon()
+        if not sup.wait_ready():
+            _set_status("Daemon did not come up. See bootstrap.log.")
+            return
+
+        # Start the watcher after wait_ready so the initial startup exit
+        # is never mistaken for a crash. Handles version drift ("Update
+        # now") and unexpected exits by restarting + reloading the WebView.
+        threading.Thread(
+            target=sup.watch, args=(_reload_window,), daemon=True
+        ).start()
+
+        # Phase 5: load the ready-gate spinner, poll /api/overview
+        # from Python (avoids CORS from a load_html origin), then load
+        # the real dashboard. Capped at 20s so an offline user is
+        # never stuck on a spinner.
+        try:
+            window.load_html(onboarding.render_ready_gate())
+        except Exception:
+            pass  # spinner is polish, not a gate
+        onboarding.wait_for_dashboard_content(port, deadline_secs=20.0)
+        try:
+            window.load_url(dashboard_url)
+        except Exception:
+            pass
+
+    def _on_closed():
+        # Stop the watcher FIRST — otherwise it sees the daemon exit
+        # from our stop() call below and respawns it while we're
+        # trying to quit.
+        sup.shutting_down.set()
+        sup.stop()
+
+    window.events.closed += _on_closed
+    threading.Thread(target=_boot, daemon=True).start()
+
+    # js_api makes DesktopAPI methods callable as window.pywebview.api.*
+    webview.start(private_mode=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -14572,6 +14572,154 @@ function _renderEfficiencyCardInner(card, eff) {
     + '</div>';
 }
 
+// ===== Cache Hit Rate + Routing Advisor cards =====
+// Uber-play companions to the Efficiency grade (Aug 2026 earnings-call framing
+// — "the next phase is efficiency"). Both derive from _cmLoadEfficiency's
+// shared /api/efficiency cache (60s TTL + in-flight dedup already there), so
+// they are cloud-safe by construction (cm-cloud-efficiency serves that URL
+// from the snapshot) and add ZERO fetches on tab load. Perf-first per
+// FLYWHEEL §5 "share, don't duplicate."
+function _cmFmtUsd(n) {
+  n = Number(n) || 0;
+  if (n >= 1000) return '$' + Math.round(n).toLocaleString();
+  if (n >= 10) return '$' + Math.round(n);
+  if (n >= 1) return '$' + n.toFixed(1);
+  return '$' + n.toFixed(2);
+}
+var _CM_CACHE_LEFT_ON_TABLE_FRAC = 0.5;
+var _CM_CACHE_READ_MULT = 0.1;
+// Derive the Cache-Hit tile payload from an efficiency scope, mirroring the
+// server-side helper in routes/usage.py::_cache_hit_shape. Pure JS, never
+// throws — bad shape returns nulls the render code hides on.
+function _cmEffCacheHitShape(scope) {
+  var m = (scope && scope.metrics) || {};
+  var tin = Number(m.tokens_in) || 0;
+  var cr = Number(m.cache_read) || 0;
+  var cw = Number(m.cache_write) || 0;
+  var denom = tin + cr;
+  var hit = denom > 0 ? (cr / denom * 100.0) : null;
+  var saved = Number((scope && scope.cache_saved_monthly_usd)) || 0;
+  var projected = Number((scope && scope.projected_monthly_cost_usd)) || 0;
+  var leaked = 0;
+  if (hit !== null && hit < 100 && projected > 0 && tin > 0) {
+    var weight = (tin + cr + cw) > 0 ? (tin / (tin + cr + cw)) : 0;
+    var monthlyInput = projected * weight;
+    leaked = monthlyInput * _CM_CACHE_LEFT_ON_TABLE_FRAC * (1 - _CM_CACHE_READ_MULT);
+  }
+  return {
+    hit: hit, saved: saved, leaked: leaked,
+    insufficient: !!(scope && scope.insufficient_data),
+    haveData: (denom > 0 && projected > 0)
+  };
+}
+function renderCacheHitRateCard() {
+  var title = document.getElementById('cache-hit-rate-title');
+  var card = document.getElementById('cache-hit-rate-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // _cmLoadEfficiency fetches with ?runtime=<id> when scoped, so the payload
+    // is already the correct scope in either mode. Node-wide it also carries
+    // a byRuntime map that we ignore here.
+    var s = _cmEffCacheHitShape(eff);
+    if (!s.haveData || s.insufficient) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var hitColor = s.hit >= 60 ? '#22c55e' : (s.hit >= 30 ? '#f59e0b' : '#ef4444');
+    var scopeLine = _cmEffScopeLine(rt);
+    var frac = Math.round(_CM_CACHE_LEFT_ON_TABLE_FRAC * 100);
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 200px;min-width:180px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Cache hit rate</div>'
+        + '<div style="font-size:40px;font-weight:800;color:' + hitColor + ';line-height:1.05;margin:6px 0 2px;">' + s.hit.toFixed(1) + '%</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:220px;display:flex;gap:24px;flex-wrap:wrap;">'
+        + '<div style="min-width:120px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Already saved</div>'
+          + '<div style="font-size:22px;font-weight:700;color:#22c55e;margin:4px 0;">' + _cmFmtUsd(s.saved) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">measured from cached reads</div>'
+        + '</div>'
+        + '<div style="min-width:140px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Left on the table</div>'
+          + '<div style="font-size:22px;font-weight:700;color:' + (s.leaked > 0 ? '#f59e0b' : 'var(--text-muted)') + ';margin:4px 0;">' + _cmFmtUsd(s.leaked) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">estimate · assumes ' + frac + '% of misses were cacheable</div>'
+        + '</div>'
+      + '</div>'
+      + '</div>';
+  });
+}
+// Pull the model_downgrade actions from an efficiency scope. Mirror of the
+// server-side helper (routes/usage.py::_extract_downgrade_suggestions).
+function _cmEffDowngradeSuggestions(scope) {
+  var out = [];
+  ((scope && scope.actions) || []).forEach(function (a) {
+    if (a.id !== 'model_downgrade') return;
+    var save = Number(a.savings_monthly_usd) || 0;
+    if (save <= 0) return;
+    var d = a.data || {};
+    out.push({
+      current_model: a.model || '',
+      suggested_model: d.target_model || '',
+      calls: Number(d.calls) || 0,
+      avg_tokens_out: Number(d.avg_tokens_out) || 0,
+      potential_savings_monthly_usd: save
+    });
+  });
+  out.sort(function (a, b) { return b.potential_savings_monthly_usd - a.potential_savings_monthly_usd; });
+  return out;
+}
+function renderRoutingAdvisorCard() {
+  var title = document.getElementById('routing-advisor-title');
+  var card = document.getElementById('routing-advisor-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // Same rationale as renderCacheHitRateCard — _cmLoadEfficiency scopes.
+    var suggestions = _cmEffDowngradeSuggestions(eff);
+    if (!suggestions.length) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var potential = 0;
+    suggestions.forEach(function (s) { potential += s.potential_savings_monthly_usd; });
+    var scopeLine = _cmEffScopeLine(rt);
+    var rows = suggestions.slice(0, 5).map(function (s) {
+      var save = _cmFmtUsd(s.potential_savings_monthly_usd);
+      var calls = s.calls.toLocaleString();
+      return '<div style="display:flex;gap:10px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:13px;color:var(--text-primary);"><span style="font-weight:600;">' + escHtml(s.current_model || 'model') + '</span> <span style="color:var(--text-muted);">→</span> <span style="font-weight:600;color:#22c55e;">' + escHtml(s.suggested_model || 'cheaper sibling') + '</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + calls + ' calls in window · avg ' + Math.round(s.avg_tokens_out) + ' output tokens</div>'
+        + '</div>'
+        + '<div style="font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">save about ' + save + '/mo</div>'
+      + '</div>';
+    }).join('');
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 220px;min-width:200px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Potential savings</div>'
+        + '<div style="font-size:34px;font-weight:800;color:#f59e0b;line-height:1.05;margin:6px 0 2px;">' + _cmFmtUsd(potential) + '<span style="font-size:13px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">from ' + suggestions.length + ' safe swap' + (suggestions.length === 1 ? '' : 's') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:280px;">'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">Safe same-provider downgrades</div>'
+        + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">Prompts running on a heavier model that would have scored the same on its cheaper sibling. Guarded resolver, never cross-provider.</div>'
+        + rows
+      + '</div>'
+    + '</div>';
+  });
+}
+
 // ===== Usage / Token Tracking =====
 
 // QW4: the "Token Usage (14 days)" title + card hide together when the series
@@ -14601,6 +14749,10 @@ async function loadUsage() {
   // state even when an unrelated usage loader throws below (on nodes where
   // /api/usage fails, the tail of the try block never runs).
   try { renderEfficiencyCard(); } catch (_eEff) {}
+  // Both derive from the same _cmLoadEfficiency cache so they cost nothing
+  // extra on cloud (cm-cloud-efficiency serves the URL from the snapshot).
+  try { renderCacheHitRateCard(); } catch (_eChr) {}
+  try { renderRoutingAdvisorCard(); } catch (_eRa) {}
   try { loadSpendFlow(); } catch (_eSf) {}
   try { _cmUpdateUsageFleetNote(); } catch (_eFleet) {}
   try {
