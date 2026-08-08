@@ -1,5 +1,27 @@
 ## Unreleased
 
+- **Fix: DMG opens with a drag-to-Applications layout instead of an empty window.**
+  - **Why:** the shipped `.dmg` mounted to a window showing only
+    `ClawMetry.app` — no `Applications` shortcut for users to drag it
+    onto. Live report 2026-08-08: *"why is there no drop to
+    applications folder — check how we did for clawmetry-mac app it's
+    a separate repo — we should reuse same approach."*
+  - **What:** rewrote the "Wrap into .dmg" step in
+    `.github/workflows/desktop-artifacts.yml` to stage the `.app` +
+    an `Applications` symlink into a directory, build a UDRW writable
+    DMG, `osascript` the Finder into positioning icons (ClawMetry.app
+    left, Applications right, 96px icons, hidden toolbar/statusbar),
+    then `hdiutil convert` to the final compressed UDZO. Signing/
+    notarization steps unchanged — they still operate on the final
+    `dist/*.dmg`. Pattern lifted from `vivekchand/clawmetry-mac`'s
+    build-sign-release workflow so both native macOS surfaces
+    (Swift menubar app + pywebview desktop app) present identical
+    drag-to-install UX.
+  - **Verified:** YAML parses locally. End-to-end verification is the
+    next release — mounting the shipped `.dmg` must show two
+    side-by-side icons (ClawMetry, Applications) in a 600x300 icon-
+    view window with no toolbar.
+
 - **Release: stable desktop-app download URLs + Windows console-window fix reach the wheel and the next signed builds.**
   - **Why:** the desktop thin-shell app had no public, permanent download link (`desktop-artifacts.yml` only produced version-suffixed GitHub Release assets reachable by digging into CI runs), and a real Windows-only bug survived because nothing had exercised those code paths end to end: the shell is built windowed (`console=False`) but every subprocess it spawns (`python -m venv`, `pip install`, the venv's `clawmetry` CLI, the daemon itself) is a console executable, so Windows flashed a console window on first launch and every relaunch. Carrier `[RELEASE]` so #4640 actually reaches the next tagged build.
   - **What:** `desktop-artifacts.yml` now uploads a fixed-name copy of each platform build (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`, `clawmetry-linux.tar.gz`) alongside the versioned one, so `github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>` always resolves to the current release with no version bookkeeping. This is what `clawmetry-landing`'s new `/download/<os>` buttons link to. `desktop/app.py` and `desktop/onboarding.py` gained a shared `_win_subprocess_kwargs()` helper applying `CREATE_NO_WINDOW` to every subprocess call on Windows (no-op elsewhere).

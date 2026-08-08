@@ -88,7 +88,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: desktop/sign_mac.sh dist/ClawMetry.app
 
-      - name: Wrap into .dmg
+      - name: Wrap into .dmg (drag-to-Applications layout)
         run: |
           # Prefer the tag ref (v0.12.<n> → 0.12.<n>) over dashboard.py's
           # __version__ because release-on-merge commits the version bump
@@ -100,10 +100,62 @@ jobs:
           else
             VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
           fi
+
+          # Stage the .dmg contents so the mounted volume has BOTH the
+          # .app and a symlink to /Applications, giving users the standard
+          # macOS drag-to-install UX. Without this the DMG mounts to an
+          # otherwise-empty window with just ClawMetry.app, and users have
+          # to figure out on their own that they should drag it somewhere.
+          # Pattern mirrored from clawmetry-mac/.github/workflows/build-sign-release.yml.
+          STAGING="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R dist/ClawMetry.app "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+
+          # Build a writable DMG first so we can osascript the Finder into
+          # arranging the icons + hiding the toolbar, then convert to the
+          # final compressed read-only UDZO the release ships.
+          TEMP_DMG="$RUNNER_TEMP/ClawMetry-temp.dmg"
           hdiutil create -volname "ClawMetry" \
-            -srcfolder dist/ClawMetry.app \
-            -ov -format UDZO \
-            "dist/ClawMetry-${VERSION}.dmg"
+            -srcfolder "$STAGING" \
+            -ov -format UDRW -fs HFS+ \
+            "$TEMP_DMG"
+          hdiutil attach "$TEMP_DMG" -readwrite -noverify -mountpoint /Volumes/ClawMetry
+
+          osascript <<'AS'
+          tell application "Finder"
+            tell disk "ClawMetry"
+              open
+              set current view of container window to icon view
+              set toolbar visible of container window to false
+              set statusbar visible of container window to false
+              set bounds of container window to {200, 200, 800, 500}
+              set theViewOptions to icon view options of container window
+              set arrangement of theViewOptions to not arranged
+              set icon size of theViewOptions to 96
+              set text size of theViewOptions to 13
+              set position of item "ClawMetry.app" of container window to {155, 130}
+              set position of item "Applications" of container window to {445, 130}
+              close
+              open
+              update without registering applications
+              delay 2
+            end tell
+          end tell
+          AS
+
+          sync && sleep 2
+          osascript -e 'tell application "Finder" to close every window' || true
+          sleep 1
+          hdiutil detach "/Volumes/ClawMetry" -force
+
+          # Convert writable UDRW → compressed read-only UDZO (final shape).
+          hdiutil convert "$TEMP_DMG" \
+            -format UDZO -imagekey zlib-level=9 \
+            -o "dist/ClawMetry-${VERSION}.dmg"
+          rm -f "$TEMP_DMG"
+
           # Fixed-name copy so clawmetry.com/download/mac can link a stable
           # URL (GitHub's /releases/latest/download/<name>) instead of
           # bookkeeping the current version anywhere else. Placed BEFORE
