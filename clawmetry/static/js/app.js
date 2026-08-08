@@ -13482,12 +13482,38 @@ async function _loadGatewayHealthSparkline() {
 }
 
 // ===== System Health Panel =====
+// Issue #2861 — version-aware health-regression banner.
+// Fetches /api/version-health (backend fully implemented in routes/health.py)
+// and shows a warning card in #sh-version-regression when the current OpenClaw
+// version shows >30% degradation in cost, error-rate, or token usage vs the
+// previous version. Safe to call even when DuckDB has no data — always clears
+// the element on any error or non-detected result so the card never sticks.
+async function _renderVersionRegression() {
+  var el = document.getElementById('sh-version-regression');
+  if (!el) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/version-health', 8000);
+    var reg = (data && data.regression) ? data.regression : {};
+    if (!reg.detected) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div style="padding:10px 14px;background:rgba(217,119,6,0.12);'
+      + 'border:1px solid rgba(217,119,6,0.4);border-left:3px solid #d97706;'
+      + 'border-radius:8px;font-size:13px;color:var(--text-primary);'
+      + 'display:flex;align-items:flex-start;gap:10px;">'
+      + '<span style="font-size:16px;flex-shrink:0;">⚠️</span>'
+      + '<span>' + _escapeHtml(reg.banner || '') + '</span>'
+      + '</div>';
+  } catch (_e) {
+    el.innerHTML = '';
+  }
+}
+
 async function loadSystemHealth() {
   try {
     var d = await fetchJsonWithTimeout('/api/system-health', 18000);
     // Connector liveness: surface a 'down' inbound channel loudly (incident:
     // a channel went deaf ~37h with no alarm). Driven by the same payload.
     try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
+    try { _renderVersionRegression(); } catch(e) {}
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
