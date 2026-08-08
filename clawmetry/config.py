@@ -152,6 +152,30 @@ def enable_cloud() -> bool:
     return False
 
 
+def disable_cloud() -> bool:
+    """Write the ``~/.clawmetry/nocloud`` marker so the daemon pauses cloud
+    sync on the next iteration. Mirror of :func:`enable_cloud`; used by the
+    dashboard header's sync toggle so users can pause sync without dropping
+    to the CLI. The marker survives updates and daemon restarts.
+
+    Returns True if a marker was newly written; False if one already
+    existed or if the write failed (best-effort, never raises).
+
+    Does NOT alter the ``CLAWMETRY_NO_CLOUD`` env var — that stays whatever
+    the operator set it to. The marker is persistent local state; the env
+    var is per-run/container config; either one activates local-only mode.
+    """
+    try:
+        if os.path.isfile(NOCLOUD_MARKER_PATH):
+            return False
+        os.makedirs(os.path.dirname(NOCLOUD_MARKER_PATH), exist_ok=True)
+        with open(NOCLOUD_MARKER_PATH, "w") as f:
+            f.write("")
+        return True
+    except Exception:
+        return False
+
+
 @dataclass
 class ClawMetryConfig:
     """

@@ -12312,6 +12312,16 @@ DASHBOARD_HTML = r"""
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
+  <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
+       through Enterprise), so it's a one-click UX toggle here rather than a
+       plan-tier decision. Hidden until the initial /api/cloud-cta/status
+       poll resolves so it doesn't flash the wrong state on first paint.
+       Refresh cadence: on load, on click, and after any focus event. -->
+  <div class="theme-toggle" id="sync-toggle-btn" onclick="clawmetryToggleSync()" title="Cloud sync" style="display:none;cursor:pointer;padding:6px 10px;gap:6px;align-items:center;">
+    <svg id="sync-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9"/><polyline points="17 5 21 5 21 9"/></svg>
+    <span id="sync-toggle-label" style="font-size:11px;font-weight:600;letter-spacing:0.2px;">Sync</span>
+  </div>
+
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" data-i18n-title="topbar.logout" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="i18n-switcher" id="i18n-switcher" style="position:relative;">
     <div id="i18n-switcher-btn" onclick="i18nToggleMenu(event)" data-i18n-title="i18n.language" title="Language" style="cursor:pointer;display:flex;align-items:center;gap:6px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;padding:7px 10px;color:var(--text-tertiary,#cbd5e1);background:var(--button-bg,transparent);transition:all 0.15s;" onmouseover="this.style.background='rgba(127,127,127,0.12)'" onmouseout="this.style.background='var(--button-bg,transparent)'">

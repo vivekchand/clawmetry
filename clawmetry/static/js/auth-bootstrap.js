@@ -134,6 +134,79 @@ function clawmetryLogout(){
   localStorage.removeItem('clawmetry-token');
   location.reload();
 }
+
+// ── Cloud-sync toggle chip (header, right of alerts bell) ──
+// Cloud sync is included in every ClawMetry plan (Self-Hosted through
+// Enterprise), so pausing it is a one-click UX toggle rather than a
+// billing decision. State reads from /api/cloud-cta/status (already
+// polled by other surfaces); writes go through /api/sync/toggle which
+// flips the ~/.clawmetry/nocloud marker the daemon polls each iteration.
+function _cmRenderSyncChip(state){
+  var el = document.getElementById('sync-toggle-btn');
+  if (!el) return;
+  var label = document.getElementById('sync-toggle-label');
+  var icon = document.getElementById('sync-toggle-icon');
+  // Show the chip only when the machine has an account linked. On a
+  // truly anonymous local-only install (never signed in), there is
+  // nothing to sync TO — showing an inert chip would be a lie.
+  if (!state || !state.account_linked) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'flex';
+  if (state.local_only) {
+    label.textContent = 'Local only';
+    el.style.color = 'var(--text-muted, #94a3b8)';
+    el.title = 'Cloud sync paused. Click to resume.';
+  } else if (state.connected) {
+    label.textContent = 'Synced';
+    el.style.color = 'var(--accent, #4ade80)';
+    el.title = 'Cloud sync active. Click to pause.';
+  } else {
+    // Account linked but not connected (e.g. transient) — still show
+    // as clickable, and let the toggle-endpoint's error message steer
+    // the user to the right recovery flow.
+    label.textContent = 'Sync';
+    el.style.color = 'var(--text-tertiary, #cbd5e1)';
+    el.title = 'Cloud sync status.';
+  }
+}
+function _cmRefreshSyncChip(){
+  fetch('/api/cloud-cta/status')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(_cmRenderSyncChip)
+    .catch(function(){ /* offline — leave chip as-is */ });
+}
+function clawmetryToggleSync(){
+  var el = document.getElementById('sync-toggle-btn');
+  if (el) el.style.pointerEvents = 'none';
+  fetch('/api/sync/toggle', {method:'POST'})
+    .then(function(r){
+      // 409 == no_account or env_locked — surface a small toast instead
+      // of silently failing. Fall through to refresh either way.
+      if (r.status === 409) {
+        return r.json().then(function(d){
+          try { alert(d && d.detail ? d.detail : 'Cloud sync toggle not available.'); } catch(e) {}
+          return null;
+        });
+      }
+      return r.ok ? r.json() : null;
+    })
+    .then(function(_res){ _cmRefreshSyncChip(); })
+    .catch(function(){ _cmRefreshSyncChip(); })
+    .finally(function(){
+      var e = document.getElementById('sync-toggle-btn');
+      if (e) e.style.pointerEvents = '';
+    });
+}
+// Poll on load + on tab focus (so returning from a sign-in tab
+// picks up the new account-linked state).
+document.addEventListener('DOMContentLoaded', function(){
+  setTimeout(_cmRefreshSyncChip, 400);
+});
+window.addEventListener('focus', function(){
+  _cmRefreshSyncChip();
+});
 // One-click sign-in on the machine itself after an explicit sign-out. The
 // button is hidden unless the loopback-only detected-token probe answered,
 // so this is the same trust boundary as zero-click auto-login — just gated
