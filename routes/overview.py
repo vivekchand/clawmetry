@@ -1697,6 +1697,64 @@ def cloud_cta_status():
     })
 
 
+@bp_overview.route("/api/sync/toggle", methods=["POST"])
+def sync_toggle():
+    """Flip cloud sync on/off from the dashboard header chip.
+
+    Reads current state via ``is_cloud_disabled()`` and either calls
+    ``enable_cloud()`` (removes ``~/.clawmetry/nocloud``) or
+    ``disable_cloud()`` (writes it), then returns the new state. The
+    sync daemon polls the marker on each iteration, so the toggle takes
+    effect within seconds — no restart required.
+
+    Returns 409 when the user has no cm_ key on this machine and asks
+    to enable sync: without an account there is nothing to push to. The
+    dashboard should redirect them through the "Enable Cloud Sync" CTA
+    (cloud-cta/oauth-start) instead of silently no-opping.
+
+    Also refuses when ``CLAWMETRY_NO_CLOUD=1`` is set in the environment
+    — that's an explicit per-run opt-out the operator chose; the chip
+    can't override it, only the operator can (unset the env + relaunch).
+    """
+    import os as _os
+    import dashboard as _d
+    from clawmetry.config import (
+        is_cloud_disabled, enable_cloud, disable_cloud,
+        _NO_CLOUD_ENABLE_VALUES,
+    )
+
+    env_flag = _os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+    if env_flag in _NO_CLOUD_ENABLE_VALUES:
+        return jsonify({
+            "ok": False,
+            "error": "env_locked",
+            "detail": "CLAWMETRY_NO_CLOUD=1 is set in the environment; unset it and relaunch to change this from the UI.",
+        }), 409
+
+    currently_disabled = is_cloud_disabled()
+    want_enable = currently_disabled  # if disabled, toggle -> enable, and vice versa
+
+    if want_enable:
+        # Enabling: refuse if there is no account key on this machine.
+        token = _d._read_cloud_token()
+        if not token:
+            return jsonify({
+                "ok": False,
+                "error": "no_account",
+                "detail": "No cloud account linked. Sign in first via the 'Enable Cloud Sync' CTA.",
+            }), 409
+        enable_cloud()
+    else:
+        disable_cloud()
+
+    new_disabled = is_cloud_disabled()
+    return jsonify({
+        "ok": True,
+        "local_only": new_disabled,
+        "connected": (not new_disabled) and bool(_d._read_cloud_token()),
+    })
+
+
 @bp_overview.route(
     "/api/cloud-proxy/<path:cloud_path>",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
