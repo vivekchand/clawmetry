@@ -1,5 +1,52 @@
 ## Unreleased
 
+- **Release: ship the E2E key settings panel and the Windows/Linux installers to end users.**
+  - **Why:** carrier `[RELEASE]` so #4645 and #4648 reach the next tagged build and PyPI release instead of sitting merged-but-unpublished on main.
+  - **What:** no new code; ships #4645 and #4648.
+  - **Verified:** end-to-end this release, confirm `pip install --upgrade clawmetry` exposes the "Cloud sync key" profile-menu item, and confirm `releases/latest/download/ClawMetry-windows-setup.exe` and `releases/latest/download/clawmetry-linux.AppImage` resolve on GitHub once `desktop-artifacts.yml` runs against the new tag.
+
+- **Feature: reveal and regenerate the E2E encryption key from the local dashboard settings.**
+  - **Why:** the only way to see the secret that decrypts cloud-synced snapshots was `clawmetry status --show-key` on the CLI. Founder ask 2026-08-08: expose it in Settings on `localhost:8900`, never on the hosted cloud dashboard, with a regenerate option for a suspected leak.
+  - **What:** `GET /api/local/e2e-key` and `POST /api/local/e2e-key/regenerate`, both bare `@app.route` registrations in `dashboard.py`'s OSS-only route section (not a Blueprint), so the hosted `clawmetry-cloud` app never mounts them. New "Cloud sync key" profile-menu item opens a modal (masked key, reveal toggle, copy button, regenerate with an explicit confirm step) via `clawmetry/templates/partials/e2e-key-modal.html` + `clawmetry/static/js/gw-setup.js`.
+  - **Verified:** ran the dashboard locally against a fake `~/.clawmetry/config.json`, confirmed both endpoints' configured/not-configured states, and drove the modal through Playwright end to end (reveal, copy-to-clipboard, regenerate-with-confirm) against the real rendered page.
+
+- **Feature: real native installers for the Windows and Linux desktop app.**
+  - **Why:** Windows shipped a `.zip` of a PyInstaller one-folder build, and the Linux CI job has been named "Linux single-folder + AppImage" since day one but only ever produced a `.tar.gz`, the AppImage step was never written. Founder priority 2026-08-08: every platform's download must be a real installer.
+  - **What:** `desktop/installer/windows.nsi` (NSIS) wraps the Windows build into `ClawMetry-Setup-<version>.exe`, Start Menu and Desktop shortcuts, an uninstaller in Add/Remove Programs, per-user install with no UAC prompt. The Linux job now stages an AppDir and runs `appimagetool`, producing `clawmetry-linux.AppImage`. Building and running the real frozen Linux binary locally to validate this surfaced a genuine bug: the Linux build has never actually been able to open a window, PyInstaller bundled whatever `gi`/PyGObject the build machine's system python3 had, compiled for the wrong Python ABI for the frozen interpreter. Fixed by pinning `PyGObject==3.48.2` for Linux in `desktop/requirements-dev.txt` and installing the dev headers it needs to compile against the CI job's own interpreter.
+  - **Verified:** compiled `windows.nsi` locally with `makensis` against a stand-in build folder. Built the real PyInstaller Linux binary locally, reproduced the `gi` import crash, applied the fix, rebuilt, and confirmed a clean launch. Built the actual `.AppImage` with `appimagetool` and ran it under Xvfb, screenshot confirms the real onboarding UI renders (not just a clean exit code).
+
+- **Release: ship the drag-to-Applications DMG layout to end users.**
+  - **Why:** #4646 rewrote the DMG-build step but no signed `.dmg`
+    carries the new layout yet. Carrier `[RELEASE]` so users see the
+    two-icon drag-and-drop window on the next download instead of the
+    lone `ClawMetry.app`.
+  - **What:** no new code; ships #4646.
+  - **Verified:** end-to-end this release — download the fresh `.dmg`,
+    mount, confirm the window shows ClawMetry + Applications side-by-
+    side in a 600x300 icon-view window with hidden toolbar.
+
+- **Fix: DMG opens with a drag-to-Applications layout instead of an empty window.**
+  - **Why:** the shipped `.dmg` mounted to a window showing only
+    `ClawMetry.app` — no `Applications` shortcut for users to drag it
+    onto. Live report 2026-08-08: *"why is there no drop to
+    applications folder — check how we did for clawmetry-mac app it's
+    a separate repo — we should reuse same approach."*
+  - **What:** rewrote the "Wrap into .dmg" step in
+    `.github/workflows/desktop-artifacts.yml` to stage the `.app` +
+    an `Applications` symlink into a directory, build a UDRW writable
+    DMG, `osascript` the Finder into positioning icons (ClawMetry.app
+    left, Applications right, 96px icons, hidden toolbar/statusbar),
+    then `hdiutil convert` to the final compressed UDZO. Signing/
+    notarization steps unchanged — they still operate on the final
+    `dist/*.dmg`. Pattern lifted from `vivekchand/clawmetry-mac`'s
+    build-sign-release workflow so both native macOS surfaces
+    (Swift menubar app + pywebview desktop app) present identical
+    drag-to-install UX.
+  - **Verified:** YAML parses locally. End-to-end verification is the
+    next release — mounting the shipped `.dmg` must show two
+    side-by-side icons (ClawMetry, Applications) in a 600x300 icon-
+    view window with no toolbar.
+
 - **Release: stable desktop-app download URLs + Windows console-window fix reach the wheel and the next signed builds.**
   - **Why:** the desktop thin-shell app had no public, permanent download link (`desktop-artifacts.yml` only produced version-suffixed GitHub Release assets reachable by digging into CI runs), and a real Windows-only bug survived because nothing had exercised those code paths end to end: the shell is built windowed (`console=False`) but every subprocess it spawns (`python -m venv`, `pip install`, the venv's `clawmetry` CLI, the daemon itself) is a console executable, so Windows flashed a console window on first launch and every relaunch. Carrier `[RELEASE]` so #4640 actually reaches the next tagged build.
   - **What:** `desktop-artifacts.yml` now uploads a fixed-name copy of each platform build (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`, `clawmetry-linux.tar.gz`) alongside the versioned one, so `github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>` always resolves to the current release with no version bookkeeping. This is what `clawmetry-landing`'s new `/download/<os>` buttons link to. `desktop/app.py` and `desktop/onboarding.py` gained a shared `_win_subprocess_kwargs()` helper applying `CREATE_NO_WINDOW` to every subprocess call on Windows (no-op elsewhere).
