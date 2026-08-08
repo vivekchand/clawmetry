@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **Release: ship the drag-to-Applications DMG layout to end users.**
+  - **Why:** #4646 rewrote the DMG-build step but no signed `.dmg`
+    carries the new layout yet. Carrier `[RELEASE]` so users see the
+    two-icon drag-and-drop window on the next download instead of the
+    lone `ClawMetry.app`.
+  - **What:** no new code; ships #4646.
+  - **Verified:** end-to-end this release — download the fresh `.dmg`,
+    mount, confirm the window shows ClawMetry + Applications side-by-
+    side in a 600x300 icon-view window with hidden toolbar.
+
 - **Fix: DMG opens with a drag-to-Applications layout instead of an empty window.**
   - **Why:** the shipped `.dmg` mounted to a window showing only
     `ClawMetry.app` — no `Applications` shortcut for users to drag it
