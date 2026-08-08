@@ -21168,6 +21168,220 @@ def tier_locks_from_path_batch(
     return {"tiers": rows, "unknown": unknown}
 
 
+def preview_from_path_batch(
+    from_tiers, to_tier: str
+) -> dict | None:
+    """Source-axis batch sibling of :func:`preview_path`: per-rung
+    cumulative ``Entitlement.to_dict`` snapshots for a caller-supplied
+    subset of SOURCE tiers all walked to a single ``to_tier`` in ONE
+    round-trip.
+
+    Mirror-direction twin of :func:`preview_path_batch` (which fixes
+    ONE source and fans out over N destinations): here we fix the
+    destination and fan out over sources. Cumulative-state cousin of
+    :func:`tier_unlocks_from_path_batch` (marginal grants) /
+    :func:`tier_locks_from_path_batch` (marginal losses) on the same
+    source-batch axis, and same relationship
+    :func:`has_features_from_path_batch` has to
+    :func:`has_features_at_path_batch`. Lets a fleet-consolidation
+    "for each tier my nodes currently sit on, show me the full
+    Entitlement snapshot at every rung climbed to reach Cloud Pro"
+    surface hydrate every per-source snapshot off ONE call instead of
+    N calls to :func:`preview_path`.
+
+    Per-source row shape mirrors the destination-side batch shape with
+    the ``to`` slot swapped for ``from``::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<preview_path row>, ...],
+        }
+
+    ``direction`` is computed per source relative to the shared
+    ``to_tier`` (a caller can mix upgrades / downgrades / laterals in
+    one batch and each row is labelled from its own perspective). Each
+    ``path`` row is byte-identical to a row from :func:`preview_path`
+    for the same ``(from, to_tier)`` pair -- a parity test pins this so
+    the scalar and source-batch path helpers cannot drift. Per-source
+    ``path`` lengths can legitimately differ (the rungs walked depend
+    on the source), matching :func:`preview_path_batch` /
+    :func:`tier_unlocks_from_path_batch`'s posture.
+
+    Envelope::
+
+        {
+          "tiers": [
+            {"from": "<id>", "from_label": ..., "from_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied source ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting, matching the destination-side batch's posture
+    and the sibling :func:`tier_unlocks_from_path_batch`. ``trial`` IS
+    accepted as a source id (excluded from the walked intermediate
+    rungs the way :func:`preview_path` already excludes it, but is a
+    valid endpoint via the lateral / identity branches).
+
+    Returns ``None`` for empty / unknown ``to_tier`` (caller renders
+    "unknown tier" / 404) -- symmetric with the destination-side
+    batch's short-circuit on an unknown ``from_tier``.
+
+    Resolver-independent: delegates per-source to :func:`preview_path`,
+    which walks the static per-tier maps via :func:`_preview_row` -- so
+    grace vs enforce yields byte-identical rows. Never raises: per-
+    source failures short-circuit that id into ``unknown[]`` and the
+    rest of the batch keeps building; a whole-fold blowup collapses to
+    ``None`` at scalar layer.
+    """
+    try:
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if t not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(from_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    to_rank = _TIER_RANK.get(t, -1)
+    for fid in candidates:
+        if fid not in _TIER_FEATURES:
+            unknown.append(fid)
+            continue
+        try:
+            path = preview_path(fid, t)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: preview_from_path_batch row %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown.append(fid)
+            continue
+        if path is None:
+            unknown.append(fid)
+            continue
+        from_rank = _TIER_RANK.get(fid, -1)
+        if fid == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "from": fid,
+                "from_label": tier_label(fid),
+                "from_rank": from_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def capacity_diff_from_path_batch(
+    from_tiers, to_tier: str
+) -> dict | None:
+    """Source-axis batch sibling of :func:`capacity_diff_path`: per-
+    rung capacity transition rows for a caller-supplied subset of
+    SOURCE tiers all walked to a single ``to_tier`` in ONE round-trip.
+
+    Mirror-direction twin of :func:`capacity_diff_path_batch` (which
+    fixes ONE source and fans out over N destinations): here we fix
+    the destination and fan out over sources. Capacity-slice cousin of
+    :func:`preview_from_path_batch` (cumulative snapshot) /
+    :func:`tier_unlocks_from_path_batch` (marginal grants) /
+    :func:`tier_locks_from_path_batch` (marginal losses) on the same
+    source-batch axis. Lets a capacity-only fleet-consolidation "for
+    each tier a node currently sits on, show me the channels /
+    retention / nodes bumps at every rung climbed to reach Enterprise"
+    surface render every per-source capacity walk off ONE call
+    instead of N calls to :func:`capacity_diff_path`.
+
+    Per-source row shape mirrors :func:`preview_from_path_batch` with
+    each ``path`` row bound to a :func:`capacity_diff_path` row::
+
+        {
+          "from":       "<tier id>",
+          "from_label": "...",
+          "from_rank":  <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<capacity_diff_path row>, ...],
+        }
+
+    ``direction`` is computed per source relative to the shared
+    ``to_tier`` -- a caller can mix directions in one batch and each
+    row is labelled from its own perspective. Each ``path`` row is
+    byte-identical to a row from :func:`capacity_diff_path` for the
+    same ``(from, to_tier)`` pair -- a parity test pins this so the
+    scalar and source-batch path helpers cannot drift.
+
+    Envelope / normalisation / unknown-bucketing / ``trial`` posture
+    all match :func:`preview_from_path_batch` byte-for-byte -- see
+    that helper's docstring.
+
+    Returns ``None`` for empty / unknown ``to_tier``. Resolver-
+    independent: delegates per-source to :func:`capacity_diff_path`,
+    which walks the static per-tier caps via :func:`_capacity_row` --
+    so grace vs enforce yields byte-identical rows. Never raises.
+    """
+    try:
+        t = (to_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if t not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(from_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    to_rank = _TIER_RANK.get(t, -1)
+    for fid in candidates:
+        if fid not in _TIER_FEATURES:
+            unknown.append(fid)
+            continue
+        try:
+            path = capacity_diff_path(fid, t)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: capacity_diff_from_path_batch row %r failed: %s",
+                fid,
+                exc,
+            )
+            unknown.append(fid)
+            continue
+        if path is None:
+            unknown.append(fid)
+            continue
+        from_rank = _TIER_RANK.get(fid, -1)
+        if fid == t:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "from": fid,
+                "from_label": tier_label(fid),
+                "from_rank": from_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def preview_path_batch(from_tier: str, to_tiers) -> dict | None:
     """Batch sibling of :func:`preview_path`: per-rung cumulative
     ``Entitlement.to_dict`` snapshots for a caller-supplied subset of
