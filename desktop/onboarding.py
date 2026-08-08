@@ -232,7 +232,7 @@ CROSS_SELL_SLIDES = [
         "art": "dashboard",
     },
     {
-        "eyebrow": "Also from InstaLabs",
+        "eyebrow": "Also from ClawMetry",
         "title": "ClawMetry Agent Builder: ship an agent in an afternoon.",
         "body": (
             "Blueprints, requirements, work orders: the same platform that "
@@ -244,7 +244,7 @@ CROSS_SELL_SLIDES = [
         "art": "builder",
     },
     {
-        "eyebrow": "Also from InstaLabs",
+        "eyebrow": "Also from ClawMetry",
         "title": "ClawMetry Desk: always-on hardware for your agents.",
         "body": (
             "A pocket-sized ambient device that shows every agent at a "
