@@ -114,6 +114,18 @@ def mark_onboarding_completed(
         pass  # onboarding stamp is best-effort; a re-shown pane is not a bug
 
 
+def _win_subprocess_kwargs() -> dict:
+    """Extra Popen/run kwargs that stop Windows from flashing a console
+    window when this windowed (console=False) shell spawns a console
+    executable (the venv's python.exe / clawmetry.exe). No-op elsewhere.
+    Mirrors app.py's helper — duplicated rather than imported to keep
+    onboarding.py importable standalone (app.py imports IT, not vice
+    versa)."""
+    if platform.system() == "Windows":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}  # type: ignore[attr-defined]
+    return {}
+
+
 # ─── Runtime detection ──────────────────────────────────────────────────
 # The clawmetry package (which lives in the runtime venv) has the
 # canonical detection logic in ``clawmetry/entitlements.py``. From the
@@ -148,6 +160,7 @@ def detect_runtimes_via_venv(venv_python: Path, *, timeout: float = 6.0) -> list
         r = subprocess.run(
             [str(py), "-c", script],
             capture_output=True, text=True, timeout=timeout,
+            **_win_subprocess_kwargs(),
         )
         if r.returncode == 0:
             data = json.loads(r.stdout.strip() or "[]")
@@ -182,6 +195,7 @@ def apply_cm_key(venv_clawmetry: Path, cm_key: str, *, timeout: float = 60.0) ->
         r = subprocess.run(
             [str(bin_), "connect", "--key", cm_key, "--start-sync-now"],
             capture_output=True, text=True, timeout=timeout,
+            **_win_subprocess_kwargs(),
         )
         if r.returncode == 0:
             return True, "signed in"

@@ -151,6 +151,17 @@ def _runtime_dir() -> Path:
     return d
 
 
+def _win_subprocess_kwargs() -> dict:
+    """Extra Popen/run kwargs that stop Windows from flashing a console
+    window. The desktop app is built windowed (console=False), but every
+    subprocess it spawns (python.exe, pip, clawmetry.exe) is a console
+    executable — without CREATE_NO_WINDOW, Windows opens a new console
+    for each one, visible for the duration of the call. No-op elsewhere."""
+    if platform.system() == "Windows":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}  # type: ignore[attr-defined]
+    return {}
+
+
 def _bootstrap_python() -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
@@ -170,6 +181,7 @@ def _bootstrap_python() -> Optional[str]:
                 r = subprocess.run(
                     [p, "-c", "import sys,venv,pip; print(sys.version_info[:2])"],
                     capture_output=True, text=True, timeout=6,
+                    **_win_subprocess_kwargs(),
                 )
                 if r.returncode == 0:
                     return p
@@ -239,6 +251,7 @@ class RuntimeSupervisor:
                 [str(py), "-c",
                  "import importlib.metadata as m; print(m.version('clawmetry'))"],
                 capture_output=True, text=True, timeout=8,
+                **_win_subprocess_kwargs(),
             )
             if r.returncode == 0:
                 return r.stdout.strip()
@@ -264,6 +277,7 @@ class RuntimeSupervisor:
                 subprocess.run(
                     [py, "-m", "venv", str(self.venv)],
                     check=True, capture_output=True, text=True, timeout=60,
+                    **_win_subprocess_kwargs(),
                 )
                 self._log(f"venv created via {py}")
             except subprocess.CalledProcessError as e:
@@ -281,6 +295,7 @@ class RuntimeSupervisor:
                     [str(self._venv_python()), "-m", "pip", "install",
                      "--upgrade", "--disable-pip-version-check", "clawmetry"],
                     capture_output=True, text=True, timeout=300,
+                    **_win_subprocess_kwargs(),
                 )
                 self._log(f"pip install rc={r.returncode}")
                 if r.returncode != 0:
@@ -318,7 +333,14 @@ class RuntimeSupervisor:
             "env": env,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            # CREATE_NEW_PROCESS_GROUP lets stop() target the child alone
+            # with CTRL_BREAK_EVENT; CREATE_NO_WINDOW stops it from
+            # flashing a console (stdout/stderr going to DEVNULL doesn't
+            # suppress the window itself — console allocation happens
+            # regardless of stream redirection).
+            kwargs["creationflags"] = (  # type: ignore[attr-defined]
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
         else:
             kwargs["start_new_session"] = True
         self.proc = subprocess.Popen(argv, **kwargs)
@@ -393,6 +415,7 @@ class RuntimeSupervisor:
             r = subprocess.run(
                 [str(cli), "update"],
                 capture_output=True, text=True, timeout=300,
+                **_win_subprocess_kwargs(),
             )
             self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
