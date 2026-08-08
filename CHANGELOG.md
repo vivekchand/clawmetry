@@ -1,5 +1,20 @@
 ## Unreleased
 
+- **Release: ship the E2E key settings panel and the Windows/Linux installers to end users.**
+  - **Why:** carrier `[RELEASE]` so #4645 and #4648 reach the next tagged build and PyPI release instead of sitting merged-but-unpublished on main.
+  - **What:** no new code; ships #4645 and #4648.
+  - **Verified:** end-to-end this release, confirm `pip install --upgrade clawmetry` exposes the "Cloud sync key" profile-menu item, and confirm `releases/latest/download/ClawMetry-windows-setup.exe` and `releases/latest/download/clawmetry-linux.AppImage` resolve on GitHub once `desktop-artifacts.yml` runs against the new tag.
+
+- **Feature: reveal and regenerate the E2E encryption key from the local dashboard settings.**
+  - **Why:** the only way to see the secret that decrypts cloud-synced snapshots was `clawmetry status --show-key` on the CLI. Founder ask 2026-08-08: expose it in Settings on `localhost:8900`, never on the hosted cloud dashboard, with a regenerate option for a suspected leak.
+  - **What:** `GET /api/local/e2e-key` and `POST /api/local/e2e-key/regenerate`, both bare `@app.route` registrations in `dashboard.py`'s OSS-only route section (not a Blueprint), so the hosted `clawmetry-cloud` app never mounts them. New "Cloud sync key" profile-menu item opens a modal (masked key, reveal toggle, copy button, regenerate with an explicit confirm step) via `clawmetry/templates/partials/e2e-key-modal.html` + `clawmetry/static/js/gw-setup.js`.
+  - **Verified:** ran the dashboard locally against a fake `~/.clawmetry/config.json`, confirmed both endpoints' configured/not-configured states, and drove the modal through Playwright end to end (reveal, copy-to-clipboard, regenerate-with-confirm) against the real rendered page.
+
+- **Feature: real native installers for the Windows and Linux desktop app.**
+  - **Why:** Windows shipped a `.zip` of a PyInstaller one-folder build, and the Linux CI job has been named "Linux single-folder + AppImage" since day one but only ever produced a `.tar.gz`, the AppImage step was never written. Founder priority 2026-08-08: every platform's download must be a real installer.
+  - **What:** `desktop/installer/windows.nsi` (NSIS) wraps the Windows build into `ClawMetry-Setup-<version>.exe`, Start Menu and Desktop shortcuts, an uninstaller in Add/Remove Programs, per-user install with no UAC prompt. The Linux job now stages an AppDir and runs `appimagetool`, producing `clawmetry-linux.AppImage`. Building and running the real frozen Linux binary locally to validate this surfaced a genuine bug: the Linux build has never actually been able to open a window, PyInstaller bundled whatever `gi`/PyGObject the build machine's system python3 had, compiled for the wrong Python ABI for the frozen interpreter. Fixed by pinning `PyGObject==3.48.2` for Linux in `desktop/requirements-dev.txt` and installing the dev headers it needs to compile against the CI job's own interpreter.
+  - **Verified:** compiled `windows.nsi` locally with `makensis` against a stand-in build folder. Built the real PyInstaller Linux binary locally, reproduced the `gi` import crash, applied the fix, rebuilt, and confirmed a clean launch. Built the actual `.AppImage` with `appimagetool` and ran it under Xvfb, screenshot confirms the real onboarding UI renders (not just a clean exit code).
+
 - **Release: ship the drag-to-Applications DMG layout to end users.**
   - **Why:** #4646 rewrote the DMG-build step but no signed `.dmg`
     carries the new layout yet. Carrier `[RELEASE]` so users see the
