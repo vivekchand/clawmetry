@@ -187,10 +187,23 @@ jobs:
           if err:
               code, body = err
               if code == 403:
+                  # Mirror the GET-403 fallback: if the check is already enforced
+                  # via branch protection (e.g. the admin added it via Settings UI
+                  # or close-c6.sh), C6 is satisfied and there is nothing to fix.
+                  if branch_has_c6_check():
+                      print(
+                          f"[C6] Rulesets API {verb} 403 but 'E2E Gate (required)' is "
+                          "present in branch protection -- C6 OK."
+                      )
+                      set_output("created", "false")
+                      sys.exit(0)
                   print(
                       f"::error title=C6 Rulesets write denied::"
-                      f"Rulesets API {verb} returned 403 -- GITHUB_TOKEN cannot write rulesets. "
-                      "Fix: bash scripts/close-c6.sh (or Settings UI, ~60 s). "
+                      f"Rulesets API {verb} returned 403 -- GITHUB_TOKEN cannot write rulesets "
+                      "AND 'E2E Gate (required)' is MISSING from branch protection. "
+                      "Fastest fix (60 s): github.com/vivekchand/clawmetry/settings/branches "
+                      "> Edit main > Require status checks > add 'E2E Gate (required)'. "
+                      "Or: bash scripts/close-c6.sh. "
                       "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
                   )
                   set_output("created", "false")
@@ -212,7 +225,7 @@ jobs:
           PYEOF
 
       # Only verify if the upsert step actually created/updated a ruleset.
-      # Skipped when upsert exits 0 or 1 due to 403 (no ruleset to verify).
+      # Skipped when upsert exits 0 (403 + check already present) or exits 1.
       - name: Verify ruleset is active
         if: success() && steps.upsert.outputs.created == 'true'
         env:

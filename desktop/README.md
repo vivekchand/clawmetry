@@ -76,6 +76,7 @@ shows a helpful error and points at python.org if none is found.
 | `build_mac.spec` | PyInstaller: WKWebView, Dock icon (`ClawMetry.icns`), ATS exception for `127.0.0.1`. |
 | `build_windows.spec` | PyInstaller: WebView2, `ClawMetry.ico`. |
 | `build_linux.spec` | PyInstaller: GTK WebKit2. |
+| `installer/windows.nsi` | NSIS script wrapping `build_windows.spec`'s output into a real `.exe` installer (Start Menu + Desktop shortcuts, uninstaller, per-user install, no admin/UAC prompt). |
 | `assets/` | Brand SVGs (`clawmetry-logo*.svg`), generated `ClawMetry.icns`, `ClawMetry.ico`, `clawmetry-512.png`. |
 | `requirements-dev.txt` | pywebview, Pillow, PyInstaller (build-only). |
 | `setup_py2app.py` | Retained for the day py2app catches up to macOS 26 Tahoe — not on the shipping path. |
@@ -85,31 +86,97 @@ shows a helpful error and points at python.org if none is found.
 ```bash
 pip install -r desktop/requirements-dev.txt
 pyinstaller --clean --noconfirm desktop/build_mac.spec
+mkdir -p dist/dmg-staging
+cp -R dist/ClawMetry.app dist/dmg-staging/
+ln -s /Applications dist/dmg-staging/Applications
 hdiutil create -volname ClawMetry \
-  -srcfolder dist/ClawMetry.app -ov -format UDZO \
+  -srcfolder dist/dmg-staging -ov -format UDZO \
   dist/ClawMetry.dmg
 open dist/ClawMetry.dmg
 ```
 
-Drag `ClawMetry.app` into `/Applications`, launch it, and watch the
-runtime bootstrap in ~10 seconds on first launch. Subsequent launches
-are near-instant.
+Drag `ClawMetry.app` onto the `Applications` shortcut shown next to it
+in the mounted volume, launch it, and watch the runtime bootstrap in
+~10 seconds on first launch. Subsequent launches are near-instant.
 
-Windows and Linux use the sibling specs. Cross-compiling from macOS
-is not supported — those builds happen in
+Windows and Linux use the sibling specs (`build_windows.spec`,
+`build_linux.spec`), wrapped into real installers by
+`desktop/installer/windows.nsi` (NSIS) and an AppImage-staging step
+in CI, respectively — see `## Real installers, not bare archives`
+below. Cross-compiling from macOS is not supported — the Windows/Linux
+builds happen in
 [`.github/workflows/desktop-artifacts.yml`](../.github/workflows/desktop-artifacts.yml)
 on push of a `v*.*.*` tag or manual dispatch.
+
+## Real installers, not bare archives (FLYWHEEL.md §0b)
+
+Each platform ships a first-class installer, not a build artifact that
+happens to be downloadable:
+
+| Platform | Artifact | What it gives the user |
+|---|---|---|
+| macOS | `.dmg` | Mount → drag `ClawMetry.app` onto the `Applications` shortcut in the same window → done. Signed + notarized when the Apple secrets below are set. |
+| Windows | `.exe` (NSIS) | Double-click → Start Menu + Desktop shortcuts, registers in "Apps & features" with a real uninstaller. Per-user install (`%LOCALAPPDATA%\Programs\ClawMetry`), no admin/UAC prompt — matches where the runtime venv already lives. Unsigned until a Windows EV cert exists (SmartScreen will warn). |
+| Linux | `.AppImage` | Download, `chmod +x`, double-click or run. No root, no distro package manager, works across Ubuntu/Fedora/Arch/etc via FUSE (or `--appimage-extract-and-run` where FUSE is unavailable). |
+
+A plain `.zip` (Windows) and `.tar.gz` (Linux) are still built and
+published alongside the installers for anyone who wants a portable,
+no-install copy — but the installer is the artifact the download
+buttons link to.
+
+**NSIS locally** (from repo root, after `pyinstaller --clean --noconfirm desktop/build_windows.spec` on Windows):
+```
+makensis /DVERSION=0.0.0-dev /DSRC_DIR=dist\ClawMetry desktop\installer\windows.nsi
+```
+`makensis` can also compile/validate the script's *syntax* from Linux/macOS (`apt install nsis` /
+`brew install makensis`) even though the produced `.exe` obviously can't run there — useful for catching
+script errors before a CI round-trip.
+
+**AppImage locally** (from repo root, on Linux, after `pyinstaller --clean --noconfirm desktop/build_linux.spec`):
+```bash
+cd dist
+mkdir -p ClawMetry.AppDir/usr/bin
+cp -r clawmetry/. ClawMetry.AppDir/usr/bin/
+printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' 'exec "$HERE/usr/bin/clawmetry" "$@"' > ClawMetry.AppDir/AppRun
+chmod +x ClawMetry.AppDir/AppRun
+cp ../desktop/assets/clawmetry-512.png ClawMetry.AppDir/clawmetry.png
+printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=ClawMetry' 'Exec=AppRun' 'Icon=clawmetry' 'Categories=Development;Monitor;' 'Terminal=false' > ClawMetry.AppDir/clawmetry.desktop
+curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+chmod +x appimagetool
+./appimagetool --appimage-extract-and-run ClawMetry.AppDir ClawMetry-0.0.0-dev-x86_64.AppImage
+```
+
+**Linux `gi`/PyGObject pin (read before touching `build_linux.spec` or `requirements-dev.txt`):**
+pywebview's GTK backend does `import gi`. Without a `PyGObject` built specifically for the CI job's
+`actions/setup-python` interpreter, PyInstaller bundles whatever `_gi.so` your build machine's *system*
+python3 happens to have (e.g. apt's python3-gi, compiled for the system python3's ABI — cp312 on Ubuntu
+24.04) — which the frozen binary's own cp311 interpreter cannot import at all, so it crashes on launch
+before ever opening a window. This was undiscovered until 2026-08-08 (nobody had run the actual frozen
+Linux binary — only the unfrozen `app.py` under Xvfb) because CI going green only proves PyInstaller *ran*,
+not that the result *opens a window*. `requirements-dev.txt` pins `PyGObject==3.48.2; sys_platform ==
+"linux"` (newer 3.56.3 hits a separate `TypeError: Must be number, not method` in pywebview's
+`on_load_finish` against this webkit2gtk build) and the CI job's `pip install` uses `--ignore-installed`
+so it always builds fresh against the job's own interpreter rather than trusting a stale "already
+satisfied" check against a system package. Verify by actually launching `dist/clawmetry/clawmetry` under
+Xvfb + `scrot` and looking at the screenshot — a clean exit code proves nothing per FLYWHEEL.md §0b.5.
 
 ### Stable download URLs
 
 Each build job also copies its artifact to a fixed, version-less
-filename (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`,
-`clawmetry-linux.tar.gz`) alongside the version-suffixed one, both
-uploaded to the same GitHub Release. That makes
-`https://github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>`
+filename alongside the version-suffixed one, both uploaded to the same
+GitHub Release:
+
+| Platform | Installer (stable name) | Portable fallback (stable name) |
+|---|---|---|
+| macOS | `ClawMetry-mac.dmg` | *(the `.dmg` IS the only artifact)* |
+| Windows | `ClawMetry-windows-setup.exe` | `ClawMetry-windows.zip` |
+| Linux | `clawmetry-linux.AppImage` | `clawmetry-linux.tar.gz` |
+
+That makes `https://github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>`
 a URL that always resolves to the current release with no version
 bookkeeping anywhere else — clawmetry-landing's `/download/<os>`
-routes (see that repo's `app.py`) redirect straight to these.
+routes (see that repo's `app.py`) redirect straight to the installer
+name for each platform.
 
 ## Regenerating icons
 
@@ -203,10 +270,10 @@ relaxations).
 ## Roadmap
 
 - Native app menu (Cmd-Q / Cmd-W / About, Preferences).
-- macOS signing + notarization (Apple Developer ID, `notarytool`).
-- Windows EV code-signing cert → SmartScreen clean.
-- Linux AppImage / `.deb` / `.rpm` wrappers around the PyInstaller
-  single-folder distribution.
+- Windows EV code-signing cert → SmartScreen clean (the NSIS installer
+  ships unsigned until this exists).
+- Linux `.deb` / `.rpm` wrappers alongside the AppImage, for users who
+  want the app to show up in their distro's own package manager.
 - **Bundle-mode "Update now"** — currently the pip-install click in
   the dashboard's update banner does upgrade the runtime venv (because
   the daemon's `sys.executable` is the venv's Python), but the user

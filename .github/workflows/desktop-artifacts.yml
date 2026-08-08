@@ -197,28 +197,57 @@ jobs:
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
 
-      - name: Zip distribution folder
-        working-directory: dist
+      - name: Resolve version
+        id: ver
         shell: pwsh
-        # Same tag-first version selection as the macOS job — see comment
+        # Tag-first version selection, same as the macOS job — see comment
         # there. Falls back to dashboard.py __version__ for non-tag runs.
+        # Shared across the zip + installer steps below so it's computed once.
         run: |
           $refName = $Env:GITHUB_REF_NAME
           if ($refName -and $refName -match '^v\d+\.\d+\.\d+$') {
             $version = $refName.Substring(1)
           } else {
-            $version = (Select-String -Path ../dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
+            $version = (Select-String -Path dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
           }
+          "version=$version" >> $Env:GITHUB_OUTPUT
+
+      - name: Zip distribution folder
+        working-directory: dist
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
           Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
-          # Fixed-name copy so clawmetry.com/download/windows can link a
+          # Fixed-name copy so clawmetry.com/download/windows-zip can link a
           # stable URL (GitHub's /releases/latest/download/<name>) instead
           # of bookkeeping the current version anywhere else.
           Copy-Item "ClawMetry-$version-windows.zip" "ClawMetry-windows.zip" -Force
 
+      # Real installer (FLYWHEEL.md §0b): Start Menu + Desktop shortcuts,
+      # an uninstaller registered in Add/Remove Programs, per-user install
+      # (no UAC prompt). NSIS ships preinstalled on the windows-latest
+      # runner image; the `where.exe` probe + choco fallback keeps this
+      # working if that ever changes upstream.
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $makensis = (where.exe makensis 2>$null | Select-Object -First 1)
+          if (-not $makensis) {
+            choco install nsis -y --no-progress
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          & $makensis "/DVERSION=${{ steps.ver.outputs.version }}" "/DSRC_DIR=$PWD\dist\ClawMetry" desktop\installer\windows.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+          Move-Item "desktop\installer\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe"
+          # Fixed-name copy — same stable-URL convention as the zip above.
+          Copy-Item "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-windows-setup.exe" -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: clawmetry-windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.exe
 
   linux:
     name: Linux single-folder + AppImage
@@ -232,39 +261,105 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          # GTK WebKit2 is the pywebview backend on Linux.
+          # GTK WebKit2 is the pywebview backend on Linux. The
+          # libgirepository1.0-dev / libcairo2-dev / pkg-config trio is
+          # needed to compile PyGObject (see requirements-dev.txt) against
+          # THIS job's actions/setup-python interpreter — without a
+          # matching build, the frozen binary can't import `gi` at all
+          # and crashes before ever opening a window.
           sudo apt-get install -y \
             libgtk-3-0 libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 \
-            libayatana-appindicator3-1 libnotify4
+            libayatana-appindicator3-1 libnotify4 \
+            libgirepository1.0-dev libcairo2-dev pkg-config
 
       - name: Install build deps
         run: |
           pip install --upgrade pip wheel
-          pip install -r desktop/requirements-dev.txt
+          # --ignore-installed: if the runner image ever ships an apt
+          # python3-gi, pip's "already satisfied" check would otherwise
+          # skip building the pinned PyGObject wheel THIS interpreter
+          # actually needs (see requirements-dev.txt), and re-introduce
+          # the "cannot import _gi" crash the pin exists to avoid.
+          pip install --ignore-installed -r desktop/requirements-dev.txt
 
       - name: Build tray binary
         run: pyinstaller --clean --noconfirm desktop/build_linux.spec
 
-      - name: Tarball distribution folder
-        working-directory: dist
+      - name: Resolve version
+        id: ver
         # Same tag-first version selection as the macOS job — see comment
         # there. Falls back to dashboard.py __version__ for non-tag runs.
+        # Shared across the tarball + AppImage steps below.
         run: |
           if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('../dashboard.py').read()).group(1))")
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Tarball distribution folder
+        working-directory: dist
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
           tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
-          # Fixed-name copy so clawmetry.com/download/linux can link a
-          # stable URL (GitHub's /releases/latest/download/<name>) instead
+          # Fixed-name copy so clawmetry.com/download/linux-tarball can link
+          # a stable URL (GitHub's /releases/latest/download/<name>) instead
           # of bookkeeping the current version anywhere else.
           cp "clawmetry-${VERSION}-linux-x86_64.tar.gz" "clawmetry-linux.tar.gz"
+
+      # Real installer (FLYWHEEL.md §0b): this job was literally named
+      # "Linux single-folder + AppImage" from day one but only ever shipped
+      # the tarball above — the AppImage step was never written. AppImage is
+      # the universal pick across "all flavours Linux": no root, no distro
+      # package manager, works on Ubuntu/Fedora/Arch/etc via FUSE (or
+      # --appimage-extract-and-run where FUSE is unavailable, e.g. some
+      # containers).
+      - name: Build AppImage
+        working-directory: dist
+        run: |
+          set -e
+          VERSION="${{ steps.ver.outputs.version }}"
+          APPDIR="ClawMetry.AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          cp -r clawmetry/. "$APPDIR/usr/bin/"
+          # AppRun is the entry point appimagetool/the runtime execs. Written
+          # with printf (not a heredoc) since this whole step is one indented
+          # YAML block scalar — a heredoc terminator needs to sit at column
+          # zero, which YAML's indentation would break.
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            'exec "$HERE/usr/bin/clawmetry" "$@"' \
+            > "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun"
+          cp ../desktop/assets/clawmetry-512.png "$APPDIR/clawmetry.png"
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=ClawMetry' \
+            'Exec=AppRun' \
+            'Icon=clawmetry' \
+            'Categories=Development;Monitor;' \
+            'Terminal=false' \
+            > "$APPDIR/clawmetry.desktop"
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          # appimagetool itself needs FUSE to run as an AppImage on the
+          # runner; --appimage-extract-and-run sidesteps that dependency.
+          ./appimagetool --appimage-extract-and-run "$APPDIR" \
+            "ClawMetry-${VERSION}-x86_64.AppImage"
+          # Fixed-name copy — same stable-URL convention as the tarball above.
+          cp "ClawMetry-${VERSION}-x86_64.AppImage" "clawmetry-linux.AppImage"
+          rm -rf "$APPDIR" appimagetool
 
       - uses: actions/upload-artifact@v4
         with:
           name: clawmetry-linux
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
 
   release:
     name: Attach artifacts to Release
@@ -291,5 +386,7 @@ jobs:
           files: |
             artifacts/clawmetry-macos/*.dmg
             artifacts/clawmetry-windows/*.zip
+            artifacts/clawmetry-windows/*.exe
             artifacts/clawmetry-linux/*.tar.gz
+            artifacts/clawmetry-linux/*.AppImage
           fail_on_unmatched_files: false
