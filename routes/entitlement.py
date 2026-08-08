@@ -7815,6 +7815,321 @@ def api_entitlement_has_runtimes_from_path_batch():
         )
 
 
+def _missing_bundle_from_path_batch_fallback(
+    axis: str,
+    to_tier: str,
+    from_tokens: list,
+    tokens: list,
+) -> dict:
+    """OSS-free / never-5xx envelope for the source-side path-batch
+    complement endpoints
+    ``/api/entitlement/missing-features-from-path-batch`` and
+    ``/api/entitlement/missing-runtimes-from-path-batch``.
+
+    Source-axis batch sibling of :func:`_missing_bundle_at_path_batch_fallback`
+    (destination-side batch) and complement-shaped sibling of
+    :func:`_has_bundle_from_path_batch_fallback` (boolean-fold source-
+    batch). On any resolver / helper blowup the endpoint still returns
+    200 with the same envelope shape as the happy path but with
+    ``tiers=[]`` and every rollup zeroed / dropped so a source-side
+    plan-change comparison surface that lost the resolver doesn't
+    silently render a denial matrix it can no longer justify. ``to`` /
+    ``unknown_tiers`` echo the caller's input so a debugging tooltip
+    can still surface the dropped sources, and ``unknown`` echoes the
+    axis tokens.
+    """
+    return {
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        axis: [],
+        "unknown": list(tokens),
+        "unknown_tiers": list(from_tokens),
+        "kind": axis,
+        "count": 0,
+        "tiers": [],
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_bundle_from_path_batch_body(axis: str) -> dict:
+    """Happy-path body builder for
+    ``/api/entitlement/missing-features-from-path-batch`` /
+    ``/api/entitlement/missing-runtimes-from-path-batch``.
+
+    Source-axis batch sibling of :func:`_missing_bundle_at_path_batch_body`
+    (which walks the rungs between ONE ``from`` and N candidate
+    destinations): this walks the rungs between N candidate sources and
+    ONE ``to`` in ONE round-trip. Mirror-direction twin of the
+    ``/missing-*-at-path-batch`` family and complement-shaped sibling
+    of the source-side boolean-fold ``/has-*-from-path-batch`` family
+    at the batch layer, in the same relationship
+    ``/missing-features-at-path`` has to ``/has-features-at-path``.
+
+    Envelope shape (byte-stable across every input branch)::
+
+        {
+          "to":                 "<tier id>",
+          "to_label":           "...",
+          "to_rank":            <int>,
+          "features"/"runtimes":[<known ids>],
+          "unknown":            [<axis tokens dropped>],
+          "unknown_tiers":      [<source ids dropped>],
+          "kind":               "features"/"runtimes",
+          "count":              <int>,                # len(known)
+          "tiers": [
+            {
+              "from":        "<id>",
+              "from_label":  "...",
+              "from_rank":   <int>,
+              "direction":   "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":        [<missing_*_at_path row>, ...],
+              "path_length": <int>,
+              "any_missing": <bool>,
+            },
+            ...
+          ],
+          "required_tier":       "<id>" | null,
+          "required_tier_label": "<label>" | null,
+          "required_tier_rank":  <int>,               # -1 when null
+          "current_tier":        "<live tier id>",
+          "current_tier_rank":   <int>,
+          "grace":               <bool>,
+          "enforced":            <bool>,
+        }
+
+    Each ``tiers[].path`` row byte-equals a row from
+    ``/missing-features-at-path?from=<from>&to=<to>&features=<bundle>``'s
+    ``.path`` (and the runtime twin) for the same ``(from, to,
+    bundle)`` triple -- a parity test pins this so the scalar and
+    source-batch path what-if complement helpers cannot drift.
+
+    Runtime-axis alias canonicalisation is applied per-token upstream
+    of the strict scalar (:func:`missing_runtimes_from_path_batch`
+    inherits :func:`missing_runtimes_at_path`'s strict-alias posture
+    at scalar layer), matching the sibling ``/missing-runtimes-at-path``
+    upstream-canonicalise pattern -- alias-and-canonical pair dedups
+    to ONE entry in ``runtimes`` before the scalar sees it, so it
+    also dedups to ONE entry in every per-source rung's ``missing``
+    list.
+
+    Per-source ``any_missing`` is ``True`` iff any rung in that
+    source's ``path`` has a non-empty ``missing`` list OR the
+    top-level ``unknown`` list is non-empty (matches the singular
+    ``/missing-features-at-path`` rollup semantics applied per
+    source, and mirrors the destination-side batch's per-destination
+    ``any_missing`` derivation byte-for-byte). ``required_tier`` folds
+    through :func:`min_tier_for_features` / :func:`min_tier_for_runtimes`
+    against the KNOWN-only subset (matches the sibling
+    ``/missing-features-at-path`` envelope's rollup contract),
+    independent of any per-source endpoint.
+
+    Never 4xxs (missing / blank / unknown ``to``, or empty / all-
+    unknown source CSV -> 200 with ``tiers=[]``, matching the sibling
+    ``/has-features-from-path-batch`` posture -- a source-side
+    comparison matrix binds ``tiers`` directly without a pre-
+    validation round-trip). Never 5xxs: any helper blowup collapses
+    to :func:`_missing_bundle_from_path_batch_fallback`.
+    """
+    from clawmetry import entitlements as _ent
+
+    raw_to = request.args.get("to")
+    to_tier = (raw_to or "").strip().lower()
+    from_tokens = _parse_csv_arg("from")
+    param = "features" if axis == "features" else "runtimes"
+    tokens = _parse_csv_arg(param)
+
+    known: list = []
+    unknown: list = []
+    if axis == "features":
+        for fid in tokens:
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known:
+                    known.append(fid)
+            elif fid not in unknown:
+                unknown.append(fid)
+        canon_tokens: list = list(tokens)
+        required = _ent.min_tier_for_features(known) if known else None
+    else:
+        canon_tokens = []
+        canon_seen: set = set()
+        for rid_raw in tokens:
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in canon_seen:
+                continue
+            canon_seen.add(rid)
+            canon_tokens.append(rid)
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known:
+                    known.append(rid)
+            elif rid not in unknown:
+                unknown.append(rid_raw)
+        required = _ent.min_tier_for_runtimes(known) if known else None
+
+    if axis == "features":
+        batch = _ent.missing_features_from_path_batch(
+            from_tokens, to_tier, canon_tokens
+        )
+    else:
+        batch = _ent.missing_runtimes_from_path_batch(
+            from_tokens, to_tier, canon_tokens
+        )
+
+    env = _resolver_envelope(_ent)
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+
+    if batch is None:
+        return {
+            "to": to_tier,
+            "to_label": None,
+            "to_rank": -1,
+            axis: known,
+            "unknown": unknown,
+            "unknown_tiers": list(from_tokens),
+            "kind": axis,
+            "count": len(known),
+            "tiers": [],
+            "required_tier": required,
+            "required_tier_label": required_label,
+            "required_tier_rank": req_rank,
+            "current_tier": env["current_tier"],
+            "current_tier_rank": env["current_tier_rank"],
+            "grace": env["grace"],
+            "enforced": env["enforced"],
+        }
+
+    tiers_out: list[dict] = []
+    for row in batch.get("tiers", []) or []:
+        try:
+            path = list(row.get("path", []) or [])
+        except AttributeError:
+            continue
+        any_missing = bool(unknown) or any(
+            bool(r.get("missing")) for r in path
+        )
+        tiers_out.append(
+            {
+                "from": row.get("from"),
+                "from_label": row.get("from_label"),
+                "from_rank": row.get("from_rank", -1),
+                "direction": row.get("direction"),
+                "path": path,
+                "path_length": len(path),
+                "any_missing": any_missing,
+            }
+        )
+
+    return {
+        "to": to_tier,
+        "to_label": _ent.tier_label(to_tier),
+        "to_rank": _ent.tier_rank(to_tier),
+        axis: known,
+        "unknown": unknown,
+        "unknown_tiers": list(batch.get("unknown", []) or []),
+        "kind": axis,
+        "count": len(known),
+        "tiers": tiers_out,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-features-from-path-batch")
+def api_entitlement_missing_features_from_path_batch():
+    """``GET /api/entitlement/missing-features-from-path-batch?from=a,b,c&to=<id>&features=x,y,z``
+    -- source-axis batch sibling of ``/api/entitlement/missing-features-at-path``.
+
+    Where ``/missing-features-at-path`` walks the rungs between ONE
+    ``(from, to)`` pair under ONE feature bundle, this walks the rungs
+    between N candidate sources and ONE ``to`` under ONE bundle in ONE
+    round-trip. Mirror-direction twin of
+    ``/missing-features-at-path-batch`` (which fans out over
+    destinations); complement-shaped sibling of
+    ``/has-features-from-path-batch`` at the source-batch layer, in
+    the same relationship ``/missing-features-at-path`` has to
+    ``/has-features-at-path``.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/missing-features-at-path?from=<from>&to=<to>&features=<bundle>``'s
+    ``.path`` for the same triple -- pinned by the parity tests so
+    the scalar and source-batch path accessors cannot drift. Per-source
+    path lengths can legitimately differ (the rungs walked depend on
+    the source), matching ``/has-features-from-path-batch``'s posture.
+
+    Envelope shape is fully documented on
+    :func:`_missing_bundle_from_path_batch_body`. ``trial`` IS accepted
+    as a source id (excluded from the walked intermediate rungs the way
+    ``/missing-features-at-path`` already excludes it, but is a valid
+    endpoint via the lateral / identity branches).
+
+    Never 4xxs (missing / blank / unknown ``to``, or empty / all-
+    unknown source CSV -> 200 with ``tiers=[]``, matching the sibling
+    ``/has-features-from-path-batch`` posture -- a source-side
+    comparison matrix binds ``tiers`` directly without a pre-
+    validation round-trip). Never 5xxs: any helper blowup collapses
+    to :func:`_missing_bundle_from_path_batch_fallback`.
+    """
+    try:
+        return jsonify(_missing_bundle_from_path_batch_body("features"))
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_features_from_path_batch: error: %s", exc
+        )
+        to_tier = (request.args.get("to") or "").strip().lower()
+        return jsonify(
+            _missing_bundle_from_path_batch_fallback(
+                "features",
+                to_tier,
+                _parse_csv_arg("from"),
+                _parse_csv_arg("features"),
+            )
+        )
+
+
+@bp_entitlement.route("/api/entitlement/missing-runtimes-from-path-batch")
+def api_entitlement_missing_runtimes_from_path_batch():
+    """``GET /api/entitlement/missing-runtimes-from-path-batch?from=a,b,c&to=<id>&runtimes=x,y,z``
+    -- runtime-axis twin of ``/api/entitlement/missing-features-from-path-batch``.
+
+    Same envelope with ``runtimes`` in the axis-specific slot.
+    Runtime-alias canonicalisation (``claude-code`` -> ``claude_code``)
+    is applied per-token upstream at the endpoint layer so
+    ``?runtimes=claude-code,openclaw`` collapses to the canonical
+    ``claude_code,openclaw`` before hitting the strict scalar --
+    matches the sibling ``/missing-runtimes-at-path`` upstream-
+    canonicalise pattern. Alias-and-canonical pair dedups to ONE entry
+    in ``runtimes`` and therefore ONE entry in every per-source rung's
+    ``missing`` list. Never 4xxs; never 5xxs.
+    """
+    try:
+        return jsonify(_missing_bundle_from_path_batch_body("runtimes"))
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_runtimes_from_path_batch: error: %s", exc
+        )
+        to_tier = (request.args.get("to") or "").strip().lower()
+        return jsonify(
+            _missing_bundle_from_path_batch_fallback(
+                "runtimes",
+                to_tier,
+                _parse_csv_arg("from"),
+                _parse_csv_arg("runtimes"),
+            )
+        )
+
+
 def _has_all_fallback() -> dict:
     """Never-5xx envelope for ``/api/entitlement/has-all``.
 
