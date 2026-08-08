@@ -56,7 +56,7 @@ import onboarding  # noqa: E402  (must follow sys.path insert)
 
 APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
-POLL_INTERVAL_SECS = 0.4
+POLL_INTERVAL_SECS = 0.15
 SHUTDOWN_WAIT_SECS = 5.0
 # Blueprint "Desktop Application Distribution" contract: poll PyPI for
 # a newer clawmetry release every 6 hours. `_should_upgrade()` is the
@@ -162,13 +162,25 @@ def _win_subprocess_kwargs() -> dict:
     return {}
 
 
-def _bootstrap_python() -> Optional[str]:
+def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
     the bundle exe and `python -m venv` mispoints), so we use the
     system Python. On macOS this is `/usr/bin/python3` (ships with the
     OS since Big Sur). On Linux, `python3` on PATH. On Windows, `py`
-    or the Store Python."""
+    or the Store Python.
+
+    Each candidate probe spawns an interpreter (slow, worst-case ~6s
+    per dud candidate), so the winner is cached in ``cache_file`` and
+    revalidated with a cheap existence check on later launches."""
+    if cache_file is not None:
+        try:
+            cached = json.loads(cache_file.read_text()).get("python", "")
+            if cached and Path(cached).exists():
+                return cached
+        except Exception:
+            pass
+
     candidates = ["python3", "/usr/bin/python3", "python", "py"]
     if platform.system() == "Windows":
         candidates = ["py", "python", "python3"]
@@ -184,6 +196,11 @@ def _bootstrap_python() -> Optional[str]:
                     **_win_subprocess_kwargs(),
                 )
                 if r.returncode == 0:
+                    if cache_file is not None:
+                        try:
+                            cache_file.write_text(json.dumps({"python": p}))
+                        except OSError:
+                            pass
                     return p
             except Exception:
                 continue
@@ -243,6 +260,28 @@ class RuntimeSupervisor:
             pass
 
     def _get_installed_version(self) -> Optional[str]:
+        """Version of clawmetry installed in the runtime venv, read
+        straight from the dist-info directory name — no interpreter
+        spawn (the old subprocess probe cost ~1s per call, on the boot
+        path and on every watcher tick). Falls back to the subprocess
+        probe only if no dist-info is found."""
+        if platform.system() == "Windows":
+            sp_globs = ["Lib/site-packages"]
+        else:
+            sp_globs = ["lib/python*/site-packages"]
+        try:
+            infos = [
+                d
+                for g in sp_globs
+                for d in self.venv.glob(f"{g}/clawmetry-*.dist-info")
+                if d.is_dir()
+            ]
+            if infos:
+                newest = max(infos, key=lambda d: d.stat().st_mtime)
+                return newest.name[len("clawmetry-"):-len(".dist-info")]
+        except OSError:
+            pass
+
         py = self._venv_python()
         if not py.exists():
             return None
@@ -260,10 +299,20 @@ class RuntimeSupervisor:
         return None
 
     def bootstrap(self) -> bool:
-        """Create the venv if missing; pip-install/upgrade clawmetry.
+        """Create the venv if missing; pip-install clawmetry if missing.
         Idempotent. Returns True if a runnable clawmetry ends up in
-        the venv; False on any hard failure."""
-        py = _bootstrap_python()
+        the venv; False on any hard failure.
+
+        Warm launches never touch the network here: if the venv already
+        has a runnable clawmetry we return immediately and let the
+        watcher thread apply the 6h upgrade cadence in the background
+        (it restarts the daemon on version drift, so users still pick
+        up releases without ever staring at a "Checking for updates"
+        splash)."""
+        if self._venv_clawmetry().exists():
+            return True
+
+        py = _bootstrap_python(self.runtime / "bootstrap-python.json")
         if not py:
             self.on_status(
                 "System Python 3 not found. Install python.org 3.11+ then relaunch."
@@ -285,34 +334,26 @@ class RuntimeSupervisor:
                 self.on_status("Runtime setup failed. Check bootstrap.log.")
                 return False
 
-        needs_upgrade = self._should_upgrade()
-        currently_installed = self._get_installed_version()
-        if currently_installed is None or needs_upgrade:
-            action = "Installing" if currently_installed is None else "Checking for updates"
-            self.on_status(f"{action} ClawMetry from PyPI")
-            try:
-                r = subprocess.run(
-                    [str(self._venv_python()), "-m", "pip", "install",
-                     "--upgrade", "--disable-pip-version-check", "clawmetry"],
-                    capture_output=True, text=True, timeout=300,
-                    **_win_subprocess_kwargs(),
-                )
-                self._log(f"pip install rc={r.returncode}")
-                if r.returncode != 0:
-                    self._log(r.stderr[:2000])
-                    # If we already have a version installed, keep it — a
-                    # transient PyPI failure shouldn't block launch.
-                    if currently_installed is None:
-                        self.on_status("PyPI install failed. See bootstrap.log.")
-                        return False
-                new_version = self._get_installed_version()
-                self._mark_upgraded(new_version)
-                self._log(f"clawmetry now at {new_version}")
-            except subprocess.TimeoutExpired:
-                self._log("pip install timed out")
-                if currently_installed is None:
-                    self.on_status("Install timed out. Check your connection.")
-                    return False
+        self.on_status("Installing ClawMetry from PyPI")
+        try:
+            r = subprocess.run(
+                [str(self._venv_python()), "-m", "pip", "install",
+                 "--upgrade", "--disable-pip-version-check", "clawmetry"],
+                capture_output=True, text=True, timeout=300,
+                **_win_subprocess_kwargs(),
+            )
+            self._log(f"pip install rc={r.returncode}")
+            if r.returncode != 0:
+                self._log(r.stderr[:2000])
+                self.on_status("PyPI install failed. See bootstrap.log.")
+                return False
+            new_version = self._get_installed_version()
+            self._mark_upgraded(new_version)
+            self._log(f"clawmetry now at {new_version}")
+        except subprocess.TimeoutExpired:
+            self._log("pip install timed out")
+            self.on_status("Install timed out. Check your connection.")
+            return False
 
         return self._venv_clawmetry().exists()
 
@@ -482,6 +523,83 @@ class RuntimeSupervisor:
                 self._background_pip_upgrade()
 
 
+def _ensure_user_path_windows(bin_dir: str, log: Callable[[str], None]) -> None:
+    """Append ``bin_dir`` to the per-user PATH (HKCU\\Environment) if it
+    isn't already there, then broadcast WM_SETTINGCHANGE so newly opened
+    cmd/PowerShell windows pick it up without a logoff. Per-user only —
+    never touches the machine PATH, no admin rights involved."""
+    import winreg
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, "Environment", 0,
+        winreg.KEY_READ | winreg.KEY_SET_VALUE,
+    ) as key:
+        try:
+            current, kind = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            current, kind = "", winreg.REG_EXPAND_SZ
+        entries = [e for e in current.split(";") if e]
+        if any(e.strip().lower().rstrip("\\") == bin_dir.lower().rstrip("\\")
+               for e in entries):
+            return
+        new_value = ";".join(entries + [bin_dir])
+        winreg.SetValueEx(key, "Path", 0, kind or winreg.REG_EXPAND_SZ, new_value)
+        log(f"added {bin_dir} to user PATH")
+
+    try:
+        import ctypes
+        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x0002
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, None,
+        )
+    except Exception:
+        pass  # PATH is set; existing shells just won't see it until reopened
+
+
+def ensure_global_cli(sup: RuntimeSupervisor) -> None:
+    """Make the runtime venv's `clawmetry` globally invocable, so users
+    of the desktop app also get the CLI (`clawmetry` in any terminal)
+    without a separate pip install.
+
+    Windows: writes a tiny shim at %LOCALAPPDATA%\\ClawMetry\\bin\\
+    clawmetry.cmd (delegates to the venv exe, so venv upgrades need no
+    shim change) and adds that dir to the user PATH. macOS/Linux:
+    symlinks ~/.local/bin/clawmetry at the venv binary. Idempotent,
+    best-effort, and called off the boot path — a failure here must
+    never break the app, so everything is logged and swallowed."""
+    cli = sup._venv_clawmetry()
+    if not cli.exists():
+        return
+    try:
+        if platform.system() == "Windows":
+            bin_dir = sup.runtime.parent / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            shim = bin_dir / "clawmetry.cmd"
+            content = f'@echo off\r\n"{cli}" %*\r\n'
+            if not shim.exists() or shim.read_text() != content:
+                shim.write_text(content)
+                sup._log(f"global CLI shim written: {shim}")
+            _ensure_user_path_windows(str(bin_dir), sup._log)
+        else:
+            local_bin = Path.home() / ".local" / "bin"
+            local_bin.mkdir(parents=True, exist_ok=True)
+            link = local_bin / "clawmetry"
+            if link.is_symlink() or link.exists():
+                try:
+                    if link.is_symlink() and os.readlink(link) == str(cli):
+                        return
+                    link.unlink()
+                except OSError:
+                    return  # something else owns that name; leave it alone
+            link.symlink_to(cli)
+            sup._log(f"global CLI symlink: {link} -> {cli}")
+            if str(local_bin) not in os.environ.get("PATH", ""):
+                sup._log(f"note: {local_bin} not on PATH in this session")
+    except Exception as exc:
+        sup._log(f"global CLI setup failed: {exc}")
+
+
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -640,6 +758,12 @@ def main() -> int:
             # the carousel up with the failure text at the top so the
             # user has something to read while filing a bug.
             return
+
+        # Expose the CLI globally (PATH shim / symlink) in the
+        # background — must never delay the boot sequence.
+        threading.Thread(
+            target=ensure_global_cli, args=(sup,), daemon=True
+        ).start()
 
         # Phase 2: onboarding — only on the very first launch.
         runtime = sup.runtime

@@ -86,6 +86,13 @@ Section "Uninstall"
   ; same as every other installer here: uninstalling the app doesn't wipe
   ; the user's synced data or a fresh reinstall's ability to skip re-onboarding.
   RMDir /r "$INSTDIR"
+
+  ; Global CLI shim (written by the app at runtime into
+  ; %LOCALAPPDATA%\ClawMetry\bin) + its user-PATH entry. Once the app
+  ; is gone the shim points at a venv nobody manages, so clean both.
+  RMDir /r "$LOCALAPPDATA\ClawMetry\bin"
+  nsExec::ExecToLog `powershell -NoProfile -Command "$$b='$LOCALAPPDATA\ClawMetry\bin'; $$p=[Environment]::GetEnvironmentVariable('Path','User'); $$n=($$p -split ';' | Where-Object { $$_ -and $$_ -ne $$b }) -join ';'; if ($$n -ne $$p) { [Environment]::SetEnvironmentVariable('Path',$$n,'User') }"`
+
   Delete "$SMPROGRAMS\ClawMetry\ClawMetry.lnk"
   Delete "$SMPROGRAMS\ClawMetry\Uninstall ClawMetry.lnk"
   RMDir "$SMPROGRAMS\ClawMetry"

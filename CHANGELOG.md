@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Feature: desktop app installs a global `clawmetry` CLI + instant warm launches.**
+  - **Why:** the desktop app's runtime venv was invisible to the terminal — desktop users who typed `clawmetry` in cmd/PowerShell got "not recognized" unless they separately `pip install`ed, splitting the install base. And warm launches could stall 20+ seconds on the splash whenever the 6h stamp expired, because `bootstrap()` ran a blocking `pip install --upgrade` before starting the daemon. Founder ask 2026-08-08: the app must be super snappy and the CLI must work globally so users can run both.
+  - **What:** `desktop/app.py` — (1) `ensure_global_cli()` runs off the boot path on every launch: Windows writes a `%LOCALAPPDATA%\ClawMetry\bin\clawmetry.cmd` shim delegating to the venv exe, appends that dir to the per-user PATH (HKCU, no admin) and broadcasts `WM_SETTINGCHANGE`; macOS/Linux symlink `~/.local/bin/clawmetry`. (2) `bootstrap()` fast-path: if the venv already has a runnable clawmetry, return immediately — the watcher thread owns the 6h upgrade cadence in the background and drift-restarts the daemon, so launch never blocks on PyPI. (3) `_get_installed_version()` reads the dist-info directory name instead of spawning the venv interpreter (~1s → ~1ms, also on every watcher tick). (4) The system-Python probe result is cached in `runtime/bootstrap-python.json`. (5) Daemon ready-poll tightened 0.4s → 0.15s. `desktop/installer/windows.nsi` uninstaller now removes the shim dir and strips its user-PATH entry.
+  - **Verified:** on a live Windows 11 install of the shipped desktop app (runtime venv at clawmetry 0.12.666): warm-path `bootstrap()` measured 0.3ms and dist-info version read 1.4ms; `ensure_global_cli()` wrote the shim, registered the PATH entry, and a fresh-PATH shell resolved `clawmetry` to the shim and printed `clawmetry 0.12.666`.
+
 - **Release: ship the E2E key settings panel and the Windows/Linux installers to end users.**
   - **Why:** carrier `[RELEASE]` so #4645 and #4648 reach the next tagged build and PyPI release instead of sitting merged-but-unpublished on main.
   - **What:** no new code; ships #4645 and #4648.
