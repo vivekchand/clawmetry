@@ -24631,20 +24631,39 @@ function dismissLicenseExpiredBanner() {
 async function checkLicenseExpiry() {
   var banner = document.getElementById('license-expired-banner');
   if (!banner) return;
+  var dismissedAt = 0;
   try {
-    var dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
-    if (dismissedAt && (Date.now() - dismissedAt) < 24 * 3600 * 1000) return;
+    dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
   } catch (e) {}
   try {
     var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
     var expiredTrial = !!(e && e.expired && e.tier === 'trial');
     var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
-    if (!expiredTrial && !expiredPaid) { banner.style.display = 'none'; return; }
+    // Trial ending (or already in grace): say it LOUD before the cliff,
+    // not after. days_until_expiry === 0 means "ends today"; grace means
+    // the expiry date passed and enforcement is pending. Both previously
+    // rendered nothing anywhere in the UI.
+    var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
+    var endingTrial = !!(e && !e.expired && e.tier === 'trial'
+      && (e.grace === true || (days !== null && days <= 3)));
+    if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
+    // A dismissed EXPIRED banner stays gone for 24h; a dismissed
+    // countdown comes back after 4h — the clock is literally running.
+    var dismissWindowMs = (expiredTrial || expiredPaid) ? 24 * 3600 * 1000 : 4 * 3600 * 1000;
+    if (dismissedAt && (Date.now() - dismissedAt) < dismissWindowMs) { banner.style.display = 'none'; return; }
     var msg = document.getElementById('license-expired-msg');
+    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
     if (msg && expiredPaid) {
-      var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
       msg.textContent = t('banners.license_expired_msg', null,
         'Your license has expired. Renew to keep every runtime.');
+    } else if (msg && endingTrial) {
+      if (e.grace === true || days === null || days <= 0) {
+        msg.textContent = t('banners.trial_ends_today_msg', null,
+          'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
+      } else {
+        msg.textContent = t('banners.trial_ending_msg', { days: days },
+          'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');
+      }
     }
     // Hide the paste-a-key link when the selfhost modal is not on this page.
     var haveKey = document.getElementById('license-expired-have-key');
