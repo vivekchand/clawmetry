@@ -104,6 +104,12 @@ jobs:
             -srcfolder dist/ClawMetry.app \
             -ov -format UDZO \
             "dist/ClawMetry-${VERSION}.dmg"
+          # Fixed-name copy so clawmetry.com/download/mac can link a stable
+          # URL (GitHub's /releases/latest/download/<name>) instead of
+          # bookkeeping the current version anywhere else. Placed BEFORE
+          # the sign step below so it rides the same `dist/*.dmg` signing
+          # loop as the versioned file.
+          cp "dist/ClawMetry-${VERSION}.dmg" "dist/ClawMetry-mac.dmg"
 
       - name: Sign + notarize + staple the .dmg itself
         if: env.HAS_SIGN == 'true'
@@ -152,6 +158,10 @@ jobs:
             $version = (Select-String -Path ../dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
           }
           Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
+          # Fixed-name copy so clawmetry.com/download/windows can link a
+          # stable URL (GitHub's /releases/latest/download/<name>) instead
+          # of bookkeeping the current version anywhere else.
+          Copy-Item "ClawMetry-$version-windows.zip" "ClawMetry-windows.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
@@ -194,6 +204,10 @@ jobs:
             VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('../dashboard.py').read()).group(1))")
           fi
           tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
+          # Fixed-name copy so clawmetry.com/download/linux can link a
+          # stable URL (GitHub's /releases/latest/download/<name>) instead
+          # of bookkeeping the current version anywhere else.
+          cp "clawmetry-${VERSION}-linux-x86_64.tar.gz" "clawmetry-linux.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:

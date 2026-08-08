@@ -100,6 +100,17 @@ is not supported — those builds happen in
 [`.github/workflows/desktop-artifacts.yml`](../.github/workflows/desktop-artifacts.yml)
 on push of a `v*.*.*` tag or manual dispatch.
 
+### Stable download URLs
+
+Each build job also copies its artifact to a fixed, version-less
+filename (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`,
+`clawmetry-linux.tar.gz`) alongside the version-suffixed one, both
+uploaded to the same GitHub Release. That makes
+`https://github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>`
+a URL that always resolves to the current release with no version
+bookkeeping anywhere else — clawmetry-landing's `/download/<os>`
+routes (see that repo's `app.py`) redirect straight to these.
+
 ## Regenerating icons
 
 The generated `.icns` / `.ico` / PNG are committed so CI doesn't need
