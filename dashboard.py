@@ -12467,9 +12467,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Dig into sessions across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label"><span data-i18n="nav.session_replay">Conversations</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
+        <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
@@ -12517,7 +12517,7 @@ DASHBOARD_HTML = r"""
         {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
            SESSION-scoped, so they left the global nav and are reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
-           Conversations viewer). Their pages + data-tab ids stay: deep links
+           Sessions viewer). Their pages + data-tab ids stay: deep links
            and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>

@@ -2,7 +2,7 @@
 
 The contract:
   * Tier-1 = seven plain-words items (Home, Agents, Activity, Cost,
-    Conversations, Approvals, Alerts), in that order, at the top level.
+    Sessions, Approvals, Alerts), in that order, at the top level.
   * Every expert view lives inside the Developer drawer, which is COLLAPSED
     by default (hidden attribute + JS opens only on stored cm_live_open=1).
   * The Developer group header carries NO data-tab: overview belongs to the
@@ -140,7 +140,7 @@ def test_i18n_keys_present_and_renamed():
     assert en["nav.home"] == "Home"
     assert en["nav.developer"] == "Developer"
     assert en["nav.brain"] == "Activity"
-    assert en["nav.session_replay"] == "Conversations"
+    assert en["nav.session_replay"] == "Sessions"
     assert en["nav.crons"] == "Schedules"
     for key in ("nav.agent_graph", "nav.turn_timing", "nav.tools",
                 "nav.context_usage", "nav.compare_sessions", "nav.ask",
