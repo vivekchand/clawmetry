@@ -4798,6 +4798,358 @@ def api_entitlement_has_node_count_batch():
         return jsonify(_has_node_count_batch_fallback())
 
 
+def _has_channel_count_batch_row_to_body(
+    row: dict, count_raw: str, cur_rank: int
+) -> dict:
+    """Translate a :func:`has_channel_count_batch` scalar row into the
+    endpoint body row shape.
+
+    Channel-axis twin of :func:`_has_node_count_batch_row_to_body`.
+    Rekeys ``has`` -> ``has_channel_count`` / ``allowed`` (matches the
+    singular ``/api/entitlement/has-channel-count`` body), replaces the
+    normalised-str ``key`` with an int ``count`` (or ``null`` on non-int
+    input) plus the caller's raw ``count_raw`` echo, and layers a
+    conjugated human ``label`` ("1 channel" / "5 channels"; matches
+    :func:`_capacity_batch_row_to_body`) plus a per-row
+    ``upgrade_required`` bit computed against the shared ``cur_rank``.
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape.
+    """
+    try:
+        n = int(row.get("key"))
+        count: int | None = n
+        label = f"{n} channel" if n == 1 else f"{n} channels"
+    except (TypeError, ValueError):
+        count = None
+        label = None
+    req_rank = row.get("required_tier_rank")
+    if req_rank is None:
+        req_rank = -1
+    has_flag = bool(row.get("has"))
+    required = row.get("required_tier")
+    return {
+        "count": count,
+        "count_raw": count_raw,
+        "kind": "channel_count",
+        "label": label,
+        "has_channel_count": has_flag,
+        "allowed": has_flag,
+        "unknown": bool(row.get("unknown")),
+        "required_tier": required,
+        "required_tier_label": row.get("required_tier_label"),
+        "required_tier_rank": req_rank,
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+def _has_channel_count_batch_fallback() -> dict:
+    """Grace-shape fallback body for
+    ``/api/entitlement/has-channel-count-batch``. Sibling of
+    :func:`_has_node_count_batch_fallback` on the same axis: on a
+    resolver crash the pricing surface keeps rendering with an empty
+    ``rows`` list instead of a stack trace. Envelope mirrors the
+    happy-path body so a caller does not have to branch on the error
+    shape.
+    """
+    return {
+        "kind": "channel_count",
+        "count": 0,
+        "rows": [],
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-channel-count-batch")
+def api_entitlement_has_channel_count_batch():
+    """``GET /api/entitlement/has-channel-count-batch?counts=1,5,100`` --
+    per-value boolean-gate batch sibling of
+    ``/api/entitlement/has-channel-count`` on the ``channels`` capacity
+    axis.
+
+    Channel-axis twin of ``/api/entitlement/has-node-count-batch`` and
+    of the retention-axis
+    ``/api/entitlement/has-retention-window-batch``. Where the singular
+    ``/has-channel-count?count=<N>`` endpoint answers ONE
+    (``has_channel_count``, ``required_tier``) pair per request, this
+    batch answers all requested counts in ONE round-trip so a channels
+    paywall matrix ("does the current install admit 1? 5? 25 channels?")
+    binds off one URL instead of ``N`` calls.
+
+    ``?counts=`` is a comma-separated list. Empty / whitespace tokens
+    are dropped, duplicates by normalised int key are dropped preserving
+    first-seen order, non-int tokens pass through as one row with
+    ``unknown=true`` / ``has_channel_count=false`` (matches
+    :func:`has_channel_count`'s strict callsite-typo posture). Missing /
+    blank ``?counts=`` -> ``400`` (matches the sibling
+    ``/api/entitlement/min-tier-for-channel-count-batch`` /
+    ``/has-node-count-batch`` posture).
+
+    Per-row body shape (extends the singular ``/has-channel-count``
+    shape with ``kind`` / ``label`` / ``unknown`` / ``count_raw`` so a
+    UI already rendering ``min-tier-for-channel-count-batch`` rows can
+    rebind without reshaping)::
+
+        {
+          "count":              <int> | null,
+          "count_raw":          "<stripped raw token>",
+          "kind":               "channel_count",
+          "label":              "1 channel" | "5 channels" | null,
+          "has_channel_count":  <bool>,
+          "allowed":            <bool>,               # mirror of has_channel_count
+          "unknown":            <bool>,               # true iff non-int input
+          "required_tier":      "<tier id>" | null,
+          "required_tier_label":"<label>"   | null,
+          "required_tier_rank": <int>,                # -1 when required_tier null
+          "upgrade_required":   <bool>,               # required_tier_rank > current_tier_rank
+        }
+
+    Envelope wraps ``rows`` with ``kind`` / ``count`` (row count) plus
+    the standard resolver envelope (``current_tier`` /
+    ``current_tier_rank`` / ``grace`` / ``enforced``) so a UI can render
+    "you are here" once alongside the per-row grants.
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) every KNOWN row reports ``has_channel_count=true``,
+    so wiring this into a channels gate today changes NO current
+    behavior. Post-enforcement each row reflects the resolver's live
+    grant.
+
+    Cross-consistency: the ``required_tier`` on each row agrees byte-
+    for-byte with ``/api/entitlement/required-tier?channels=<count>``
+    and with the per-row ``required_tier`` on the sibling
+    ``/api/entitlement/min-tier-for-channel-count-batch`` -- a UI wiring
+    both for the same paywall matrix cannot see inconsistent tier state.
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_channel_count_batch_fallback`.
+    """
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        scalar_rows = _ent.has_channel_count_batch(values)
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            try:
+                key = str(int(raw))
+            except (TypeError, ValueError):
+                key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_channel_count_batch_row_to_body(
+                r, raw_by_key.get(str(r.get("key")), str(r.get("key"))), cur_rank
+            )
+            for r in scalar_rows
+        ]
+        return jsonify(
+            {
+                "kind": "channel_count",
+                "count": len(rows),
+                "rows": rows,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_channel_count_batch: error: %s", exc
+        )
+        return jsonify(_has_channel_count_batch_fallback())
+
+
+def _has_retention_window_batch_row_to_body(
+    row: dict, days_raw: str, cur_rank: int
+) -> dict:
+    """Translate a :func:`has_retention_window_batch` scalar row into the
+    endpoint body row shape.
+
+    Retention-axis twin of :func:`_has_channel_count_batch_row_to_body`
+    with one wrinkle: the ``"unlimited"`` row surfaces with ``days=null``
+    and ``unlimited=true`` / ``label="unlimited"`` -- matching the
+    singular ``/api/entitlement/has-retention-window`` body's ``unlimited``
+    axis semantics. All other rows carry the parsed int in ``days`` and
+    the conjugated ``label`` ("1 day" / "5 days").
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape.
+    """
+    key = row.get("key")
+    days: int | None
+    unlimited = False
+    if isinstance(key, str) and key == "unlimited":
+        days = None
+        label = "unlimited"
+        unlimited = True
+    else:
+        try:
+            n = int(key)
+            days = n
+            label = f"{n} day" if n == 1 else f"{n} days"
+        except (TypeError, ValueError):
+            days = None
+            label = None
+    req_rank = row.get("required_tier_rank")
+    if req_rank is None:
+        req_rank = -1
+    has_flag = bool(row.get("has"))
+    required = row.get("required_tier")
+    return {
+        "days": days,
+        "days_raw": days_raw,
+        "unlimited": unlimited,
+        "kind": "retention_window",
+        "label": label,
+        "has_retention_window": has_flag,
+        "allowed": has_flag,
+        "unknown": bool(row.get("unknown")),
+        "required_tier": required,
+        "required_tier_label": row.get("required_tier_label"),
+        "required_tier_rank": req_rank,
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+def _has_retention_window_batch_fallback() -> dict:
+    """Grace-shape fallback body for
+    ``/api/entitlement/has-retention-window-batch``. Sibling of
+    :func:`_has_node_count_batch_fallback` /
+    :func:`_has_channel_count_batch_fallback` on the same axis: on a
+    resolver crash the pricing surface keeps rendering with an empty
+    ``rows`` list instead of a stack trace.
+    """
+    return {
+        "kind": "retention_window",
+        "count": 0,
+        "rows": [],
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-retention-window-batch")
+def api_entitlement_has_retention_window_batch():
+    """``GET /api/entitlement/has-retention-window-batch?days=7,30,unlimited``
+    -- per-value boolean-gate batch sibling of
+    ``/api/entitlement/has-retention-window`` on the ``retention_days``
+    capacity axis.
+
+    Retention-axis twin of ``/api/entitlement/has-channel-count-batch``
+    and of ``/api/entitlement/has-node-count-batch``. Each token may be
+    a finite int (``7`` / ``30`` / ``90``) or the case-insensitive
+    string ``"unlimited"`` (routes to
+    :func:`has_retention_window(None)`). The unlimited row surfaces
+    with ``days=null``, ``unlimited=true`` and ``label="unlimited"``;
+    matches the singular ``/has-retention-window?days=unlimited``
+    posture. This is the *only* per-axis batch on the retention axis
+    that admits the unlimited sentinel -- distinct from
+    ``/api/entitlement/has-batch`` where ``retention_days=`` (no value)
+    is *unset*.
+
+    ``?days=`` is a comma-separated list. Empty / whitespace tokens are
+    dropped, duplicates by normalised key are dropped preserving first-
+    seen order, non-int / non-``"unlimited"`` tokens pass through as
+    one row with ``unknown=true`` / ``has_retention_window=false``
+    (matches :func:`has_retention_window`'s strict callsite-typo
+    posture). Missing / blank ``?days=`` -> ``400`` (matches the
+    sibling ``/api/entitlement/min-tier-for-retention-window-batch``
+    posture).
+
+    Per-row body shape::
+
+        {
+          "days":                 <int> | null,
+          "days_raw":             "<stripped raw token>",
+          "unlimited":            <bool>,               # true iff ?days=unlimited
+          "kind":                 "retention_window",
+          "label":                "1 day" | "5 days" | "unlimited" | null,
+          "has_retention_window": <bool>,
+          "allowed":              <bool>,               # mirror of has_retention_window
+          "unknown":              <bool>,               # true iff junk input
+          "required_tier":        "<tier id>" | null,
+          "required_tier_label":  "<label>"   | null,
+          "required_tier_rank":   <int>,                # -1 when required_tier null
+          "upgrade_required":     <bool>,               # required_tier_rank > current_tier_rank
+        }
+
+    Envelope wraps ``rows`` with ``kind`` / ``count`` (row count) plus
+    the standard resolver envelope (``current_tier`` /
+    ``current_tier_rank`` / ``grace`` / ``enforced``).
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) every KNOWN row -- including the ``"unlimited"``
+    row -- reports ``has_retention_window=true``, so wiring this into
+    a history-range gate today changes NO current behavior. Post-
+    enforcement each row reflects the resolver's live grant; notably
+    the ``"unlimited"`` row collapses to Enterprise-only there.
+
+    Cross-consistency: the ``required_tier`` on each row agrees byte-
+    for-byte with
+    ``/api/entitlement/required-tier?retention_days=<days>`` and with
+    the per-row ``required_tier`` on the sibling
+    ``/api/entitlement/min-tier-for-retention-window-batch`` -- a UI
+    wiring both for the same paywall matrix cannot see inconsistent
+    tier state.
+
+    Never 5xx: any resolver blowup collapses to
+    :func:`_has_retention_window_batch_fallback`.
+    """
+    values, err = _parse_capacity_batch_csv("days", unlimited_ok=True)
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        cur_tier = ent.tier
+        cur_rank = _ent.tier_rank(cur_tier)
+        scalar_rows = _ent.has_retention_window_batch(values)
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            if isinstance(raw, str) and raw.strip().lower() == "unlimited":
+                key = "unlimited"
+            else:
+                try:
+                    key = str(int(raw))
+                except (TypeError, ValueError):
+                    key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_retention_window_batch_row_to_body(
+                r, raw_by_key.get(str(r.get("key")), str(r.get("key"))), cur_rank
+            )
+            for r in scalar_rows
+        ]
+        return jsonify(
+            {
+                "kind": "retention_window",
+                "count": len(rows),
+                "rows": rows,
+                "current_tier": cur_tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_retention_window_batch: error: %s", exc
+        )
+        return jsonify(_has_retention_window_batch_fallback())
+
+
 def _has_bundle_fallback(axis: str, tokens: list[str]) -> dict:
     """OSS-free / never-5xx envelope for the plural ``/api/entitlement/has-features``
     and ``/api/entitlement/has-runtimes`` endpoints.

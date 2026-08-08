@@ -5868,6 +5868,124 @@ def has_channel_count_at(perspective_tier: str, count) -> bool:
         return False
 
 
+def has_channel_count_batch(counts) -> list[dict]:
+    """Per-value boolean-gate rows on the ``channels`` capacity axis in ONE
+    round-trip. Batch sibling of :func:`has_channel_count` and channel-axis
+    twin of :func:`has_node_count_batch` / the retention-axis
+    :func:`has_retention_window_batch`.
+
+    Where :func:`has_channel_count` answers "does the CURRENT install admit
+    ``count``?" as ONE boolean and :func:`min_tier_for_channel_count_batch`
+    answers "cheapest tier that would admit each count?" as a list of
+    reverse-lookup rows, this scalar folds the two together: for every
+    supplied count it emits ONE row carrying both the live boolean
+    ``has`` gate (via :meth:`Entitlement.allows_channel_count` on the
+    resolved entitlement) and the reverse-lookup ``required_tier``
+    answer. A channels paywall matrix ("show me each requested channel
+    count with its live grant AND the cheapest tier that would unlock
+    it") renders off ONE URL instead of ``N`` calls to
+    ``/api/entitlement/has-channel-count?count=<N>``.
+
+    Row shape (byte-parity with :func:`_has_row` rows produced by
+    :func:`has_batch` on the ``"channels"`` axis so a UI already wired
+    for ``has_batch`` rows can rebind to this batch without reshaping)::
+
+        {
+          "key":                "<normalised int as str>",
+          "kind":               "channels",
+          "has":                <bool>,
+          "unknown":            <bool>,   # True iff non-int input
+          "required_tier":      "<tier id>" | None,
+          "required_tier_label":"<label>"  | None,
+          "required_tier_rank": <int>,     # -1 when required_tier None
+        }
+
+    Delegates per-row to :func:`_has_row` so the boolean gate + reverse-
+    lookup answer stay byte-parity with the singular
+    :func:`has_channel_count` + :func:`min_tier_for_channel_count` pair
+    and with the ``channels`` axis row emitted by :func:`has_batch`. That
+    single delegation point means any future contract change to the
+    ``channels`` row shape (e.g. adding a ``label`` conjugation) lands
+    in ONE place.
+
+    Contract mirrors :func:`has_node_count_batch` exactly:
+
+    * ``counts`` is any iterable. ``None`` -> ``[]``. Non-iterable ->
+      ``[]``.
+    * Per-value dedup by ``str(int(raw))`` when parseable, else
+      ``str(raw)``. First-seen order preserved (matches
+      :func:`min_tier_for_channel_count_batch`).
+    * Non-int items surface as one row with ``unknown=True`` /
+      ``has=False`` (strict callsite-typo fail-closed posture matching
+      :func:`has_channel_count` and :func:`_has_row`). A caller that
+      passes ``["five"]`` here has a bug -- fail-closed instead of
+      silently granting.
+    * ``count <= 0`` -- ``has=True`` (trivially satisfied by the free
+      floor via :meth:`Entitlement.allows_channel_count`'s zero
+      contract); ``required_tier="oss"`` per
+      :func:`min_tier_for_channel_count`.
+    * Positive int -- ``has`` reflects the resolver's live grant
+      (grace-passthrough while ``ent.grace`` is ``True``, hard cap
+      thereafter); ``required_tier`` is the cheapest tier admitting
+      ``count`` per :func:`min_tier_for_channel_count`.
+
+    Grace vs enforce: while ``ent.grace`` is ``True`` (the current
+    rollout state) every KNOWN row reports ``has=True``; unknown rows
+    still fail-closed to ``has=False`` (the typo-catches-at-callsite
+    contract). Post-enforcement each row reflects the underlying
+    :meth:`Entitlement.allows_channel_count` answer.
+
+    Never raises: any resolver / row-shape failure short-circuits to the
+    fail-closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        if counts is None:
+            return []
+        items = list(counts)
+    except TypeError:
+        return []
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_channel_count_batch falling back to grace: %s",
+            exc,
+        )
+        ent = _oss_free()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            n = int(raw)
+            key = str(n)
+            passthrough = n
+        except (TypeError, ValueError):
+            key = str(raw)
+            passthrough = raw
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            row = _has_row(ent, passthrough, "channels")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_channel_count_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            row = {
+                "key": key,
+                "kind": "channels",
+                "has": False,
+                "unknown": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        out.append(row)
+    return out
+
+
 def has_retention_window(days) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit a ``days`` history
     window?
@@ -6042,6 +6160,176 @@ def has_retention_window_at(perspective_tier: str, days) -> bool:
             exc,
         )
         return False
+
+
+def has_retention_window_batch(days_list) -> list[dict]:
+    """Per-value boolean-gate rows on the ``retention_days`` capacity axis
+    in ONE round-trip. Batch sibling of :func:`has_retention_window` and
+    retention-axis twin of :func:`has_channel_count_batch` /
+    :func:`has_node_count_batch`.
+
+    Where :func:`has_retention_window` answers "does the CURRENT install
+    admit ``days``?" as ONE boolean and
+    :func:`min_tier_for_retention_window_batch` answers "cheapest tier
+    that would admit each window?" as a list of reverse-lookup rows,
+    this scalar folds the two together: for every supplied window it
+    emits ONE row carrying both the live boolean ``has`` gate (via
+    :meth:`Entitlement.allows_retention_window` on the resolved
+    entitlement) and the reverse-lookup ``required_tier`` answer. A
+    history-range paywall matrix ("show me 7 / 30 / 90 / unlimited days
+    with each row's live grant AND the cheapest tier that would unlock
+    it") renders off ONE URL instead of ``N`` calls to
+    ``/api/entitlement/has-retention-window?days=<N>``.
+
+    Row shape (byte-parity with :func:`_has_row` rows produced by
+    :func:`has_batch` on the ``"retention_days"`` axis so a UI already
+    wired for ``has_batch`` rows can rebind to this batch without
+    reshaping)::
+
+        {
+          "key":                "<normalised int as str>" | "unlimited",
+          "kind":               "retention_days",
+          "has":                <bool>,
+          "unknown":            <bool>,   # True iff junk (non-int, non-"unlimited")
+          "required_tier":      "<tier id>" | None,
+          "required_tier_label":"<label>"  | None,
+          "required_tier_rank": <int>,     # -1 when required_tier None
+        }
+
+    Delegates the ``unlimited`` row locally (matching
+    :func:`_retention_batch_row` -- the shared integer-only capacity
+    batch cannot express the ``None`` / ``"unlimited"`` sentinel) and
+    every finite / non-int row to :func:`_has_row` so per-row parity
+    with :func:`has_retention_window` +
+    :func:`min_tier_for_retention_window` and with the
+    ``retention_days`` axis row emitted by :func:`has_batch` is
+    automatic.
+
+    Contract mirrors :func:`min_tier_for_retention_window_batch` on the
+    input side (``None`` / ``"unlimited"`` are the sentinel) and
+    :func:`has_node_count_batch` on the output side (every row carries
+    the same ``key`` / ``kind`` / ``has`` / ``unknown`` /
+    ``required_tier*`` shape):
+
+    * ``days_list`` is any iterable. ``None`` -> ``[]``. Non-iterable
+      -> ``[]``.
+    * ``None`` items and the case-insensitive string ``"unlimited"``
+      route to the unlimited row: ``key="unlimited"``, ``has`` reflects
+      :func:`has_retention_window(None)` (grace: ``True``; enforce:
+      Enterprise-only), ``required_tier`` matches
+      :func:`min_tier_for_retention_window(None)` (Enterprise on the
+      current tier table). This is the *only* per-axis batch on the
+      retention axis that admits the unlimited sentinel -- distinct
+      from :func:`has_batch` where ``retention_days=None`` is *unset*.
+    * Per-value dedup by ``str(int(raw))`` for parseable ints,
+      ``"unlimited"`` for the sentinel, ``str(raw)`` otherwise.
+      First-seen order preserved.
+    * Non-int / non-``"unlimited"`` items surface as one row with
+      ``unknown=True`` / ``has=False`` (strict callsite-typo
+      fail-closed posture matching :func:`has_retention_window` and
+      :func:`_has_row`). A caller that passes ``["seven"]`` here has
+      a bug -- fail-closed instead of silently granting.
+    * ``days <= 0`` -- ``has=True`` (trivially satisfied by the free
+      floor via :meth:`Entitlement.allows_retention_window`'s zero
+      contract); ``required_tier="oss"`` per
+      :func:`min_tier_for_retention_window`.
+    * Positive int -- ``has`` reflects the resolver's live grant
+      (grace-passthrough while ``ent.grace`` is ``True``, hard cap
+      thereafter); ``required_tier`` is the cheapest tier admitting
+      ``days`` per :func:`min_tier_for_retention_window`.
+
+    Grace vs enforce: while ``ent.grace`` is ``True`` (the current
+    rollout state) every KNOWN row (including ``"unlimited"``) reports
+    ``has=True``; unknown rows still fail-closed to ``has=False`` (the
+    typo-catches-at-callsite contract). Post-enforcement each row
+    reflects the underlying :meth:`Entitlement.allows_retention_window`
+    answer -- notably the ``"unlimited"`` row collapses to Enterprise-
+    only there.
+
+    Never raises: any resolver / row-shape failure short-circuits to
+    the fail-closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        if days_list is None:
+            return []
+        items = list(days_list)
+    except TypeError:
+        return []
+    try:
+        ent = get_entitlement()
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_batch falling back to grace: %s",
+            exc,
+        )
+        ent = _oss_free()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        if raw is None or (
+            isinstance(raw, str) and raw.strip().lower() == "unlimited"
+        ):
+            key = "unlimited"
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                has_flag = bool(ent.allows_retention_window(None))
+                req = min_tier_for_retention_window(None)
+                row = {
+                    "key": key,
+                    "kind": "retention_days",
+                    "has": has_flag,
+                    "unknown": False,
+                    "required_tier": req,
+                    "required_tier_label": tier_label(req) if req else None,
+                    "required_tier_rank": tier_rank(req) if req else -1,
+                }
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: has_retention_window_batch unlimited row failed: %s",
+                    exc,
+                )
+                row = {
+                    "key": key,
+                    "kind": "retention_days",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            out.append(row)
+            continue
+        try:
+            n = int(raw)
+            key = str(n)
+            passthrough = n
+        except (TypeError, ValueError):
+            key = str(raw)
+            passthrough = raw
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            row = _has_row(ent, passthrough, "retention_days")
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_retention_window_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            row = {
+                "key": key,
+                "kind": "retention_days",
+                "has": False,
+                "unknown": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        out.append(row)
+    return out
 
 
 def has_node_count(count) -> bool:
