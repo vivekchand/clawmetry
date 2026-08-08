@@ -7,6 +7,19 @@ Pillow>=10.0
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
 pywebview>=5.0
+# Linux only. pywebview's GTK backend does `import gi`; without this,
+# PyInstaller falls back to bundling whatever `gi` your SYSTEM python3
+# has (usually apt's python3-gi), which is compiled for the system's
+# python3 ABI (e.g. cp312 on Ubuntu 24.04). actions/setup-python's
+# isolated 3.11 can't import a cp312 `_gi.so` at all, so the frozen
+# binary crashed on launch with "cannot import name '_gi'" - the Linux
+# tray build has never actually been verified to open a window (2026-08-08
+# discovery, desktop#... AppImage work). Pinned to 3.48.2: pip's latest
+# (3.56.3) triggers a separate `TypeError: Must be number, not method`
+# in pywebview's gtk.py on_load_finish against this webkit2gtk build.
+# Needs libgirepository1.0-dev + libcairo2-dev + pkg-config at build time
+# (see the Linux job's "Install system deps" step in desktop-artifacts.yml).
+PyGObject==3.48.2; sys_platform == "linux"
 # Bundler for all three OSes. build_mac.spec / build_windows.spec /
 # build_linux.spec are all PyInstaller specs. py2app is intentionally
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
