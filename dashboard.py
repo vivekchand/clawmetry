@@ -12098,6 +12098,58 @@ def detect_config(args=None):
             "env_optout": bool(os.environ.get("CLAWMETRY_NO_CLOUD", "").strip()),
         })
 
+    # E2E encryption key — Settings surface for the secret that decrypts
+    # cloud-synced snapshots client-side in the browser. Deliberately a bare
+    # @app.route in this OSS-only section (like /api/cloud-status above),
+    # NOT a Blueprint: the hosted cloud app never calls this route-registration
+    # code path (it imports only bp_sessions/bp_overview/bp_health + specific
+    # helpers from this module via importlib — see clawmetry-cloud/CLAUDE.md),
+    # so this endpoint architecturally does not exist on app.clawmetry.com.
+    # Belt-and-braces: cloud's own container also has no ~/.clawmetry/config.json
+    # for a user's node in the first place, since the key never leaves this
+    # machine except E2E-encrypted. Auth follows the normal /api/* rule in
+    # _check_auth() (loopback trusted; remote needs the gateway token).
+    @app.route("/api/local/e2e-key", endpoint="e2e_key_get")
+    def _e2e_key_get():
+        from flask import jsonify as _jsonify
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f) or {}
+        except Exception:
+            cfg = {}
+        key = cfg.get("encryption_key", "") or ""
+        return _jsonify({
+            "configured": bool(key),
+            "key": key or None,
+            "node_id": cfg.get("node_id", ""),
+        })
+
+    @app.route("/api/local/e2e-key/regenerate", methods=["POST"], endpoint="e2e_key_regenerate")
+    def _e2e_key_regenerate():
+        from flask import jsonify as _jsonify
+        from clawmetry.sync import generate_encryption_key, save_config
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f) or {}
+        except Exception:
+            cfg = {}
+        if not cfg.get("api_key"):
+            return _jsonify({
+                "error": "Cloud sync isn't set up on this node yet. Run "
+                         "\"clawmetry connect\" first.",
+            }), 400
+        new_key = generate_encryption_key()
+        cfg["encryption_key"] = new_key
+        save_config(cfg)
+        # Restart so the daemon encrypts everything from now on with the new
+        # key. Anything already synced under the old key stays readable by
+        # anyone who has that old key — regenerating protects data going
+        # forward, it does not retroactively re-encrypt history.
+        _restart_sync_daemon()
+        return _jsonify({"key": new_key})
+
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -12649,6 +12701,7 @@ DASHBOARD_HTML = r"""
    card below the fold (users saw only the blur backdrop, issue: blank
    blurred dashboard on first run). #}
 {% include 'partials/cloud-modal.html' %}
+{% include 'partials/e2e-key-modal.html' %}
 {% include 'partials/onboarding-modal.html' %}
 {% include 'partials/selfhost-modal.html' %}
 {% include 'partials/budget-modal.html' %}
@@ -17790,6 +17843,20 @@ def _full_connect_with_key(api_key):
     # (Re)start the sync daemon so it re-reads the new key AND re-evaluates
     # cloud mode. If it is already running in local-only mode, merely "starting
     # if absent" would leave it local-only forever, so we restart unconditionally.
+    _restart_sync_daemon()
+
+    return node_id, enc_key
+
+
+def _restart_sync_daemon():
+    """Restart the sync daemon so it re-reads ~/.clawmetry/config.json.
+
+    Cross-platform: launchctl kickstart on macOS, systemctl restart on
+    Linux, kill+relaunch elsewhere. Best-effort, never raises — callers
+    (cloud connect, E2E key regenerate) proceed either way since the config
+    file write already succeeded and a stale in-memory daemon just means
+    the next natural restart picks up the change.
+    """
     try:
         if _is_macos():
             if os.path.exists(SYNC_LAUNCHD_PLIST):
@@ -17807,8 +17874,6 @@ def _full_connect_with_key(api_key):
             _start_daemon_background()
     except Exception:
         pass
-
-    return node_id, enc_key
 
 
 def _selfhost_signin_with_key(api_key):
