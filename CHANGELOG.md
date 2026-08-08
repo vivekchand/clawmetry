@@ -1,5 +1,14 @@
 ## Unreleased
 
+- **Release: ship dashboard sign-out login fix to end users.**
+  - **Why:** #4632 fixed the "Enter your access token" primary prompt on
+    main but no signed `.dmg` / PyPI wheel carries it yet. Carrier
+    `[RELEASE]` so the fix reaches installs.
+  - **What:** no new code; ships #4632.
+  - **Verified:** end-to-end this release — sign-out on the shipped
+    `.dmg` must show the new hierarchy (Sign back in primary red,
+    GitHub/Google/OTP secondary, gateway-token in Advanced disclosure).
+
 - **Fix: dashboard sign-out login pane no longer shows "Enter your access token" as the primary prompt.**
   - **Why:** users who clicked Sign Out on the dashboard landed on a
     confusing overlay whose primary CTA was a raw access-token input.
