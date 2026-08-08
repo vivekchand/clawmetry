@@ -12481,17 +12481,19 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
-        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
-        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
-      </div>
       {# Notifications sits directly under its two consumers (Approvals,
          Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
          nobody could find where to connect a delivery channel, so enabled
-         alert rules dead-ended at "no channels". #}
+         alert rules dead-ended at "no channels". Evals (#4295) rides Tier-1
+         below that trio so it can't split the Approvals/Alerts/Notifications
+         adjacency. #}
       <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
         <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
+      </div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
+        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
+        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
