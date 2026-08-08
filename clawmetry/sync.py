@@ -1409,6 +1409,34 @@ def _update_trial_state(resp: dict) -> None:
 _TRIAL_WARNING_STATE = {
     "last_warn_day": "",   # YYYY-MM-DD of the last warning we sent
 }
+# The in-memory guard alone is NOT enough: the daemon restarts often
+# (auto-update tracks every PyPI release), and each restart used to reset
+# the guard and re-fire the warning — customers got the "trial ends in 2
+# days" email hourly (2026-08-08 spam report). Persist the day marker so
+# it survives restarts.
+_TRIAL_WARNING_STATE_PATH = os.path.join(
+    os.path.expanduser("~/.clawmetry"), "trial_warning_state.json")
+
+
+def _load_trial_warning_day() -> str:
+    """Read the persisted last-warn day (YYYY-MM-DD, '' if never/unreadable)."""
+    try:
+        with open(_TRIAL_WARNING_STATE_PATH, encoding="utf-8") as fh:
+            return str((json.load(fh) or {}).get("last_warn_day", "") or "")
+    except Exception:
+        return ""
+
+
+def _persist_trial_warning_day(day: str) -> None:
+    """Durably record the last-warn day. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(_TRIAL_WARNING_STATE_PATH), exist_ok=True)
+        tmp = _TRIAL_WARNING_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"last_warn_day": day}, fh)
+        os.replace(tmp, _TRIAL_WARNING_STATE_PATH)
+    except Exception:
+        pass
 
 
 def _maybe_install_license_from_heartbeat(resp: dict) -> None:
@@ -1494,9 +1522,14 @@ def _maybe_send_trial_warning(resp: dict) -> None:
     if days_i > window:
         return
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _TRIAL_WARNING_STATE["last_warn_day"] != today:
+        # Fresh process (or day rollover): consult the disk marker so a
+        # daemon restart can't re-fire a warning already sent today.
+        _TRIAL_WARNING_STATE["last_warn_day"] = _load_trial_warning_day()
     if _TRIAL_WARNING_STATE["last_warn_day"] == today:
         return
     _TRIAL_WARNING_STATE["last_warn_day"] = today
+    _persist_trial_warning_day(today)
     try:
         cfg = load_config() or {}
         api_key = cfg.get("api_key")
