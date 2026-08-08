@@ -225,6 +225,73 @@ def _args_meta(row) -> dict:
     return args if isinstance(args, dict) else {}
 
 
+# ── structural risk check: symlink target concealment (GhostApproval) ─────
+# A Wiz write-up (2026-08, same "humans miss dangerous AI-agent requests"
+# theme as the Register/game-study coverage cited elsewhere in this repo)
+# found six major AI coding assistants shared a pattern: a malicious repo
+# plants a symlink at a plausible-looking path (e.g. "notes.txt" ->
+# "~/.ssh/authorized_keys"), the agent's OWN reasoning sees the real
+# target, but the confirmation dialog shown to the human only ever
+# rendered the literal path — so the reviewer approves what looks like an
+# edit to a harmless file while the agent actually writes somewhere
+# sensitive. This is a general property of PreToolUse-style approval UIs,
+# and ClawMetry's own queue was exposed to the identical gap: the args
+# blob stores the literal ``file_path`` the tool was called with, never
+# what it resolves to.
+#
+# The check runs here (not in routes/policy.py) because it needs real
+# filesystem access to the literal path AND ``cwd`` at the moment of the
+# call — both are only available on the machine actually running the
+# hook, which this endpoint already restricts to loopback callers (see
+# the module docstring). It has to run while parking the row, before any
+# other code treats the literal path as authoritative.
+
+_SYMLINK_CHECK_TOOL_PATH_KEYS = {
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
+
+def _symlink_escape_signal(tool_name: str, tool_input: dict, cwd: str):
+    """Detect a Write/Edit/NotebookEdit target that resolves outside the
+    workspace via an existing symlink. The symlink must already exist at
+    the literal path for the attack to work at all, so ``os.path.realpath``
+    reveals it before the write happens. Returns a risk-signal dict
+    ``{rule_id, severity, description}`` shaped like the SEC-* threat
+    signatures (so callers can merge the two lists), or ``None``. Never
+    raises — a filesystem error degrades to "no signal", not a crash."""
+    path_key = _SYMLINK_CHECK_TOOL_PATH_KEYS.get(tool_name)
+    if not path_key or not isinstance(tool_input, dict):
+        return None
+    literal = tool_input.get(path_key)
+    if not literal:
+        return None
+    literal = str(literal)
+    try:
+        abs_literal = literal if os.path.isabs(literal) else \
+            os.path.join(cwd or ".", literal)
+        abs_literal = os.path.normpath(abs_literal)
+        real = os.path.realpath(abs_literal)
+        root = os.path.realpath(cwd) if cwd else None
+    except Exception:
+        return None
+    if not root or real == abs_literal:
+        return None  # no cwd to scope against, or no symlink hop occurred
+    if real == root or real.startswith(root + os.sep):
+        return None  # resolves back inside the workspace — fine
+    return {
+        "rule_id": "SEC-019",
+        "severity": "critical",
+        "description": (
+            f"{tool_name} target '{literal}' resolves outside the "
+            f"workspace via a symlink (real path: {real}) — the approval "
+            "preview may not reflect the true write target"
+        ),
+    }
+
+
 # ── the receiver ───────────────────────────────────────────────────────────
 
 @bp_hooks.route("/api/hooks/claude-code/pretooluse", methods=["POST"])
@@ -342,6 +409,13 @@ def api_hook_claude_code_pretooluse():
         cmd_preview = ap._extract_command(tool_name, tool_input)[:140]
     except Exception:
         pass
+    structural_risk = []
+    try:
+        sig = _symlink_escape_signal(tool_name, tool_input, cwd)
+        if sig:
+            structural_risk.append(sig)
+    except Exception:
+        pass
     ok = _ls_write("ingest_approval", approval={
         "id": approval_id,
         "requestor_session_id": f"claude_code:{session_id}" if session_id
@@ -361,6 +435,10 @@ def api_hook_claude_code_pretooluse():
             "timeout": timeout_s,
             "on_timeout": policy.get("on_timeout") or "deny",
             "deadline_ms": now_ms + timeout_s * 1000,
+            # Consumed by routes/policy.py's _combined_risk_signals so the
+            # symlink-escape warning shows up next to Approve/Deny, not
+            # just in this hook's own audit trail.
+            "structural_risk_signals": structural_risk,
         },
         "status": "pending",
         "created_at": _utcnow(),

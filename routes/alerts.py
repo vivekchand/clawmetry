@@ -893,6 +893,7 @@ def api_alerts_webhook():
             "cost_spike_alerts",
             "agent_error_rate_alerts",
             "security_posture_changes",
+            "risky_approval_alerts",
         }
         updates = {k: data[k] for k in data if k in allowed}
         cfg = _d._save_alerts_webhook_config(updates)
@@ -997,6 +998,7 @@ def api_alert_channels():
             "cost_spike_alerts",
             "agent_error_rate_alerts",
             "security_posture_changes",
+            "risky_approval_alerts",
             "min_severity",
         }
         updates = {k: data[k] for k in data if k in allowed}

@@ -9660,6 +9660,12 @@ def _default_alerts_webhook_config():
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
+        # Second-pair-of-eyes notification: ping configured channels when a
+        # human approves a command that matched a built-in risk signature
+        # (see routes/policy.py's _combined_risk_signals). Defaults on —
+        # the whole point is to catch what a fatigued/rushed approver
+        # might have missed (Register/Wiz, 2026-08-06).
+        "risky_approval_alerts": True,
         "min_severity": "warning",
     }
 
@@ -9688,6 +9694,7 @@ def _save_alerts_webhook_config(updates):
         "pagerduty_routing_key", "opsgenie_api_key", "opsgenie_api_url",
         "telegram_bot_token", "telegram_chat_id",
         "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
+        "risky_approval_alerts",
         "min_severity",
     }
     for k in allowed:
@@ -9714,6 +9721,8 @@ def _should_send_webhook_for_type(alert_type):
         return bool(cfg.get("agent_error_rate_alerts", True))
     if alert_type == "security_posture_change":
         return bool(cfg.get("security_posture_changes", True))
+    if alert_type == "risky_approval_approved":
+        return bool(cfg.get("risky_approval_alerts", True))
     return True
 
 

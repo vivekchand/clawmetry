@@ -17832,6 +17832,15 @@ async function loadToolPolicy() {
     head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
     if (as.flagged) head += '<span style="color:#dc2626;" title="Decisions matching a built-in threat signature — worth a second look">⚠ '+as.flagged+' flagged</span>';
     head += '</div>';
+    // Approval-fatigue nudge: research (Register/Wiz, 2026-08-06) found
+    // reviewer accuracy drops as approval volume rises within a session.
+    // A tight average gap across the most recent decisions is the same
+    // rubber-stamping pattern — surface it instead of staying silent.
+    if (as.fatigue && as.fatigue.rapid) {
+      head += '<div style="padding:8px 14px;background:rgba(217,119,6,.08);border-bottom:1px solid var(--border-primary);font-size:11px;color:#d97706;">'
+        + '⚡ Rapid approval pattern: last '+as.fatigue.recent_count+' decisions averaged '+as.fatigue.avg_interval_s+'s apart — worth slowing down on the next one.'
+        + '</div>';
+    }
     if (decisions.length === 0) {
       apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
     } else {
@@ -17971,6 +17980,15 @@ async function loadToolPolicy() {
     head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
     if (as.flagged) head += '<span style="color:#dc2626;" title="Decisions matching a built-in threat signature — worth a second look">⚠ '+as.flagged+' flagged</span>';
     head += '</div>';
+    // Approval-fatigue nudge: research (Register/Wiz, 2026-08-06) found
+    // reviewer accuracy drops as approval volume rises within a session.
+    // A tight average gap across the most recent decisions is the same
+    // rubber-stamping pattern — surface it instead of staying silent.
+    if (as.fatigue && as.fatigue.rapid) {
+      head += '<div style="padding:8px 14px;background:rgba(217,119,6,.08);border-bottom:1px solid var(--border-primary);font-size:11px;color:#d97706;">'
+        + '⚡ Rapid approval pattern: last '+as.fatigue.recent_count+' decisions averaged '+as.fatigue.avg_interval_s+'s apart — worth slowing down on the next one.'
+        + '</div>';
+    }
     if (decisions.length === 0) {
       apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
     } else {

@@ -1,5 +1,56 @@
 ## Unreleased
 
+- **Feature: four follow-ups on the approval-queue risk work — symlink-escape detection, fatigue signal, opt-in enforcement presets, second-pair-of-eyes alerts.**
+  - **Why:** direct continuation of the risk-signal work below, closing
+    the remaining gaps from the same research plus its companion Wiz
+    "GhostApproval" write-up (2026-08-06): (1) GhostApproval found six AI
+    coding assistants let an approval dialog show a harmless literal path
+    while a pre-planted symlink silently redirects the write elsewhere —
+    ClawMetry's own approval preview had the identical exposure; (2) the
+    study found reviewer accuracy drops as approval volume rises within a
+    session — informational badges alone don't address that; (3) SEC-017
+    was deliberately informational-only to avoid over-blocking, but teams
+    who *want* to actually gate npm-run/git-hooks had no one-click way to;
+    (4) a single fatigued approver is still a single point of failure with
+    no second reviewer in the loop.
+  - **What:**
+    - `routes/hooks.py`: `_symlink_escape_signal()` resolves a Write/Edit/
+      MultiEdit/NotebookEdit target through `os.path.realpath` and flags
+      (`SEC-019`, critical) when it escapes the workspace via an existing
+      symlink — computed at approval-parking time (needs real filesystem +
+      `cwd`, only available on the loopback-only hook endpoint) and stored
+      in the approval row's `args.structural_risk_signals`.
+    - `routes/policy.py`: `_combined_risk_signals()` merges that structural
+      signal with the text-pattern ones and is now what `/api/approvals`
+      and `/api/approvals-audit` return. `_fatigue_summary()` computes
+      average gap across the most recent decided rows and flags `rapid`
+      when it drops under 4s; surfaced as `summary.fatigue` and a banner in
+      the Policy tab audit panel. `_notify_risky_approval()` fires
+      `dashboard._dispatch_alert()` (new `risky_approval_approved` alert
+      type, `risky_approval_alerts` config toggle, default on) whenever
+      `/api/approvals/<id>/decide` approves a flagged row, so a configured
+      Slack/Discord/webhook channel gets a chance to catch what the
+      approving operator might have missed.
+    - `clawmetry/templates/tabs/approvals.html`: two new preset policies,
+      `npm_run` and `git_hooks`, so a team can flip SEC-017/018 from a
+      badge to an actual `require_approval` gate with one click, same as
+      the existing `rm_rf`/`force_push`/`sudo` presets.
+    - `routes/alerts.py`: `risky_approval_alerts` added to both
+      `/api/alerts/webhook` and `/api/alert-channels` POST allowlists so
+      it's actually toggleable, not just defaulted.
+  - **Verified:** `pytest tests/test_approval_risk_signals.py
+    tests/test_security_threat_heuristics.py` — 81 passed, covering the
+    symlink resolver (escape / inside-workspace / no-symlink / non-write-
+    tool / missing-cwd cases), the merge helper, the fatigue calculator
+    (rapid / slow / too-few-samples / pending-only), and the notification
+    path (fires on a flagged approve, silent on clean/deny, survives a
+    broken dashboard import) end to end through `/api/approvals/<id>/decide`.
+    Re-ran the full targeted suite (hooks, tool-policy, policy-replay,
+    approvals store/blocking/deny-kill/duckdb-watcher, runtime-gates,
+    security-audit, exec-policy-gate) before and after: identical 9
+    failed / 40 errors baseline (environment-only, e.g. no `duckdb`
+    module), zero new regressions. `node --check` on `app.js` passes.
+
 - **Feature: inline risk hints on the live approval queue (SEC-017/SEC-018 threat signatures + Policy tab audit badges).**
   - **Why:** a Register/Wiz write-up (2026-08-06, "humans in the loop miss
     a third of dangerous AI coding agent requests") analysed a browser-game

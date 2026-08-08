@@ -271,7 +271,15 @@
     {key:'sys_config', name:'Block system config changes', icon:'⚙️',
      desc:'Prevents writes to /etc, systemctl, crontab edits',
      tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:604800, on_timeout:'deny',
-     color:'#64748b'}
+     color:'#64748b'},
+    {key:'npm_run', name:'Require approval for package scripts', icon:'📜',
+     desc:'Gates npm/yarn/pnpm/bun run — the payload lives in the script body, not the command name (missed by human reviewers 52-65% of the time in a 2026 study)',
+     tool:'exec', pattern:'\\b(?:npm|yarn|pnpm|bun)\\s+run\\s+\\S+', timeout:604800, on_timeout:'deny',
+     color:'#0891b2'},
+    {key:'git_hooks', name:'Block git config/hooks hijacks', icon:'🪝',
+     desc:'Catches core.hooksPath, insteadOf URL rewrites, and .git/hooks writes that can silently redirect future commits or pushes',
+     tool:'', pattern:'core\\.hooksPath|insteadOf|\\.git/hooks/(?:pre-commit|post-checkout|pre-push|post-merge|pre-receive)', timeout:604800, on_timeout:'deny',
+     color:'#9333ea'}
   ];
 
   /* ── Integration channels ── */

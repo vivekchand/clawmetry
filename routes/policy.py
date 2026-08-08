@@ -71,6 +71,31 @@ def _risk_signals(text):
         return []
 
 
+_RISK_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _combined_risk_signals(row):
+    """Full risk-signal list for one approval row: the structural checks
+    computed at approval time (routes/hooks.py's ``_symlink_escape_signal``
+    — GhostApproval-style symlink concealment, stored under
+    ``args.structural_risk_signals``) plus the text-pattern signatures
+    matched against the command preview. Structural signals sort first
+    (they're computed with real filesystem context, not just regex on a
+    string) and are never dropped even if the text scan finds nothing.
+    Never raises; unreadable row -> []."""
+    args = row.get("args") if isinstance(row, dict) else None
+    structural = []
+    if isinstance(args, dict):
+        raw = args.get("structural_risk_signals")
+        if isinstance(raw, list):
+            structural = [s for s in raw if isinstance(s, dict) and s.get("rule_id")]
+    preview = _arg_preview(args)
+    textual = _risk_signals(preview) or _risk_signals(row.get("action") if isinstance(row, dict) else None)
+    combined = structural + textual
+    combined.sort(key=lambda h: _RISK_SEVERITY_ORDER.get(h.get("severity"), 9))
+    return combined
+
+
 def _arg_preview(args) -> str:
     """Short single-line preview of tool-call arguments — never the full body.
 
@@ -220,7 +245,6 @@ def api_approvals_queue():
     rows = _filter_rows_by_runtime(rows, request.args.get("runtime"))
     approvals = []
     for r in rows:
-        preview = _arg_preview(r.get("args"))
         approvals.append({
             "id":                   r.get("id"),
             "action_token":         r.get("id"),
@@ -228,8 +252,8 @@ def api_approvals_queue():
             "status":               r.get("status") or "pending",
             "created_at":           r.get("created_at"),
             "requestor_session_id": r.get("requestor_session_id"),
-            "args_preview":         preview,
-            "risk_signals":         _risk_signals(preview) or _risk_signals(r.get("action")),
+            "args_preview":         _arg_preview(r.get("args")),
+            "risk_signals":         _combined_risk_signals(r),
         })
     return jsonify({"approvals": approvals, "count": len(approvals), "_source": "local_store"})
 
@@ -256,12 +280,10 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             approved += 1
         elif st in ("denied", "deny", "blocked", "rejected") or dec in ("deny", "block"):
             denied += 1
-        preview = _arg_preview(r.get("args"))
-        risk = _risk_signals(preview) or _risk_signals(r.get("action"))
         decisions.append({
             "id": r.get("id"),
             "action": r.get("action"),
-            "args_preview": preview,
+            "args_preview": _arg_preview(r.get("args")),
             "status": st,
             "decision": dec or None,
             "decision_reason": (str(r.get("decision_reason"))[:300]
@@ -270,11 +292,11 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             "requestor_session_id": r.get("requestor_session_id"),
             "created_at": r.get("created_at"),
             "resolved_at": r.get("resolved_at"),
-            # Best-effort risk hint from the built-in threat-signature
-            # engine (dashboard._threat_signals_for_text), same table the
-            # Security tab scans retrospectively — surfaced here so a
-            # reviewer sees it AT decision time, not after the fact.
-            "risk_signals": risk,
+            # Best-effort risk hint: structural checks (e.g. symlink-escape
+            # detection) plus the built-in threat-signature engine, same
+            # table the Security tab scans retrospectively — surfaced here
+            # so a reviewer sees it AT decision time, not after the fact.
+            "risk_signals": _combined_risk_signals(r),
         })
 
     summary = {
@@ -287,8 +309,61 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
         # "how many of these need a second look" rollup for the audit
         # panel header.
         "flagged": sum(1 for d in decisions if d["risk_signals"]),
+        # Approval-fatigue signal (Register/Wiz, 2026-08-06: miss rate
+        # climbs as approval volume rises within a session) — a coarse
+        # "is someone rubber-stamping" rollup from decision timestamps.
+        "fatigue": _fatigue_summary(decisions),
     }
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
+
+
+_FATIGUE_WINDOW = 8       # how many of the most recent decisions to sample
+_FATIGUE_MIN_SAMPLE = 3   # need at least this many gaps before judging
+_FATIGUE_THRESHOLD_S = 4.0  # avg gap below this reads as "rapid"
+
+
+def _fatigue_summary(decisions):
+    """Coarse approval-velocity signal from decided rows' timestamps.
+
+    The research this responds to found reviewer accuracy degrades as
+    approval volume rises within a session — not because any single
+    decision is hard, but because attention erodes over a run of
+    approvals. This can't tell whether any one decision was rushed, but a
+    tight average gap across the most recent decisions is the same
+    "rubber-stamping" pattern the study measured, and worth a nudge on the
+    audit panel rather than silence.
+
+    Returns ``{rapid, recent_count, avg_interval_s}``. Never raises; too
+    few timestamped decisions -> ``rapid: False``."""
+    import datetime as _dt
+
+    times = []
+    for d in decisions:
+        if d.get("status") not in ("approved", "denied", "allowed", "blocked"):
+            continue
+        ts = d.get("resolved_at") or d.get("created_at")
+        if not ts:
+            continue
+        try:
+            times.append(_dt.datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")))
+        except Exception:
+            continue
+    times.sort(reverse=True)
+    recent = times[:_FATIGUE_WINDOW]
+    if len(recent) < _FATIGUE_MIN_SAMPLE:
+        return {"rapid": False, "recent_count": len(recent), "avg_interval_s": None}
+    gaps = [(recent[i] - recent[i + 1]).total_seconds()
+            for i in range(len(recent) - 1)]
+    gaps = [g for g in gaps if g >= 0]
+    if not gaps:
+        return {"rapid": False, "recent_count": len(recent), "avg_interval_s": None}
+    avg_gap = sum(gaps) / len(gaps)
+    return {
+        "rapid": avg_gap < _FATIGUE_THRESHOLD_S,
+        "recent_count": len(recent),
+        "avg_interval_s": round(avg_gap, 1),
+    }
 
 
 def _policy_summary(compiled: dict) -> dict:
@@ -641,4 +716,41 @@ def api_approval_decide(approval_id: str):
                             "error": f"decision write failed: {e}"}), 500
 
     new_status = "approved" if decision == "approve" else "denied"
+    if new_status == "approved":
+        # Second-pair-of-eyes: the operator who clicked Approve may be the
+        # only one who saw this command (permission fatigue is exactly the
+        # failure mode the research responds to) — ping the configured
+        # alert channels so a team gets a chance to catch what one
+        # reviewer might have rubber-stamped. Never blocks or fails the
+        # decision it's reporting on.
+        _notify_risky_approval(row, aid)
     return jsonify({"ok": True, "status": new_status})
+
+
+def _notify_risky_approval(row, approval_id):
+    """Fire a Slack/Discord/generic-webhook alert when an approved command
+    carried at least one risk signal (built-in threat pattern or the
+    symlink-escape structural check). Best-effort and silent: a broken
+    webhook config or a missing dashboard import must never surface as an
+    error on the approval decision itself."""
+    try:
+        risk = _combined_risk_signals(row)
+        if not risk:
+            return
+        top = risk[0]
+        preview = _arg_preview(row.get("args")) or str(row.get("action") or "(unknown command)")
+        title = f"Risky approval approved: {top['rule_id']}"
+        message = (
+            f"{top['description']}\n"
+            f"Command: {preview}\n"
+            f"Session: {row.get('requestor_session_id') or 'unknown'}\n"
+            f"Approval id: {approval_id}"
+        )
+        if len(risk) > 1:
+            message += f"\n({len(risk) - 1} additional signal(s) matched)"
+        severity = "critical" if top.get("severity") in ("critical", "high") else "warning"
+        import dashboard as _d
+        _d._dispatch_alert(title, message, severity=severity,
+                           alert_type="risky_approval_approved")
+    except Exception:
+        pass
