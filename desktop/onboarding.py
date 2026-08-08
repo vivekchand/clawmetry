@@ -387,9 +387,12 @@ def render_mode_pane(*, assets_dir: Path) -> str:
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 12px; padding: 20px 18px;
       transition: border-color .15s ease;
+      /* <button> does NOT inherit text color — without this the
+         headings render UA-default black on the dark card. */
+      color: var(--text);
     }}
     .mode:hover {{ border-color: var(--accent); }}
-    .mode h3 {{ margin: 0 0 6px; font-size: 15px; }}
+    .mode h3 {{ margin: 0 0 6px; font-size: 15px; color: var(--text); }}
     .mode p {{ margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }}
     .mode .tag {{
       display: inline-block; margin-bottom: 10px; padding: 2px 9px;
