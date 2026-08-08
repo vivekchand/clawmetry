@@ -465,7 +465,7 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-# ─── Boot orchestration ─────────────────────────────────────────────────
+# ─── Boot orchestration ─────────────────────────────────────────────
 # The first-launch onboarding flow is a small state machine driven from
 # a single worker thread. Phases:
 #
@@ -502,7 +502,7 @@ class DesktopAPI:
         self._captured_email: str = ""
         self._captured_provider: str = ""
 
-    # ── OAuth (GitHub / Google) ──────────────────────────────────────
+    # ── OAuth (GitHub / Google) ────────────────────────────────────
     def start_oauth(self, provider: str) -> dict:
         provider = (provider or "").lower()
         if provider not in ("github", "google"):
@@ -517,7 +517,7 @@ class DesktopAPI:
         self._auth_done.set()
         return {"ok": True}
 
-    # ── Email OTP ────────────────────────────────────────────────────
+    # ── Email OTP ─────────────────────────────────────────────
     def send_email_otp(self, email: str) -> dict:
         ok, msg = onboarding.send_email_otp(email, app_base=self._app_base)
         return {"ok": ok, "error": "" if ok else msg}
@@ -534,14 +534,14 @@ class DesktopAPI:
         self._auth_done.set()
         return {"ok": True}
 
-    # ── Skip (dismiss without auth) ──────────────────────────────────
+    # ── Skip (dismiss without auth) ────────────────────────────────
     def skip_auth(self) -> dict:
         # No key captured; downstream `_apply_and_boot_daemon` will
         # just skip the connect step and go straight to the dashboard.
         self._auth_done.set()
         return {"ok": True}
 
-    # ── External links (carousel CTAs) ───────────────────────────────
+    # ── External links (carousel CTAs) ──────────────────────────────
     def open_external(self, url: str) -> dict:
         # Restrict to https:// to keep the pane from being weaponised
         # into launching arbitrary schemes if a slide is ever
@@ -676,13 +676,6 @@ def main() -> int:
             _set_status("Daemon did not come up. See bootstrap.log.")
             return
 
-        # Start the watcher after wait_ready so the initial startup exit
-        # is never mistaken for a crash. Handles version drift ("Update
-        # now") and unexpected exits by restarting + reloading the WebView.
-        threading.Thread(
-            target=sup.watch, args=(_reload_window,), daemon=True
-        ).start()
-
         # Phase 5: load the ready-gate spinner, poll /api/overview
         # from Python (avoids CORS from a load_html origin), then load
         # the real dashboard. Capped at 20s so an offline user is
@@ -692,10 +685,13 @@ def main() -> int:
         except Exception:
             pass  # spinner is polish, not a gate
         onboarding.wait_for_dashboard_content(port, deadline_secs=20.0)
-        try:
-            window.load_url(f"http://127.0.0.1:{port}/")
-        except Exception:
-            pass
+        _reload_window()
+        # Now that we're on the real dashboard, start the watcher.
+        # It handles version drift ("Update now" clicks) and
+        # unexpected daemon exits by restarting + reloading.
+        threading.Thread(
+            target=sup.watch, args=(_reload_window,), daemon=True
+        ).start()
 
     def _on_closed():
         # Stop the watcher FIRST — otherwise it sees the daemon exit
