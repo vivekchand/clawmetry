@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Release: rename the Conversations tab to Sessions.**
+  - **Why:** carrier `[RELEASE]` so #4656 reaches PyPI and the hosted dashboard. "Sessions" is the normal term across every harness we observe (Claude Code, Codex, Cursor, OpenClaw), and the tab is where you dig deep into sessions; "Conversations" was the odd one out.
+  - **What:** no new code beyond #4656: nav label, tooltip, and in-tab copy (time-window tooltip, empty state, inventory work count) now say session(s). The `data-tab="transcripts"` id and `nav.session_replay` i18n key are unchanged, so deep links and stored state keep working. Only `en.json` changes; the autotranslate workflow fans the other locales out.
+  - **Verified:** full CI matrix green on #4656 (31 checks incl. drift-bot, Live OpenClaw E2E, visual-diff). Post-release: confirm the served app.clawmetry.com sidebar reads "Sessions" after the cloud pin bump.
+
 - **Release: ship the E2E key settings panel and the Windows/Linux installers to end users.**
   - **Why:** carrier `[RELEASE]` so #4645 and #4648 reach the next tagged build and PyPI release instead of sitting merged-but-unpublished on main.
   - **What:** no new code; ships #4645 and #4648.
