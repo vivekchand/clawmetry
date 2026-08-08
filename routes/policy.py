@@ -54,8 +54,34 @@ def _coerce_rows(rows) -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
+def _risk_signals(text):
+    """Best-effort inline risk annotation for one approval row, via the
+    same threat-signature table the Security tab uses retrospectively
+    (dashboard._threat_signals_for_text). Connects that passive scanner to
+    the LIVE approval decision — the point where a human is actually about
+    to click Approve/Deny, and where the "humans miss dangerous requests"
+    research (Register/Wiz, 2026-08-06) found the highest-leverage moment
+    to surface context. Never raises; missing engine or empty text -> []."""
+    if not text:
+        return []
+    try:
+        import dashboard as _d
+        return _d._threat_signals_for_text(text)
+    except Exception:
+        return []
+
+
 def _arg_preview(args) -> str:
-    """Short single-line preview of tool-call arguments — never the full body."""
+    """Short single-line preview of tool-call arguments — never the full body.
+
+    Checks top-level keys first, then one level into ``tool_input`` — the
+    PreToolUse hook (routes/hooks.py, the primary Claude Code path) nests
+    the actual command/path there (``args = {"tool_input": {"command": ...}
+    , ...}``), so without this the preview silently fell back to a raw JSON
+    dump of the whole args blob for every hook-originated approval: harder
+    for a reviewer to scan than the command itself, and it hid the command
+    text from risk-signal matching (``_risk_signals``) too.
+    """
     if args is None:
         return ""
     if isinstance(args, dict):
@@ -63,6 +89,12 @@ def _arg_preview(args) -> str:
             v = args.get(k)
             if v:
                 return str(v)[:160]
+        tool_input = args.get("tool_input")
+        if isinstance(tool_input, dict):
+            for k in ("command", "cmd", "file_path", "path", "url", "pattern"):
+                v = tool_input.get(k)
+                if v:
+                    return str(v)[:160]
         try:
             import json as _json
             return _json.dumps(args, separators=(",", ":"))[:160]
@@ -186,18 +218,19 @@ def api_approvals_queue():
         limit = 50
     rows = _coerce_rows(_ls_call("query_approvals", status="pending", limit=limit))
     rows = _filter_rows_by_runtime(rows, request.args.get("runtime"))
-    approvals = [
-        {
+    approvals = []
+    for r in rows:
+        preview = _arg_preview(r.get("args"))
+        approvals.append({
             "id":                   r.get("id"),
             "action_token":         r.get("id"),
             "action":               r.get("action"),
             "status":               r.get("status") or "pending",
             "created_at":           r.get("created_at"),
             "requestor_session_id": r.get("requestor_session_id"),
-            "args_preview":         _arg_preview(r.get("args")),
-        }
-        for r in rows
-    ]
+            "args_preview":         preview,
+            "risk_signals":         _risk_signals(preview) or _risk_signals(r.get("action")),
+        })
     return jsonify({"approvals": approvals, "count": len(approvals), "_source": "local_store"})
 
 
@@ -223,10 +256,12 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             approved += 1
         elif st in ("denied", "deny", "blocked", "rejected") or dec in ("deny", "block"):
             denied += 1
+        preview = _arg_preview(r.get("args"))
+        risk = _risk_signals(preview) or _risk_signals(r.get("action"))
         decisions.append({
             "id": r.get("id"),
             "action": r.get("action"),
-            "args_preview": _arg_preview(r.get("args")),
+            "args_preview": preview,
             "status": st,
             "decision": dec or None,
             "decision_reason": (str(r.get("decision_reason"))[:300]
@@ -235,6 +270,11 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             "requestor_session_id": r.get("requestor_session_id"),
             "created_at": r.get("created_at"),
             "resolved_at": r.get("resolved_at"),
+            # Best-effort risk hint from the built-in threat-signature
+            # engine (dashboard._threat_signals_for_text), same table the
+            # Security tab scans retrospectively — surfaced here so a
+            # reviewer sees it AT decision time, not after the fact.
+            "risk_signals": risk,
         })
 
     summary = {
@@ -243,6 +283,10 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
         "approved": approved,
         "denied": denied,
         "simulated": simulated,
+        # Count of decisions carrying at least one risk signal — a coarse
+        # "how many of these need a second look" rollup for the audit
+        # panel header.
+        "flagged": sum(1 for d in decisions if d["risk_signals"]),
     }
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
 

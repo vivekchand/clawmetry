@@ -15320,6 +15320,44 @@ _THREAT_SIGNATURES = [
             r"new\s+instructions?[:]\s*(?:you|your|from\s+now)",
         ],
     },
+    # 2026-08-08: added after a Register/Wiz write-up on the "human in the
+    # loop misses a third of dangerous AI coding-agent requests" research
+    # (browser-game study, ~409k approval decisions). Two blind spots that
+    # study quantified had no signature here: familiar-looking
+    # `npm run <script>` invocations (missed 52.5-64.7% of the time — the
+    # script name reads as safe but the payload lives in package.json, not
+    # the command line) and git config/hooks hijacks (grouped with crontab
+    # injection under "code hijacking", but crontab alone was covered by
+    # SEC-010). Low severity by design: these commands are common and
+    # mostly legitimate, so this is a contextual nudge (surfaced inline on
+    # the live approval queue, not just the retrospective Security tab),
+    # not a block — indiscriminately flagging every `npm run build` is the
+    # same over-blocking mistake the research warns causes reviewers to
+    # stop reading prompts altogether.
+    {
+        "id": "SEC-017",
+        "severity": "low",
+        "description": "Package script execution (npm/yarn/pnpm/bun run) — "
+                        "the payload lives in the script body, not the "
+                        "command name; check package.json before approving",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\b(?:npm|yarn|pnpm|bun)\s+run\s+\S+",
+        ],
+    },
+    {
+        "id": "SEC-018",
+        "severity": "medium",
+        "description": "Git config/hooks manipulation (can silently hijack "
+                        "future commits, pushes, or clones)",
+        "tool_types": ["EXEC", "WRITE"],
+        "patterns": [
+            r"\bgit\s+config\b.*(?:core\.hooksPath|url\..*\.insteadOf|"
+            r"http\.proxy|core\.sshCommand)",
+            r"\.git/hooks/(?:pre-commit|post-checkout|pre-push|post-merge|"
+            r"pre-receive)\b",
+        ],
+    },
 ]
 
 # Compile patterns once
@@ -15381,6 +15419,43 @@ def _scan_events_for_threats(events):
         "clean_sessions": len(sessions_seen - sessions_with_threats),
     }
     return threats, counts
+
+
+def _threat_signals_for_text(detail, ev_type="EXEC"):
+    """Score a single command/args string against the built-in threat
+    signatures — same table ``_scan_events_for_threats`` uses, but for one
+    string instead of a batch of historical events.
+
+    ``_scan_events_for_threats`` only runs against the Security tab's
+    retrospective brain-history scan, i.e. after a tool call already ran.
+    The research this responds to (Register/Wiz, 2026-08-06: human
+    reviewers miss ~1/3 of dangerous AI-agent tool calls, worst on
+    innocuous-looking commands) found that gap matters most at the moment
+    a human is looking at a pending approval — that's exactly when a
+    contextual hint helps and a retrospective scan is too late. Callers
+    (``routes/policy.py``'s live/audit approval queues) use this to
+    annotate a pending or decided approval row inline.
+
+    Returns a list of ``{rule_id, severity, description}``, worst severity
+    first; ``[]`` for empty input or no match. Never raises.
+    """
+    if not detail:
+        return []
+    hits = []
+    for sig in _THREAT_SIGNATURES:
+        if ev_type not in sig["tool_types"]:
+            continue
+        for compiled in sig["_compiled"]:
+            if compiled.search(detail):
+                hits.append({
+                    "rule_id": sig["id"],
+                    "severity": sig["severity"],
+                    "description": sig["description"],
+                })
+                break
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    hits.sort(key=lambda h: sev_order.get(h["severity"], 9))
+    return hits
 
 
 # (bp_security routes /api/security/threats and /api/security/signatures

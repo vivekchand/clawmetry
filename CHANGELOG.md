@@ -1,5 +1,48 @@
 ## Unreleased
 
+- **Feature: inline risk hints on the live approval queue (SEC-017/SEC-018 threat signatures + Policy tab audit badges).**
+  - **Why:** a Register/Wiz write-up (2026-08-06, "humans in the loop miss
+    a third of dangerous AI coding agent requests") analysed a browser-game
+    study of ~409k human approve/deny decisions on simulated AI-agent tool
+    calls: reviewers approved roughly 1 in 3 malicious commands, worst on
+    ones that *look* familiar — `npm run analyze/setup/deploy` alone was
+    missed 52.5-64.7% of the time because the danger lives in the script
+    body, not the command name. The article's prescription is layered
+    technical defenses instead of leaning on human judgment alone. ClawMetry
+    already had two pieces of that — a retrospective threat-signature
+    scanner (`_THREAT_SIGNATURES` / `_scan_events_for_threats`, the Security
+    tab) and a live human-approval queue (the PreToolUse gate in
+    `routes/hooks.py` + `/api/approvals*` in `routes/policy.py`) — but they
+    were disconnected: the scanner only ran after a tool call already
+    executed, too late to help the human clicking Approve.
+  - **What:** two new signatures, `SEC-017` (npm/yarn/pnpm/bun `run
+    <script>` — low severity, informational nudge, not a block, to avoid
+    the over-blocking backlash the same research warns about) and
+    `SEC-018` (git config/hooks hijacks: `core.hooksPath`, `insteadOf` URL
+    rewrites, `.git/hooks/*` writes — grouped with crontab injection under
+    "code hijacking" in the research; crontab itself was already covered by
+    `SEC-010`). `dashboard._threat_signals_for_text()` scores one
+    command/arg string against the same signature table used retrospectively.
+    `routes/policy.py`'s `/api/approvals` and `/api/approvals-audit` now run
+    every row's args through it and attach `risk_signals` (plus a `flagged`
+    rollup count) — so the warning shows up next to the Approve/Deny buttons
+    at decision time. Along the way, fixed `_arg_preview()` to also check one
+    level into `tool_input` (`{"tool_input": {"command": ...}}`): the
+    PreToolUse hook nests the real command there, so previously every
+    Claude-Code-originated approval row silently showed a raw JSON dump
+    instead of the actual command — harder to scan than the command itself,
+    and it hid the command text from risk-signal matching too. The Policy
+    tab's exec-approval audit panel (`clawmetry/static/js/app.js`) renders a
+    `⚠ SEC-xxx` badge per flagged row (tooltip lists every matched
+    signature) and a `flagged` counter in the panel header.
+  - **Verified:** `pytest tests/test_security_threat_heuristics.py
+    tests/test_approval_risk_signals.py tests/test_tool_policy_route_gate.py`
+    — 71 passed. Confirmed the pre-existing `test_hooks_claude_code.py` /
+    `test_runtime_gates_and_hooks.py` / DuckDB-watcher suites fail identically
+    with and without this change (environment-only gap, not a regression:
+    `git stash` gave the same 9 failed/86 passed/40 errors baseline).
+    `node --check clawmetry/static/js/app.js` passes.
+
 - **Release: stable desktop-app download URLs + Windows console-window fix reach the wheel and the next signed builds.**
   - **Why:** the desktop thin-shell app had no public, permanent download link (`desktop-artifacts.yml` only produced version-suffixed GitHub Release assets reachable by digging into CI runs), and a real Windows-only bug survived because nothing had exercised those code paths end to end: the shell is built windowed (`console=False`) but every subprocess it spawns (`python -m venv`, `pip install`, the venv's `clawmetry` CLI, the daemon itself) is a console executable, so Windows flashed a console window on first launch and every relaunch. Carrier `[RELEASE]` so #4640 actually reaches the next tagged build.
   - **What:** `desktop-artifacts.yml` now uploads a fixed-name copy of each platform build (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`, `clawmetry-linux.tar.gz`) alongside the versioned one, so `github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>` always resolves to the current release with no version bookkeeping. This is what `clawmetry-landing`'s new `/download/<os>` buttons link to. `desktop/app.py` and `desktop/onboarding.py` gained a shared `_win_subprocess_kwargs()` helper applying `CREATE_NO_WINDOW` to every subprocess call on Windows (no-op elsewhere).

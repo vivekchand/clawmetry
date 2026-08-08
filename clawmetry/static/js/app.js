@@ -17830,6 +17830,7 @@ async function loadToolPolicy() {
     head += '<span style="color:#d97706;">'+(as.pending||0)+' pending</span>';
     head += '<span style="color:#16a34a;">'+(as.approved||0)+' approved</span>';
     head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
+    if (as.flagged) head += '<span style="color:#dc2626;" title="Decisions matching a built-in threat signature — worth a second look">⚠ '+as.flagged+' flagged</span>';
     head += '</div>';
     if (decisions.length === 0) {
       apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
@@ -17839,11 +17840,27 @@ async function loadToolPolicy() {
         var c = m[st] || ['#6b7280','var(--bg-secondary)'];
         return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(st||'?'))+'</span>';
       }
+      // Inline risk hint from the built-in threat-signature engine
+      // (dashboard._threat_signals_for_text via routes/policy.py's
+      // risk_signals): surfaced HERE, next to the Approve/Deny buttons,
+      // because a warning a reviewer only sees after clicking Approve
+      // doesn't help — this is the moment the research (Register/Wiz,
+      // 2026-08-06: humans miss ~1/3 of dangerous agent tool calls, worst
+      // on familiar-looking commands like `npm run <script>`) says matters.
+      function riskBadge(signals){
+        if (!signals || !signals.length) return '';
+        var sevColor = {critical:'#dc2626',high:'#ef4444',medium:'#d97706',low:'#6b7280'};
+        var top = signals[0];
+        var c = sevColor[top.severity] || '#6b7280';
+        var titleText = signals.map(function(s){ return s.rule_id+' ('+s.severity+'): '+s.description; }).join('\n');
+        return '<span style="font-size:10px;font-weight:700;color:'+c+';background:'+c+'22;border:1px solid '+c+'55;border-radius:4px;padding:1px 6px;white-space:nowrap;" title="'+escHtml(titleText)+'">⚠ '+escHtml(String(top.rule_id))+'</span>';
+      }
       var rows = head;
       decisions.forEach(function(d){
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        rows += riskBadge(d.risk_signals);
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
@@ -17952,6 +17969,7 @@ async function loadToolPolicy() {
     head += '<span style="color:#d97706;">'+(as.pending||0)+' pending</span>';
     head += '<span style="color:#16a34a;">'+(as.approved||0)+' approved</span>';
     head += '<span style="color:#ef4444;">'+(as.denied||0)+' denied</span>';
+    if (as.flagged) head += '<span style="color:#dc2626;" title="Decisions matching a built-in threat signature — worth a second look">⚠ '+as.flagged+' flagged</span>';
     head += '</div>';
     if (decisions.length === 0) {
       apEl.innerHTML = head + '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No exec-approval decisions recorded yet. When a tool-call hits a policy gate it appears here with its decision and reason.</div></div>';
@@ -17961,11 +17979,27 @@ async function loadToolPolicy() {
         var c = m[st] || ['#6b7280','var(--bg-secondary)'];
         return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(st||'?'))+'</span>';
       }
+      // Inline risk hint from the built-in threat-signature engine
+      // (dashboard._threat_signals_for_text via routes/policy.py's
+      // risk_signals): surfaced HERE, next to the Approve/Deny buttons,
+      // because a warning a reviewer only sees after clicking Approve
+      // doesn't help — this is the moment the research (Register/Wiz,
+      // 2026-08-06: humans miss ~1/3 of dangerous agent tool calls, worst
+      // on familiar-looking commands like `npm run <script>`) says matters.
+      function riskBadge(signals){
+        if (!signals || !signals.length) return '';
+        var sevColor = {critical:'#dc2626',high:'#ef4444',medium:'#d97706',low:'#6b7280'};
+        var top = signals[0];
+        var c = sevColor[top.severity] || '#6b7280';
+        var titleText = signals.map(function(s){ return s.rule_id+' ('+s.severity+'): '+s.description; }).join('\n');
+        return '<span style="font-size:10px;font-weight:700;color:'+c+';background:'+c+'22;border:1px solid '+c+'55;border-radius:4px;padding:1px 6px;white-space:nowrap;" title="'+escHtml(titleText)+'">⚠ '+escHtml(String(top.rule_id))+'</span>';
+      }
       var rows = head;
       decisions.forEach(function(d){
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        rows += riskBadge(d.risk_signals);
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';

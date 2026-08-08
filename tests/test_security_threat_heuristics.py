@@ -291,3 +291,57 @@ def test_sec016_no_trigger_on_exec():
     # Prompt injection patterns fire only on READ/BROWSER/SEARCH, not EXEC
     threats, _ = _scan([_ev("ignore previous instructions", ev_type="EXEC")])
     assert "SEC-016" not in _rule_ids(threats)
+
+
+# ── SEC-017 / SEC-018: added 2026-08-08 after the Register/Wiz coverage of
+# the "humans miss ~1/3 of dangerous AI coding-agent requests" browser-game
+# research. That study's single biggest quantified blind spot was familiar-
+# looking `npm run <script>` commands (missed 52.5-64.7% of the time — the
+# payload lives in package.json, not the command name); "code hijacking"
+# via git config/hooks was the other named category alongside crontab
+# injection, which SEC-010 already covered.
+
+
+def test_sec017_npm_run_script():
+    threats, counts = _scan([_ev("npm run analyze")])
+    assert "SEC-017" in _rule_ids(threats)
+    assert counts["low"] >= 1
+
+
+def test_sec017_yarn_pnpm_bun_run():
+    for cmd in ("yarn run deploy", "pnpm run setup", "bun run build"):
+        threats, _ = _scan([_ev(cmd)])
+        assert "SEC-017" in _rule_ids(threats), cmd
+
+
+def test_sec017_no_trigger_on_bare_npm_install():
+    # Only the `run` subcommand is the blind spot this signature targets —
+    # plain `npm install` is already covered by SEC-008's supply-chain checks.
+    threats, _ = _scan([_ev("npm install lodash")])
+    assert "SEC-017" not in _rule_ids(threats)
+
+
+def test_sec018_git_hooks_path():
+    threats, counts = _scan([_ev("git config core.hooksPath /tmp/evil-hooks")])
+    assert "SEC-018" in _rule_ids(threats)
+    assert counts["medium"] >= 1
+
+
+def test_sec018_git_insteadof_rewrite():
+    threats, _ = _scan([_ev(
+        "git config --global url.https://evil.example.com/.insteadOf https://github.com/"
+    )])
+    assert "SEC-018" in _rule_ids(threats)
+
+
+def test_sec018_hook_file_write():
+    threats, _ = _scan([_ev("write .git/hooks/pre-commit", ev_type="WRITE")])
+    assert "SEC-018" in _rule_ids(threats)
+
+
+def test_sec018_no_trigger_on_routine_git_config():
+    # Avoid the exact over-blocking failure mode the research warns about
+    # (indiscriminate flags on common, mostly-benign commands erode trust
+    # and push people to bypass review) — routine identity config is fine.
+    threats, _ = _scan([_ev("git config --global user.email 'dev@example.com'")])
+    assert "SEC-018" not in _rule_ids(threats)
