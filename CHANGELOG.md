@@ -1,5 +1,18 @@
 ## Unreleased
 
+- **Release: header cloud-sync toggle reaches users — one-click pause/resume from the dashboard.**
+  - **Why:** the sync-toggle chip landed on main in #4623 (9f6355209) but
+    hasn't shipped in a signed `.dmg` or PyPI release yet. Carrier
+    `[RELEASE]` so the feature actually reaches installs — a
+    stay-on-main fix helps no user.
+  - **What:** no new code; ships #4623 into a bundle.
+  - **Verified:** end-to-end is this release — the tag push must
+    auto-cascade to desktop-artifacts (regression check for the
+    `actions: write` fix), produce `ClawMetry-0.12.<n>.dmg` with the
+    sync chip present in the header (grep the bundle's PYZ for
+    `sync-toggle-btn` — analogous to how #4619's shipment was
+    verified for `btn-tertiary`).
+
 - **Release: auth pane hierarchy fix — GitHub/Google now primary, email tertiary.**
   - **Why:** screenshot verification of v0.12.659 caught a visual bug —
     the red "Sign in with email" button dominated GitHub/Google buttons
