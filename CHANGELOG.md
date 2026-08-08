@@ -1,5 +1,35 @@
 ## Unreleased
 
+- **Fix: dashboard sign-out login pane no longer shows "Enter your access token" as the primary prompt.**
+  - **Why:** users who clicked Sign Out on the dashboard landed on a
+    confusing overlay whose primary CTA was a raw access-token input.
+    The token concept is an internal implementation detail (gateway JWT
+    on the local machine); users think in terms of accounts. Reported
+    live 2026-08-08: *"what the hell is this access token?? I told
+    1000 times we should not have such confusing things — there should
+    be only login / signup via google / github / otp."*
+  - **What:** rewrote `clawmetry/templates/partials/overlays.html` login
+    card to mirror `clawmetry onboard` and the desktop first-launch
+    pane. Primary: "Sign back in (this machine)" (solid red, one-click,
+    visible only when the loopback detected-token probe answers — so
+    hidden on remote access). Secondary: three cloud sign-in options —
+    Continue with GitHub, Continue with Google, Continue with email
+    (OTP). The raw gateway-token entry is preserved for legitimate
+    remote-access users behind an Advanced `<details>` disclosure at
+    the bottom, so nobody has to see "access token" as a top-level
+    prompt. New JS handlers `clawmetryOauthLogin(provider)` and
+    `clawmetryEmailOtpStart()` in `auth-bootstrap.js`; both reuse
+    existing endpoints (`/api/cloud-cta/oauth-start`,
+    `/api/auth/email-otp`) so no new server surface. Both clear the
+    `cm-signed-out` marker on success so the next page load auto-signs
+    in via the detected-token bootstrap.
+  - **Verified:** HTML + JS parse; new functions defined
+    (`clawmetryOauthLogin`, `clawmetryEmailOtpStart`); existing
+    `clawmetryLogin` still wired to the Advanced token input so
+    remote-access users are not broken; headless Chrome screenshot of
+    the rendered overlay confirms the new hierarchy (Sign back in
+    prominent, OAuth/OTP visible, gateway token buried).
+
 - **Release: header cloud-sync toggle reaches users — one-click pause/resume from the dashboard.**
   - **Why:** the sync-toggle chip landed on main in #4623 (9f6355209) but
     hasn't shipped in a signed `.dmg` or PyPI release yet. Carrier
