@@ -250,25 +250,71 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
         candidates = ["py", "python", "python3"]
     import shutil
 
-    for c in candidates:
-        p = shutil.which(c)
-        if p:
-            try:
-                r = subprocess.run(
-                    [p, "-c", "import sys,venv,pip; print(sys.version_info[:2])"],
-                    capture_output=True, text=True, timeout=6,
-                    **_win_subprocess_kwargs(),
-                )
-                if r.returncode == 0:
-                    if cache_file is not None:
-                        try:
-                            cache_file.write_text(json.dumps({"python": p}))
-                        except OSError:
-                            pass
-                    return p
-            except Exception:
-                continue
+    paths = [shutil.which(c) for c in candidates]
+    if platform.system() == "Windows":
+        # A Python that the NSIS installer (or the winget fallback below)
+        # just put down is NOT on this process's PATH — ClawMetry.exe
+        # inherited its environment before that install ran. Probe the
+        # per-user python.org install location directly, newest first.
+        local = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python"
+        paths += [
+            str(p) for p in sorted(local.glob("Python3*/python.exe"), reverse=True)
+        ]
+    for p in paths:
+        if not p:
+            continue
+        try:
+            r = subprocess.run(
+                [p, "-c", "import sys,venv,pip; print(sys.version_info[:2])"],
+                capture_output=True, text=True, timeout=6,
+                **_win_subprocess_kwargs(),
+            )
+            if r.returncode == 0:
+                if cache_file is not None:
+                    try:
+                        cache_file.write_text(json.dumps({"python": p}))
+                    except OSError:
+                        pass
+                return p
+        except Exception:
+            continue
     return None
+
+
+def _winget_install_python(log: Callable[[str], None]) -> None:
+    """Windows-only last resort: pull Python 3 in via winget, silently,
+    per-user (no UAC). Called when no usable interpreter was found — the
+    NSIS installer normally handles this at install time, but portable
+    .zip users and machines where that step failed land here. Best
+    effort: the caller re-probes `_bootstrap_python()` regardless of the
+    outcome, because winget's exit codes are unreliable (nonzero for
+    "already installed", "newer version present", etc.)."""
+    import shutil
+
+    winget = shutil.which("winget")
+    if not winget:
+        # The WindowsApps alias dir is occasionally missing from a
+        # stripped-down PATH even though winget itself is present.
+        alias = (
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Microsoft" / "WindowsApps" / "winget.exe"
+        )
+        if alias.exists():
+            winget = str(alias)
+    if not winget:
+        log("winget not available; cannot auto-install python")
+        return
+    try:
+        r = subprocess.run(
+            [winget, "install", "-e", "--id", "Python.Python.3.12",
+             "--scope", "user", "--silent", "--disable-interactivity",
+             "--accept-package-agreements", "--accept-source-agreements"],
+            capture_output=True, text=True, timeout=600,
+            **_win_subprocess_kwargs(),
+        )
+        log(f"winget python install rc={r.returncode}")
+    except Exception as e:
+        log(f"winget python install failed: {e}")
 
 
 class RuntimeSupervisor:
@@ -381,9 +427,18 @@ class RuntimeSupervisor:
             return True
 
         py = _bootstrap_python(self.runtime / "bootstrap-python.json")
+        if not py and platform.system() == "Windows":
+            # Python is a dependency we install, not one we ask for: the
+            # NSIS installer bootstraps it at install time, and this
+            # covers portable-.zip users / machines where that failed.
+            self.on_status("Installing Python 3 runtime (one-time, ~1 min)")
+            self._log("no system python3; attempting winget auto-install")
+            _winget_install_python(self._log)
+            py = _bootstrap_python(self.runtime / "bootstrap-python.json")
         if not py:
             self.on_status(
-                "System Python 3 not found. Install python.org 3.11+ then relaunch."
+                "Python 3 not found and automatic install failed. "
+                "Install python.org 3.11+ then relaunch."
             )
             self._log("no system python3 available")
             return False

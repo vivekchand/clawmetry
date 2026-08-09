@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Fix: Sessions tab blanked for anyone with sessions (shipped in 0.12.669).**
+  - **Why:** founder report 2026-08-09: the Sessions tab is blank for ANY user with at least one session: the row loop's `function(t)` parameter shadows the global i18n `t()`, and the Score button inside the loop calls `t('transcripts.score_btn', ...)`, so the first row throws and the catch paints "Failed to load transcripts". The API is unaffected; only the render dies.
+  - **What:** #4675: param renamed to `tx`, plus an auto-discovering guard test (`tests/test_app_js_t_shadowing.py`) that fails CI if any callback shadowing `t` calls i18n inside its body. Reached PyPI in 0.12.669 (carried by the #4676 release).
+  - **Verified:** guard revert-proven (red on pre-fix main at app.js:16031, green after); fix injected into the live 0.12.667 dashboard on the founder's Windows box rendered all 9 session rows where the tab was blank; the published 0.12.669 wheel cracked and confirmed to carry the fixed loop.
+
 - **Fix: persistent console window after Windows self-update (Release: carrier).**
   - **Why:** 0.12.667 made the self-updater's pip run windowless, but the RELAUNCHED daemon still popped a console — permanently. Founder report 2026-08-09: a Windows Terminal tab titled with the venv exe path, open forever. Root cause reproduced live: every daemon-(re)spawn path used DETACHED_PROCESS (parent gets NO console), and on Windows a console-subsystem child of a console-less parent allocates a fresh VISIBLE console — the pip-launcher clawmetry.exe re-execs python.exe workers, so the relaunched daemon's workers each owned an on-screen console for the daemon's lifetime.
   - **What:** every Windows daemon-spawn site now uses CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (a hidden console all descendants inherit) instead of DETACHED_PROCESS: update_respawn.py relaunch, routes/update_check.py helper spawn, daemon_registration.start_background_subprocess, and both cli.py fallback spawns. Same terminal-detach and Ctrl+C-isolation semantics, zero visible consoles.

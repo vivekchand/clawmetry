@@ -77,8 +77,24 @@ PATH entry.
   → drag → launch → dashboard. The pip install happens once, invisibly.
 
 The tradeoff is that first launch requires internet and a system
-Python 3 (macOS/Linux ship one; on Windows it uses `py`). The shell
-shows a helpful error and points at python.org if none is found.
+Python 3. That is treated as an **auto-installing dependency**, not a
+user-facing prerequisite:
+
+- **macOS / Linux** ship a usable `python3` (macOS via the OS,
+  Linux via every mainstream distro).
+- **Windows** — the NSIS installer (`installer/windows.nsi`,
+  `-PythonRuntime` section) probes for a working interpreter and, if
+  none, downloads the python.org installer and runs it silently,
+  per-user, no UAC. As a second line (portable-.zip users, or the
+  install-time bootstrap failed), `app.py` falls back to a silent
+  `winget install Python.Python.3.12 --scope user` at first launch.
+  `_bootstrap_python()` also probes
+  `%LOCALAPPDATA%\Programs\Python\Python3*\python.exe` directly,
+  because a just-installed Python isn't on the already-running
+  process's PATH.
+
+Only when every rung fails does the shell show the old
+"install python.org 3.11+ then relaunch" guidance.
 
 ## Files
 
@@ -129,7 +145,7 @@ happens to be downloadable:
 | Platform | Artifact | What it gives the user |
 |---|---|---|
 | macOS | `.dmg` | Mount → drag `ClawMetry.app` onto the `Applications` shortcut in the same window → done. Signed + notarized when the Apple secrets below are set. |
-| Windows | `.exe` (NSIS) | Double-click → Start Menu + Desktop shortcuts, registers in "Apps & features" with a real uninstaller. Per-user install (`%LOCALAPPDATA%\Programs\ClawMetry`), no admin/UAC prompt — matches where the runtime venv already lives. Unsigned until a Windows EV cert exists (SmartScreen will warn). |
+| Windows | `.exe` (NSIS) | Double-click → Start Menu + Desktop shortcuts, registers in "Apps & features" with a real uninstaller. Per-user install (`%LOCALAPPDATA%\Programs\ClawMetry`), no admin/UAC prompt — matches where the runtime venv already lives. Auto-installs Python 3 (python.org, silent, per-user) when the machine has none. Unsigned until a Windows EV cert exists (SmartScreen will warn). |
 | Linux | `.AppImage` | Download, `chmod +x`, double-click or run. No root, no distro package manager, works across Ubuntu/Fedora/Arch/etc via FUSE (or `--appimage-extract-and-run` where FUSE is unavailable). |
 
 A plain `.zip` (Windows) and `.tar.gz` (Linux) are still built and
@@ -292,7 +308,7 @@ relaxations).
   the daemon's `sys.executable` is the venv's Python), but the user
   has to quit and relaunch to pick it up. A nicer UX would restart
   the daemon automatically after upgrade.
-- Bundle `uv` instead of relying on system Python — removes the
-  "install python.org first" fallback path on Windows.
+- Bundle `uv` instead of relying on system Python — would replace the
+  NSIS/winget Python bootstrap with a fully self-contained runtime.
 - Optional "quit to menubar" mode by merging `tray.py`'s icon into
   the main app.
