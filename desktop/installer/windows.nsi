@@ -58,6 +58,28 @@ VIAddVersionKey "LegalCopyright" "ClawMetry"
 
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClawMetry"
 
+; --- Authenticode signing (CI passes /DSIGN_CMD=<path to sign wrapper>) ---
+; Both the installer AND the uninstaller stub must be signed, and the
+; uninstaller can only be signed HERE, at compile time: WriteUninstaller
+; regenerates $INSTDIR\Uninstall.exe from the stub embedded in this
+; installer on every (re)install, so a post-hoc signature on an installed
+; Uninstall.exe would be wiped by the next setup run. !uninstfinalize signs
+; the stub before it is embedded, making every regenerated copy signed.
+;
+; Why this matters (lab repro 2026-08-10): Windows 11 Smart App Control in
+; enforce mode blocks the NSIS uninstaller's temp-copy relaunch
+; (%TEMP%\Un_A.exe) when Uninstall.exe is unsigned - "Error launching
+; installer" - so users cannot uninstall from Settings > Apps at all. The
+; Authenticode signature travels with the temp copy, which is exactly what
+; SAC checks.
+;
+; %1 is the file NSIS wants signed. The wrapper (written by CI) calls
+; signtool with the cert; a nonzero exit fails the build loudly.
+!ifdef SIGN_CMD
+  !finalize '"${SIGN_CMD}" "%1"'
+  !uninstfinalize '"${SIGN_CMD}" "%1"'
+!endif
+
 ; Python 3 is a hard dependency of the thin-shell architecture (app.py
 ; needs a real interpreter to build the runtime venv it pip-installs
 ; clawmetry into — PyInstaller's own frozen interpreter can't run

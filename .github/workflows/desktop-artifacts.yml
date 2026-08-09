@@ -4,10 +4,13 @@ name: Build desktop artifacts (.dmg / .exe / .AppImage)
 # app on macOS, Windows, and Linux. Runs on:
 #   - manual dispatch (any branch — use to smoke test locally-built specs)
 #   - version tag push (v*.*.*) — attaches artifacts to the GitHub Release
-# Signing / notarization is a follow-up step; until Apple Developer ID
-# and a Windows EV cert are wired up as repo secrets, the artifacts are
-# unsigned and Gatekeeper / SmartScreen will warn on first launch. That
-# is intentional for the internal-distribution phase.
+# Signing is wired for macOS (Developer ID + notarization) AND Windows
+# (Authenticode via signtool; installer + embedded uninstaller stub +
+# ClawMetry.exe). Each activates only when its repo secrets are set and
+# NO-OPs otherwise, so forks build unsigned artifacts. Unsigned Windows
+# builds don't just SmartScreen-warn: Smart App Control in enforce mode
+# blocks the unsigned NSIS uninstaller's %TEMP% relaunch, making the app
+# un-uninstallable from Settings > Apps (lab repro 2026-08-10).
 
 on:
   push:
@@ -181,8 +184,17 @@ jobs:
           path: dist/*.dmg
 
   windows:
-    name: Windows .exe
+    name: Windows .exe (signed when secrets are set)
     runs-on: windows-latest
+    # Same secrets-presence hoisting trick as the macOS job above. Signing
+    # activates when these repo secrets exist (OV/EV PFX export):
+    #   WINDOWS_CERT_PFX_BASE64   code-signing cert + key as base64 .pfx
+    #   WINDOWS_CERT_PASSWORD     password protecting the .pfx
+    # Without them every step NO-OPs, so forks and dev builds stay green
+    # and simply produce unsigned artifacts (SmartScreen warns; Smart App
+    # Control blocks the uninstaller - see the .nsi comment).
+    env:
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -196,6 +208,43 @@ jobs:
 
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
+
+      # --- Authenticode signing setup ---
+      # Decodes the cert and writes a sign.cmd wrapper that both this
+      # workflow AND makensis (via /DSIGN_CMD + !finalize/!uninstfinalize
+      # in windows.nsi) invoke. The wrapper reads the password from the
+      # environment at run time so it never appears in a command line or
+      # on disk. SHA-256 digest + RFC 3161 timestamp so signatures outlive
+      # the cert's expiry.
+      - name: Prepare signing cert + wrapper
+        if: env.HAS_WIN_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($Env:WINDOWS_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found in Windows SDK" }
+          $cmd = Join-Path $Env:RUNNER_TEMP "sign.cmd"
+          @(
+            '@echo off'
+            "`"$signtool`" sign /f `"$pfx`" /p %CLAWMETRY_SIGN_PW% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 %1"
+          ) | Set-Content -Path $cmd -Encoding ascii
+          "SIGN_CMD=$cmd" >> $Env:GITHUB_ENV
+
+      # Sign the app exe BEFORE the zip + installer steps so both the
+      # portable .zip and the NSIS-packed install tree ship a signed
+      # ClawMetry.exe (Smart App Control evaluates it at launch too).
+      - name: Sign ClawMetry.exe
+        if: env.HAS_WIN_CERT == 'true'
+        shell: pwsh
+        env:
+          CLAWMETRY_SIGN_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          & $Env:SIGN_CMD "dist\ClawMetry\ClawMetry.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signing ClawMetry.exe failed ($LASTEXITCODE)" }
 
       - name: Resolve version
         id: ver
@@ -230,17 +279,43 @@ jobs:
       # working if that ever changes upstream.
       - name: Build NSIS installer
         shell: pwsh
+        # When the cert secrets are set, /DSIGN_CMD turns on the
+        # !finalize/!uninstfinalize hooks in windows.nsi: makensis signs the
+        # embedded uninstaller stub (the only place a WriteUninstaller-
+        # regenerated Uninstall.exe can ever get a signature - see the .nsi
+        # comment on Smart App Control) and the setup exe itself. The
+        # wrapper reads CLAWMETRY_SIGN_PW from this step's environment.
+        env:
+          CLAWMETRY_SIGN_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $makensis = (where.exe makensis 2>$null | Select-Object -First 1)
           if (-not $makensis) {
             choco install nsis -y --no-progress
             $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
           }
-          & $makensis "/DVERSION=${{ steps.ver.outputs.version }}" "/DSRC_DIR=$PWD\dist\ClawMetry" desktop\installer\windows.nsi
+          $signArgs = @()
+          if ($Env:HAS_WIN_CERT -eq 'true') { $signArgs = @("/DSIGN_CMD=$Env:SIGN_CMD") }
+          & $makensis @signArgs "/DVERSION=${{ steps.ver.outputs.version }}" "/DSRC_DIR=$PWD\dist\ClawMetry" desktop\installer\windows.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
           Move-Item "desktop\installer\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe"
           # Fixed-name copy — same stable-URL convention as the zip above.
           Copy-Item "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-windows-setup.exe" -Force
+
+      # Verify the artifact, not the build log (FLYWHEEL §0b.5): a chained
+      # Authenticode signature must actually be on the setup exe and the
+      # app exe, or the SAC uninstall fix silently didn't ship. Also
+      # removes the decoded cert so it never lands in an artifact.
+      - name: Verify signatures + scrub cert
+        if: env.HAS_WIN_CERT == 'true'
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          & $signtool verify /pa "dist\ClawMetry-windows-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw "setup exe is not validly signed" }
+          & $signtool verify /pa "dist\ClawMetry\ClawMetry.exe"
+          if ($LASTEXITCODE -ne 0) { throw "ClawMetry.exe is not validly signed" }
+          Remove-Item (Join-Path $Env:RUNNER_TEMP "codesign.pfx") -Force
 
       - uses: actions/upload-artifact@v4
         with:

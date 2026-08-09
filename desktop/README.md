@@ -145,7 +145,7 @@ happens to be downloadable:
 | Platform | Artifact | What it gives the user |
 |---|---|---|
 | macOS | `.dmg` | Mount → drag `ClawMetry.app` onto the `Applications` shortcut in the same window → done. Signed + notarized when the Apple secrets below are set. |
-| Windows | `.exe` (NSIS) | Double-click → Start Menu + Desktop shortcuts, registers in "Apps & features" with a real uninstaller. Per-user install (`%LOCALAPPDATA%\Programs\ClawMetry`), no admin/UAC prompt — matches where the runtime venv already lives. Auto-installs Python 3 (python.org, silent, per-user) when the machine has none. Unsigned until a Windows EV cert exists (SmartScreen will warn). |
+| Windows | `.exe` (NSIS) | Double-click → Start Menu + Desktop shortcuts, registers in "Apps & features" with a real uninstaller. Per-user install (`%LOCALAPPDATA%\Programs\ClawMetry`), no admin/UAC prompt — matches where the runtime venv already lives. Auto-installs Python 3 (python.org, silent, per-user) when the machine has none. Authenticode-signed (installer + uninstaller + app exe) when the Windows cert secrets below are set; unsigned until then (SmartScreen warns, and Smart App Control enforce mode blocks uninstall). |
 | Linux | `.AppImage` | Download, `chmod +x`, double-click or run. No root, no distro package manager, works across Ubuntu/Fedora/Arch/etc via FUSE (or `--appimage-extract-and-run` where FUSE is unavailable). |
 
 A plain `.zip` (Windows) and `.tar.gz` (Linux) are still built and
@@ -296,11 +296,54 @@ successfully. Everything hard-codes the entitlements at
 `desktop/entitlements.plist` (Hardened Runtime plus the CPython-friendly
 relaxations).
 
+## Signing (Windows / Authenticode)
+
+The Windows CI job signs three things once the cert secrets exist, and
+NO-OPs (unsigned build) until then:
+
+1. `ClawMetry.exe` (PyInstaller output) — signed before zipping/packing,
+   so both the portable `.zip` and the installer ship a signed app.
+2. **The uninstaller stub** — via `!uninstfinalize` in
+   `desktop/installer/windows.nsi`. This is the only place the
+   uninstaller can ever be signed: `WriteUninstaller` regenerates
+   `Uninstall.exe` from the stub embedded in the installer on every
+   (re)install, so signing an already-installed `Uninstall.exe` would be
+   undone by the next setup run.
+3. `ClawMetry-Setup-<version>.exe` itself — via `!finalize`.
+
+Why it matters beyond SmartScreen: on Windows 11 with **Smart App
+Control in enforce mode**, the unsigned NSIS uninstaller's temp-copy
+relaunch (`%TEMP%\Un_A.exe`) is blocked outright ("Error launching
+installer"), so users cannot uninstall the app from Settings > Apps
+(lab repro 2026-08-10). The Authenticode signature travels with the
+temp copy, which is exactly what SAC verifies.
+
+Repo secrets (Settings → Secrets and variables → Actions):
+
+| Secret | What to paste |
+|--------|---------------|
+| `WINDOWS_CERT_PFX_BASE64` | OV/EV code-signing cert + private key exported as `.pfx`, base64-encoded (`[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`) |
+| `WINDOWS_CERT_PASSWORD` | Password protecting the `.pfx` |
+
+Signatures use SHA-256 with an RFC 3161 timestamp
+(`http://timestamp.digicert.com`), so they stay valid after the cert
+expires. CI verifies both the setup exe and `ClawMetry.exe` with
+`signtool verify /pa` before uploading; a hardware-token EV cert or
+Azure Trusted Signing can replace the PFX secrets later by swapping the
+`sign.cmd` wrapper the workflow writes.
+
+Note the auto-updater never rewrites the installed app or uninstaller
+in place — it only pip-upgrades the runtime venv under
+`%LOCALAPPDATA%\ClawMetry\runtime`. `Uninstall.exe` changes only when a
+newer setup exe is run, and that setup regenerates it from its own
+signed embedded stub, so updater-refreshed installs stay signed.
+
 ## Roadmap
 
 - Native app menu (Cmd-Q / Cmd-W / About, Preferences).
-- Windows EV code-signing cert → SmartScreen clean (the NSIS installer
-  ships unsigned until this exists).
+- Obtain the Windows code-signing cert and set the two secrets above
+  (the pipeline is wired; unsigned builds SmartScreen-warn and cannot
+  be uninstalled under Smart App Control enforce mode).
 - Linux `.deb` / `.rpm` wrappers alongside the AppImage, for users who
   want the app to show up in their distro's own package manager.
 - **Bundle-mode "Update now"** — currently the pip-install click in
