@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "software-factory-clawmetry": {
+      "type": "http",
+      "url": "https://api.factory.8090.dev/v2/mcp",
+      "headers": {
+        "X-Sofa-Mcp-Project-Id": "b415065f-ab2f-4f53-8864-0c009fd098cb"
+      }
+    }
+  }
+}

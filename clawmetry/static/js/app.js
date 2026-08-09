@@ -17501,13 +17501,13 @@ function renderToolCatalog() {
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
 var _cmHarnessData = null;
 
-// Show the Harness nav iff a specific runtime is selected AND it has a template.
+// The Harness nav is always visible: the tab opens with the plain-language
+// "anatomy of a harness" explainer (static, works for every runtime and on
+// cloud), and adds the runtime-specific extras panel when a template exists.
 function _cmRefreshHarnessNav() {
   var nav = document.getElementById('left-nav-harness');
   if (!nav) return;
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (!rt || rt === 'all') { nav.style.display = 'none'; return; }
-  nav.style.display = (_cmHarnessTemplates && _cmHarnessTemplates[rt]) ? '' : 'none';
+  nav.style.display = '';
 }
 
 // Eagerly fetch templates at page-init so the nav can appear without waiting
@@ -17539,14 +17539,15 @@ async function loadHarness() {
     _cmHarnessData = data;
     el.innerHTML = renderHarnessPanel(tmpl, data);
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load harness view: '
+    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load the runtime panel: '
       + escapeHtml(String((e && e.message) || e)) + '</div>';
   }
 }
 
 function _cmHarnessNoTemplate(rt) {
-  return '<div style="color:var(--muted,#888);line-height:1.5;">No harness panel for <b>'
-    + escapeHtml(rt) + '</b> yet.<br>Pro runtimes light up their panels when '
+  return '<div style="color:var(--muted,#888);line-height:1.5;">Nothing extra for <b>'
+    + escapeHtml(rt) + '</b> yet. The anatomy above applies to every runtime.<br>'
+    + 'Pro runtimes light up their own panels when '
     + 'clawmetry-pro is installed (Cloud Pro or a self-hosted license).</div>';
 }
 
@@ -24631,20 +24632,39 @@ function dismissLicenseExpiredBanner() {
 async function checkLicenseExpiry() {
   var banner = document.getElementById('license-expired-banner');
   if (!banner) return;
+  var dismissedAt = 0;
   try {
-    var dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
-    if (dismissedAt && (Date.now() - dismissedAt) < 24 * 3600 * 1000) return;
+    dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
   } catch (e) {}
   try {
     var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
     var expiredTrial = !!(e && e.expired && e.tier === 'trial');
     var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
-    if (!expiredTrial && !expiredPaid) { banner.style.display = 'none'; return; }
+    // Trial ending (or already in grace): say it LOUD before the cliff,
+    // not after. days_until_expiry === 0 means "ends today"; grace means
+    // the expiry date passed and enforcement is pending. Both previously
+    // rendered nothing anywhere in the UI.
+    var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
+    var endingTrial = !!(e && !e.expired && e.tier === 'trial'
+      && (e.grace === true || (days !== null && days <= 3)));
+    if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
+    // A dismissed EXPIRED banner stays gone for 24h; a dismissed
+    // countdown comes back after 4h — the clock is literally running.
+    var dismissWindowMs = (expiredTrial || expiredPaid) ? 24 * 3600 * 1000 : 4 * 3600 * 1000;
+    if (dismissedAt && (Date.now() - dismissedAt) < dismissWindowMs) { banner.style.display = 'none'; return; }
     var msg = document.getElementById('license-expired-msg');
+    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
     if (msg && expiredPaid) {
-      var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
       msg.textContent = t('banners.license_expired_msg', null,
         'Your license has expired. Renew to keep every runtime.');
+    } else if (msg && endingTrial) {
+      if (e.grace === true || days === null || days <= 0) {
+        msg.textContent = t('banners.trial_ends_today_msg', null,
+          'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
+      } else {
+        msg.textContent = t('banners.trial_ending_msg', { days: days },
+          'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');
+      }
     }
     // Hide the paste-a-key link when the selfhost modal is not on this page.
     var haveKey = document.getElementById('license-expired-have-key');
