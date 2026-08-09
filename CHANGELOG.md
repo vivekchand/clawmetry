@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Fix: Sessions tab blanked for anyone with sessions (shipped in 0.12.669).**
+  - **Why:** founder report 2026-08-09: the Sessions tab is blank for ANY user with at least one session: the row loop's `function(t)` parameter shadows the global i18n `t()`, and the Score button inside the loop calls `t('transcripts.score_btn', ...)`, so the first row throws and the catch paints "Failed to load transcripts". The API is unaffected; only the render dies.
+  - **What:** #4675: param renamed to `tx`, plus an auto-discovering guard test (`tests/test_app_js_t_shadowing.py`) that fails CI if any callback shadowing `t` calls i18n inside its body. Reached PyPI in 0.12.669 (carried by the #4676 release).
+  - **Verified:** guard revert-proven (red on pre-fix main at app.js:16031, green after); fix injected into the live 0.12.667 dashboard on the founder's Windows box rendered all 9 session rows where the tab was blank; the published 0.12.669 wheel cracked and confirmed to carry the fixed loop.
+
 - **Fix: Notifications sits directly under Approvals and Alerts again; nav guard synced with the shipped Evals and Gateway tabs.**
   - **Why:** the Phase-A nav guard (`tests/test_beginner_nav_phase_a.py`) was red on main. Two shipped nav changes had drifted past it: #4295 added the top-level Evals tab but inserted it between Alerts and Notifications, breaking the founder request (2026-07-29) that Notifications sit directly under its two consumers, and #4575 added the opt-in Gateway tab to the Developer drawer without updating the guard.
   - **What:** Evals moves below Notifications so the Approvals, Alerts, Notifications trio is contiguous again (both tabs stay; membership was intentional in both releases). The guard now encodes the nine-item Tier-1 order and the Gateway drawer membership.
