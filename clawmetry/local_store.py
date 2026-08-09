@@ -56,6 +56,40 @@ import duckdb
 log = logging.getLogger("clawmetry.local_store")
 
 
+# ── negative-cache missing optional deps duckdb probes per parameter ─────────
+#
+# duckdb's Python parameter binding lazily tries ``import pandas`` for (nearly)
+# every bound value, and CPython does NOT cache a FAILED import — each attempt
+# re-scans all of sys.path (~1.4ms on a Windows laptop). Profiled on the flush
+# path: a 1000-event flush spent ~45s of its 48s inside ~28,000 failed pandas
+# imports, throttling fresh-install ingest to ~20 events/s. Setting
+# ``sys.modules["pandas"] = None`` is the documented CPython negative-cache:
+# a later ``import pandas`` raises ModuleNotFoundError instantly (duckdb
+# catches it), making binding O(1) again — measured 65x faster on the same
+# batch. Applied ONLY when pandas is genuinely absent (find_spec miss), so a
+# real installed pandas is never shadowed. Opt out with
+# CLAWMETRY_NO_IMPORT_NEGATIVE_CACHE=1 (e.g. if the process later needs to
+# pick up a runtime-installed pandas without restarting).
+def _negative_cache_missing_pandas() -> None:
+    if os.environ.get("CLAWMETRY_NO_IMPORT_NEGATIVE_CACHE", "").strip() in (
+        "1", "true", "yes",
+    ):
+        return
+    import sys as _sys
+    if "pandas" in _sys.modules:
+        return
+    try:
+        import importlib.util as _ilu
+        spec = _ilu.find_spec("pandas")
+    except Exception:
+        spec = None
+    if spec is None:
+        _sys.modules["pandas"] = None  # type: ignore[assignment]
+
+
+_negative_cache_missing_pandas()
+
+
 # Public knobs — tuned for the common case (one daemon, one dashboard, ≤1 K
 # events/s sustained on a developer laptop). Adjust via env vars only.
 
@@ -2023,50 +2057,76 @@ class LocalStore:
         background. Required keys: ``id``, ``node_id``, ``event_type``, ``ts``.
         Other columns optional. Re-ingesting the same id is a no-op (INSERT OR
         IGNORE) so callers don't need their own dedup."""
-        if self._read_only:
-            raise RuntimeError("local_store: ingest() called on read-only store")
-        if not event.get("id"):
-            raise ValueError("event must include 'id'")
-        if not event.get("node_id"):
-            raise ValueError("event must include 'node_id'")
-        if not event.get("event_type"):
-            raise ValueError("event must include 'event_type'")
-        if not event.get("ts"):
-            raise ValueError("event must include 'ts'")
-        # Defense-in-depth: scrub secret-shaped values before they rest in
-        # DuckDB (events are stored plaintext pre-E2E). Issue #2197.
-        try:
-            from clawmetry import redaction as _redaction
-            event = _redaction.redact_event(event)
-        except Exception:
-            pass  # never let redaction block ingest
-        # Optional SIEM/syslog forward (Issue #2199). Off unless
-        # CLAWMETRY_SIEM_HOST is set; non-blocking enqueue, drops + counts
-        # if the bounded queue is full. Runs *after* redaction so secrets
-        # never leave via syslog either.
-        try:
-            from clawmetry import siem as _siem
-            _siem.forward_event(event)
-        except Exception:
-            pass  # never let the SIEM hook block ingest
-        # Optional OTLP/HTTP push forward (Pro feature; #2262 catalogue).
-        # Off unless CLAWMETRY_OTLP_ENDPOINT is set + tier unlocks
-        # otel_export. Same non-blocking-enqueue contract as SIEM.
-        try:
-            from clawmetry import otel_push as _otelp
-            _otelp.forward_event(event)
-        except Exception:
-            pass  # never let the OTLP push hook block ingest
-        with self._ring_lock:
-            if len(self._ring) >= RING_MAX:
-                self._dropped += 1
-            self._ring.append(event)
-        if len(self._ring) >= FLUSH_BATCH:
-            self._flush_now()
+        self.ingest_many((event,))
 
     def ingest_many(self, events: Iterable[dict[str, Any]]) -> None:
-        for e in events:
-            self.ingest(e)
+        """Queue a batch of events. Same contract as :meth:`ingest`, but the
+        forward-hook enablement (redaction / SIEM / OTLP push) is resolved
+        ONCE per batch instead of per event — the disabled-hook path used to
+        cost ~4ms PER EVENT (a failed ``clawmetry_pro`` import is retried by
+        Python on every call), which dominated fresh-install backfills.
+        Per-event hook calls only happen when the hook is actually enabled."""
+        if self._read_only:
+            raise RuntimeError("local_store: ingest() called on read-only store")
+        # Defense-in-depth: scrub secret-shaped values before they rest in
+        # DuckDB (events are stored plaintext pre-E2E). Issue #2197. The
+        # enabled check is hoisted; redact_event still re-checks internally.
+        redact = None
+        try:
+            from clawmetry import redaction as _redaction
+            if not _redaction._disabled():
+                redact = _redaction.redact_event
+        except Exception:
+            redact = None  # partial install — never block ingest
+        # Optional SIEM/syslog forward (Issue #2199) — Enterprise feature in
+        # clawmetry-pro; non-blocking enqueue when enabled. Runs *after*
+        # redaction so secrets never leave via syslog either.
+        siem_fwd = None
+        try:
+            from clawmetry import siem as _siem
+            if _siem.enabled():
+                siem_fwd = _siem.forward_event
+        except Exception:
+            siem_fwd = None
+        # Optional OTLP/HTTP push forward (Pro feature; #2262 catalogue).
+        # Same non-blocking-enqueue contract as SIEM.
+        otel_fwd = None
+        try:
+            from clawmetry import otel_push as _otelp
+            if _otelp.enabled():
+                otel_fwd = _otelp.forward_event
+        except Exception:
+            otel_fwd = None
+        for event in events:
+            if not event.get("id"):
+                raise ValueError("event must include 'id'")
+            if not event.get("node_id"):
+                raise ValueError("event must include 'node_id'")
+            if not event.get("event_type"):
+                raise ValueError("event must include 'event_type'")
+            if not event.get("ts"):
+                raise ValueError("event must include 'ts'")
+            if redact is not None:
+                try:
+                    event = redact(event)
+                except Exception:
+                    pass  # never let redaction block ingest
+            if siem_fwd is not None:
+                try:
+                    siem_fwd(event)
+                except Exception:
+                    pass  # never let the SIEM hook block ingest
+            if otel_fwd is not None:
+                try:
+                    otel_fwd(event)
+                except Exception:
+                    pass  # never let the OTLP push hook block ingest
+            with self._ring_lock:
+                if len(self._ring) >= RING_MAX:
+                    self._dropped += 1
+                self._ring.append(event)
+            if len(self._ring) >= FLUSH_BATCH:
+                self._flush_now()
 
     # ── ingest helpers for the non-event tables ────────────────────────────
     #
@@ -2077,66 +2137,101 @@ class LocalStore:
 
     def ingest_session(self, session: dict[str, Any]) -> None:
         """Upsert one session row. Required: session_id. Other fields optional."""
-        sid = session.get("session_id")
-        if not sid:
-            raise ValueError("session must include 'session_id'")
-        atype = session.get("agent_type") or "openclaw"
-        meta_blob = _to_blob(session.get("metadata"))
+        self.ingest_sessions_batch([session])
+
+    def ingest_sessions_batch(self, sessions: list[dict[str, Any]]) -> int:
+        """Upsert many session rows in ONE write-lock hold / ONE transaction.
+
+        Per-row semantics are identical to :meth:`ingest_session` (which
+        delegates here): ON CONFLICT keeps the earliest ``started_at`` and
+        COALESCEs ``title`` / ``metadata``. What batching buys (the fresh-
+        install 465-session case used to pay this per row): the pre-upsert
+        day snapshot for the #2988 rollup mirror is ONE chunked IN(...)
+        lookup instead of a SELECT per session, the upserts run as one
+        executemany inside one transaction instead of per-row autocommit,
+        and the per-(runtime, day) session-count refresh runs once per
+        touched day for the whole batch. Returns rows upserted."""
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: ingest_session() called on read-only store"
+            )
+        prepared: list[tuple[str, str, dict[str, Any]]] = []
+        for session in sessions:
+            sid = session.get("session_id")
+            if not sid:
+                raise ValueError("session must include 'session_id'")
+            atype = session.get("agent_type") or "openclaw"
+            prepared.append((atype, str(sid), session))
+        if not prepared:
+            return 0
         now_ms = int(time.time() * 1000)
-        params = [
-            atype, sid,
-            session.get("node_id"),
-            session.get("agent_id") or "main",
-            session.get("workspace_id"),
-            session.get("title"),
-            session.get("started_at"),
-            session.get("last_active_at"),
-            session.get("ended_at"),
-            session.get("status"),
-            int(session.get("total_tokens") or 0),
-            float(session.get("cost_usd") or 0),
-            int(session.get("message_count") or 0),
-            meta_blob,
-            now_ms,
-        ]
         with self._write_lock:
             # #2988 — snapshot the pre-upsert day keys so the rollup session
-            # counts only recompute the (runtime, day) cells that actually
+            # counts only recompute the (runtime, day) cells that could
             # change. Direct conn read (NOT _fetch — it takes _write_lock
-            # internally and would deadlock here).
-            prev = self._conn.execute(
-                "SELECT started_at, last_active_at FROM sessions"
-                " WHERE agent_type = ? AND session_id = ?",
-                [atype, sid],
-            ).fetchone()
-            # Upsert: replace if (agent_type, session_id) exists.
-            self._conn.execute("""
-                INSERT INTO sessions (
-                    agent_type, session_id, node_id, agent_id, workspace_id,
-                    title, started_at, last_active_at, ended_at, status,
-                    total_tokens, cost_usd, message_count, metadata, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (agent_type, session_id) DO UPDATE SET
-                    node_id        = excluded.node_id,
-                    agent_id       = excluded.agent_id,
-                    workspace_id   = excluded.workspace_id,
-                    title          = COALESCE(excluded.title, sessions.title),
-                    started_at     = COALESCE(sessions.started_at, excluded.started_at),
-                    last_active_at = excluded.last_active_at,
-                    ended_at       = excluded.ended_at,
-                    status         = excluded.status,
-                    total_tokens   = excluded.total_tokens,
-                    cost_usd       = excluded.cost_usd,
-                    message_count  = excluded.message_count,
-                    metadata       = COALESCE(excluded.metadata, sessions.metadata),
-                    updated_at     = excluded.updated_at
-            """, params)
-            try:
-                self._upsert_session_rollup_locked(session, atype, prev)
-            except Exception:
-                log.exception(
-                    "local store: session rollup upsert failed (non-fatal)"
-                )
+            # internally and would deadlock here). session_id-only IN plus a
+            # Python-side (agent_type, session_id) key sidesteps DuckDB
+            # row-value IN syntax; the extra rows a shared sid pulls in are
+            # filtered by the map lookup.
+            prev_map: dict[tuple[str, str], tuple] = {}
+            sids = sorted({p[1] for p in prepared})
+            for off in range(0, len(sids), 500):
+                chunk = sids[off:off + 500]
+                ph = ",".join("?" * len(chunk))
+                for r in self._conn.execute(
+                    "SELECT agent_type, session_id, started_at, last_active_at"
+                    f" FROM sessions WHERE session_id IN ({ph})", chunk,
+                ).fetchall():
+                    prev_map[(str(r[0]), str(r[1]))] = (r[2], r[3])
+            upsert_params = [
+                [
+                    atype, sid,
+                    session.get("node_id"),
+                    session.get("agent_id") or "main",
+                    session.get("workspace_id"),
+                    session.get("title"),
+                    session.get("started_at"),
+                    session.get("last_active_at"),
+                    session.get("ended_at"),
+                    session.get("status"),
+                    int(session.get("total_tokens") or 0),
+                    float(session.get("cost_usd") or 0),
+                    int(session.get("message_count") or 0),
+                    _to_blob(session.get("metadata")),
+                    now_ms,
+                ]
+                for atype, sid, session in prepared
+            ]
+            with _txn(self._conn):
+                # Upsert: replace if (agent_type, session_id) exists.
+                self._conn.executemany("""
+                    INSERT INTO sessions (
+                        agent_type, session_id, node_id, agent_id, workspace_id,
+                        title, started_at, last_active_at, ended_at, status,
+                        total_tokens, cost_usd, message_count, metadata, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (agent_type, session_id) DO UPDATE SET
+                        node_id        = excluded.node_id,
+                        agent_id       = excluded.agent_id,
+                        workspace_id   = excluded.workspace_id,
+                        title          = COALESCE(excluded.title, sessions.title),
+                        started_at     = COALESCE(sessions.started_at, excluded.started_at),
+                        last_active_at = excluded.last_active_at,
+                        ended_at       = excluded.ended_at,
+                        status         = excluded.status,
+                        total_tokens   = excluded.total_tokens,
+                        cost_usd       = excluded.cost_usd,
+                        message_count  = excluded.message_count,
+                        metadata       = COALESCE(excluded.metadata, sessions.metadata),
+                        updated_at     = excluded.updated_at
+                """, upsert_params)
+                try:
+                    self._mirror_session_rollups_locked(prepared, prev_map)
+                except Exception:
+                    log.exception(
+                        "local store: session rollup upsert failed (non-fatal)"
+                    )
+        return len(prepared)
 
     def reclassify_session_outcome(
         self,
@@ -3999,104 +4094,38 @@ class LocalStore:
         Also exposed as ``put_span`` for symmetry with the helper name the
         issue body uses (``local_store.put_span``).
         """
+        self.ingest_spans_batch([span])
+
+    def ingest_spans_batch(self, spans: list[dict[str, Any]]) -> int:
+        """Upsert many spans in ONE write-lock hold / ONE transaction.
+
+        Same INSERT-OR-REPLACE semantics as :meth:`ingest_span` (which
+        delegates here): one chunked DELETE for every re-delivered span_id,
+        then one executemany INSERT — instead of a per-span autocommit
+        DELETE+INSERT transaction, which dominated family-runtime span
+        reconstruction on fresh installs. In-batch duplicate span_ids keep
+        the LAST occurrence (matches sequential REPLACE ordering). Returns
+        the number of span rows written."""
         if self._read_only:
-            raise RuntimeError("local_store: ingest_span() called on read-only store")
-        span_id = span.get("span_id")
-        if not span_id:
-            raise ValueError("span must include 'span_id'")
-        trace_id = span.get("trace_id")
-        if not trace_id:
-            raise ValueError("span must include 'trace_id'")
-        name = span.get("name")
-        if not name:
-            raise ValueError("span must include 'name'")
-        start_ts = span.get("start_ts")
-        if start_ts is None:
-            raise ValueError("span must include 'start_ts'")
-        try:
-            start_ts_f = float(start_ts)
-        except (TypeError, ValueError):
-            raise ValueError(f"span 'start_ts' must be numeric (got {start_ts!r})")
-        end_ts = span.get("end_ts")
-        try:
-            end_ts_f = float(end_ts) if end_ts is not None else start_ts_f
-        except (TypeError, ValueError):
-            end_ts_f = start_ts_f
-        # Duration: prefer explicit, else derive from (end - start).
-        duration_ms = span.get("duration_ms")
-        duration_ns = span.get("duration_ns")
-        if duration_ms is None and duration_ns is None:
-            duration_ms = max(0.0, (end_ts_f - start_ts_f) * 1000.0)
-        elif duration_ms is None and duration_ns is not None:
-            try:
-                duration_ms = float(duration_ns) / 1_000_000.0
-            except (TypeError, ValueError):
-                duration_ms = None
-        elif duration_ns is None and duration_ms is not None:
-            try:
-                duration_ns = int(float(duration_ms) * 1_000_000)
-            except (TypeError, ValueError):
-                duration_ns = None
-
-        def _i(v):
-            if v is None:
-                return None
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                return None
-
-        def _f(v):
-            if v is None:
-                return None
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return None
-
-        params = [
-            str(span_id),
-            str(trace_id),
-            span.get("parent_span_id"),
-            str(span.get("agent_type") or "openclaw"),
-            str(span.get("agent_id") or "main"),
-            span.get("node_id"),
-            span.get("session_id"),
-            span.get("service_name"),
-            str(name),
-            span.get("kind"),
-            span.get("status_code"),
-            span.get("status_message"),
-            span.get("status"),
-            start_ts_f,
-            end_ts_f,
-            _f(duration_ms),
-            _i(duration_ns),
-            span.get("model"),
-            span.get("tool_name"),
-            _f(span.get("cost_usd")),
-            _i(span.get("token_count")),
-            _i(span.get("tokens_input")),
-            _i(span.get("tokens_output")),
-            _to_blob(span.get("input")),
-            _to_blob(span.get("output")),
-            _to_blob(span.get("attributes")),
-            _to_blob(span.get("events")),
-            _to_blob(span.get("links")),
-            start_ts_f,  # ts = canonical retention key, mirror of start_ts
-            int(time.time() * 1000),
-        ]
-        # DuckDB doesn't support ON CONFLICT DO REPLACE; emulate with
-        # DELETE-then-INSERT inside one transaction. Same pattern works for
-        # ``INSERT OR REPLACE`` semantics without losing the FK-free PK
-        # constraint enforcement.
+            raise RuntimeError(
+                "local_store: ingest_span() called on read-only store"
+            )
+        rows: dict[str, list[Any]] = {}
+        for span in spans:
+            params = _span_row(span)
+            rows[str(params[0])] = params
+        if not rows:
+            return 0
         with self._write_lock:
             with _txn(self._conn):
-                self._conn.execute(
-                    "DELETE FROM spans WHERE span_id = ?",
-                    [str(span_id)],
-                )
-                self._conn.execute("""
+                ids = list(rows.keys())
+                for off in range(0, len(ids), 500):
+                    chunk = ids[off:off + 500]
+                    ph = ",".join("?" * len(chunk))
+                    self._conn.execute(
+                        f"DELETE FROM spans WHERE span_id IN ({ph})", chunk
+                    )
+                self._conn.executemany("""
                     INSERT INTO spans (
                         span_id, trace_id, parent_span_id, agent_type, agent_id,
                         node_id, session_id, service_name, name, kind,
@@ -4114,7 +4143,8 @@ class LocalStore:
                               ?, ?,
                               ?, ?, ?, ?, ?,
                               ?, ?)
-                """, params)
+                """, list(rows.values()))
+        return len(rows)
 
     # Alias used by the issue body / callers that prefer "put" semantics.
     def put_span(self, span: dict[str, Any]) -> None:
@@ -5118,31 +5148,72 @@ class LocalStore:
         for attempt in range(FLUSH_MAX_ATTEMPTS):
             try:
                 with self._write_lock:
-                    # Rollups (#2988) must count each event exactly once:
-                    # INSERT OR IGNORE silently drops ids already in the
-                    # events table (and in-batch dupes), so only the rows
-                    # that will actually insert may increment the rollups.
-                    # Indexed id lookup — O(batch), never a table scan.
-                    new_idx = self._new_event_indices_locked(batch)
+                    # In-batch dedup: first occurrence wins, matching what
+                    # INSERT OR IGNORE would keep. Rollups (#2988) must count
+                    # each event exactly once, so only rows that will actually
+                    # insert may increment them.
+                    seen: set[str] = set()
+                    uniq: list[int] = []
+                    for i, e in enumerate(batch):
+                        eid = str(e.get("id"))
+                        if eid in seen:
+                            continue
+                        seen.add(eid)
+                        uniq.append(i)
+                    # One indexed lookup for BOTH dedup and integrity state
+                    # (id -> stored chain_hash, possibly NULL). O(batch),
+                    # never a table scan.
+                    existing = self._existing_event_chain_locked(
+                        [str(batch[i]["id"]) for i in uniq]
+                    )
+                    new_idx = [
+                        i for i in uniq if str(batch[i]["id"]) not in existing
+                    ]
                     model_d, runtime_d = _rollup_deltas(
                         (batch[i], usages[i]) for i in new_idx
                     )
+                    # Integrity chain (#2200) computed in Python BEFORE the
+                    # insert so the hashes ride the INSERT itself — the old
+                    # post-insert UPDATE pass re-wrote every fresh row, which
+                    # DuckDB executes as delete+reinsert against all six
+                    # secondary indexes (the profiled 100x ingest slowdown).
+                    # Heads are advanced on a LOCAL copy; self._chain_heads
+                    # only moves after COMMIT, so a retried flush (rollback)
+                    # can't fork the chain off a phantom head.
+                    stamp, restamp, new_heads = self._integrity_plan_locked(
+                        [batch[i] for i in uniq], existing
+                    )
                     with _txn(self._conn):
-                        self._conn.executemany(
-                            """
-                            INSERT OR IGNORE INTO events
-                              (id, agent_type, node_id, agent_id, session_id, workspace_id,
-                               event_type, ts, data, cost_usd, token_count, model, created_at,
-                               runtime_kind)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                            """,
-                            rows,
-                        )
-                        self._stamp_integrity(batch, self._conn)
+                        self._insert_event_rows_locked([
+                            rows[i] + stamp.get(str(batch[i]["id"]), (None, None))
+                            for i in new_idx
+                        ])
+                        if restamp:
+                            # Rare path: a re-delivered event that predates
+                            # integrity (row exists, chain_hash NULL) gets
+                            # stamped in place, same as the old behavior.
+                            self._conn.executemany(
+                                "UPDATE events SET chain_prev_hash = ?, "
+                                "chain_hash = ? WHERE id = ?",
+                                restamp,
+                            )
+                        if new_heads:
+                            now_ms = int(time.time() * 1000)
+                            self._conn.executemany(
+                                """
+                                INSERT INTO chain_heads (node_id, chain_hash, updated_at)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT (node_id) DO UPDATE SET
+                                    chain_hash = excluded.chain_hash,
+                                    updated_at = excluded.updated_at
+                                """,
+                                [[n, h, now_ms] for n, h in new_heads.items()],
+                            )
                         # Same transaction: a failed rollup write rolls the
                         # event insert back too, and the ring (snapshot-then-
                         # pop) retries the whole batch consistently.
                         self._apply_rollup_deltas_locked(model_d, runtime_d)
+                    self._chain_heads.update(new_heads)
                 last_exc = None
                 break
             except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
@@ -5235,28 +5306,123 @@ class LocalStore:
     # as the sessions upsert (sessions). Never opened read-only, never
     # recomputed full-table on the hot path.
 
-    def _new_event_indices_locked(self, batch: list[dict[str, Any]]) -> list[int]:
-        """Indices of batch events that are NOT yet in the events table and
-        not duplicated earlier in the batch — i.e. the rows INSERT OR IGNORE
-        will actually insert. Caller holds ``_write_lock``."""
-        seen: set[str] = set()
-        uniq: list[int] = []
-        for i, e in enumerate(batch):
-            eid = str(e.get("id"))
-            if eid in seen:
-                continue
-            seen.add(eid)
-            uniq.append(i)
-        existing: set[str] = set()
-        ids = [str(batch[i]["id"]) for i in uniq]
+    def _existing_event_chain_locked(
+        self, ids: list[str],
+    ) -> dict[str, str | None]:
+        """Map of ``id -> stored chain_hash`` for every id already in the
+        events table (value is None for pre-integrity rows). Ids absent from
+        the map are new. One chunked indexed IN(...) lookup — never a table
+        scan. Caller holds ``_write_lock``."""
+        existing: dict[str, str | None] = {}
         for off in range(0, len(ids), 500):
             chunk = ids[off:off + 500]
             ph = ",".join("?" * len(chunk))
             cur = self._conn.execute(
-                f"SELECT id FROM events WHERE id IN ({ph})", chunk
+                f"SELECT id, chain_hash FROM events WHERE id IN ({ph})", chunk
             )
-            existing.update(r[0] for r in cur.fetchall())
-        return [i for i in uniq if str(batch[i]["id"]) not in existing]
+            for r in cur.fetchall():
+                existing[str(r[0])] = r[1]
+        return existing
+
+    def _integrity_plan_locked(
+        self,
+        events: list[dict[str, Any]],
+        existing: dict[str, str | None],
+    ) -> tuple[
+        dict[str, tuple[str, str]],
+        list[tuple[str, str, str]],
+        dict[str, str],
+    ]:
+        """Compute the #2200 hash-chain stamps for one flush batch WITHOUT
+        touching the events table (the caller folds the result into the bulk
+        INSERT). Same scheme as the retired ``_stamp_integrity``: group by
+        node_id, sort by id within the node (matches verify_integrity's
+        ORDER BY), chain via ``_integrity_hash`` from the node's current head.
+
+        Returns ``(stamp, restamp, new_heads)``:
+          * ``stamp[id] = (chain_prev_hash, chain_hash)`` for NEW rows;
+          * ``restamp`` = ``(prev, hash, id)`` UPDATE tuples for re-delivered
+            rows that exist but were never stamped (pre-integrity rows);
+          * ``new_heads[node_id]`` = the node's advanced head. The caller
+            persists these inside the flush _txn and updates the in-memory
+            ``self._chain_heads`` cache only AFTER the COMMIT (a retried
+            flush must not chain off a rolled-back head).
+
+        An already-stamped re-delivered id resets the running head to its
+        stored hash (chain-repair behavior carried over from
+        ``_stamp_integrity``). Caller holds ``_write_lock``.
+        """
+        if not _INTEGRITY_ENABLED:
+            return {}, [], {}
+        from collections import defaultdict
+        by_node: dict[str, list[dict]] = defaultdict(list)
+        for e in events:
+            by_node[str(e.get("node_id") or "unknown")].append(e)
+        stamp: dict[str, tuple[str, str]] = {}
+        restamp: list[tuple[str, str, str]] = []
+        new_heads: dict[str, str] = {}
+        for node_id, node_events in by_node.items():
+            head = self._chain_heads.get(node_id)
+            if head is None:
+                row = self._conn.execute(
+                    "SELECT chain_hash FROM chain_heads WHERE node_id = ?",
+                    [node_id],
+                ).fetchone()
+                head = row[0] if row else "0" * 64
+                # Safe to cache immediately: the DB value can't change under
+                # ``_write_lock``, and the advanced head only lands in the
+                # cache post-COMMIT.
+                self._chain_heads[node_id] = head
+            node_events.sort(key=lambda e: str(e.get("id") or ""))
+            for e in node_events:
+                eid = str(e.get("id") or "")
+                if not eid:
+                    continue
+                if eid in existing:
+                    prev = existing[eid]
+                    if prev is not None:
+                        head = prev
+                        continue
+                    new_hash = _integrity_hash(head, e)
+                    restamp.append((head, new_hash, eid))
+                    head = new_hash
+                else:
+                    new_hash = _integrity_hash(head, e)
+                    stamp[eid] = (head, new_hash)
+                    head = new_hash
+            if head != self._chain_heads.get(node_id):
+                new_heads[node_id] = head
+        return stamp, restamp, new_heads
+
+    _EVENT_INSERT_COLS = (
+        "id, agent_type, node_id, agent_id, session_id, workspace_id, "
+        "event_type, ts, data, cost_usd, token_count, model, created_at, "
+        "runtime_kind, chain_prev_hash, chain_hash"
+    )
+
+    def _insert_event_rows_locked(self, rows16: list[tuple]) -> None:
+        """Bulk INSERT of fully-built event rows (the 14 ``_event_to_row``
+        columns + the two chain columns). Multi-row VALUES in chunks so each
+        statement is ONE vectorized insert — DuckDB's Python ``executemany``
+        runs row-at-a-time and pays index maintenance per row, which is what
+        made the old flush path ~19 events/s. Caller holds ``_write_lock``
+        and an open ``_txn``; rows must already be deduped against the table
+        (OR IGNORE stays as a belt-and-braces guard only)."""
+        if not rows16:
+            return
+        ncols = 16
+        row_ph = "(" + ",".join("?" * ncols) + ")"
+        chunk_rows = 250  # 4000 bind params per statement — well within limits
+        for off in range(0, len(rows16), chunk_rows):
+            chunk = rows16[off:off + chunk_rows]
+            sql = (
+                f"INSERT OR IGNORE INTO events ({self._EVENT_INSERT_COLS}) "
+                "VALUES " + ",".join([row_ph] * len(chunk))
+            )
+            flat: list[Any] = []
+            for r in chunk:
+                flat.extend(r)
+            self._conn.execute(sql, flat)
 
     def _apply_rollup_deltas_locked(
         self,
@@ -5333,64 +5499,78 @@ class LocalStore:
                 [day, runtime, int(started), int(active)],
             )
 
-    def _upsert_session_rollup_locked(
+    def _mirror_session_rollups_locked(
         self,
-        session: dict[str, Any],
-        atype: str,
-        prev: tuple | None,
+        prepared: list[tuple[str, str, dict[str, Any]]],
+        prev_map: dict[tuple[str, str], tuple],
     ) -> None:
-        """Mirror one ``ingest_session`` upsert into ``rollup_session`` and
-        refresh the touched (runtime, day) session counts. Caller holds
-        ``_write_lock``; ``prev`` is the pre-upsert (started_at,
-        last_active_at) row (None for a new session)."""
-        sid = str(session.get("session_id"))
-        started = session.get("started_at")
-        last_active = session.get("last_active_at")
-        stuck = bool(session.get("stuck") or session.get("stuck_flag") or False)
-        self._conn.execute(
-            """
-            INSERT INTO rollup_session
-              (session_id, runtime, title, status, started_at,
-               last_activity, tokens, cost_usd, turns, stuck_flag)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT (session_id) DO UPDATE SET
-                runtime       = excluded.runtime,
-                title         = COALESCE(excluded.title, rollup_session.title),
-                status        = excluded.status,
-                started_at    = COALESCE(rollup_session.started_at, excluded.started_at),
-                last_activity = excluded.last_activity,
-                tokens        = excluded.tokens,
-                cost_usd      = excluded.cost_usd,
-                turns         = excluded.turns,
-                stuck_flag    = excluded.stuck_flag
-            """,
-            [
+        """Mirror one ``ingest_sessions_batch`` upsert batch into
+        ``rollup_session`` and refresh the touched (runtime, day) session
+        counts — once per distinct day for the whole batch, not per row.
+        Caller holds ``_write_lock``; ``prev_map`` maps (agent_type,
+        session_id) to the pre-upsert (started_at, last_active_at) row
+        (absent for new sessions)."""
+        rollup_params: list[list[Any]] = []
+        days_by_runtime: dict[str, set[str]] = {}
+        for atype, sid, session in prepared:
+            prev = prev_map.get((atype, sid))
+            started = session.get("started_at")
+            last_active = session.get("last_active_at")
+            stuck = bool(
+                session.get("stuck") or session.get("stuck_flag") or False
+            )
+            rollup_params.append([
                 sid, atype, session.get("title"), session.get("status"),
                 started, last_active,
                 int(session.get("total_tokens") or 0),
                 float(session.get("cost_usd") or 0),
                 int(session.get("message_count") or 0),
                 stuck,
-            ],
-        )
-        # Touched-day session counts. ``started_at`` keeps the existing value
-        # on conflict (COALESCE(sessions.started_at, excluded.started_at)),
-        # so the effective start day comes from the pre-upsert row when set.
-        eff_started = (prev[0] if prev and prev[0] else started)
-        new_days = {
-            _event_day(eff_started or last_active),
-            _event_day(last_active),
-        } - {None}
-        if prev is not None:
-            old_days = {
-                _event_day(prev[0] or prev[1]),
-                _event_day(prev[1]),
-            } - {None}
-            days = new_days ^ old_days
-        else:
-            days = new_days
-        if days:
-            self._refresh_runtime_day_session_counts_locked(atype, sorted(days))
+            ])
+            # Touched-day session counts. ``started_at`` keeps the existing
+            # value on conflict (COALESCE(sessions.started_at,
+            # excluded.started_at)), so the effective start day comes from
+            # the pre-upsert row when set. The refresh is an idempotent
+            # recompute, so collecting the UNION of old+new days (rather than
+            # the per-row symmetric diff) is safe — batching dedupes the days
+            # anyway, so the extra recomputes cost nothing at batch scale.
+            eff_started = (prev[0] if prev and prev[0] else started)
+            days = {
+                _event_day(eff_started or last_active),
+                _event_day(last_active),
+            }
+            if prev is not None:
+                days |= {
+                    _event_day(prev[0] or prev[1]),
+                    _event_day(prev[1]),
+                }
+            days -= {None}
+            if days:
+                days_by_runtime.setdefault(atype, set()).update(days)
+        if rollup_params:
+            self._conn.executemany(
+                """
+                INSERT INTO rollup_session
+                  (session_id, runtime, title, status, started_at,
+                   last_activity, tokens, cost_usd, turns, stuck_flag)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    runtime       = excluded.runtime,
+                    title         = COALESCE(excluded.title, rollup_session.title),
+                    status        = excluded.status,
+                    started_at    = COALESCE(rollup_session.started_at, excluded.started_at),
+                    last_activity = excluded.last_activity,
+                    tokens        = excluded.tokens,
+                    cost_usd      = excluded.cost_usd,
+                    turns         = excluded.turns,
+                    stuck_flag    = excluded.stuck_flag
+                """,
+                rollup_params,
+            )
+        for runtime, days in days_by_runtime.items():
+            self._refresh_runtime_day_session_counts_locked(
+                runtime, sorted(days)
+            )
 
     def backfill_rollups(self, *, force: bool = False) -> dict[str, Any]:
         """One-time, bounded, chunked rebuild of the three rollup tables from
@@ -5966,79 +6146,10 @@ class LocalStore:
 
     # ── Issue #2200: integrity hash chain ────────────────────────────────────
 
-    def _stamp_integrity(self, batch: list[dict], conn) -> None:
-        """Compute and store chain_prev_hash/chain_hash for a flushed batch.
-
-        Called inside _flush_now_locked's _txn so hashes land atomically with
-        the events. No-op when _INTEGRITY_ENABLED is false or when an event was
-        already stamped (INSERT OR IGNORE skipped it, so we skip the UPDATE too).
-        """
-        if not _INTEGRITY_ENABLED:
-            return
-        from collections import defaultdict
-        by_node: dict[str, list[dict]] = defaultdict(list)
-        for e in batch:
-            node = str(e.get("node_id") or "unknown")
-            by_node[node].append(e)
-
-        for node_id, events in by_node.items():
-            if node_id not in self._chain_heads:
-                row = conn.execute(
-                    "SELECT chain_hash FROM chain_heads WHERE node_id = ?", [node_id]
-                ).fetchone()
-                self._chain_heads[node_id] = row[0] if row else "0" * 64
-
-            head = self._chain_heads[node_id]
-            # Sort by id so stamp order within a created_at bucket is deterministic
-            # and matches the ORDER BY id ASC used in verify_integrity.
-            events.sort(key=lambda e: str(e.get("id") or ""))
-            # Dedup check in ONE query for the whole batch (was a SELECT per
-            # event). INSERT OR IGNORE may have skipped a re-delivered event
-            # that is already stamped; re-stamping it would fork the chain, so
-            # we must skip those. With the flush batch up to 1000 rows, a
-            # per-event lookup is up to 1000 indexed PK queries per flush; this
-            # collapses it to one IN(...) lookup, keeping default-on stamping
-            # within the daemon CPU budget (FLYWHEEL 1e).
-            ids = [str(e.get("id")) for e in events if e.get("id")]
-            already_stamped: dict[str, str] = {}
-            if ids:
-                placeholders = ",".join("?" for _ in ids)
-                for r in conn.execute(
-                    "SELECT id, chain_hash FROM events "
-                    f"WHERE id IN ({placeholders}) AND chain_hash IS NOT NULL",
-                    ids,
-                ).fetchall():
-                    already_stamped[str(r[0])] = r[1]
-            updates: list[tuple[str, str, str]] = []
-            for e in events:
-                eid = str(e.get("id") or "")
-                if not eid:
-                    continue
-                # Only stamp events that were actually inserted (not duplicates).
-                prev = already_stamped.get(eid)
-                if prev is not None:
-                    head = prev
-                    continue
-                new_hash = _integrity_hash(head, e)
-                updates.append((head, new_hash, eid))
-                head = new_hash
-
-            if updates:
-                conn.executemany(
-                    "UPDATE events SET chain_prev_hash = ?, chain_hash = ? WHERE id = ?",
-                    updates,
-                )
-            conn.execute(
-                """
-                INSERT INTO chain_heads (node_id, chain_hash, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT (node_id) DO UPDATE SET
-                    chain_hash = excluded.chain_hash,
-                    updated_at = excluded.updated_at
-                """,
-                [node_id, head, int(time.time() * 1000)],
-            )
-            self._chain_heads[node_id] = head
+    # NOTE: the pre-insert chain computation lives in ``_integrity_plan_locked``
+    # (called from ``_flush_now_locked``). The old post-insert ``_stamp_integrity``
+    # UPDATE pass was retired — re-UPDATEing every fresh row cost a
+    # delete+reinsert against all six secondary indexes per event.
 
     def verify_integrity(self, node_id: str | None = None) -> dict:
         """Walk the hash chain and verify every stamped event in order.
@@ -11658,6 +11769,98 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
     )
+
+
+def _span_row(span: dict[str, Any]) -> list[Any]:
+    """Validate + coerce one OTel-shaped span dict into the 30-column spans
+    row (the ``ingest_span`` docstring documents the accepted shape). Raises
+    ValueError on missing span_id/trace_id/name/start_ts, same as the old
+    inline ``ingest_span`` body this was extracted from."""
+    span_id = span.get("span_id")
+    if not span_id:
+        raise ValueError("span must include 'span_id'")
+    trace_id = span.get("trace_id")
+    if not trace_id:
+        raise ValueError("span must include 'trace_id'")
+    name = span.get("name")
+    if not name:
+        raise ValueError("span must include 'name'")
+    start_ts = span.get("start_ts")
+    if start_ts is None:
+        raise ValueError("span must include 'start_ts'")
+    try:
+        start_ts_f = float(start_ts)
+    except (TypeError, ValueError):
+        raise ValueError(f"span 'start_ts' must be numeric (got {start_ts!r})")
+    end_ts = span.get("end_ts")
+    try:
+        end_ts_f = float(end_ts) if end_ts is not None else start_ts_f
+    except (TypeError, ValueError):
+        end_ts_f = start_ts_f
+    # Duration: prefer explicit, else derive from (end - start).
+    duration_ms = span.get("duration_ms")
+    duration_ns = span.get("duration_ns")
+    if duration_ms is None and duration_ns is None:
+        duration_ms = max(0.0, (end_ts_f - start_ts_f) * 1000.0)
+    elif duration_ms is None and duration_ns is not None:
+        try:
+            duration_ms = float(duration_ns) / 1_000_000.0
+        except (TypeError, ValueError):
+            duration_ms = None
+    elif duration_ns is None and duration_ms is not None:
+        try:
+            duration_ns = int(float(duration_ms) * 1_000_000)
+        except (TypeError, ValueError):
+            duration_ns = None
+
+    def _i(v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _f(v):
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    return [
+        str(span_id),
+        str(trace_id),
+        span.get("parent_span_id"),
+        str(span.get("agent_type") or "openclaw"),
+        str(span.get("agent_id") or "main"),
+        span.get("node_id"),
+        span.get("session_id"),
+        span.get("service_name"),
+        str(name),
+        span.get("kind"),
+        span.get("status_code"),
+        span.get("status_message"),
+        span.get("status"),
+        start_ts_f,
+        end_ts_f,
+        _f(duration_ms),
+        _i(duration_ns),
+        span.get("model"),
+        span.get("tool_name"),
+        _f(span.get("cost_usd")),
+        _i(span.get("token_count")),
+        _i(span.get("tokens_input")),
+        _i(span.get("tokens_output")),
+        _to_blob(span.get("input")),
+        _to_blob(span.get("output")),
+        _to_blob(span.get("attributes")),
+        _to_blob(span.get("events")),
+        _to_blob(span.get("links")),
+        start_ts_f,  # ts = canonical retention key, mirror of start_ts
+        int(time.time() * 1000),
+    ]
 
 
 def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:

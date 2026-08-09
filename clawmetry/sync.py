@@ -3680,23 +3680,27 @@ def _local_ingest_session_batch(
     # Non-fatal: span failures never block event ingest.
     try:
         from clawmetry.adapters.openclaw import OpenClawAdapter
-        for sp in OpenClawAdapter._build_spans_from_events(
+        _spans = list(OpenClawAdapter._build_spans_from_events(
             batch, session_id, agent_type=agent_type
-        ):
-            store.ingest_span(sp)
+        ))
+        if _spans:
+            store.ingest_spans_batch(_spans)
     except Exception as _e:
         log.debug("span reconstruction skipped (non-fatal): %s", _e)
 
 
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
     """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
-    into the local DuckDB ``sessions`` table. One upsert per row; safe to call
-    on a store that already has these sessions (ON CONFLICT DO UPDATE)."""
+    into the local DuckDB ``sessions`` table. Batched: ONE
+    ``ingest_sessions_batch`` call (one lock hold / one transaction) instead
+    of a per-row upsert; safe to call on a store that already has these
+    sessions (ON CONFLICT DO UPDATE)."""
     if not rows:
         return
     from clawmetry import local_store
 
     store = local_store.get_store()
+    session_rows: list = []
     for s in rows:
         sid = s.get("session_id") or s.get("session_key") or s.get("id")
         if not sid:
@@ -3715,7 +3719,7 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
                      "session_key", "end_reason", "runtime", "thinking_level")
             and v
         }
-        store.ingest_session({
+        session_rows.append({
             "agent_type": s.get("agent_type") or "openclaw",
             "session_id": sid,
             "node_id": node_id,
@@ -3730,6 +3734,8 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             "message_count": s.get("message_count") or 0,
             "metadata": meta_extras or None,
         })
+    if session_rows:
+        store.ingest_sessions_batch(session_rows)
 
 
 def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
@@ -12653,15 +12659,16 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     # blocks the subagent row / watermark logic.
                     try:
                         from clawmetry import span_reconstruct as _sr
-                        for _sp in _sr.build_family_spans(
+                        _sp_batch = list(_sr.build_family_spans(
                             runtime, s, [], node_id=node_id
-                        ):
-                            store.ingest_span(_sp)
+                        ))
                         _spawn = _sr.build_subagent_spawn_span(
                             runtime, s, node_id=node_id
                         )
                         if _spawn:
-                            store.ingest_span(_spawn)
+                            _sp_batch.append(_spawn)
+                        if _sp_batch:
+                            store.ingest_spans_batch(_sp_batch)
                     except Exception as _spe:
                         log.debug(
                             "family spawn-span ingest failed (%s): %s",
@@ -12792,10 +12799,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # span failures never block event ingest or the watermark.
                 try:
                     from clawmetry import span_reconstruct as _sr
-                    for _sp in _sr.build_family_spans(
+                    _sp_batch = list(_sr.build_family_spans(
                         runtime, s, _events, node_id=node_id
-                    ):
-                        store.ingest_span(_sp)
+                    ))
+                    if _sp_batch:
+                        store.ingest_spans_batch(_sp_batch)
                 except Exception as _spe:
                     log.debug(
                         "family span reconstruction failed (%s): %s",
