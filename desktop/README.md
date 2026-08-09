@@ -48,10 +48,23 @@ Sequence on first launch (~15 seconds on a fast connection):
    `/api/overview` from Python (avoids CORS from a `load_html` origin);
    swaps to the real dashboard when there's content OR after 20s.
 
-Subsequent launches skip 2–3 if the venv exists and the last upgrade
-is under 6 hours old, AND skip 5–6 because
+Subsequent launches skip 2–4 entirely whenever the venv already holds
+a runnable clawmetry — the shell **never blocks launch on pip**. The
+watcher thread owns the 6h upgrade cadence in the background and
+restarts the daemon on version drift, so users still track PyPI
+releases without ever staring at a "Checking for updates" splash.
+Steps 5–6 are skipped because
 `~/Library/Application Support/ClawMetry/runtime/onboarding-completed.json`
 is present. Every launch, the daemon child is fresh.
+
+**Global CLI:** every boot also runs `ensure_global_cli()` off the
+boot path — Windows writes `%LOCALAPPDATA%\ClawMetry\bin\clawmetry.cmd`
+(a shim delegating to the venv exe, immune to venv upgrades), adds
+that dir to the per-user PATH (HKCU, no admin) and broadcasts
+`WM_SETTINGCHANGE`; macOS/Linux symlink `~/.local/bin/clawmetry`. So
+desktop users get a working `clawmetry` in any new terminal without a
+separate pip install. The NSIS uninstaller removes the shim and its
+PATH entry.
 
 **Why this shape and not "freeze clawmetry into the bundle":**
 
