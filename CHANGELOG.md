@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Feature: rename the Conversations tab to Sessions (shipped in 0.12.667).**
+  - **Why:** "Sessions" is the normal term across every harness we observe (Claude Code, Codex, Cursor, OpenClaw), and the tab is where you dig deep into sessions; "Conversations" was the odd one out.
+  - **What:** #4656: nav label, tooltip, and in-tab copy (time-window tooltip, empty state, inventory work count) now say session(s). The `data-tab="transcripts"` id and `nav.session_replay` i18n key are unchanged, so deep links and stored state keep working. Only `en.json` changes by hand; the autotranslate workflow fanned the other locales out in #4665. Reached PyPI in 0.12.667 (carried by the #4666 release) and app.clawmetry.com via the cloud pin bump (clawmetry-cloud #1960).
+  - **Verified:** full CI matrix green on #4656 (31 checks incl. drift-bot, Live OpenClaw E2E, visual-diff); the published 0.12.667 wheel cracked and confirmed to carry the rename before pinning cloud.
+
 - **Release: ship windowless self-update, self-healing sync daemon, global CLI, and trial-expiry banners to end users.**
   - **Why:** carrier `[RELEASE]` so #4657 reaches PyPI and the fleet. Until this ships, every unattended Windows self-update pops a visible cmd window (seen live during an enterprise client call 2026-08-08), fresh installs that skipped sign-in show an empty dashboard forever, and desktop users have no `clawmetry` on PATH.
   - **What:** no new code; ships #4657.

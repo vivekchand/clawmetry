@@ -245,10 +245,12 @@ def test_local_ingest_memory_files_dedups_on_resync(sync_with_isolated_store):
 
 def test_local_ingest_sessions_batch_failure_does_not_break_caller(sync_with_isolated_store):
     """If the local store throws (e.g. corrupt file), the caller should
-    catch — verified by patching ingest_session to raise."""
+    catch — verified by patching the store write to raise. The helper now
+    writes through ``ingest_sessions_batch`` (one transaction per batch),
+    so that's the seam we patch."""
     sync, ls = sync_with_isolated_store
     store = ls.get_store()
-    with patch.object(store, "ingest_session", side_effect=RuntimeError("disk full")):
+    with patch.object(store, "ingest_sessions_batch", side_effect=RuntimeError("disk full")):
         # The helper itself doesn't catch; the CALLER (sync_session_metadata's
         # _flush) catches via try/except. Here we just verify the helper
         # propagates the exception so the caller's try/except sees it.
