@@ -17501,13 +17501,13 @@ function renderToolCatalog() {
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
 var _cmHarnessData = null;
 
-// Show the Harness nav iff a specific runtime is selected AND it has a template.
+// The Harness nav is always visible: the tab opens with the plain-language
+// "anatomy of a harness" explainer (static, works for every runtime and on
+// cloud), and adds the runtime-specific extras panel when a template exists.
 function _cmRefreshHarnessNav() {
   var nav = document.getElementById('left-nav-harness');
   if (!nav) return;
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (!rt || rt === 'all') { nav.style.display = 'none'; return; }
-  nav.style.display = (_cmHarnessTemplates && _cmHarnessTemplates[rt]) ? '' : 'none';
+  nav.style.display = '';
 }
 
 // Eagerly fetch templates at page-init so the nav can appear without waiting
@@ -17539,14 +17539,15 @@ async function loadHarness() {
     _cmHarnessData = data;
     el.innerHTML = renderHarnessPanel(tmpl, data);
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load harness view: '
+    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load the runtime panel: '
       + escapeHtml(String((e && e.message) || e)) + '</div>';
   }
 }
 
 function _cmHarnessNoTemplate(rt) {
-  return '<div style="color:var(--muted,#888);line-height:1.5;">No harness panel for <b>'
-    + escapeHtml(rt) + '</b> yet.<br>Pro runtimes light up their panels when '
+  return '<div style="color:var(--muted,#888);line-height:1.5;">Nothing extra for <b>'
+    + escapeHtml(rt) + '</b> yet. The anatomy above applies to every runtime.<br>'
+    + 'Pro runtimes light up their own panels when '
     + 'clawmetry-pro is installed (Cloud Pro or a self-hosted license).</div>';
 }
 
