@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Niezalogowano",
   "profile.plan": "Plan {tier}",
   "profile.sign_in": "Zaloguj się / Utwórz konto",
+  "profile.signed_in": "Zalogowano",
   "profile.sign_out": "Wyloguj się",
   "profile.trial_days_left": "Okres próbny · pozostało dni: {days}",
   "profile.upgrade": "Ulepsz plan",

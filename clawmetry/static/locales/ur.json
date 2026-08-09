@@ -956,6 +956,7 @@
   "profile.not_signed_in": "سائن ان نہیں ہے",
   "profile.plan": "{tier} پلان",
   "profile.sign_in": "سائن ان کریں / اکاؤنٹ بنائیں",
+  "profile.signed_in": "سائن ان ہے",
   "profile.sign_out": "سائن آؤٹ کریں",
   "profile.trial_days_left": "ٹرائل · {days} دن باقی",
   "profile.upgrade": "پلان اپ گریڈ کریں",

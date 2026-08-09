@@ -956,6 +956,7 @@
   "profile.not_signed_in": "未登录",
   "profile.plan": "{tier} 套餐",
   "profile.sign_in": "登录 / 创建账户",
+  "profile.signed_in": "已登录",
   "profile.sign_out": "退出登录",
   "profile.trial_days_left": "试用期 · 剩余 {days} 天",
   "profile.upgrade": "升级套餐",

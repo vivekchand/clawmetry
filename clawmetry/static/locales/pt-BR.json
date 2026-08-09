@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Não conectado",
   "profile.plan": "Plano {tier}",
   "profile.sign_in": "Entrar / Criar conta",
+  "profile.signed_in": "Conectado",
   "profile.sign_out": "Sair",
   "profile.trial_days_left": "Teste · {days} dias restantes",
   "profile.upgrade": "Fazer upgrade do plano",

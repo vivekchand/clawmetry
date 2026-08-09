@@ -956,6 +956,7 @@
   "profile.not_signed_in": "సైన్ ఇన్ కాలేదు",
   "profile.plan": "{tier} ప్లాన్",
   "profile.sign_in": "సైన్ ఇన్ / ఖాతా సృష్టించండి",
+  "profile.signed_in": "సైన్ ఇన్ చేసారు",
   "profile.sign_out": "సైన్ అవుట్",
   "profile.trial_days_left": "ట్రయల్ · {days} రోజులు మిగిలి ఉన్నాయి",
   "profile.upgrade": "ప్లాన్ అప్‌గ్రేడ్ చేయండి",

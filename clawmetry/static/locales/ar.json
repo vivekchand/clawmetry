@@ -956,6 +956,7 @@
   "profile.not_signed_in": "لم يتم تسجيل الدخول",
   "profile.plan": "خطة {tier}",
   "profile.sign_in": "تسجيل الدخول / إنشاء حساب",
+  "profile.signed_in": "تم تسجيل الدخول",
   "profile.sign_out": "تسجيل الخروج",
   "profile.trial_days_left": "تجربة · {days} أيام متبقية",
   "profile.upgrade": "ترقية الخطة",

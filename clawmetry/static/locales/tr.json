@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Giriş yapılmadı",
   "profile.plan": "{tier} planı",
   "profile.sign_in": "Giriş yap / Hesap oluştur",
+  "profile.signed_in": "Oturum açıldı",
   "profile.sign_out": "Çıkış yap",
   "profile.trial_days_left": "Deneme · {days} gün kaldı",
   "profile.upgrade": "Planı yükselt",

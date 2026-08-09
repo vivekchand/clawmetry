@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Niet ingelogd",
   "profile.plan": "{tier}-abonnement",
   "profile.sign_in": "Inloggen / Account aanmaken",
+  "profile.signed_in": "Aangemeld",
   "profile.sign_out": "Uitloggen",
   "profile.trial_days_left": "Proefperiode · nog {days} dagen",
   "profile.upgrade": "Abonnement upgraden",

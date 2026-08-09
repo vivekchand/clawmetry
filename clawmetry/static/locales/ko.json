@@ -956,6 +956,7 @@
   "profile.not_signed_in": "로그인되지 않음",
   "profile.plan": "{tier} 요금제",
   "profile.sign_in": "로그인 / 계정 만들기",
+  "profile.signed_in": "로그인됨",
   "profile.sign_out": "로그아웃",
   "profile.trial_days_left": "체험판 · {days}일 남음",
   "profile.upgrade": "요금제 업그레이드",

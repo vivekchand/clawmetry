@@ -956,6 +956,7 @@
   "profile.not_signed_in": "وارد نشده‌اید",
   "profile.plan": "پلن {tier}",
   "profile.sign_in": "ورود / ایجاد حساب",
+  "profile.signed_in": "وارد شده",
   "profile.sign_out": "خروج",
   "profile.trial_days_left": "آزمایشی · {days} روز باقی‌مانده",
   "profile.upgrade": "ارتقای پلن",

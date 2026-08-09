@@ -956,6 +956,7 @@
   "profile.not_signed_in": "לא מחובר",
   "profile.plan": "תוכנית {tier}",
   "profile.sign_in": "התחברות / יצירת חשבון",
+  "profile.signed_in": "מחובר",
   "profile.sign_out": "התנתקות",
   "profile.trial_days_left": "תקופת ניסיון · נותרו {days} ימים",
   "profile.upgrade": "שדרוג תוכנית",

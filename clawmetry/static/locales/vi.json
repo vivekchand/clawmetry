@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Chưa đăng nhập",
   "profile.plan": "Gói {tier}",
   "profile.sign_in": "Đăng nhập / Tạo tài khoản",
+  "profile.signed_in": "Đã đăng nhập",
   "profile.sign_out": "Đăng xuất",
   "profile.trial_days_left": "Dùng thử · còn {days} ngày",
   "profile.upgrade": "Nâng cấp gói",

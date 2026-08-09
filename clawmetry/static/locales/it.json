@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Non hai eseguito l'accesso",
   "profile.plan": "Piano {tier}",
   "profile.sign_in": "Accedi / Crea account",
+  "profile.signed_in": "Accesso effettuato",
   "profile.sign_out": "Esci",
   "profile.trial_days_left": "Prova · {days} giorni rimanenti",
   "profile.upgrade": "Esegui l'upgrade del piano",

@@ -956,6 +956,7 @@
   "profile.not_signed_in": "સાઇન ઇન નથી",
   "profile.plan": "{tier} પ્લાન",
   "profile.sign_in": "સાઇન ઇન / એકાઉન્ટ બનાવો",
+  "profile.signed_in": "સાઇન ઇન છે",
   "profile.sign_out": "સાઇન આઉટ",
   "profile.trial_days_left": "ટ્રાયલ · {days} દિવસ બાકી",
   "profile.upgrade": "પ્લાન અપગ્રેડ કરો",

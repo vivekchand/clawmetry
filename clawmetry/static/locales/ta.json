@@ -956,6 +956,7 @@
   "profile.not_signed_in": "உள்நுழையவில்லை",
   "profile.plan": "{tier} திட்டம்",
   "profile.sign_in": "உள்நுழையவும் / கணக்கை உருவாக்கவும்",
+  "profile.signed_in": "உள்நுழைந்துள்ளீர்கள்",
   "profile.sign_out": "வெளியேறு",
   "profile.trial_days_left": "சோதனை · {days} நாட்கள் மீதம்",
   "profile.upgrade": "திட்டத்தை மேம்படுத்தவும்",

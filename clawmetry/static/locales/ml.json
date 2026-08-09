@@ -956,6 +956,7 @@
   "profile.not_signed_in": "സൈൻ ഇൻ ചെയ്തിട്ടില്ല",
   "profile.plan": "{tier} പ്ലാൻ",
   "profile.sign_in": "സൈൻ ഇൻ / അക്കൗണ്ട് ഉണ്ടാക്കുക",
+  "profile.signed_in": "സൈൻ ഇൻ ചെയ്തു",
   "profile.sign_out": "സൈൻ ഔട്ട്",
   "profile.trial_days_left": "ട്രയൽ · {days} ദിവസം ബാക്കി",
   "profile.upgrade": "പ്ലാൻ അപ്ഗ്രേഡ് ചെയ്യുക",

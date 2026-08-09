@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Δεν έχετε συνδεθεί",
   "profile.plan": "Πλάνο {tier}",
   "profile.sign_in": "Σύνδεση / Δημιουργία λογαριασμού",
+  "profile.signed_in": "Συνδεδεμένος",
   "profile.sign_out": "Αποσύνδεση",
   "profile.trial_days_left": "Δοκιμή · {days} ημέρες απομένουν",
   "profile.upgrade": "Αναβάθμιση πλάνου",

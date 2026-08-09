@@ -956,6 +956,7 @@
   "profile.not_signed_in": "尚未登入",
   "profile.plan": "{tier} 方案",
   "profile.sign_in": "登入 / 建立帳戶",
+  "profile.signed_in": "已登入",
   "profile.sign_out": "登出",
   "profile.trial_days_left": "試用中 · 剩 {days} 天",
   "profile.upgrade": "升級方案",

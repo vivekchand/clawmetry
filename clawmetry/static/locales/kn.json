@@ -956,6 +956,7 @@
   "profile.not_signed_in": "ಸೈನ್ ಇನ್ ಆಗಿಲ್ಲ",
   "profile.plan": "{tier} ಪ್ಲಾನ್",
   "profile.sign_in": "ಸೈನ್ ಇನ್ / ಖಾತೆ ರಚಿಸಿ",
+  "profile.signed_in": "ಸೈನ್ ಇನ್ ಮಾಡಲಾಗಿದೆ",
   "profile.sign_out": "ಸೈನ್ ಔಟ್",
   "profile.trial_days_left": "ಟ್ರಯಲ್ · {days} ದಿನಗಳು ಬಾಕಿ",
   "profile.upgrade": "ಪ್ಲಾನ್ ಅಪ್‌ಗ್ರೇಡ್ ಮಾಡಿ",

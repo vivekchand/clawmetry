@@ -956,6 +956,7 @@
   "profile.not_signed_in": "ยังไม่ได้ลงชื่อเข้าใช้",
   "profile.plan": "แพ็กเกจ {tier}",
   "profile.sign_in": "ลงชื่อเข้าใช้ / สร้างบัญชี",
+  "profile.signed_in": "ลงชื่อเข้าใช้แล้ว",
   "profile.sign_out": "ออกจากระบบ",
   "profile.trial_days_left": "ทดลองใช้ · เหลืออีก {days} วัน",
   "profile.upgrade": "อัปเกรดแพ็กเกจ",

@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Inte inloggad",
   "profile.plan": "{tier}-plan",
   "profile.sign_in": "Logga in / Skapa konto",
+  "profile.signed_in": "Inloggad",
   "profile.sign_out": "Logga ut",
   "profile.trial_days_left": "Provperiod · {days} dagar kvar",
   "profile.upgrade": "Uppgradera plan",

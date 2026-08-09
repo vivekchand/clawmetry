@@ -956,6 +956,7 @@
   "profile.not_signed_in": "No has iniciado sesión",
   "profile.plan": "Plan {tier}",
   "profile.sign_in": "Iniciar sesión / Crear cuenta",
+  "profile.signed_in": "Sesión iniciada",
   "profile.sign_out": "Cerrar sesión",
   "profile.trial_days_left": "Prueba · {days} días restantes",
   "profile.upgrade": "Mejorar plan",

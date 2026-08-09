@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Nicht angemeldet",
   "profile.plan": "{tier}-Tarif",
   "profile.sign_in": "Anmelden / Konto erstellen",
+  "profile.signed_in": "Angemeldet",
   "profile.sign_out": "Abmelden",
   "profile.trial_days_left": "Testphase · noch {days} Tage",
   "profile.upgrade": "Tarif upgraden",

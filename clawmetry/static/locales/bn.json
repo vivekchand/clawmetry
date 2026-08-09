@@ -956,6 +956,7 @@
   "profile.not_signed_in": "সাইন ইন করা নেই",
   "profile.plan": "{tier} প্ল্যান",
   "profile.sign_in": "সাইন ইন / অ্যাকাউন্ট তৈরি করুন",
+  "profile.signed_in": "সাইন ইন করা আছে",
   "profile.sign_out": "সাইন আউট",
   "profile.trial_days_left": "ট্রায়াল · {days} দিন বাকি",
   "profile.upgrade": "প্ল্যান আপগ্রেড করুন",

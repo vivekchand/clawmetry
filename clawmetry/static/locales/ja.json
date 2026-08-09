@@ -956,6 +956,7 @@
   "profile.not_signed_in": "サインインしていません",
   "profile.plan": "{tier}プラン",
   "profile.sign_in": "サインイン / アカウント作成",
+  "profile.signed_in": "サインイン済み",
   "profile.sign_out": "サインアウト",
   "profile.trial_days_left": "トライアル・残り{days}日",
   "profile.upgrade": "プランをアップグレード",

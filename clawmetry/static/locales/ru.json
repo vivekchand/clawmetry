@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Вы не вошли в систему",
   "profile.plan": "Тариф {tier}",
   "profile.sign_in": "Войти / Создать аккаунт",
+  "profile.signed_in": "Вы вошли в систему",
   "profile.sign_out": "Выйти",
   "profile.trial_days_left": "Пробный период · осталось {days} дн.",
   "profile.upgrade": "Улучшить тариф",

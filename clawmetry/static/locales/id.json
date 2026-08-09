@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Belum masuk",
   "profile.plan": "Paket {tier}",
   "profile.sign_in": "Masuk / Buat akun",
+  "profile.signed_in": "Sudah masuk",
   "profile.sign_out": "Keluar",
   "profile.trial_days_left": "Uji coba · {days} hari tersisa",
   "profile.upgrade": "Tingkatkan paket",
