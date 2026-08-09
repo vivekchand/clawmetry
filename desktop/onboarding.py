@@ -173,15 +173,25 @@ def detect_runtimes_via_venv(venv_python: Path, *, timeout: float = 6.0) -> list
 
 # ─── Post-auth: hand key to clawmetry connect ───────────────────────────
 
-def apply_cm_key(venv_clawmetry: Path, cm_key: str, *, timeout: float = 60.0) -> tuple[bool, str]:
-    """Run ``clawmetry connect --key cm_… --start-sync-now`` in the venv.
+def apply_cm_key(
+    venv_clawmetry: Path, cm_key: str, *, mode: str = "cloud", timeout: float = 60.0
+) -> tuple[bool, str]:
+    """Run ``clawmetry connect --key cm_…`` in the venv.
 
     This is the single seam that:
       * validates the key against the cloud (/auth)
       * writes ~/.clawmetry/config.json
       * calls ``auto_provision_pro`` (Pro wheel downloads iff account is
-        Trial/Starter/Pro/Enterprise)
-      * starts the sync daemon (cloud sync is default-ON per product spec)
+        Trial/Starter/Pro/Enterprise) — this is what starts the 7-day
+        all-runtimes trial in both modes
+      * starts the sync daemon
+
+    ``mode`` is the user's hosting choice from the onboarding pane:
+      * "cloud"    → ``--start-sync-now``: cloud sync ON (E2E-encrypted
+                     snapshots to ingest.clawmetry.com).
+      * "selfhost" → ``--defer-sync`` + ``clawmetry sync``: account
+                     linked, trial provisioned, but data stays on this
+                     machine; the sync daemon runs local-only ingest.
 
     We avoid duplicating any of that in the shell. Returns
     (ok, short_message). The message is user-safe (no key/token
@@ -191,25 +201,38 @@ def apply_cm_key(venv_clawmetry: Path, cm_key: str, *, timeout: float = 60.0) ->
         return False, "runtime venv is not ready yet"
     if not (cm_key or "").startswith("cm_"):
         return False, "invalid sign-in key"
+    mode_flag = "--defer-sync" if mode == "selfhost" else "--start-sync-now"
     try:
         r = subprocess.run(
-            [str(bin_), "connect", "--key", cm_key, "--start-sync-now"],
+            [str(bin_), "connect", "--key", cm_key, mode_flag],
             capture_output=True, text=True, timeout=timeout,
             **_win_subprocess_kwargs(),
         )
-        if r.returncode == 0:
-            return True, "signed in"
-        # Trim to the last non-empty line — clawmetry connect prints a
-        # user-friendly one-liner on failure.
-        tail = next(
-            (ln for ln in reversed((r.stderr + r.stdout).splitlines()) if ln.strip()),
-            "sign-in failed",
-        )
-        return False, tail.strip()[:200]
+        if r.returncode == 0 and mode == "selfhost":
+            # --defer-sync leaves the daemon down; start local-only
+            # ingest now so the dashboard has data on first paint. The
+            # shell's watcher heals it from here on.
+            try:
+                subprocess.run(
+                    [str(bin_), "sync"],
+                    capture_output=True, text=True, timeout=timeout,
+                    **_win_subprocess_kwargs(),
+                )
+            except Exception:
+                pass  # ensure_sync_daemon() in app.py retries
     except subprocess.TimeoutExpired:
         return False, "sign-in timed out — check your connection and try again"
     except Exception as exc:
         return False, f"sign-in error: {exc}"
+    if r.returncode == 0:
+        return True, "signed in"
+    # Trim to the last non-empty line — clawmetry connect prints a
+    # user-friendly one-liner on failure.
+    tail = next(
+        (ln for ln in reversed((r.stderr + r.stdout).splitlines()) if ln.strip()),
+        "sign-in failed",
+    )
+    return False, tail.strip()[:200]
 
 
 # ─── Cross-sell slides (Ubuntu-installer style) ─────────────────────────
@@ -329,6 +352,94 @@ def _logo_data_uri(assets_dir: Path) -> str:
         return "data:image/svg+xml;base64," + base64.b64encode(p.read_bytes()).decode()
     except OSError:
         return ""
+
+
+def render_mode_pane(*, assets_dir: Path) -> str:
+    """Post-sign-in hosting choice: ClawMetry Cloud vs Local / Self-host.
+
+    Both choices start the same 7-day all-runtimes trial (the account's
+    entitlement does that); the ONLY difference is where the data goes,
+    and the pane says so explicitly. Calls
+    ``window.pywebview.api.choose_mode('cloud'|'selfhost')``."""
+    logo = _logo_data_uri(assets_dir)
+    return f"""<!doctype html>
+<html><head>
+  <meta charset="utf-8"/>
+  <title>ClawMetry: Choose hosting</title>
+  <style>
+    {_shared_css()}
+    .card {{
+      width: 100%; max-width: 620px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 16px; padding: 40px 36px;
+    }}
+    .headline {{
+      font-size: 22px; font-weight: 700; letter-spacing: -0.01em;
+      margin: 0 0 8px; line-height: 1.25;
+    }}
+    .subline {{
+      color: var(--muted); font-size: 14px; line-height: 1.5;
+      margin: 0 0 24px;
+    }}
+    .modes {{ display: flex; gap: 14px; }}
+    .mode {{
+      flex: 1; text-align: left; cursor: pointer;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px 18px;
+      transition: border-color .15s ease;
+      /* <button> does NOT inherit text color — without this the
+         headings render UA-default black on the dark card. */
+      color: var(--text);
+    }}
+    .mode:hover {{ border-color: var(--accent); }}
+    .mode h3 {{ margin: 0 0 6px; font-size: 15px; color: var(--text); }}
+    .mode p {{ margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }}
+    .mode .tag {{
+      display: inline-block; margin-bottom: 10px; padding: 2px 9px;
+      border-radius: 999px; font-size: 10.5px; font-weight: 700;
+      letter-spacing: .04em; text-transform: uppercase;
+    }}
+    .mode.cloud .tag {{ background: rgba(124,140,255,.15); color: #a5b4ff; }}
+    .mode.selfhost .tag {{ background: rgba(74,222,128,.12); color: #4ade80; }}
+    .trial-note {{
+      margin-top: 20px; text-align: center; font-size: 12.5px;
+      color: var(--muted);
+    }}
+    .trial-note b {{ color: var(--text); }}
+  </style>
+</head><body>
+  <div class="center"><div class="card">
+    {'<img class="brand-logo" src="' + logo + '" alt="ClawMetry"/>' if logo else ''}
+    <h1 class="headline">Where should your data live?</h1>
+    <p class="subline">Either way, your <b>7-day free trial of every runtime</b> starts
+      now — this only decides where dashboards are served from.</p>
+    <div class="modes">
+      <button class="mode cloud" onclick="choose('cloud')">
+        <span class="tag">Cloud</span>
+        <h3>ClawMetry Cloud</h3>
+        <p>See this machine's agents from anywhere at app.clawmetry.com.
+           Snapshots leave this machine E2E-encrypted; only your browser
+           holds the key.</p>
+      </button>
+      <button class="mode selfhost" onclick="choose('selfhost')">
+        <span class="tag">Local / Self-host</span>
+        <h3>Stay on this machine</h3>
+        <p>Nothing leaves this box. Dashboard on localhost only.
+           You can turn cloud sync on later with one click.</p>
+      </button>
+    </div>
+    <p class="trial-note">No card required. After 7 days the free tier keeps
+      OpenClaw &amp; NemoClaw; paid tiers keep everything.</p>
+  </div></div>
+  <script>
+    var done = false;
+    function choose(mode) {{
+      if (done) return; done = true;
+      try {{ window.pywebview.api.choose_mode(mode); }} catch (e) {{ done = false; }}
+    }}
+  </script>
+</body></html>
+"""
 
 
 def render_auth_pane(

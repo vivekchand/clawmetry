@@ -63,6 +63,22 @@ def _env_auto_update_disabled():
     return ci not in ("", "0", "false")
 
 
+def _running_from_source_checkout():
+    """True when this code runs from a git checkout instead of an installed
+    wheel. Auto-update must never fire there: pip installs into
+    site-packages but the process keeps executing the checkout, so the
+    version can NEVER converge — on Windows the respawn plan then loops
+    forever (exit → pip → relaunch → still stale → repeat), flashing a
+    console window every cycle. Live-hit on the founder's box 2026-08-08:
+    a dev `python dashboard.py` run respawn-looped every ~70s, popping cmd
+    windows during an enterprise call."""
+    try:
+        from pathlib import Path
+        return (Path(__file__).resolve().parents[1] / ".git").exists()
+    except Exception:
+        return False
+
+
 def _daemon_supervised():
     """Best-effort: is the sync daemon under a supervisor that respawns it
     (launchd KeepAlive / systemd Restart=always)? When it is not, exiting to
@@ -720,6 +736,10 @@ def _maybe_auto_update(current, target, latest=None):
         return
     if _env_auto_update_disabled():
         log.info("auto-update: disabled (CLAWMETRY_AUTO_UPDATE=0 or CI env)")
+        return
+    if _running_from_source_checkout():
+        log.info("auto-update: skipped (running from a source checkout — "
+                 "pip cannot update the code this process executes)")
         return
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):

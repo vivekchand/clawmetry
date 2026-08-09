@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Μόνιμα αρχεία μνήμης που διαβάζει ο agent κατά την εκκίνηση",
   "nav.models": "Μοντέλα",
   "nav.notifications": "Ειδοποιήσεις",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "Πρόσθετα runtime",
   "nav.security": "Ασφάλεια",
   "nav.self_evolve": "Self-Evolve",

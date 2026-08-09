@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "קובצי זיכרון קבועים שהסוכן קורא באתחול",
   "nav.models": "מודלים",
   "nav.notifications": "הודעות",
+  "nav.harness": "רתמה",
   "nav.runtime_extras": "תוספות ריצה",
   "nav.security": "אבטחה",
   "nav.self_evolve": "Self-Evolve",
