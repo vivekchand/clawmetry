@@ -190,13 +190,9 @@ def apply_cm_key(
       * "cloud"    → ``--start-sync-now``: cloud sync ON (E2E-encrypted
                      snapshots to ingest.clawmetry.com).
       * "selfhost" → ``--keep-local --defer-sync`` + ``clawmetry sync``:
-                     account linked, trial provisioned, and the local-only
-                     marker written BEFORE the key lands, so the daemon can
-                     never observe a cm_ key without it. ``--defer-sync``
-                     alone did NOT do this (founder live-hit 2026-08-09:
-                     it only skips the daemon start; connect still ran the
-                     cloud rail, and the "self-host" node pushed snapshots).
-                     The sync daemon then runs local-only ingest.
+                     account linked, trial provisioned, nocloud marker
+                     kept, data stays on this machine; the sync daemon
+                     runs local-only ingest.
 
     We avoid duplicating any of that in the shell. Returns
     (ok, short_message). The message is user-safe (no key/token
@@ -206,6 +202,11 @@ def apply_cm_key(
         return False, "runtime venv is not ready yet"
     if not (cm_key or "").startswith("cm_"):
         return False, "invalid sign-in key"
+    # selfhost: --keep-local preserves the nocloud marker (sign-in must not
+    # flip a self-host install to cloud sync), skips the ownership OTP that
+    # would otherwise kill this non-interactive subprocess, and still mints
+    # the account's 7-day trial; --defer-sync leaves daemon/dashboard
+    # management to this shell.
     mode_flags = (
         ["--keep-local", "--defer-sync"] if mode == "selfhost"
         else ["--start-sync-now"]

@@ -902,8 +902,7 @@ def _cmd_connect(args) -> None:
     # `--force` flag lets the user override after explicit confirmation.
     from clawmetry.config import is_cloud_disabled, NOCLOUD_MARKER_PATH
     # Sign in while KEEPING the nocloud marker: account + trial license yes,
-    # data egress no. Set by the Case-B "keep local-only" answer below, by
-    # the `--keep-local` flag (the desktop app's Self-host choice), or
+    # data egress no. Set by the Case-B "keep local-only" answer below, or
     # passed in directly by onboard's Self-Hosted trial path (args.keep_local),
     # which has already asked its own questions and must not be re-prompted.
     _keep_local_signin = bool(getattr(args, "keep_local", False))
@@ -912,9 +911,8 @@ def _cmd_connect(args) -> None:
         # Case-B path below only runs when one already exists). Write it
         # BEFORE any config/daemon work: the daemon must never observe a
         # cm_ key without the marker, or it starts pushing (founder
-        # live-hit 2026-08-09 — the desktop Self-host choice passed only
-        # --defer-sync, no marker was ever written, and the node synced
-        # to cloud against an explicit local-only choice).
+        # live-hit 2026-08-09; the end-of-flow touch alone leaves a
+        # window where a respawning daemon sees key-without-marker).
         try:
             from pathlib import Path as _P
 
@@ -1078,13 +1076,19 @@ def _cmd_connect(args) -> None:
     if getattr(args, "key", None):
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
-        elif getattr(args, "start_sync_now", False):
-            pass  # Key from the authenticated dashboard command — already proven
-        elif getattr(args, "keep_local", False):
-            # Key captured by the desktop shell's own OAuth loopback on this
-            # machine — same already-authenticated provenance as the
-            # dashboard command above. Also runs headless (captured
-            # subprocess), where an OTP prompt would hang the onboarding.
+        elif (
+            getattr(args, "start_sync_now", False)
+            or getattr(args, "defer_sync", False)
+            or getattr(args, "keep_local", False)
+        ):
+            # Key from the authenticated dashboard command (--start-sync-now)
+            # or the desktop onboarding's self-host path (--defer-sync). Both
+            # flags only exist on machine-generated invocations whose key was
+            # just minted in an OAuth/OTP-verified session. --defer-sync runs
+            # non-interactively (no stdin), so an OTP prompt here doesn't just
+            # add friction, it kills the sign-in: _verify_key_ownership exits 1
+            # without a tty, the trial never provisions, and a self-host user
+            # is left on the OSS tier with every runtime locked.
             pass
         else:
             from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
@@ -1276,12 +1280,10 @@ def _cmd_connect(args) -> None:
             pass
         print()
         print("  Local-only kept: your data stays on this machine.")
-        if getattr(args, "key", None):
-            # Automated invocation (desktop shell / scripts pass --key): the
-            # caller owns its own dashboard lifecycle — spawning one on
-            # :8900 here would leave a stray duplicate next to the shell's.
-            pass
-        else:
+        # --defer-sync means a supervisor (the desktop app) manages the
+        # daemon and dashboard itself — spawning a second dashboard here
+        # would race it for the DuckDB writer lock.
+        if not getattr(args, "defer_sync", False):
             _dash_up = _ensure_local_dashboard()
             if _dash_up:
                 print("  Dashboard: http://localhost:8900 (live now)")
@@ -1335,11 +1337,12 @@ def _cmd_connect(args) -> None:
         print()
         print("  All done! Your dashboard: http://localhost:8900")
         print()
-        try:
-            import webbrowser
-            webbrowser.open("http://localhost:8900")
-        except Exception:
-            pass
+        if not getattr(args, "defer_sync", False):
+            try:
+                import webbrowser
+                webbrowser.open("http://localhost:8900")
+            except Exception:
+                pass
         return
 
     # Open browser with encryption key in URL fragment (never sent to server)
@@ -6499,14 +6502,6 @@ def main() -> None:
         help="Connect but leave sync paused; start it later with `clawmetry sync`",
     )
     p_connect.add_argument(
-        "--keep-local",
-        action="store_true",
-        dest="keep_local",
-        help="Sign in WITHOUT enabling cloud sync: links the account (and its "
-        "trial license) but writes the local-only marker first, so data "
-        "never leaves this machine (the desktop app's Self-host choice)",
-    )
-    p_connect.add_argument(
         "--foreground", action="store_true", help="Run daemon in foreground"
     )
     p_connect.add_argument(
@@ -6519,6 +6514,14 @@ def main() -> None:
         "--force",
         action="store_true",
         help="Override the persistent local-only marker (#1937) and connect anyway",
+    )
+    p_connect.add_argument(
+        "--keep-local",
+        action="store_true",
+        dest="keep_local",
+        help="Sign in for the account + trial license but keep this install "
+        "local-only: the nocloud marker stays, no snapshots ever leave "
+        "this machine (the desktop app's Self-Hosted choice uses this)",
     )
 
     # setup — alias for onboard (new user-facing name)
