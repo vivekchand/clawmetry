@@ -253,6 +253,7 @@ CROSS_SELL_SLIDES = [
         "cta_label": "",
         "cta_url": "",
         "art": "dashboard",
+        "img_asset": "cross-sell-dashboard.png",
     },
     {
         "eyebrow": "Also from ClawMetry",
@@ -265,6 +266,7 @@ CROSS_SELL_SLIDES = [
         "cta_label": "Explore Agent Builder",
         "cta_url": "https://build.clawmetry.com",
         "art": "builder",
+        "img_asset": "cross-sell-builder.png",
     },
     {
         "eyebrow": "Also from ClawMetry",
@@ -278,6 +280,7 @@ CROSS_SELL_SLIDES = [
         "cta_label": "See the Desk device",
         "cta_url": "https://clawmetry.com/device",
         "art": "desk",
+        "img_asset": "cross-sell-device.png",
         "img": "https://clawmetry.com/device-square.png",
     },
     {
@@ -291,6 +294,7 @@ CROSS_SELL_SLIDES = [
         "cta_label": "Talk to sales",
         "cta_url": "https://clawmetry.com/enterprise",
         "art": "enterprise",
+        "img_asset": "cross-sell-enterprise.png",
     },
 ]
 
@@ -344,14 +348,20 @@ def _shared_css() -> str:
     """
 
 
-def _logo_data_uri(assets_dir: Path) -> str:
-    """Embed the horizontal-darkbg logo as a data URI so the HTML is
-    fully self-contained (no external asset loads)."""
-    p = Path(assets_dir) / "clawmetry-logo-horizontal-darkbg.svg"
+def _asset_data_uri(assets_dir: Path, name: str, mime: str) -> str:
+    """Embed a bundled asset as a data URI so the HTML is fully
+    self-contained (no external asset loads)."""
+    p = Path(assets_dir) / name
     try:
-        return "data:image/svg+xml;base64," + base64.b64encode(p.read_bytes()).decode()
+        return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
     except OSError:
         return ""
+
+
+def _logo_data_uri(assets_dir: Path) -> str:
+    return _asset_data_uri(
+        assets_dir, "clawmetry-logo-horizontal-darkbg.svg", "image/svg+xml"
+    )
 
 
 def render_mode_pane(*, assets_dir: Path) -> str:
@@ -688,7 +698,18 @@ def render_bootstrap_carousel(*, assets_dir: Path, status: str = "Preparing runt
     installs. Ubuntu-installer style: 4 auto-advancing slides, click
     on a CTA opens the URL in the system browser (via pywebview API)."""
     logo = _logo_data_uri(assets_dir)
-    slides_json = json.dumps(CROSS_SELL_SLIDES)
+    # Resolve bundled page screenshots to data URIs; a slide's remote
+    # "img" (if any) stays as a fallback when the asset is missing.
+    slides = []
+    for s in CROSS_SELL_SLIDES:
+        s = dict(s)
+        asset = s.pop("img_asset", "")
+        if asset:
+            uri = _asset_data_uri(assets_dir, asset, "image/png")
+            if uri:
+                s["img"] = uri
+        slides.append(s)
+    slides_json = json.dumps(slides)
     safe_status = status.replace("<", "&lt;")
 
     return f"""<!doctype html>
@@ -723,21 +744,27 @@ def render_bootstrap_carousel(*, assets_dir: Path, status: str = "Preparing runt
     }}
     .slide {{
       max-width: 720px; text-align: center;
-      opacity: 0; transition: opacity 500ms ease;
       position: absolute; padding: 0 20px;
+      /* Inactive slides stay stacked underneath for the cross-fade but
+         must not swallow clicks meant for the active slide's CTA
+         (opacity:0 alone leaves them clickable). */
+      opacity: 0; visibility: hidden; pointer-events: none;
+      transition: opacity 500ms ease, visibility 0s linear 500ms;
     }}
-    .slide.active {{ opacity: 1; }}
+    .slide.active {{
+      opacity: 1; visibility: visible; pointer-events: auto;
+      transition: opacity 500ms ease;
+    }}
     .slide-art {{
-      width: 220px; height: 140px; margin: 0 auto 32px;
-      border-radius: 14px;
+      width: 440px; max-width: 90%; height: 280px; margin: 0 auto 28px;
+      border-radius: 14px; overflow: hidden;
       background: linear-gradient(135deg, {BRAND_RED}22, {BRAND_RED}05);
       border: 1px solid var(--border);
       display: flex; align-items: center; justify-content: center;
       font-size: 56px;
     }}
     .slide-art img {{
-      max-width: 100%; max-height: 100%; object-fit: contain;
-      border-radius: 8px;
+      width: 100%; height: 100%; object-fit: cover; object-position: top;
     }}
     .eyebrow {{
       font-size: 11px; font-weight: 700; letter-spacing: 0.12em;

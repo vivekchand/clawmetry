@@ -31,6 +31,12 @@ brand_datas = [
     (os.path.join(ASSETS_SRC, 'clawmetry-512.png'),
      'desktop/assets'),
 ]
+# Cross-sell carousel page screenshots (onboarding.py embeds them as
+# data URIs during the bootstrap carousel).
+brand_datas += [
+    (os.path.join(ASSETS_SRC, f), 'desktop/assets')
+    for f in sorted(os.listdir(ASSETS_SRC)) if f.startswith('cross-sell-')
+]
 
 extra_hidden = [
     'PIL',
