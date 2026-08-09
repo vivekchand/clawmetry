@@ -43,6 +43,7 @@ Unicode true
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_COMPONENTS
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
@@ -80,15 +81,49 @@ Section "ClawMetry" SecMain
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
 SectionEnd
 
-Section "Uninstall"
-  ; Program files only — the runtime venv under %LOCALAPPDATA%\ClawMetry\runtime
-  ; and the account config under %USERPROFILE%\.clawmetry are left in place,
-  ; same as every other installer here: uninstalling the app doesn't wipe
-  ; the user's synced data or a fresh reinstall's ability to skip re-onboarding.
+; Founder bug 2026-08-08: uninstall + reinstall showed no onboarding, because
+; the old uninstaller removed only $INSTDIR and left the app runtime (venv,
+; onboarding stamp, logs) under %LOCALAPPDATA%\ClawMetry behind. Uninstalling
+; now removes everything the app created. Account data (~\.clawmetry) is its
+; own checkbox because it holds the E2E encryption key: deleting it makes
+; already-synced cloud snapshots permanently undecryptable, so the user must
+; see that choice, not have it made silently.
+
+Section "un.ClawMetry program + runtime" UnSecMain
+  SectionIn RO  ; always removed — this IS the uninstall
+
+  ; Stop the shell and any daemon running out of the runtime venv so file
+  ; locks don't leave half the tree behind. ExecWait + /F: no prompts.
+  ExecWait `taskkill /F /T /IM ClawMetry.exe`
+  ExecWait `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$LOCALAPPDATA\ClawMetry\runtime\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
+
   RMDir /r "$INSTDIR"
   Delete "$SMPROGRAMS\ClawMetry\ClawMetry.lnk"
   Delete "$SMPROGRAMS\ClawMetry\Uninstall ClawMetry.lnk"
   RMDir "$SMPROGRAMS\ClawMetry"
   Delete "$DESKTOP\ClawMetry.lnk"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
+
+  ; App-created runtime state: the venv, the onboarding-completed stamp, and
+  ; logs. Removing the stamp is what makes a reinstall re-onboard.
+  RMDir /r "$LOCALAPPDATA\ClawMetry\runtime"
+  ; Global CLI shim dir (present on installs whose app.py wrote it). The
+  ; user-PATH entry it registered is stripped by the shim-aware uninstaller
+  ; work; deleting the dir here keeps a stale shim from shadowing pip's.
+  RMDir /r "$LOCALAPPDATA\ClawMetry\bin"
+  ; Remove the parent only if nothing else claimed it (RMDir without /r is
+  ; a no-op on a non-empty dir).
+  RMDir "$LOCALAPPDATA\ClawMetry"
 SectionEnd
+
+Section "un.Account data + E2E encryption keys (~\.clawmetry)" UnSecData
+  ; WARNING surfaced in the components page description: this deletes the
+  ; node identity and the AES-256-GCM key — encrypted snapshots already in
+  ; the cloud can never be decrypted again.
+  RMDir /r "$PROFILE\.clawmetry"
+SectionEnd
+
+!insertmacro MUI_UNFUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${UnSecMain} "Removes the ClawMetry app, its runtime (bundled Python environment, onboarding state, logs), shortcuts, and registry entries."
+  !insertmacro MUI_DESCRIPTION_TEXT ${UnSecData} "Also deletes ~\.clawmetry: your node identity, API key, and end-to-end encryption key. WARNING: encrypted snapshots already synced to ClawMetry Cloud become permanently unreadable. Uncheck to keep your keys for a later reinstall."
+!insertmacro MUI_UNFUNCTION_DESCRIPTION_END
