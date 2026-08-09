@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "এজেন্ট বুটের সময় যে স্থায়ী মেমরি ফাইল পড়ে",
   "nav.models": "মডেল",
   "nav.notifications": "নোটিফিকেশন",
+  "nav.harness": "হার্নেস",
   "nav.runtime_extras": "রানটাইম এক্সট্রা",
   "nav.security": "নিরাপত্তা",
   "nav.self_evolve": "Self-Evolve",

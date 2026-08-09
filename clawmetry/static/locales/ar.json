@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "ملفات ذاكرة دائمة يقرأها الوكيل عند بدء التشغيل",
   "nav.models": "النماذج",
   "nav.notifications": "الإشعارات",
+  "nav.harness": "الأداة",
   "nav.runtime_extras": "إضافات وقت التشغيل",
   "nav.security": "الأمان",
   "nav.self_evolve": "Self-Evolve",
