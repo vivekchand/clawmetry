@@ -4293,15 +4293,88 @@ def _cmd_eval_regression(args) -> None:
     sys.exit(exit_code)
 
 
-def _cmd_update() -> None:
-    """Self-update clawmetry to the latest PyPI version."""
+def _unattended_update_target(current: str):
+    """Resolve what an unattended ``clawmetry update --unattended`` run may
+    install, deferring to the DAEMON's policy helpers in
+    ``routes/update_check.py`` so the two paths cannot drift:
+
+      * ``_env_auto_update_disabled()`` — the CLAWMETRY_AUTO_UPDATE kill
+        switch, including the implicit CI-environment disable.
+      * ``_autoupdate_min_age_hours()`` + ``_newest_aged_in_version()`` —
+        the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, targeting
+        the newest release that has aged past it (NOT the absolute latest).
+
+    Returns ``(target_version_or_None, human_reason)``. ``None`` means
+    "install nothing this cycle" — including when the policy helpers cannot
+    be imported: an unattended caller must never do MORE than the policy
+    allows, so an unevaluable policy fails closed (the caller's next
+    scheduled cycle retries).
+    """
+    import json
+    import urllib.request
+
+    try:
+        from routes.update_check import (
+            _autoupdate_min_age_hours,
+            _env_auto_update_disabled,
+            _newest_aged_in_version,
+        )
+    except Exception as exc:
+        return None, f"Update policy unavailable ({exc}); skipping unattended update"
+    if _env_auto_update_disabled():
+        return None, (
+            "Unattended updates disabled "
+            "(CLAWMETRY_AUTO_UPDATE kill switch or CI environment)"
+        )
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/clawmetry/json",
+            headers={"User-Agent": f"clawmetry/{current}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        return None, f"PyPI check failed ({exc}); skipping unattended update"
+    min_age = _autoupdate_min_age_hours()
+    target = _newest_aged_in_version(data.get("releases", {}), current, min_age)
+    if not target:
+        latest = data.get("info", {}).get("version", "") or current
+        if latest == current:
+            return None, f"Already on latest version ({current})"
+        return None, (
+            f"Newest release v{latest} has not aged past the "
+            f"{min_age:g}h stability window yet; nothing to install"
+        )
+    return target, (
+        f"Unattended target: v{target} "
+        f"(newest release aged past the {min_age:g}h stability window)"
+    )
+
+
+def _cmd_update(args=None) -> None:
+    """Self-update clawmetry to the latest PyPI version.
+
+    ``--unattended`` (the desktop shell's 6h background path) routes target
+    selection through the daemon's update policy (kill switch + stability
+    window) via ``_unattended_update_target`` and pins the pip install to
+    that version; the plain interactive command keeps installing the
+    absolute latest.
+    """
     import subprocess
 
+    unattended = bool(getattr(args, "unattended", False))
     try:
         from dashboard import __version__ as current
     except Exception:
         current = "unknown"
     print(f"Current version: {current}")
+    install_spec = "clawmetry"
+    if unattended:
+        target, reason = _unattended_update_target(current)
+        print(reason)
+        if not target:
+            return
+        install_spec = f"clawmetry=={target}"
     print("Checking for updates...")
     try:
         result = subprocess.run(
@@ -4312,7 +4385,7 @@ def _cmd_update() -> None:
                 "install",
                 "--upgrade",
                 "--break-system-packages",
-                "clawmetry",
+                install_spec,
             ],
             capture_output=True,
             text=True,
@@ -6744,7 +6817,19 @@ def main() -> None:
     )
 
     # update — self-update to latest PyPI version
-    sub.add_parser("update", help="Update clawmetry to the latest version")
+    p_update = sub.add_parser("update", help="Update clawmetry to the latest version")
+    p_update.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "Apply the daemon's unattended-update policy instead of blindly "
+            "upgrading: honor the CLAWMETRY_AUTO_UPDATE kill switch (including "
+            "implicit CI disable) and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS "
+            "stability window, installing the newest aged-in release (pinned) "
+            "rather than the absolute latest. Used by the desktop shell's 6h "
+            "background upgrade."
+        ),
+    )
 
     # mcp — start MCP server on stdio (issue #2859)
     sub.add_parser(
@@ -7276,7 +7361,7 @@ def main() -> None:
         elif args.cmd == "mcp":
             _cmd_mcp(args)
         elif args.cmd == "update":
-            _cmd_update()
+            _cmd_update(args)
         elif args.cmd == "uninstall":
             _cmd_uninstall()
         elif args.cmd == "activate":
