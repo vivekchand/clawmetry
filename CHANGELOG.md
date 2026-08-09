@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **Feature: rename the Conversations tab to Sessions (shipped in 0.12.667).**
+  - **Why:** "Sessions" is the normal term across every harness we observe (Claude Code, Codex, Cursor, OpenClaw), and the tab is where you dig deep into sessions; "Conversations" was the odd one out.
+  - **What:** #4656: nav label, tooltip, and in-tab copy (time-window tooltip, empty state, inventory work count) now say session(s). The `data-tab="transcripts"` id and `nav.session_replay` i18n key are unchanged, so deep links and stored state keep working. Only `en.json` changes by hand; the autotranslate workflow fanned the other locales out in #4665. Reached PyPI in 0.12.667 (carried by the #4666 release) and app.clawmetry.com via the cloud pin bump (clawmetry-cloud #1960).
+  - **Verified:** full CI matrix green on #4656 (31 checks incl. drift-bot, Live OpenClaw E2E, visual-diff); the published 0.12.667 wheel cracked and confirmed to carry the rename before pinning cloud.
+
+- **Release: ship windowless self-update, self-healing sync daemon, global CLI, and trial-expiry banners to end users.**
+  - **Why:** carrier `[RELEASE]` so #4657 reaches PyPI and the fleet. Until this ships, every unattended Windows self-update pops a visible cmd window (seen live during an enterprise client call 2026-08-08), fresh installs that skipped sign-in show an empty dashboard forever, and desktop users have no `clawmetry` on PATH.
+  - **What:** no new code; ships #4657.
+  - **Verified:** end-to-end this release - after PyPI publish, confirm the founder's Windows 11 desktop install auto-updates to the new version (one final visible pip window from the old helper is expected), then confirm the NEXT update check produces zero visible console windows, `clawmetry --version` works in a fresh terminal, and the dashboard shows sessions with the sync daemon healed by the shell.
+
 - **Fix: mystery cmd windows flashing on Windows during self-update.**
   - **Why:** founder report 2026-08-08 — console windows popping open and closing on their own, including during a call with an enterprise client. Traced live with a process-creation monitor: (1) `clawmetry/update_respawn.py` runs detached (no console), so the `pip install` child it spawns without `CREATE_NO_WINDOW` gets a brand-new VISIBLE console for the whole seconds-to-minutes install — this fires on every real unattended update, and the fleet updates constantly; (2) a dashboard running from a source checkout can never version-converge (pip installs to site-packages, the process re-runs the checkout), so the Windows respawn plan looped forever — exit → pip → relaunch → still stale — flashing 3-4 windows per minute.
   - **What:** `update_respawn.py` runs pip with `CREATE_NO_WINDOW`; `routes/update_check.py` gains `_running_from_source_checkout()` (`.git` next to the package) and `_maybe_auto_update()` refuses to fire there, logging why.

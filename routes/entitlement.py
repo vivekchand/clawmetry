@@ -29120,6 +29120,414 @@ def api_entitlement_capacity_diff_from_path_batch():
         )
 
 
+
+
+@bp_entitlement.route("/api/entitlement/lock-reason-from-path-batch")
+def api_entitlement_lock_reason_from_path_batch():
+    """``GET /api/entitlement/lock-reason-from-path-batch?from=a,b,c
+    &to=<id>&<axis>=<value>`` -- source-axis batch sibling of
+    ``/api/entitlement/lock-reason-path``.
+
+    Where ``/lock-reason-path`` walks the rungs between ONE
+    ``(from, to)`` pair for ONE item, this fixes the destination and
+    the item and fans out over N candidate sources in ONE round-trip.
+    Mirror-direction twin of ``/lock-reason-path`` on the source axis;
+    per-item, per-source companion of
+    ``/tier-unlocks-from-path-batch`` / ``/tier-locks-from-path-batch``
+    (marginal grants / losses) and ``/preview-from-path-batch`` /
+    ``/capacity-diff-from-path-batch`` (cumulative state / capacity
+    slice) -- same source-batch envelope, per-rung ``locked`` /
+    ``allowed`` / ``reason`` body instead.
+
+    Use case: a fleet-view "for each of the tiers my nodes currently
+    sit on, does THIS one paywalled item stay locked at every rung
+    climbed to reach Enterprise?" surface hydrates the per-rung lock
+    row for every source off ONE call instead of N calls to
+    ``/lock-reason-path``. Per-source path lengths can legitimately
+    differ (the rungs walked depend on the source), matching every
+    other ``/*-from-path-batch`` sibling.
+
+    Exactly one of ``feature=`` / ``runtime=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied -- the same axis
+    dispatcher as ``/lock-reason-path``.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/lock-reason-path?from=<from>&to=<to>&<axis>=<value>`` -- pinned
+    by parity tests so the scalar and source-batch path accessors
+    cannot drift. Supplied source ids are normalised (whitespace
+    stripped, lowercased, duplicates dropped, first-seen order
+    preserved). Unknown source ids do not 404 the call -- they are
+    echoed in ``unknown[]`` so a partially-bad caller still gets paths
+    back for the valid ids.
+
+    Response shape::
+
+        {
+          "to":       "<tier id>",
+          "to_label": "...",
+          "to_rank":  <int>,
+          "key":      "<echoed item id>",
+          "kind":     "feature" | "runtime" | "channels" |
+                      "retention_days" | "nodes",
+          "tiers": [
+            {
+              "from":       "<tier id>",
+              "from_label": "...",
+              "from_rank":  <int>,
+              "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":       [<lock_reason_path row>, ...],
+            },
+            ...
+          ],
+          "unknown":  ["bogus_id", ...],
+        }
+
+    - **400** when ``to=`` is missing / blank, when ``from=`` is
+      missing / empty after normalisation, when no axis is supplied,
+      or when more than one axis is supplied
+    - **404** when ``to`` is unknown (body carries ``which: "tier"``),
+      or when the item id is unknown / non-positive for a capacity
+      axis
+    - **200** with bucketed unknowns for unknown source ids -- does
+      NOT 404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an
+      envelope with empty rows so the matrix keeps rendering.
+    """
+    t = (request.args.get("to") or "").strip().lower()
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+
+    feature = (request.args.get("feature") or "").strip().lower()
+    runtime_in = (request.args.get("runtime") or "").strip().lower()
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied = [
+        bool(feature),
+        bool(runtime_in),
+        channels_present,
+        retention_present,
+        nodes_present,
+    ]
+    n_supplied = sum(1 for s in supplied if s)
+    if n_supplied == 0:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply exactly one of feature=<id>, runtime=<id>, "
+                        "channels=<int>, retention_days=<int>, or "
+                        "nodes=<int>"
+                    )
+                }
+            ),
+            400,
+        )
+    if n_supplied > 1:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "supply only one of feature=, runtime=, channels=, "
+                        "retention_days=, or nodes="
+                    )
+                }
+            ),
+            400,
+        )
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+        sources = _parse_csv_arg("from")
+        if not sources:
+            return jsonify({"error": "supply from=<csv>"}), 400
+
+        if feature:
+            item, kind, echoed_key = feature, "feature", feature
+        elif runtime_in:
+            canon = _ent.canonical_runtime(runtime_in)
+            item, kind, echoed_key = (
+                canon or runtime_in,
+                "runtime",
+                canon or runtime_in,
+            )
+        elif channels_present:
+            if not channels_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "to": t,
+                            "key": channels_raw,
+                            "kind": "channels",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = str(channels_n), "channels", str(channels_n)
+        elif retention_present:
+            if not retention_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "to": t,
+                            "key": retention_raw,
+                            "kind": "retention_days",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = (
+                str(retention_n),
+                "retention_days",
+                str(retention_n),
+            )
+        else:
+            if not nodes_ok:
+                return (
+                    jsonify(
+                        {
+                            "error": "unknown tier or item",
+                            "to": t,
+                            "key": nodes_raw,
+                            "kind": "nodes",
+                        }
+                    ),
+                    404,
+                )
+            item, kind, echoed_key = str(nodes_n), "nodes", str(nodes_n)
+
+        batch = _ent.lock_reason_from_path_batch(sources, t, item, kind=kind)
+        if batch is None:
+            # A None here means the item itself is unknown / non-positive
+            # (source pre-flight would have echoed bogus sources into
+            # ``unknown[]``, not collapsed the batch). Surface as 404 so
+            # the paywall UI can render "no such feature / runtime /
+            # capacity" cleanly.
+            return (
+                jsonify(
+                    {
+                        "error": "unknown tier or item",
+                        "to": t,
+                        "key": echoed_key,
+                        "kind": kind,
+                    }
+                ),
+                404,
+            )
+        return jsonify(
+            {
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": _ent.tier_rank(t),
+                "key": echoed_key,
+                "kind": kind,
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_lock_reason_from_path_batch: error: %s", exc
+        )
+        if feature:
+            echoed_key, kind = feature, "feature"
+        elif runtime_in:
+            echoed_key, kind = runtime_in, "runtime"
+        elif channels_present:
+            echoed_key, kind = channels_raw, "channels"
+        elif retention_present:
+            echoed_key, kind = retention_raw, "retention_days"
+        else:
+            echoed_key, kind = nodes_raw, "nodes"
+        return jsonify(
+            {
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "key": echoed_key,
+                "kind": kind,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
+@bp_entitlement.route("/api/entitlement/lock-reasons-from-path-batch")
+def api_entitlement_lock_reasons_from_path_batch():
+    """``GET /api/entitlement/lock-reasons-from-path-batch?from=a,b,c
+    &to=<id>&features=x,y&runtimes=p,q&channels=N&retention_days=K
+    &nodes=M`` -- multi-axis source-batch sibling of
+    ``/api/entitlement/lock-reason-path-batch``.
+
+    Where ``/lock-reason-path-batch`` walks N items across all 5 axes
+    for ONE ``(from, to)`` pair, this fixes the destination and fans
+    out over M candidate sources with the same multi-axis body per
+    source in ONE round-trip. Source-axis fan-out companion of
+    ``/lock-reason-path-batch`` -- the ``lock-reason`` axis's answer
+    to ``/tier-unlocks-from-path-batch`` /
+    ``/tier-locks-from-path-batch`` (single-slice source batches) with
+    the whole 5-axis matrix preserved per source.
+
+    Use case: a fleet-consolidation "for each of the 4 tiers our
+    nodes currently sit on, walk the whole (features + runtimes +
+    capacity) lock matrix up to Enterprise" surface hydrates every
+    source column of the matrix off ONE call instead of M calls to
+    ``/lock-reason-path-batch``.
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (matches
+    ``/lock-reason-path-batch``). CSV bundles are canonicalised once
+    at the top so every per-source delegate sees the same iterable.
+
+    Response shape wraps ``/lock-reason-path-batch``'s multi-axis
+    payload per source::
+
+        {
+          "to":       "<tier id>",
+          "to_label": "...",
+          "to_rank":  <int>,
+          "tiers": [
+            {
+              "from":       "<tier id>",
+              "from_label": "...",
+              "from_rank":  <int>,
+              "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+              "matrix": {
+                "features": [{"key": "<id>", "path": [...]}, ...],
+                "runtimes": [{"key": "<canonical id>", "path": [...]}, ...],
+                "channels":       {"key": "<n>", "path": [...]} | None,
+                "retention_days": {"key": "<n>", "path": [...]} | None,
+                "nodes":          {"key": "<n>", "path": [...]} | None,
+                "unknown": {"features": [...], "runtimes": [...]},
+              },
+            },
+            ...
+          ],
+          "unknown":  ["bogus_id", ...],
+        }
+
+    Each per-source ``matrix`` is byte-identical to
+    ``/lock-reason-path-batch?from=<from>&to=<to>&features=&runtimes=&...``
+    for the corresponding source -- pinned by parity tests so the
+    source-batch and scalar-batch multi-axis accessors cannot drift.
+
+    - **400** when ``to=`` is missing / blank, when ``from=`` is
+      missing / empty after normalisation, or when no axis is
+      supplied
+    - **404** when ``to`` is unknown (body carries ``which: "tier"``)
+    - **200** with bucketed unknowns for unknown source ids (outer
+      ``unknown[]``) and unknown item ids (per-source
+      ``matrix.unknown``) -- does NOT 404 the call
+    - **Never 5xxs**: a synthesis failure short-circuits to an
+      envelope with empty rows so the matrix keeps rendering.
+    """
+    t = (request.args.get("to") or "").strip().lower()
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if t not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": t}
+                ),
+                404,
+            )
+        sources = _parse_csv_arg("from")
+        if not sources:
+            return jsonify({"error": "supply from=<csv>"}), 400
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.lock_reasons_from_path_batch(
+            sources,
+            t,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        return jsonify(
+            {
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": _ent.tier_rank(t),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_lock_reasons_from_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "tiers": [],
+                "unknown": [],
+            }
+        )
+
+
+
 @bp_entitlement.route("/api/entitlement/tier-path-batch")
 def api_entitlement_tier_path_batch():
     """``GET /api/entitlement/tier-path-batch?from=<id>&to=a,b,c`` --
