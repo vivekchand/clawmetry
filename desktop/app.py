@@ -378,11 +378,26 @@ class RuntimeSupervisor:
         straight from the dist-info directory name — no interpreter
         spawn (the old subprocess probe cost ~1s per call, on the boot
         path and on every watcher tick). Falls back to the subprocess
-        probe only if no dist-info is found."""
+        probe only if no dist-info is found.
+
+        Multiple dist-infos can coexist: a pip upgrade that runs while
+        the daemon holds .pyd/.exe files open half-fails its uninstall
+        of the OLD version and leaves its dist-info behind (five stale
+        ones observed live, 2026-08-10). Pick the highest parsed
+        version, not the newest mtime — a partially-uninstalled stale
+        dir can carry a fresher mtime than the real install."""
         if platform.system() == "Windows":
             sp_globs = ["Lib/site-packages"]
         else:
             sp_globs = ["lib/python*/site-packages"]
+
+        def _ver_key(d: Path):
+            v = d.name[len("clawmetry-"):-len(".dist-info")]
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except ValueError:
+                return (-1,)
+
         try:
             infos = [
                 d
@@ -391,7 +406,7 @@ class RuntimeSupervisor:
                 if d.is_dir()
             ]
             if infos:
-                newest = max(infos, key=lambda d: d.stat().st_mtime)
+                newest = max(infos, key=_ver_key)
                 return newest.name[len("clawmetry-"):-len(".dist-info")]
         except OSError:
             pass

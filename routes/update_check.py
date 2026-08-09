@@ -218,6 +218,15 @@ def _schedule_windows_respawn(delay_secs: float = 5.0) -> None:
         except Exception as exc:
             global _auto_update_in_progress
             _auto_update_in_progress = False
+            # The lock was riding the handoff for the HELPER to release; the
+            # helper never launched, so release it here or every check cycle
+            # silently skips ("another process is updating") until the 900s
+            # staleness window breaks it — a 15-minute invisible update
+            # stall (observed as a 12+ minute lag on the Windows lab box).
+            _release_update_lock()
+            _record_update_attempt(
+                _pending_update_target.get("version", "?"), "failed",
+                f"windows respawn handoff failed: {exc}")
             log.warning("auto-update: windows respawn failed (%s); new version "
                         "applies on next manual start", exc)
     t = threading.Timer(2.0, _respawn)
@@ -872,6 +881,21 @@ def _update_check_worker(stop_event):
     auto-update is off (CLAWMETRY_AUTO_UPDATE=0 or stored config), the
     dashboard keeps the gentle banner-only cadence.
     """
+    # Boot-time hygiene: prune stale clawmetry-*.dist-info dirs a partially
+    # failed in-place pip upgrade left behind (Windows: pip runs while a
+    # sibling process holds .pyd/.exe files open, so the OLD version's
+    # uninstall half-fails). Stale dist-infos make importlib.metadata — and
+    # pip itself — resolve the OLDEST version (alphabetical listdir order),
+    # which lies to every metadata probe (five stale dist-infos observed
+    # live on a Windows lab box, 2026-08-10). dist-info entries are plain
+    # metadata files, never held open, so this succeeds even while code
+    # files stay locked.
+    try:
+        from clawmetry.distinfo_cleanup import cleanup_stale_dist_info
+        cleanup_stale_dist_info()
+    except Exception as exc:
+        log.debug("stale dist-info cleanup failed: %s", exc)
+
     # Initial check on startup (after a boot-settle delay; interruptible).
     if stop_event.wait(60):
         return
