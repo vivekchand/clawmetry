@@ -1823,10 +1823,19 @@ def cloud_cta_oauth_start():
 
     Starts a loopback browser-bridge and returns the cloud OAuth start URL for
     the dashboard to open in a new tab. The cm_ key the cloud mints rides back
-    over 127.0.0.1 only. mode="managed" (default) then registers this node and
+    over 127.0.0.1 only. mode="managed" then registers this node and
     starts the sync daemon; mode="selfhost" keeps data local (nocloud marker)
     and activates the account's 7-day trial license instead. The dashboard
     polls /api/cloud-cta/oauth-status.
+
+    When the caller omits ``mode``, the default follows the install's
+    recorded intent (``_selfhost_intent``): a self-host install signing back
+    in (profile menu "Sign in") stays on the identity-only selfhost rail;
+    anything else defaults to managed. Explicit modes always win — the
+    "Enable Cloud Sync" CTA sends mode="managed" because clicking it IS the
+    egress opt-in. Founder report 2026-08-09: sign-in from the profile menu
+    rode the managed rail on a self-host machine, and enable_cloud()
+    silently started pushing snapshots.
     """
     import dashboard as _d
 
@@ -1834,7 +1843,12 @@ def cloud_cta_oauth_start():
     provider = (data.get("provider") or "").strip().lower()
     if provider not in ("github", "google"):
         return jsonify({"ok": False, "error": "Unsupported provider"}), 400
-    mode = (data.get("mode") or "managed").strip().lower()
+    mode = (data.get("mode") or "").strip().lower()
+    if not mode:
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
     if mode not in ("managed", "selfhost"):
         return jsonify({"ok": False, "error": "Unsupported mode"}), 400
     url = _d._start_oauth_bridge(provider, mode=mode)

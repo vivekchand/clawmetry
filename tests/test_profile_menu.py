@@ -72,7 +72,7 @@ def test_gw_setup_module_wiring():
         "/api/license/status",
         "/api/cloud-cta/status",
         "clawmetryLogout()",
-        "openCloudModal()",
+        "openCloudModal(\\'signin\\')",
         "app.clawmetry.com/settings",
     ):
         assert needle in js, f"gw-setup.js missing: {needle}"
@@ -157,3 +157,20 @@ def test_profile_resolves_identity_for_cloud_oauth_accounts():
     # branch's fallback label.
     render = js.split("function _cmProfileRender", 1)[1]
     assert render.index("profile.signed_in") < render.index("profile.not_signed_in")
+
+
+def test_profile_signin_never_flips_egress_on_selfhost():
+    """The profile menu's sign-in must ride the intent-resolved rail, not
+    hardwired managed: on a self-host install, signing back in silently
+    called enable_cloud() and started pushing snapshots (founder report
+    2026-08-09). The profile entry passes the 'signin' intent, and
+    cloudOauth() then omits mode so the backend resolves it from
+    _selfhost_intent(); every other modal entry stays an explicit managed
+    egress opt-in."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "openCloudModal(\\'signin\\')" in js
+    assert "_cloudModalIntent" in js
+    # cloudOauth sends an explicit managed mode ONLY for non-signin intents.
+    fn = js.split("function cloudOauth", 1)[1].split("function ", 1)[0]
+    assert "payload.mode = 'managed'" in fn
+    assert "_cloudModalIntent !== 'signin'" in fn

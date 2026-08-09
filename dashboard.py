@@ -17843,6 +17843,35 @@ def _account_email_for_token(token):
     return email
 
 
+def _selfhost_intent():
+    """True when this install's recorded intent is self-host (local-only).
+
+    Two signals, either wins: the nocloud marker (the daemon-facing egress
+    switch), or a recorded selfhost_* choice in ~/.clawmetry/onboarding.json
+    (survives even if some flow clears the marker). Used to pick the
+    default rail for sign-in flows that did not explicitly choose one:
+    founder report 2026-08-09 — a self-host install that signed back in
+    via the profile menu rode the managed rail, which called
+    enable_cloud() and silently started pushing snapshots. Identity and
+    egress are separate choices; sign-in alone must never flip egress on.
+    Never raises.
+    """
+    try:
+        from clawmetry.config import is_cloud_disabled
+
+        if is_cloud_disabled():
+            return True
+    except Exception:
+        pass
+    try:
+        from routes.onboarding import _read_choice_file
+
+        choice = str(_read_choice_file().get("choice", "")).strip().lower()
+        return choice.startswith("selfhost")
+    except Exception:
+        return False
+
+
 # ── One-click cloud connect via GitHub/Google OAuth (dashboard CTA) ────────────
 # The local "Enable Cloud Sync" modal can sign the user up AND connect this node
 # in one click. We reuse the same loopback browser-bridge as `clawmetry connect`:

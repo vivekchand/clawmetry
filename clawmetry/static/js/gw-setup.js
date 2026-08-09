@@ -113,7 +113,16 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 
 // ClawMetry Cloud CTA
 var _cloudEmail = '';
-function openCloudModal() {
+// How the modal was reached decides the OAuth rail. 'managed' (the default:
+// the "Enable Cloud Sync" CTA, the onboarding cloud card, alert sign-up CTAs)
+// sends mode=managed explicitly — clicking those IS the egress opt-in.
+// 'signin' (the profile menu's "Sign in / Create account") omits mode so the
+// backend picks the rail from the install's recorded intent: a self-host
+// machine signing back in stays local-only (founder report 2026-08-09:
+// profile-menu sign-in silently enabled cloud sync on a self-host install).
+var _cloudModalIntent = 'managed';
+function openCloudModal(intent) {
+  _cloudModalIntent = (intent === 'signin') ? 'signin' : 'managed';
   var _cmo = document.getElementById('cloud-modal-overlay');
   document.body.appendChild(_cmo);
   _cmo.style.display = 'flex';
@@ -138,7 +147,9 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeClou
 var _cloudOauthTimer = null;
 function _cloudStopOauthPoll() { if (_cloudOauthTimer) { clearInterval(_cloudOauthTimer); _cloudOauthTimer = null; } }
 function cloudOauth(provider) {
-  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider: provider})})
+  var payload = {provider: provider};
+  if (_cloudModalIntent !== 'signin') payload.mode = 'managed';
+  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.ok && d.url) {
@@ -484,7 +495,7 @@ function _cmProfileRender(st) {
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
       + t('profile.e2e_key', null, 'Cloud sync key') + '</button>';
   } else {
-    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal()">'
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal(\'signin\')">'
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
       + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
   }

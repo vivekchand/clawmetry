@@ -78,7 +78,10 @@ def test_oauth_start_passes_mode_to_bridge(cta_app, monkeypatch):
                json={"provider": "github", "mode": "selfhost"})
     assert r.status_code == 200, r.data
     assert seen == {"provider": "github", "mode": "selfhost"}
-    # Callers that omit mode (the existing cloud modal) stay managed.
+    # Callers that omit mode follow the install's recorded intent (see
+    # test_oauth_start_omitted_mode_respects_selfhost_intent); with no
+    # self-host intent on record they stay managed.
+    monkeypatch.setattr(_d, "_selfhost_intent", lambda: False)
     c.post("/api/cloud-cta/oauth-start", json={"provider": "google"})
     assert seen["mode"] == "managed"
 
@@ -380,3 +383,61 @@ def test_cloud_cta_status_signed_out_has_no_email(cta_app, monkeypatch):
     body = cta_app.test_client().get("/api/cloud-cta/status").get_json()
     assert body["account_linked"] is False
     assert body["account_email"] == ""
+
+
+# ── Intent-resolved OAuth rail (sign-in must never flip egress on) ─────────────
+# Founder report 2026-08-09: a self-host install signing back in via the
+# profile menu rode the managed rail; _full_connect_with_key -> enable_cloud()
+# deleted the nocloud marker and the node silently started pushing snapshots.
+
+
+def test_oauth_start_omitted_mode_respects_selfhost_intent(cta_app, monkeypatch):
+    import dashboard as _d
+
+    seen = {}
+
+    def _fake(provider, mode="managed"):
+        seen["mode"] = mode
+        return "https://app.clawmetry.com/api/oauth/%s/start?cli_port=1" % provider
+
+    monkeypatch.setattr(_d, "_start_oauth_bridge", _fake)
+    monkeypatch.setattr(_d, "_selfhost_intent", lambda: True)
+    c = cta_app.test_client()
+    r = c.post("/api/cloud-cta/oauth-start", json={"provider": "github"})
+    assert r.status_code == 200, r.data
+    assert seen["mode"] == "selfhost"
+
+    # No self-host intent on record: omitted mode stays managed.
+    monkeypatch.setattr(_d, "_selfhost_intent", lambda: False)
+    c.post("/api/cloud-cta/oauth-start", json={"provider": "github"})
+    assert seen["mode"] == "managed"
+
+    # Explicit managed is a deliberate egress opt-in and always wins.
+    monkeypatch.setattr(_d, "_selfhost_intent", lambda: True)
+    c.post("/api/cloud-cta/oauth-start",
+           json={"provider": "github", "mode": "managed"})
+    assert seen["mode"] == "managed"
+
+
+def test_selfhost_intent_signals(monkeypatch, tmp_path):
+    import dashboard as _d
+    from clawmetry import config as _cfg
+    import routes.onboarding as _ob
+
+    # Marker present -> self-host, regardless of the choice file.
+    monkeypatch.setattr(_cfg, "is_cloud_disabled", lambda: True)
+    monkeypatch.setattr(_ob, "_read_choice_file", lambda: {})
+    assert _d._selfhost_intent() is True
+
+    # Marker gone but a recorded selfhost_* choice survives -> self-host.
+    monkeypatch.setattr(_cfg, "is_cloud_disabled", lambda: False)
+    monkeypatch.setattr(_ob, "_read_choice_file",
+                        lambda: {"choice": "selfhost_trial"})
+    assert _d._selfhost_intent() is True
+
+    # Managed choice / nothing on record -> managed.
+    monkeypatch.setattr(_ob, "_read_choice_file",
+                        lambda: {"choice": "managed"})
+    assert _d._selfhost_intent() is False
+    monkeypatch.setattr(_ob, "_read_choice_file", lambda: {})
+    assert _d._selfhost_intent() is False
