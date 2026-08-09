@@ -140,10 +140,12 @@ Hold the line with:
 
 This repo (and `clawmetry-cloud` / `clawmetry-pro` / `clawmetry-mac` / `clawmetry-railway`) is tracked in [8090 Software Factory](https://factory.8090.ai) as the "ClawMetry" project: Requirements and Blueprints describing what the product does and how. A `drift-bot` GitHub status check runs on every PR and posts an inline comment when the code says something the Blueprints/Requirements don't. Real example: PR #4599 shipped the installer's stale-duplicate sweep and documented it in `CHANGELOG.md`, but no Blueprint said the installers clean up other Python interpreters on PATH, so Drift Bot failed the PR.
 
-**`CHANGELOG.md` is not enough.** Drift Bot reads Blueprints/Requirements, not the changelog. Before merging a change that alters documented (or should-be-documented) product behavior:
+**"Sync Blueprint with Code" is a MANDATORY step of the loop, not a reaction to a red check** (founder directive 2026-08-09). For every PR that changes product behavior, run the sync as part of shipping — the dashboard's "Sync Blueprint with Code" agent action, or the Software Factory MCP skill (`npx skills add 8090-inc/software-factory-plugin`) — pointed at the specific PR/CHANGELOG entry, BEFORE or immediately alongside opening the PR. Waiting for drift-bot to fail and then patching the Blueprint is the anti-pattern; the check exists as a backstop, not as the trigger.
+
+**`CHANGELOG.md` is not enough.** Drift Bot reads Blueprints/Requirements, not the changelog. The sync step concretely means:
 - Check whether an existing Blueprint covers the area you touched; if your change makes it wrong or incomplete, update it.
-- If no Blueprint covers it yet, say so in the PR description so a human (or the next agent) creates one — don't let it merge silently undocumented.
-- The dashboard's "Sync Blueprint with Code" agent action (or the Software Factory MCP skill, `npx skills add 8090-inc/software-factory-plugin`) can do this for you; point it at the specific PR/CHANGELOG entry rather than asking for a blanket sync of everything.
+- If no Blueprint covers it yet, create one via the sync action, or say so explicitly in the PR description so a human (or the next agent) creates it — don't let it merge silently undocumented.
+- If you have no authenticated path to Software Factory (e.g. the lab box has no factory login), post the exact proposed Blueprint wording as a PR comment so the sync is a copy-paste for whoever holds the login, and do not merge until it's applied and drift-bot is green.
 - A red `drift-bot` check is a real signal like any other CI failure (§4) — fix the documentation gap, don't merge past it.
 
 Separately, **check [Pending Work Orders](https://factory.8090.ai) regularly**, not just when drift-bot fires. Work Orders are the actual tickets Software Factory queues from Requirements/Blueprints; picking them up (not just reacting to drift after the fact) is how the docs and the code stay one thing instead of drifting apart again next week.

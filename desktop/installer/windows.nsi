@@ -69,7 +69,7 @@ Section "ClawMetry" SecMain
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\ClawMetry\Uninstall ClawMetry.lnk" "$INSTDIR\Uninstall.exe"
 
-  ; Per-user (HKCU) registration — matches RequestExecutionLevel user, no
+  ; Per-user (HKCU) registration - matches RequestExecutionLevel user, no
   ; admin rights needed to show up in Windows' "Apps & features".
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "ClawMetry"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
@@ -90,7 +90,7 @@ SectionEnd
 ; see that choice, not have it made silently.
 
 Section "un.ClawMetry program + runtime" UnSecMain
-  SectionIn RO  ; always removed — this IS the uninstall
+  SectionIn RO  ; always removed - this IS the uninstall
 
   ; Stop the shell and any daemon running out of the runtime venv so file
   ; locks don't leave half the tree behind. ExecWait + /F: no prompts.
@@ -118,7 +118,7 @@ SectionEnd
 
 Section "un.Account data + E2E encryption keys (~\.clawmetry)" UnSecData
   ; WARNING surfaced in the components page description: this deletes the
-  ; node identity and the AES-256-GCM key — encrypted snapshots already in
+  ; node identity and the AES-256-GCM key - encrypted snapshots already in
   ; the cloud can never be decrypted again.
   RMDir /r "$PROFILE\.clawmetry"
 SectionEnd
