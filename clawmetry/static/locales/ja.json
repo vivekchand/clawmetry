@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "エージェントが起動時に読み込む永続メモリファイル",
   "nav.models": "モデル",
   "nav.notifications": "通知",
+  "nav.harness": "ハーネス",
   "nav.runtime_extras": "ランタイム拡張",
   "nav.security": "セキュリティ",
   "nav.self_evolve": "自己進化",

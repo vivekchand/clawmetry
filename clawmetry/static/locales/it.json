@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "File di memoria persistente che l'agente legge all'avvio",
   "nav.models": "Modelli",
   "nav.notifications": "Notifiche",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "Extra runtime",
   "nav.security": "Sicurezza",
   "nav.self_evolve": "Self-Evolve",

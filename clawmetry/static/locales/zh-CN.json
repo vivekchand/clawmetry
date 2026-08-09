@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "智能体启动时读取的持久化记忆文件",
   "nav.models": "模型",
   "nav.notifications": "通知",
+  "nav.harness": "运行框架",
   "nav.runtime_extras": "运行时附加信息",
   "nav.security": "安全",
   "nav.self_evolve": "Self-Evolve",

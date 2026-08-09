@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "ไฟล์หน่วยความจำถาวรที่เอเจนต์อ่านตอนเริ่มทำงาน",
   "nav.models": "โมเดล",
   "nav.notifications": "การแจ้งเตือน",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "ส่วนเสริมรันไทม์",
   "nav.security": "ความปลอดภัย",
   "nav.self_evolve": "Self-Evolve",

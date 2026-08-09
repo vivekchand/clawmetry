@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Mga persistent na memory file na binabasa ng agent sa pag-boot",
   "nav.models": "Mga Model",
   "nav.notifications": "Mga Notification",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "Mga extra sa runtime",
   "nav.security": "Seguridad",
   "nav.self_evolve": "Self-Evolve",

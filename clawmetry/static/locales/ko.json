@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "에이전트가 부팅 시 읽는 영구 메모리 파일",
   "nav.models": "모델",
   "nav.notifications": "통지",
+  "nav.harness": "하네스",
   "nav.runtime_extras": "런타임 추가 기능",
   "nav.security": "보안",
   "nav.self_evolve": "Self-Evolve",

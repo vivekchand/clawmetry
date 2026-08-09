@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Permanente geheugenbestanden die de agent bij het opstarten leest",
   "nav.models": "Modellen",
   "nav.notifications": "Notificaties",
+  "nav.harness": "Harnas",
   "nav.runtime_extras": "Runtime extra's",
   "nav.security": "Beveiliging",
   "nav.self_evolve": "Self-Evolve",

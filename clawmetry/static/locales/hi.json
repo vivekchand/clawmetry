@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "स्थायी मेमोरी फाइलें जो एजेंट बूट पर पढ़ता है",
   "nav.models": "मॉडल",
   "nav.notifications": "सूचनाएं",
+  "nav.harness": "हार्नेस",
   "nav.runtime_extras": "रनटाइम एक्स्ट्रा",
   "nav.security": "सुरक्षा",
   "nav.self_evolve": "Self-Evolve",

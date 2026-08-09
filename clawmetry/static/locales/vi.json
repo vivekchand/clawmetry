@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Các tệp bộ nhớ lưu lâu dài mà agent đọc khi khởi động",
   "nav.models": "Mô hình",
   "nav.notifications": "Thông báo",
+  "nav.harness": "Cơ chế vận hành",
   "nav.runtime_extras": "Tiện ích runtime",
   "nav.security": "Bảo mật",
   "nav.self_evolve": "Self-Evolve",

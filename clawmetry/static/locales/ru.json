@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Постоянные файлы памяти, которые агент читает при запуске",
   "nav.models": "Модели",
   "nav.notifications": "Уведомления",
+  "nav.harness": "Инструментарий",
   "nav.runtime_extras": "Дополнительно о рантайме",
   "nav.security": "Безопасность",
   "nav.self_evolve": "Self-Evolve",

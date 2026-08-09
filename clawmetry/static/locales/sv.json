@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Beständiga minnesfiler som agenten läser vid start",
   "nav.models": "Modeller",
   "nav.notifications": "Aviseringar",
+  "nav.harness": "Sele",
   "nav.runtime_extras": "Körtidstillägg",
   "nav.security": "Säkerhet",
   "nav.self_evolve": "Self-Evolve",

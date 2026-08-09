@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "代理啟動時讀取的持久記憶檔案",
   "nav.models": "模型",
   "nav.notifications": "通知",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "執行環境附加功能",
   "nav.security": "安全性",
   "nav.self_evolve": "Self-Evolve",
