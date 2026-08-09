@@ -16028,9 +16028,13 @@ async function loadTranscripts() {
       _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
     }
     var plumbingTotal = 0;
-    data.transcripts.forEach(function(t) {
-      var raw = String(t.id || '');
-      var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
+    // NOTE: the callback param must NOT be named `t` — that shadows the global
+    // i18n t() and the score-button line below throws "t is not a function",
+    // blanking the whole tab (founder report 2026-08-09). Guarded by
+    // tests/test_app_js_t_shadowing.py.
+    data.transcripts.forEach(function(tx) {
+      var raw = String(tx.id || '');
+      var titleSrc = (tx.title && String(tx.title).trim()) || (tx.name && String(tx.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
       var isPlumbing = _isPlumbingTranscript(titleSrc);
@@ -16042,9 +16046,9 @@ async function loadTranscripts() {
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
       html += '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-muted,#888);font-size:11px;" title="' + escHtml(raw) + '">' + escHtml(raw.slice(0, 8)) + '</span>';
-      html += '<span>' + t.messages + ' messages</span>';
-      if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
+      html += '<span>' + tx.messages + ' messages</span>';
+      if (tx.size > 0) html += '<span>' + (tx.size > 1024 ? (tx.size/1024).toFixed(1) + ' KB' : tx.size + ' B') + '</span>';
+      html += '<span>' + timeAgo(tx.modified) + '</span>';
       html += '</div></div>';
       // Score-this-conversation button (#4562): runs the same judge the daemon
       // uses via /api/evals/rescore. Empty judge key → button flips to
