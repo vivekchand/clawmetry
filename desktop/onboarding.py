@@ -189,9 +189,10 @@ def apply_cm_key(
     ``mode`` is the user's hosting choice from the onboarding pane:
       * "cloud"    → ``--start-sync-now``: cloud sync ON (E2E-encrypted
                      snapshots to ingest.clawmetry.com).
-      * "selfhost" → ``--defer-sync`` + ``clawmetry sync``: account
-                     linked, trial provisioned, but data stays on this
-                     machine; the sync daemon runs local-only ingest.
+      * "selfhost" → ``--keep-local --defer-sync`` + ``clawmetry sync``:
+                     account linked, trial provisioned, nocloud marker
+                     kept, data stays on this machine; the sync daemon
+                     runs local-only ingest.
 
     We avoid duplicating any of that in the shell. Returns
     (ok, short_message). The message is user-safe (no key/token
@@ -201,10 +202,18 @@ def apply_cm_key(
         return False, "runtime venv is not ready yet"
     if not (cm_key or "").startswith("cm_"):
         return False, "invalid sign-in key"
-    mode_flag = "--defer-sync" if mode == "selfhost" else "--start-sync-now"
+    # selfhost: --keep-local preserves the nocloud marker (sign-in must not
+    # flip a self-host install to cloud sync), skips the ownership OTP that
+    # would otherwise kill this non-interactive subprocess, and still mints
+    # the account's 7-day trial; --defer-sync leaves daemon/dashboard
+    # management to this shell.
+    mode_flags = (
+        ["--keep-local", "--defer-sync"] if mode == "selfhost"
+        else ["--start-sync-now"]
+    )
     try:
         r = subprocess.run(
-            [str(bin_), "connect", "--key", cm_key, mode_flag],
+            [str(bin_), "connect", "--key", cm_key, *mode_flags],
             capture_output=True, text=True, timeout=timeout,
             **_win_subprocess_kwargs(),
         )
