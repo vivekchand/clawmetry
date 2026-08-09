@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Trwałe pliki pamięci, które agent czyta przy starcie",
   "nav.models": "Modele",
   "nav.notifications": "Powiadomienia",
+  "nav.harness": "Uprząż",
   "nav.runtime_extras": "Dodatki środowiska uruchomieniowego",
   "nav.security": "Bezpieczeństwo",
   "nav.self_evolve": "Self-Evolve",

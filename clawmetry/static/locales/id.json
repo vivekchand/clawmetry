@@ -841,6 +841,7 @@
   "nav.memory_tooltip": "Berkas memori persisten yang dibaca agen saat boot",
   "nav.models": "Model",
   "nav.notifications": "Notifikasi",
+  "nav.harness": "Harness",
   "nav.runtime_extras": "Fitur tambahan runtime",
   "nav.security": "Keamanan",
   "nav.self_evolve": "Self-Evolve",
