@@ -262,7 +262,6 @@ CROSS_SELL_SLIDES = [
         "cta_label": "",
         "cta_url": "",
         "art": "dashboard",
-        "img_asset": "cross-sell-dashboard.png",
     },
     {
         "eyebrow": "Also from ClawMetry",
@@ -275,7 +274,6 @@ CROSS_SELL_SLIDES = [
         "cta_label": "Explore Agent Builder",
         "cta_url": "https://build.clawmetry.com",
         "art": "builder",
-        "img_asset": "cross-sell-builder.png",
     },
     {
         "eyebrow": "Also from ClawMetry",
@@ -289,8 +287,6 @@ CROSS_SELL_SLIDES = [
         "cta_label": "See the Desk device",
         "cta_url": "https://clawmetry.com/device",
         "art": "desk",
-        "img_asset": "cross-sell-device.png",
-        "img": "https://clawmetry.com/device-square.png",
     },
     {
         "eyebrow": "For teams",
@@ -303,9 +299,179 @@ CROSS_SELL_SLIDES = [
         "cta_label": "Talk to sales",
         "cta_url": "https://clawmetry.com/enterprise",
         "art": "enterprise",
-        "img_asset": "cross-sell-enterprise.png",
     },
 ]
+
+
+# ─── Slide art (inline SVG) ─────────────────────────────────────────────
+# One hand-drawn vector illustration per slide, in brand colors. Inline
+# SVG keeps the pane self-contained (the module promises no external
+# assets) and stays crisp at any DPI — a downscaled raster screenshot of
+# the landing site reads as cheap; a purpose-built diagram reads as the
+# product. One idea per picture, nothing else.
+
+SLIDE_ART_SVG = {
+    # An idealized in-app view (Apple-style marketing render, not a
+    # raster screenshot): window chrome, live stat tiles, spend chart,
+    # session rows. Detailed enough to sell "this is what you get".
+    "dashboard": """<svg viewBox="0 0 460 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The ClawMetry dashboard"
+     font-family="-apple-system,'Segoe UI',system-ui,sans-serif">
+  <rect x="10" y="10" width="440" height="260" rx="14" fill="#10151f" stroke="#1f2937" stroke-width="1.5"/>
+  <g fill="#273143">
+    <circle cx="30" cy="28" r="4"/><circle cx="44" cy="28" r="4"/><circle cx="58" cy="28" r="4"/>
+  </g>
+  <circle cx="86" cy="28" r="4.5" fill="#E94644"/>
+  <text x="96" y="32" font-size="11" font-weight="700" fill="#e2e8f0">ClawMetry</text>
+  <g font-size="10" fill="#94a3b8">
+    <text x="240" y="32" fill="#e2e8f0" font-weight="600">Overview</text>
+    <text x="298" y="32">Sessions</text>
+    <text x="352" y="32">Usage</text>
+    <text x="392" y="32">Brain</text>
+  </g>
+  <rect x="240" y="38" width="48" height="2" rx="1" fill="#E94644"/>
+  <g>
+    <rect x="26" y="52" width="128" height="52" rx="10" fill="#141924" stroke="#1f2937"/>
+    <text x="38" y="70" font-size="7.5" letter-spacing="1" fill="#94a3b8">TOKENS TODAY</text>
+    <text x="38" y="92" font-size="16" font-weight="700" fill="#e2e8f0">4.2M</text>
+    <rect x="166" y="52" width="128" height="52" rx="10" fill="#141924" stroke="#1f2937"/>
+    <text x="178" y="70" font-size="7.5" letter-spacing="1" fill="#94a3b8">SPEND TODAY</text>
+    <text x="178" y="92" font-size="16" font-weight="700" fill="#e2e8f0">$12.40</text>
+    <rect x="306" y="52" width="128" height="52" rx="10" fill="#141924" stroke="#1f2937"/>
+    <text x="318" y="70" font-size="7.5" letter-spacing="1" fill="#94a3b8">AGENTS LIVE</text>
+    <text x="318" y="92" font-size="16" font-weight="700" fill="#e2e8f0">7</text>
+    <circle cx="350" cy="87" r="4" fill="#4ade80"/>
+  </g>
+  <g>
+    <rect x="26" y="114" width="268" height="104" rx="10" fill="#141924" stroke="#1f2937"/>
+    <text x="38" y="132" font-size="7.5" letter-spacing="1" fill="#94a3b8">SPEND · LAST 24H</text>
+    <g stroke="#1c2433" stroke-width="1">
+      <path d="M38 156 L 282 156"/><path d="M38 180 L 282 180"/>
+    </g>
+    <defs>
+      <linearGradient id="cm-a" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#E94644" stop-opacity=".28"/>
+        <stop offset="1" stop-color="#E94644" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <path d="M38 196 L 66 184 L 94 190 L 122 168 L 150 176 L 178 152 L 206 160 L 234 142 L 262 148 L 282 138 L 282 206 L 38 206 Z"
+          fill="url(#cm-a)"/>
+    <path d="M38 196 L 66 184 L 94 190 L 122 168 L 150 176 L 178 152 L 206 160 L 234 142 L 262 148 L 282 138"
+          fill="none" stroke="#E94644" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="282" cy="138" r="3.5" fill="#E94644"/>
+  </g>
+  <g>
+    <rect x="306" y="114" width="128" height="104" rx="10" fill="#141924" stroke="#1f2937"/>
+    <text x="318" y="132" font-size="7.5" letter-spacing="1" fill="#94a3b8">BY MODEL</text>
+    <g font-size="8.5" fill="#94a3b8">
+      <text x="318" y="152">opus</text>
+      <text x="318" y="176">sonnet</text>
+      <text x="318" y="200">haiku</text>
+    </g>
+    <g fill="#E94644">
+      <rect x="352" y="145" width="70" height="8" rx="4"/>
+      <rect x="352" y="169" width="44" height="8" rx="4" opacity=".65"/>
+      <rect x="352" y="193" width="22" height="8" rx="4" opacity=".4"/>
+    </g>
+  </g>
+  <g>
+    <circle cx="34" cy="238" r="4" fill="#4ade80"/>
+    <text x="46" y="241" font-size="9.5" fill="#e2e8f0">claude-code · refactor auth flow</text>
+    <text x="252" y="241" font-size="9.5" fill="#94a3b8">$0.84</text>
+    <circle cx="316" cy="238" r="4" fill="#4ade80"/>
+    <text x="328" y="241" font-size="9.5" fill="#e2e8f0">openclaw · main</text>
+    <text x="412" y="241" font-size="9.5" fill="#94a3b8">$2.10</text>
+    <circle cx="34" cy="256" r="4" fill="#facc15"/>
+    <text x="46" y="259" font-size="9.5" fill="#e2e8f0">cursor · fix flaky e2e</text>
+    <text x="252" y="259" font-size="9.5" fill="#94a3b8">$0.31</text>
+    <circle cx="316" cy="256" r="4" fill="#94a3b8"/>
+    <text x="328" y="259" font-size="9.5" fill="#e2e8f0">codex · idle</text>
+    <text x="412" y="259" font-size="9.5" fill="#94a3b8">$0.00</text>
+  </g>
+</svg>""",
+    # Blueprint scaffold: describe the agent, the builder wires it up.
+    "builder": """<svg viewBox="0 0 440 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Agent blueprint being scaffolded">
+  <rect x="70" y="30" width="300" height="180" rx="14" fill="none"
+        stroke="#334155" stroke-width="1.5" stroke-dasharray="7 7"/>
+  <g stroke="#334155" fill="none" stroke-width="1.5">
+    <path d="M220 78 L 150 132"/>
+    <path d="M220 78 L 290 132"/>
+    <path d="M150 156 L 150 168"/>
+    <path d="M290 156 L 290 168"/>
+  </g>
+  <circle cx="220" cy="68" r="20" fill="#141924" stroke="#E94644" stroke-width="2"/>
+  <rect x="212" y="60" width="16" height="16" rx="4" fill="#E94644"/>
+  <g fill="#141924" stroke="#1f2937">
+    <rect x="122" y="132" width="56" height="26" rx="8"/>
+    <rect x="262" y="132" width="56" height="26" rx="8"/>
+  </g>
+  <g fill="#94a3b8">
+    <rect x="132" y="142" width="36" height="5" rx="2.5"/>
+    <rect x="272" y="142" width="36" height="5" rx="2.5"/>
+  </g>
+  <g fill="#141924" stroke="#334155" stroke-dasharray="4 4">
+    <rect x="122" y="168" width="56" height="26" rx="8"/>
+    <rect x="262" y="168" width="56" height="26" rx="8"/>
+  </g>
+  <g stroke="#94a3b8" stroke-width="1.6" stroke-linecap="round">
+    <path d="M150 176 L 150 186 M145 181 L 155 181"/>
+    <path d="M290 176 L 290 186 M285 181 L 295 181"/>
+  </g>
+</svg>""",
+    # The Desk device: a screen of agents with approve/deny at a glance.
+    "desk": """<svg viewBox="0 0 440 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ClawMetry Desk device">
+  <ellipse cx="220" cy="212" rx="96" ry="8" fill="#0f131c"/>
+  <rect x="140" y="28" width="160" height="178" rx="20" fill="#141924" stroke="#1f2937" stroke-width="1.5"/>
+  <rect x="154" y="42" width="132" height="128" rx="10" fill="#0b0e14" stroke="#1f2937"/>
+  <g>
+    <circle cx="170" cy="60" r="4" fill="#4ade80"/>
+    <rect x="182" y="56" width="66" height="7" rx="3.5" fill="#94a3b8"/>
+    <circle cx="170" cy="84" r="4" fill="#4ade80"/>
+    <rect x="182" y="80" width="52" height="7" rx="3.5" fill="#94a3b8"/>
+    <circle cx="170" cy="108" r="4" fill="#E94644"/>
+    <rect x="182" y="104" width="60" height="7" rx="3.5" fill="#94a3b8"/>
+  </g>
+  <g>
+    <rect x="164" y="130" width="52" height="24" rx="12" fill="none" stroke="#4ade80" stroke-width="1.5"/>
+    <path d="M182 142 L 187 147 L 197 136" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="224" y="130" width="52" height="24" rx="12" fill="none" stroke="#E94644" stroke-width="1.5"/>
+    <path d="M244 137 L 255 147 M255 137 L 244 147" stroke="#E94644" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <rect x="204" y="182" width="32" height="8" rx="4" fill="#1f2937"/>
+  <rect x="210" y="206" width="20" height="5" rx="2.5" fill="#1f2937"/>
+</svg>""",
+    # Shield + identity ring: SSO in, every action audited.
+    "enterprise": """<svg viewBox="0 0 440 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Enterprise SSO and audit shield">
+  <g stroke="#334155" fill="none" stroke-width="1.5">
+    <path d="M96 70 C 140 70, 150 120, 178 120"/>
+    <path d="M96 120 L 178 120"/>
+    <path d="M96 170 C 140 170, 150 120, 178 120"/>
+  </g>
+  <g fill="#141924" stroke="#1f2937">
+    <circle cx="78" cy="70" r="17"/>
+    <circle cx="78" cy="120" r="17"/>
+    <circle cx="78" cy="170" r="17"/>
+  </g>
+  <g fill="#94a3b8">
+    <circle cx="78" cy="65" r="5"/>
+    <path d="M68 79 C 68 71, 88 71, 88 79 Z"/>
+    <circle cx="78" cy="115" r="5"/>
+    <path d="M68 129 C 68 121, 88 121, 88 129 Z"/>
+    <circle cx="78" cy="165" r="5"/>
+    <path d="M68 179 C 68 171, 88 171, 88 179 Z"/>
+  </g>
+  <path d="M240 40 L 306 62 L 306 122 C 306 164, 276 190, 240 202
+           C 204 190, 174 164, 174 122 L 174 62 Z"
+        fill="#141924" stroke="#E94644" stroke-width="2"/>
+  <path d="M214 120 L 234 142 L 268 100" fill="none" stroke="#E94644"
+        stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#334155">
+    <rect x="336" y="76" width="70" height="9" rx="4.5"/>
+    <rect x="336" y="96" width="54" height="9" rx="4.5"/>
+    <rect x="336" y="116" width="62" height="9" rx="4.5"/>
+    <rect x="336" y="136" width="44" height="9" rx="4.5"/>
+  </g>
+</svg>""",
+}
 
 
 # ─── HTML surfaces ──────────────────────────────────────────────────────
@@ -707,18 +873,8 @@ def render_bootstrap_carousel(*, assets_dir: Path, status: str = "Preparing runt
     installs. Ubuntu-installer style: 4 auto-advancing slides, click
     on a CTA opens the URL in the system browser (via pywebview API)."""
     logo = _logo_data_uri(assets_dir)
-    # Resolve bundled page screenshots to data URIs; a slide's remote
-    # "img" (if any) stays as a fallback when the asset is missing.
-    slides = []
-    for s in CROSS_SELL_SLIDES:
-        s = dict(s)
-        asset = s.pop("img_asset", "")
-        if asset:
-            uri = _asset_data_uri(assets_dir, asset, "image/png")
-            if uri:
-                s["img"] = uri
-        slides.append(s)
-    slides_json = json.dumps(slides)
+    slides_json = json.dumps(CROSS_SELL_SLIDES)
+    art_json = json.dumps(SLIDE_ART_SVG)
     safe_status = status.replace("<", "&lt;")
 
     return f"""<!doctype html>
@@ -764,16 +920,14 @@ def render_bootstrap_carousel(*, assets_dir: Path, status: str = "Preparing runt
       opacity: 1; visibility: visible; pointer-events: auto;
       transition: opacity 500ms ease;
     }}
+    /* Frameless vector illustration floating on the dark canvas — no
+       gradient box, no border. The art carries its own chrome. */
     .slide-art {{
-      width: 440px; max-width: 90%; height: 280px; margin: 0 auto 28px;
-      border-radius: 14px; overflow: hidden;
-      background: linear-gradient(135deg, {BRAND_RED}22, {BRAND_RED}05);
-      border: 1px solid var(--border);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 56px;
+      width: 460px; max-width: 100%; margin: 0 auto 28px;
     }}
-    .slide-art img {{
-      width: 100%; height: 100%; object-fit: cover; object-position: top;
+    .slide-art svg {{
+      display: block; width: 100%; height: auto;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,.45));
     }}
     .eyebrow {{
       font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
@@ -817,19 +971,14 @@ def render_bootstrap_carousel(*, assets_dir: Path, status: str = "Preparing runt
 
   <script>
     const SLIDES = {slides_json};
-    const ART = {{
-      dashboard: '📊',
-      builder: '🛠',
-      desk: '📟',
-      enterprise: '🔒',
-    }};
+    const ART = {art_json};
     let idx = 0;
 
     function render() {{
       const c = document.getElementById('carousel');
       c.innerHTML = SLIDES.map((s, i) => `
         <div class="slide ${{i === idx ? 'active' : ''}}" data-i="${{i}}">
-          <div class="slide-art">${{s.img ? `<img src="${{s.img}}" alt="" loading="lazy" onerror="this.parentElement.textContent='${{ART[s.art] || '★'}}'"/>` : (ART[s.art] || '★')}}</div>
+          <div class="slide-art">${{ART[s.art] || ''}}</div>
           <div class="eyebrow">${{s.eyebrow}}</div>
           <h2>${{s.title}}</h2>
           <p>${{s.body}}</p>
