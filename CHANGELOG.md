@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Fix: Notifications sits directly under Approvals and Alerts again; nav guard synced with the shipped Evals and Gateway tabs.**
+  - **Why:** the Phase-A nav guard (`tests/test_beginner_nav_phase_a.py`) was red on main. Two shipped nav changes had drifted past it: #4295 added the top-level Evals tab but inserted it between Alerts and Notifications, breaking the founder request (2026-07-29) that Notifications sit directly under its two consumers, and #4575 added the opt-in Gateway tab to the Developer drawer without updating the guard.
+  - **What:** Evals moves below Notifications so the Approvals, Alerts, Notifications trio is contiguous again (both tabs stay; membership was intentional in both releases). The guard now encodes the nine-item Tier-1 order and the Gateway drawer membership.
+  - **Verified:** revert-proof (guard red on the pre-fix nav, green after the reorder), all 8 module tests pass, other tab guards are membership-only and unaffected.
+
 - **Fix: persistent console window after Windows self-update (Release: carrier).**
   - **Why:** 0.12.667 made the self-updater's pip run windowless, but the RELAUNCHED daemon still popped a console — permanently. Founder report 2026-08-09: a Windows Terminal tab titled with the venv exe path, open forever. Root cause reproduced live: every daemon-(re)spawn path used DETACHED_PROCESS (parent gets NO console), and on Windows a console-subsystem child of a console-less parent allocates a fresh VISIBLE console — the pip-launcher clawmetry.exe re-execs python.exe workers, so the relaunched daemon's workers each owned an on-screen console for the daemon's lifetime.
   - **What:** every Windows daemon-spawn site now uses CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (a hidden console all descendants inherit) instead of DETACHED_PROCESS: update_respawn.py relaunch, routes/update_check.py helper spawn, daemon_registration.start_background_subprocess, and both cli.py fallback spawns. Same terminal-detach and Ctrl+C-isolation semantics, zero visible consoles.
