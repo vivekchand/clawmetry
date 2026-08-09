@@ -956,6 +956,7 @@
   "profile.not_signed_in": "Not signed in",
   "profile.plan": "{tier} plan",
   "profile.sign_in": "Sign in / Create account",
+  "profile.signed_in": "Signed in",
   "profile.sign_out": "Sign out",
   "profile.trial_days_left": "Trial · {days} days left",
   "profile.upgrade": "Upgrade plan",

@@ -1690,9 +1690,20 @@ def cloud_cta_status():
         local_only = is_cloud_disabled()
     except Exception:
         local_only = False
+    # The sign-in email behind the key — the profile menu's "who am I" for
+    # cloud-OAuth accounts that hold no local license (license `sub` is
+    # empty there). '' when unresolvable; the UI then still shows a
+    # signed-in state, just without the address.
+    account_email = ""
+    if token:
+        try:
+            account_email = _d._account_email_for_token(token) or ""
+        except Exception:
+            account_email = ""
     return jsonify({
         "connected": bool(token) and not local_only,
         "account_linked": bool(token),
+        "account_email": account_email,
         "local_only": local_only,
     })
 

@@ -17760,6 +17760,89 @@ def _write_cloud_token(token):
         json.dump(data, f, indent=2)
 
 
+# In-memory account-email cache for /api/cloud-cta/status. `fail_at` throttles
+# cloud lookups on offline machines (retry at most once a minute) so opening
+# the profile menu never blocks on a dead network for every click.
+_ACCOUNT_EMAIL_CACHE = {"token": "", "email": "", "fail_at": 0.0}
+
+
+def _account_email_for_token(token):
+    """Resolve the sign-in email behind a cm_ key, '' if unknowable.
+
+    The profile menu needs a "who am I" for cloud-OAuth accounts that hold
+    no local license (license `sub` is empty there) — without this the
+    header says "Not signed in" on a fully signed-in, cloud-connected node
+    (founder report 2026-08-09). Resolution order:
+
+      1. ``~/.clawmetry/config.json`` → ``account_email`` (written at
+         connect time and by the claim watcher in clawmetry/sync.py).
+      2. Cloud ``/api/cloud/account?token=`` (best-effort, cached; the
+         result is persisted back into config.json when that file exists
+         so restarts skip the network hop).
+
+    Placeholder identities (``agent+<hash>@clawmetry.auto`` / ``.linked``)
+    are reported as '' — they are internal pre-claim accounts, not
+    something to show a human. Never raises.
+    """
+    if not token:
+        return ""
+
+    def _real(email):
+        e = (email or "").strip()
+        low = e.lower()
+        if low.endswith("@clawmetry.auto") or low.endswith("@clawmetry.linked"):
+            return ""
+        return e
+
+    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    try:
+        with open(daemon_cfg) as f:
+            cfg = json.load(f)
+        # Only trust the stored email when it belongs to THIS key — after a
+        # reconnect under a different account the old email would be stale.
+        if cfg.get("api_key") == token:
+            e = _real(cfg.get("account_email"))
+            if e:
+                return e
+    except Exception:
+        cfg = None
+
+    if _ACCOUNT_EMAIL_CACHE["token"] == token:
+        if _ACCOUNT_EMAIL_CACHE["email"]:
+            return _ACCOUNT_EMAIL_CACHE["email"]
+        if time.time() - _ACCOUNT_EMAIL_CACHE["fail_at"] < 60:
+            return ""
+
+    email = ""
+    try:
+        import urllib.parse as _up
+        import urllib.request as _ur
+        from clawmetry.endpoints import app_url as _app_url
+
+        url = _app_url() + "/api/cloud/account?token=" + _up.quote(token)
+        with _ur.urlopen(url, timeout=3) as resp:
+            body = json.loads(resp.read() or b"{}")
+        email = _real(body.get("email") if isinstance(body, dict) else "")
+    except Exception:
+        email = ""
+
+    _ACCOUNT_EMAIL_CACHE.update(
+        {"token": token, "email": email,
+         "fail_at": 0.0 if email else time.time()}
+    )
+    if email and isinstance(cfg, dict) and cfg.get("api_key") == token:
+        # Best-effort persist so the daemon and future dashboards see it
+        # without a network hop; config.json stays 0o600 via save_config.
+        try:
+            from clawmetry.sync import save_config
+
+            cfg["account_email"] = email
+            save_config(cfg)
+        except Exception:
+            pass
+    return email
+
+
 # ── One-click cloud connect via GitHub/Google OAuth (dashboard CTA) ────────────
 # The local "Enable Cloud Sync" modal can sign the user up AND connect this node
 # in one click. We reuse the same loopback browser-bridge as `clawmetry connect`:
@@ -17814,6 +17897,17 @@ def _persist_identity_with_key(api_key):
         "connected_at": __import__("datetime").datetime.now().isoformat(),
         "encryption_key": enc_key,
     }
+    # Resolve + store the sign-in email now, while we know the network is up
+    # (we just OAuth'd through it) — the profile menu reads it via
+    # /api/cloud-cta/status and must not show "Not signed in" on a
+    # signed-in node (founder report 2026-08-09).
+    try:
+        _ACCOUNT_EMAIL_CACHE.update({"token": "", "email": "", "fail_at": 0.0})
+        acct_email = _account_email_for_token(api_key)
+        if acct_email:
+            config["account_email"] = acct_email
+    except Exception:
+        pass
     save_config(config)
     try:
         _write_cloud_token(api_key)

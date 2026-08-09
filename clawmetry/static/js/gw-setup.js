@@ -398,8 +398,10 @@ function _cmProfileFetchState() {
     var signedIn = !!(lic.valid || cta.account_linked);
     _cmProfile.state = {
       signedIn: signedIn,
-      // license `sub` is the account the key was issued to (the sign-in email)
-      who: lic.sub || '',
+      // license `sub` is the account the key was issued to (the sign-in
+      // email); a cloud-OAuth account with no local license has no sub, so
+      // fall back to the cloud account email resolved by the backend.
+      who: lic.sub || cta.account_email || '',
       tier: (lic.tier || '').toLowerCase(),
       daysLeft: (typeof lic.days_left === 'number') ? lic.days_left : null,
       licenseValid: !!lic.valid,
@@ -416,10 +418,10 @@ function _cmProfileApplyAvatar(st) {
   var btn = document.getElementById('cm-profile-btn');
   var initial = document.getElementById('cm-profile-initial');
   if (!btn || !initial) return;
-  if (st.signedIn && st.who) {
+  if (st.signedIn) {
     btn.dataset.signedIn = '1';
-    initial.textContent = st.who.charAt(0).toUpperCase();
-    btn.title = st.who;
+    initial.textContent = st.who ? st.who.charAt(0).toUpperCase() : '';
+    btn.title = st.who || t('profile.signed_in', null, 'Signed in');
   } else {
     delete btn.dataset.signedIn;
     btn.title = t('profile.account', null, 'Account');
@@ -442,8 +444,13 @@ function _cmProfileRender(st) {
   var h = '';
   // Identity header
   h += '<div style="padding:10px 10px 8px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.08));margin-bottom:4px;">';
-  if (st.signedIn && st.who) {
-    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + _cmProfileEsc(st.who) + '</div>';
+  if (st.signedIn) {
+    // Signed in but the email is unresolvable (offline, pre-claim account):
+    // still say "Signed in" — a signed-in menu that opens with "Not signed
+    // in" above Billing/Sign out is a contradiction (founder report
+    // 2026-08-09, GitHub-OAuth node with no local license).
+    var whoLine = st.who ? _cmProfileEsc(st.who) : t('profile.signed_in', null, 'Signed in');
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + whoLine + '</div>';
     var plan = _cmProfilePlanLine(st);
     if (plan) h += '<div style="font-size:11px;color:var(--text-muted,#94a3b8);margin-top:2px;">' + _cmProfileEsc(plan) + '</div>';
   } else {

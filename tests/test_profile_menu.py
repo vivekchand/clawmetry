@@ -136,8 +136,24 @@ def test_sign_out_sticks_and_offers_local_signin():
 
 def test_en_catalog_has_every_profile_key_the_module_uses():
     js = (STATIC / "js" / "gw-setup.js").read_text()
-    used = set(re.findall(r"[t(\"']+(profile\.[a-z_]+)", js))
+    used = set(re.findall(r"[t(\"']+(profile\.[a-z0-9_]+)", js))
     assert used, "expected profile.* t() keys in gw-setup.js"
     catalog = json.loads((STATIC / "locales" / "en.json").read_text())
     missing = sorted(k for k in used if k not in catalog)
     assert not missing, f"en.json missing i18n keys: {missing}"
+
+
+def test_profile_resolves_identity_for_cloud_oauth_accounts():
+    """A GitHub/Google-OAuth cloud account holds no local license, so `who`
+    must fall back to /api/cloud-cta/status's account_email — and a signed-in
+    menu must NEVER render the "Not signed in" header (2026-08-09 report:
+    signed-in node showed "Not signed in" above Billing & plan / Sign out)."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "cta.account_email" in js
+    # Signed-in-but-email-unresolvable falls back to a "Signed in" label.
+    assert "profile.signed_in" in js
+    # The not-signed-in header may only render on the signed-out branch:
+    # inside _cmProfileRender, "Not signed in" must sit AFTER the signedIn
+    # branch's fallback label.
+    render = js.split("function _cmProfileRender", 1)[1]
+    assert render.index("profile.signed_in") < render.index("profile.not_signed_in")
