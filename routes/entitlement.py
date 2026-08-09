@@ -38560,7 +38560,6 @@ def _runtime_detection_counts(probes: list) -> dict:
         "locked": locked,
     }
 
-
 def _has_node_count_at_batch_row_to_body(row: dict, count_raw: str) -> dict:
     """Translate a :func:`has_node_count_at_batch` scalar row into the
     endpoint body row shape.
@@ -38765,3 +38764,336 @@ def api_entitlement_has_node_count_at_batch():
             "api_entitlement_has_node_count_at_batch: error: %s", exc
         )
         return jsonify(_has_node_count_at_batch_fallback(tier_in))
+
+
+
+def _has_capacity_at_batch_row_to_body(
+    row: dict, raw_token: str, endpoint_kind: str, has_flag_key: str
+) -> dict:
+    """Translate a :func:`has_channel_count_at_batch` /
+    :func:`has_retention_window_at_batch` scalar row into the endpoint
+    body row shape.
+
+    Perspective-shaped batch sibling of
+    :func:`_has_node_count_batch_row_to_body`. Rekeys ``has`` ->
+    ``has_<kind>_at`` / ``allowed`` (matches the singular
+    ``/api/entitlement/has-<kind>-at`` body), replaces the normalised-
+    str ``key`` with an int ``count`` / ``days`` (or ``null`` on the
+    unlimited-retention row and on non-int input) plus the caller's
+    raw echo, and layers a conjugated human ``label`` matching the
+    sibling ``/min-tier-for-<kind>-at-batch`` shape. The unlimited-
+    retention row carries ``unlimited=true`` / ``label="unlimited"``.
+
+    Drops the ``upgrade_required`` bit that
+    :func:`_has_node_count_batch_row_to_body` carries: this is the
+    perspective-shaped ``_at`` slot, so "would tier X admit this?" is
+    the row's whole point -- comparing that answer against the LIVE
+    current-tier rank would double-count the perspective in the paywall
+    matrix cell (matches the singular ``/has-<kind>-at`` sibling, which
+    omits ``upgrade_required`` for the same reason).
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape so the batch keeps building.
+    """
+    key = row.get("key")
+    body: dict = {
+        "kind": endpoint_kind,
+    }
+    if endpoint_kind == "retention_window":
+        if key == "unlimited":
+            body["days"] = None
+            body["days_raw"] = raw_token
+            body["unlimited"] = True
+            body["label"] = "unlimited"
+        else:
+            try:
+                n = int(key)
+                body["days"] = n
+                body["label"] = f"{n} day" if n == 1 else f"{n} days"
+            except (TypeError, ValueError):
+                body["days"] = None
+                body["label"] = None
+            body["days_raw"] = raw_token
+            body["unlimited"] = False
+    else:
+        try:
+            n = int(key)
+            body["count"] = n
+            body["label"] = f"{n} channel" if n == 1 else f"{n} channels"
+        except (TypeError, ValueError):
+            body["count"] = None
+            body["label"] = None
+        body["count_raw"] = raw_token
+    has_flag = bool(row.get("has"))
+    body[has_flag_key] = has_flag
+    body["allowed"] = has_flag
+    body["unknown"] = bool(row.get("unknown"))
+    body["required_tier"] = row.get("required_tier")
+    body["required_tier_label"] = row.get("required_tier_label")
+    req_rank = row.get("required_tier_rank")
+    body["required_tier_rank"] = -1 if req_rank is None else req_rank
+    return body
+
+
+def _has_capacity_at_batch_body(
+    _ent, tier_in: str, endpoint_kind: str, rows: list
+) -> dict:
+    """Assemble the response envelope for a
+    ``has-<capacity-axis>-at-batch`` endpoint.
+
+    Layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the standard capacity-batch
+    envelope so a pricing-matrix walkthrough surface can render the
+    "from <perspective>" copy off one round-trip, matching how
+    :func:`_min_tier_for_capacity_at_batch_body` layers perspective
+    onto the reverse-lookup batches on the same axes. Never raises.
+    """
+    return {
+        "kind": endpoint_kind,
+        "count": len(rows),
+        "rows": rows,
+        "perspective_tier": tier_in,
+        "perspective_tier_label": _ent.tier_label(tier_in),
+        "perspective_tier_rank": _ent.tier_rank(tier_in),
+        **_resolver_envelope(_ent),
+    }
+
+
+def _has_capacity_at_batch_fallback(tier_in: str, endpoint_kind: str) -> dict:
+    """Grace-shape fallback body for the two
+    ``has-<capacity-axis>-at-batch`` endpoints. Same never-5xx posture
+    as :func:`_min_tier_for_capacity_at_batch_fallback` on the sibling
+    reverse-lookup batches with the perspective envelope layered on so
+    a caller can still render the "from <perspective>" copy with
+    placeholders on a resolver crash.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": endpoint_kind,
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-channel-count-at-batch")
+def api_entitlement_has_channel_count_at_batch():
+    """``GET /api/entitlement/has-channel-count-at-batch?tier=<perspective>
+    &counts=1,5,100`` -- per-value what-if boolean-gate batch sibling of
+    ``/api/entitlement/has-channel-count-at`` on the ``channels``
+    capacity axis.
+
+    Perspective-shaped twin of ``/api/entitlement/has-node-count-batch``
+    (which uses the LIVE resolved entitlement) and channel-axis twin of
+    the paired ``/has-retention-window-at-batch``. Fills the last
+    ``_at_batch`` slot on the channel-count axis alongside
+    ``/api/entitlement/min-tier-for-channel-count-at-batch`` (the
+    perspective-tier variant of the reverse-lookup batch on the same
+    axis).
+
+    Where the singular ``/has-channel-count-at?tier=<perspective>&count=<N>``
+    answers ONE (``has_channel_count_at``, ``required_tier``) pair per
+    request, this batch answers all requested counts in ONE round-trip
+    so a pricing-matrix walkthrough ("at OSS -- does 1 / 5 / 25 / 100
+    channels fit?") binds off one URL per perspective instead of ``N``
+    calls to ``/has-channel-count-at?tier=oss&count=<N>``.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+
+    Per-row body shape (mirrors the sibling
+    ``/has-node-count-batch`` per-row shape with ``has_channel_count_at``
+    in place of ``has_node_count`` and no ``upgrade_required`` bit --
+    the ``_at`` slot is perspective-shaped, so comparing against the
+    LIVE current-tier rank would double-count the perspective; matches
+    the singular ``/has-channel-count-at`` sibling which omits it for
+    the same reason)::
+
+        {
+          "count":              <int> | null,
+          "count_raw":          "<stripped raw token>",
+          "kind":               "channel_count",
+          "label":              "1 channel" | "5 channels" | null,
+          "has_channel_count_at": <bool>,
+          "allowed":            <bool>,               # mirror of has_channel_count_at
+          "unknown":            <bool>,               # true iff non-int input
+          "required_tier":      "<tier id>" | null,
+          "required_tier_label":"<label>"   | null,
+          "required_tier_rank": <int>,                # -1 when required_tier null
+        }
+
+    Envelope wraps ``rows`` with ``kind`` / ``count`` (row count) plus
+    ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` and the standard resolver envelope
+    (``current_tier`` / ``current_tier_rank`` / ``grace`` /
+    ``enforced``) so a UI can render "you are here" alongside the
+    per-row grants under the requested perspective.
+
+    Perspective-shaped (grace-independent by design): unlike the LIVE
+    ``/has-channel-count-batch`` sibling (which will report
+    ``allowed=true`` for every finite count while ``ent.grace`` is
+    ``True``), each row here reflects the STATIC per-tier cap in
+    :data:`_TIER_CHANNEL_LIMIT` -- ``has-channel-count-at-batch?tier=oss&counts=5``
+    returns ``allowed=false`` even in grace, which is the whole point
+    of the ``_at`` slot.
+
+    Cross-consistency: each row's ``has_channel_count_at`` byte-
+    equals the singular ``/api/entitlement/has-channel-count-at``
+    endpoint for the same (``tier``, ``count``) pair; each row's
+    ``required_tier`` byte-equals the sibling
+    ``/api/entitlement/min-tier-for-channel-count-at-batch`` row for
+    the same count.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = _ent.has_channel_count_at_batch(tier_in, values) or []
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            try:
+                key = str(int(raw))
+            except (TypeError, ValueError):
+                key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_capacity_at_batch_row_to_body(
+                r,
+                raw_by_key.get(str(r.get("key")), str(r.get("key"))),
+                "channel_count",
+                "has_channel_count_at",
+            )
+            for r in helper_rows
+        ]
+        return jsonify(
+            _has_capacity_at_batch_body(
+                _ent, tier_in, "channel_count", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_channel_count_at_batch: error: %s", exc
+        )
+        return jsonify(
+            _has_capacity_at_batch_fallback(tier_in, "channel_count")
+        )
+
+
+@bp_entitlement.route("/api/entitlement/has-retention-window-at-batch")
+def api_entitlement_has_retention_window_at_batch():
+    """``GET /api/entitlement/has-retention-window-at-batch?tier=<perspective>
+    &days=7,30,unlimited`` -- per-value what-if boolean-gate batch sibling
+    of ``/api/entitlement/has-retention-window-at`` on the
+    ``retention_days`` capacity axis. Retention-axis twin of
+    ``/has-channel-count-at-batch``.
+
+    Each token may be a finite int or the case-insensitive string
+    ``"unlimited"`` (routes to
+    :func:`has_retention_window_at_batch` unlimited-history branch);
+    the unlimited row surfaces with ``days=null`` / ``unlimited=true``
+    / ``label="unlimited"``. This is the *only* per-axis ``_at_batch``
+    on the retention axis that admits the unlimited sentinel --
+    matching the input side of
+    ``/min-tier-for-retention-window-at-batch``.
+
+    Same 400-on-missing-tier / 400-on-blank-days / 404-on-unknown-tier
+    / never-5xx contracts as the two count-axis siblings.
+
+    Per-row body shape (mirrors ``/has-channel-count-at-batch`` with a
+    ``days`` slot in place of ``count`` and the extra
+    ``unlimited`` flag for the sentinel row)::
+
+        {
+          "days":                <int> | null,
+          "days_raw":            "<stripped raw token>",
+          "kind":                "retention_window",
+          "label":               "1 day" | "7 days" | "unlimited" | null,
+          "unlimited":           <bool>,               # true iff the unlimited row
+          "has_retention_window_at": <bool>,
+          "allowed":             <bool>,               # mirror of has_retention_window_at
+          "unknown":             <bool>,               # true iff non-int / non-"unlimited"
+          "required_tier":       "<tier id>" | null,
+          "required_tier_label": "<label>"   | null,
+          "required_tier_rank":  <int>,                # -1 when required_tier null
+        }
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("days", unlimited_ok=True)
+    if err == "missing":
+        return jsonify({"error": "missing days"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = _ent.has_retention_window_at_batch(tier_in, values) or []
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            if raw is None or (
+                isinstance(raw, str) and raw.strip().lower() == "unlimited"
+            ):
+                key = "unlimited"
+            else:
+                try:
+                    key = str(int(raw))
+                except (TypeError, ValueError):
+                    key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_capacity_at_batch_row_to_body(
+                r,
+                raw_by_key.get(str(r.get("key")), str(r.get("key"))),
+                "retention_window",
+                "has_retention_window_at",
+            )
+            for r in helper_rows
+        ]
+        return jsonify(
+            _has_capacity_at_batch_body(
+                _ent, tier_in, "retention_window", rows
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_retention_window_at_batch: error: %s", exc
+        )
+        return jsonify(
+            _has_capacity_at_batch_fallback(tier_in, "retention_window")
+        )

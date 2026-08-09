@@ -5986,6 +5986,162 @@ def has_channel_count_batch(counts) -> list[dict]:
     return out
 
 
+
+def has_channel_count_at_batch(perspective_tier: str, counts) -> list[dict] | None:
+    """Hypothetical-perspective per-value boolean-gate rows on the
+    ``channels`` capacity axis in ONE round-trip. Perspective-shaped
+    sibling of :func:`has_channel_count_at` (singular) and channel-axis
+    twin of :func:`has_node_count_batch` scoped by a caller-supplied
+    ``perspective_tier``.
+
+    Fills the ``_at_batch`` slot on the channel-count axis alongside
+    :func:`min_tier_for_channel_count_at_batch` (the perspective-tier
+    variant of the reverse-lookup batch on the same axis). A pricing-
+    matrix walkthrough comparing several hypothetical channel counts
+    from a fixed perspective ("at OSS -- does 1 / 5 / 25 / 100 channels
+    fit?") renders off ONE URL per perspective instead of ``N`` calls
+    to :func:`has_channel_count_at` + client-side row assembly.
+
+    Row shape is byte-parity with :func:`has_node_count_batch` on the
+    corresponding capacity axis so a UI already wired for the node-axis
+    batch can rebind to this channel-axis batch without reshaping::
+
+        {
+          "key":                "<normalised int as str>",
+          "kind":               "channels",
+          "has":                <bool>,       # perspective's static cap admits count
+          "unknown":            <bool>,       # True iff non-int input
+          "required_tier":      "<tier id>" | None,   # min_tier_for_channel_count(count)
+          "required_tier_label":"<label>"   | None,
+          "required_tier_rank": <int>,        # -1 when required_tier None
+        }
+
+    Perspective-shaped (grace-independent by design): unlike the live
+    :func:`has_channel_count_batch` sibling (which will report
+    ``has=True`` for every finite count while ``ent.grace`` is
+    ``True``), each row here reflects the STATIC per-tier cap in
+    :data:`_TIER_CHANNEL_LIMIT` -- ``has_channel_count_at_batch("oss",
+    [5])`` returns ``has=False`` even in grace, which is the whole
+    point of the ``_at`` slot (render the would-be-locked state
+    alongside the live grant). The perspective-independent
+    ``required_tier`` slot is delegated to
+    :func:`min_tier_for_channel_count` so it stays byte-parity with the
+    sibling ``has_channel_count_batch`` / ``has_channel_count`` /
+    ``min_tier_for_channel_count`` scalars for the same count.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown
+      perspective -> ``None`` (caller renders "unknown tier" / 404).
+      Matches the ``None`` posture the rest of the ``_at_batch`` family
+      uses for the perspective-validation failure mode (see
+      :func:`min_tier_for_channel_count_at_batch`).
+    * ``counts`` is any iterable. ``None`` or non-iterable -> ``[]``
+      (mirrors :func:`has_node_count_batch`).
+    * Per-value dedup by ``str(int(raw))`` when parseable, else
+      ``str(raw)``. First-seen order preserved.
+    * Non-int items surface as one row with ``unknown=True`` /
+      ``has=False`` (strict callsite-typo fail-closed posture matching
+      :func:`has_channel_count_at`).
+    * ``count <= 0`` -- ``has=True`` (trivially satisfied by the free
+      floor on every perspective, mirrors
+      :func:`has_channel_count_at`'s zero contract);
+      ``required_tier="oss"`` per :func:`min_tier_for_channel_count`.
+    * Positive int -- ``has`` reflects the perspective's cap in
+      :data:`_TIER_CHANNEL_LIMIT` (``None`` there means unlimited, any
+      integer is the hard cap); ``required_tier`` is the cheapest tier
+      admitting ``count`` per :func:`min_tier_for_channel_count`.
+
+    Never raises: any per-row failure short-circuits to the fail-
+    closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if counts is None:
+            return []
+        items = list(counts)
+    except TypeError:
+        return []
+    try:
+        cap = _TIER_CHANNEL_LIMIT.get(p, _FREE_CHANNEL_LIMIT)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_channel_count_at_batch(%r) cap lookup failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            n = int(raw)
+            key = str(n)
+            parsed_ok = True
+        except (TypeError, ValueError):
+            key = str(raw)
+            n = None
+            parsed_ok = False
+        if key in seen:
+            continue
+        seen.add(key)
+        if not parsed_ok:
+            out.append(
+                {
+                    "key": key,
+                    "kind": "channels",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+            continue
+        try:
+            if n <= 0:
+                has_flag = True
+            else:
+                has_flag = cap is None or n <= int(cap)
+            req = min_tier_for_channel_count(n)
+            out.append(
+                {
+                    "key": key,
+                    "kind": "channels",
+                    "has": bool(has_flag),
+                    "unknown": False,
+                    "required_tier": req,
+                    "required_tier_label": tier_label(req) if req else None,
+                    "required_tier_rank": tier_rank(req) if req else -1,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_channel_count_at_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            out.append(
+                {
+                    "key": key,
+                    "kind": "channels",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+    return out
+
+
+
 def has_retention_window(days) -> bool:
     """Boolean-gate scalar: does the CURRENT install admit a ``days`` history
     window?
@@ -6330,6 +6486,174 @@ def has_retention_window_batch(days_list) -> list[dict]:
             }
         out.append(row)
     return out
+
+
+
+def has_retention_window_at_batch(
+    perspective_tier: str, days_list
+) -> list[dict] | None:
+    """Hypothetical-perspective per-value boolean-gate rows on the
+    ``retention_days`` capacity axis in ONE round-trip. Retention-axis
+    twin of :func:`has_channel_count_at_batch`.
+
+    Fills the ``_at_batch`` slot on the retention axis alongside
+    :func:`min_tier_for_retention_window_at_batch` (the perspective-
+    tier variant of the reverse-lookup batch on the same axis). A
+    pricing-matrix walkthrough comparing several hypothetical retention
+    windows from a fixed perspective ("at Starter -- does 7 / 30 / 90 /
+    unlimited days fit?") renders off ONE URL per perspective instead
+    of ``N`` calls to :func:`has_retention_window_at`.
+
+    Row shape mirrors :func:`has_channel_count_at_batch` on the sibling
+    axis. The unlimited row is identifiable via ``key="unlimited"`` and
+    is the *only* per-axis ``_at_batch`` on the retention axis that
+    admits the unlimited sentinel -- matching
+    :func:`min_tier_for_retention_window_at_batch` on the input side::
+
+        {
+          "key":                "<normalised int as str>" | "unlimited",
+          "kind":               "retention_days",
+          "has":                <bool>,       # perspective's static cap admits days
+          "unknown":            <bool>,       # True iff non-int / non-"unlimited" input
+          "required_tier":      "<tier id>" | None,
+          "required_tier_label":"<label>"   | None,
+          "required_tier_rank": <int>,        # -1 when required_tier None
+        }
+
+    Perspective-shaped (grace-independent by design): each row reflects
+    the STATIC per-tier cap in :data:`_TIER_RETENTION_DAYS` --
+    ``has_retention_window_at_batch("oss", [30])`` returns ``has=False``
+    even in grace. The perspective-independent ``required_tier`` slot
+    is delegated to :func:`min_tier_for_retention_window` so it stays
+    byte-parity with the sibling scalars for the same window.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``None`` (matches the ``None`` posture the rest of the
+      ``_at_batch`` family uses).
+    * ``days_list`` is any iterable. ``None`` or non-iterable -> ``[]``.
+    * Per-row items may be:
+
+      * ``None`` or the case-insensitive string ``"unlimited"`` -- the
+        unlimited-history request; ``has=True`` iff the perspective's
+        cap is ``None`` (Enterprise on the current tier table);
+        ``required_tier`` matches
+        :func:`min_tier_for_retention_window(None)`; ``key="unlimited"``.
+      * an int (or int-parseable string) -- finite ``days`` window;
+        ``has`` = perspective's cap is ``None`` or ``>= days``;
+        ``key="<n>"``.
+      * Any other value (blank / non-int / non-``"unlimited"`` string) --
+        collapses to ``unknown=True`` / ``has=False`` with ``key`` as
+        the raw string (strict callsite-typo fail-closed posture).
+    * ``days <= 0`` on a finite int -- ``has=True`` (trivially satisfied
+      by the free floor on every perspective, matches
+      :func:`has_retention_window_at`).
+    * Per-value dedup by normalised key (``"<n>"`` for a parsed int,
+      ``"unlimited"`` for the unlimited sentinel and every
+      case-insensitive variant of it, ``str(raw)`` otherwise). First-
+      seen order preserved.
+
+    Never raises: any per-row failure short-circuits to the fail-
+    closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if days_list is None:
+            return []
+        items = list(days_list)
+    except TypeError:
+        return []
+    try:
+        cap = _TIER_RETENTION_DAYS.get(p, 7)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_retention_window_at_batch(%r) cap lookup failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        is_unlimited = raw is None or (
+            isinstance(raw, str) and raw.strip().lower() == "unlimited"
+        )
+        if is_unlimited:
+            key = "unlimited"
+            n = None
+            parsed_ok = True
+        else:
+            try:
+                n = int(raw)
+                key = str(n)
+                parsed_ok = True
+            except (TypeError, ValueError):
+                key = str(raw)
+                n = None
+                parsed_ok = False
+        if key in seen:
+            continue
+        seen.add(key)
+        if not parsed_ok:
+            out.append(
+                {
+                    "key": key,
+                    "kind": "retention_days",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+            continue
+        try:
+            if n is None:
+                has_flag = cap is None
+                req = min_tier_for_retention_window(None)
+            elif n <= 0:
+                has_flag = True
+                req = min_tier_for_retention_window(n)
+            else:
+                has_flag = cap is None or n <= int(cap)
+                req = min_tier_for_retention_window(n)
+            out.append(
+                {
+                    "key": key,
+                    "kind": "retention_days",
+                    "has": bool(has_flag),
+                    "unknown": False,
+                    "required_tier": req,
+                    "required_tier_label": tier_label(req) if req else None,
+                    "required_tier_rank": tier_rank(req) if req else -1,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_retention_window_at_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            out.append(
+                {
+                    "key": key,
+                    "kind": "retention_days",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+    return out
+
 
 
 def has_node_count(count) -> bool:
