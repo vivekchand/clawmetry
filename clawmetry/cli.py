@@ -1969,11 +1969,30 @@ def _cmd_disconnect(args) -> None:
         _kill_sync_daemon()  # also kill any bare subprocess daemon
         print("✅  Stopped sync daemon")
 
+    # Capture node_id BEFORE the config file goes away — the keychain entry
+    # is keyed by it.
+    _node_id = ""
+    try:
+        import json as _json_dc
+        _node_id = _json_dc.loads(CONFIG_FILE.read_text()).get("node_id", "")
+    except Exception:
+        pass
+
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()
         print(f"✅  Removed config ({CONFIG_FILE})")
     if STATE_FILE.exists():
         STATE_FILE.unlink()
+
+    # The cm_ bearer is also mirrored into ~/.openclaw/openclaw.json
+    # (clawmetry.cloudToken) and the E2E key may sit in the OS keychain.
+    # Leaving either behind makes a later install/launch silently re-adopt
+    # this account (founder report 2026-08-10).
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        print("✅  Cleared cloud token from ~/.openclaw/openclaw.json")
+    if delete_workspace_keychain_entry(_node_id):
+        print("✅  Removed workspace key from the OS keychain")
 
     # Drop the stale sync-progress file so the dashboard banner ("Step:
     # crons · about 2m remaining") doesn't freeze on the last phase the
@@ -2332,6 +2351,33 @@ def _cmd_uninstall() -> None:
                     print(f"  ✅  Scheduled removal of {_cand} (in use by this uninstall)")
                 except Exception:
                     print(f"  ⚠️  Could not schedule removal of {_cand}. Remove it manually.")
+
+    # 2b. Clear the cloudToken mirrored into OpenClaw's config, the
+    # ClawMetry-owned files inside ~/.openclaw, and the OS-keychain
+    # workspace-key entry. Node_id must be read BEFORE the config dir goes
+    # away. Leaving any of these behind lets a later install re-adopt the
+    # old account identity with zero login (founder report 2026-08-10).
+    _node_id_u = ""
+    try:
+        import json as _json_un
+        _node_id_u = _json_un.loads((clawmetry_dir / "config.json").read_text()).get("node_id", "")
+    except Exception:
+        pass
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        print("  ✅  Cleared cloud token from ~/.openclaw/openclaw.json")
+    if delete_workspace_keychain_entry(_node_id_u):
+        print("  ✅  Removed workspace key from the OS keychain")
+    _openclaw_home = home / ".openclaw"
+    for _owned in (".clawmetry", "clawmetry.db", "clawmetry.db-shm", "clawmetry.db-wal"):
+        _p = _openclaw_home / _owned
+        try:
+            if _p.is_dir():
+                shutil.rmtree(_p, ignore_errors=True)
+            elif _p.exists():
+                _p.unlink()
+        except Exception:
+            pass
 
     # 3. Remove config directory (includes venv). ignore_errors hides
     # locked-file failures, so verify and re-try instead of printing a

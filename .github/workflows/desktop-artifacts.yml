@@ -293,9 +293,14 @@ jobs:
             choco install nsis -y --no-progress
             $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
           }
-          $signArgs = @()
-          if ($Env:HAS_WIN_CERT -eq 'true') { $signArgs = @("/DSIGN_CMD=$Env:SIGN_CMD") }
-          & $makensis @signArgs "/DVERSION=${{ steps.ver.outputs.version }}" "/DSRC_DIR=$PWD\dist\ClawMetry" desktop\installer\windows.nsi
+          # VIVERSION must be numeric x.y.z.w for VIProductVersion; releases
+          # are x.y.z so append .0 (non-numeric dev versions fall back to
+          # the script's 0.0.0.0 default by passing nothing).
+          $nsisArgs = @("/DVERSION=${{ steps.ver.outputs.version }}")
+          if ("${{ steps.ver.outputs.version }}" -match '^\d+\.\d+\.\d+$') { $nsisArgs += "/DVIVERSION=${{ steps.ver.outputs.version }}.0" }
+          if ($Env:HAS_WIN_CERT -eq 'true') { $nsisArgs += "/DSIGN_CMD=$Env:SIGN_CMD" }
+          $nsisArgs += @("/DSRC_DIR=$PWD\dist\ClawMetry", "desktop\installer\windows.nsi")
+          & $makensis @nsisArgs
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
           Move-Item "desktop\installer\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe"
           # Fixed-name copy — same stable-URL convention as the zip above.

@@ -86,9 +86,24 @@ BRAND_BORDER = "#1f2937"
 ONBOARDING_STAMP_NAME = "onboarding-completed.json"
 
 
+def read_stamp(runtime_dir: Path):
+    """Parse the onboarding stamp. Returns the payload dict, or None when
+    the stamp is missing, truncated, or otherwise unreadable — a corrupt
+    stamp must fail toward re-showing onboarding, never toward silently
+    skipping it."""
+    stamp = Path(runtime_dir) / ONBOARDING_STAMP_NAME
+    try:
+        data = json.loads(stamp.read_text())
+        if isinstance(data, dict) and data.get("completed"):
+            return data
+    except Exception:
+        pass
+    return None
+
+
 def is_first_launch(runtime_dir: Path) -> bool:
     """True when we have never completed onboarding for this install."""
-    return not (Path(runtime_dir) / ONBOARDING_STAMP_NAME).exists()
+    return read_stamp(runtime_dir) is None
 
 
 def mark_onboarding_completed(
@@ -109,9 +124,86 @@ def mark_onboarding_completed(
         "email": email or "",
     }
     try:
-        stamp.write_text(json.dumps(payload))
+        # Atomic write: a crash mid-write must not leave a truncated stamp
+        # (read_stamp treats corrupt as first-launch, so a partial file
+        # would re-onboard — annoying but safe; better to avoid it).
+        tmp = stamp.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, stamp)
     except OSError:
         pass  # onboarding stamp is best-effort; a re-shown pane is not a bug
+
+
+def clear_onboarding_stamp(runtime_dir: Path) -> None:
+    """Delete the stamp so the next boot re-onboards (used when stored
+    credentials turn out to be revoked/invalid). Best-effort."""
+    try:
+        (Path(runtime_dir) / ONBOARDING_STAMP_NAME).unlink()
+    except OSError:
+        pass
+
+
+def stored_credentials_state(app_base: Optional[str] = None, *, timeout: float = 3.0) -> str:
+    """Classify the credentials a previous run left on disk.
+
+    Returns one of:
+      * ``"absent"``  — no cm_ key anywhere: the install is signed out.
+      * ``"valid"``   — a key exists and the cloud accepts it (or the
+                        install is local-only/self-host, where the cloud
+                        has no say).
+      * ``"invalid"`` — the cloud explicitly rejected the key (401/403):
+                        revoked, deleted account, or foreign leftovers.
+      * ``"unknown"`` — network trouble: fail OPEN (treat as valid) so an
+                        offline laptop never gets locked out of its own
+                        dashboard.
+
+    This is the startup re-validation the boot gate uses: file existence
+    alone must never present a signed-in app (founder report 2026-08-10:
+    a fresh install landed on the dashboard signed-in off leftover files).
+    """
+    home = Path.home()
+    token = ""
+    # Same resolution order as the dashboard's _read_cloud_token.
+    try:
+        oc = json.loads((home / ".openclaw" / "openclaw.json").read_text())
+        token = ((oc.get("clawmetry") or {}).get("cloudToken") or "").strip()
+    except Exception:
+        pass
+    if not token:
+        try:
+            cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
+            k = (cfg.get("api_key") or "").strip()
+            if k.startswith("cm_"):
+                token = k
+        except Exception:
+            pass
+    if not token:
+        return "absent"
+
+    # Self-host / local-only installs: the local config is authoritative;
+    # never phone home to validate (mirrors clawmetry.config.is_cloud_disabled).
+    if (os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+            in ("1", "true", "yes", "on")):
+        return "valid"
+    try:
+        if (home / ".clawmetry" / "nocloud").is_file():
+            return "valid"
+    except Exception:
+        pass
+
+    base = (app_base or resolve_app_base()).rstrip("/")
+    url = f"{base}/api/cloud/account?token={urllib.parse.quote(token)}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            if resp.status in (401, 403):
+                return "invalid"
+            return "valid"
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return "invalid"
+        return "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _win_subprocess_kwargs() -> dict:
