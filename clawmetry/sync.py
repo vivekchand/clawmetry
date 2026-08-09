@@ -1187,8 +1187,44 @@ _TRIAL_STATE = {
     "plan": None,
     "trial_days_left": None,
     "upgrade_url": "https://app.clawmetry.com/cloud",
+    "checkout_url": None,    # signed per-account Stripe checkout URL, if any
     "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
 }
+
+# Trial-state cache file the paywall overlay's backend reads
+# (clawmetry/trial_enforcement.py::persisted_trial_state). The daemon writes
+# it from heartbeat responses so the dashboard process's "Continue to payment"
+# button can point at the per-account signed Stripe checkout URL instead of
+# the generic upgrade page. In-memory _TRIAL_STATE alone is useless to the
+# dashboard: it runs in a different process and only ever sees the defaults.
+_TRIAL_STATE_FILE_PATH = os.path.expanduser("~/.clawmetry/trial_state.json")
+
+
+def _persist_trial_state_to_disk() -> None:
+    """Mirror the heartbeat's upgrade/checkout URLs into
+    ``~/.clawmetry/trial_state.json``. Idempotent (skips the write when the
+    file already matches) and best-effort — never raises."""
+    try:
+        payload = {
+            "upgrade_url": _TRIAL_STATE.get("upgrade_url"),
+            "checkout_url": _TRIAL_STATE.get("checkout_url"),
+            "plan": _TRIAL_STATE.get("plan"),
+            "sync_allowed": _TRIAL_STATE.get("sync_allowed"),
+        }
+        try:
+            if os.path.isfile(_TRIAL_STATE_FILE_PATH):
+                with open(_TRIAL_STATE_FILE_PATH, encoding="utf-8") as fh:
+                    if json.load(fh) == payload:
+                        return
+        except Exception:
+            pass
+        os.makedirs(os.path.dirname(_TRIAL_STATE_FILE_PATH), exist_ok=True)
+        tmp = _TRIAL_STATE_FILE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _TRIAL_STATE_FILE_PATH)
+    except Exception as exc:
+        log.debug("trial_state: persist failed: %s", exc)
 
 # Cloud-plan cache file the entitlements resolver reads. The daemon writes it
 # from heartbeat responses so a separate process (the Flask dashboard) can pick
@@ -1344,6 +1380,11 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    if resp.get("checkout_url"):
+        _TRIAL_STATE["checkout_url"] = resp["checkout_url"]
+    # Persist the URLs for the dashboard process (paywall "Continue to
+    # payment" button); idempotent, so cheap on every beat.
+    _persist_trial_state_to_disk()
     # Reconcile the on-disk plan cache on EVERY heartbeat (the founder ask:
     # "check & start sync at every heartbeat, for which plan it is in"). The
     # call is idempotent (a no-op when the cache already matches the live tier),

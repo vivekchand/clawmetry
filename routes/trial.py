@@ -286,3 +286,70 @@ def api_trial_mark_warned():
     except Exception as exc:
         _hb_log.warning("trial.mark_warned: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 200
+
+
+# Cloud endpoint that mints a Stripe Checkout Session for the account this
+# node belongs to (X-Api-Key auth). Lives on the license server / ingest app;
+# clawmetry.license._cloud_base honours CLAWMETRY_LICENSE_SERVER /
+# CLAWMETRY_INGEST_URL for self-hosted setups.
+_CHECKOUT_SESSION_PATH = "/api/billing/checkout-session"
+
+
+def _local_api_key() -> str:
+    """The cloud account key this node is linked to, or ``""`` when the
+    install has never run ``clawmetry connect``/``login``. Never raises."""
+    try:
+        from clawmetry.sync import load_config
+        cfg = load_config() or {}
+        return str(cfg.get("api_key") or "")
+    except Exception:
+        return ""
+
+
+@bp_trial.route("/api/trial/checkout", methods=["POST"])
+def api_trial_checkout():
+    """Resolve the best "Continue to payment" destination for this install.
+
+    The account is already known locally (the node's ``api_key`` from
+    ``clawmetry connect``), so instead of dropping the user on the generic
+    upgrade page we ask the cloud to mint a per-account Stripe Checkout
+    Session and send the browser straight there: card form pre-scoped to the
+    right account, and on completion the cloud attaches the freshly-minted
+    license to the next daemon heartbeat, which unlocks the dashboard
+    automatically (no key to copy-paste).
+
+    Fallback chain — this endpoint always returns HTTP 200 with a usable URL:
+      1. live Stripe Checkout Session minted by the cloud (``source: session``)
+      2. per-account ``checkout_url`` cached from a heartbeat (``source: cached``)
+      3. generic upgrade page (``source: upgrade``)
+    """
+    from clawmetry import trial_enforcement as _te
+
+    api_key = _local_api_key()
+    if api_key:
+        try:
+            from clawmetry import license as _lic
+            base = _lic._cloud_base().rstrip("/")
+            body = json.dumps({"context": "trial_hard_block"}).encode("utf-8")
+            req = urllib.request.Request(
+                base + _CHECKOUT_SESSION_PATH,
+                data=body,
+                headers={"Content-Type": "application/json",
+                         "X-Api-Key": api_key},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            url = (payload.get("url") or "").strip()
+            if payload.get("ok") and url.startswith("https://"):
+                return jsonify({"ok": True, "url": url, "source": "session"})
+        except Exception as exc:
+            # Older cloud without the endpoint (404), network trouble, or a
+            # malformed reply: all fall through to the cached / generic URL.
+            _hb_log.debug("trial.checkout: session mint failed: %s", exc)
+
+    cached = _te.resolved_checkout_url()
+    if cached:
+        return jsonify({"ok": True, "url": cached, "source": "cached"})
+    return jsonify({"ok": True, "url": _te.resolved_upgrade_url(),
+                    "source": "upgrade"})
