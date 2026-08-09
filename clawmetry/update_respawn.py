@@ -153,7 +153,14 @@ def main(argv=None) -> int:
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": log,
               "close_fds": True, "env": env}
     if os.name == "nt":
-        kwargs["creationflags"] = _DETACHED
+        # NO_WINDOW (hidden console), NOT _DETACHED (no console): the
+        # relaunched daemon is a console-subsystem exe whose pip-launcher
+        # re-execs python.exe workers — with a DETACHED parent each worker
+        # allocated a fresh VISIBLE console that sat on screen for the
+        # daemon's lifetime (founder report 2026-08-09, persistent Windows
+        # Terminal tab titled with the venv exe path). A hidden console is
+        # inherited by every descendant; new process group unchanged.
+        kwargs["creationflags"] = _NO_WINDOW | 0x00000200
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(relaunch_cmd, **kwargs)

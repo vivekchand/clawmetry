@@ -1435,8 +1435,14 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
             log = open(log_path, "ab")
             kw = {"stdout": log, "stderr": log, "stdin": _sp.DEVNULL}
             if system == "Windows":
-                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-                kw["creationflags"] = 0x00000208
+                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP. NO_WINDOW (a
+                # hidden console the daemon's own console-subsystem children
+                # inherit), NOT DETACHED_PROCESS (no console at all): a
+                # console-less parent's unflagged children each get a fresh
+                # VISIBLE console — on Win11, a Windows Terminal tab that sits
+                # on the user's screen for the daemon's lifetime (founder
+                # report 2026-08-09, "open forever" window after self-update).
+                kw["creationflags"] = 0x08000200
             else:
                 kw["start_new_session"] = True
             _sp.Popen(cmd, **kw)
@@ -1860,10 +1866,14 @@ def _start_subprocess() -> None:
         # start_new_session is POSIX-only and silently no-ops on Windows, which
         # left the daemon inside the launching console's process group: closing
         # that window delivered CTRL_CLOSE_EVENT and killed the daemon with it.
-        # DETACHED_PROCESS cuts it loose from the console, and a new process
-        # group stops Ctrl+C in the parent terminal from propagating.
+        # CREATE_NO_WINDOW gives the daemon its OWN (hidden) console — cut
+        # loose from the launching terminal like DETACHED_PROCESS, but unlike
+        # DETACHED its console-subsystem children inherit the hidden console
+        # instead of each allocating a fresh VISIBLE one (founder report
+        # 2026-08-09: persistent Windows Terminal tab after self-update).
+        # The new process group still stops parent-terminal Ctrl+C propagating.
         spawn_kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         )
     else:
         spawn_kwargs["start_new_session"] = True

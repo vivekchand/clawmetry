@@ -297,8 +297,13 @@ def start_background_subprocess() -> bool:
     )
     spawn_kwargs = {"stdin": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS: both detach from the
+        # launching terminal, but a DETACHED (console-less) daemon's own
+        # console-subsystem children each allocate a fresh VISIBLE console
+        # (a persistent Windows Terminal tab on Win11 — founder report
+        # 2026-08-09). NO_WINDOW's hidden console is inherited instead.
         spawn_kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         )
     else:
         spawn_kwargs["start_new_session"] = True

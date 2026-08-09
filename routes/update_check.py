@@ -191,7 +191,12 @@ def _schedule_windows_respawn(delay_secs: float = 5.0) -> None:
     def _respawn():
         try:
             import subprocess
-            flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP — a hidden console
+            # the helper's own children inherit, NOT DETACHED_PROCESS (no
+            # console): console-subsystem children of a console-less parent
+            # each allocate a fresh VISIBLE console (persistent Windows
+            # Terminal tab on Win11 — founder report 2026-08-09).
+            flags = 0x08000000 | 0x00000200
             cmd = _respawn_cmdline()
             log_dir = os.path.expanduser("~/.clawmetry")
             try:
