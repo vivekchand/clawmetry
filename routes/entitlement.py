@@ -12670,6 +12670,188 @@ def api_entitlement_has_batch():
         return jsonify(_has_batch_fallback())
 
 
+def _has_batch_at_fallback(tier_in: str) -> dict:
+    """Grace-shape fallback body for ``/api/entitlement/has-batch-at``.
+
+    Perspective-carrying sibling of :func:`_has_batch_fallback`: on a
+    resolver crash the pricing walkthrough keeps rendering with empty
+    per-axis rows AND its "from <perspective>" copy still has its
+    placeholders. Fail-closed on the ``has_all`` rollup for the same
+    reason :func:`_has_batch_fallback` does -- a paywall matrix that
+    lost the resolver must not silently render every row as granted.
+
+    Never raises: any tier-metadata blowup falls back to the raw
+    ``tier_in`` string and rank ``-1``.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = -1
+    return {
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "has_all": False,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-batch-at")
+def api_entitlement_has_batch_at():
+    """``GET /api/entitlement/has-batch-at?tier=<perspective>&features=a,b,c
+    &runtimes=x,y&channels=N&retention_days=K&nodes=M`` -- hypothetical-
+    perspective sibling of ``/api/entitlement/has-batch``.
+
+    Fills the missing ``_at`` slot on the ``has-batch`` mixed-axis batch
+    surface alongside ``/api/entitlement/min-tier-batch-at`` (the
+    perspective sibling on the reverse-lookup axis) and the singular
+    ``/has-feature-at`` / ``/has-runtime-at`` / ``/has-channel-count-at``
+    / ``/has-retention-window-at`` / ``/has-node-count-at`` scalars. A
+    paywall matrix walkthrough at a hypothetical perspective ("if I
+    were on Starter, does this bundle land granted?") renders off ONE
+    round-trip instead of N calls to the singular ``_at`` scalars +
+    client-side row assembly.
+
+    Wraps :func:`clawmetry.entitlements.has_batch_at` and layers the
+    perspective envelope (``perspective_tier`` /
+    ``perspective_tier_label`` / ``perspective_tier_rank``) plus the
+    standard resolver envelope (``current_tier`` / ``current_tier_rank``
+    / ``grace`` / ``enforced``) on top so a walkthrough surface can
+    render the "from <perspective>" copy alongside "you are here" off
+    one call.
+
+    Perspective-shaped (grace-independent by design): unlike the LIVE
+    ``/has-batch`` sibling (which reports ``has=true`` for every known
+    row while ``ent.grace`` is ``true``), each row here reflects the
+    STATIC per-tier grant for ``perspective_tier``. ``has-batch-at?
+    tier=oss&features=fleet`` returns ``has=false`` for the fleet row
+    even in grace -- the whole point of the ``_at`` slot (render the
+    would-be-locked state alongside the live grant).
+
+    Args mirror ``/has-batch`` byte-for-byte except for the additional
+    ``tier=`` perspective arg. Same CSV normalisation, same capacity-
+    axis parsing, same ``None`` = "not supplied" sentinel.
+
+    Response shape (13 keys, byte-stable across every input branch)::
+
+        {
+          "perspective_tier":       "...",
+          "perspective_tier_label": "...",
+          "perspective_tier_rank":  <int>,
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+          "has_all":            <bool>,   # True iff every emitted row is has=True AND unknown=False
+          "current_tier":       "...",
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``has``, ``unknown``,
+    ``required_tier``, ``required_tier_label`` and ``required_tier_rank``
+    (``-1`` when ``required_tier`` is ``None``). Per-row ``has_*_at``
+    parity with the singular ``/has-feature-at?`` /
+    ``/has-runtime-at?`` / ``/has-channel-count-at?`` /
+    ``/has-retention-window-at?`` / ``/has-node-count-at?`` endpoints is
+    pinned in the test suite so the batch cannot silently drift from
+    the singular scalars.
+
+    - **400** when ``tier=`` is missing / blank, OR when no constraint
+      axis is supplied.
+    - **404** when ``tier`` is unknown. The body carries ``which=tier``.
+    - **Never 5xxs**: a resolver failure yields the perspective-carrying
+      OSS-free shape (empty per-axis rows, ``has_all=False``) so the
+      pricing walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (_, channels_ok, channels_n, _) = _parse_capacity_arg("channels")
+        (_, retention_ok, retention_n, _) = _parse_capacity_arg(
+            "retention_days"
+        )
+        (_, nodes_ok, nodes_n, _) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_ok
+            and not retention_ok
+            and not nodes_ok
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        batch = _ent.has_batch_at(
+            tier_in,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels_n if channels_ok else None,
+            retention_days=retention_n if retention_ok else None,
+            nodes=nodes_n if nodes_ok else None,
+        )
+        if batch is None:
+            batch = {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            }
+        ent = _ent.get_entitlement()
+        batch["perspective_tier"] = tier_in
+        batch["perspective_tier_label"] = _ent.tier_label(tier_in)
+        batch["perspective_tier_rank"] = _ent.tier_rank(tier_in)
+        batch["has_all"] = _has_batch_rollup(batch)
+        batch["current_tier"] = ent.tier
+        batch["current_tier_rank"] = _ent.tier_rank(ent.tier)
+        batch["grace"] = bool(ent.grace)
+        batch["enforced"] = _ent.is_enforced()
+        return jsonify(batch)
+    except Exception as exc:
+        logger.warning("api_entitlement_has_batch_at: error: %s", exc)
+        return jsonify(_has_batch_at_fallback(tier_in))
+
+
 @bp_entitlement.route("/api/entitlement/min-tier-batch-at")
 def api_entitlement_min_tier_batch_at():
     """``GET /api/entitlement/min-tier-batch-at?tier=<perspective>
