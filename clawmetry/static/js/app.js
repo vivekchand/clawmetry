@@ -18,6 +18,9 @@
 (function initClawMetryHardBlockOverlay() {
   var POLL_MS_ACTIVE = 15000;    // while blocked: retry auto-refresh every 15s
   var POLL_MS_IDLE   = 60000;    // while unblocked: sanity-check every 60s
+  var POLL_MS_PAYING = 5000;     // after "Continue to payment": poll hard
+  var PAYING_WINDOW_MS = 10 * 60 * 1000;  // fast-poll for 10 min after click
+  var _checkoutClickedAt = 0;
   var OVERLAY_ID     = 'cm-hard-block-overlay';
   var STYLE_ID       = 'cm-hard-block-overlay-style';
 
@@ -113,7 +116,7 @@
     el.setAttribute('aria-modal', 'true');
     el.setAttribute('aria-labelledby', 'cm-hbo-title');
     el.setAttribute('data-cm-locked', '1');
-    var upgradeUrl = (state && state.upgrade_url) || 'https://app.clawmetry.com/upgrade';
+    var upgradeUrl = (state && (state.checkout_url || state.upgrade_url)) || 'https://app.clawmetry.com/upgrade';
     var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
     var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
     var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
@@ -150,6 +153,46 @@
         }),
       }).catch(function () {});
     } catch (e) { /* noop */ }
+
+    // Wire the payment CTA. The href (per-account checkout URL if the
+    // heartbeat cached one, else the upgrade page) is only the no-JS
+    // fallback: on click we ask /api/trial/checkout to mint a live Stripe
+    // Checkout Session for the account this node is already linked to, so
+    // the user lands directly on the card form instead of a generic
+    // upgrade page. The tab MUST be opened synchronously in the click
+    // handler (popup blockers kill window.open from inside a fetch
+    // callback) and is redirected once the URL arrives.
+    var ctaEl = el.querySelector('.cm-hbo-cta');
+    var statusElForCta = el.querySelector('.cm-hbo-status');
+    ctaEl.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      _checkoutClickedAt = Date.now();
+      var payTab = null;
+      try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      function go(url) {
+        if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
+        try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
+      }
+      statusElForCta.className = 'cm-hbo-status';
+      statusElForCta.textContent = 'Opening secure checkout…';
+      fetch('/api/trial/checkout', { method: 'POST' })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          go(resp && resp.url ? resp.url : ctaEl.href);
+          statusElForCta.textContent = 'Waiting for payment. This dashboard unlocks automatically once checkout completes.';
+          // Poll hard while the user is off paying so the unlock feels
+          // instant when the license lands on the next daemon heartbeat.
+          refreshAndMaybeUnblock(true);
+        })
+        .catch(function () { go(ctaEl.href); });
+      try {
+        fetch('/api/paywall/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'hard_block_checkout_click' }),
+        }).catch(function () {});
+      } catch (e) { /* noop */ }
+    });
 
     // Wire activate button — POSTs to /api/license/activate (allowlisted),
     // then forces a refresh + snapshot. The overlay auto-removes itself if
@@ -247,13 +290,18 @@
       if (!existing) mount(state);
     }
     _lastBlocked = blocked;
-    var delay = blocked ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    var delay = blocked ? (paying ? POLL_MS_PAYING : POLL_MS_ACTIVE) : POLL_MS_IDLE;
     if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
     window.__cmHardBlockTimer = setTimeout(tick, delay);
   }
 
   function tick() {
-    refreshAndMaybeUnblock(false);
+    // While the user is off paying, force the refresh-license path so the
+    // entitlement cache is invalidated and a license the daemon just wrote
+    // is honoured on THIS tick, not after the resolver TTL expires.
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    refreshAndMaybeUnblock(!!paying);
   }
 
   // First tick: read status ASAP (before any other tab hits an /api/* that
