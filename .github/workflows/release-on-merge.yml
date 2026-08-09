@@ -380,13 +380,26 @@ jobs:
           echo "✅ PyPI install of $NEW works end-to-end"
 
       - name: Create GitHub release tag
+        # The release is created as a DRAFT and only published by
+        # desktop-artifacts.yml AFTER all installers are attached. A
+        # published-but-assetless release immediately becomes GitHub's
+        # "latest", so every clawmetry.com download button
+        # (/releases/latest/download/<fixed-name>) 404s for the minutes
+        # the desktop build takes — seen live on v0.12.674 (2026-08-10).
+        # Drafts are invisible to /releases/latest, so downloads keep
+        # serving the previous complete release until the new one is
+        # whole. Draft releases do NOT create the git tag, so push it
+        # explicitly first — the workflow dispatch below needs the ref.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.bump.outputs.new }}" \
-            --title "v${{ steps.bump.outputs.new }}" \
+          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          git tag "$NEW_TAG" || echo "Tag already exists locally"
+          git push origin "refs/tags/$NEW_TAG" || echo "Tag already on origin, skipping"
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG" \
             --notes "Released via PR: ${{ github.event.pull_request.title }}" \
-            --latest || echo "Release tag already exists, skipping"
+            --draft || echo "Release already exists, skipping"
 
       # GitHub deliberately suppresses `on: push: tags:` cascade triggers
       # for anything created with the default GITHUB_TOKEN (see

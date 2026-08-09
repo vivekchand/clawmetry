@@ -380,13 +380,23 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
-      - name: Attach to release
+      # release-on-merge.yml creates the Release as a DRAFT so GitHub's
+      # /releases/latest (which every clawmetry.com download button
+      # resolves through) keeps pointing at the previous COMPLETE release
+      # while these installers build. This step attaches all assets and
+      # then publishes in one go (draft: false + make_latest).
+      # fail_on_unmatched_files is deliberately true: a missing installer
+      # must keep the release draft rather than publish a "latest" whose
+      # download links 404 (seen live on v0.12.674, 2026-08-10).
+      - name: Attach to release and publish
         uses: softprops/action-gh-release@v2
         with:
+          draft: false
+          make_latest: "true"
           files: |
             artifacts/clawmetry-macos/*.dmg
             artifacts/clawmetry-windows/*.zip
             artifacts/clawmetry-windows/*.exe
             artifacts/clawmetry-linux/*.tar.gz
             artifacts/clawmetry-linux/*.AppImage
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
