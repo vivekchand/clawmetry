@@ -26465,6 +26465,131 @@ def api_entitlement_preview_path_batch():
         )
 
 
+@bp_entitlement.route("/api/entitlement/preview-from-path-batch")
+def api_entitlement_preview_from_path_batch():
+    """``GET /api/entitlement/preview-from-path-batch?from=a,b,c&to=<id>``
+    -- source-axis batch sibling of ``/api/entitlement/preview-path``.
+
+    Mirror-direction twin of ``/preview-path-batch`` (which fixes ONE
+    source and fans out over N destinations): here we fix the destination
+    and fan out over sources. Where ``/preview-path`` walks the
+    cumulative-state rungs between ONE ``(from, to)`` pair, this walks
+    the cumulative-state rungs between N candidate sources and ONE ``to``
+    in ONE round-trip.
+
+    Use case: a fleet-consolidation "for each tier my nodes currently
+    sit on, show me the full Entitlement snapshot at every rung walked
+    to reach Cloud Pro" surface hydrates the per-rung cumulative
+    snapshot for every source off ONE call instead of N calls to
+    ``/preview-path``. Same-rank siblings strictly between each
+    ``(from, to)`` pair are included in each per-source path; same-rank
+    siblings of the shared ``to`` are excluded so each per-source path
+    terminates exactly at ``to``. Per-source path lengths can
+    legitimately differ (the rungs walked depend on the source),
+    matching ``/preview-path-batch``'s posture.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/preview-path?from=<from>&to=<to>`` -- pinned by parity tests so
+    the scalar and source-batch path accessors cannot drift. Supplied
+    source ids are normalised (whitespace stripped, lowercased,
+    duplicates dropped, first-seen order preserved). Unknown ids do not
+    404 the call -- they are echoed in ``unknown[]`` so a partially-bad
+    caller still gets paths back for the valid ids.
+
+    Response shape::
+
+        {
+          "to":            "<tier id>",
+          "to_label":      "...",
+          "to_rank":       <int>,
+          "tiers": [
+            {
+              "from":       "<tier id>",
+              "from_label": "...",
+              "from_rank":  <int>,
+              "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":       [<preview row>, ...],
+            },
+            ...
+          ],
+          "unknown":       ["bogus_id", ...],
+          "current_tier":  "<tier id>",
+          "grace":         <bool>,
+          "enforced":      <bool>,
+        }
+
+    - **400** when ``to=`` is missing / blank, or ``from=`` is missing /
+      empty after normalisation
+    - **404** when ``to`` is unknown (body carries ``which: "to"``)
+    - **200** with bucketed unknowns for unknown source ids -- does NOT
+      404 the call, matching every other batch sibling
+    - **Never 5xxs**: a synthesis failure short-circuits to an envelope
+      with empty rows so the matrix keeps rendering.
+
+    GET+CSV rather than the POST+JSON ``/preview-path-batch`` shape --
+    the source axis (``_TIER_ORDER``) is small and finite, so the CSV
+    always fits in a query string, matching sibling source-axis GETs.
+    """
+    t = (request.args.get("to") or "").strip().lower()
+    if not t:
+        return jsonify({"error": "missing to"}), 400
+    sources = _parse_csv_arg("from")
+    if not sources:
+        return jsonify({"error": "supply from=<csv>"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if t not in _ent._TIER_FEATURES:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "to", "to": t}
+                ),
+                404,
+            )
+        batch = _ent.preview_from_path_batch(sources, t)
+        if batch is None:
+            batch = {"tiers": [], "unknown": []}
+        try:
+            ent = _ent.get_entitlement()
+            current_tier = getattr(ent, "tier", "oss") or "oss"
+            grace = bool(getattr(ent, "grace", True))
+        except Exception:
+            current_tier = "oss"
+            grace = True
+        try:
+            enforced = bool(_ent.is_enforced())
+        except Exception:
+            enforced = False
+        return jsonify(
+            {
+                "to": t,
+                "to_label": _ent.tier_label(t),
+                "to_rank": _ent.tier_rank(t),
+                "tiers": batch.get("tiers", []),
+                "unknown": batch.get("unknown", []),
+                "current_tier": current_tier,
+                "grace": grace,
+                "enforced": enforced,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_preview_from_path_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "to": t,
+                "to_label": None,
+                "to_rank": -1,
+                "tiers": [],
+                "unknown": [],
+                "current_tier": "oss",
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-catalog-path-batch")
 def api_entitlement_feature_catalog_path_batch():
     """``GET /api/entitlement/feature-catalog-path-batch?from=<id>&to=a,b,c``
