@@ -6914,6 +6914,161 @@ def has_node_count_batch(counts) -> list[dict]:
     return out
 
 
+def has_node_count_at_batch(perspective_tier: str, counts) -> list[dict] | None:
+    """Hypothetical-perspective per-value boolean-gate rows on the
+    ``nodes`` capacity axis in ONE round-trip. Perspective-shaped
+    sibling of :func:`has_node_count_at` (singular) and node-axis twin
+    of :func:`has_channel_count_at_batch` / :func:`has_retention_window_at_batch`
+    on the capacity-axis ``_at_batch`` matrix.
+
+    Fills the last ``_at_batch`` slot on the ``nodes`` capacity axis
+    alongside :func:`min_tier_for_node_count_at_batch` (the perspective-
+    tier variant of the reverse-lookup batch on the same axis). A
+    pricing-matrix walkthrough comparing several hypothetical node
+    counts from a fixed perspective ("at OSS -- does 1 / 5 / 25 / 100
+    nodes fit?") renders off ONE URL per perspective instead of ``N``
+    calls to :func:`has_node_count_at` + client-side row assembly.
+
+    Row shape is byte-parity with :func:`has_channel_count_at_batch`
+    and :func:`has_node_count_batch` so a UI already wired for either
+    sibling batch can rebind without reshaping::
+
+        {
+          "key":                "<normalised int as str>",
+          "kind":               "nodes",
+          "has":                <bool>,       # perspective's static cap admits count
+          "unknown":            <bool>,       # True iff non-int input
+          "required_tier":      "<tier id>" | None,   # min_tier_for_node_count(count)
+          "required_tier_label":"<label>"   | None,
+          "required_tier_rank": <int>,        # -1 when required_tier None
+        }
+
+    Perspective-shaped (grace-independent by design): unlike the live
+    :func:`has_node_count_batch` sibling (which will report
+    ``has=True`` for every finite count while ``ent.grace`` is
+    ``True``), each row here reflects the STATIC per-tier cap in
+    :data:`_TIER_NODE_LIMIT` -- ``has_node_count_at_batch("oss", [5])``
+    returns ``has=False`` even in grace, which is the whole point of
+    the ``_at`` slot (render the would-be-locked state alongside the
+    live grant). The perspective-independent ``required_tier`` slot is
+    delegated to :func:`min_tier_for_node_count` so it stays byte-
+    parity with the sibling ``has_node_count_batch`` /
+    ``has_node_count`` / ``min_tier_for_node_count`` scalars for the
+    same count.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``None`` (caller renders "unknown tier" / 404). Matches the
+      ``None`` posture the rest of the ``_at_batch`` family uses for
+      the perspective-validation failure mode (see
+      :func:`has_channel_count_at_batch` and
+      :func:`min_tier_for_node_count_at_batch`).
+    * ``counts`` is any iterable. ``None`` or non-iterable -> ``[]``
+      (mirrors :func:`has_node_count_batch`).
+    * Per-value dedup by ``str(int(raw))`` when parseable, else
+      ``str(raw)``. First-seen order preserved.
+    * Non-int items surface as one row with ``unknown=True`` /
+      ``has=False`` (strict callsite-typo fail-closed posture matching
+      :func:`has_node_count_at`).
+    * ``count <= 0`` -- ``has=True`` (trivially satisfied by the free
+      floor on every perspective, mirrors :func:`has_node_count_at`'s
+      zero contract); ``required_tier="oss"`` per
+      :func:`min_tier_for_node_count`.
+    * Positive int -- ``has`` reflects the perspective's cap in
+      :data:`_TIER_NODE_LIMIT` (``None`` there means unlimited, any
+      integer is the hard cap); ``required_tier`` is the cheapest tier
+      admitting ``count`` per :func:`min_tier_for_node_count`.
+
+    Never raises: any per-row failure short-circuits to the fail-
+    closed row shape so the paywall matrix keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if counts is None:
+            return []
+        items = list(counts)
+    except TypeError:
+        return []
+    try:
+        cap = _TIER_NODE_LIMIT.get(p, _FREE_NODE_LIMIT)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_node_count_at_batch(%r) cap lookup failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    for raw in items:
+        try:
+            n = int(raw)
+            key = str(n)
+            parsed_ok = True
+        except (TypeError, ValueError):
+            key = str(raw)
+            n = None
+            parsed_ok = False
+        if key in seen:
+            continue
+        seen.add(key)
+        if not parsed_ok:
+            out.append(
+                {
+                    "key": key,
+                    "kind": "nodes",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+            continue
+        try:
+            if n <= 0:
+                has_flag = True
+            else:
+                has_flag = cap is None or n <= int(cap)
+            req = min_tier_for_node_count(n)
+            out.append(
+                {
+                    "key": key,
+                    "kind": "nodes",
+                    "has": bool(has_flag),
+                    "unknown": False,
+                    "required_tier": req,
+                    "required_tier_label": tier_label(req) if req else None,
+                    "required_tier_rank": tier_rank(req) if req else -1,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_node_count_at_batch row(%r) failed: %s",
+                raw,
+                exc,
+            )
+            out.append(
+                {
+                    "key": key,
+                    "kind": "nodes",
+                    "has": False,
+                    "unknown": True,
+                    "required_tier": None,
+                    "required_tier_label": None,
+                    "required_tier_rank": -1,
+                }
+            )
+    return out
+
+
 def has_features(features) -> bool:
     """Boolean-gate scalar: does the CURRENT install allow **all** ``features``?
 
@@ -11453,6 +11608,122 @@ def min_tier_for_all_at(
     except Exception as exc:
         logger.warning("entitlements: min_tier_for_all_at failed: %s", exc)
         return None
+
+
+def has_all_at(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_all`: would tier
+    ``perspective_tier`` grant **every** supplied axis in ONE mixed-bundle
+    fold?
+
+    Same relationship to :func:`has_all` that the singular ``_at`` scalars
+    (:func:`has_feature_at` / :func:`has_runtime_at` /
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at`) have to their current-perspective siblings:
+    the ``perspective_tier`` argument tells the fold which STATIC per-tier
+    grant to reason from, so a pricing-matrix cell can answer "would Pro
+    admit this whole bundle?" off ONE call instead of five singular
+    ``_at`` round-trips + a client-side AND-chain.
+
+    Fold rule: returns ``True`` iff every SUPPLIED axis' per-item ``_at``
+    gate returns ``True`` against ``perspective_tier``. Delegates per axis
+    to :func:`has_features_at` / :func:`has_runtimes_at` /
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at` so each axis inherits that scalar's typo /
+    empty / non-int / unknown-perspective posture without a divergent code
+    path here. **Grace-independent by construction**: every delegate is
+    backed by the static per-tier grant tables (via
+    :func:`_hypothetical_entitlement` on the feature / runtime axes and by
+    the static ``_TIER_CHANNEL_LIMIT`` / ``_TIER_RETENTION_DAYS`` /
+    ``_TIER_NODE_LIMIT`` tables on the capacity axes), so the answer is
+    identical under grace vs enforce for the same
+    (perspective, bundle) pair -- diverges deliberately from
+    :func:`has_all` (which grants every fully-known bundle in grace via
+    the live resolver's grace pass-through). Whole point of the ``_at``
+    slot is to render the would-be-locked state alongside the live grant.
+
+    Kwarg semantics mirror :func:`has_all` exactly (same signature so a
+    caller can pass identical kwargs to both helpers without a
+    re-normalise):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to the fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty. This
+      COLLAPSES the fold to ``False`` for the same callsite-typo posture
+      :func:`has_features_at` / :func:`has_runtimes_at` carry on their
+      empty inputs.
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- matches :func:`has_all`.
+    * Non-int capacity value (str, list, ...) on ``channels`` / ``nodes``
+      / ``retention_days`` -- collapses the fold to ``False`` (mirrors
+      the singular ``_at`` capacity scalars' strict-``False`` typo
+      posture).
+    * No axes supplied at all -- returns ``False``. Matches
+      :func:`has_all` empty-``False`` posture so a caller who forgot to
+      pass any of the five kwargs sees the typo at the callsite instead
+      of a silent grant. Distinct from :func:`min_tier_for_all_at`
+      (returns ``None`` on the same input -- nothing-to-compute); here
+      the boolean seat collapses to strict ``False``.
+    * Unknown / empty / non-string ``perspective_tier`` -- returns
+      ``False``. Perspective validation lives on the OUTER helper (once
+      per call) rather than folding into per-item ``_at`` calls, so a
+      bogus perspective fails-closed in one place. Same fail-closed
+      posture as :func:`has_features_at` on an unknown perspective.
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses the whole fold to ``False`` via the singular
+      :func:`has_features_at` / :func:`has_runtimes_at` typo posture. A
+      UI wanting to distinguish "denied by tier" from "typo" should call
+      the per-axis singular ``_at`` scalars (or
+      :func:`min_tier_for_all_at`) for the per-axis story.
+
+    Never raises: any delegate failure logs a warning and returns
+    ``False`` so a caller can bind this into a boolean AND-chain without
+    a try/except.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        supplied_any = False
+        if features is not None:
+            supplied_any = True
+            if not has_features_at(p, features):
+                return False
+        if runtimes is not None:
+            supplied_any = True
+            if not has_runtimes_at(p, runtimes):
+                return False
+        if channels is not None:
+            supplied_any = True
+            if not has_channel_count_at(p, channels):
+                return False
+        if retention_days is not None:
+            supplied_any = True
+            if not has_retention_window_at(p, retention_days):
+                return False
+        if nodes is not None:
+            supplied_any = True
+            if not has_node_count_at(p, nodes):
+                return False
+        return supplied_any
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_all_at(%r, ...) failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return False
 
 
 def _min_tier_for_all_bundle_row(bundle) -> dict:
