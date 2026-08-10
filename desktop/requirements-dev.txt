@@ -6,7 +6,7 @@ Pillow>=10.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
-pywebview>=5.0
+pywebview>=6.2.1
 # Linux only. pywebview's GTK backend does `import gi`; without this,
 # PyInstaller falls back to bundling whatever `gi` your SYSTEM python3
 # has (usually apt's python3-gi), which is compiled for the system's
