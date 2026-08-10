@@ -14,6 +14,13 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # actions: write is required by the "Kick tag-triggered workflows"
+      # step below — without it, `gh workflow run desktop-artifacts.yml`
+      # returns HTTP 403: Resource not accessible by integration. Verified
+      # 2026-08-07 on v0.12.658: dispatch step succeeded (because of `|| echo`)
+      # but silently 403'd, so desktop-artifacts had to be dispatched by hand
+      # to attach the .dmg to the release.
+      actions: write
 
     steps:
       - uses: actions/checkout@v7
@@ -373,13 +380,46 @@ jobs:
           echo "✅ PyPI install of $NEW works end-to-end"
 
       - name: Create GitHub release tag
+        # The release is created as a DRAFT and only published by
+        # desktop-artifacts.yml AFTER all installers are attached. A
+        # published-but-assetless release immediately becomes GitHub's
+        # "latest", so every clawmetry.com download button
+        # (/releases/latest/download/<fixed-name>) 404s for the minutes
+        # the desktop build takes — seen live on v0.12.674 (2026-08-10).
+        # Drafts are invisible to /releases/latest, so downloads keep
+        # serving the previous complete release until the new one is
+        # whole. Draft releases do NOT create the git tag, so push it
+        # explicitly first — the workflow dispatch below needs the ref.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.bump.outputs.new }}" \
-            --title "v${{ steps.bump.outputs.new }}" \
+          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          git tag "$NEW_TAG" || echo "Tag already exists locally"
+          git push origin "refs/tags/$NEW_TAG" || echo "Tag already on origin, skipping"
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG" \
             --notes "Released via PR: ${{ github.event.pull_request.title }}" \
-            --latest || echo "Release tag already exists, skipping"
+            --draft || echo "Release already exists, skipping"
+
+      # GitHub deliberately suppresses `on: push: tags:` cascade triggers
+      # for anything created with the default GITHUB_TOKEN (see
+      # https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow).
+      # So the tag we just created will NOT auto-fire desktop-artifacts.yml,
+      # publish.yml, or any other tag-triggered workflow. Kick them
+      # explicitly here — matches the actual intent of "when we cut a
+      # release, build the desktop bundles." Verified 2026-08-07: without
+      # this step, v0.12.656 and v0.12.657 published to PyPI cleanly but
+      # left the GitHub Release with zero binary assets attached.
+      - name: Kick tag-triggered workflows the token can't cascade
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          echo "▸ Dispatching desktop-artifacts.yml against $NEW_TAG"
+          gh workflow run desktop-artifacts.yml \
+            --repo ${{ github.repository }} \
+            --ref "$NEW_TAG" \
+            || echo "⚠ desktop-artifacts dispatch failed (non-blocking)"
 
       - name: Open PR for version bump
         # Branch protection on main blocks direct pushes. The wheel is

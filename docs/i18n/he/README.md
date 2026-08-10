@@ -1,4 +1,4 @@
-<!-- i18n-src:0e34918f8f2e -->
+<!-- i18n-src:7cfb63716507 -->
 > עברית translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -15,67 +15,67 @@
 
 > 🌐 **קראו זאת ב:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [עוד →](docs/i18n/)
 
-פקודה אחת. אפס תצורה. מזהה הכל אוטומטית.
+פקודה אחת. ללא הגדרות. מזהה הכל אוטומטית.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-נפתח בכתובת **http://localhost:8900** וזהו.
+נפתח בכתובת **http://localhost:8900** וזהו, סיימתם.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
 ## עובד עם 14 סביבות ריצה של סוכנים
 
-ClawMetry התחיל כפתרון תצפית עבור OpenClaw, וכעת הוא מודד את **כל צי הסוכנים שלכם** בלוח מחוונים אחד, תוך זיהוי אוטומטי של כל סביבת ריצה במכונה שלכם:
+ClawMetry החל כתצפית עבור OpenClaw, וכעת מודד את **כל צי הסוכנים שלכם** בלוח מחוונים אחד, תוך זיהוי אוטומטי של כל סביבת ריצה במחשב שלכם:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok** · **QM**
 
-OpenClaw ו-NemoClaw חינמיים באפליקציית הקוד הפתוח; שאר סביבות הריצה נפתחות עם ClawMetry Cloud או רישיון Pro בהתקנה עצמית. ניתן להחליף בין סביבות ריצה מהכותרת העליונה, וכל לשונית - עלות, טוקנים, כלים, עקבות - תתמקד מחדש בסביבת הריצה הזו. ראו את **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** לפירוט המדויק של החלוקה בין חינמי לתשלום, מטריצת הרמות, מבנה ה-`/api/entitlement`, וכלי שורת הפקודה `clawmetry license`.
+OpenClaw ו-NemoClaw חינמיים ביישום הקוד הפתוח; שאר סביבות הריצה נפתחות עם ClawMetry Cloud או רישיון Pro בהתקנה עצמית. החליפו סביבת ריצה מהכותרת, וכל לשונית, עלות, טוקנים, כלים, מעקבים, תתמקד מחדש בסביבת הריצה הזו. ראו **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** לפירוט המדויק של החלוקה בין חינמי לבתשלום, טבלת הרמות, מבנה `/api/entitlement`, וכלי שורת הפקודה `clawmetry license`.
 
 ## מה תקבלו
 
-- **Flow** - דיאגרמה חיה ומונפשת המציגה את זרימת ההודעות דרך ערוצים, המוח, כלים וחזרה
-- **Overview** - בדיקות תקינות, מפת חום של פעילות, מספר סשנים, מידע על מודלים
-- **Usage** - מעקב אחר טוקנים ועלויות עם פירוטים יומיים/שבועיים/חודשיים
-- **Sessions** - סשני סוכן פעילים עם מודל, טוקנים, פעילות אחרונה
-- **Crons** - משימות מתוזמנות עם סטטוס, הרצה הבאה, משך זמן
-- **Logs** - הזרמת לוגים בזמן אמת עם קידוד צבעים
-- **Memory** - עיינו ב-SOUL.md, MEMORY.md, AGENTS.md, הערות יומיות
-- **Transcripts** - ממשק בועות צ'אט לקריאת היסטוריית סשנים
-- **Alerts** - תקרות תקציב, טריגרים של שיעור שגיאות, זיהוי סוכן לא מקוון; נשלח ל-Slack, Discord, PagerDuty, Telegram, אימייל
-- **Approvals** - חוסמות מחיקות הרסניות, דחיפות כפויות (force push), שינויים במסדי נתונים, sudo, התקנות חבילות, קריאות רשת מאחורי אישור בלחיצה אחת
+- **Flow** — דיאגרמה אנימציה חיה שמראה הודעות זורמות דרך ערוצים, המוח, כלים, וחזרה
+- **Overview** — בדיקות תקינות, מפת חום פעילות, ספירת סשנים, מידע על מודלים
+- **Usage** — מעקב אחר טוקנים ועלויות עם פילוחים יומיים/שבועיים/חודשיים
+- **Sessions** — סשנים פעילים של הסוכן עם מודל, טוקנים, פעילות אחרונה
+- **Crons** — משימות מתוזמנות עם סטטוס, הרצה הבאה, משך זמן
+- **Logs** — הזרמת יומנים בזמן אמת עם קידוד צבעים
+- **Memory** — עיון בקבצי SOUL.md, MEMORY.md, AGENTS.md, הערות יומיות
+- **Transcripts** — ממשק בועות צ'אט לקריאת היסטוריית סשנים
+- **Alerts** — תקרות תקציב, טריגרים לשיעור שגיאות, זיהוי סוכן לא פעיל; מנתב ל-Slack, Discord, PagerDuty, Telegram, אימייל
+- **Approvals** — חוסם מחיקות הרסניות, דחיפות כוח (force push), שינויים במסדי נתונים, sudo, התקנות חבילות, קריאות רשת, מאחורי אישור בלחיצה אחת
 
 ## צילומי מסך
 
-### 🧠 Brain - זרם אירועים חי של הסוכן
+### 🧠 Brain — זרם אירועים חי של הסוכן
 ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
-### 📊 Overview - שימוש בטוקנים וסיכום סשנים
+### 📊 Overview — שימוש בטוקנים וסיכום סשנים
 ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-### ⚡ Flow - עדכון קריאות כלים בזמן אמת
+### ⚡ Flow — הזנת קריאות כלים בזמן אמת
 ![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-### 💰 Tokens - פירוט עלויות לפי מודל וסשן
+### 💰 Tokens — פירוט עלויות לפי מודל וסשן
 ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
-### 🧬 Memory - דפדפן קבצים של סביבת העבודה
+### 🧬 Memory — דפדפן קבצי סביבת העבודה
 ![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
-### 🔐 Security - עמדת אבטחה ויומן ביקורת
+### 🔐 Security — יציבה ויומן ביקורת
 ![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
-### 🚨 Alerts - תקרות תקציב, טריגרים של שיעור שגיאות, וובהוקים ל-Slack / Discord / PagerDuty / אימייל
+### 🚨 Alerts — תקרות תקציב, טריגרים לשיעור שגיאות, webhooks ל-Slack / Discord / PagerDuty / אימייל
 ![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-### ✋ Approvals - חוסמות קריאות כלים מסוכנות מאחורי אישור ידני; כללי הגנה מבוססי מדיניות
+### ✋ Approvals — חסימת קריאות כלים מסוכנות מאחורי אישור ידני; כללי הגנה מבוססי מדיניות
 ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**חסימה טרם ביצוע עבור Claude Code** - פקודה אחת מתקינה hook מסוג
-PreToolUse שעוצר קריאות כלים תואמות *לפני* שהן רצות וממתין
+**חסימה טרם-ביצוע עבור Claude Code** — פקודה אחת מתקינה
+hook מסוג PreToolUse שעוצר קריאות כלים תואמות *לפני* שהן רצות וממתין
 להחלטה שלכם (הקשה אחת מהטלפון עם
-[התראות דחיפה מהענן](https://app.clawmetry.com/push) מופעלות):
+[התראות דחיפה בענן](https://app.clawmetry.com/push) מופעלות):
 
 ```bash
 clawmetry hooks install     # writes ~/.claude/settings.json (idempotent)
@@ -83,16 +83,15 @@ clawmetry hooks status      # what's wired + how many policies are active
 clawmetry hooks uninstall   # removes only ClawMetry's entries
 ```
 
-דחייה חוסמת רק את אותה קריאת כלי אחת - הסוכן שומר על הסשן שלו ויכול
-לנסות גישה אחרת. אישור מהטלפון מדלג על ההנחיה המובנית של Claude Code
-לקבלת הרשאה (כבר עניתם). כלים שלא תואמים עולים כ-40ms ו
-נופלים חזרה לזרימת ההרשאות הרגילה של Claude Code. בנוסף תקבלו התראת
-דחיפה לטלפון כאשר Claude Code עצמו ממתין לכם (התראות
-`permission_prompt` / `idle_prompt`).
+דחייה חוסמת רק את קריאת הכלי הבודדת ההיא, הסוכן שומר על הסשן שלו ויכול
+לנסות גישה אחרת. אישור מהטלפון מדלג על הנחיית ההרשאה המובנית של Claude Code
+(כבר ענית). כלים לא תואמים עולים כ-40ms ו
+עוברים לזרימת ההרשאות הרגילה של Claude Code. תקבלו גם התראת דחיפה לטלפון כאשר Claude Code עצמו ממתין לכם (התראות `permission_prompt` /
+`idle_prompt`).
 
 ## התקנה
 
-**פקודה אחת (מומלץ):**
+**מהיר (מומלץ):**
 ```bash
 curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
@@ -103,18 +102,18 @@ pip install clawmetry
 clawmetry
 ```
 
-**מהקוד המקורי:**
+**מקוד המקור:**
 ```bash
 git clone https://github.com/vivekchand/clawmetry.git
 cd clawmetry && pip install flask && python3 dashboard.py
 ```
 
-## פיתוח ה-Frontend של v2
+## פיתוח Frontend גרסה 2
 
-אפליקציית ה-React של v2 נמצאת ב-`frontend/` ומוגשת בכתובת `/v2` כאשר
-שרת ה-Flask מופעל עם v2 פעיל.
+אפליקציית ה-React של גרסה 2 נמצאת ב-`frontend/` ומוגשת בכתובת `/v2` כאשר
+שרת Flask מופעל עם v2 מופעל.
 
-השתמשו בשני מסופים (terminals) בזמן הפיתוח:
+השתמשו בשני מסופים בזמן הפיתוח:
 
 ```bash
 # Terminal 1: Flask API/server on :8900
@@ -130,48 +129,49 @@ npm run dev
 ```
 
 פתחו את `http://localhost:5173/v2/`. Vite מנתב בקשות `/api` אל
-`http://localhost:8900`, כך שאפליקציית ה-React יכולה לתקשר עם שרת ה-Flask
-המקומי ללא הגדרות CORS נוספות.
+`http://localhost:8900`, כך שאפליקציית ה-React יכולה לתקשר עם שרת Flask המקומי
+ללא הגדרת CORS נוספת.
 
-כדי לבנות את החבילה שמסופקת עם חבילת ה-Python:
+כדי לבנות את החבילה שמצורפת לחבילת הפייתון:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-חבילת הייצור נכתבת לתוך `clawmetry/static/v2/dist/`.
+חבילת הייצור נכתבת אל `clawmetry/static/v2/dist/`.
 
 ## תאימות סביבות ריצה / סוכנים
 
-ClawMetry מתצפת על סביבות ריצה רבות של סוכני AI, לא רק OpenClaw. כל סביבת ריצה שאינה OpenClaw מגיעה עם מתאם קורא (reader adapter) ייעודי שממיר את פורמט הסשנים המקורי שלה לצורות המאוחדות של ClawMetry; הדימון קולט אותן לאותו מאגר DuckDB + תמונת מצב (snapshot) בענן, מתויגות לפי סביבת הריצה, ולשונית שחזור הסשן (Session replay) מציגה **מחליף סביבות ריצה** כאשר יש יותר מאחת נוכחת. ראו את [`docs/compatibility.md`](docs/compatibility.md) למטריצה המלאה + מדריך להוספת סביבות ריצה, ואת [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) למבוא למשפחת OpenClaw.
+ClawMetry עוקבת אחר סביבות ריצה רבות של סוכני AI, לא רק OpenClaw. כל סביבת ריצה שאינה OpenClaw מגיעה עם מתאם קורא ייעודי שמתרגם את פורמט הסשן המקורי שלה לצורות המאוחדות של ClawMetry; הדימון מטמיע אותן לאותו מאגר DuckDB + תמונת מצב בענן, מתויגות לפי סביבת הריצה, ולשונית שחזור הסשן מציגה **מחליף סביבת ריצה** כאשר קיימת יותר מאחת. ראו את [`docs/compatibility.md`](docs/compatibility.md) לטבלה המלאה + מדריך להוספת סביבות ריצה, ואת [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) למבוא למשפחת OpenClaw.
 
-מריצים את כלי אבטחת הסוכנים [numbat של Perplexity](https://github.com/perplexityai/numbat)? ClawMetry קולט את הממצאים והחלטות האכיפה שלו ישירות מהקופסה - ראו [`docs/NUMBAT.md`](docs/NUMBAT.md).
+מריצים את כלי אבטחת הסוכנים [numbat של Perplexity](https://github.com/perplexityai/numbat)? ClawMetry מטמיעה את הממצאים והחלטות האכיפה שלו ישר מהקופסה, ראו [`docs/NUMBAT.md`](docs/NUMBAT.md).
 
 | סביבת ריצה / סוכן | סטטוס | הערות |
 |---|---|---|
-| **OpenClaw** | מובנה (Native) | סביבת ריצה ייחוס, מזוהה אוטומטית |
-| **PicoClaw** | מתאם בטא | `providers.Message` JSONL שטוח (`~/.picoclaw/workspace/sessions`). תמלולים, מודל, קריאות כלים. |
-| **NanoClaw** | מתאם בטא | SQLite פר-סשן (`data/v2-sessions`). תמלולים + ספירת הודעות. |
-| **Hermes** | מתאם בטא | SQLite `~/.hermes/state.db`. תמלולים, מודל, טוקנים/עלות. |
-| **Claude Code** | מתאם בטא | JSONL `~/.claude/projects/.../<id>.jsonl`. תמלולים, מודל, קריאות כלים + חשיבה, שימוש בטוקנים. |
-| **Codex** | מתאם בטא | Rollout JSONL `~/.codex/sessions/...`. תמלולים, מודל, קריאות כלים, שימוש בטוקנים. |
-| **Cursor** | מתאם בטא | SQLite `state.vscdb`. תמלולי צ'אט/מחבר (composer), מודל. |
-| **Aider** | מתאם בטא | `.aider.chat.history.md` פר-פרויקט. תמלולים, מודל, ספירת טוקנים. |
-| **Goose** | מתאם בטא | SQLite `~/.local/share/goose`. תמלולים, מודל, קריאות כלים, סך טוקנים. |
-| **opencode** | מתאם בטא | SQLite `~/.local/share/opencode`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
-| **Qwen Code** | מתאם בטא | JSONL `~/.qwen/projects/.../chats`. תמלולים, מודל, קריאות כלים, שימוש בטוקנים. |
-| **Pi** | מתאם בטא | JSONL `~/.pi/agent/sessions`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
-| **Deep Agents** | מתאם בטא | SQLite `~/.deepagents/.state/sessions.db`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
-| **n8n** | מתאם בטא | SQLite `~/.n8n/database.sqlite`. הרצות זרימת עבודה (workflow), הרצות צמתים, פרומפטים של AI Agent, מודל + טוקנים היכן ש-n8n רושם אותם. |
-| **Antigravity** | מתאם בטא | Brain JSONL תחת `~/.gemini/<flavor>/brain/`. שיחות, שלבי כלים, חשיבה, פיצול טוקני Gemini לפי כל יצירה (generation) + עלות, צריכה של יצירה ברקע. |
-| **GitHub Copilot** | מתאם בטא | Copilot CLI `events.jsonl` תחת `~/.copilot/session-state/` + פנקס השימוש `session-store.db` לכל קריאה. שיחות, קריאות כלים, ניתוב מודלים, פיצול טוקנים מודע-מטמון (cache-aware), עלות המחויבת על ידי הספק ב"קרדיטי AI". |
+| **OpenClaw** | ילידית | סביבת ריצה ייחוס, מזוהה אוטומטית |
+| **PicoClaw** | מתאם בטא | `providers.Message` שטוח בפורמט JSONL (`~/.picoclaw/workspace/sessions`). תמלולים, מודל, קריאות כלים. |
+| **NanoClaw** | מתאם בטא | SQLite לפי סשן (`data/v2-sessions`). תמלולים + ספירת הודעות. |
+| **Hermes** | מתאם בטא | SQLite ‏`~/.hermes/state.db`. תמלולים, מודל, טוקנים/עלות. |
+| **Claude Code** | מתאם בטא | JSONL ‏`~/.claude/projects/.../<id>.jsonl`. תמלולים, מודל, קריאות כלים + חשיבה, שימוש בטוקנים. |
+| **Codex** | מתאם בטא | Rollout JSONL ‏`~/.codex/sessions/...`. תמלולים, מודל, קריאות כלים, שימוש בטוקנים. |
+| **Cursor** | מתאם בטא | SQLite ‏`state.vscdb`. תמלולי צ'אט/composer, מודל. |
+| **Aider** | מתאם בטא | `.aider.chat.history.md` לכל פרויקט. תמלולים, מודל, ספירת טוקנים. |
+| **Goose** | מתאם בטא | SQLite ‏`~/.local/share/goose`. תמלולים, מודל, קריאות כלים, סך טוקנים. |
+| **opencode** | מתאם בטא | SQLite ‏`~/.local/share/opencode`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
+| **Qwen Code** | מתאם בטא | JSONL ‏`~/.qwen/projects/.../chats`. תמלולים, מודל, קריאות כלים, שימוש בטוקנים. |
+| **Pi** | מתאם בטא | JSONL ‏`~/.pi/agent/sessions`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
+| **Deep Agents** | מתאם בטא | SQLite ‏`~/.deepagents/.state/sessions.db`. תמלולים, מודל, קריאות כלים, טוקנים + עלות. |
+| **n8n** | מתאם בטא | SQLite ‏`~/.n8n/database.sqlite`. הרצות זרימות עבודה, הרצות צמתים, בקשות AI Agent, מודל + טוקנים היכן ש-n8n מתעד אותם. |
+| **Antigravity** | מתאם בטא | Brain JSONL תחת `~/.gemini/<flavor>/brain/`. שיחות, שלבי כלים, חשיבה, פילוח טוקני Gemini לכל ג'נרציה + עלות, צריכת ג'נרציה ברקע. |
+| **GitHub Copilot** | מתאם בטא | Copilot CLI ‏`events.jsonl` תחת `~/.copilot/session-state/` + פנקס שימוש לכל קריאה `session-store.db`. שיחות, קריאות כלים, ניתוב מודלים, פילוח טוקנים מודע-מטמון, עלות המחויבת ביחידות אשראי AI של הספק. |
+| **Grok** | מתאם בטא | xAI Grok Build CLI (בינארי Rust תחת `~/.grok/bin/grok`): יומן אירועים גלובלי `~/.grok/logs/unified.jsonl` + לכל סשן `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}`. שיחות, פילוח טוקנים לכל תור, ניתוב מודלים, ומטען המאגר היוצא של ה-CLI המאוחסן תחת `~/.grok/upload_queue/` כך שתוכלו לראות מה יצא מהמחשב שלכם. |
 
-"מתאם בטא" משמעו ש-ClawMetry מספק קורא לפורמט הדיסק האמיתי של אותה סביבת ריצה, כל אחד נבנה ואומת מול התקנה אמיתית על מכונה אמיתית (ראו `tests/fixtures/runtimes/<rt>/`). המתאמים הם לקריאה בלבד (read-only); כל אחד מהם כן לגבי מה שסביבת הריצה שלו באמת שומרת בדיסק (למשל PicoClaw/NanoClaw/Cursor לא כותבים עלות טוקנים לדיסק). כאשר רצות כמה סביבות ריצה על צומת אחד, מחליף סביבות הריצה ממקד את תצוגת הסשנים לאחת מהן לצלילה עמוקה ונקייה.
+"מתאם בטא" משמעו ש-ClawMetry מספקת קורא לפורמט האמיתי על הדיסק של סביבת הריצה הזו, כל אחד נבנה + מאומת מול התקנה אמיתית על מכונה אמיתית (ראו `tests/fixtures/runtimes/<rt>/`). המתאמים הם לקריאה בלבד; כל אחד מהם כן לגבי מה שסביבת הריצה שלו באמת שומרת (למשל PicoClaw/NanoClaw/Cursor לא כותבים עלות טוקנים לדיסק). כאשר מספר סביבות ריצה פועלות על אותו node, מחליף סביבת הריצה ממקד את תצוגת הסשנים לאחת מהן לצלילה נקייה.
 
-## מעקב אחר כל סוכן SDK - ייחוס עלות מחוץ ללולאה
+## מעקב אחר כל סוכן SDK, ייחוס עלויות מחוץ-ללולאה
 
-סביבות הריצה הנ"ל כולן כותבות סשנים לדיסק. סוכן **הייצור** (production) שלכם - זה שבניתם על OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, או לולאת `httpx` פשוטה - לא עושה זאת. המיירט (interceptor) חסר התצורה של ClawMetry עדיין תופס את קריאות ה-LLM שלו (עלות, טוקנים, זמן תגובה, שגיאות) על ידי טלאי (monkey-patching) ל-`httpx`/`requests`:
+סביבות הריצה שלמעלה כולן כותבות סשנים לדיסק. **סוכן הייצור** שלכם, זה שבניתם על OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, או לולאת `httpx` פשוטה, לא עושה זאת. המיירט חסר-ההגדרות של ClawMetry עדיין לוכד את קריאות ה-LLM שלו (עלות, טוקנים, זמן תגובה, שגיאות) באמצעות monkey-patching ל-`httpx`/`requests`:
 
 ```python
 import clawmetry.track            # activate the interceptor
@@ -180,19 +180,19 @@ clawmetry.track.set_source("support-agent")   # name this product
 # ...your agent runs as normal; every LLM call is now tracked + attributed.
 ```
 
-`set_source()` (או משתנה הסביבה `CLAWMETRY_SOURCE=support-agent`) מתייג כל קריאה עם **מקור בעל שם** (named source), כך שכל מוצר שאתם מריצים מופיע ככרטיס עצמאי, ניתן לייחוס עלות, בכרטיס **🔌 מקורות מחוץ ללולאה** בלוח המחוונים, בלשונית Overview - קריאות, ספקים, זמן תגובה, שיעור שגיאות לכל סוכן. לא הוגדר מקור? הקריאות עדיין נעקבות; הכרטיס פשוט נשאר מוסתר.
+‏`set_source()` (או משתנה הסביבה `CLAWMETRY_SOURCE=support-agent`) מתייג כל קריאה עם **מקור בעל שם**, כך שכל מוצר שאתם מריצים מופיע כשורה עצמאית, ניתנת לייחוס עלויות, בכרטיס **🔌 מקורות מחוץ-ללולאה** בלוח המחוונים תחת Overview, קריאות, ספקים, זמן תגובה, שיעור שגיאות לכל סוכן. לא הגדרתם מקור? הקריאות עדיין נעקבות; הכרטיס פשוט נשאר מוסתר.
 
 ```bash
 CLAWMETRY_SOURCE=billing-agent python my_agent.py
 ```
 
-זוהי אותה שכבת נתונים שמאכילה את מתאמי סביבות הריצה (DuckDB → תמונת מצב בענן), כך שמקורות מחוץ ללולאה מסתנכרנים לענן בדיוק כמו כל השאר, מוצפנים מקצה לקצה.
+זוהי אותה שכבת נתונים שמאכילה את מתאמי סביבת הריצה (DuckDB → תמונת מצב בענן), כך שמקורות מחוץ-ללולאה מסתנכרנים ללוח המחוונים בענן בדיוק כמו כל השאר, מוצפן מקצה-לקצה.
 
-## OpenTelemetry - נטול ספק, שלחו את העקבות שלכם לכל מקום
+## OpenTelemetry, ניטרלי לספקים, שלחו את המעקבים שלכם לכל מקום
 
-ClawMetry דובר **OpenTelemetry** בשני הכיוונים, תוך שימוש ב**מוסכמות הסמנטיות של GenAI**, כך שעקבות הסוכן שלכם לעולם לא נעולות בכלי אחד.
+ClawMetry דוברת **OpenTelemetry** בשני הכיוונים, תוך שימוש ב**מוסכמות הסמנטיות של GenAI**, כך שמעקבי הסוכן שלכם לעולם לא נעולים לכלי אחד.
 
-**ייצוא** של כל סשן - קריאות LLM, כלים, תת-סוכנים, טוקנים, עלות - כ-OTLP/HTTP GenAI spans לכל אספן (collector) (Datadog, Grafana, Honeycomb, או ה-OTel Collector שלכם):
+**ייצוא** של כל סשן, קריאות LLM, כלים, תת-סוכנים, טוקנים, עלות, כ-spans מסוג OTLP/HTTP GenAI לכל אספן (Datadog, Grafana, Honeycomb, או ה-OTel Collector שלכם):
 
 ```bash
 clawmetry --otel-export http://localhost:4318/v1/traces
@@ -200,20 +200,20 @@ clawmetry --otel-export http://localhost:4318/v1/traces
 CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
 ```
 
-כותרות אימות ומרווח סקר (poll interval) הם משתני סביבה אופציונליים:
+כותרות אימות ומרווח סקירה הם משתני סביבה אופציונליים:
 
 ```bash
 CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**קליטה (Ingest)** - מקלט ה-OTLP המובנה מקבל עקבות ומדדים מכל דבר אחר בכתובות `/v1/traces` ו-`/v1/metrics` (`pip install clawmetry[otel]` לקליטת protobuf).
+**קליטה** — מקלט ה-OTLP המובנה מקבל מעקבים ומדדים מכל דבר אחר בכתובות `/v1/traces` ו-`/v1/metrics` (‏`pip install clawmetry[otel]` עבור קליטת protobuf).
 
-תקבלו את לוח המחוונים המקומי חסר התצורה של ClawMetry **וגם** את הנתונים שלכם בכל backend שהצוות שלכם כבר מריץ - ללא נעילה, ללא סוכן שני להתקנה.
+תקבלו את לוח המחוונים של ClawMetry, חסר-הגדרות ומקומי-תחילה, **וגם** את הנתונים שלכם בכל backend שהצוות שלכם כבר מריץ, ללא נעילה, ללא סוכן שני להתקין.
 
-## תצורה
+## הגדרות
 
-רוב האנשים לא צריכים תצורה כלשהי. ClawMetry מזהה אוטומטית את סביבת העבודה, הלוגים, הסשנים והמשימות המתוזמנות (crons) שלכם.
+רוב האנשים לא צריכים שום הגדרה. ClawMetry מזהה אוטומטית את סביבת העבודה, היומנים, הסשנים וה-crons שלכם.
 
 אם אתם כן צריכים להתאים אישית:
 
@@ -228,36 +228,36 @@ clawmetry --name "Alice"           # Your name in Flow visualization
 
 ## ערוצים נתמכים
 
-ClawMetry מציג פעילות חיה עבור כל ערוץ OpenClaw שהגדרתם. רק ערוצים שאכן מוגדרים ב-`openclaw.json` שלכם מופיעים בדיאגרמת ה-Flow - ערוצים לא מוגדרים מוסתרים אוטומטית.
+ClawMetry מציגה פעילות חיה עבור כל ערוץ OpenClaw שהגדרתם. רק ערוצים שמוגדרים בפועל ב-`openclaw.json` שלכם מופיעים בדיאגרמת ה-Flow, ערוצים לא מוגדרים מוסתרים אוטומטית.
 
-לחצו על כל צומת ערוץ ב-Flow כדי לראות תצוגת בועות צ'אט חיה עם ספירת הודעות נכנסות/יוצאות.
+לחצו על כל צומת ערוץ ב-Flow כדי לראות תצוגת בועות צ'אט חיה עם ספירות הודעות נכנסות/יוצאות.
 
-| ערוץ | סטטוס | חלונית חיה | הערות |
+| ערוץ | סטטוס | חלון קופץ חי | הערות |
 |---------|--------|------------|-------|
 | 📱 **Telegram** | ✅ מלא | ✅ | הודעות, סטטיסטיקות, רענון כל 10 שניות |
 | 💬 **iMessage** | ✅ מלא | ✅ | קורא ישירות מ-`~/Library/Messages/chat.db` |
-| 💚 **WhatsApp** | ✅ מלא | ✅ | דרך WhatsApp Web‏ (Baileys) |
+| 💚 **WhatsApp** | ✅ מלא | ✅ | דרך WhatsApp Web ‏(Baileys) |
 | 🔵 **Signal** | ✅ מלא | ✅ | דרך signal-cli |
 | 🟣 **Discord** | ✅ מלא | ✅ | זיהוי גילדה + ערוץ |
 | 🟪 **Slack** | ✅ מלא | ✅ | זיהוי סביבת עבודה + ערוץ |
-| 🌐 **Webchat** | ✅ מלא | ✅ | סשני ממשק אינטרנט מובנה |
+| 🌐 **Webchat** | ✅ מלא | ✅ | סשנים של ממשק אינטרנט מובנה |
 | 📡 **IRC** | ✅ מלא | ✅ | ממשק בועות בסגנון מסוף |
 | 🍏 **BlueBubbles** | ✅ מלא | ✅ | iMessage דרך BlueBubbles REST API |
 | 🔵 **Google Chat** | ✅ מלא | ✅ | דרך webhooks של Chat API |
 | 🟣 **MS Teams** | ✅ מלא | ✅ | דרך תוסף בוט Teams |
 | 🔷 **Mattermost** | ✅ מלא | ✅ | צ'אט צוות בהתקנה עצמית |
-| 🟩 **Matrix** | ✅ מלא | ✅ | ביזורי, תמיכה ב-E2EE |
+| 🟩 **Matrix** | ✅ מלא | ✅ | מבוזר, תמיכה ב-E2EE |
 | 🟢 **LINE** | ✅ מלא | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ מלא | ✅ | הודעות פרטיות ביזוריות NIP-04 |
+| ⚡ **Nostr** | ✅ מלא | ✅ | הודעות פרטיות מבוזרות NIP-04 |
 | 🟣 **Twitch** | ✅ מלא | ✅ | צ'אט דרך חיבור IRC |
-| 🔷 **Feishu/Lark** | ✅ מלא | ✅ | מנוי אירועים WebSocket |
+| 🔷 **Feishu/Lark** | ✅ מלא | ✅ | הרשמה לאירועי WebSocket |
 | 🔵 **Zalo** | ✅ מלא | ✅ | Zalo Bot API |
 
-> **זיהוי אוטומטי:** ClawMetry קורא את `~/.openclaw/openclaw.json` שלכם ומרנדר רק את הערוצים שהגדרתם בפועל. אין צורך בהגדרה ידנית.
+> **זיהוי אוטומטי:** ClawMetry קוראת את `~/.openclaw/openclaw.json` שלכם ומציגה רק את הערוצים שהגדרתם בפועל. אין צורך בהגדרה ידנית.
 
-## פריסת Docker
+## פריסה עם Docker
 
-רוצים להריץ את ClawMetry בקונטיינר? אין בעיה! 🐳
+רוצים להריץ את ClawMetry בתוך קונטיינר? אין בעיה! 🐳
 
 **התחלה מהירה עם Docker:**
 
@@ -275,7 +275,7 @@ docker run -p 8900:8900 \
   clawmetry
 ```
 
-**דוגמת Docker Compose:**
+**דוגמה ל-Docker Compose:**
 
 ```yaml
 version: '3.8'
@@ -290,31 +290,31 @@ services:
     restart: unless-stopped
 ```
 
-> **הערה:** כאשר מריצים ב-Docker, עשו mount לתיקיות הנתונים + הלוגים של הסוכן שלכם (למשל `~/.openclaw`, `~/.claude`, `~/.codex`) כדי ש-ClawMetry יוכל לזהות את ההגדרה שלכם אוטומטית.
+> **הערה:** בעת הרצה ב-Docker, עגנו (mount) את תיקיות הנתונים + היומנים של הסוכן שלכם (למשל `~/.openclaw`, `~/.claude`, `~/.codex`) כדי ש-ClawMetry תוכל לזהות את ההגדרה שלכם אוטומטית.
 
 ## דרישות
 
 - Python 3.8+
 - Flask (מותקן אוטומטית דרך pip)
-- סביבת ריצת סוכן AI על אותה מכונה: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, או GitHub Copilot (או כרכי mount עבור Docker)
+- סביבת ריצה של סוכן AI על אותה מכונה: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, Deep Agents, n8n, Antigravity, GitHub Copilot, Grok, או QM (או כרכי mount עבור Docker)
 - Linux או macOS
 
 ## תמיכה ב-NemoClaw / OpenShell
 
-ClawMetry מזהה אוטומטית את [NemoClaw](https://github.com/NVIDIA/NemoClaw) - עטיפת האבטחה הארגונית של NVIDIA עבור OpenClaw שמריצה סוכנים בתוך קונטיינרי OpenShell מבודדים (sandboxed).
+ClawMetry מזהה אוטומטית את [NemoClaw](https://github.com/NVIDIA/NemoClaw), מעטפת האבטחה הארגונית של NVIDIA עבור OpenClaw שמריצה סוכנים בתוך קונטיינרי OpenShell מבודדים.
 
-לא נדרשת תצורה נוספת ברוב המקרים. דימון הסנכרון מגלה אוטומטית קבצי סשן בין אם הם נמצאים ב-`~/.openclaw/` על המארח (host) או בתוך קונטיינר OpenShell.
+ברוב המקרים אין צורך בהגדרה נוספת. דימון הסנכרון מגלה אוטומטית קבצי סשן בין אם הם נמצאים ב-`~/.openclaw/` על המארח או בתוך קונטיינר OpenShell.
 
 ### איך זה עובד
 
 ClawMetry מזהה NemoClaw בשתי דרכים:
 
-1. **זיהוי בינארי** - בודק את קיומו של כלי שורת הפקודה `nemoclaw` ומריץ `nemoclaw status` לקבלת מידע על ה-sandbox
-2. **זיהוי קונטיינר** - סורק קונטיינרי Docker פעילים לחיפוש `openshell`, `nemoclaw`, או תמונות `ghcr.io/nvidia/`, ואז קורא סשנים דרך volume mounts או `docker cp`
+1. **זיהוי בינארי** — בודקת קיום CLI בשם `nemoclaw` ומריצה `nemoclaw status` לקבלת מידע על ה-sandbox
+2. **זיהוי קונטיינר** — סורקת קונטיינרי Docker פעילים לחיפוש תמונות `openshell`, `nemoclaw`, או `ghcr.io/nvidia/`, ואז קוראת סשנים דרך volume mounts או `docker cp`
 
-קבצי סשן שסונכרנו מקונטיינרי NemoClaw מתויגים עם `runtime=nemoclaw` ומטא-נתוני `container_id` בלוח המחוונים בענן, כך שתוכלו להבחין ביניהם לבין סשני OpenClaw רגילים במבט חטוף.
+קבצי סשן שסונכרנו מקונטיינרי NemoClaw מתויגים עם `runtime=nemoclaw` ומטא-דאטה של `container_id` בלוח המחוונים בענן, כך שתוכלו להבחין ביניהם לבין סשני OpenClaw רגילים במבט חטוף.
 
-### הגדרה מומלצת: דימון הסנכרון על המארח (HOST)
+### הגדרה מומלצת: דימון הסנכרון על המארח
 
 לחוויה הטובה ביותר, הריצו את דימון הסנכרון של ClawMetry על **מכונת המארח** (לא בתוך ה-sandbox). כך נמנעים ממגבלות מדיניות הרשת של NemoClaw.
 
@@ -325,11 +325,11 @@ clawmetry connect
 clawmetry sync
 ```
 
-דימון הסנכרון ימצא אוטומטית סשנים בתוך כל קונטיינרי OpenShell פעילים.
+דימון הסנכרון ימצא אוטומטית סשנים בתוך כל קונטיינר OpenShell פעיל.
 
 ### אופציונלי: שם sandbox מפורש
 
-אם הזיהוי האוטומטי לא עובד, כוונו את ClawMetry ל-sandbox הנכון:
+אם הזיהוי האוטומטי לא עובד, כוונו את ClawMetry אל ה-sandbox הנכון:
 
 ```bash
 export NEMOCLAW_SANDBOX=my-sandbox-name
@@ -338,7 +338,7 @@ clawmetry sync
 
 ### הרצה בתוך ה-sandbox (מתקדם)
 
-אם אתם חייבים להריץ את דימון הסנכרון **בתוך** ה-sandbox של OpenShell, הוסיפו את כלל היציאה (egress) הבא למדיניות הרשת של NemoClaw כדי שיוכל להגיע ל-API הקליטה של ClawMetry:
+אם אתם חייבים להריץ את דימון הסנכרון **בתוך** ה-sandbox של OpenShell, הוסיפו את כלל ה-egress הזה למדיניות הרשת של NemoClaw כדי שיוכל להגיע ל-API הקליטה של ClawMetry:
 
 ```yaml
 # nemoclaw-policy.yaml
@@ -355,58 +355,56 @@ network:
 nemoclaw policy apply --file nemoclaw-policy.yaml
 ```
 
-### יציאות ונקודות קצה
+### פורטים ונקודות קצה
 
-| נקודת קצה | יציאה | פרוטוקול | נדרש |
+| נקודת קצה | פורט | פרוטוקול | נדרש |
 |---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | כן (דימון סנכרון → ענן) |
-| `localhost:8900` | 8900 | HTTP | כן (ממשק לוח מחוונים מקומי) |
-| שקע Docker (`/var/run/docker.sock`) | — | Unix socket | לגילוי סשנים בקונטיינרים |
+| `ingest.clawmetry.com` | 443 | HTTPS | כן (דימון הסנכרון → ענן) |
+| `localhost:8900` | 8900 | HTTP | כן (ממשק לוח המחוונים המקומי) |
+| Docker socket (`/var/run/docker.sock`) | — | Unix socket | לגילוי סשני קונטיינרים |
 
-דימון הסנכרון מבצע רק קריאות HTTPS יוצאות אל `ingest.clawmetry.com`. לא נדרשות יציאות נכנסות.
+דימון הסנכרון מבצע רק קריאות HTTPS יוצאות אל `ingest.clawmetry.com`. אין צורך בפורטים נכנסים.
 
 ---
 
 ## פריסה בענן
 
-ראו את **[מדריך בדיקת הענן](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** לטאנלים SSH, פרוקסי הפוך (reverse proxy), ו-Docker.
+ראו את **[מדריך בדיקת הענן](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** עבור מנהרות SSH, פרוקסי הפוך, ו-Docker.
 
 ## בדיקות
 
-הפרויקט הזה נבדק עם BrowserStack.
+פרויקט זה נבדק עם BrowserStack.
 
 [![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
 
 ## טלמטריה
 
-ClawMetry שולח פינגים אנונימיים על מחזור חיי ההתקנה אל
-`https://app.clawmetry.com/api/install`: פינג אחד מסוג `install` בפעם
-הראשונה שאתם מריצים את שורת הפקודה `clawmetry` על מכונה חדשה, פינג אחד
-מסוג `update` בהרצה הראשונה לאחר שדרוג לגרסה חדשה, ופינג אחד מסוג
-`onboarded` כשאתם משלימים את בחירת ההיכרות (onboarding) בתוך לוח
-המחוונים. אנו משתמשים בזה כדי לספור התקנות אמיתיות (מספרי ההורדות הגולמיים
-מ-PyPI הם כ-98% מראות (mirrors), CI, והורדות חוזרות של עדכון אוטומטי) וכדי
-ללמוד אילו מסגרות סוכנים וגרסאות אכן קיימות בשטח.
+ClawMetry שולחת פינגים אנונימיים של מחזור חיי ההתקנה אל
+`https://app.clawmetry.com/api/install`: פינג `install` אחד בפעם
+הראשונה שאתם מריצים את ה-CLI של `clawmetry` על מכונה חדשה, פינג `update`
+אחד בהרצה הראשונה לאחר שדרוג לגרסה חדשה, ופינג `onboarded`
+אחד כאשר אתם משלימים את בחירת ה-onboarding בתוך לוח המחוונים. אנו משתמשים בזה
+כדי לספור התקנות אמיתיות (מספרי ההורדות הגולמיים של PyPI הם כ-98% מראות (mirrors), CI,
+והורדות חוזרות של עדכון אוטומטי) וכדי ללמוד אילו מסגרות סוכנים
+וגרסאות אכן קיימות בשטח.
 
 **לכל היותר בקשת POST אחת לכל אירוע מחזור חיים לכל גרסה**, המכילה:
 
 | שדה | דוגמה | למה |
 |---|---|---|
-| `install_id` | UUID אקראי המאוחסן ב-`~/.clawmetry/install_id` | מניעת כפילויות; אנונימי עד שתחברו במפורש סנכרון ענן (הלמעל הדימון המאומת אז נושא אותו, ומקשר את ההתקנה הזו לחשבון שלכם) |
-| `event` | `install` / `update` / `onboarded` | התקנה חדשה לעומת שדרוג של התקנה קיימת |
+| `install_id` | UUID אקראי המאוחסן ב-`~/.clawmetry/install_id` | מניעת כפילויות; אנונימי עד שתתחברו במפורש לסנכרון הענן (הלב-פעימה המאומתת של הדימון נושאת אז אותו, ומקשרת התקנה זו לחשבון שלכם) |
+| `event` | `install` / `update` / `onboarded` | התקנה חדשה מול שדרוג של התקנה קיימת |
 | `version` | `0.12.167` | אילו גרסאות קיימות בשטח |
-| `os` / `os_version` | `Darwin` / `25.3.0` | סדרי עדיפויות תמיכה בפלטפורמות |
-| `python` | `3.11.15` | מטריצת תמיכה בגרסאות Python |
+| `os` / `os_version` | `Darwin` / `25.3.0` | סדרי עדיפויות לתמיכת פלטפורמות |
+| `python` | `3.11.15` | מטריצת תמיכת גרסאות Python |
 | `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | עם אילו סוכנים כדאי לנו להשתלב הלאה |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | הפרדה בין התקנות אנושיות לרעש CI |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | הפרדת התקנות אנושיות מרעש CI |
 
-**מה שאנחנו לא שולחים**: כתובת IP (הענן גוזר את קוד המדינה בצד השרת
-מהבקשה, ואז משליך את ה-IP), שם מארח, שם משתמש, נתיב סביבת עבודה, תוכן
-קבצים, מפתח ה-API שלכם, האימייל שלכם, כל דבר בעל אופי אישי (PII) או
-ספציפי לסביבת העבודה. מטען הרשת (wire payload) ניתן לביקורת ב-
+**מה אנחנו לא שולחים**: כתובת IP (הענן גוזר את קוד המדינה בצד השרת
+מתוך הבקשה, ואז מוחק את כתובת ה-IP), שם מארח, שם משתמש, נתיב סביבת עבודה, תוכן קבצים, ה-api_key שלכם, האימייל שלכם, כל מידע מזהה אישי או ספציפי לסביבת העבודה. מטען ה-wire ניתן לביקורת ב-
 [`clawmetry/telemetry.py`](clawmetry/telemetry.py).
 
-**ביטול הסכמה** (כל אחת מהאפשרויות הבאות מבטלת אותה לצמיתות):
+**ביטול הסכמה** (כל אחת מהאפשרויות הבאות מבטלת זאת לצמיתות):
 
 ```bash
 export CLAWMETRY_NO_TELEMETRY=1                # per-shell
@@ -414,8 +412,8 @@ export DO_NOT_TRACK=1                          # W3C cross-tool standard
 touch ~/.clawmetry/notelemetry                 # persistent file marker
 ```
 
-תקלת רשת כאן אף פעם לא חוסמת את הרצת `clawmetry` - הפינג הוא
-ירי-ושכח (fire-and-forget) על תהליכון דימון עם timeout של 3 שניות.
+כשל רשת כאן לעולם לא חוסם את הרצת `clawmetry`, הפינג הוא
+fire-and-forget על thread של דימון עם timeout של 3 שניות.
 
 ## היסטוריית כוכבים
 
@@ -435,5 +433,5 @@ MIT
 
 <p align="center">
   <strong>🦞 ראו את הסוכן שלכם חושב</strong><br>
-  <sub>נבנה על ידי <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · חלק מהאקוסיסטם של <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
+  <sub>נבנה על ידי <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · חלק ממערכת <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
 </p>

@@ -113,7 +113,16 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 
 // ClawMetry Cloud CTA
 var _cloudEmail = '';
-function openCloudModal() {
+// How the modal was reached decides the OAuth rail. 'managed' (the default:
+// the "Enable Cloud Sync" CTA, the onboarding cloud card, alert sign-up CTAs)
+// sends mode=managed explicitly — clicking those IS the egress opt-in.
+// 'signin' (the profile menu's "Sign in / Create account") omits mode so the
+// backend picks the rail from the install's recorded intent: a self-host
+// machine signing back in stays local-only (founder report 2026-08-09:
+// profile-menu sign-in silently enabled cloud sync on a self-host install).
+var _cloudModalIntent = 'managed';
+function openCloudModal(intent) {
+  _cloudModalIntent = (intent === 'signin') ? 'signin' : 'managed';
   var _cmo = document.getElementById('cloud-modal-overlay');
   document.body.appendChild(_cmo);
   _cmo.style.display = 'flex';
@@ -138,7 +147,9 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeClou
 var _cloudOauthTimer = null;
 function _cloudStopOauthPoll() { if (_cloudOauthTimer) { clearInterval(_cloudOauthTimer); _cloudOauthTimer = null; } }
 function cloudOauth(provider) {
-  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider: provider})})
+  var payload = {provider: provider};
+  if (_cloudModalIntent !== 'signin') payload.mode = 'managed';
+  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.ok && d.url) {
@@ -255,6 +266,97 @@ function cloudVerifyOtp() {
     })
     .catch(function(){ var err = document.getElementById('cloud-otp-error'); err.textContent = 'Network error. Try again.'; err.style.display = ''; });
 }
+// ── E2E encryption key modal (Settings) ─────────────────────────────────────
+// Local dashboard only — the /api/local/e2e-key route this reads does not
+// exist on the hosted cloud dashboard (see dashboard.py for why).
+var _e2eKeyValue = '';
+var _e2eKeyRevealed = false;
+
+function openE2eKeyModal() {
+  var overlay = document.getElementById('e2e-key-modal-overlay');
+  if (!overlay) return;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+  document.getElementById('e2e-key-empty').style.display = 'none';
+  document.getElementById('e2e-key-body').style.display = 'none';
+  document.getElementById('e2e-key-error').style.display = 'none';
+  document.getElementById('e2e-key-regen-confirm').style.display = 'none';
+  document.getElementById('e2e-key-regen-btn').style.display = '';
+  _e2eKeyRevealed = false;
+  fetch('/api/local/e2e-key').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.configured || !d.key) {
+      document.getElementById('e2e-key-empty').style.display = '';
+      return;
+    }
+    _e2eKeyValue = d.key;
+    document.getElementById('e2e-key-body').style.display = '';
+    _e2eKeyRender();
+  }).catch(function () {
+    document.getElementById('e2e-key-empty').style.display = '';
+  });
+}
+function closeE2eKeyModal() {
+  var overlay = document.getElementById('e2e-key-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+function _e2eKeyMask(k) {
+  if (!k || k.length < 10) return '••••••••';
+  return k.slice(0, 6) + '…' + k.slice(-4);
+}
+function _e2eKeyRender() {
+  var el = document.getElementById('e2e-key-value');
+  if (!el) return;
+  el.textContent = _e2eKeyRevealed ? _e2eKeyValue : _e2eKeyMask(_e2eKeyValue);
+}
+function e2eKeyToggleReveal() {
+  _e2eKeyRevealed = !_e2eKeyRevealed;
+  _e2eKeyRender();
+}
+function e2eKeyCopy() {
+  if (!_e2eKeyValue) return;
+  var done = function () {
+    var msg = document.getElementById('e2e-key-copied');
+    if (msg) { msg.style.display = ''; setTimeout(function () { msg.style.display = 'none'; }, 2000); }
+  };
+  try {
+    navigator.clipboard.writeText(_e2eKeyValue).then(done);
+  } catch (e) {
+    var el = document.getElementById('e2e-key-value');
+    var wasRevealed = _e2eKeyRevealed;
+    _e2eKeyRevealed = true; _e2eKeyRender();
+    var r = document.createRange(); r.selectNode(el);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    try { document.execCommand('copy'); done(); } catch (e2) {}
+    sel.removeAllRanges();
+    _e2eKeyRevealed = wasRevealed; _e2eKeyRender();
+  }
+}
+function e2eKeyRegenerate() {
+  var btn = document.querySelector('#e2e-key-regen-confirm button');
+  var errEl = document.getElementById('e2e-key-error');
+  errEl.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  fetch('/api/local/e2e-key/regenerate', { method: 'POST' }).then(function (r) {
+    return r.json().then(function (d) { return { ok: r.ok, body: d }; });
+  }).then(function (res) {
+    if (!res.ok || !res.body.key) {
+      errEl.textContent = (res.body && res.body.error) || 'Could not regenerate the key. Try again.';
+      errEl.style.display = '';
+      if (btn) { btn.disabled = false; btn.textContent = t('e2e_key.regen_yes', null, 'Yes, regenerate'); }
+      return;
+    }
+    _e2eKeyValue = res.body.key;
+    _e2eKeyRevealed = true;
+    _e2eKeyRender();
+    document.getElementById('e2e-key-regen-confirm').style.display = 'none';
+    document.getElementById('e2e-key-regen-btn').style.display = '';
+  }).catch(function () {
+    errEl.textContent = 'Network error. Try again.';
+    errEl.style.display = '';
+    if (btn) { btn.disabled = false; btn.textContent = t('e2e_key.regen_yes', null, 'Yes, regenerate'); }
+  });
+}
+
 function _updateCloudStatus() {
   fetch('/api/cloud-cta/status').then(function(r){ return r.json(); }).then(function(d){
     var cta = document.getElementById('cloud-cta-btn');
@@ -307,8 +409,10 @@ function _cmProfileFetchState() {
     var signedIn = !!(lic.valid || cta.account_linked);
     _cmProfile.state = {
       signedIn: signedIn,
-      // license `sub` is the account the key was issued to (the sign-in email)
-      who: lic.sub || '',
+      // license `sub` is the account the key was issued to (the sign-in
+      // email); a cloud-OAuth account with no local license has no sub, so
+      // fall back to the cloud account email resolved by the backend.
+      who: lic.sub || cta.account_email || '',
       tier: (lic.tier || '').toLowerCase(),
       daysLeft: (typeof lic.days_left === 'number') ? lic.days_left : null,
       licenseValid: !!lic.valid,
@@ -325,10 +429,10 @@ function _cmProfileApplyAvatar(st) {
   var btn = document.getElementById('cm-profile-btn');
   var initial = document.getElementById('cm-profile-initial');
   if (!btn || !initial) return;
-  if (st.signedIn && st.who) {
+  if (st.signedIn) {
     btn.dataset.signedIn = '1';
-    initial.textContent = st.who.charAt(0).toUpperCase();
-    btn.title = st.who;
+    initial.textContent = st.who ? st.who.charAt(0).toUpperCase() : '';
+    btn.title = st.who || t('profile.signed_in', null, 'Signed in');
   } else {
     delete btn.dataset.signedIn;
     btn.title = t('profile.account', null, 'Account');
@@ -351,8 +455,13 @@ function _cmProfileRender(st) {
   var h = '';
   // Identity header
   h += '<div style="padding:10px 10px 8px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.08));margin-bottom:4px;">';
-  if (st.signedIn && st.who) {
-    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + _cmProfileEsc(st.who) + '</div>';
+  if (st.signedIn) {
+    // Signed in but the email is unresolvable (offline, pre-claim account):
+    // still say "Signed in" — a signed-in menu that opens with "Not signed
+    // in" above Billing/Sign out is a contradiction (founder report
+    // 2026-08-09, GitHub-OAuth node with no local license).
+    var whoLine = st.who ? _cmProfileEsc(st.who) : t('profile.signed_in', null, 'Signed in');
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + whoLine + '</div>';
     var plan = _cmProfilePlanLine(st);
     if (plan) h += '<div style="font-size:11px;color:var(--text-muted,#94a3b8);margin-top:2px;">' + _cmProfileEsc(plan) + '</div>';
   } else {
@@ -377,8 +486,16 @@ function _cmProfileRender(st) {
         + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>'
         + t('profile.upgrade', null, 'Upgrade plan') + '</button>';
     }
+    // Local-only surface: reveal/regenerate the E2E key used to decrypt
+    // cloud-synced data in the browser. Never rendered on the hosted cloud
+    // dashboard (this whole menu only exists in the OSS local dashboard),
+    // and the modal itself falls back to an "enable cloud sync" prompt when
+    // no key is configured yet, so it is safe to always offer here.
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();openE2eKeyModal()">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+      + t('profile.e2e_key', null, 'Cloud sync key') + '</button>';
   } else {
-    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal()">'
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal(\'signin\')">'
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
       + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
   }

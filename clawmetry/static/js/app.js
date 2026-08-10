@@ -18,6 +18,9 @@
 (function initClawMetryHardBlockOverlay() {
   var POLL_MS_ACTIVE = 15000;    // while blocked: retry auto-refresh every 15s
   var POLL_MS_IDLE   = 60000;    // while unblocked: sanity-check every 60s
+  var POLL_MS_PAYING = 5000;     // after "Continue to payment": poll hard
+  var PAYING_WINDOW_MS = 10 * 60 * 1000;  // fast-poll for 10 min after click
+  var _checkoutClickedAt = 0;
   var OVERLAY_ID     = 'cm-hard-block-overlay';
   var STYLE_ID       = 'cm-hard-block-overlay-style';
 
@@ -113,7 +116,7 @@
     el.setAttribute('aria-modal', 'true');
     el.setAttribute('aria-labelledby', 'cm-hbo-title');
     el.setAttribute('data-cm-locked', '1');
-    var upgradeUrl = (state && state.upgrade_url) || 'https://app.clawmetry.com/upgrade';
+    var upgradeUrl = (state && (state.checkout_url || state.upgrade_url)) || 'https://app.clawmetry.com/upgrade';
     var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
     var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
     var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
@@ -150,6 +153,46 @@
         }),
       }).catch(function () {});
     } catch (e) { /* noop */ }
+
+    // Wire the payment CTA. The href (per-account checkout URL if the
+    // heartbeat cached one, else the upgrade page) is only the no-JS
+    // fallback: on click we ask /api/trial/checkout to mint a live Stripe
+    // Checkout Session for the account this node is already linked to, so
+    // the user lands directly on the card form instead of a generic
+    // upgrade page. The tab MUST be opened synchronously in the click
+    // handler (popup blockers kill window.open from inside a fetch
+    // callback) and is redirected once the URL arrives.
+    var ctaEl = el.querySelector('.cm-hbo-cta');
+    var statusElForCta = el.querySelector('.cm-hbo-status');
+    ctaEl.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      _checkoutClickedAt = Date.now();
+      var payTab = null;
+      try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      function go(url) {
+        if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
+        try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
+      }
+      statusElForCta.className = 'cm-hbo-status';
+      statusElForCta.textContent = 'Opening secure checkout…';
+      fetch('/api/trial/checkout', { method: 'POST' })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          go(resp && resp.url ? resp.url : ctaEl.href);
+          statusElForCta.textContent = 'Waiting for payment. This dashboard unlocks automatically once checkout completes.';
+          // Poll hard while the user is off paying so the unlock feels
+          // instant when the license lands on the next daemon heartbeat.
+          refreshAndMaybeUnblock(true);
+        })
+        .catch(function () { go(ctaEl.href); });
+      try {
+        fetch('/api/paywall/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'hard_block_checkout_click' }),
+        }).catch(function () {});
+      } catch (e) { /* noop */ }
+    });
 
     // Wire activate button — POSTs to /api/license/activate (allowlisted),
     // then forces a refresh + snapshot. The overlay auto-removes itself if
@@ -247,13 +290,18 @@
       if (!existing) mount(state);
     }
     _lastBlocked = blocked;
-    var delay = blocked ? POLL_MS_ACTIVE : POLL_MS_IDLE;
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    var delay = blocked ? (paying ? POLL_MS_PAYING : POLL_MS_ACTIVE) : POLL_MS_IDLE;
     if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
     window.__cmHardBlockTimer = setTimeout(tick, delay);
   }
 
   function tick() {
-    refreshAndMaybeUnblock(false);
+    // While the user is off paying, force the refresh-license path so the
+    // entitlement cache is invalidated and a license the daemon just wrote
+    // is honoured on THIS tick, not after the resolver TTL expires.
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    refreshAndMaybeUnblock(!!paying);
   }
 
   // First tick: read status ASAP (before any other tab hits an /api/* that
@@ -9283,7 +9331,7 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
-  copilot: 'GitHub Copilot', grok: 'Grok'
+  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -9943,7 +9991,7 @@ function _invRosterRow(a, rtFilter) {
   var naTip = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
   var dayCell = hasCost ? _invFmtUsd(a.cost24hUsd) : naTip;
   var lifeCell = hasCost ? _invFmtUsd(a.costUsd) : naTip;
-  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
+  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' session' : ' sessions');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
   // Subscription coverage, mirroring the desk device's green "covered" / amber
@@ -13482,12 +13530,38 @@ async function _loadGatewayHealthSparkline() {
 }
 
 // ===== System Health Panel =====
+// Issue #2861 — version-aware health-regression banner.
+// Fetches /api/version-health (backend fully implemented in routes/health.py)
+// and shows a warning card in #sh-version-regression when the current OpenClaw
+// version shows >30% degradation in cost, error-rate, or token usage vs the
+// previous version. Safe to call even when DuckDB has no data — always clears
+// the element on any error or non-detected result so the card never sticks.
+async function _renderVersionRegression() {
+  var el = document.getElementById('sh-version-regression');
+  if (!el) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/version-health', 8000);
+    var reg = (data && data.regression) ? data.regression : {};
+    if (!reg.detected) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div style="padding:10px 14px;background:rgba(217,119,6,0.12);'
+      + 'border:1px solid rgba(217,119,6,0.4);border-left:3px solid #d97706;'
+      + 'border-radius:8px;font-size:13px;color:var(--text-primary);'
+      + 'display:flex;align-items:flex-start;gap:10px;">'
+      + '<span style="font-size:16px;flex-shrink:0;">⚠️</span>'
+      + '<span>' + _escapeHtml(reg.banner || '') + '</span>'
+      + '</div>';
+  } catch (_e) {
+    el.innerHTML = '';
+  }
+}
+
 async function loadSystemHealth() {
   try {
     var d = await fetchJsonWithTimeout('/api/system-health', 18000);
     // Connector liveness: surface a 'down' inbound channel loudly (incident:
     // a channel went deaf ~37h with no alarm). Driven by the same payload.
     try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
+    try { _renderVersionRegression(); } catch(e) {}
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -14572,6 +14646,154 @@ function _renderEfficiencyCardInner(card, eff) {
     + '</div>';
 }
 
+// ===== Cache Hit Rate + Routing Advisor cards =====
+// Uber-play companions to the Efficiency grade (Aug 2026 earnings-call framing
+// — "the next phase is efficiency"). Both derive from _cmLoadEfficiency's
+// shared /api/efficiency cache (60s TTL + in-flight dedup already there), so
+// they are cloud-safe by construction (cm-cloud-efficiency serves that URL
+// from the snapshot) and add ZERO fetches on tab load. Perf-first per
+// FLYWHEEL §5 "share, don't duplicate."
+function _cmFmtUsd(n) {
+  n = Number(n) || 0;
+  if (n >= 1000) return '$' + Math.round(n).toLocaleString();
+  if (n >= 10) return '$' + Math.round(n);
+  if (n >= 1) return '$' + n.toFixed(1);
+  return '$' + n.toFixed(2);
+}
+var _CM_CACHE_LEFT_ON_TABLE_FRAC = 0.5;
+var _CM_CACHE_READ_MULT = 0.1;
+// Derive the Cache-Hit tile payload from an efficiency scope, mirroring the
+// server-side helper in routes/usage.py::_cache_hit_shape. Pure JS, never
+// throws — bad shape returns nulls the render code hides on.
+function _cmEffCacheHitShape(scope) {
+  var m = (scope && scope.metrics) || {};
+  var tin = Number(m.tokens_in) || 0;
+  var cr = Number(m.cache_read) || 0;
+  var cw = Number(m.cache_write) || 0;
+  var denom = tin + cr;
+  var hit = denom > 0 ? (cr / denom * 100.0) : null;
+  var saved = Number((scope && scope.cache_saved_monthly_usd)) || 0;
+  var projected = Number((scope && scope.projected_monthly_cost_usd)) || 0;
+  var leaked = 0;
+  if (hit !== null && hit < 100 && projected > 0 && tin > 0) {
+    var weight = (tin + cr + cw) > 0 ? (tin / (tin + cr + cw)) : 0;
+    var monthlyInput = projected * weight;
+    leaked = monthlyInput * _CM_CACHE_LEFT_ON_TABLE_FRAC * (1 - _CM_CACHE_READ_MULT);
+  }
+  return {
+    hit: hit, saved: saved, leaked: leaked,
+    insufficient: !!(scope && scope.insufficient_data),
+    haveData: (denom > 0 && projected > 0)
+  };
+}
+function renderCacheHitRateCard() {
+  var title = document.getElementById('cache-hit-rate-title');
+  var card = document.getElementById('cache-hit-rate-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // _cmLoadEfficiency fetches with ?runtime=<id> when scoped, so the payload
+    // is already the correct scope in either mode. Node-wide it also carries
+    // a byRuntime map that we ignore here.
+    var s = _cmEffCacheHitShape(eff);
+    if (!s.haveData || s.insufficient) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var hitColor = s.hit >= 60 ? '#22c55e' : (s.hit >= 30 ? '#f59e0b' : '#ef4444');
+    var scopeLine = _cmEffScopeLine(rt);
+    var frac = Math.round(_CM_CACHE_LEFT_ON_TABLE_FRAC * 100);
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 200px;min-width:180px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Cache hit rate</div>'
+        + '<div style="font-size:40px;font-weight:800;color:' + hitColor + ';line-height:1.05;margin:6px 0 2px;">' + s.hit.toFixed(1) + '%</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:220px;display:flex;gap:24px;flex-wrap:wrap;">'
+        + '<div style="min-width:120px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Already saved</div>'
+          + '<div style="font-size:22px;font-weight:700;color:#22c55e;margin:4px 0;">' + _cmFmtUsd(s.saved) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">measured from cached reads</div>'
+        + '</div>'
+        + '<div style="min-width:140px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Left on the table</div>'
+          + '<div style="font-size:22px;font-weight:700;color:' + (s.leaked > 0 ? '#f59e0b' : 'var(--text-muted)') + ';margin:4px 0;">' + _cmFmtUsd(s.leaked) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">estimate · assumes ' + frac + '% of misses were cacheable</div>'
+        + '</div>'
+      + '</div>'
+      + '</div>';
+  });
+}
+// Pull the model_downgrade actions from an efficiency scope. Mirror of the
+// server-side helper (routes/usage.py::_extract_downgrade_suggestions).
+function _cmEffDowngradeSuggestions(scope) {
+  var out = [];
+  ((scope && scope.actions) || []).forEach(function (a) {
+    if (a.id !== 'model_downgrade') return;
+    var save = Number(a.savings_monthly_usd) || 0;
+    if (save <= 0) return;
+    var d = a.data || {};
+    out.push({
+      current_model: a.model || '',
+      suggested_model: d.target_model || '',
+      calls: Number(d.calls) || 0,
+      avg_tokens_out: Number(d.avg_tokens_out) || 0,
+      potential_savings_monthly_usd: save
+    });
+  });
+  out.sort(function (a, b) { return b.potential_savings_monthly_usd - a.potential_savings_monthly_usd; });
+  return out;
+}
+function renderRoutingAdvisorCard() {
+  var title = document.getElementById('routing-advisor-title');
+  var card = document.getElementById('routing-advisor-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // Same rationale as renderCacheHitRateCard — _cmLoadEfficiency scopes.
+    var suggestions = _cmEffDowngradeSuggestions(eff);
+    if (!suggestions.length) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var potential = 0;
+    suggestions.forEach(function (s) { potential += s.potential_savings_monthly_usd; });
+    var scopeLine = _cmEffScopeLine(rt);
+    var rows = suggestions.slice(0, 5).map(function (s) {
+      var save = _cmFmtUsd(s.potential_savings_monthly_usd);
+      var calls = s.calls.toLocaleString();
+      return '<div style="display:flex;gap:10px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:13px;color:var(--text-primary);"><span style="font-weight:600;">' + escHtml(s.current_model || 'model') + '</span> <span style="color:var(--text-muted);">→</span> <span style="font-weight:600;color:#22c55e;">' + escHtml(s.suggested_model || 'cheaper sibling') + '</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + calls + ' calls in window · avg ' + Math.round(s.avg_tokens_out) + ' output tokens</div>'
+        + '</div>'
+        + '<div style="font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">save about ' + save + '/mo</div>'
+      + '</div>';
+    }).join('');
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 220px;min-width:200px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Potential savings</div>'
+        + '<div style="font-size:34px;font-weight:800;color:#f59e0b;line-height:1.05;margin:6px 0 2px;">' + _cmFmtUsd(potential) + '<span style="font-size:13px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">from ' + suggestions.length + ' safe swap' + (suggestions.length === 1 ? '' : 's') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:280px;">'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">Safe same-provider downgrades</div>'
+        + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">Prompts running on a heavier model that would have scored the same on its cheaper sibling. Guarded resolver, never cross-provider.</div>'
+        + rows
+      + '</div>'
+    + '</div>';
+  });
+}
+
 // ===== Usage / Token Tracking =====
 
 // QW4: the "Token Usage (14 days)" title + card hide together when the series
@@ -14601,6 +14823,10 @@ async function loadUsage() {
   // state even when an unrelated usage loader throws below (on nodes where
   // /api/usage fails, the tail of the try block never runs).
   try { renderEfficiencyCard(); } catch (_eEff) {}
+  // Both derive from the same _cmLoadEfficiency cache so they cost nothing
+  // extra on cloud (cm-cloud-efficiency serves the URL from the snapshot).
+  try { renderCacheHitRateCard(); } catch (_eChr) {}
+  try { renderRoutingAdvisorCard(); } catch (_eRa) {}
   try { loadSpendFlow(); } catch (_eSf) {}
   try { _cmUpdateUsageFleetNote(); } catch (_eFleet) {}
   try {
@@ -15850,9 +16076,13 @@ async function loadTranscripts() {
       _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
     }
     var plumbingTotal = 0;
-    data.transcripts.forEach(function(t) {
-      var raw = String(t.id || '');
-      var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
+    // NOTE: the callback param must NOT be named `t` — that shadows the global
+    // i18n t() and the score-button line below throws "t is not a function",
+    // blanking the whole tab (founder report 2026-08-09). Guarded by
+    // tests/test_app_js_t_shadowing.py.
+    data.transcripts.forEach(function(tx) {
+      var raw = String(tx.id || '');
+      var titleSrc = (tx.title && String(tx.title).trim()) || (tx.name && String(tx.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
       var isPlumbing = _isPlumbingTranscript(titleSrc);
@@ -15864,9 +16094,9 @@ async function loadTranscripts() {
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
       html += '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-muted,#888);font-size:11px;" title="' + escHtml(raw) + '">' + escHtml(raw.slice(0, 8)) + '</span>';
-      html += '<span>' + t.messages + ' messages</span>';
-      if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
+      html += '<span>' + tx.messages + ' messages</span>';
+      if (tx.size > 0) html += '<span>' + (tx.size > 1024 ? (tx.size/1024).toFixed(1) + ' KB' : tx.size + ' B') + '</span>';
+      html += '<span>' + timeAgo(tx.modified) + '</span>';
       html += '</div></div>';
       // Score-this-conversation button (#4562): runs the same judge the daemon
       // uses via /api/evals/rescore. Empty judge key → button flips to
@@ -15902,7 +16132,7 @@ async function loadTranscripts() {
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
     var emptyMsg = _txWinEmpty
-      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No conversations were active in this window. Try a wider window — or note that only recently synced conversations are listed here.') + '</div>'
+      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
       ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
@@ -17323,13 +17553,13 @@ function renderToolCatalog() {
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
 var _cmHarnessData = null;
 
-// Show the Harness nav iff a specific runtime is selected AND it has a template.
+// The Harness nav is always visible: the tab opens with the plain-language
+// "anatomy of a harness" explainer (static, works for every runtime and on
+// cloud), and adds the runtime-specific extras panel when a template exists.
 function _cmRefreshHarnessNav() {
   var nav = document.getElementById('left-nav-harness');
   if (!nav) return;
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (!rt || rt === 'all') { nav.style.display = 'none'; return; }
-  nav.style.display = (_cmHarnessTemplates && _cmHarnessTemplates[rt]) ? '' : 'none';
+  nav.style.display = '';
 }
 
 // Eagerly fetch templates at page-init so the nav can appear without waiting
@@ -17361,14 +17591,15 @@ async function loadHarness() {
     _cmHarnessData = data;
     el.innerHTML = renderHarnessPanel(tmpl, data);
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load harness view: '
+    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load the runtime panel: '
       + escapeHtml(String((e && e.message) || e)) + '</div>';
   }
 }
 
 function _cmHarnessNoTemplate(rt) {
-  return '<div style="color:var(--muted,#888);line-height:1.5;">No harness panel for <b>'
-    + escapeHtml(rt) + '</b> yet.<br>Pro runtimes light up their panels when '
+  return '<div style="color:var(--muted,#888);line-height:1.5;">Nothing extra for <b>'
+    + escapeHtml(rt) + '</b> yet. The anatomy above applies to every runtime.<br>'
+    + 'Pro runtimes light up their own panels when '
     + 'clawmetry-pro is installed (Cloud Pro or a self-hosted license).</div>';
 }
 
@@ -23851,8 +24082,8 @@ setTimeout(checkUpdateStatus, 5000);
       if (!it) return;
       var rt = it.getAttribute('data-rt');
       if (it.getAttribute('data-locked')) {
-        window.open('https://app.clawmetry.com/upgrade?source=runtime_chip', '_blank', 'noopener');
         _closeMenu();
+        try { _cmShowRuntimePaywall(rt, _label(rt)); } catch (e) {}
         return;
       }
       _closeMenu();
@@ -24453,20 +24684,42 @@ function dismissLicenseExpiredBanner() {
 async function checkLicenseExpiry() {
   var banner = document.getElementById('license-expired-banner');
   if (!banner) return;
+  var dismissedAt = 0;
   try {
-    var dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
-    if (dismissedAt && (Date.now() - dismissedAt) < 24 * 3600 * 1000) return;
+    dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
   } catch (e) {}
   try {
     var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
     var expiredTrial = !!(e && e.expired && e.tier === 'trial');
     var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
-    if (!expiredTrial && !expiredPaid) { banner.style.display = 'none'; return; }
+    // Trial ending: say it LOUD before the cliff, not after.
+    // days_until_expiry === 0 means "ends today". `e.grace` must NOT
+    // gate this: it is the global paywall-rollout flag (true on every
+    // install until enforcement goes live), not a statement about this
+    // trial's expiry — keying on it made a freshly-activated 7-day
+    // trial read "ends today". A trial whose expiry actually passed
+    // surfaces via `e.expired` above.
+    var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
+    var endingTrial = !!(e && !e.expired && e.tier === 'trial'
+      && days !== null && days <= 3);
+    if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
+    // A dismissed EXPIRED banner stays gone for 24h; a dismissed
+    // countdown comes back after 4h — the clock is literally running.
+    var dismissWindowMs = (expiredTrial || expiredPaid) ? 24 * 3600 * 1000 : 4 * 3600 * 1000;
+    if (dismissedAt && (Date.now() - dismissedAt) < dismissWindowMs) { banner.style.display = 'none'; return; }
     var msg = document.getElementById('license-expired-msg');
+    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
     if (msg && expiredPaid) {
-      var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
       msg.textContent = t('banners.license_expired_msg', null,
         'Your license has expired. Renew to keep every runtime.');
+    } else if (msg && endingTrial) {
+      if (days <= 0) {
+        msg.textContent = t('banners.trial_ends_today_msg', null,
+          'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
+      } else {
+        msg.textContent = t('banners.trial_ending_msg', { days: days },
+          'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');
+      }
     }
     // Hide the paste-a-key link when the selfhost modal is not on this page.
     var haveKey = document.getElementById('license-expired-have-key');

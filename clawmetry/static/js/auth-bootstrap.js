@@ -134,6 +134,162 @@ function clawmetryLogout(){
   localStorage.removeItem('clawmetry-token');
   location.reload();
 }
+
+// ── Cloud-sync toggle chip (header, right of alerts bell) ──
+// Cloud sync is included in every ClawMetry plan (Self-Hosted through
+// Enterprise), so pausing it is a one-click UX toggle rather than a
+// billing decision. State reads from /api/cloud-cta/status (already
+// polled by other surfaces); writes go through /api/sync/toggle which
+// flips the ~/.clawmetry/nocloud marker the daemon polls each iteration.
+function _cmRenderSyncChip(state){
+  var el = document.getElementById('sync-toggle-btn');
+  if (!el) return;
+  var label = document.getElementById('sync-toggle-label');
+  var icon = document.getElementById('sync-toggle-icon');
+  // Show the chip only when the machine has an account linked. On a
+  // truly anonymous local-only install (never signed in), there is
+  // nothing to sync TO — showing an inert chip would be a lie.
+  if (!state || !state.account_linked) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'flex';
+  if (state.local_only) {
+    label.textContent = 'Local only';
+    el.style.color = 'var(--text-muted, #94a3b8)';
+    el.title = 'Cloud sync paused. Click to resume.';
+  } else if (state.connected) {
+    label.textContent = 'Synced';
+    el.style.color = 'var(--accent, #4ade80)';
+    el.title = 'Cloud sync active. Click to pause.';
+  } else {
+    // Account linked but not connected (e.g. transient) — still show
+    // as clickable, and let the toggle-endpoint's error message steer
+    // the user to the right recovery flow.
+    label.textContent = 'Sync';
+    el.style.color = 'var(--text-tertiary, #cbd5e1)';
+    el.title = 'Cloud sync status.';
+  }
+}
+function _cmRefreshSyncChip(){
+  fetch('/api/cloud-cta/status')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(_cmRenderSyncChip)
+    .catch(function(){ /* offline — leave chip as-is */ });
+}
+function clawmetryToggleSync(){
+  var el = document.getElementById('sync-toggle-btn');
+  if (el) el.style.pointerEvents = 'none';
+  fetch('/api/sync/toggle', {method:'POST'})
+    .then(function(r){
+      // 409 == no_account or env_locked — surface a small toast instead
+      // of silently failing. Fall through to refresh either way.
+      if (r.status === 409) {
+        return r.json().then(function(d){
+          try { alert(d && d.detail ? d.detail : 'Cloud sync toggle not available.'); } catch(e) {}
+          return null;
+        });
+      }
+      return r.ok ? r.json() : null;
+    })
+    .then(function(_res){ _cmRefreshSyncChip(); })
+    .catch(function(){ _cmRefreshSyncChip(); })
+    .finally(function(){
+      var e = document.getElementById('sync-toggle-btn');
+      if (e) e.style.pointerEvents = '';
+    });
+}
+// Poll on load + on tab focus (so returning from a sign-in tab
+// picks up the new account-linked state).
+document.addEventListener('DOMContentLoaded', function(){
+  setTimeout(_cmRefreshSyncChip, 400);
+});
+window.addEventListener('focus', function(){
+  _cmRefreshSyncChip();
+});
+// ── Cloud sign-in from the dashboard login overlay ──
+// Matches `clawmetry onboard` and the desktop first-launch pane so users
+// see one auth story across every surface. Uses the existing
+// /api/cloud-cta/oauth-start endpoint (which spins up a loopback bridge
+// and returns the cloud OAuth start URL). We open the URL in the SAME tab
+// so the return round-trip is invisible; on success the loopback bridge
+// stashes the cm_ key server-side, then this dashboard's next load picks
+// up the fresh gateway token via /api/auth/detected-token.
+function clawmetryOauthLogin(provider){
+  var err = document.getElementById('login-error');
+  if(err){ err.style.display='none'; }
+  // Adaptive mode: on a self-hosted machine (nocloud marker present),
+  // the trial license flow is what /connect wants — mode=selfhost. On a
+  // fresh machine or one already using cloud sync, mode=managed registers
+  // the node and starts the sync daemon. Same choice `clawmetry onboard`
+  // and the desktop first-launch pane make. Probes /api/cloud-cta/status
+  // first so the OAuth start URL matches the machine's disposition.
+  fetch('/api/cloud-cta/status')
+    .then(function(r){ return r.ok ? r.json() : {local_only: false}; })
+    .catch(function(){ return {local_only: false}; })
+    .then(function(status){
+      var mode = (status && status.local_only) ? 'selfhost' : 'managed';
+      return fetch('/api/cloud-cta/oauth-start', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({provider: provider, mode: mode}),
+      });
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(d && d.url){
+        // Clear the signed-out marker so the next page load auto-signs in
+        // once the cloud round-trip completes and the token lands on disk.
+        try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
+        window.location.href = d.url;
+      } else {
+        if(err){ err.textContent = (d && d.error) || 'Sign-in unavailable. Try email or a gateway token.'; err.style.display='block'; }
+      }
+    })
+    .catch(function(){
+      if(err){ err.textContent = 'Network error. Try again in a moment.'; err.style.display='block'; }
+    });
+}
+// Email OTP: swap the login card into a two-step (email → code) inline flow.
+// Uses /api/auth/email-otp (same endpoint `clawmetry onboard` and the
+// desktop pane hit). On success the returned cm_key is saved server-side
+// and the page reloads to pick up the fresh gateway token via auto-signin.
+function clawmetryEmailOtpStart(){
+  var err = document.getElementById('login-error');
+  if(err){ err.style.display='none'; }
+  var email = prompt('Email address to send a sign-in code to:');
+  if(!email || email.indexOf('@') < 0){ return; }
+  fetch('/api/auth/email-otp', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'send', email: email.trim()}),
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d || !d.ok){
+        if(err){ err.textContent = (d && d.error) || 'Could not send code.'; err.style.display='block'; }
+        return;
+      }
+      var code = prompt('Check ' + email + ' for a 6-digit code:');
+      if(!code){ return; }
+      return fetch('/api/auth/email-otp', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'verify', email: email.trim(), otp: code.trim()}),
+      }).then(function(r){ return r.json(); }).then(function(v){
+        if(v && v.ok){
+          try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
+          location.reload();
+        } else {
+          if(err){ err.textContent = (v && v.error) || 'Invalid code.'; err.style.display='block'; }
+        }
+      });
+    })
+    .catch(function(){
+      if(err){ err.textContent = 'Network error. Try again.'; err.style.display='block'; }
+    });
+}
+
 // One-click sign-in on the machine itself after an explicit sign-out. The
 // button is hidden unless the loopback-only detected-token probe answered,
 // so this is the same trust boundary as zero-click auto-login — just gated

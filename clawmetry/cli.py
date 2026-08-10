@@ -906,6 +906,20 @@ def _cmd_connect(args) -> None:
     # passed in directly by onboard's Self-Hosted trial path (args.keep_local),
     # which has already asked its own questions and must not be re-prompted.
     _keep_local_signin = bool(getattr(args, "keep_local", False))
+    if _keep_local_signin:
+        # A fresh self-host machine has NO marker yet (the interactive
+        # Case-B path below only runs when one already exists). Write it
+        # BEFORE any config/daemon work: the daemon must never observe a
+        # cm_ key without the marker, or it starts pushing (founder
+        # live-hit 2026-08-09; the end-of-flow touch alone leaves a
+        # window where a respawning daemon sees key-without-marker).
+        try:
+            from pathlib import Path as _P
+
+            _P(NOCLOUD_MARKER_PATH).parent.mkdir(parents=True, exist_ok=True)
+            _P(NOCLOUD_MARKER_PATH).touch(exist_ok=True)
+        except Exception:
+            pass
     if is_cloud_disabled() and not getattr(args, "force", False) and not _keep_local_signin:
         # Two cases here:
         #
@@ -1062,8 +1076,20 @@ def _cmd_connect(args) -> None:
     if getattr(args, "key", None):
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
-        elif getattr(args, "start_sync_now", False):
-            pass  # Key from the authenticated dashboard command — already proven
+        elif (
+            getattr(args, "start_sync_now", False)
+            or getattr(args, "defer_sync", False)
+            or getattr(args, "keep_local", False)
+        ):
+            # Key from the authenticated dashboard command (--start-sync-now)
+            # or the desktop onboarding's self-host path (--defer-sync). Both
+            # flags only exist on machine-generated invocations whose key was
+            # just minted in an OAuth/OTP-verified session. --defer-sync runs
+            # non-interactively (no stdin), so an OTP prompt here doesn't just
+            # add friction, it kills the sign-in: _verify_key_ownership exits 1
+            # without a tty, the trial never provisions, and a self-host user
+            # is left on the OSS tier with every runtime locked.
+            pass
         else:
             from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
             if _is_custom_ep():
@@ -1252,13 +1278,17 @@ def _cmd_connect(args) -> None:
             _P(NOCLOUD_MARKER_PATH).touch()
         except Exception:
             pass
-        _dash_up = _ensure_local_dashboard()
         print()
         print("  Local-only kept: your data stays on this machine.")
-        if _dash_up:
-            print("  Dashboard: http://localhost:8900 (live now)")
-        else:
-            print("  Dashboard did not come up at http://localhost:8900. Start it: clawmetry")
+        # --defer-sync means a supervisor (the desktop app) manages the
+        # daemon and dashboard itself — spawning a second dashboard here
+        # would race it for the DuckDB writer lock.
+        if not getattr(args, "defer_sync", False):
+            _dash_up = _ensure_local_dashboard()
+            if _dash_up:
+                print("  Dashboard: http://localhost:8900 (live now)")
+            else:
+                print("  Dashboard did not come up at http://localhost:8900. Start it: clawmetry")
 
     print()
 
@@ -1307,11 +1337,12 @@ def _cmd_connect(args) -> None:
         print()
         print("  All done! Your dashboard: http://localhost:8900")
         print()
-        try:
-            import webbrowser
-            webbrowser.open("http://localhost:8900")
-        except Exception:
-            pass
+        if not getattr(args, "defer_sync", False):
+            try:
+                import webbrowser
+                webbrowser.open("http://localhost:8900")
+            except Exception:
+                pass
         return
 
     # Open browser with encryption key in URL fragment (never sent to server)
@@ -1435,8 +1466,14 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
             log = open(log_path, "ab")
             kw = {"stdout": log, "stderr": log, "stdin": _sp.DEVNULL}
             if system == "Windows":
-                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-                kw["creationflags"] = 0x00000208
+                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP. NO_WINDOW (a
+                # hidden console the daemon's own console-subsystem children
+                # inherit), NOT DETACHED_PROCESS (no console at all): a
+                # console-less parent's unflagged children each get a fresh
+                # VISIBLE console — on Win11, a Windows Terminal tab that sits
+                # on the user's screen for the daemon's lifetime (founder
+                # report 2026-08-09, "open forever" window after self-update).
+                kw["creationflags"] = 0x08000200
             else:
                 kw["start_new_session"] = True
             _sp.Popen(cmd, **kw)
@@ -1519,8 +1556,19 @@ def _start_daemon(config: dict, args) -> None:
         _register_launchd(config)
     elif system == "Linux":
         _register_systemd(config)
+    elif os.name == "nt":
+        # Windows has no launchd/systemd equivalent short of Task Scheduler.
+        # Without a registered task the daemon (and with it, all auto-update
+        # polling) does not survive a reboot/logoff/crash -- confirmed live
+        # on the founder's own Windows box (2026-07-28, CHANGELOG #4146).
+        # Register a logon-triggered, restart-on-failure scheduled task;
+        # fall back to the old unsupervised subprocess if schtasks fails
+        # (e.g. sandboxed/locked-down environments with no Task Scheduler
+        # access) so `clawmetry connect`/`onboard` never hard-fails here.
+        from clawmetry.daemon_registration import register_windows_task
+        if not register_windows_task(config):
+            _start_subprocess()
     else:
-        # Windows / fallback: subprocess
         _start_subprocess()
 
 
@@ -1849,10 +1897,14 @@ def _start_subprocess() -> None:
         # start_new_session is POSIX-only and silently no-ops on Windows, which
         # left the daemon inside the launching console's process group: closing
         # that window delivered CTRL_CLOSE_EVENT and killed the daemon with it.
-        # DETACHED_PROCESS cuts it loose from the console, and a new process
-        # group stops Ctrl+C in the parent terminal from propagating.
+        # CREATE_NO_WINDOW gives the daemon its OWN (hidden) console — cut
+        # loose from the launching terminal like DETACHED_PROCESS, but unlike
+        # DETACHED its console-subsystem children inherit the hidden console
+        # instead of each allocating a fresh VISIBLE one (founder report
+        # 2026-08-09: persistent Windows Terminal tab after self-update).
+        # The new process group still stops parent-terminal Ctrl+C propagating.
         spawn_kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         )
     else:
         spawn_kwargs["start_new_session"] = True
@@ -4241,15 +4293,88 @@ def _cmd_eval_regression(args) -> None:
     sys.exit(exit_code)
 
 
-def _cmd_update() -> None:
-    """Self-update clawmetry to the latest PyPI version."""
+def _unattended_update_target(current: str):
+    """Resolve what an unattended ``clawmetry update --unattended`` run may
+    install, deferring to the DAEMON's policy helpers in
+    ``routes/update_check.py`` so the two paths cannot drift:
+
+      * ``_env_auto_update_disabled()`` — the CLAWMETRY_AUTO_UPDATE kill
+        switch, including the implicit CI-environment disable.
+      * ``_autoupdate_min_age_hours()`` + ``_newest_aged_in_version()`` —
+        the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, targeting
+        the newest release that has aged past it (NOT the absolute latest).
+
+    Returns ``(target_version_or_None, human_reason)``. ``None`` means
+    "install nothing this cycle" — including when the policy helpers cannot
+    be imported: an unattended caller must never do MORE than the policy
+    allows, so an unevaluable policy fails closed (the caller's next
+    scheduled cycle retries).
+    """
+    import json
+    import urllib.request
+
+    try:
+        from routes.update_check import (
+            _autoupdate_min_age_hours,
+            _env_auto_update_disabled,
+            _newest_aged_in_version,
+        )
+    except Exception as exc:
+        return None, f"Update policy unavailable ({exc}); skipping unattended update"
+    if _env_auto_update_disabled():
+        return None, (
+            "Unattended updates disabled "
+            "(CLAWMETRY_AUTO_UPDATE kill switch or CI environment)"
+        )
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/clawmetry/json",
+            headers={"User-Agent": f"clawmetry/{current}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        return None, f"PyPI check failed ({exc}); skipping unattended update"
+    min_age = _autoupdate_min_age_hours()
+    target = _newest_aged_in_version(data.get("releases", {}), current, min_age)
+    if not target:
+        latest = data.get("info", {}).get("version", "") or current
+        if latest == current:
+            return None, f"Already on latest version ({current})"
+        return None, (
+            f"Newest release v{latest} has not aged past the "
+            f"{min_age:g}h stability window yet; nothing to install"
+        )
+    return target, (
+        f"Unattended target: v{target} "
+        f"(newest release aged past the {min_age:g}h stability window)"
+    )
+
+
+def _cmd_update(args=None) -> None:
+    """Self-update clawmetry to the latest PyPI version.
+
+    ``--unattended`` (the desktop shell's 6h background path) routes target
+    selection through the daemon's update policy (kill switch + stability
+    window) via ``_unattended_update_target`` and pins the pip install to
+    that version; the plain interactive command keeps installing the
+    absolute latest.
+    """
     import subprocess
 
+    unattended = bool(getattr(args, "unattended", False))
     try:
         from dashboard import __version__ as current
     except Exception:
         current = "unknown"
     print(f"Current version: {current}")
+    install_spec = "clawmetry"
+    if unattended:
+        target, reason = _unattended_update_target(current)
+        print(reason)
+        if not target:
+            return
+        install_spec = f"clawmetry=={target}"
     print("Checking for updates...")
     try:
         result = subprocess.run(
@@ -4260,7 +4385,7 @@ def _cmd_update() -> None:
                 "install",
                 "--upgrade",
                 "--break-system-packages",
-                "clawmetry",
+                install_spec,
             ],
             capture_output=True,
             text=True,
@@ -6463,6 +6588,14 @@ def main() -> None:
         action="store_true",
         help="Override the persistent local-only marker (#1937) and connect anyway",
     )
+    p_connect.add_argument(
+        "--keep-local",
+        action="store_true",
+        dest="keep_local",
+        help="Sign in for the account + trial license but keep this install "
+        "local-only: the nocloud marker stays, no snapshots ever leave "
+        "this machine (the desktop app's Self-Hosted choice uses this)",
+    )
 
     # setup — alias for onboard (new user-facing name)
     p_setup = sub.add_parser(
@@ -6684,7 +6817,19 @@ def main() -> None:
     )
 
     # update — self-update to latest PyPI version
-    sub.add_parser("update", help="Update clawmetry to the latest version")
+    p_update = sub.add_parser("update", help="Update clawmetry to the latest version")
+    p_update.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "Apply the daemon's unattended-update policy instead of blindly "
+            "upgrading: honor the CLAWMETRY_AUTO_UPDATE kill switch (including "
+            "implicit CI disable) and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS "
+            "stability window, installing the newest aged-in release (pinned) "
+            "rather than the absolute latest. Used by the desktop shell's 6h "
+            "background upgrade."
+        ),
+    )
 
     # mcp — start MCP server on stdio (issue #2859)
     sub.add_parser(
@@ -7216,7 +7361,7 @@ def main() -> None:
         elif args.cmd == "mcp":
             _cmd_mcp(args)
         elif args.cmd == "update":
-            _cmd_update()
+            _cmd_update(args)
         elif args.cmd == "uninstall":
             _cmd_uninstall()
         elif args.cmd == "activate":

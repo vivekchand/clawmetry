@@ -1,5 +1,463 @@
 ## Unreleased
 
+- **Release: the Claude Code approval hook no longer pops console windows on Windows.**
+  - **Why:** carrier `[RELEASE]` so #4717 reaches PyPI and the fleet. Founder live-hit 2026-08-10 on the Windows lab machine: terminal windows kept popping up over the desktop app. The PreToolUse approval-gate hook command is built from `sys.executable`, the venv's console-mode `python.exe`; when Claude Code runs under a windowless parent (the desktop app), every gated tool call (Bash, WebFetch, WebSearch) makes Windows allocate a visible console for the hook process, and a call parked for approval keeps that window on screen until the human decides (hook timeout is the policy window plus buffer, up to 7 days).
+  - **What:** ships #4717. `_hook_command()` swaps `python.exe` for the adjacent `pythonw.exe` (GUI subsystem, never allocates a console) via a pure helper `_windowless_python()`. Non-Windows installs and venvs without `pythonw.exe` are untouched; existing installs self-heal because the gate installer refreshes any marker-matched entry whose command differs on the next watcher tick.
+  - **Verified:** 23 tests green in `tests/test_runtime_gates_and_hooks.py`, new assertions revert-proven (red on the un-fixed module); live on the reporting machine the patched gate rewrote the real `~/.claude/settings.json` entry to the pythonw command, and the hook client was exercised under pythonw with explicit pipes (the spawn shape Claude Code uses): stdin/stdout round-trip works and the fail-open contract holds (rc=0, no output, no window).
+
+- **Release: a daemon restart can no longer re-send the "trial ending" warning on the same day.**
+  - **Why:** carrier `[RELEASE]` so #4714 reaches PyPI and the fleet. The daemon throttles `POST /ingest/trial-warning` (the trigger for the "your trial ends in N days" customer email) with an in-memory once-per-UTC-day guard only. Auto-update restarts the daemon on every release, often several times a day, and each restart reset the guard and re-fired the POST. 2026-08-10 trial-email spam RCA: one account received 5+ "trial has ended" emails in a single day. Cloud-side dedup landed in clawmetry-cloud #1970; this is the daemon-side half, so the duplicate request never leaves the machine at all.
+  - **What:** ships #4714. The warned day is now persisted to `~/.clawmetry/trial_warnings.json`, the same `{"YYYY-MM-DD": days_left}` file the dashboard's `/api/trial/mark-warned` endpoint already writes, so either writer suppresses the other. A fresh daemon process checks the file before POSTing and primes its in-memory fast path from it. Both new helpers never raise: corrupt or unwritable state files fail open (warn once, repair where possible), keeping the heartbeat path crash-proof.
+  - **Verified:** new 6-test regression suite `tests/test_trial_warning_restart_persist.py`, including the core restart case (fresh module import against the same state file must not re-POST); revert-proven (6 red with the sync.py fix stashed, green restored) alongside the existing `test_sync_trial_gating.py` suite, 19 tests green total.
+
+- **Release: the desktop app's background updates now respect the update kill switch and stability window.**
+  - **Why:** carrier `[RELEASE]` so #4706 reaches PyPI and the desktop fleet. The desktop shell's 6h auto-upgrade shelled the venv's `clawmetry update`, a bare pip upgrade that read neither `CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS` nor `CLAWMETRY_AUTO_UPDATE`, and the shell's own pre-check only recognized the literal `0`. An operator who configured a stability window or the kill switch (both documented, both honored by the daemon's updater) still had every desktop install jump straight to the newest wheel. Tracked as a known follow-up in the Desktop Application Distribution blueprint.
+  - **What:** ships #4706. New `clawmetry update --unattended` flag: target selection defers to the daemon's own policy helpers in `routes/update_check.py` (kill switch including implicit CI disable, stability window, newest aged-in release) and pins the install to that version; when nothing may be installed it installs nothing, and an unevaluable policy fails closed. The desktop shell passes the flag, aligns its kill-switch pre-check with the daemon parser (false/no/off and CI, not just `0`), and keeps a one-shot plain-update fallback strictly for venvs predating the flag so bootstrap still works. Plain interactive `clawmetry update` is unchanged.
+  - **Verified:** 84 tests green (new `tests/test_cli_unattended_update.py` and `tests/test_desktop_unattended_update.py` plus the existing aged-in selection suite), including a parity matrix pinning the shell's parser to `routes/update_check.py::_env_auto_update_disabled`; revert-proven (79 red on the un-fixed code, green after).
+
+- **Release: desktop download links no longer 404 while a release is being cut.**
+  - **Why:** carrier `[RELEASE]` so the draft-until-attached release flow governs the next cut. Founder live-hit 2026-08-10: clicking any desktop download button on clawmetry.com returned a GitHub 404. The buttons resolve through GitHub's `releases/latest/download/<fixed-name>` convention, but release-on-merge published the v0.12.674 GitHub Release at 22:32 UTC, minutes before desktop-artifacts finished building and attaching the installers at 22:35, so the empty release became "latest" and every download link 404'd for the whole build window. Worse, partial uploads were tolerated (`fail_on_unmatched_files: false`), so one failed installer job would have left its platform's link broken until the next release.
+  - **What:** ships #4699. `release-on-merge.yml` now pushes the release tag explicitly (draft releases do not create tags, and the desktop-artifacts dispatch needs the ref) and creates the GitHub Release as a draft; drafts are invisible to `releases/latest`, so downloads keep serving the previous complete release while installers build. `desktop-artifacts.yml` attaches all assets and publishes the release in the same step, marking it latest only then, and now refuses to publish when any of the five installer patterns is missing: a broken desktop build keeps the release draft instead of shipping dead links. PyPI and the cloud pin are unaffected either way; they key off PyPI, not the GitHub Release.
+  - **Verified:** root cause confirmed in the live v0.12.674 run logs (release published 22:32:26Z, all ten assets attached 22:35:38Z, matching the founder's 404 screenshot in between); all three fixed-name download URLs re-checked at HTTP 200 once assets landed; both workflows YAML-parse clean. End-to-end proof rides this release: after merge, confirm the new release appears as draft first, flips to published latest only after desktop-artifacts completes, and the three download URLs never 404 during the window.
+- **Release: the self-updater cleans up after itself — stale version metadata no longer accumulates, and a failed update hand-off no longer stalls the fleet for 15 minutes.**
+  - **Why:** carrier `[RELEASE]` so #4702 reaches PyPI and the fleet. Observed live on a Windows lab machine 2026-08-10: every in-place pip upgrade run while a sibling clawmetry process held `.pyd`/`.exe` files open half-failed its uninstall of the previous version, leaving that version's `clawmetry-*.dist-info` behind — five stale ones (0.12.655–0.12.669) sat alongside the current install. `importlib.metadata` resolves the FIRST matching dist-info in directory-listing order (alphabetical on NTFS), so the OLDEST stale version won every metadata probe and pip ran uninstalls against the wrong RECORD. Separately, the same box sat 12+ minutes behind a fresh release: the Windows respawn path leaks `~/.clawmetry/update-in-progress.lock` when the helper hand-off fails or the helper aborts because the parent never exited, and every subsequent 60s check then silently skips ("another process is updating") until the 900s staleness window breaks the lock.
+  - **What:** ships #4702. New `clawmetry/distinfo_cleanup.py` removes `clawmetry-*.dist-info` dirs strictly older than the installed version plus `~lawmetry*` pip-uninstall corpses (newer-than-current metadata is deliberately kept — that's the just-upgraded-but-not-yet-restarted window); wired at update-check worker boot (daemon and dashboard roles) and after a successful `perform_self_update`. The Windows out-of-process helper (`update_respawn.py`) runs its own stdlib-only prune after pip succeeds and now releases the update lock when it aborts; `routes/update_check.py` releases the lock and records a `failed` attempt when the respawn hand-off itself fails. The desktop shell's `_get_installed_version` picks the highest parsed version instead of newest mtime, since a partially-uninstalled stale dir can carry a fresher mtime than the real install.
+  - **Verified:** 7-test regression guard `tests/test_stale_distinfo_cleanup.py` (cleanup semantics, metadata resolution, source-checkout no-op, ghost-install case, wiring pins into `perform_self_update` and the worker boot) green alongside the existing self-update suites; end-to-end on a real venv seeded with the five observed stale dist-infos plus a `~lawmetry` corpse, `importlib.metadata.version` reproduced the bug (0.12.655) before cleanup and returned the installed 0.12.674 with only the current dist-info remaining after, with a second pass confirming idempotence.
+
+- **Release: the desktop install carousel draws its slides as crisp vector art instead of raster screenshots.**
+  - **Why:** carrier `[RELEASE]` so #4697 reaches the desktop installers. Founder feedback 2026-08-09 on the first-run carousel: the slide images look bad. The slides showed downscaled PNG screenshots of the landing site (shipped in the previous carousel release) plus a remote device-square.png fetch for the Desk slide. A shrunken website screenshot tells a new user nothing and reads as cheap, and the remote fetch broke the pane's own contract of no external assets and no network beyond loopback.
+  - **What:** ships #4697. Each slide's art is now a purpose-built inline SVG in the brand palette: the hero slide is an idealized in-app render of the dashboard (window chrome, stat tiles, spend chart, per-model bars, live session rows), the builder slide a blueprint scaffold, the Desk slide the device with approve and deny pills on its screen, the enterprise slide an identity ring feeding a shield with a check. The art stage is frameless with a soft drop shadow. The four bundled screenshot PNGs, their PyInstaller bundling blocks, the remote img fallback, and the emoji fallback map are all removed; the pane is fully self-contained again. The keep-local self-host guard and the carousel CTA pointer-events fix from previous releases are untouched.
+  - **Verified:** all four slides rendered and screenshotted in a browser at 1250x800; new guard `tests/test_desktop_carousel_art.py` is revert-proven (red at collection on the pre-fix code, green after) and pins: vector art for every slide, no raster art keys, well-formed SVGs with no embedded or external images, and a self-contained carousel payload (data URIs only).
+
+- **Release: the desktop Self-host choice now actually keeps data on the machine.**
+  - **Why:** carrier `[RELEASE]` for the keep-local connect fix. Founder live-hit 2026-08-09: choosing Self-host in desktop onboarding ran `connect --key cm_ --defer-sync`, but `--defer-sync` only skips the daemon start. The connect still rode the full cloud rail (`enable_cloud()`, family-mark reset), never wrote the local-only marker, and the shell then started `clawmetry sync` itself, so a machine whose user explicitly chose "data stays local" pushed snapshots to cloud and showed a green "Cloud Connected" badge.
+  - **What:** ships #4694 plus #4692. New `clawmetry connect --keep-local` flag mapping to the existing keep-local rail: the local-only marker is written up front (the daemon must never observe a cm_ key without it), `enable_cloud()` is never called, the ownership OTP is skipped (the key comes from the shell's own OAuth loopback, the same authenticated provenance as `--start-sync-now`, and the subprocess runs headless where a prompt would hang onboarding), and automated `--key` invocations no longer spawn a stray port-8900 dashboard next to the shell's own. Desktop onboarding's selfhost mode now passes `--keep-local --defer-sync`. Complements the sign-in guard released in 0.12.672: that one stopped the profile-menu sign-in from flipping egress on; this one stops the original onboarding choice from being dropped.
+  - **Verified:** new `tests/test_connect_keep_local.py` (marker written and cloud rail skipped on keep-local, cloud rail intact on plain connect, parser and desktop wiring pins) plus the existing connect suites, 9 tests green; on the reporting Windows machine the unwanted egress was switched off live via the sync toggle and confirmed `local_only: true`.
+
+- **Release: the desktop install carousel's buttons open the page they name, and each slide shows a real screenshot of it.**
+  - **Why:** carrier `[RELEASE]` so #4686 reaches PyPI and the fleet. Founder report 2026-08-09: on the desktop install carousel, clicking "Explore Agent Builder" opened clawmetry.com/device instead of build.clawmetry.com. The four slides are stacked with position:absolute and inactive ones were hidden with opacity alone, which leaves them clickable; the Desk-device slide is painted on top, so its invisible CTA swallowed clicks meant for the visible Agent Builder button.
+  - **What:** ships #4686. Inactive slides are now visibility:hidden plus pointer-events:none (the cross-fade is preserved with a delayed visibility transition), so only the visible slide can be clicked. Slide art is upgraded from emoji placeholders to bundled screenshots of the actual target pages (clawmetry.com, build.clawmetry.com, the Desk device page, the Enterprise page), embedded as data URIs so the pane stays fully self-contained, Ubuntu-installer style; emoji art remains the fallback when an asset is missing. All three PyInstaller specs bundle the new screenshots.
+  - **Verified:** headless-Chrome hit-test on the rendered pane confirms the element under the Agent Builder CTA now fires open_ext('https://build.clawmetry.com'); slides 1 and 2 rendered and eyeballed with the real screenshots in place; desktop/onboarding.py compiles clean.
+
+- **Release: signing in can no longer switch a self-host install to cloud sync.**
+  - **Why:** carrier `[RELEASE]` so the sign-in egress guard reaches PyPI and the fleet. Founder report 2026-08-09: a self-host machine (egress off by choice) hit the "Not signed in" identity bug, so the user signed back in from the profile menu. That entry opens the cloud-CTA modal, whose OAuth start defaulted to the managed rail; the connect then called `enable_cloud()`, deleted the local-only marker, and the node silently started pushing snapshots, with the header flipping to a green "Cloud Connected" on a machine whose whole promise was local-only.
+  - **What:** ships the sign-in guard PR. `dashboard.py` gains `_selfhost_intent()` (local-only marker or a recorded selfhost onboarding choice). `/api/cloud-cta/oauth-start` with no explicit mode now resolves the rail from that intent, so a self-host install signing back in rides the identity-only selfhost rail; explicit modes always win. The profile menu's "Sign in / Create account" passes the new signin intent, while the "Enable Cloud Sync" CTA, the onboarding cloud card, the e2e-key modal, and alert sign-up CTAs keep sending an explicit managed mode: clicking those IS the egress opt-in. Identity and egress stay separate choices, per the onboarding gate's own contract.
+  - **Verified:** 59 tests green across the profile-menu, OAuth-CTA, and onboarding-gate suites (new: intent resolution matrix, `_selfhost_intent` signal tests, JS wiring pins); on the reporting machine the unwanted egress was stopped live via the sync toggle (`local_only: true` confirmed) and the served endpoints re-checked.
+
+- **Release: the profile menu shows who you are on cloud-OAuth sign-ins instead of "Not signed in".**
+  - **Why:** carrier `[RELEASE]` so #4680 reaches PyPI and the fleet. Founder report 2026-08-09: a fully signed-in, cloud-connected node (GitHub OAuth) opened the avatar menu to "Not signed in" rendered directly above Billing & plan and Sign out. The menu's only identity source was the license `sub`; a cloud-OAuth account with no local license file has none, so the header fell through to the signed-out label while the signed-in items still rendered.
+  - **What:** ships #4680. `dashboard.py` gains `_account_email_for_token()`: it resolves the sign-in email behind a cm_ key from `~/.clawmetry/config.json` (`account_email`, trusted only when keyed to this token) with a cached, best-effort fallback to the cloud's `/api/cloud/account`, persisting the result back when it belongs to the same key; internal placeholder identities (`agent+*@clawmetry.auto`, `.linked`) are never shown. Connect flows now store `account_email` at pairing time. `/api/cloud-cta/status` returns `account_email`; the profile menu falls back to it for `who`, and a signed-in menu whose email is unresolvable (offline, pre-claim) now says "Signed in", never "Not signed in". Also fixes a latent guard bug: the profile i18n-key regex truncated `profile.e2e_key` to a bogus `profile.e`, leaving `test_profile_menu.py` red on main.
+  - **Verified:** 56 tests green across the profile-menu, OAuth-CTA, and onboarding-gate suites (including the previously red i18n guard); live on the reporting Windows machine, `_account_email_for_token(_read_cloud_token())` resolved the real account email for the exact token that reproduced the bug.
+- **Feature: the trial paywall's "Continue to payment" goes straight to per-account Stripe checkout, and the dashboard unlocks itself after payment.**
+  - **Why:** founder feedback 2026-08-09 (desktop trial-ended modal): the user is already signed in locally, so the payment CTA should open Stripe checkout for that account, charge, and activate Pro/Starter with no license key to paste. Instead the CTA opened the generic upgrade page. Root cause was a cross-process bug: the per-account URL the cloud attaches to heartbeats was cached only in the sync daemon's memory, which the dashboard process can never see, so `resolved_upgrade_url()` only ever saw module defaults.
+  - **What:** ships #4679. New `POST /api/trial/checkout` (allowlisted while hard-blocked) asks the cloud to mint a per-account Stripe Checkout Session (`POST /api/billing/checkout-session`, node api_key auth), falling back to the heartbeat-cached `checkout_url`, then the generic upgrade page: always HTTP 200 with a usable URL, so the button never dead-ends on an older cloud. The daemon now persists heartbeat `{upgrade_url, checkout_url}` to `~/.clawmetry/trial_state.json` for the dashboard process to read. The overlay CTA opens the checkout tab synchronously (popup-blocker safe), redirects it to the minted session, then polls the refresh endpoint every 5s for 10 minutes, so the license the cloud attaches to the next heartbeat unlocks the dashboard within seconds. The 402 payload and `/api/trial/status` now advertise `checkout_endpoint` and `checkout_url`. The cloud endpoint ships separately in clawmetry-cloud; until then the button degrades exactly as before.
+  - **Verified:** 9 new guard tests in `tests/test_trial_checkout.py` (fallback chain, live session mint with URL and auth-header assertions, cloud failure never 500s, daemon-to-dashboard persistence, env override, corrupt state file); `node` syntax check on app.js; full 31-check CI matrix green on #4679. Software Factory blueprint synced (Local Agent Observability: new TrialHardBlockPaywall component, contracts, ADR-002).
+
+- **Fix: Sessions tab blanked for anyone with sessions (shipped in 0.12.669).**
+  - **Why:** founder report 2026-08-09: the Sessions tab is blank for ANY user with at least one session: the row loop's `function(t)` parameter shadows the global i18n `t()`, and the Score button inside the loop calls `t('transcripts.score_btn', ...)`, so the first row throws and the catch paints "Failed to load transcripts". The API is unaffected; only the render dies.
+  - **What:** #4675: param renamed to `tx`, plus an auto-discovering guard test (`tests/test_app_js_t_shadowing.py`) that fails CI if any callback shadowing `t` calls i18n inside its body. Reached PyPI in 0.12.669 (carried by the #4676 release).
+  - **Verified:** guard revert-proven (red on pre-fix main at app.js:16031, green after); fix injected into the live 0.12.667 dashboard on the founder's Windows box rendered all 9 session rows where the tab was blank; the published 0.12.669 wheel cracked and confirmed to carry the fixed loop.
+
+- **Fix: Notifications sits directly under Approvals and Alerts again; nav guard synced with the shipped Evals and Gateway tabs.**
+  - **Why:** the Phase-A nav guard (`tests/test_beginner_nav_phase_a.py`) was red on main. Two shipped nav changes had drifted past it: #4295 added the top-level Evals tab but inserted it between Alerts and Notifications, breaking the founder request (2026-07-29) that Notifications sit directly under its two consumers, and #4575 added the opt-in Gateway tab to the Developer drawer without updating the guard.
+  - **What:** Evals moves below Notifications so the Approvals, Alerts, Notifications trio is contiguous again (both tabs stay; membership was intentional in both releases). The guard now encodes the nine-item Tier-1 order and the Gateway drawer membership.
+  - **Verified:** revert-proof (guard red on the pre-fix nav, green after the reorder), all 8 module tests pass, other tab guards are membership-only and unaffected.
+
+- **Fix: persistent console window after Windows self-update (Release: carrier).**
+  - **Why:** 0.12.667 made the self-updater's pip run windowless, but the RELAUNCHED daemon still popped a console — permanently. Founder report 2026-08-09: a Windows Terminal tab titled with the venv exe path, open forever. Root cause reproduced live: every daemon-(re)spawn path used DETACHED_PROCESS (parent gets NO console), and on Windows a console-subsystem child of a console-less parent allocates a fresh VISIBLE console — the pip-launcher clawmetry.exe re-execs python.exe workers, so the relaunched daemon's workers each owned an on-screen console for the daemon's lifetime.
+  - **What:** every Windows daemon-spawn site now uses CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (a hidden console all descendants inherit) instead of DETACHED_PROCESS: update_respawn.py relaunch, routes/update_check.py helper spawn, daemon_registration.start_background_subprocess, and both cli.py fallback spawns. Same terminal-detach and Ctrl+C-isolation semantics, zero visible consoles.
+  - **Verified:** reproduced on the founder's Windows 11 box with a minimal probe: a sleeping python child of a DETACHED parent created a visible console titled with the python path (matching the reported window); the identical child under CREATE_NO_WINDOW created none. All four files compile; the live windowed daemon was killed and respawned hidden by the desktop shell.
+
+- **Release: roughly 80x faster fresh-install ingest (bulk flush, pre-insert integrity chain, per-batch hooks, batch session/span APIs).**
+  - **Why:** carrier `[RELEASE]` so #4669 reaches PyPI and the fleet. Fresh installs ingested at about 19 events/s end to end: a 1000-event flush took about 53s, and a first run with hundreds of sessions left the dashboard empty for hours. Three compounding root causes on the local store write path: (1) duckdb's Python parameter binding retries a failed `import pandas` for nearly every bound value, and CPython never caches a failed import, so each attempt re-scans sys.path (a 1000-event flush spent about 45 of its 48 seconds inside roughly 28,000 failed pandas imports); (2) the flush inserted row by row and then re-UPDATEd every fresh row to stamp the integrity chain, a delete plus reinsert against all six secondary indexes per event; (3) the disabled SIEM/OTLP hooks paid a failed `clawmetry_pro` import per event (about 4.4ms each).
+  - **What:** ships #4669. Negative-cache the pandas miss (`sys.modules` sentinel, applied only when pandas is genuinely absent, opt out with `CLAWMETRY_NO_IMPORT_NEGATIVE_CACHE=1`); compute the tamper-evident hash chain in Python before insert (same scheme and ordering as before, byte-for-byte) and fold it into one chunked multi-row VALUES insert inside the existing transaction; resolve redaction/SIEM/OTLP enablement once per batch in `ingest_many`; new `ingest_sessions_batch` and `ingest_spans_batch` APIs (one lock hold, one transaction per batch) wired into the sync daemon's session mirror and family-runtime span reconstruction. Also fixes a latent chain-fork on flush retry: the in-memory chain head now advances only after COMMIT. Writer-lock design, ring pop-after-commit, INSERT OR IGNORE dedup, rollup exactly-once counting, redaction behavior, and the DuckDB thread/memory caps are unchanged.
+  - **Verified:** guard suite `tests/test_ingest_bulk_flush.py` (17 tests): the perf guard (5000-event ingest plus flush under 10s) proven red on un-fixed main (356.8s) and green post-fix (4.5s, about 1100 events/s) on the same Windows machine; integrity chain byte-for-byte parity with the legacy stamping for a fixed multi-node sequence, `verify_integrity()` valid across redelivery and restarts; related suites (local store, integrity, rollups, spans, sync integration, family ingest, crash recovery) diffed against origin/main with zero new failures. Full 28-check CI matrix green on #4669 including Live OpenClaw E2E and the MOAT verifier.
+
+- **Feature: rename the Conversations tab to Sessions (shipped in 0.12.667).**
+  - **Why:** "Sessions" is the normal term across every harness we observe (Claude Code, Codex, Cursor, OpenClaw), and the tab is where you dig deep into sessions; "Conversations" was the odd one out.
+  - **What:** #4656: nav label, tooltip, and in-tab copy (time-window tooltip, empty state, inventory work count) now say session(s). The `data-tab="transcripts"` id and `nav.session_replay` i18n key are unchanged, so deep links and stored state keep working. Only `en.json` changes by hand; the autotranslate workflow fanned the other locales out in #4665. Reached PyPI in 0.12.667 (carried by the #4666 release) and app.clawmetry.com via the cloud pin bump (clawmetry-cloud #1960).
+  - **Verified:** full CI matrix green on #4656 (31 checks incl. drift-bot, Live OpenClaw E2E, visual-diff); the published 0.12.667 wheel cracked and confirmed to carry the rename before pinning cloud.
+
+- **Release: ship windowless self-update, self-healing sync daemon, global CLI, and trial-expiry banners to end users.**
+  - **Why:** carrier `[RELEASE]` so #4657 reaches PyPI and the fleet. Until this ships, every unattended Windows self-update pops a visible cmd window (seen live during an enterprise client call 2026-08-08), fresh installs that skipped sign-in show an empty dashboard forever, and desktop users have no `clawmetry` on PATH.
+  - **What:** no new code; ships #4657.
+  - **Verified:** end-to-end this release - after PyPI publish, confirm the founder's Windows 11 desktop install auto-updates to the new version (one final visible pip window from the old helper is expected), then confirm the NEXT update check produces zero visible console windows, `clawmetry --version` works in a fresh terminal, and the dashboard shows sessions with the sync daemon healed by the shell.
+
+- **Fix: mystery cmd windows flashing on Windows during self-update.**
+  - **Why:** founder report 2026-08-08 — console windows popping open and closing on their own, including during a call with an enterprise client. Traced live with a process-creation monitor: (1) `clawmetry/update_respawn.py` runs detached (no console), so the `pip install` child it spawns without `CREATE_NO_WINDOW` gets a brand-new VISIBLE console for the whole seconds-to-minutes install — this fires on every real unattended update, and the fleet updates constantly; (2) a dashboard running from a source checkout can never version-converge (pip installs to site-packages, the process re-runs the checkout), so the Windows respawn plan looped forever — exit → pip → relaunch → still stale — flashing 3-4 windows per minute.
+  - **What:** `update_respawn.py` runs pip with `CREATE_NO_WINDOW`; `routes/update_check.py` gains `_running_from_source_checkout()` (`.git` next to the package) and `_maybe_auto_update()` refuses to fire there, logging why.
+  - **Verified:** reproduced the respawn loop live (process monitor caught `update_respawn` → pip → relaunch cycling at ~70s), killed it, applied the guard, then watched for visible `ConsoleWindowClass` windows for 120s spanning two watcher ticks: none appeared.
+
+- **Fix: desktop shell owns the sync daemon — a fresh install shows data instead of an empty dashboard.**
+  - **Why:** the shell only started the sync/ingest daemon in one narrow path (a cm_ key captured during first-launch onboarding). Skip sign-in, or connect later via CLI, and local ingest never ran: every page sat on its empty state while banners told a desktop user to go run `clawmetry status` in a terminal. Confirmed live on the founder's Windows box 2026-08-08 — a connected node with 4 Claude Code sessions on disk showed $0.00 everywhere because the daemon had died at 15:01 and nothing restarted it (schtasks registration had also silently failed, so there was no supervisor at all). Founder expectation: install → sign in → see every runtime, no terminal.
+  - **What:** `desktop/app.py` — (1) `ensure_sync_daemon()`: liveness-probe the daemon via `~/.clawmetry/local_query.json` (PID alive + query-server port accepting), and if dead run the venv's `clawmetry sync`; called off the boot path at launch and from every watcher tick, with a 300s retry floor. Independent of cloud sign-in — local ingest is the product. (2) Single-instance guard: `start_daemon()` records `{app_pid, daemon_pid, port}` in `runtime/app-instance.json`; a second launch attaches its window to the live instance's daemon instead of stacking another, and a daemon whose owning app died (pre-fix versions leaked one per relaunch) is killed and replaced at boot. (3) Onboarding gains an explicit hosting choice pane after sign-in — ClawMetry Cloud (`connect --start-sync-now`) vs Local/Self-host (`connect --defer-sync` + `clawmetry sync`), both starting the same 7-day all-runtimes trial, defaulting to cloud after 180s. `clawmetry/static/js/app.js` — `checkLicenseExpiry()` now also fires BEFORE the cliff: trial with ≤3 days left or in grace shows the red banner ("Your trial ends today…" / "ends in N days") with a 4h re-show on dismiss; previously a trial at 0 days left rendered nothing anywhere. Also added the missing `nav.evals_tooltip` / `nav.notifications_tooltip` locale keys that leaked raw i18n keys into sidebar tooltips.
+  - **Verified:** live on the founder's Windows 11 desktop install: `ensure_sync_daemon()` took the daemon from dead to alive (discovery-file probe False→True), and `/api/sessions` immediately returned real Claude Code sessions; the orphaned second dashboard daemon was detected and killed; all three `_check_existing_instance` cases (attach / orphan / stale) unit-tested against the live daemon; ran the dashboard from source against the machine's real trial license (0 days left, grace) and screenshotted the new red trial banner with its Get-a-license CTA rendering above the tab content.
+
+- **Feature: desktop app installs a global `clawmetry` CLI + instant warm launches.**
+  - **Why:** the desktop app's runtime venv was invisible to the terminal — desktop users who typed `clawmetry` in cmd/PowerShell got "not recognized" unless they separately `pip install`ed, splitting the install base. And warm launches could stall 20+ seconds on the splash whenever the 6h stamp expired, because `bootstrap()` ran a blocking `pip install --upgrade` before starting the daemon. Founder ask 2026-08-08: the app must be super snappy and the CLI must work globally so users can run both.
+  - **What:** `desktop/app.py` — (1) `ensure_global_cli()` runs off the boot path on every launch: Windows writes a `%LOCALAPPDATA%\ClawMetry\bin\clawmetry.cmd` shim delegating to the venv exe, appends that dir to the per-user PATH (HKCU, no admin) and broadcasts `WM_SETTINGCHANGE`; macOS/Linux symlink `~/.local/bin/clawmetry`. (2) `bootstrap()` fast-path: if the venv already has a runnable clawmetry, return immediately — the watcher thread owns the 6h upgrade cadence in the background and drift-restarts the daemon, so launch never blocks on PyPI. (3) `_get_installed_version()` reads the dist-info directory name instead of spawning the venv interpreter (~1s → ~1ms, also on every watcher tick). (4) The system-Python probe result is cached in `runtime/bootstrap-python.json`. (5) Daemon ready-poll tightened 0.4s → 0.15s. `desktop/installer/windows.nsi` uninstaller now removes the shim dir and strips its user-PATH entry.
+  - **Verified:** on a live Windows 11 install of the shipped desktop app (runtime venv at clawmetry 0.12.666): warm-path `bootstrap()` measured 0.3ms and dist-info version read 1.4ms; `ensure_global_cli()` wrote the shim, registered the PATH entry, and a fresh-PATH shell resolved `clawmetry` to the shim and printed `clawmetry 0.12.666`.
+
+- **Release: ship the E2E key settings panel and the Windows/Linux installers to end users.**
+  - **Why:** carrier `[RELEASE]` so #4645 and #4648 reach the next tagged build and PyPI release instead of sitting merged-but-unpublished on main.
+  - **What:** no new code; ships #4645 and #4648.
+  - **Verified:** end-to-end this release, confirm `pip install --upgrade clawmetry` exposes the "Cloud sync key" profile-menu item, and confirm `releases/latest/download/ClawMetry-windows-setup.exe` and `releases/latest/download/clawmetry-linux.AppImage` resolve on GitHub once `desktop-artifacts.yml` runs against the new tag.
+
+- **Feature: reveal and regenerate the E2E encryption key from the local dashboard settings.**
+  - **Why:** the only way to see the secret that decrypts cloud-synced snapshots was `clawmetry status --show-key` on the CLI. Founder ask 2026-08-08: expose it in Settings on `localhost:8900`, never on the hosted cloud dashboard, with a regenerate option for a suspected leak.
+  - **What:** `GET /api/local/e2e-key` and `POST /api/local/e2e-key/regenerate`, both bare `@app.route` registrations in `dashboard.py`'s OSS-only route section (not a Blueprint), so the hosted `clawmetry-cloud` app never mounts them. New "Cloud sync key" profile-menu item opens a modal (masked key, reveal toggle, copy button, regenerate with an explicit confirm step) via `clawmetry/templates/partials/e2e-key-modal.html` + `clawmetry/static/js/gw-setup.js`.
+  - **Verified:** ran the dashboard locally against a fake `~/.clawmetry/config.json`, confirmed both endpoints' configured/not-configured states, and drove the modal through Playwright end to end (reveal, copy-to-clipboard, regenerate-with-confirm) against the real rendered page.
+
+- **Feature: real native installers for the Windows and Linux desktop app.**
+  - **Why:** Windows shipped a `.zip` of a PyInstaller one-folder build, and the Linux CI job has been named "Linux single-folder + AppImage" since day one but only ever produced a `.tar.gz`, the AppImage step was never written. Founder priority 2026-08-08: every platform's download must be a real installer.
+  - **What:** `desktop/installer/windows.nsi` (NSIS) wraps the Windows build into `ClawMetry-Setup-<version>.exe`, Start Menu and Desktop shortcuts, an uninstaller in Add/Remove Programs, per-user install with no UAC prompt. The Linux job now stages an AppDir and runs `appimagetool`, producing `clawmetry-linux.AppImage`. Building and running the real frozen Linux binary locally to validate this surfaced a genuine bug: the Linux build has never actually been able to open a window, PyInstaller bundled whatever `gi`/PyGObject the build machine's system python3 had, compiled for the wrong Python ABI for the frozen interpreter. Fixed by pinning `PyGObject==3.48.2` for Linux in `desktop/requirements-dev.txt` and installing the dev headers it needs to compile against the CI job's own interpreter.
+  - **Verified:** compiled `windows.nsi` locally with `makensis` against a stand-in build folder. Built the real PyInstaller Linux binary locally, reproduced the `gi` import crash, applied the fix, rebuilt, and confirmed a clean launch. Built the actual `.AppImage` with `appimagetool` and ran it under Xvfb, screenshot confirms the real onboarding UI renders (not just a clean exit code).
+
+- **Release: ship the drag-to-Applications DMG layout to end users.**
+  - **Why:** #4646 rewrote the DMG-build step but no signed `.dmg`
+    carries the new layout yet. Carrier `[RELEASE]` so users see the
+    two-icon drag-and-drop window on the next download instead of the
+    lone `ClawMetry.app`.
+  - **What:** no new code; ships #4646.
+  - **Verified:** end-to-end this release — download the fresh `.dmg`,
+    mount, confirm the window shows ClawMetry + Applications side-by-
+    side in a 600x300 icon-view window with hidden toolbar.
+
+- **Fix: DMG opens with a drag-to-Applications layout instead of an empty window.**
+  - **Why:** the shipped `.dmg` mounted to a window showing only
+    `ClawMetry.app` — no `Applications` shortcut for users to drag it
+    onto. Live report 2026-08-08: *"why is there no drop to
+    applications folder — check how we did for clawmetry-mac app it's
+    a separate repo — we should reuse same approach."*
+  - **What:** rewrote the "Wrap into .dmg" step in
+    `.github/workflows/desktop-artifacts.yml` to stage the `.app` +
+    an `Applications` symlink into a directory, build a UDRW writable
+    DMG, `osascript` the Finder into positioning icons (ClawMetry.app
+    left, Applications right, 96px icons, hidden toolbar/statusbar),
+    then `hdiutil convert` to the final compressed UDZO. Signing/
+    notarization steps unchanged — they still operate on the final
+    `dist/*.dmg`. Pattern lifted from `vivekchand/clawmetry-mac`'s
+    build-sign-release workflow so both native macOS surfaces
+    (Swift menubar app + pywebview desktop app) present identical
+    drag-to-install UX.
+  - **Verified:** YAML parses locally. End-to-end verification is the
+    next release — mounting the shipped `.dmg` must show two
+    side-by-side icons (ClawMetry, Applications) in a 600x300 icon-
+    view window with no toolbar.
+
+- **Release: stable desktop-app download URLs + Windows console-window fix reach the wheel and the next signed builds.**
+  - **Why:** the desktop thin-shell app had no public, permanent download link (`desktop-artifacts.yml` only produced version-suffixed GitHub Release assets reachable by digging into CI runs), and a real Windows-only bug survived because nothing had exercised those code paths end to end: the shell is built windowed (`console=False`) but every subprocess it spawns (`python -m venv`, `pip install`, the venv's `clawmetry` CLI, the daemon itself) is a console executable, so Windows flashed a console window on first launch and every relaunch. Carrier `[RELEASE]` so #4640 actually reaches the next tagged build.
+  - **What:** `desktop-artifacts.yml` now uploads a fixed-name copy of each platform build (`ClawMetry-mac.dmg`, `ClawMetry-windows.zip`, `clawmetry-linux.tar.gz`) alongside the versioned one, so `github.com/vivekchand/clawmetry/releases/latest/download/<fixed-name>` always resolves to the current release with no version bookkeeping. This is what `clawmetry-landing`'s new `/download/<os>` buttons link to. `desktop/app.py` and `desktop/onboarding.py` gained a shared `_win_subprocess_kwargs()` helper applying `CREATE_NO_WINDOW` to every subprocess call on Windows (no-op elsewhere).
+  - **Verified:** ran `desktop/app.py` end-to-end under Xvfb (GTK-WebKit backend) before and after the fix: real venv bootstrap, real `pip install clawmetry` from PyPI, real onboarding auth pane with a real OTP round-trip, real daemon spawn serving a working `/api/overview`, identical behavior both times (the fix is a no-op outside `platform.system() == "Windows"`, confirming it doesn't regress macOS/Linux). End-to-end for this release: the tag push must cascade to `desktop-artifacts.yml` and produce the fixed-name assets on the GitHub Release. Will confirm with `curl -I` on `releases/latest/download/ClawMetry-windows.zip` post-release. Carries #4640.
+
+- **Release: ship dashboard sign-out login fix to end users.**
+  - **Why:** #4632 fixed the "Enter your access token" primary prompt on
+    main but no signed `.dmg` / PyPI wheel carries it yet. Carrier
+    `[RELEASE]` so the fix reaches installs.
+  - **What:** no new code; ships #4632.
+  - **Verified:** end-to-end this release — sign-out on the shipped
+    `.dmg` must show the new hierarchy (Sign back in primary red,
+    GitHub/Google/OTP secondary, gateway-token in Advanced disclosure).
+
+- **Fix: dashboard sign-out login pane no longer shows "Enter your access token" as the primary prompt.**
+  - **Why:** users who clicked Sign Out on the dashboard landed on a
+    confusing overlay whose primary CTA was a raw access-token input.
+    The token concept is an internal implementation detail (gateway JWT
+    on the local machine); users think in terms of accounts. Reported
+    live 2026-08-08: *"what the hell is this access token?? I told
+    1000 times we should not have such confusing things — there should
+    be only login / signup via google / github / otp."*
+  - **What:** rewrote `clawmetry/templates/partials/overlays.html` login
+    card to mirror `clawmetry onboard` and the desktop first-launch
+    pane. Primary: "Sign back in (this machine)" (solid red, one-click,
+    visible only when the loopback detected-token probe answers — so
+    hidden on remote access). Secondary: three cloud sign-in options —
+    Continue with GitHub, Continue with Google, Continue with email
+    (OTP). The raw gateway-token entry is preserved for legitimate
+    remote-access users behind an Advanced `<details>` disclosure at
+    the bottom, so nobody has to see "access token" as a top-level
+    prompt. New JS handlers `clawmetryOauthLogin(provider)` and
+    `clawmetryEmailOtpStart()` in `auth-bootstrap.js`; both reuse
+    existing endpoints (`/api/cloud-cta/oauth-start`,
+    `/api/auth/email-otp`) so no new server surface. Both clear the
+    `cm-signed-out` marker on success so the next page load auto-signs
+    in via the detected-token bootstrap.
+  - **Verified:** HTML + JS parse; new functions defined
+    (`clawmetryOauthLogin`, `clawmetryEmailOtpStart`); existing
+    `clawmetryLogin` still wired to the Advanced token input so
+    remote-access users are not broken; headless Chrome screenshot of
+    the rendered overlay confirms the new hierarchy (Sign back in
+    prominent, OAuth/OTP visible, gateway token buried).
+
+- **Release: header cloud-sync toggle reaches users — one-click pause/resume from the dashboard.**
+  - **Why:** the sync-toggle chip landed on main in #4623 (9f6355209) but
+    hasn't shipped in a signed `.dmg` or PyPI release yet. Carrier
+    `[RELEASE]` so the feature actually reaches installs — a
+    stay-on-main fix helps no user.
+  - **What:** no new code; ships #4623 into a bundle.
+  - **Verified:** end-to-end is this release — the tag push must
+    auto-cascade to desktop-artifacts (regression check for the
+    `actions: write` fix), produce `ClawMetry-0.12.<n>.dmg` with the
+    sync chip present in the header (grep the bundle's PYZ for
+    `sync-toggle-btn` — analogous to how #4619's shipment was
+    verified for `btn-tertiary`).
+
+- **Release: auth pane hierarchy fix — GitHub/Google now primary, email tertiary.**
+  - **Why:** screenshot verification of v0.12.659 caught a visual bug —
+    the red "Sign in with email" button dominated GitHub/Google buttons
+    on the first-launch auth pane. That's the wrong signal: OAuth is
+    one-click while email is two-step (send OTP, verify). The CLI's
+    `clawmetry onboard` already presents `[1] GitHub  [2] Google` as
+    primary with email as fallback; the desktop pane didn't match.
+  - **What:** carrier `[RELEASE]` for the fix that landed in #4618.
+    No new code in this PR; the visual hierarchy fix rides along.
+  - **Verified:** side-by-side screenshots before/after in the #4618
+    description. End-to-end verification is this release: the tag push
+    must (a) auto-cascade to `desktop-artifacts.yml` (regression check
+    for the auto-cascade fix), (b) produce `ClawMetry-0.12.<n>.dmg`
+    with the corrected auth pane inside.
+
+- **Feature: Cache Hit Rate and Routing Advisor tiles land under the Usage tab, answering the two efficiency tactics Uber's CTO named on the Aug 6, 2026 earnings call.**
+  - **Why:** Uber's CTO on the Q2 2026 call: "the next phase will not be characterized by who spends the most tokens, but about how people use them as efficiently as possible." Frontier-AI adoption at Uber quadrupled since January while cost per token trended down, thanks to prompt caching, default model selection, per-engineer visibility, and open-weight experiments. Every CFO on the S&P 500 now asks the same board question with a smaller budget and no internal GenAI Gateway. ClawMetry ships the two most CFO-legible answers off the shelf.
+  - **What:** two tiles positioned directly under the Efficiency grade. Cache-Hit tile shows the current hit rate, the amount already saved from cached reads, and a conservative estimate of the amount left on the table (flagged as an estimate; cacheable-fraction constant exposed in the payload so the UI labels it honestly). Routing Advisor tile shows total potential monthly savings and the top five safe same-provider model downgrades, sourced from `providers_pricing.downgrade_model_name`'s guarded resolver (never cross-provider, never a bare-family splice that synthesises a non-existent id). Both tiles derive client-side from the shared `/api/efficiency` cache, so they add zero fetches per tab load and are cloud-safe by construction via the existing `cm-cloud-efficiency` interceptor. Two new public API endpoints (`/api/efficiency/cache-hit-rate`, `/api/efficiency/routing-advisor`) stay for external consumers and reconcile with `/api/efficiency` by construction, both honour `?days=` clamping, both never 500.
+  - **Verified:** 36/36 tests in `tests/test_efficiency.py` pass (5 new endpoint tests join the existing suite: shape, per-runtime scoping, `?days=` clamp, realised pull, never-500 on store failure). Served `static/js/app.js` contains `renderCacheHitRateCard` + `renderRoutingAdvisorCard`. Rendered `tabs/usage.html` (via Jinja) contains both card ids. FLYWHEEL Hard Gate 4 (No Dead UI) satisfied. Cloud parity satisfied without touching the cloud repo: both tiles read the same cached `/api/efficiency` blob that the existing `cm-cloud-efficiency` interceptor already serves from the snapshot. Blueprint and Requirement in 8090 Factory carry the new `CacheHitRate` and `RoutingAdvisor` components plus three new acceptance criteria (`AC-OBS-CEA-002.3` cache hit rate + estimate labelling, `AC-OBS-CEA-002.4` routing recommendation, `AC-OBS-CEA-002.5` realised vs potential); no drift. Carries #4610.
+
+- **Release: first `.dmg` that ships end-to-end signed + notarized + first-launch onboarding.**
+  - **Why:** the desktop bundle capability landed in stages this evening —
+    (a) the thin-shell PyInstaller `.app` (#4602), (b) signing pipeline
+    wiring (#4603), (c) workflow-file syntax fix (#4605), (d) `pyinstaller`
+    marker fix + release-on-merge tag cascade (#4608), (e) `actions: write`
+    permission + tag-derived VERSION (#4612), and (f) the first-launch
+    onboarding pane itself (#4614). Each release since v0.12.658 had one
+    or more of those pieces missing. This release is the first one where
+    the complete chain fires end-to-end from a single `[RELEASE]` merge:
+    PyPI wheel publishes, tag pushes, `desktop-artifacts.yml` auto-fires
+    on the tag (permission fix), macOS PyInstaller finds pyinstaller
+    (marker fix), signs and notarizes both `.app` and `.dmg` (secrets
+    wiring), and attaches everything to the GitHub Release named for the
+    right version (VERSION fix). And when the user opens the `.dmg`, the
+    first-launch onboarding pane runs — GitHub/Google/Email OTP sign-in,
+    auto Pro trial provisioning for entitled accounts, cross-sell
+    carousel during bootstrap, dashboard-content-ready gate — instead
+    of dropping them on an anonymous empty dashboard.
+  - **What:** no new code changes in THIS release — a `[RELEASE]` carrier
+    to fire the full pipeline for the first time end-to-end. The prior
+    `## Unreleased` entries describe the actual changes shipping.
+  - **Verified:** end-to-end verification IS this release. Success bar:
+    (1) `release-on-merge` bumps to `v0.12.<n>` and pushes tag WITHOUT
+    manual intervention, (2) `desktop-artifacts.yml` auto-fires on the
+    tag WITHOUT a manual `gh workflow run`, (3) all three OS jobs green,
+    (4) release attaches `ClawMetry-{correct_version}.dmg` (not stale
+    by one version), (5) `spctl --assess --type open` on the downloaded
+    `.dmg` returns `accepted, source=Notarized Developer ID`, (6) first
+    launch shows the onboarding pane.
+
+- **Feature: desktop app now onboards new users natively — sign-in pane, auto Pro trial, cross-sell carousel, dashboard-content-ready gate.**
+  - **Why:** a user who chose the `.dmg` over `pip install` is the highest-intent
+    surface we have; the old shell was a passive webview that dropped them on
+    the same anonymous empty dashboard a `pip install` would produce, wasting
+    that signal. Trial provisioning existed in the backend (`auto_provision_pro`
+    in `clawmetry/license.py`) but had no in-app trigger — the paywall CTA
+    just did `window.open('clawmetry.com/connect')` and users had to bring a
+    `cm_` key back manually. Result: desktop installs converted to trial at
+    single-digit rates.
+  - **What:** `desktop/onboarding.py` — a new self-contained module (stdlib only)
+    that renders three surfaces inside the pywebview window: (1) an auth pane
+    mirroring `clawmetry onboard`'s three paths (GitHub OAuth loopback,
+    Google OAuth loopback, email OTP — same server endpoints), (2) an
+    Ubuntu-installer-style cross-sell carousel that auto-advances through
+    Agent Builder, Desk device, and Enterprise SSO while the runtime venv
+    provisions, (3) a ready-gate spinner that keeps the pane up until
+    `/api/overview` returns content or 20s elapses. `desktop/app.py` gains a
+    `DesktopAPI` class exposed as `window.pywebview.api.*` so the pane's JS
+    can call into Python for OAuth, OTP send/verify, external-link opens, and
+    skip. Post-auth the shell shells out to
+    `runtime/venv/bin/clawmetry connect --key cm_… --start-sync-now` — no
+    duplication of key-validation, `auto_provision_pro`, or sync-daemon
+    start in the shell. First-launch state stamped in
+    `~/Library/Application Support/ClawMetry/runtime/onboarding-completed.json`
+    so relaunches skip the pane. Cloud sync is default-ON per product spec;
+    the header toggle to disable is a follow-up. `desktop/build_mac.spec` +
+    `build_windows.spec` + `build_linux.spec` explicitly list `onboarding`
+    in `hiddenimports` so a future refactor can't silently drop it from the
+    bundle. `desktop/README.md` and Software Factory Blueprint updated with
+    the new sequence.
+  - **Verified:** onboarding.py + app.py both parse (`python3 -c "import ast;
+    ast.parse(open(...).read())"`); DesktopAPI unit smoke tests pass (skip_auth
+    sets the event, open_external rejects non-https, start_oauth rejects
+    unknown providers, send_email_otp rejects invalid emails, verify_email_otp
+    rejects short codes). End-to-end verification is the next release: the
+    tag push must produce a `.dmg` that on first launch shows the auth pane,
+    completes GitHub OAuth via loopback, provisions the Pro wheel for a
+    trial-entitled account, and dismisses when `/api/overview` returns data.
+
+- **Fix: macOS `.dmg` now actually builds — pyinstaller was excluded from macOS via a stray sys_platform marker; release-on-merge now kicks tag-triggered workflows the GITHUB_TOKEN can't cascade.**
+  - **Why:** two bugs in a row prevented v0.12.656 and v0.12.657 from
+    shipping desktop bundles even though PyPI got the wheels cleanly.
+    (1) `desktop/requirements-dev.txt` pinned pyinstaller with
+    `sys_platform != "darwin"` — literally excluding it on macOS. The
+    workflow's macOS job then runs `pyinstaller --clean --noconfirm
+    desktop/build_mac.spec` and dies with exit 127 ("command not
+    found"). The comment above the workflow step even says "PyInstaller
+    (not py2app)" but the requirements file thought it was
+    py2app-on-mac. (2) `release-on-merge.yml` creates the release tag
+    with the default GITHUB_TOKEN, and GitHub Actions deliberately
+    suppresses cascade triggers for GITHUB_TOKEN events — so the
+    `on: push: tags:` gate on `desktop-artifacts.yml` never fired even
+    after the workflow-file syntax fix in v0.12.657. Every release
+    since v0.12.656 has needed a manual `gh workflow run
+    desktop-artifacts.yml --ref v0.12.<n>` to build the bundles.
+  - **What:** (1) collapse the pyinstaller line in
+    `desktop/requirements-dev.txt` to a single unconditional
+    `pyinstaller>=6.0` and drop the unused py2app + `setuptools<70`
+    macOS pins — all three build specs are PyInstaller specs, py2app
+    is not on the shipping path. (2) add an explicit
+    `gh workflow run desktop-artifacts.yml --ref v0.12.<n>` step at
+    the end of `release-on-merge.yml` right after the `gh release
+    create` step, so every future release fires the desktop-bundle
+    build automatically. Non-blocking (`|| echo`) so a dispatch failure
+    never blocks the PyPI publish that already succeeded upstream.
+  - **Verified:** locally,
+    `pip install -r desktop/requirements-dev.txt` on macOS installs
+    pyinstaller (was previously silently skipped by the sys_platform
+    marker). The `gh workflow run` step is idempotent and safe on
+    re-runs. End-to-end verification is this release: the tag push
+    must produce a signed+notarized `.dmg` + Windows `.zip` + Linux
+    `.tar.gz` attached to the GitHub Release WITHOUT any manual
+    dispatch step from me.
+
+- **Fix: desktop-artifacts workflow now parses — signed `.dmg` ships on tag push instead of failing at the workflow-file level.**
+  - **Why:** the wiring release (v0.12.656) attempted to gate the signing
+    steps with `if: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}` at step level.
+    GitHub Actions rejects `secrets.*` inside `if:` — that context is only
+    legal in `env:`, `with:`, and `run:`. The parser refused the whole
+    workflow file, so every run (both the tag push and a manual dispatch
+    for retry) failed at "This run likely failed because of a workflow
+    file issue" before any job started. Net effect: `clawmetry 0.12.656`
+    published to PyPI cleanly but the GitHub Release for that tag had
+    zero binary assets attached.
+  - **What:** hoist the presence checks to job-level `env` and gate the
+    steps on `env.HAS_CERT` / `env.HAS_SIGN`, which is legal in `if:`.
+    Also declare `permissions: contents: write` on the release job so
+    `softprops/action-gh-release@v2` can attach files even when the org
+    default GITHUB_TOKEN scope is read-only. First tag on which the fix
+    lands is the one this release cuts.
+  - **Verified:** YAML parses locally (`python3 -c "import yaml; yaml.safe_load(...)"`);
+    no `secrets.*` references remain inside any `if:` conditional
+    (`grep -nE '^\s*if:.*secrets\.'` returns nothing). End-to-end
+    verification comes with this release's tag push — the macOS job
+    must import the cert, sign both the `.app` and the `.dmg`, and the
+    release job must attach all three OS bundles to the GitHub Release.
+
+- **Release: macOS desktop `.dmg` now ships signed + notarized on every tag push.**
+  - **Why:** the desktop-app scaffold landed in #4602 with the signing pipeline
+    wired but the six Apple credentials were not yet in the repo, so
+    `desktop-artifacts.yml` on a `v*.*.*` tag would still produce an unsigned
+    `.dmg` — Gatekeeper would warn on first launch and the app-store-quality
+    experience the desktop bundle was built for wouldn't actually reach users.
+  - **What:** `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`,
+    `APPLE_APP_SPECIFIC_PASSWORD`, `MACOS_CERT_P12_BASE64`, and
+    `MACOS_CERT_PASSWORD` are now set on `vivekchand/clawmetry`. On every
+    tag push, `desktop-artifacts.yml` codesigns and hardened-runtime-signs
+    `ClawMetry.app`, submits the wrapping `.dmg` to Apple's notary service via
+    `notarytool`, staples the ticket, and attaches the finished `.dmg` to the
+    GitHub Release alongside the Windows `.zip` and Linux `.tar.gz`.
+  - **Verified:** local proof — `~/Downloads/ClawMetry-signed.dmg` (7.3 MB) is
+    signed by `Developer ID Application: InstaLabs LLC (8LVH596RA5)` and
+    `spctl --assess --type open` reports `accepted, source=Notarized Developer
+    ID`; the six secrets are confirmed present via `gh secret list` at
+    2026-08-07T21:12Z. CI verification comes in this release: the tag push
+    for this version is the first end-to-end exercise of the notarization
+    path on GitHub-hosted runners.
+
+- **Fix: installers now sweep and remove stale clawmetry duplicates instead of only detecting them.**
+  - **Why:** #4335 (`clawmetry/installs.py`) taught the CLI to *detect and
+    warn* about a stale clawmetry copy elsewhere on PATH, but nothing
+    actually removed one — `install.ps1`/`install.sh` only ever cleaned up a
+    previous install at their OWN target directory, and `install.cmd` has no
+    dedicated venv at all, so re-running it (or switching between it and
+    `install.ps1`) leaves the old copy installed and dormant. Live-reproduced
+    2026-08-07: a plain `pip install --user` into a system Python left
+    clawmetry 0.11.99 dormant next to a current 0.12.655 dedicated-venv
+    install — harmless here only because PATH ordering happened to favor the
+    venv.
+  - **What:** all three canonical installers (`install.sh`, `install.ps1`,
+    `install.cmd`) now sweep every python/python3 interpreter reachable on
+    PATH before installing and `pip uninstall -y clawmetry` from every one of
+    them except the venv/target they're about to (re)build; best-effort,
+    never fails the install (`|| true` under install.sh's `set -e`).
+    `install.cmd` additionally removes a leftover `install.ps1`-created venv
+    at `%LOCALAPPDATA%\clawmetry` since it has no venv of its own and the two
+    would otherwise coexist and shadow each other. `clawmetry/doctor.py`'s
+    install census is unchanged and still catches whatever a sweep can't
+    reach (e.g. a copy on a PATH entry that wasn't scanned).
+  - **Verified:** 10 new tests (`tests/test_installer_stale_sweep.py`:
+    bash -n / PowerShell parser syntax checks, sweep ordering before the
+    install step, own-install-dir exclusion, best-effort-under-`set -e`), all
+    16 pre-existing `install.sh` tests still green; reproduced the exact live
+    scenario on the affected machine — reinstalled clawmetry into a second
+    system Python, confirmed both `install.cmd` and `install.ps1` detected
+    and removed it via `pip show`/`pip uninstall` before reinstalling fresh,
+    `clawmetry --version` correct afterward. `install.sh` not behaviorally
+    re-run beyond `bash -n` (Windows dev machine, no macOS/Linux box handy);
+    behavioral proof for all three lands in
+    `.github/workflows/install-test.yml`.
+
+- **Added qm as the 17th observable runtime.** qm
+  (github.com/yc-software/qm, qm.ycombinator.com) is YC's Postgres-
+  backed multiplayer agent harness (launched 2026-07-29 MIT). Because
+  qm delegates to Pi, OpenCode, Codex, and Claude Code (all already
+  Pro adapters), a qm user is definitionally a Pro user and skipping
+  qm meant every YC-portfolio deployment ran blind. Adapter reads qm's
+  own Postgres tables (sessions / session_entries / session_llm_requests /
+  turn_metrics / runs) in read-only mode via pg8000 (or psycopg2 /
+  psycopg if already installed). It reads DATABASE_URL with a
+  CLAWMETRY_QM_DATABASE_URL override for read-replica setups. Surfaces
+  the org-scope layer (who in the org ran what, cron health across
+  scopes, scope-level tokens) that Pi/OpenCode/Codex/Claude Code cannot
+  see individually. Ships across the 6-PR chain: clawmetry-pro#120
+  (QMAdapter + 14 tests), clawmetry#4582 (this repo — registration in
+  10 lists + runtime probe + README + 4 pin tests bumped to 17), 
+  clawmetry-cloud#1945 (runtime-locks FAM + Grok drift-fix),
+  clawmetry-landing#611 + #612 (17 to 18 counts + chip grid),
+  clawmetry-pro#121 (release 0.7.5), and clawmetry-cloud#1947 (wheel
+  0.7.5 baked into the served image so activated daemons auto-provision
+  QMAdapter on their next 30-min cycle).
+
+- **Fixed the root cause of ClawMetry silently no longer auto-updating.**
+  The browser onboarding gate (`routes/onboarding.py`, the default
+  first-run path since the 2026-07-31 hard-gate rollout) completed a
+  `managed`/`selfhost_*` choice without ever starting or registering a
+  background sync daemon — only the CLI paths (`clawmetry connect`,
+  `clawmetry onboard`) did that. The only thing left polling PyPI was the
+  foreground dashboard's in-process checker thread, which stops the
+  moment that one process exits (closed terminal, sleep, reboot, crash),
+  silently and permanently halting auto-update until a human manually
+  relaunched `clawmetry`. Onboarding completion now always calls the new
+  `clawmetry/daemon_registration.py::ensure_persistent_daemon()`.
+  Windows also gets real persistence for the first time: previously it had
+  no launchd/systemd equivalent at all (`_start_daemon`'s Windows branch
+  fell straight to an unsupervised detached subprocess), so a Windows node
+  lost auto-update after any reboot/logoff/crash even when a daemon HAD
+  been registered — it now registers a logon-triggered, restart-on-failure
+  Task Scheduler task. Finally, `auto_update` self-healing (re-asserting
+  the default-on `True` after a stale persisted `False`) previously only
+  ran for entitled *paid* cloud accounts via the heartbeat
+  (`_sync_auto_update_with_plan`); self-hosted and free-tier installs had
+  no path back to `True`. The update-check worker now heals a stale unset
+  `False` for every role/tier on boot, while a real, explicit user opt-out
+  (`POST /api/update-check/config`) is now tracked and never overridden.
+- **Fixed an onboarding-complete request hang introduced by the daemon-registration
+  fix above.** `register_systemd`/`register_launchd` shelled out to
+  systemctl/launchctl with no timeout, synchronously inside the
+  `/api/onboarding/complete` HTTP handler the browser's init sequence waits
+  on. A runner or container with no working user systemd/dbus session can
+  make those commands hang instead of failing fast, blocking the response
+  indefinitely (caught live via a PR's own visual-diff bot: mobile
+  screenshots stuck forever on "Initializing ClawMetry"). Every
+  `daemon_registration.py` subprocess call is now bounded to a few seconds,
+  and the registration call itself is dispatched on a background thread so
+  onboarding-complete never blocks on it at all.
 - **Retired the legacy "ClawMetry Setup" gateway-token modal.** It auto-popped
   on every dashboard load regardless of whether onboarding had already
   completed (v0.1-era UX from before the product detected 17+ non-OpenClaw

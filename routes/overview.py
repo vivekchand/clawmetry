@@ -1690,10 +1690,79 @@ def cloud_cta_status():
         local_only = is_cloud_disabled()
     except Exception:
         local_only = False
+    # The sign-in email behind the key — the profile menu's "who am I" for
+    # cloud-OAuth accounts that hold no local license (license `sub` is
+    # empty there). '' when unresolvable; the UI then still shows a
+    # signed-in state, just without the address.
+    account_email = ""
+    if token:
+        try:
+            account_email = _d._account_email_for_token(token) or ""
+        except Exception:
+            account_email = ""
     return jsonify({
         "connected": bool(token) and not local_only,
         "account_linked": bool(token),
+        "account_email": account_email,
         "local_only": local_only,
+    })
+
+
+@bp_overview.route("/api/sync/toggle", methods=["POST"])
+def sync_toggle():
+    """Flip cloud sync on/off from the dashboard header chip.
+
+    Reads current state via ``is_cloud_disabled()`` and either calls
+    ``enable_cloud()`` (removes ``~/.clawmetry/nocloud``) or
+    ``disable_cloud()`` (writes it), then returns the new state. The
+    sync daemon polls the marker on each iteration, so the toggle takes
+    effect within seconds — no restart required.
+
+    Returns 409 when the user has no cm_ key on this machine and asks
+    to enable sync: without an account there is nothing to push to. The
+    dashboard should redirect them through the "Enable Cloud Sync" CTA
+    (cloud-cta/oauth-start) instead of silently no-opping.
+
+    Also refuses when ``CLAWMETRY_NO_CLOUD=1`` is set in the environment
+    — that's an explicit per-run opt-out the operator chose; the chip
+    can't override it, only the operator can (unset the env + relaunch).
+    """
+    import os as _os
+    import dashboard as _d
+    from clawmetry.config import (
+        is_cloud_disabled, enable_cloud, disable_cloud,
+        _NO_CLOUD_ENABLE_VALUES,
+    )
+
+    env_flag = _os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+    if env_flag in _NO_CLOUD_ENABLE_VALUES:
+        return jsonify({
+            "ok": False,
+            "error": "env_locked",
+            "detail": "CLAWMETRY_NO_CLOUD=1 is set in the environment; unset it and relaunch to change this from the UI.",
+        }), 409
+
+    currently_disabled = is_cloud_disabled()
+    want_enable = currently_disabled  # if disabled, toggle -> enable, and vice versa
+
+    if want_enable:
+        # Enabling: refuse if there is no account key on this machine.
+        token = _d._read_cloud_token()
+        if not token:
+            return jsonify({
+                "ok": False,
+                "error": "no_account",
+                "detail": "No cloud account linked. Sign in first via the 'Enable Cloud Sync' CTA.",
+            }), 409
+        enable_cloud()
+    else:
+        disable_cloud()
+
+    new_disabled = is_cloud_disabled()
+    return jsonify({
+        "ok": True,
+        "local_only": new_disabled,
+        "connected": (not new_disabled) and bool(_d._read_cloud_token()),
     })
 
 
@@ -1754,10 +1823,19 @@ def cloud_cta_oauth_start():
 
     Starts a loopback browser-bridge and returns the cloud OAuth start URL for
     the dashboard to open in a new tab. The cm_ key the cloud mints rides back
-    over 127.0.0.1 only. mode="managed" (default) then registers this node and
+    over 127.0.0.1 only. mode="managed" then registers this node and
     starts the sync daemon; mode="selfhost" keeps data local (nocloud marker)
     and activates the account's 7-day trial license instead. The dashboard
     polls /api/cloud-cta/oauth-status.
+
+    When the caller omits ``mode``, the default follows the install's
+    recorded intent (``_selfhost_intent``): a self-host install signing back
+    in (profile menu "Sign in") stays on the identity-only selfhost rail;
+    anything else defaults to managed. Explicit modes always win — the
+    "Enable Cloud Sync" CTA sends mode="managed" because clicking it IS the
+    egress opt-in. Founder report 2026-08-09: sign-in from the profile menu
+    rode the managed rail on a self-host machine, and enable_cloud()
+    silently started pushing snapshots.
     """
     import dashboard as _d
 
@@ -1765,7 +1843,12 @@ def cloud_cta_oauth_start():
     provider = (data.get("provider") or "").strip().lower()
     if provider not in ("github", "google"):
         return jsonify({"ok": False, "error": "Unsupported provider"}), 400
-    mode = (data.get("mode") or "managed").strip().lower()
+    mode = (data.get("mode") or "").strip().lower()
+    if not mode:
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
     if mode not in ("managed", "selfhost"):
         return jsonify({"ok": False, "error": "Unsupported mode"}), 400
     url = _d._start_oauth_bridge(provider, mode=mode)

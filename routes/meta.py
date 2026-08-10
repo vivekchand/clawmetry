@@ -511,6 +511,18 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
     except Exception:
         pass
 
+    # Prune stale dist-info dirs the upgrade may have left behind (pip's
+    # uninstall of the old version half-fails when a sibling process holds
+    # .pyd/.exe files open — the normal Windows case). Keep the version pip
+    # just installed: the OLD version's dist-info is the stale one here, and
+    # leftover stale metadata makes importlib.metadata (and pip's own
+    # installed-version resolution) report the oldest dist-info present.
+    try:
+        from clawmetry.distinfo_cleanup import cleanup_stale_dist_info
+        cleanup_stale_dist_info(keep_version=new_version)
+    except Exception:
+        pass
+
     # Arm the crash-loop rollback guard BEFORE any restart: if the new wheel
     # boot-loops, the daemon's next boots detect it and pip-roll back to
     # ``old_version`` (clawmetry/update_guard.py — firmware-OTA style).

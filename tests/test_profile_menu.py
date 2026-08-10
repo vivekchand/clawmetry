@@ -72,7 +72,7 @@ def test_gw_setup_module_wiring():
         "/api/license/status",
         "/api/cloud-cta/status",
         "clawmetryLogout()",
-        "openCloudModal()",
+        "openCloudModal(\\'signin\\')",
         "app.clawmetry.com/settings",
     ):
         assert needle in js, f"gw-setup.js missing: {needle}"
@@ -136,8 +136,41 @@ def test_sign_out_sticks_and_offers_local_signin():
 
 def test_en_catalog_has_every_profile_key_the_module_uses():
     js = (STATIC / "js" / "gw-setup.js").read_text()
-    used = set(re.findall(r"[t(\"']+(profile\.[a-z_]+)", js))
+    used = set(re.findall(r"[t(\"']+(profile\.[a-z0-9_]+)", js))
     assert used, "expected profile.* t() keys in gw-setup.js"
     catalog = json.loads((STATIC / "locales" / "en.json").read_text())
     missing = sorted(k for k in used if k not in catalog)
     assert not missing, f"en.json missing i18n keys: {missing}"
+
+
+def test_profile_resolves_identity_for_cloud_oauth_accounts():
+    """A GitHub/Google-OAuth cloud account holds no local license, so `who`
+    must fall back to /api/cloud-cta/status's account_email — and a signed-in
+    menu must NEVER render the "Not signed in" header (2026-08-09 report:
+    signed-in node showed "Not signed in" above Billing & plan / Sign out)."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "cta.account_email" in js
+    # Signed-in-but-email-unresolvable falls back to a "Signed in" label.
+    assert "profile.signed_in" in js
+    # The not-signed-in header may only render on the signed-out branch:
+    # inside _cmProfileRender, "Not signed in" must sit AFTER the signedIn
+    # branch's fallback label.
+    render = js.split("function _cmProfileRender", 1)[1]
+    assert render.index("profile.signed_in") < render.index("profile.not_signed_in")
+
+
+def test_profile_signin_never_flips_egress_on_selfhost():
+    """The profile menu's sign-in must ride the intent-resolved rail, not
+    hardwired managed: on a self-host install, signing back in silently
+    called enable_cloud() and started pushing snapshots (founder report
+    2026-08-09). The profile entry passes the 'signin' intent, and
+    cloudOauth() then omits mode so the backend resolves it from
+    _selfhost_intent(); every other modal entry stays an explicit managed
+    egress opt-in."""
+    js = (STATIC / "js" / "gw-setup.js").read_text()
+    assert "openCloudModal(\\'signin\\')" in js
+    assert "_cloudModalIntent" in js
+    # cloudOauth sends an explicit managed mode ONLY for non-signin intents.
+    fn = js.split("function cloudOauth", 1)[1].split("function ", 1)[0]
+    assert "payload.mode = 'managed'" in fn
+    assert "_cloudModalIntent !== 'signin'" in fn

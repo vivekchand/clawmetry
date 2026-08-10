@@ -38,6 +38,47 @@ Write-Host "→ Using $python ($(& $python --version 2>&1))"
 # Install directory
 $installDir = "$env:LOCALAPPDATA\clawmetry"
 
+# ── Stale-duplicate sweep ────────────────────────────────────────────────
+# The dedicated venv above is the ONLY environment auto-update keeps current.
+# A clawmetry copy left behind in some OTHER interpreter (e.g. a system-wide
+# `pip install --user clawmetry` from before this installer switched to a
+# per-app venv, or a leftover from install.cmd) never updates, and if it
+# happens to resolve first on PATH it shadows the venv binary — `clawmetry
+# --version` then reports a stale version while the real install is current.
+# Sweep every python interpreter reachable on PATH and uninstall clawmetry
+# from all of them except the one we're about to (re)build.
+$seenPython = New-Object System.Collections.Generic.HashSet[string]
+$pyCandidates = @()
+foreach ($cmd in @("python", "python3")) {
+    try {
+        $cmdInfo = Get-Command $cmd -All -ErrorAction SilentlyContinue
+        foreach ($c in $cmdInfo) { $pyCandidates += $c.Source }
+    } catch {}
+}
+try {
+    $launcherList = & py -0p 2>&1
+    foreach ($line in $launcherList) {
+        if ($line -match '(?m)^\s*\S+\s+(.+\\python\.exe)\s*$') {
+            $pyCandidates += $Matches[1]
+        }
+    }
+} catch {}
+
+foreach ($pyExe in $pyCandidates) {
+    if (-not $pyExe) { continue }
+    $resolved = $null
+    try { $resolved = (Resolve-Path -LiteralPath $pyExe -ErrorAction Stop).Path } catch { $resolved = $pyExe }
+    if (-not $seenPython.Add($resolved.ToLowerInvariant())) { continue }
+    if ($resolved.ToLowerInvariant().StartsWith($installDir.ToLowerInvariant())) { continue }
+    try {
+        & $resolved -m pip show clawmetry 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "→ Removing stale clawmetry copy from $resolved..."
+            & $resolved -m pip uninstall -y clawmetry 2>&1 | Out-Null
+        }
+    } catch {}
+}
+
 # Remove old install for clean state
 if (Test-Path $installDir) {
     Write-Host "→ Removing previous installation..."
