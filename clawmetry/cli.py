@@ -2118,7 +2118,7 @@ def _uninstall_nemoclaw_sandbox(
         pass
 
 
-def _cmd_uninstall() -> None:
+def _cmd_uninstall(assume_yes: bool = False) -> None:
     """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files."""
     import shutil
     import platform
@@ -2207,15 +2207,18 @@ def _cmd_uninstall() -> None:
     print("  config will be permanently deleted.\033[0m")
     print()
 
-    try:
-        confirm = input("  Type 'uninstall' to confirm: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\n  Cancelled.")
-        return
+    if assume_yes:
+        print("  --yes given: proceeding without interactive confirmation.")
+    else:
+        try:
+            confirm = input("  Type 'uninstall' to confirm: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Cancelled.")
+            return
 
-    if confirm != "uninstall":
-        print("  Cancelled.")
-        return
+        if confirm != "uninstall":
+            print("  Cancelled.")
+            return
 
     print()
 
@@ -6884,8 +6887,14 @@ def main() -> None:
     )
 
     # uninstall — fully remove clawmetry
-    sub.add_parser(
+    p_uninstall = sub.add_parser(
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
+    )
+    p_uninstall.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation (for the desktop uninstaller "
+        "and other non-interactive callers)",
     )
 
     # activate — install a self-hosted Pro/Enterprise license key
@@ -7409,7 +7418,7 @@ def main() -> None:
         elif args.cmd == "update":
             _cmd_update(args)
         elif args.cmd == "uninstall":
-            _cmd_uninstall()
+            _cmd_uninstall(assume_yes=getattr(args, "yes", False))
         elif args.cmd == "activate":
             _cmd_activate(args)
         elif args.cmd == "license":

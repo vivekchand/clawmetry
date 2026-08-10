@@ -77,6 +77,20 @@ def test_uninstall_removes_clawmetry_owned_openclaw_files() -> None:
         assert path in body, f"uninstall must remove ClawMetry-owned {path}"
 
 
+def test_uninstall_prefers_cli_cleanup_with_native_fallback() -> None:
+    # The CLI is the single source of cleanup truth (server-side
+    # /api/unregister, token mirror, keychain, ~/.clawmetry); the native
+    # NSIS steps stay as the fallback for a broken venv - the exact
+    # failure class that motivated this uninstaller.
+    body = _read()
+    cli_call = body.index('uninstall --yes')
+    native = body.index('RMDir /r "$PROFILE\\.clawmetry"')
+    assert cli_call < native, (
+        "the CLI cleanup (`clawmetry uninstall --yes`) must run before the "
+        "native fallback deletions"
+    )
+
+
 def test_uninstall_deletes_keychain_entry_before_venv_removal() -> None:
     body = _read()
     assert "keyring.delete_password" in body, (

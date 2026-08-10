@@ -79,6 +79,9 @@ def test_disconnect_and_uninstall_clear_the_mirror():
     disconnect = cli_src.split("def _cmd_disconnect", 1)[1].split("\ndef ", 1)[0]
     assert "clear_cloud_token" in disconnect
     assert "delete_workspace_keychain_entry" in disconnect
+    # `clawmetry uninstall --yes` must exist (the desktop uninstaller
+    # shells out to it non-interactively as its first-choice cleanup).
+    assert '"--yes"' in cli_src and "assume_yes" in cli_src
     uninstall = cli_src.split("def _cmd_uninstall", 1)[1].split("\ndef _cmd_", 1)[0]
     assert "clear_cloud_token" in uninstall
     assert "delete_workspace_keychain_entry" in uninstall

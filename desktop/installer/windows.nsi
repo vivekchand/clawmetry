@@ -220,6 +220,15 @@ FunctionEnd
 ; NOTE: UnSecData is declared BEFORE UnSecMain on purpose - the keychain
 ; cleanup shells out to the runtime venv's python, which UnSecMain deletes.
 Section "un.Account data + E2E encryption keys" UnSecData
+  ; First choice: let the CLI do its own full cleanup - `clawmetry
+  ; uninstall --yes` is the single source of truth (server-side
+  ; /api/unregister, cloudToken mirror, keychain entry, ~\.clawmetry,
+  ; ClawMetry-owned ~\.openclaw files, daemon shutdown). Everything below
+  ; is the NATIVE FALLBACK for the exact failure class that motivated
+  ; this uninstaller: a broken/half-deleted venv where the CLI cannot
+  ; run. Each native step is idempotent, so running both is safe.
+  nsExec::ExecToLog `"$LOCALAPPDATA\ClawMetry\runtime\venv\Scripts\clawmetry.exe" uninstall --yes`
+
   ; OS keychain copy of the workspace key (service 'clawmetry', account
   ; 'workspace-key:<node_id>'). Needs the venv python + config.json, so it
   ; must run before either is removed. Best-effort: missing venv/config/
