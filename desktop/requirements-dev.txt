@@ -1,7 +1,7 @@
 # Extra deps for the desktop wrapper only. Not required to run
 # clawmetry itself; only needed when running `python -m desktop.tray`
 # or building the .app / .exe bundles.
-pystray>=0.19
+pystray>=0.19.5
 Pillow>=10.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
