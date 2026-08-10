@@ -85,6 +85,23 @@ SYNC_DISCOVERY_FILE = Path.home() / ".clawmetry" / "local_query.json"
 SYNC_START_RETRY_SECS = 300
 
 
+def _auto_update_disabled() -> bool:
+    """Kill-switch parse for the shell's unattended upgrades, mirroring the
+    daemon's routes/update_check.py::_env_auto_update_disabled (the shell
+    cannot import the venv's clawmetry package, so the semantics are
+    duplicated here — keep the two in sync): an explicit truthy value
+    re-arms, any explicit falsy value disables (not just the literal "0"),
+    and CI environments are implicitly disabled so an ephemeral runner
+    never swaps its code out mid-job."""
+    val = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return False
+    if val in ("0", "false", "no", "off"):
+        return True
+    ci = os.environ.get("CI", "").strip().lower()
+    return ci not in ("", "0", "false")
+
+
 def _pid_alive(pid: int) -> bool:
     """Best-effort 'is this PID a live process'. Never raises."""
     if pid <= 0:
@@ -629,27 +646,48 @@ class RuntimeSupervisor:
             return None
 
     def _background_pip_upgrade(self) -> None:
-        """Non-blocking upgrade via the venv's `clawmetry update`
-        subcommand — this way we inherit the daemon's own
-        CLAWMETRY_AUTO_UPDATE kill switch and
-        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window without
-        reimplementing them here. Matches the blueprint contract
-        "the shell defers to the daemon's update policy rather than
-        shipping its own". Errors are logged and swallowed — a
-        transient PyPI failure should never take down the running app.
+        """Non-blocking upgrade via the venv's `clawmetry update
+        --unattended` subcommand — the flag makes the CLI apply the
+        daemon's own update policy (routes/update_check.py): the
+        CLAWMETRY_AUTO_UPDATE kill switch (incl. implicit CI disable)
+        and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window,
+        pinning to the newest aged-in release. Matches the blueprint
+        contract "the shell defers to the daemon's update policy rather
+        than shipping its own"; the local _auto_update_disabled() check
+        is only a cheap pre-flight with the same semantics. Errors are
+        logged and swallowed — a transient PyPI failure should never
+        take down the running app.
         """
-        if os.environ.get("CLAWMETRY_AUTO_UPDATE") == "0":
-            self._log("watcher upgrade: CLAWMETRY_AUTO_UPDATE=0, skipping")
+        if _auto_update_disabled():
+            self._log(
+                "watcher upgrade: auto-update disabled "
+                "(CLAWMETRY_AUTO_UPDATE kill switch or CI env), skipping"
+            )
             return
         cli = self._venv_clawmetry()
         if not cli.exists():
             return
         try:
             r = subprocess.run(
-                [str(cli), "update"],
+                [str(cli), "update", "--unattended"],
                 capture_output=True, text=True, timeout=300,
                 **_win_subprocess_kwargs(),
             )
+            if r.returncode != 0 and "--unattended" in (r.stderr or "") \
+                    and "unrecognized arguments" in (r.stderr or ""):
+                # Bootstrap compat: the venv still runs a clawmetry from
+                # before the flag existed, so no unattended run can ever
+                # succeed — one plain update to get onto a version that
+                # understands the policy flag.
+                self._log(
+                    "watcher upgrade: venv clawmetry predates --unattended; "
+                    "falling back to plain update once"
+                )
+                r = subprocess.run(
+                    [str(cli), "update"],
+                    capture_output=True, text=True, timeout=300,
+                    **_win_subprocess_kwargs(),
+                )
             self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
                 self._log(r.stderr[:2000])
