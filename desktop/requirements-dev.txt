@@ -25,4 +25,4 @@ PyGObject==3.56.3; sys_platform == "linux"
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
 # check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
 # kept in-tree only for the day py2app catches up.
-pyinstaller>=6.0
+pyinstaller>=6.21.0
