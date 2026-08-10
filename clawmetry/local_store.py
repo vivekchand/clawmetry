@@ -6316,6 +6316,70 @@ class LocalStore:
             return 0
         return len(updates)
 
+    def backfill_tts_event_costs(self, *, batch: int = 5000) -> int:
+        """#4724: populate cost_usd for TTS voice events that arrived without it.
+
+        Fish Audio S2.1 (hosted) and other TTS providers bill per-character.
+        Voice events store char_count + provider in their data blob; this method
+        derives cost_usd via estimate_tts_cost_usd. Fish S2 Pro (isLocal=True)
+        and macOS Talk (local TTS) have no per-call API cost and are skipped.
+        Idempotent: only rows with cost_usd NULL/0 and char_count > 0 are
+        updated. Returns rows updated. Daemon-only (needs the writer connection)."""
+        try:
+            from clawmetry.providers_pricing import estimate_tts_cost_usd
+        except Exception:
+            return 0
+        try:
+            rows = self._conn.execute(
+                "SELECT id, data FROM events "
+                "WHERE (cost_usd IS NULL OR cost_usd = 0) "
+                "AND event_type LIKE 'tts.%' "
+                "LIMIT ?",
+                [int(batch)],
+            ).fetchall()
+        except Exception:
+            return 0
+        updates: list[tuple] = []
+        for (eid, data) in rows:
+            try:
+                if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
+                    data = bytes(data).decode("utf-8", "replace")
+                obj = json.loads(data) if isinstance(data, str) else data
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            # Skip local TTS (Fish S2 Pro, macOS Talk) — no API billing cost.
+            if obj.get("isLocal"):
+                continue
+            char_count = obj.get("char_count")
+            if not char_count:
+                continue
+            try:
+                char_count = int(char_count)
+            except (TypeError, ValueError):
+                continue
+            if char_count <= 0:
+                continue
+            # Resolve provider: explicit field first, fall back to ttsModel
+            # (Fish Audio events may carry either spelling).
+            provider = str(obj.get("provider") or obj.get("ttsModel") or "")
+            if not provider:
+                continue
+            cost = estimate_tts_cost_usd(provider, char_count)
+            if cost and cost > 0:
+                updates.append((float(cost), eid))
+        if not updates:
+            return 0
+        try:
+            self._conn.executemany(
+                "UPDATE events SET cost_usd = ? WHERE id = ?", updates
+            )
+        except Exception:
+            return 0
+        return len(updates)
+
     def backfill_benign_errors(self, *, after_id: str = "", batch: int = 5000):
         """#2196: clear the error flag on historical tool results whose body
         matches a known-benign signature (see ``clawmetry.error_signal``).
