@@ -24692,13 +24692,16 @@ async function checkLicenseExpiry() {
     var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
     var expiredTrial = !!(e && e.expired && e.tier === 'trial');
     var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
-    // Trial ending (or already in grace): say it LOUD before the cliff,
-    // not after. days_until_expiry === 0 means "ends today"; grace means
-    // the expiry date passed and enforcement is pending. Both previously
-    // rendered nothing anywhere in the UI.
+    // Trial ending: say it LOUD before the cliff, not after.
+    // days_until_expiry === 0 means "ends today". `e.grace` must NOT
+    // gate this: it is the global paywall-rollout flag (true on every
+    // install until enforcement goes live), not a statement about this
+    // trial's expiry — keying on it made a freshly-activated 7-day
+    // trial read "ends today". A trial whose expiry actually passed
+    // surfaces via `e.expired` above.
     var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
     var endingTrial = !!(e && !e.expired && e.tier === 'trial'
-      && (e.grace === true || (days !== null && days <= 3)));
+      && days !== null && days <= 3);
     if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
     // A dismissed EXPIRED banner stays gone for 24h; a dismissed
     // countdown comes back after 4h — the clock is literally running.
@@ -24710,7 +24713,7 @@ async function checkLicenseExpiry() {
       msg.textContent = t('banners.license_expired_msg', null,
         'Your license has expired. Renew to keep every runtime.');
     } else if (msg && endingTrial) {
-      if (e.grace === true || days === null || days <= 0) {
+      if (days <= 0) {
         msg.textContent = t('banners.trial_ends_today_msg', null,
           'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
       } else {

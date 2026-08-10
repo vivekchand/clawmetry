@@ -1030,6 +1030,15 @@ def oauth_loopback_flow(
     thread — starts + tears down its own HTTPServer."""
     base = (app_base or resolve_app_base()).rstrip("/")
 
+    logo = _asset_data_uri(
+        Path(__file__).resolve().parent / "assets",
+        "clawmetry-logo-stacked-darkbg.svg", "image/svg+xml",
+    )
+    logo_html = (
+        f"<img src='{logo}' alt='ClawMetry' style='width:180px;height:auto'/>"
+        if logo else "<div style='font-size:40px'>\U0001f99e</div>"
+    )
+
     captured: dict = {}
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -1050,7 +1059,7 @@ def oauth_loopback_flow(
                  "<body style='font-family:-apple-system,sans-serif;background:#0b0e14;"
                  "color:#e2e8f0;display:flex;align-items:center;justify-content:center;"
                  "height:100vh;margin:0'>"
-                 "<div style='text-align:center'><div style='font-size:40px'>\U0001f99e</div>"
+                 f"<div style='text-align:center'>{logo_html}"
                  f"<h2 style='font-weight:700'>{msg}</h2></div>"
                  "</body></html>").encode("utf-8")
             )

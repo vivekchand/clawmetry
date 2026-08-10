@@ -434,7 +434,10 @@ def test_cc_gate_install_merges_and_uninstall_removes_only_ours(cc_gate):
     cmd = ours["hooks"][0]["command"]
     assert ccg.HOOK_CMD_MARKER in cmd
     assert "--base http://127.0.0.1:8900" in cmd
-    assert cmd.startswith(sys.executable)
+    # On Windows the console python.exe is swapped for pythonw.exe so the
+    # hook never flashes (or parks) a console window under the desktop app.
+    assert cmd.startswith(
+        ccg._windowless_python(sys.executable, os.name == "nt"))
     assert ours["hooks"][0]["timeout"] == 120 + 60  # policy + buffer
     assert s["model"] == "opus"                     # rest of file untouched
     st = json.loads(open(ccg._STATE_PATH).read())
@@ -471,6 +474,24 @@ def test_cc_gate_install_merges_and_uninstall_removes_only_ours(cc_gate):
 
     # Uninstall again (no state) → no-op, never raises.
     ccg.gate_handler(False, [])
+
+
+def test_cc_gate_windowless_python_swap():
+    import clawmetry.claude_code_gate as ccg
+    py = r"C:\v\Scripts\python.exe"
+    pyw = r"C:\v\Scripts\pythonw.exe"
+    # Windows + pythonw present → swapped (case-insensitive on the exe name).
+    assert ccg._windowless_python(py, True, exists=lambda p: p == pyw) == pyw
+    assert ccg._windowless_python(
+        r"C:\v\Scripts\PYTHON.EXE", True,
+        exists=lambda p: p.lower() == pyw.lower(),
+    ).lower() == pyw.lower()
+    # pythonw missing → untouched.
+    assert ccg._windowless_python(py, True, exists=lambda p: False) == py
+    # Not python.exe (already pythonw, or a posix path) → untouched.
+    assert ccg._windowless_python(pyw, True, exists=lambda p: True) == pyw
+    assert ccg._windowless_python(
+        "/usr/bin/python3", False, exists=lambda p: True) == "/usr/bin/python3"
 
 
 def test_cc_gate_does_not_stack_on_manual_cloud_hook(cc_gate):

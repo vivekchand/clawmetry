@@ -38560,6 +38560,212 @@ def _runtime_detection_counts(probes: list) -> dict:
         "locked": locked,
     }
 
+def _has_node_count_at_batch_row_to_body(row: dict, count_raw: str) -> dict:
+    """Translate a :func:`has_node_count_at_batch` scalar row into the
+    endpoint body row shape.
+
+    Perspective-shaped batch sibling of
+    :func:`_has_node_count_batch_row_to_body`. Rekeys ``has`` ->
+    ``has_node_count_at`` / ``allowed`` (matches the singular
+    ``/api/entitlement/has-node-count-at`` body), replaces the
+    normalised-str ``key`` with an int ``count`` (or ``null`` on non-
+    int input) plus the caller's raw ``count_raw`` echo, and layers a
+    conjugated human ``label`` ("1 node" / "5 nodes") matching the
+    sibling ``/min-tier-for-node-count-at-batch`` shape.
+
+    Drops the ``upgrade_required`` bit that
+    :func:`_has_node_count_batch_row_to_body` carries: this is the
+    perspective-shaped ``_at`` slot, so "would tier X admit this?" is
+    the row's whole point -- comparing that answer against the LIVE
+    current-tier rank would double-count the perspective in the paywall
+    matrix cell (matches the singular ``/has-node-count-at`` sibling,
+    which omits ``upgrade_required`` for the same reason).
+
+    Never raises: missing keys / bad rows surface as the all-``None``
+    row shape so the batch keeps building.
+    """
+    try:
+        n = int(row.get("key"))
+        count: int | None = n
+        label = f"{n} node" if n == 1 else f"{n} nodes"
+    except (TypeError, ValueError):
+        count = None
+        label = None
+    req_rank = row.get("required_tier_rank")
+    if req_rank is None:
+        req_rank = -1
+    has_flag = bool(row.get("has"))
+    return {
+        "count": count,
+        "count_raw": count_raw,
+        "kind": "node_count",
+        "label": label,
+        "has_node_count_at": has_flag,
+        "allowed": has_flag,
+        "unknown": bool(row.get("unknown")),
+        "required_tier": row.get("required_tier"),
+        "required_tier_label": row.get("required_tier_label"),
+        "required_tier_rank": req_rank,
+    }
+
+
+def _has_node_count_at_batch_fallback(tier_in: str) -> dict:
+    """Grace-shape fallback body for
+    ``/api/entitlement/has-node-count-at-batch``. Sibling of
+    :func:`_has_node_count_batch_fallback` with the perspective envelope
+    layered on: on a resolver crash the pricing surface keeps rendering
+    with an empty ``rows`` list instead of a stack trace, and the "from
+    <perspective>" copy still has its placeholders.
+
+    Never raises: any tier-metadata blowup falls back to the raw
+    ``tier_in`` string and rank ``0``.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+    except Exception:
+        label = tier_in
+        rank = 0
+    return {
+        "kind": "node_count",
+        "count": 0,
+        "rows": [],
+        "perspective_tier": tier_in,
+        "perspective_tier_label": label,
+        "perspective_tier_rank": rank,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-node-count-at-batch")
+def api_entitlement_has_node_count_at_batch():
+    """``GET /api/entitlement/has-node-count-at-batch?tier=<perspective>
+    &counts=1,5,100`` -- per-value what-if boolean-gate batch sibling of
+    ``/api/entitlement/has-node-count-at`` on the ``nodes`` capacity
+    axis.
+
+    Perspective-shaped twin of ``/api/entitlement/has-node-count-batch``
+    (which uses the LIVE resolved entitlement). Fills the last
+    ``_at_batch`` slot on the ``nodes`` capacity axis alongside
+    ``/api/entitlement/min-tier-for-node-count-at-batch`` (the
+    perspective-tier variant of the reverse-lookup batch on the same
+    axis).
+
+    Where the singular ``/has-node-count-at?tier=<perspective>&count=<N>``
+    answers ONE (``has_node_count_at``, ``required_tier``) pair per
+    request, this batch answers all requested counts in ONE round-trip
+    so a pricing-matrix walkthrough ("at OSS -- does 1 / 5 / 25 / 100
+    nodes fit?") binds off one URL per perspective instead of ``N``
+    calls to ``/has-node-count-at?tier=oss&count=<N>``.
+
+    - **400** when ``tier=`` is missing / blank, OR when ``counts=`` is
+      missing / blank / only-commas.
+    - **404** when ``tier`` is unknown (body carries ``which=tier``).
+    - **Never 5xxs**: resolver failure -> perspective-carrying grace
+      body with empty ``rows``.
+
+    Per-row body shape (mirrors the sibling
+    ``/has-node-count-batch`` per-row shape with ``has_node_count_at``
+    in place of ``has_node_count`` and no ``upgrade_required`` bit --
+    the ``_at`` slot is perspective-shaped, so comparing against the
+    LIVE current-tier rank would double-count the perspective; matches
+    the singular ``/has-node-count-at`` sibling which omits it for the
+    same reason)::
+
+        {
+          "count":              <int> | null,
+          "count_raw":          "<stripped raw token>",
+          "kind":               "node_count",
+          "label":              "1 node" | "5 nodes" | null,
+          "has_node_count_at":  <bool>,
+          "allowed":            <bool>,               # mirror of has_node_count_at
+          "unknown":            <bool>,               # true iff non-int input
+          "required_tier":      "<tier id>" | null,
+          "required_tier_label":"<label>"   | null,
+          "required_tier_rank": <int>,                # -1 when required_tier null
+        }
+
+    Envelope wraps ``rows`` with ``kind`` / ``count`` (row count) plus
+    ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` and the standard resolver envelope
+    (``current_tier`` / ``current_tier_rank`` / ``grace`` /
+    ``enforced``) so a UI can render "you are here" alongside the
+    per-row grants under the requested perspective.
+
+    Perspective-shaped (grace-independent by design): unlike the LIVE
+    ``/has-node-count-batch`` sibling (which reports ``allowed=true``
+    for every finite count while ``ent.grace`` is ``True``), each row
+    here reflects the STATIC per-tier cap in :data:`_TIER_NODE_LIMIT`
+    -- ``has-node-count-at-batch?tier=oss&counts=5`` returns
+    ``allowed=false`` even in grace, which is the whole point of the
+    ``_at`` slot.
+
+    Cross-consistency: each row's ``has_node_count_at`` byte-equals the
+    singular ``/api/entitlement/has-node-count-at`` endpoint for the
+    same (``tier``, ``count``) pair; each row's ``required_tier``
+    byte-equals the sibling
+    ``/api/entitlement/min-tier-for-node-count-at-batch`` row for the
+    same count.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    values, err = _parse_capacity_batch_csv("counts", unlimited_ok=False)
+    if err == "missing":
+        return jsonify({"error": "missing counts"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        helper_rows = _ent.has_node_count_at_batch(tier_in, values) or []
+        raw_by_key: dict[str, str] = {}
+        for raw in values:
+            try:
+                key = str(int(raw))
+            except (TypeError, ValueError):
+                key = str(raw)
+            raw_by_key.setdefault(key, str(raw))
+        rows = [
+            _has_node_count_at_batch_row_to_body(
+                r,
+                raw_by_key.get(str(r.get("key")), str(r.get("key"))),
+            )
+            for r in helper_rows
+        ]
+        ent = _ent.get_entitlement()
+        return jsonify(
+            {
+                "kind": "node_count",
+                "count": len(rows),
+                "rows": rows,
+                "perspective_tier": tier_in,
+                "perspective_tier_label": _ent.tier_label(tier_in),
+                "perspective_tier_rank": _ent.tier_rank(tier_in),
+                "current_tier": ent.tier,
+                "current_tier_rank": _ent.tier_rank(ent.tier),
+                "grace": bool(ent.grace),
+                "enforced": _ent.is_enforced(),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_node_count_at_batch: error: %s", exc
+        )
+        return jsonify(_has_node_count_at_batch_fallback(tier_in))
+
+
 
 def _has_capacity_at_batch_row_to_body(
     row: dict, raw_token: str, endpoint_kind: str, has_flag_key: str

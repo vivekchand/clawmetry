@@ -1451,6 +1451,48 @@ _TRIAL_WARNING_STATE = {
     "last_warn_day": "",   # YYYY-MM-DD of the last warning we sent
 }
 
+# Same file routes/trial.py's /api/trial/mark-warned writes ({"YYYY-MM-DD":
+# days_left}); sharing it means either writer suppresses the other's re-fire.
+# The in-memory guard alone resets on every daemon restart, and auto-update
+# restarts the daemon on every release (often several per day), so without the
+# disk check each restart re-fired /ingest/trial-warning (2026-08-10 trial-email
+# spam RCA).
+_TRIAL_WARNINGS_PATH = os.path.expanduser("~/.clawmetry/trial_warnings.json")
+
+
+def _trial_warning_sent_on(day: str) -> bool:
+    """True when ``day`` (YYYY-MM-DD) is already recorded on disk. Never raises."""
+    try:
+        if not os.path.isfile(_TRIAL_WARNINGS_PATH):
+            return False
+        with open(_TRIAL_WARNINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return isinstance(data, dict) and day in data
+    except Exception:
+        return False
+
+
+def _record_trial_warning(day: str, days_left: int) -> None:
+    """Persist ``{day: days_left}`` into the warnings file. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(_TRIAL_WARNINGS_PATH), exist_ok=True)
+        existing = {}
+        if os.path.isfile(_TRIAL_WARNINGS_PATH):
+            try:
+                with open(_TRIAL_WARNINGS_PATH, encoding="utf-8") as fh:
+                    existing = json.load(fh) or {}
+            except Exception:
+                existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        existing[day] = days_left
+        tmp = _TRIAL_WARNINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh)
+        os.replace(tmp, _TRIAL_WARNINGS_PATH)
+    except Exception as exc:
+        log.debug("trial-warning persist failed: %s", exc)
+
 
 def _maybe_install_license_from_heartbeat(resp: dict) -> None:
     """Persist a signed license key the cloud attached to this heartbeat.
@@ -1512,10 +1554,12 @@ def _maybe_send_trial_warning(resp: dict) -> None:
     fire ``POST /ingest/trial-warning`` on the cloud so it can send the
     customer a "your trial ends in N days — click to upgrade" email.
 
-    Rate-limited: at most one warning per UTC day per daemon process. The
-    cloud is authoritative on email throttling itself; this guard just
-    prevents a daemon that beats every 30s from spamming the cloud with 2880
-    identical warnings.
+    Rate-limited: at most one warning per UTC day, guarded both in memory
+    (fast path for a daemon that beats every 30s) and on disk
+    (``~/.clawmetry/trial_warnings.json``) so an auto-update restart — which
+    happens on every release, often several times a day — doesn't reset the
+    guard and re-fire the POST. The cloud is authoritative on email
+    throttling itself.
 
     Never raises."""
     if not isinstance(resp, dict):
@@ -1537,7 +1581,12 @@ def _maybe_send_trial_warning(resp: dict) -> None:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _TRIAL_WARNING_STATE["last_warn_day"] == today:
         return
+    if _trial_warning_sent_on(today):
+        # A previous daemon process (pre-restart) already warned today.
+        _TRIAL_WARNING_STATE["last_warn_day"] = today
+        return
     _TRIAL_WARNING_STATE["last_warn_day"] = today
+    _record_trial_warning(today, days_i)
     try:
         cfg = load_config() or {}
         api_key = cfg.get("api_key")
