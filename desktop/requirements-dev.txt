@@ -2,7 +2,7 @@
 # clawmetry itself; only needed when running `python -m desktop.tray`
 # or building the .app / .exe bundles.
 pystray>=0.19.5
-Pillow>=10.0
+Pillow>=12.3.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
