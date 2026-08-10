@@ -63,6 +63,23 @@ def test_js_gates_on_expired_entitlement_only():
     assert "24 * 3600 * 1000" in block
 
 
+def test_js_never_keys_countdown_on_grace_flag():
+    """``grace`` on /api/entitlement is the GLOBAL paywall-rollout flag
+    (``not is_enforced()`` — true on every install until enforcement goes
+    live), not a per-trial expiry signal. Keying the countdown on it made
+    a freshly-activated 7-day trial read "Your trial ends today"
+    (2026-08-10 lab repro: license valid 6 more days, banner said ends
+    today next to the license email saying Aug 17)."""
+    js = _read("clawmetry/static/js/app.js")
+    anchor = js.find("async function checkLicenseExpiry")
+    assert anchor != -1
+    block = js[anchor:anchor + 3000]
+    assert "e.grace ===" not in block and "e.grace)" not in block, (
+        "the trial-countdown banner must never gate on the grace flag — "
+        "use days_until_expiry / expired only"
+    )
+
+
 def test_locale_keys_present_in_en():
     en = json.loads(_read("clawmetry/static/locales/en.json"))
     for key in ("banners.trial_expired_msg", "banners.license_expired_msg",
