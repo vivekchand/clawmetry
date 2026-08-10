@@ -19,7 +19,7 @@ pywebview>=5.0
 # in pywebview's gtk.py on_load_finish against this webkit2gtk build.
 # Needs libgirepository1.0-dev + libcairo2-dev + pkg-config at build time
 # (see the Linux job's "Install system deps" step in desktop-artifacts.yml).
-PyGObject==3.48.2; sys_platform == "linux"
+PyGObject==3.56.3; sys_platform == "linux"
 # Bundler for all three OSes. build_mac.spec / build_windows.spec /
 # build_linux.spec are all PyInstaller specs. py2app is intentionally
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
