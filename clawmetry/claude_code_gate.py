@@ -243,8 +243,23 @@ def _clear_state() -> None:
         pass
 
 
+def _windowless_python(py: str, is_windows: bool, exists=os.path.exists) -> str:
+    """python.exe is a console executable: when Claude Code runs under a
+    windowless parent (the desktop app), every hook invocation makes Windows
+    allocate a VISIBLE console — and a gated call keeps it on screen until
+    the human decides. pythonw.exe (same dir, GUI subsystem) never allocates
+    one; the hook still talks over the pipes Claude Code attaches, and
+    hook_main tolerates absent std streams (fail-open). Pure function so the
+    swap is testable on any OS."""
+    if is_windows and py.lower().endswith("python.exe"):
+        pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
+        if exists(pyw):
+            return pyw
+    return py
+
+
 def _hook_command(base: str) -> str:
-    py = sys.executable or "python3"
+    py = _windowless_python(sys.executable or "python3", os.name == "nt")
     return f"{py} -m clawmetry hook claude-code --base {base}"
 
 
