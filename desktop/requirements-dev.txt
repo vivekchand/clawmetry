@@ -2,7 +2,7 @@
 # clawmetry itself; only needed when running `python -m desktop.tray`
 # or building the .app / .exe bundles.
 pystray>=0.19.5
-Pillow>=10.0
+Pillow>=12.3.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
@@ -25,4 +25,4 @@ PyGObject==3.56.3; sys_platform == "linux"
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
 # check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
 # kept in-tree only for the day py2app catches up.
-pyinstaller>=6.0
+pyinstaller>=6.21.0
