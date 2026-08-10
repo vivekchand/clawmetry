@@ -11726,6 +11726,147 @@ def has_all_at(
         return False
 
 
+def has_all_at_batch(
+    perspective_tiers,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Batch what-if sibling of :func:`has_all_at`: would each caller-supplied
+    hypothetical tier grant the WHOLE mixed-axis bundle, in ONE round-trip.
+
+    Fixes ONE 5-axis bundle and sweeps across N perspective tiers, returning
+    one row per tier with the aggregate fold boolean plus the surrounding
+    tier envelope. Mixed-axis extension of :func:`has_features_at_batch` /
+    :func:`has_runtimes_at_batch` (which fold one axis at a time): where the
+    single-axis batch helpers answer "does each tier admit this feature/
+    runtime bundle?", this one answers "does each tier admit the whole
+    subscription state?" so a pricing-matrix column can hydrate the mixed-
+    axis grant off ONE call instead of five ``_at_batch`` round-trips + a
+    client-side AND-chain.
+
+    Fold rule per row: delegates to :func:`has_all_at` for that
+    ``(perspective_tier, bundle)`` pair -- inherits every axis's typo /
+    empty / non-int posture without a divergent code path here. **Grace-
+    independent by construction**: every per-row delegate is backed by the
+    static per-tier grant tables (via :func:`_hypothetical_entitlement` on
+    the feature / runtime axes and the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the capacity
+    axes), so the per-row answer is identical under grace vs enforce for
+    the same ``(perspective, bundle)`` pair. Whole point of the ``_at``
+    slot: ``has_all_at_batch(["oss", "cloud_pro"], features=["fleet"])``
+    reports ``has_all_at=False`` for the ``oss`` row even in grace
+    (because OSS statically does not grant ``fleet``).
+
+    Per-tier row shape mirrors :func:`has_features_at_batch` with
+    ``has_all_at`` in the fold slot::
+
+        {
+          "tier":         "<id>",
+          "tier_label":   "...",
+          "tier_rank":    <int>,
+          "has_all_at":   <bool>,
+        }
+
+    Envelope mirrors :func:`has_features_at_batch` byte-for-byte::
+
+        {
+          "tiers":   [<row>, ...],
+          "unknown": [<tier tokens dropped as unknown>, ...],
+        }
+
+    Each ``has_all_at`` byte-equals :func:`has_all_at` for the same
+    ``(tier, bundle)`` pair -- a parity test pins this so the scalar and
+    batch what-if aggregate helpers cannot drift.
+
+    Kwarg semantics mirror :func:`has_all_at` / :func:`has_all` exactly
+    (same 5-axis signature so a caller can pass identical kwargs to any of
+    the three helpers without a re-normalise):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      per-row (contributes ``True`` to each row's fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty. This
+      COLLAPSES every row's fold to ``False`` for the same callsite-typo
+      posture :func:`has_all_at` carries on its empty inputs.
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically, ``retention_days=None``
+      means *unset*, NOT *unlimited*.
+    * Non-int capacity value (str, list, ...) on ``channels`` / ``nodes``
+      / ``retention_days`` -- collapses EVERY row's fold to ``False``
+      (mirrors :func:`has_all_at`'s strict-``False`` typo posture on the
+      same axis).
+    * No axes supplied at all -- every row's fold reports ``False``
+      (matches :func:`has_all_at` / :func:`has_all` empty-``False``
+      posture; a caller who forgot to pass any kwarg sees the typo at the
+      callsite instead of a silent grant on every tier column).
+    * Unknown / typo'd feature or runtime id in an otherwise-known bundle
+      -- collapses every row's fold to ``False`` via the singular
+      :func:`has_features_at` / :func:`has_runtimes_at` typo posture. A
+      UI wanting to distinguish "denied by tier" from "typo" should call
+      :func:`min_tier_for_all_batch` (per-bundle aggregate floor) or the
+      singular ``_at`` scalars for the per-axis story.
+
+    Tier normalisation is delegated to :func:`_normalise_csv` (whitespace
+    stripped, lowercased, dedup preserving first-seen; ``trial`` IS
+    accepted -- it lives in :data:`_TIER_ORDER`). Unknown tier ids are
+    echoed in ``unknown[]`` instead of short-circuiting so a partially-
+    bad caller still gets rows for the valid tiers alongside a list of
+    what was dropped -- matches :func:`has_features_at_batch` /
+    :func:`missing_features_at_batch` posture byte-for-byte.
+
+    Runtime-alias posture is inherited from :func:`has_runtimes_at`: no
+    scalar-level canonicalisation -- a raw ``"claude-code"`` surfaces as
+    ``False`` on every row because the strict scalar sees it as an
+    unknown id. Alias tolerance belongs to the paired
+    ``/api/entitlement/has-all-at-batch`` endpoint, which canonicalises
+    per-token upstream before delegating -- matches the sibling
+    :func:`has_runtimes_at_batch` /
+    ``/api/entitlement/has-runtimes-at-batch`` split exactly.
+
+    Empty / ``None`` / non-iterable ``perspective_tiers`` returns
+    ``{"tiers": [], "unknown": []}``.
+
+    Never raises: a per-tier delegate failure short-circuits that id into
+    ``unknown[]`` and the rest of the batch keeps building.
+    """
+    ids = _normalise_csv(perspective_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    for tid in ids:
+        if tid not in _TIER_ORDER:
+            unknown.append(tid)
+            continue
+        try:
+            allowed = has_all_at(
+                tid,
+                features=features,
+                runtimes=runtimes,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_all_at_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        rows.append(
+            {
+                "tier": tid,
+                "tier_label": tier_label(tid),
+                "tier_rank": _TIER_RANK.get(tid, -1),
+                "has_all_at": bool(allowed),
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def _min_tier_for_all_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`min_tier_for_all_batch`.
 
