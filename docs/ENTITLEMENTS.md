@@ -35,12 +35,12 @@ The FREE layer needs no key, no network call, and no account.
 `nemo_governance` (policy enforcement layered on top of any runtime) is a
 separate **free feature**, not a runtime — see the feature list below.
 
-**Chat-channel adapters** (all 22 are free; `entitlements.ALL_CHANNELS`):
+**Chat-channel adapters** (all 23 are free; `entitlements.ALL_CHANNELS`):
 
 Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat,
 Google Chat, Microsoft Teams, BlueBubbles, Matrix, Mattermost, LINE,
 Nostr, Twitch, Feishu, Zalo, Tlon, Synology Chat, Nextcloud Talk,
-ClickClack.
+ClickClack, Buzz.
 
 There is **no paid-channel tier** — every adapter unlocks on every plan.
 What tiers govern is how many channels can be *active concurrently*
@@ -65,14 +65,15 @@ below live here so the free UI can render locked rows with an accurate
 **Additional runtimes** (`entitlements.PAID_RUNTIMES`):
 
 `claude_code`, `codex`, `cursor`, `aider`, `goose`, `opencode`,
-`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`, `n8n`, `antigravity`.
+`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
+`n8n`, `antigravity`, `copilot`, `grok`, `qm`.
 
 **Additional features**, split across three tiers:
 
 | Bucket | Constant | Features |
 |---|---|---|
 | Starter | `STARTER_FEATURES` | `multi_runtime`, `fleet`, `cloud_sync`, `all_channels`, `approval_queue`, `budget_limits`, `per_runtime_health_timeline` |
-| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer` |
+| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `compliance_pack` |
 | Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `audit_logs`, `rbac`, `air_gapped_license`, `custom_data_residency` |
 
 Display labels for every feature live in `entitlements.FEATURE_LABELS`.

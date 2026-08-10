@@ -8681,6 +8681,330 @@ def _has_all_body() -> dict:
     }
 
 
+_HAS_ALL_AT_KEYS = (
+    "perspective_tier",
+    "perspective_tier_label",
+    "perspective_tier_rank",
+    "features",
+    "runtimes",
+    "channels",
+    "retention_days",
+    "nodes",
+    "unknown_features",
+    "unknown_runtimes",
+    "supplied_axes",
+    "supplied_count",
+    "has_all_at",
+    "allowed",
+    "required_tier",
+    "required_tier_label",
+    "required_tier_rank",
+    "current_tier",
+    "current_tier_rank",
+    "grace",
+    "enforced",
+)
+
+
+def _has_all_at_fallback(perspective_tier: str) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all-at``.
+
+    Mirrors :func:`_has_all_fallback` on the LIVE sibling with the
+    perspective slot layered on top: on a resolver blowup the endpoint
+    still returns 200 with the same envelope shape as the happy path,
+    but ``has_all_at`` / ``allowed`` ``False`` and every axis empty so a
+    pricing-matrix cell that lost the resolver doesn't silently grant a
+    hypothetical bundle it can no longer evaluate.
+
+    ``perspective_tier_label`` / ``perspective_tier_rank`` fall back to
+    ``None`` / ``-1`` (matches the sibling ``min-tier-batch-at``
+    fallback envelope) so the envelope shape stays byte-stable across
+    every input branch, including the resolver-blowup fallback.
+    """
+    return {
+        "perspective_tier": perspective_tier,
+        "perspective_tier_label": None,
+        "perspective_tier_rank": -1,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": [],
+        "unknown_runtimes": [],
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "has_all_at": False,
+        "allowed": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_all_at_body(perspective_tier: str) -> dict:
+    """Happy-path body builder for ``/api/entitlement/has-all-at``.
+
+    Perspective-shaped sibling of :func:`_has_all_body`: applies the same
+    per-axis normalisation (CSV known/unknown split for features and
+    runtimes with runtime-alias canonicalisation; capacity axes parsed
+    via :func:`_parse_capacity_arg` so a blank / non-int value collapses
+    the axis to ``False`` in the fold) then delegates to
+    :func:`clawmetry.entitlements.has_all_at` against the SUPPLIED axis
+    values so this endpoint stays byte-parity with the module scalar.
+
+    Every axis is OPTIONAL -- a caller can supply any (or none) of the
+    five kwargs; the fold answers off just those axes and every
+    unsupplied axis is skipped (contributes ``True`` to the fold). The
+    envelope always carries every axis' slot for byte-stable shape
+    across every URL branch. No-axes-supplied collapses ``has_all_at``
+    to ``False`` (matches :func:`has_all_at` empty-``False`` posture
+    byte-for-byte).
+
+    Grace-independent by construction: :func:`has_all_at` delegates to
+    the static-per-tier ``_at`` singular scalars, so this endpoint's
+    ``has_all_at`` bit is IDENTICAL under grace vs enforce for the same
+    (perspective, bundle) pair -- diverges deliberately from the LIVE
+    ``/has-all`` sibling (which grants every fully-known bundle in
+    grace via the resolver's grace pass-through). Whole point of the
+    ``_at`` slot: ``/has-all-at?tier=oss&features=fleet`` returns
+    ``has_all_at=false`` even in grace (because OSS statically does not
+    grant ``fleet``), whereas LIVE ``/has-all?features=fleet`` reports
+    ``true`` for it via :attr:`Entitlement.grace` pass-through.
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-only
+    subsets for parity with the LIVE ``/api/entitlement/has-all``
+    envelope. Perspective-independent by design (delegates to
+    :func:`min_tier_for_all`, which walks the static per-tier caps);
+    matches ``min_tier_for_all_at``'s pinned parity contract.
+    """
+    from clawmetry import entitlements as _ent
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        _channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        _retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        _nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    if (
+        (channels_present and not channels_ok)
+        or (retention_present and not retention_ok)
+        or (nodes_present and not nodes_ok)
+        or (features_supplied and (unknown_features or not known_features))
+        or (runtimes_supplied and (unknown_runtimes or not known_runtimes))
+    ):
+        has_flag = False
+    else:
+        has_flag = _ent.has_all_at(
+            perspective_tier,
+            features=known_features if features_supplied else None,
+            runtimes=known_runtimes if runtimes_supplied else None,
+            channels=channels_n if channels_present else None,
+            retention_days=retention_n if retention_present else None,
+            nodes=nodes_n if nodes_present else None,
+        )
+
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    required_label = _ent.tier_label(required) if required else None
+    req_rank = _ent.tier_rank(required) if required else -1
+
+    return {
+        "perspective_tier": perspective_tier,
+        "perspective_tier_label": _ent.tier_label(perspective_tier),
+        "perspective_tier_rank": _ent.tier_rank(perspective_tier),
+        "features": known_features,
+        "runtimes": known_runtimes,
+        "channels": channels_n if channels_present and channels_ok else None,
+        "retention_days": (
+            retention_n if retention_present and retention_ok else None
+        ),
+        "nodes": nodes_n if nodes_present and nodes_ok else None,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "has_all_at": bool(has_flag),
+        "allowed": bool(has_flag),
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-all-at")
+def api_entitlement_has_all_at():
+    """``GET /api/entitlement/has-all-at?tier=<perspective>
+    &features=a,b&runtimes=x,y&channels=5&retention_days=30&nodes=2`` --
+    hypothetical-perspective mixed-axis boolean-gate scalar.
+
+    Perspective-shaped sibling of ``/api/entitlement/has-all``: same
+    aggregate mixed-axis fold, but the boolean answers "would tier
+    ``<perspective>`` grant everything?" from the static per-tier grant
+    tables instead of "does the resolved entitlement grant everything
+    right now?" from the live resolver. A pricing-matrix walkthrough
+    that renders "if I were on Pro, this whole bundle would be
+    granted -- upgrade?" binds ``allowed`` directly off this URL per
+    perspective without switching the resolver.
+
+    Fills the ``_at`` slot on the mixed-axis rollup family alongside
+    :func:`min_tier_for_all_at` (scalar tier-id sibling) and the singular
+    ``_at`` scalars (``has_feature_at`` / ``has_runtime_at`` /
+    ``has_channel_count_at`` / ``has_retention_window_at`` /
+    ``has_node_count_at``), and completes the mixed-axis batch matrix
+    alongside ``/has-batch-at`` (per-row perspective sibling of
+    ``/has-batch``).
+
+    Every axis is OPTIONAL. Supply any non-empty subset; the fold
+    answers off just those axes and every unsupplied axis is skipped
+    (contributes ``True`` to the fold). Runtime-alias canonicalisation
+    (``claude-code`` -> ``claude_code``) is applied per token before
+    the known/unknown split. Capacity axes accept a single int (``5``);
+    blank / non-int values collapse ``has_all_at`` to ``False`` (matches
+    the singular capacity ``_at`` scalars' strict-``False`` typo
+    posture).
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (they read the static per-tier tables via the singular
+    ``_at`` delegates, not the resolver's ``grace`` bit) -- the whole
+    point of the ``_at`` slot: ``/has-all-at?tier=oss&features=fleet``
+    returns ``has_all_at=false`` even in grace (because OSS statically
+    does not grant ``fleet``), whereas the LIVE
+    ``/has-all?features=fleet`` reports ``true`` for it via
+    :attr:`Entitlement.grace` pass-through.
+
+    - **400** on missing / blank ``tier=``.
+    - **404** on unknown ``tier=`` (body carries ``which=tier``).
+    - **Never 4xxs** on axis-side inputs -- no axes supplied returns 200
+      with ``has_all_at=false`` (matches ``/has-all`` empty-``False``
+      posture); non-int capacity / unknown token collapses
+      ``has_all_at`` to ``False`` with the offending token surfaced via
+      ``unknown_features`` / ``unknown_runtimes``.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope with ``has_all_at=false`` so the pricing
+      walkthrough keeps rendering.
+
+    Envelope shape (21 keys, byte-stable across every input branch)::
+
+        {
+          "perspective_tier":       "cloud_pro",
+          "perspective_tier_label": "Pro",
+          "perspective_tier_rank":  <int>,
+          "features":               ["fleet"],           # known ids only
+          "runtimes":               ["claude_code"],     # canonicalised, known only
+          "channels":               5 | null,            # parsed int or null
+          "retention_days":         30 | null,
+          "nodes":                  2 | null,
+          "unknown_features":       ["bogus"],           # tokens not in ALL_FEATURES
+          "unknown_runtimes":       [],                  # tokens not in ALL_RUNTIMES
+          "supplied_axes":          ["features", "channels"],
+          "supplied_count":         2,
+          "has_all_at":             true,                # perspective boolean
+          "allowed":                true,                # alias of has_all_at
+          "required_tier":          "cloud_pro" | null,
+          "required_tier_label":    "Pro" | null,
+          "required_tier_rank":     <int>,               # -1 when null
+          "current_tier":           "oss",
+          "current_tier_rank":      0,
+          "grace":                  true,
+          "enforced":               false
+        }
+
+    Note the deliberate absence of ``upgrade_required``: this is the
+    perspective-shaped ``_at`` slot, so comparing against the LIVE
+    current-tier rank would double-count the perspective (matches the
+    singular ``/has-feature-at`` / ``/has-runtime-at`` / ``/has-batch-at``
+    siblings which omit it for the same reason).
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        return jsonify(_has_all_at_body(tier_in))
+    except Exception as exc:
+        logger.warning("api_entitlement_has_all_at: error: %s", exc)
+        return jsonify(_has_all_at_fallback(tier_in))
+
+
 @bp_entitlement.route("/api/entitlement/has-all")
 def api_entitlement_has_all():
     """``GET /api/entitlement/has-all?features=a,b&runtimes=x,y&channels=5&retention_days=30&nodes=2``

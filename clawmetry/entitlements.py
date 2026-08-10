@@ -11610,6 +11610,122 @@ def min_tier_for_all_at(
         return None
 
 
+def has_all_at(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> bool:
+    """Hypothetical-perspective sibling of :func:`has_all`: would tier
+    ``perspective_tier`` grant **every** supplied axis in ONE mixed-bundle
+    fold?
+
+    Same relationship to :func:`has_all` that the singular ``_at`` scalars
+    (:func:`has_feature_at` / :func:`has_runtime_at` /
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at`) have to their current-perspective siblings:
+    the ``perspective_tier`` argument tells the fold which STATIC per-tier
+    grant to reason from, so a pricing-matrix cell can answer "would Pro
+    admit this whole bundle?" off ONE call instead of five singular
+    ``_at`` round-trips + a client-side AND-chain.
+
+    Fold rule: returns ``True`` iff every SUPPLIED axis' per-item ``_at``
+    gate returns ``True`` against ``perspective_tier``. Delegates per axis
+    to :func:`has_features_at` / :func:`has_runtimes_at` /
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at` so each axis inherits that scalar's typo /
+    empty / non-int / unknown-perspective posture without a divergent code
+    path here. **Grace-independent by construction**: every delegate is
+    backed by the static per-tier grant tables (via
+    :func:`_hypothetical_entitlement` on the feature / runtime axes and by
+    the static ``_TIER_CHANNEL_LIMIT`` / ``_TIER_RETENTION_DAYS`` /
+    ``_TIER_NODE_LIMIT`` tables on the capacity axes), so the answer is
+    identical under grace vs enforce for the same
+    (perspective, bundle) pair -- diverges deliberately from
+    :func:`has_all` (which grants every fully-known bundle in grace via
+    the live resolver's grace pass-through). Whole point of the ``_at``
+    slot is to render the would-be-locked state alongside the live grant.
+
+    Kwarg semantics mirror :func:`has_all` exactly (same signature so a
+    caller can pass identical kwargs to both helpers without a
+    re-normalise):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to the fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty. This
+      COLLAPSES the fold to ``False`` for the same callsite-typo posture
+      :func:`has_features_at` / :func:`has_runtimes_at` carry on their
+      empty inputs.
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- matches :func:`has_all`.
+    * Non-int capacity value (str, list, ...) on ``channels`` / ``nodes``
+      / ``retention_days`` -- collapses the fold to ``False`` (mirrors
+      the singular ``_at`` capacity scalars' strict-``False`` typo
+      posture).
+    * No axes supplied at all -- returns ``False``. Matches
+      :func:`has_all` empty-``False`` posture so a caller who forgot to
+      pass any of the five kwargs sees the typo at the callsite instead
+      of a silent grant. Distinct from :func:`min_tier_for_all_at`
+      (returns ``None`` on the same input -- nothing-to-compute); here
+      the boolean seat collapses to strict ``False``.
+    * Unknown / empty / non-string ``perspective_tier`` -- returns
+      ``False``. Perspective validation lives on the OUTER helper (once
+      per call) rather than folding into per-item ``_at`` calls, so a
+      bogus perspective fails-closed in one place. Same fail-closed
+      posture as :func:`has_features_at` on an unknown perspective.
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses the whole fold to ``False`` via the singular
+      :func:`has_features_at` / :func:`has_runtimes_at` typo posture. A
+      UI wanting to distinguish "denied by tier" from "typo" should call
+      the per-axis singular ``_at`` scalars (or
+      :func:`min_tier_for_all_at`) for the per-axis story.
+
+    Never raises: any delegate failure logs a warning and returns
+    ``False`` so a caller can bind this into a boolean AND-chain without
+    a try/except.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return False
+    if not p or p not in _TIER_ORDER:
+        return False
+    try:
+        supplied_any = False
+        if features is not None:
+            supplied_any = True
+            if not has_features_at(p, features):
+                return False
+        if runtimes is not None:
+            supplied_any = True
+            if not has_runtimes_at(p, runtimes):
+                return False
+        if channels is not None:
+            supplied_any = True
+            if not has_channel_count_at(p, channels):
+                return False
+        if retention_days is not None:
+            supplied_any = True
+            if not has_retention_window_at(p, retention_days):
+                return False
+        if nodes is not None:
+            supplied_any = True
+            if not has_node_count_at(p, nodes):
+                return False
+        return supplied_any
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_all_at(%r, ...) failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return False
+
+
 def _min_tier_for_all_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`min_tier_for_all_batch`.
 
