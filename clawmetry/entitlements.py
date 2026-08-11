@@ -11872,6 +11872,167 @@ def has_all_at(
         return False
 
 
+def missing_all_at(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Hypothetical-perspective sibling of :func:`missing_all`: which subset of
+    the supplied mixed-axis bundle would tier ``perspective_tier`` NOT grant,
+    in ONE row-detail rollup?
+
+    Same relationship to :func:`missing_all` that :func:`has_all_at` has to
+    :func:`has_all`: the ``perspective_tier`` argument tells the fold which
+    STATIC per-tier grant to reason from, so a pricing-matrix denial tile
+    can bind every per-axis slot ("if you were on OSS, you'd still be
+    missing fleet + claude_code + 100 channels + 90d retention + 99 nodes")
+    off ONE call per (perspective, bundle) cell instead of five singular
+    ``_at`` round-trips + a client-side per-axis stitch. Fills the ``_at``
+    slot on the mixed-axis row-detail complement family alongside
+    :func:`has_all_at` (boolean-fold sibling) and the singular row-detail
+    ``_at`` scalars :func:`missing_features_at` / :func:`missing_runtimes_at`
+    for the two grant axes.
+
+    Returns a 5-key dict::
+
+        {
+          "features":       [<subset denied via missing_features_at>],
+          "runtimes":       [<subset denied via missing_runtimes_at>],
+          "channels":       <supplied int if has_channel_count_at is False, else None>,
+          "retention_days": <supplied int if has_retention_window_at is False, else None>,
+          "nodes":          <supplied int if has_node_count_at is False, else None>,
+        }
+
+    Per-axis rules:
+
+    * Grant axes (``features`` / ``runtimes``) delegate to
+      :func:`missing_features_at` / :func:`missing_runtimes_at` byte-for-byte
+      so the ``_at`` typo posture, dedup, and canonicalisation surface here
+      unchanged. Empty / ``None`` / non-iterable bundle -> ``[]`` on that
+      axis (nothing to check, nothing missing).
+    * Capacity axes (``channels`` / ``retention_days`` / ``nodes``) return
+      the SUPPLIED int when :func:`has_channel_count_at` /
+      :func:`has_retention_window_at` / :func:`has_node_count_at` returns
+      ``False`` under ``perspective_tier``, ``None`` otherwise (or when the
+      axis is unsupplied). Non-int capacity swallows to ``None`` on this
+      scalar; the paired :func:`has_all_at` fold reports ``False`` via the
+      strict singular scalar so the denial is coherently surfaced through
+      the paired call. ``retention_days=None`` means *unset*, NOT
+      *unlimited* -- matches :func:`has_all_at` / :func:`min_tier_for_all_at`.
+
+    **Grace-independent by construction**: every axis delegate reads the
+    static per-tier grant tables (via :func:`_hypothetical_entitlement` on
+    the grant axes and the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the capacity
+    axes), so the returned dict is IDENTICAL under grace vs enforce for
+    the same (perspective, bundle) pair -- diverges deliberately from
+    :func:`missing_all` (which reports every per-axis slot empty for a
+    fully-known bundle in grace via the live resolver's grace pass-through).
+    The whole point of the ``_at`` slot: ``missing_all_at("oss",
+    features=["fleet"])["features"]`` returns ``["fleet"]`` even in grace
+    (because OSS statically does not grant ``fleet``), whereas the LIVE
+    :func:`missing_all` reports ``[]`` for it via
+    :attr:`Entitlement.grace` pass-through.
+
+    Complement invariant with :func:`has_all_at`: for every fully-parseable
+    bundle, ``any(missing_all_at(p, **b).values())`` is the strict negation
+    of ``has_all_at(p, **b)`` -- pins the row-detail seat as the exact
+    perspective-shaped negation of the boolean fold. (Non-int capacity is
+    the one deliberate divergence: the row-detail slot swallows to ``None``
+    while the boolean fold collapses to ``False`` via the strict singular
+    scalar; a UI wanting a coherent "supplied but denied" story on that
+    branch should call the paired :func:`has_all_at`.)
+
+    Returns the empty per-axis shape for empty / unknown / non-string
+    ``perspective_tier`` (matches :func:`missing_features_at` /
+    :func:`missing_runtimes_at` fail-open perspective posture); the paired
+    endpoint returns 400 / 404 in that branch so callers wanting a
+    validity gate can read it there.
+
+    Never raises: any delegate failure logs a warning and collapses that
+    axis to its empty seat so a paywall diagnostics tile stays mute
+    instead of breaking.
+    """
+    empty: dict = {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+    }
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return dict(empty)
+    if not p or p not in _TIER_ORDER:
+        return dict(empty)
+    out = dict(empty)
+    try:
+        if features is not None:
+            out["features"] = list(missing_features_at(p, features))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_at(%r, ...) features axis failed: %s",
+            perspective_tier,
+            exc,
+        )
+        out["features"] = []
+    try:
+        if runtimes is not None:
+            out["runtimes"] = list(missing_runtimes_at(p, runtimes))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_at(%r, ...) runtimes axis failed: %s",
+            perspective_tier,
+            exc,
+        )
+        out["runtimes"] = []
+    try:
+        if channels is not None and isinstance(channels, int) and not isinstance(
+            channels, bool
+        ):
+            if not has_channel_count_at(p, channels):
+                out["channels"] = channels
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_at(%r, ...) channels axis failed: %s",
+            perspective_tier,
+            exc,
+        )
+        out["channels"] = None
+    try:
+        if retention_days is not None and isinstance(
+            retention_days, int
+        ) and not isinstance(retention_days, bool):
+            if not has_retention_window_at(p, retention_days):
+                out["retention_days"] = retention_days
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_at(%r, ...) retention_days axis failed: %s",
+            perspective_tier,
+            exc,
+        )
+        out["retention_days"] = None
+    try:
+        if nodes is not None and isinstance(nodes, int) and not isinstance(
+            nodes, bool
+        ):
+            if not has_node_count_at(p, nodes):
+                out["nodes"] = nodes
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_at(%r, ...) nodes axis failed: %s",
+            perspective_tier,
+            exc,
+        )
+        out["nodes"] = None
+    return out
+
+
 def has_all_at_batch(
     perspective_tiers,
     *,
