@@ -13270,6 +13270,249 @@ def has_batch(
         }
 
 
+def _has_row_capacity_at(
+    perspective_tier: str, key, kind: str
+) -> dict:
+    """Perspective-aware sibling of :func:`_has_row` for the three
+    capacity axes (``channels`` / ``retention_days`` / ``nodes``).
+
+    Row shape byte-parity with :func:`_has_row`; ``has`` reflects the
+    STATIC per-tier cap for ``perspective_tier`` -- matches the singular
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at` scalars and the batch
+    :func:`has_channel_count_at_batch` / :func:`has_retention_window_at_batch`
+    siblings on the same axes.
+
+    Deliberately does NOT route through :func:`_hypothetical_entitlement`:
+    that helper hard-codes ``node_limit=1`` regardless of tier and would
+    misreport ``allowed=False`` for e.g. ``nodes=100`` at
+    ``perspective_tier="cloud_pro"`` (which admits unlimited nodes on the
+    static cap table). Reads the static ``_TIER_*_LIMIT`` tables directly
+    so per-row ``has`` matches the singular ``_at`` scalars byte-for-byte.
+
+    ``required_tier`` is perspective-independent (delegates to
+    :func:`min_tier_for_channel_count` / :func:`min_tier_for_retention_window`
+    / :func:`min_tier_for_node_count`), matching every other ``_at`` row
+    on the capacity axes.
+
+    Never raises: any failure short-circuits to the fail-closed row shape
+    so the paywall matrix keeps rendering.
+    """
+    try:
+        n = int(key)
+    except (TypeError, ValueError):
+        return {
+            "key": str(key),
+            "kind": kind,
+            "has": False,
+            "unknown": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+    try:
+        if kind == "channels":
+            cap = _TIER_CHANNEL_LIMIT.get(
+                perspective_tier, _FREE_CHANNEL_LIMIT
+            )
+            req = min_tier_for_channel_count(n)
+        elif kind == "retention_days":
+            cap = _TIER_RETENTION_DAYS.get(
+                perspective_tier, _TIER_RETENTION_DAYS[TIER_OSS]
+            )
+            req = min_tier_for_retention_window(n)
+        elif kind == "nodes":
+            cap = _TIER_NODE_LIMIT.get(
+                perspective_tier, _FREE_NODE_LIMIT
+            )
+            req = min_tier_for_node_count(n)
+        else:
+            return {
+                "key": str(key),
+                "kind": kind,
+                "has": False,
+                "unknown": True,
+                "required_tier": None,
+                "required_tier_label": None,
+                "required_tier_rank": -1,
+            }
+        if n <= 0:
+            has_flag = True
+        else:
+            has_flag = cap is None or n <= int(cap)
+        return {
+            "key": str(n),
+            "kind": kind,
+            "has": bool(has_flag),
+            "unknown": False,
+            "required_tier": req,
+            "required_tier_label": tier_label(req) if req else None,
+            "required_tier_rank": tier_rank(req) if req else -1,
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _has_row_capacity_at(%r, %r, %r) failed: %s",
+            perspective_tier,
+            key,
+            kind,
+            exc,
+        )
+        return {
+            "key": str(key),
+            "kind": kind,
+            "has": False,
+            "unknown": True,
+            "required_tier": None,
+            "required_tier_label": None,
+            "required_tier_rank": -1,
+        }
+
+
+def has_batch_at(
+    perspective_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`has_batch`: per-item
+    boolean-gate rows for every supplied item across all five axes in
+    one pass, scoped by a caller-supplied ``perspective_tier``.
+
+    Fills the missing ``_at`` slot on the ``has_batch`` mixed-axis batch
+    family alongside :func:`min_tier_batch_at` (the perspective sibling
+    of :func:`min_tier_batch` on the reverse-lookup axis) and
+    :func:`has_feature_at` / :func:`has_runtime_at` /
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at` (the per-axis singular scalars). A paywall
+    matrix walkthrough at a hypothetical perspective ("if I were on
+    Starter, does this bundle of feature + runtime + capacity rows land
+    granted or locked?") renders off ONE round-trip instead of N calls
+    to the singular ``_at`` scalars + client-side row assembly.
+
+    Envelope shape mirrors :func:`has_batch` exactly (same five-axis
+    kwargs, same per-axis ``None`` "not supplied" sentinel, same
+    never-raise contract)::
+
+        {
+          "features":       [<row>, ...],
+          "runtimes":       [<row>, ...],
+          "channels":       <row> | None,
+          "retention_days": <row> | None,
+          "nodes":          <row> | None,
+        }
+
+    Each ``<row>`` carries ``key``, ``kind``, ``has`` (bool),
+    ``unknown``, ``required_tier``, ``required_tier_label`` and
+    ``required_tier_rank`` (``-1`` when ``required_tier`` is ``None``).
+
+    Perspective-shaped (grace-independent by design): unlike the LIVE
+    :func:`has_batch` sibling (which reports ``has=True`` for every
+    known row while ``ent.grace`` is ``True``), each row here reflects
+    the STATIC per-tier grant for ``perspective_tier``. Features /
+    runtimes are resolved against :func:`_hypothetical_entitlement`
+    (grace forced off, feature / runtime grants pulled from
+    :data:`_TIER_FEATURES` / :data:`_TIER_PAID_RUNTIMES`); the three
+    capacity axes read the static caps in :data:`_TIER_CHANNEL_LIMIT` /
+    :data:`_TIER_RETENTION_DAYS` / :data:`_TIER_NODE_LIMIT` directly
+    (matches the singular :func:`has_channel_count_at` / ...retention /
+    ...node scalars). ``has_batch_at("oss", features=["fleet"])``
+    returns ``has=False`` for the fleet row even in grace -- the whole
+    point of a what-if batch.
+
+    ``required_tier`` on every row is perspective-independent (delegates
+    to the singular :func:`min_tier_for_*` helpers) so a UI wiring both
+    the LIVE :func:`has_batch` and this perspective sibling sees byte-
+    identical reverse-lookup answers across the two batches.
+
+    Contract:
+
+    * ``perspective_tier`` is validated against :data:`_TIER_ORDER`
+      (including :data:`TIER_TRIAL`). Empty / non-string / unknown ->
+      ``None`` (caller renders "unknown tier" / 404). Matches the
+      ``None`` posture the rest of the ``_at`` mixed-axis family uses
+      (see :func:`min_tier_batch_at`).
+    * Feature ids normalised via :func:`_normalise_csv` (whitespace
+      stripped, lowercased, duplicates dropped preserving first-seen
+      order). Runtime ids additionally canonicalise via
+      :func:`canonical_runtime` (matches :func:`has_batch`).
+    * ``channels`` / ``retention_days`` / ``nodes`` are single ints;
+      ``None`` means "not supplied" (row slot collapses to ``None``).
+      Same posture as :func:`has_batch`: ``retention_days=None`` is
+      *unset* -- NOT *unlimited*.
+    * Unknown / non-canonical feature or runtime ids surface as one row
+      with ``unknown=True`` / ``has=False`` (strict callsite-typo fail-
+      closed posture matching the singular :func:`has_feature_at` /
+      :func:`has_runtime_at` scalars).
+
+    Never raises: a per-row failure short-circuits to the fail-closed
+    row shape so the paywall matrix keeps rendering; a perspective /
+    hypothetical build failure returns ``None`` so the caller can render
+    "unknown tier" / 404 without a stack trace.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        hypo = _hypothetical_entitlement(p)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_batch_at hypo build failed for %r: %s",
+            perspective_tier,
+            exc,
+        )
+        return None
+    try:
+        feats = _normalise_csv(features)
+        raw_rts = _normalise_csv(runtimes)
+        seen: set[str] = set()
+        rt_rows: list[dict] = []
+        for raw in raw_rts:
+            rt = canonical_runtime(raw)
+            key = rt if rt else raw
+            if key in seen:
+                continue
+            seen.add(key)
+            rt_rows.append(_has_row(hypo, raw, "runtime"))
+        return {
+            "features": [_has_row(hypo, f, "feature") for f in feats],
+            "runtimes": rt_rows,
+            "channels": (
+                _has_row_capacity_at(p, channels, "channels")
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                _has_row_capacity_at(p, retention_days, "retention_days")
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                _has_row_capacity_at(p, nodes, "nodes")
+                if nodes is not None
+                else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_batch_at failed for %r: %s",
+            perspective_tier,
+            exc,
+        )
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+
 def feature_label(feature: str) -> str:
     fid = (feature or "").strip().lower()
     return FEATURE_LABELS.get(fid, fid)
