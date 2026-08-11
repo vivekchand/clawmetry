@@ -1072,6 +1072,79 @@ def main() -> int:
         except Exception:
             pass
 
+    def _do_uninstall_flow() -> None:
+        """Menu handler — confirm, then shell out to
+        ``clawmetry uninstall --yes`` in the runtime venv, then quit.
+
+        The uninstall itself removes the runtime dir the venv lives in;
+        that's safe on POSIX because the venv's clawmetry binary is
+        already mmap'd by the child process (unlinked files stay open
+        for the running process). On Windows the uninstall reschedules
+        the exe delete for after we exit.
+        """
+        try:
+            ok = window.evaluate_js(
+                "confirm('Uninstall ClawMetry?\\n\\n"
+                "This removes the runtime, local event history, and your "
+                "sign-in token.\\n\\n"
+                "The app in /Applications is not deleted — drag it to "
+                "Trash separately.')"
+            )
+        except Exception:
+            ok = True  # If we can't render a dialog, assume the menu click
+            # is intent enough. The CLI would still refuse on a bad flag.
+        if not ok:
+            return
+
+        _set_status("Uninstalling ClawMetry…")
+        # Stop the daemon before removing its files: on Windows a live
+        # process holds an exclusive lock on its exe; on macOS/Linux the
+        # rmtree still works but the sync.log deletion races.
+        try:
+            sup.shutting_down.set()
+        except Exception:
+            pass
+        try:
+            sup.stop()
+        except Exception:
+            pass
+
+        venv_cli = sup._venv_clawmetry()
+        if venv_cli.exists():
+            try:
+                subprocess.run(
+                    [str(venv_cli), "uninstall", "--yes"],
+                    check=False,
+                    timeout=300,
+                )
+            except Exception:
+                pass
+
+        # Quit the app. The runtime dir is gone; a relaunch would re-bootstrap.
+        try:
+            window.destroy()
+        except Exception:
+            os._exit(0)
+
+    def _on_menu_uninstall() -> None:
+        # Menu callbacks run on the GUI thread; move the confirm+shell-out
+        # off it so evaluate_js and subprocess don't block the main loop.
+        threading.Thread(target=_do_uninstall_flow, daemon=True).start()
+
+    # Build the menu — tolerant of pywebview versions without a menu API.
+    # macOS shows this alongside the standard app menu; the item name uses
+    # the platform convention "Uninstall ClawMetry…" (ellipsis = confirms).
+    menu_items: list = []
+    try:
+        from webview.menu import Menu, MenuAction  # type: ignore
+        menu_items = [
+            Menu(APP_TITLE, [
+                MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
+            ]),
+        ]
+    except Exception:
+        menu_items = []
+
     def _boot():
         # Phase 1: bootstrap the runtime venv.
         ok = sup.bootstrap()
@@ -1080,6 +1153,21 @@ def main() -> int:
             # the carousel up with the failure text at the top so the
             # user has something to read while filing a bug.
             return
+
+        # Install the macOS app-vanished watchdog so drag-to-trash of
+        # /Applications/ClawMetry.app triggers a full uninstall without
+        # the user having to open a terminal. No-op on non-macOS and in
+        # dev mode (sys.frozen unset). See clawmetry/watchdog.py.
+        try:
+            from clawmetry.watchdog import ensure_app_watchdog_installed
+            ensure_app_watchdog_installed(
+                runtime_dir=sup.runtime,
+                venv_clawmetry=sup._venv_clawmetry(),
+            )
+        except Exception:
+            # Never let a watchdog install failure block launch — the
+            # in-app menu and manual CLI still work without it.
+            pass
 
         # Expose the CLI globally (PATH shim / symlink) and make sure
         # local ingest is running — both in the background, neither may
@@ -1202,7 +1290,11 @@ def main() -> int:
     threading.Thread(target=_boot, daemon=True).start()
 
     # js_api makes DesktopAPI methods callable as window.pywebview.api.*
-    webview.start(private_mode=False)
+    # Older pywebview versions don't accept `menu=`; fall back cleanly.
+    try:
+        webview.start(private_mode=False, menu=menu_items)
+    except TypeError:
+        webview.start(private_mode=False)
     return 0
 
 
