@@ -193,11 +193,15 @@ family of preview/diff/batch helpers. The stable everyday endpoints are:
 | `GET /api/entitlement/required-tier?feature=<f>` | Cheapest tier that includes the given feature/runtime/channel-count/etc. |
 
 Beyond these there is a large family of preview / batch / capacity /
-"at-tier" endpoints that let a UI answer questions like "what does
-tier X look like at N channels", "which tiers are affordable at this
-node count", and "what does the path from tier A to tier B unlock at
-each step". They all read the same in-memory tier matrix and never
-mutate state. See `routes/entitlement.py` for the full list.
+"at-tier" / rollup (`has-all`, `missing-all`) / row-detail
+complement (`missing-features`, `missing-runtimes`) endpoints that
+let a UI answer questions like "what does tier X look like at N
+channels", "which tiers are affordable at this node count", "what
+does the path from tier A to tier B unlock at each step", "does the
+resolved install grant this whole bundle in one boolean fold" and
+"what's blocking the upgrade off ONE per-axis denial payload". They
+all read the same in-memory tier matrix and never mutate state. See
+`routes/entitlement.py` for the full list.
 
 Every endpoint is defensive: a resolver failure falls back to the OSS-
 free snapshot (identical shape) rather than 500-ing, so a UI can rely
