@@ -9467,6 +9467,289 @@ def api_entitlement_has_all():
         return jsonify(_has_all_fallback())
 
 
+def _missing_all_fallback() -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all``.
+
+    Row-detail sibling of :func:`_has_all_fallback`. On a resolver blowup the
+    endpoint still returns 200 with the same envelope shape as the happy
+    path, but every per-axis missing slot is empty (``[]`` / ``None``) and
+    the ``any_missing`` / ``upgrade_required`` rollups are ``False`` so a
+    paywall tile that lost the resolver doesn't render a denial banner it
+    can no longer justify. Matches ``_has_all_fallback`` on every shared
+    slot (envelope key set is a strict superset -- extra keys are the
+    per-axis missing counters).
+    """
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": [],
+        "unknown_runtimes": [],
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "missing_count": 0,
+        "any_missing": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+        "upgrade_required": False,
+    }
+
+
+def _missing_all_body() -> dict:
+    """Happy-path body builder for ``/api/entitlement/missing-all``.
+
+    Row-detail complement of :func:`_has_all_body`: same per-axis
+    normalisation, same runtime-alias canonicalisation, same
+    known/unknown split -- but instead of folding the answer to ONE
+    boolean ``has_all``, this returns the exact per-axis denial detail
+    a paywall diagnostics tile needs to render "you're missing X, Y --
+    upgrade to unlock" off ONE URL.
+
+    Delegates the per-axis fold to :func:`clawmetry.entitlements.missing_all`
+    against the CANONICALISED known-only subsets so envelope-vs-scalar
+    parity holds byte-exact (matches ``_has_all_body`` posture). Unknown
+    tokens are ECHOED inside the per-axis missing list (canonicalised to
+    ``.strip().lower()`` for features; runtime-alias resolved for
+    runtimes) so a caller sees the full denial roster in one place;
+    ``unknown_features`` / ``unknown_runtimes`` still split them out for
+    a tooltip that wants to distinguish "denied by tier" from "not a real
+    id". Supplied-but-unparseable capacity axis surfaces the raw string
+    in that axis' slot (matches the singular ``missing_features`` scalar's
+    typo-catches-at-callsite posture on the grant axes).
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-only
+    subsets for parity with ``/api/entitlement/has-all`` and
+    ``/api/entitlement/required-tier``.
+    """
+    from clawmetry import entitlements as _ent
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    # Delegate to the module scalar off the CANONICALISED known-only
+    # lists for envelope-vs-scalar parity (unsupplied axes pass ``None``
+    # verbatim so the delegate can distinguish "supplied but empty" from
+    # "unsupplied", matching ``has_all``'s posture).
+    scalar = _ent.missing_all(
+        features=known_features if features_supplied else None,
+        runtimes=known_runtimes if runtimes_supplied else None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    # Layer unknown tokens ONTO the per-axis missing list (append at the
+    # end, dedup preserved). A caller wiring a single "these ids are
+    # blocking the upgrade" tooltip off ``features`` / ``runtimes`` sees
+    # the full denial roster; a caller who wants the split still reads
+    # ``unknown_features`` / ``unknown_runtimes`` alone.
+    missing_features_out: list[str] = list(scalar.get("features") or [])
+    if features_supplied:
+        for u in unknown_features:
+            if u not in missing_features_out:
+                missing_features_out.append(u)
+
+    missing_runtimes_out: list[str] = list(scalar.get("runtimes") or [])
+    if runtimes_supplied:
+        for u in unknown_runtimes:
+            if u not in missing_runtimes_out:
+                missing_runtimes_out.append(u)
+
+    # Capacity axes: the scalar returns the parsed int on denial. When
+    # the caller supplied an UNPARSEABLE value the scalar can't compute
+    # a denial (the delegate has_channel_count returns False on non-int
+    # too so ``missing_all=... has_all=False`` remains coherent) -- we
+    # echo the raw string here so a UI can still surface the typo.
+    channels_missing = scalar.get("channels")
+    if channels_present and not channels_ok:
+        channels_missing = channels_raw
+    retention_missing = scalar.get("retention_days")
+    if retention_present and not retention_ok:
+        retention_missing = retention_raw
+    nodes_missing = scalar.get("nodes")
+    if nodes_present and not nodes_ok:
+        nodes_missing = nodes_raw
+
+    # ``missing_count`` folds: 1 per non-empty per-axis slot on the
+    # capacity axes + len(list) on the grant axes. Matches the paired
+    # ``has_all`` sense (``missing_count == 0`` iff every supplied axis
+    # is granted).
+    missing_count = (
+        len(missing_features_out)
+        + len(missing_runtimes_out)
+        + (1 if channels_missing is not None else 0)
+        + (1 if retention_missing is not None else 0)
+        + (1 if nodes_missing is not None else 0)
+    )
+
+    any_missing = missing_count > 0
+
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    cur_rank = env["current_tier_rank"]
+    req_rank = _ent.tier_rank(required) if required else -1
+    required_label = _ent.tier_label(required) if required else None
+
+    return {
+        "features": missing_features_out,
+        "runtimes": missing_runtimes_out,
+        "channels": channels_missing,
+        "retention_days": retention_missing,
+        "nodes": nodes_missing,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "missing_count": missing_count,
+        "any_missing": any_missing,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": cur_rank,
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+        "upgrade_required": bool(required) and req_rank > cur_rank,
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-all")
+def api_entitlement_missing_all():
+    """``GET /api/entitlement/missing-all?features=a,b&runtimes=x,y&channels=100&retention_days=90&nodes=100``
+    -- row-detail complement of ``/api/entitlement/has-all``.
+
+    Aggregate row-detail sibling of ``/api/entitlement/missing-features``
+    (single-axis complement of ``/has-features``) and
+    ``/api/entitlement/missing-runtimes`` at the mixed-axis rollup layer:
+    where ``/has-all`` folds the bundle to ONE boolean, this preserves
+    the per-axis denial detail so a paywall diagnostics tile ("you're
+    missing fleet, sso, claude_code, +75 channels, +60 days retention,
+    +99 nodes -- upgrade to Enterprise") binds every slot directly off
+    ONE URL instead of walking the five singular ``/missing-*`` / capacity
+    endpoints and stitching client-side.
+
+    Every axis is OPTIONAL. Supply any non-empty subset; the response
+    populates just those axes' missing slots and every unsupplied axis
+    stays at its empty seat (``[]`` for grant axes, ``None`` for
+    capacity axes). Runtime-alias canonicalisation (``claude-code`` ->
+    ``claude_code``) is applied per token before the known/unknown
+    split. Capacity axes accept a single int; blank / non-int values
+    surface the raw string in that axis' slot (matches the singular
+    ``missing_features`` scalar's typo-catches-at-callsite posture).
+
+    Grace-safe: while :attr:`Entitlement.grace` is ``True`` (the current
+    rollout state) every per-axis slot reports empty for every
+    fully-known bundle -- matches the ``has_all=True`` grace answer on
+    the same bundle -- so wiring this into a diagnostics tile today
+    surfaces NOTHING. Never 4xxs (no axes supplied -> 200 with empty
+    per-axis slots and ``any_missing=false``, matching ``/has-all``'s
+    empty-``False`` posture). Never 5xxs (resolver blowup -> fallback
+    envelope with empty per-axis slots and ``any_missing=false``).
+
+    Envelope shape (19 keys, byte-stable across every input branch)::
+
+        {
+          "features":            ["fleet", "sso"],   # missing grant ids
+          "runtimes":            ["claude_code"],
+          "channels":            100 | null,          # requested int if denied
+          "retention_days":      90 | null,
+          "nodes":               100 | null,
+          "unknown_features":    ["bogus"],
+          "unknown_runtimes":    [],
+          "supplied_axes":       ["features", "channels"],
+          "supplied_count":      2,
+          "missing_count":       3,                   # total items across all axes
+          "any_missing":         true,                # missing_count > 0
+          "required_tier":       "enterprise" | null,
+          "required_tier_label": "Enterprise" | null,
+          "required_tier_rank":  <int>,               # -1 when null
+          "current_tier":        "oss",
+          "current_tier_rank":   0,
+          "grace":               true,
+          "enforced":            false,
+          "upgrade_required":    <bool>
+        }
+    """
+    try:
+        return jsonify(_missing_all_body())
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_all: error: %s", exc)
+        return jsonify(_missing_all_fallback())
+
+
 @bp_entitlement.route("/api/entitlement/lock-reason")
 def api_entitlement_lock_reason():
     try:

@@ -9405,6 +9405,152 @@ def has_all(
         return False
 
 
+def missing_all(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Row-detail complement of :func:`has_all`: return WHAT is missing on
+    each supplied axis of a mixed bundle instead of folding the answer to
+    ONE boolean.
+
+    Rollup twin of :func:`missing_features` / :func:`missing_runtimes` at
+    the aggregate axis (same relationship :func:`has_all` has to the
+    singular ``has_*`` scalars). A paywall diagnostics tile that gates on
+    the FULL subscription state ("fleet + claude_code + 100 channels +
+    90-day retention + 100 nodes -- what's blocking the upgrade?") binds
+    the per-axis denial detail directly off this scalar's dict instead of
+    walking the five singular ``missing_*`` complements + capacity
+    scalars + client-side stitching.
+
+    Return shape (5 keys, byte-stable across every input branch)::
+
+        {
+          "features":       ["fleet", "sso"],   # from missing_features()
+          "runtimes":       ["claude_code"],    # from missing_runtimes()
+          "channels":       100 | None,         # requested int if denied
+          "retention_days": 90 | None,
+          "nodes":          100 | None,
+        }
+
+    Per-axis rules:
+
+    * Grant axes (``features`` / ``runtimes``): delegate to
+      :func:`missing_features` / :func:`missing_runtimes` so unknown
+      tokens, dedup, empty-``[]`` posture, and grace pass-through match
+      those scalars byte-for-byte. ``features=None`` / ``runtimes=None``
+      (axis unsupplied) -> ``[]`` in that slot.
+    * Capacity axes (``channels`` / ``retention_days`` / ``nodes``):
+      returns the SUPPLIED int if the current entitlement's
+      per-axis scalar (:func:`has_channel_count` /
+      :func:`has_retention_window` / :func:`has_node_count`) denies it,
+      otherwise ``None``. Axis unsupplied (``None``) -> ``None`` in
+      that slot. Non-int (str, list, ``None``-substitute) collapses to
+      ``None`` too -- the strict-``False`` singular scalar reports the
+      denial via ``has_all=False`` on the caller's paired ``has_all``
+      call; this scalar deliberately does NOT surface the raw non-int
+      here (matches :func:`missing_features` swallowing typos on the
+      grant axes -- callers who want typo-detail should use the paired
+      capacity scalar directly).
+
+    Grace pass-through: while ``ent.grace`` is ``True`` (the current
+    rollout state) every singular ``has_*`` scalar returns ``True`` for
+    its fully-known input, so this scalar reports empty lists / ``None``
+    on every axis for every fully-known mixed bundle. Wiring this into a
+    diagnostics tile today surfaces NOTHING (matches the
+    ``has_all=True`` grace answer on the same bundle).
+
+    Post-enforcement: for every supplied grant axis, the returned list
+    contains the exact ids denied by the resolved entitlement's live
+    grant; for every supplied capacity axis, the requested int is
+    surfaced iff the resolved tier's cap denies it. Symmetric to
+    :func:`has_all` at row level in the same way :func:`missing_features`
+    is symmetric to :func:`has_features`.
+
+    Never raises: any delegate failure logs a warning and collapses that
+    axis to its empty seat (``[]`` for grant axes, ``None`` for capacity
+    axes) so a caller can bind this into a diagnostics dict without a
+    try/except.
+    """
+    out: dict = {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+    }
+    try:
+        if features is not None:
+            try:
+                out["features"] = missing_features(features)
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: missing_all features leg failed: %s", exc
+                )
+                out["features"] = []
+        if runtimes is not None:
+            try:
+                out["runtimes"] = missing_runtimes(runtimes)
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: missing_all runtimes leg failed: %s", exc
+                )
+                out["runtimes"] = []
+        if channels is not None:
+            try:
+                n = int(channels)
+                if not has_channel_count(n):
+                    out["channels"] = n
+            except (TypeError, ValueError):
+                # Strict typo posture on the capacity axes: a non-int
+                # channels= would fail-closed on has_channel_count and
+                # so has_all would report False; we deliberately do NOT
+                # surface the raw non-int here (matches the missing_*
+                # grant-axis scalars swallowing non-string tokens as
+                # ``""`` rather than raising).
+                pass
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: missing_all channels leg failed: %s", exc
+                )
+        if retention_days is not None:
+            try:
+                n = int(retention_days)
+                if not has_retention_window(n):
+                    out["retention_days"] = n
+            except (TypeError, ValueError):
+                pass
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: missing_all retention_days leg failed: %s",
+                    exc,
+                )
+        if nodes is not None:
+            try:
+                n = int(nodes)
+                if not has_node_count(n):
+                    out["nodes"] = n
+            except (TypeError, ValueError):
+                pass
+            except Exception as exc:
+                logger.warning(
+                    "entitlements: missing_all nodes leg failed: %s", exc
+                )
+        return out
+    except Exception as exc:
+        logger.warning("entitlements: missing_all failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+
 def _tier_row(tier: str) -> dict:
     return {
         "id": tier,
