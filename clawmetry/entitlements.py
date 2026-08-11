@@ -11867,6 +11867,378 @@ def has_all_at_batch(
     return {"tiers": rows, "unknown": unknown}
 
 
+def _normalise_all_bundle(bundle) -> tuple:
+    """Shared per-bundle normalisation for the aggregate 5-axis bundle
+    batches (:func:`has_all_bundle_batch` /
+    :func:`has_all_bundle_batch_at` and the reverse-lookup twin
+    :func:`_min_tier_for_all_bundle_row`).
+
+    Returns ``(features, runtimes, channels, retention_days, nodes)``
+    with the same normalisation posture the singular scalars and the
+    ``/required-tier-batch`` GET endpoint use so a caller can pass an
+    unnormalised bundle dict without a re-normalise step:
+
+    * ``features`` / ``runtimes`` -- CSV-normalised via
+      :func:`_normalise_csv` (whitespace stripped, lowercased, dedup
+      preserving first-seen order). Runtime tokens additionally
+      canonicalise via :func:`canonical_runtime` so aliases
+      (``claude-code`` -> ``claude_code``) resolve the same way as the
+      singular scalars, and duplicates that collapse after
+      canonicalisation only contribute once.
+    * ``channels`` / ``retention_days`` / ``nodes`` -- coerced through
+      ``int(str(v).strip())`` with a blank / non-int collapsing to
+      ``None`` so a typo cannot silently mis-route the aggregate. This
+      is DIFFERENT from :func:`has_all`, which treats a non-int on a
+      supplied axis as a strict typo (fold collapses to ``False``); at
+      the batch layer we prefer the "unset" reading because the paired
+      endpoint echoes the normalised value back so a caller can see the
+      dropped input on the row.
+
+    Non-dict bundles collapse to the empty tuple (matches
+    :func:`_min_tier_for_all_bundle_row` never-crash posture). Never
+    raises.
+    """
+    features: list[str] = []
+    runtimes: list[str] = []
+    channels: int | None = None
+    retention_days: int | None = None
+    nodes: int | None = None
+    try:
+        raw = bundle if isinstance(bundle, dict) else {}
+        features = _normalise_csv(raw.get("features"))
+        raw_rts = _normalise_csv(raw.get("runtimes"))
+        seen: set[str] = set()
+        for rt in raw_rts:
+            canon = canonical_runtime(rt)
+            key = canon if canon and canon in ALL_RUNTIMES else rt
+            if key in seen:
+                continue
+            seen.add(key)
+            runtimes.append(key)
+
+        def _coerce_int(val):
+            if val is None:
+                return None
+            try:
+                return int(str(val).strip())
+            except (TypeError, ValueError):
+                return None
+
+        channels = _coerce_int(raw.get("channels"))
+        retention_days = _coerce_int(raw.get("retention_days"))
+        nodes = _coerce_int(raw.get("nodes"))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _normalise_all_bundle failed: %s", exc
+        )
+    return (features, runtimes, channels, retention_days, nodes)
+
+
+def _has_all_bundle_row(bundle) -> dict:
+    """Per-bundle row shape for :func:`has_all_bundle_batch`.
+
+    Normalises one aggregate 5-axis bundle via
+    :func:`_normalise_all_bundle` (feature / runtime CSV + alias
+    canonicalisation, capacity int coercion with a blank / non-int
+    collapsing to ``None``), then folds it through :func:`has_all` for
+    the LIVE aggregate boolean.
+
+    Grace posture mirrors :func:`has_all` byte-for-byte: while
+    ``ent.grace`` is ``True`` (the current rollout state) every fully-
+    known bundle reports ``has_all=True``; post-enforcement each row
+    reflects the underlying :meth:`Entitlement.allows_*` answer.
+
+    Row keys mirror the paired ``/api/entitlement/has-all-bundle-batch``
+    endpoint body minus the resolver envelope (``features``,
+    ``runtimes``, ``channels``, ``retention_days``, ``nodes``,
+    ``has_all``). Empty / all-``None`` axes (empty bundle) surface as a
+    stable row with ``has_all=False`` -- distinguishes "caller asked for
+    nothing" from "caller asked and every axis was a typo" and matches
+    the singular :func:`has_all` empty-``False`` posture.
+
+    Never raises: a per-bundle failure returns the empty row shape so
+    the batch keeps building.
+    """
+    features, runtimes, channels, retention_days, nodes = _normalise_all_bundle(
+        bundle
+    )
+    try:
+        allowed = has_all(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _has_all_bundle_row fold failed: %s", exc
+        )
+        allowed = False
+    return {
+        "features": features,
+        "runtimes": runtimes,
+        "channels": channels,
+        "retention_days": retention_days,
+        "nodes": nodes,
+        "has_all": bool(allowed),
+    }
+
+
+def has_all_bundle_batch(bundles) -> list[dict]:
+    """Per-bundle aggregate boolean-fold grant for N caller-supplied
+    5-axis bundles in ONE round-trip.
+
+    Bundle-axis batch sibling of :func:`has_all` (which folds ONE
+    aggregate bundle to ONE boolean) on the boolean-fold slot, in the
+    same relationship :func:`min_tier_for_all_batch` has to
+    :func:`min_tier_for_all` on the reverse-lookup slot. Where the
+    singular helper answers "does the CURRENT install grant THIS whole
+    5-axis subscription state?", this answers the same question for N
+    distinct bundles at once so a paywall matrix or upgrade-walkthrough
+    surface comparing several hypothetical whole configs
+    (e.g. "Starter-shaped install vs Pro-shaped install vs Enterprise-
+    shaped install") renders off ONE call instead of N calls to
+    :func:`has_all`.
+
+    Distinct from :func:`has_features_batch` / :func:`has_runtimes_batch`
+    (which batch N *single-axis* bundles) and from :func:`has_batch`
+    (per-*item* rows for one flat bundle -- rows are individual
+    feature / runtime / capacity ids). This helper preserves the per-
+    bundle grouping AND the cross-axis aggregation: each row is the
+    aggregate fold-answer for that whole 5-axis bundle, not a fold-
+    answer per item or per single axis.
+
+    Also distinct from :func:`has_all_at_batch` (which fixes ONE bundle
+    and sweeps N perspective tiers): this fixes N bundles and reads the
+    LIVE per-install grant.
+
+    Row shape mirrors :func:`min_tier_for_all_batch` on the axis echo
+    slots (byte-parity so a UI that unions the two batches sees a
+    consistent shape) with the fold slot swapped from ``required_tier``
+    to ``has_all``::
+
+        {
+          "features":       ["fleet"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | None,
+          "retention_days": 30 | None,
+          "nodes":          2 | None,
+          "has_all":        <bool>,
+        }
+
+    Per-bundle normalisation is delegated to
+    :func:`_normalise_all_bundle`, which matches the singular endpoint
+    exactly: CSV normalisation on features / runtimes; runtime aliases
+    (``claude-code`` -> ``claude_code``) canonicalised; capacity axes
+    coerced through ``int(...)`` with a blank / non-int collapsing to
+    ``None``. Empty bundles / all-``None`` axes surface as a stable row
+    with ``has_all=False`` (matches :func:`has_all` empty-``False``
+    posture; a caller who forgot to pass any kwarg in one row of the
+    batch sees the typo at that row instead of a silent grant).
+
+    Grace posture per-row mirrors :func:`has_all` byte-for-byte: while
+    ``ent.grace`` is ``True`` every fully-known bundle reports
+    ``has_all=True``; post-enforcement each row reflects the underlying
+    :meth:`Entitlement.allows_*` answer.
+
+    Argument handling:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]``.
+    * Each bundle may itself be ``None``, non-dict, or empty -- the
+      helper emits a stable row (``has_all=False`` on empty / non-dict).
+    * Non-dict bundle rows (e.g. a bare list) collapse to the empty row
+      shape (matches the never-crash posture of every other bundle
+      helper).
+
+    Critically, ``retention_days=None`` inside a bundle means *unset* --
+    NOT *unlimited*. Same posture as :func:`min_tier_for_all_batch` /
+    :func:`has_all`: asking about the unlimited-retention grant is the
+    singular :meth:`Entitlement.allows_retention_window` (``days=None``)
+    call's job and would collapse the row's kwarg-branch to "not
+    supplied" otherwise.
+
+    Never raises: per-bundle failures short-circuit to the empty row
+    shape (``has_all=False``) so the batch keeps building.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_has_all_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_all_bundle_batch row failed: %s", exc
+            )
+            out.append(
+                {
+                    "features": [],
+                    "runtimes": [],
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                    "has_all": False,
+                }
+            )
+    return out
+
+
+def _has_all_bundle_row_at(perspective_tier: str, bundle) -> dict:
+    """Perspective-shaped sibling of :func:`_has_all_bundle_row`.
+
+    Normalises one aggregate 5-axis bundle via
+    :func:`_normalise_all_bundle` (identical to the LIVE row helper),
+    then folds it through :func:`has_all_at` against
+    ``perspective_tier`` so the row reflects the STATIC per-tier grant
+    for that hypothetical tier instead of the LIVE resolver.
+
+    **Grace-independent by construction**: every axis in
+    :func:`has_all_at` is backed by the static per-tier grant tables
+    (via :func:`_hypothetical_entitlement` on the feature / runtime axes
+    and by :data:`_TIER_CHANNEL_LIMIT` / :data:`_TIER_RETENTION_DAYS` /
+    :data:`_TIER_NODE_LIMIT` on the capacity axes), so the per-row
+    ``has_all_at`` is identical under grace vs enforce for the same
+    ``(perspective, bundle)`` pair. Whole point of the ``_at`` slot: a
+    paywall walkthrough at OSS ("if I were on OSS today, would this
+    whole bundle land granted?") sees the would-be-locked state even
+    while the LIVE :func:`has_all_bundle_batch` reports every fully-
+    known bundle granted via grace pass-through.
+
+    Row keys mirror :func:`_has_all_bundle_row` byte-for-byte with the
+    fold slot renamed ``has_all_at`` so a UI wiring both the LIVE and
+    the perspective batches can distinguish the two answers on the same
+    ``(bundle,)`` cell. Never raises: a delegate failure returns the
+    empty row shape with ``has_all_at=False``.
+    """
+    features, runtimes, channels, retention_days, nodes = _normalise_all_bundle(
+        bundle
+    )
+    try:
+        allowed = has_all_at(
+            perspective_tier,
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=channels,
+            retention_days=retention_days,
+            nodes=nodes,
+        )
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _has_all_bundle_row_at(%r) fold failed: %s",
+            perspective_tier,
+            exc,
+        )
+        allowed = False
+    return {
+        "features": features,
+        "runtimes": runtimes,
+        "channels": channels,
+        "retention_days": retention_days,
+        "nodes": nodes,
+        "has_all_at": bool(allowed),
+    }
+
+
+def has_all_bundle_batch_at(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Hypothetical-perspective sibling of :func:`has_all_bundle_batch`:
+    per-bundle aggregate boolean-fold grant for N 5-axis bundles in one
+    round-trip, scoped by a caller-supplied ``perspective_tier``.
+
+    Same relationship to :func:`has_all_bundle_batch` that
+    :func:`has_all_at` has to :func:`has_all` and
+    :func:`min_tier_for_all_at_batch` has to
+    :func:`min_tier_for_all_batch`: the ``perspective_tier`` argument
+    tells the fold which STATIC per-tier grant to reason from so a
+    pricing-matrix walkthrough can hydrate the per-bundle "would <tier>
+    admit this whole config?" boolean off ONE call per (perspective,
+    bundles) cell instead of N calls to :func:`has_all_at`.
+
+    **Perspective-shaped (grace-independent by design)**: unlike the
+    reverse-lookup :func:`min_tier_for_all_at_batch` (which is
+    inherently perspective-independent because the required tier is a
+    property of the bundle, not the caller), the boolean-fold answer
+    DOES depend on ``perspective_tier`` -- each row's ``has_all_at``
+    delegates to :func:`has_all_at` (backed by the static per-tier
+    tables), so the row IS shaped by the hypothetical perspective.
+    ``has_all_bundle_batch_at("oss", [{"features": ["fleet"]}])``
+    reports ``has_all_at=False`` for the fleet row even in grace --
+    that's the whole point of the ``_at`` slot.
+
+    Row shape mirrors :func:`has_all_bundle_batch` byte-for-byte on the
+    axis echo slots (byte-parity so a UI wiring both the LIVE and the
+    perspective batches sees a consistent shape) with the fold slot
+    renamed ``has_all_at``::
+
+        {
+          "features":       ["fleet"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | None,
+          "retention_days": 30 | None,
+          "nodes":          2 | None,
+          "has_all_at":     <bool>,
+        }
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`); returns ``None`` for empty / unknown /
+    non-string ``perspective_tier`` (caller renders "unknown tier" /
+    404). Matches the ``None`` posture the rest of the ``_at`` mixed-
+    axis family uses (see :func:`min_tier_batch_at` /
+    :func:`min_tier_for_all_at_batch`).
+
+    Argument handling on ``bundles`` mirrors
+    :func:`has_all_bundle_batch`:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]`` (perspective
+      valid but nothing to fold).
+    * Each bundle may itself be ``None``, non-dict, or empty -- the
+      helper emits a stable row (``has_all_at=False`` on empty /
+      non-dict).
+
+    Never raises: a delegate failure logs a warning and short-circuits
+    to the empty row shape so the batch keeps building. A perspective-
+    validation failure returns ``None`` so the paired endpoint can
+    surface a 404 with ``which=tier``.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_has_all_bundle_row_at(p, bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_all_bundle_batch_at row failed: %s", exc
+            )
+            out.append(
+                {
+                    "features": [],
+                    "runtimes": [],
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                    "has_all_at": False,
+                }
+            )
+    return out
+
+
 def _min_tier_for_all_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`min_tier_for_all_batch`.
 
