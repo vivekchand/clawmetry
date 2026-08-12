@@ -10,6 +10,12 @@
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
 
+  <!-- Subscription-coverage banner (goal: stop the "API cost panic"
+       when the user's plan already covers the shown $$). Populated by
+       app.js renderBillingCoverageBanner() from /api/usage
+       .billingCoverage. Hidden until we've detected a plan. -->
+  <div id="usage-coverage-banner" style="display:none; margin-bottom: 16px;"></div>
+
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">

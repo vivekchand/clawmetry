@@ -359,6 +359,8 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     # usage tab can show "X substitutions saved $Y this month."
     routing_data = _ls_call("query_routing_savings") or {}
 
+    import dashboard as _d  # late import — same pattern as other paths
+
     return {
         "source": "local_store",
         "_source": "local_store",
@@ -372,6 +374,13 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "modelBreakdown": model_breakdown,
         "modelBilling": [],
         "billingSummary": {},
+        # Fast-path has no per-model tokens; fall back to "detected sub
+        # covers everything" so the Cost tab still paints the coverage
+        # banner (matches the device UX).
+        "billingCoverage": _d._get_billing_coverage(
+            [], today_cost, week_cost, month_cost,
+            fallback_all_covered_when_no_models=True,
+        ),
         "sessionCosts": {},
         "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
         "anomalies": [],
@@ -1941,6 +1950,9 @@ def api_usage():
         "modelBreakdown": model_breakdown,
         "modelBilling": model_billing,
         "billingSummary": billing_summary,
+        "billingCoverage": _d._get_billing_coverage(
+            model_billing, today_cost, week_cost, month_cost
+        ),
         "sessionCosts": session_costs,
         "sessions": top_sessions_rows,
         "anomalies": anomalies,
