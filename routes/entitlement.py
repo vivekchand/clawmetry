@@ -39100,6 +39100,213 @@ def api_entitlement_min_tier_for_runtimes_batch():
         )
 
 
+def _has_bundle_row_body(row: dict, list_key: str) -> dict:
+    """Normalise a ``has_features_bundle_batch`` /
+    ``has_runtimes_bundle_batch`` helper row for the endpoint response.
+
+    Boolean-fold sibling of :func:`_min_tier_for_bundle_row_to_body`:
+    same ``list_key`` / ``unknown`` / ``kind`` / ``count`` axes, but the
+    tier slots are swapped for a single ``has_<axis>`` bool matching the
+    fold-slot name on the singular ``/api/entitlement/has-features`` /
+    ``/has-runtimes`` endpoint body. Never raises; a missing key
+    surfaces as the empty-row shape with ``has_<axis>=False`` so the
+    batch envelope is byte-stable across every branch.
+    """
+    fold_key = f"has_{list_key}"
+    return {
+        list_key: list(row.get(list_key) or []),
+        "unknown": list(row.get("unknown") or []),
+        "kind": row.get("kind"),
+        "count": int(row.get("count") or 0),
+        fold_key: bool(row.get(fold_key)),
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-features-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_has_features_bundle_batch():
+    """``POST /api/entitlement/has-features-bundle-batch`` -- bundle-axis
+    batch boolean-fold sibling of ``/api/entitlement/has-features``.
+
+    Where the singular endpoint folds ONE bundle of features to ONE
+    ``has_features`` boolean on the LIVE install, this folds N caller-
+    supplied feature bundles to N ``has_features`` rows in ONE round-
+    trip. Distinct from ``/has-features-at-batch`` (which fixes ONE
+    feature bundle and sweeps N perspective tiers): this fixes N
+    bundles and reads the LIVE per-install grant. Boolean-fold sibling
+    of ``/min-tier-for-features-batch`` on the reverse-lookup slot; the
+    two responses pair on the same ``features`` / ``unknown`` / ``kind``
+    / ``count`` axes so a UI can render "granted right now? / cheapest
+    tier that grants it?" side by side per bundle off two calls.
+
+    Use case: a paywall matrix or upgrade-walkthrough surface comparing
+    several hypothetical feature sets ("starter add-ons vs pro add-ons
+    vs enterprise add-ons") hydrates the LIVE-grant column off ONE
+    round-trip instead of N calls to ``/has-features``.
+
+    POST rather than GET because the caller-supplied set of bundles can
+    grow past a comfortable query-string length; the sibling singular
+    endpoint uses GET+CSV where the bundle is small.
+
+    Request body::
+
+        {
+          "bundles": [
+            ["fleet", "sso"],
+            ["otel_export"],
+            []
+          ]
+        }
+
+    A shorthand ``{"bundles": ["fleet", "sso"]}`` (bare list of strings)
+    is treated as ONE bundle, matching the singular endpoint's bare-CSV
+    posture; a missing / non-list ``bundles`` value is a 400. An empty
+    ``bundles=[]`` list is a 400 for the same reason the singular
+    endpoint 400s on an empty ``features=`` -- distinguishes "caller
+    asked for nothing" from "caller asked and every token was unknown".
+
+    Response shape::
+
+        {
+          "bundles": [<row>, ...],
+          "count":   <int>,        # len(bundles)
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` is byte-stable across every input branch::
+
+        {
+          "features":     ["fleet", "sso"],
+          "unknown":      ["bogus"],
+          "kind":         "features",
+          "count":        2,
+          "has_features": <bool>,
+        }
+
+    Per-bundle normalisation matches the singular endpoint: whitespace
+    stripped, lowercased, deduplicated preserving first-seen order;
+    unknown ids bucketed into the per-bundle ``unknown`` list instead
+    of mis-collapsing the fold. Any unknown token collapses that row's
+    ``has_features`` to ``False`` (inherits the singular typo-catches-
+    at-callsite posture). Empty / all-unknown bundles surface as a
+    stable row with ``has_features=False`` (does NOT short-circuit the
+    batch).
+
+    - **400** when ``bundles`` is missing / non-list / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the paywall matrix keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.has_features_bundle_batch(bundles)
+        out_rows = [_has_bundle_row_body(row, "features") for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_features_bundle_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-runtimes-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_has_runtimes_bundle_batch():
+    """``POST /api/entitlement/has-runtimes-bundle-batch`` -- runtime-
+    axis twin of ``/api/entitlement/has-features-bundle-batch``.
+
+    Same never-5xx posture, same partial-unknown bucketing, same POST
+    envelope. Runtime aliases (``claude-code`` -> ``claude_code``) are
+    canonicalised per bundle through
+    :func:`clawmetry.entitlements.canonical_runtime` so a caller does
+    not need to normalise before calling; unknown ids land in the per-
+    bundle ``unknown`` and collapse that row's ``has_runtimes`` to
+    ``False`` (a typo does NOT silently render "granted" even in
+    grace).
+
+    Request body::
+
+        {
+          "bundles": [
+            ["claude_code", "codex"],
+            ["openclaw"],
+            []
+          ]
+        }
+
+    Response shape and error paths mirror
+    ``/has-features-bundle-batch`` exactly, with ``kind="runtimes"``,
+    a ``runtimes`` list in place of ``features``, and ``has_runtimes``
+    in place of ``has_features`` per row.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.has_runtimes_bundle_batch(bundles)
+        out_rows = [_has_bundle_row_body(row, "runtimes") for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_runtimes_bundle_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 def _parse_aggregate_bundles_body(body, key: str = "bundles"):
     """Extract a list of aggregate 5-axis bundle dicts from a JSON POST body.
 
