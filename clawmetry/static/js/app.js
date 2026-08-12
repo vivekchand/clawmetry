@@ -5137,9 +5137,50 @@ function _brainRangeHuman(sinceIso, untilIso) {
 }
 
 function _brainSetRangeActiveBtn(key) {
+  // Legacy no-op-safe shim: the crude button strip was replaced by the
+  // Grafana-style picker (static/js/time-range-picker.js), which owns its
+  // own "active" state. If any legacy button strip is still present (e.g.
+  // an older embed), keep it in sync as a courtesy.
   document.querySelectorAll('#brain-range-bar .brain-range-btn').forEach(function(b) {
     b.classList.toggle('active', b.getAttribute('data-range') === String(key));
   });
+}
+
+// Mount the reusable Grafana-style time range picker on the Brain tab.
+// Idempotent: safe to call every time we render the tab; only initializes
+// once per DOM insertion. Wires the picker's onChange to the existing
+// setBrainTimeRange / applyBrainAbsoluteRange helpers so the rest of the
+// page (SSE, density chart, banner) reacts unchanged.
+function _brainMountRangePicker() {
+  var host = document.getElementById('brain-range-picker');
+  if (!host || host._cmTimeRange) return;
+  if (!window.cmTimeRangePicker) return;
+  var initial = _brainRange
+    ? { since: _brainRange.since, until: _brainRange.until }
+    : 'live';
+  window.cmTimeRangePicker.mount(host, {
+    name: 'brain',
+    showLive: true,
+    initial: initial,
+    onChange: function(r) {
+      if (r.mode === 'live') { setBrainTimeRange('live'); return; }
+      if (r.mode === 'quick') { setBrainTimeRange(r.seconds); return; }
+      if (r.mode === 'absolute') { applyBrainAbsoluteRange(r.since, r.until); return; }
+    }
+  });
+}
+
+// Explicit ISO from/until entry point used by the picker's absolute mode.
+// applyBrainCustomRange() still works and reads from the (now removed)
+// <input> fields — kept as a no-op-if-fields-missing shim for compat.
+function applyBrainAbsoluteRange(sinceIso, untilIso) {
+  var s = new Date(sinceIso), u = new Date(untilIso);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _brainRange = {since: _brainRangeIso(s), until: _brainRangeIso(u)};
+  _brainRangeRetries = 0;
+  _brainSetRangeActiveBtn('custom');
+  _enterBrainHistoryMode();
 }
 
 function _brainUpdateRangeUI() {
@@ -7820,6 +7861,10 @@ window.selfevolveRun = async function () {
 };
 
 async function loadBrainPage(silent) {
+  // Mount the Grafana-style date/time-range picker on first paint (and
+  // re-mount if the tab was rebuilt). Idempotent by design — the helper
+  // no-ops when the container already has a picker attached.
+  try { _brainMountRangePicker(); } catch (e) {}
   // Cloud iframe doesn't proxy /api/brain-history (live event stream is
   // local-only). Without this branch, `loadBrainPage` returned silently and
   // left the inline `Loading...` placeholder in `#brain-stream` forever
@@ -15948,9 +15993,49 @@ window.toggleTranscriptPlumbing = function() {
 var _transcriptRange = null;
 
 function _txSetRangeActiveBtn(key) {
+  // Legacy no-op-safe shim: the crude button strip was replaced by the
+  // Grafana-style picker (static/js/time-range-picker.js), which owns its
+  // own "active" state. Keep any legacy button strip in sync as a courtesy.
   document.querySelectorAll('#tx-range-bar .brain-range-btn').forEach(function(b) {
     b.classList.toggle('active', b.getAttribute('data-range') === String(key));
   });
+}
+
+// Mount the reusable Grafana-style time range picker on the Sessions tab.
+// Wires the picker's onChange to setTranscriptTimeRange (Live/quick) and
+// applyTranscriptAbsoluteRange (absolute From/To) so the existing filter
+// logic + "Viewing history" banner keep working unchanged.
+function _transcriptsMountRangePicker() {
+  var host = document.getElementById('transcripts-range-picker');
+  if (!host || host._cmTimeRange) return;
+  if (!window.cmTimeRangePicker) return;
+  var initial = _transcriptRange
+    ? { since: new Date(_transcriptRange.sinceMs).toISOString(),
+        until: new Date(_transcriptRange.untilMs).toISOString() }
+    : 'live';
+  window.cmTimeRangePicker.mount(host, {
+    name: 'transcripts',
+    showLive: true,
+    initial: initial,
+    onChange: function(r) {
+      if (r.mode === 'live') { setTranscriptTimeRange('live'); return; }
+      if (r.mode === 'quick') { setTranscriptTimeRange(r.seconds); return; }
+      if (r.mode === 'absolute') { applyTranscriptAbsoluteRange(r.since, r.until); return; }
+    }
+  });
+}
+
+// Explicit ISO from/until entry point used by the picker's absolute mode.
+// applyTranscriptCustomRange() still works and reads from the (now removed)
+// <input> fields — kept as a no-op-if-fields-missing shim for compat.
+function applyTranscriptAbsoluteRange(sinceIso, untilIso) {
+  var s = new Date(sinceIso), u = new Date(untilIso);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _transcriptRange = {sinceMs: s.getTime(), untilMs: u.getTime()};
+  _txSetRangeActiveBtn('custom');
+  _txUpdateRangeUI();
+  loadTranscripts();
 }
 
 function _txUpdateRangeUI() {
@@ -16017,6 +16102,13 @@ function applyTranscriptCustomRange() {
 }
 
 async function loadTranscripts() {
+  // Mount the Grafana-style date/time-range picker on first paint.
+  // Idempotent — the helper no-ops when already attached.
+  try { _transcriptsMountRangePicker(); } catch (e) {}
+  // Surface a small counter next to the picker: how many rows survived the
+  // window filter this load. Cleared when no window is active.
+  var _rangeCountEl = document.getElementById('transcripts-range-count');
+  if (_rangeCountEl) _rangeCountEl.textContent = '';
   try {
     // In cloud mode we can't score live (no key, no session DuckDB) but the
     // snapshot carries recent scores at /api/evals/recent. Refetch each
@@ -16066,6 +16158,7 @@ async function loadTranscripts() {
     // i.e. strict last-activity-in-window.
     var _txWin = _transcriptRange;
     var _txWinEmpty = false;
+    var _txWinHidden = 0;
     if (_txWin) {
       var _preWin = data.transcripts.length;
       data.transcripts = data.transcripts.filter(function(t) {
@@ -16073,7 +16166,19 @@ async function loadTranscripts() {
         var start = t.started || mod;
         return start <= _txWin.untilMs && mod >= _txWin.sinceMs;
       });
+      _txWinHidden = _preWin - data.transcripts.length;
       _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
+    }
+    // Post the "X sessions in this window · Y hidden" counter next to the picker.
+    var _rcEl = document.getElementById('transcripts-range-count');
+    if (_rcEl) {
+      if (_txWin) {
+        var _shown = data.transcripts.length;
+        _rcEl.textContent = _shown + ' session' + (_shown === 1 ? '' : 's') +
+          ' in this window' + (_txWinHidden ? ' · ' + _txWinHidden + ' hidden' : '');
+      } else {
+        _rcEl.textContent = '';
+      }
     }
     var plumbingTotal = 0;
     // NOTE: the callback param must NOT be named `t` — that shadows the global

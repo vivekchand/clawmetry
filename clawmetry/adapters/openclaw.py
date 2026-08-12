@@ -2874,6 +2874,36 @@ class OpenClawAdapter(AgentAdapter):
                                     ]
                                     if _tr_details:
                                         extra["tool_result_details"] = _tr_details
+                            # Cloud workspace conflict fields (#4747): sync.py stores
+                            # conflictedPaths / resolution / stagedRef in the data blob
+                            # but list_events never extracted them, so Event.extra was
+                            # empty for these rows and transcript callers saw nothing.
+                            if str(r[1] or "") == "workspace.conflict":
+                                _wc_paths = (
+                                    obj.get("conflictedPaths")
+                                    or obj.get("conflicted_paths")
+                                    or []
+                                )
+                                if isinstance(_wc_paths, list):
+                                    extra["conflictedPaths"] = _wc_paths
+                                _wc_res = (
+                                    obj.get("resolution")
+                                    or obj.get("resolutionAction")
+                                    or obj.get("resolution_action")
+                                )
+                                if _wc_res is not None:
+                                    extra["resolution"] = _wc_res
+                                _wc_sr = obj.get("stagedRef") or obj.get("staged_ref")
+                                if _wc_sr is not None:
+                                    extra["stagedRef"] = _wc_sr
+                                _wc_path_str = (
+                                    ", ".join(_wc_paths)
+                                    if isinstance(_wc_paths, list) and _wc_paths
+                                    else "(no paths)"
+                                )
+                                content_text = f"Cloud workspace conflict: {_wc_path_str}"
+                                if _wc_res:
+                                    content_text += f" — {_wc_res}"
                     except Exception:
                         pass
                 # #2794: DB token_count derives from input+output and under-counts
@@ -3360,6 +3390,37 @@ class OpenClawAdapter(AgentAdapter):
                     "session_id": session_id,
                     "agent_type": agent_type,
                     "attributes": retry_attrs,
+                })
+
+            elif t == "workspace.conflict":
+                # Cloud workspace conflict span (#4747): surface in the Tracing
+                # tab so the conflict marker appears at the right point in the
+                # session timeline (same pattern as compaction/retry spans).
+                _wc_paths = (
+                    obj.get("conflictedPaths")
+                    or obj.get("conflicted_paths")
+                    or []
+                )
+                wc_attrs: dict = {"event.kind": "workspace.conflict"}
+                if isinstance(_wc_paths, list) and _wc_paths:
+                    wc_attrs["conflict.paths"] = _wc_paths
+                    wc_attrs["conflict.path_count"] = len(_wc_paths)
+                _wc_res = obj.get("resolution") or obj.get("resolutionAction")
+                if _wc_res is not None:
+                    wc_attrs["conflict.resolution"] = _wc_res
+                _wc_sr = obj.get("stagedRef") or obj.get("staged_ref")
+                if _wc_sr is not None:
+                    wc_attrs["conflict.staged_ref"] = _wc_sr
+                spans.append({
+                    "span_id": _sid("workspace.conflict", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "workspace.conflict",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": agent_type,
+                    "attributes": wc_attrs,
                 })
 
         return spans
