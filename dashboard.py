@@ -18037,15 +18037,70 @@ def _persist_identity_with_key(api_key):
     return node_id, enc_key
 
 
+def _activate_trial_for_key(api_key) -> str:
+    """Mint-or-reuse the account's 7-day Pro trial for ``api_key``.
+
+    Mirrors ``clawmetry.cli._activate_signup_trial`` — same
+    ``/api/license/trial/signup`` endpoint, same idempotent server
+    semantics — but takes the key as an argument so in-process pairing
+    paths (dashboard cloud modal OTP, OAuth loopback bridge) can call it
+    without having to first round-trip through
+    ``~/.clawmetry/config.json``. Returns
+    ``'active' | 'expired' | 'unavailable'`` for the caller to surface;
+    every failure path returns ``'unavailable'`` (never raises).
+
+    Founder ask 2026-08-12: cloud users MUST get the same 7-day Pro
+    trial that self-host users get on sign-in, so they can experience
+    the full product before deciding to pay. Previously the cloud rail
+    only enabled sync and left the account on FREE.
+    """
+    if not (api_key or "").startswith("cm_"):
+        return "unavailable"
+    try:
+        import urllib.request as _ur
+        from clawmetry import license as _lic
+
+        req = _ur.Request(
+            _lic._cloud_base() + "/api/license/trial/signup",
+            data=json.dumps({"api_key": api_key}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode())
+        if not (isinstance(body, dict) and body.get("ok")):
+            return "unavailable"
+        if body.get("expired"):
+            return "expired"
+        if not body.get("key"):
+            return "unavailable"
+        ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
+        return "active" if ok else "unavailable"
+    except Exception:
+        return "unavailable"
+
+
 def _full_connect_with_key(api_key):
     """Register this node with a verified cm_ key and start syncing.
 
     Mirrors the non-interactive parts of `clawmetry connect`: persist the
-    identity (_persist_identity_with_key), then opt into egress and ensure
-    the sync daemon is running. Returns (node_id, enc_key). Never raises
-    for non-fatal issues.
+    identity (_persist_identity_with_key), mint-or-reuse the account's
+    7-day Pro trial (same rail as the CLI's ``_activate_signup_trial``
+    and as ``_selfhost_signin_with_key``), opt into egress, and ensure
+    the sync daemon is running. Returns (node_id, enc_key, trial) where
+    trial is ``'active' | 'expired' | 'unavailable'``. Never raises for
+    non-fatal issues.
     """
     node_id, enc_key = _persist_identity_with_key(api_key)
+
+    # Mint-or-reuse the 7-day Pro trial so cloud users get the same
+    # "unlock every runtime for 7 days" onboarding self-host already
+    # gets. Founder ask 2026-08-12 — without this the cloud rail was
+    # asymmetric: self-host signup started the trial, cloud signup did
+    # not, so cloud users couldn't experience the full product before
+    # the paywall. Runs BEFORE _restart_sync_daemon so the daemon sees
+    # the freshly activated license on its first poll.
+    trial = _activate_trial_for_key(api_key)
 
     # Clear the local-only marker so the daemon actually pushes to cloud. A
     # local-only install writes ~/.clawmetry/nocloud; without this the connect
@@ -18062,7 +18117,7 @@ def _full_connect_with_key(api_key):
     # if absent" would leave it local-only forever, so we restart unconditionally.
     _restart_sync_daemon()
 
-    return node_id, enc_key
+    return node_id, enc_key, trial
 
 
 def _restart_sync_daemon():
@@ -18117,28 +18172,11 @@ def _selfhost_signin_with_key(api_key):
 
     node_id, _enc = _persist_identity_with_key(api_key)
 
-    trial = "unavailable"
-    try:
-        import urllib.request as _ur
-        from clawmetry import license as _lic
-
-        req = _ur.Request(
-            _lic._cloud_base() + "/api/license/trial/signup",
-            data=json.dumps({"api_key": api_key}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with _ur.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode())
-        if isinstance(body, dict) and body.get("ok"):
-            if body.get("expired"):
-                trial = "expired"
-            elif body.get("key"):
-                ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
-                if ok:
-                    trial = "active"
-    except Exception:
-        pass
+    # Same trial rail as _full_connect_with_key (cloud) and
+    # clawmetry.cli._activate_signup_trial — mint-or-reuse the 7-day
+    # Pro trial. Delegated to the shared helper so cloud + self-host
+    # never drift on trial semantics again (founder ask 2026-08-12).
+    trial = _activate_trial_for_key(api_key)
 
     # Same as the email-OTP trial path: make sure the local ingest daemon is
     # running (it stays local-only under the marker written above).
@@ -18234,10 +18272,10 @@ def _start_oauth_bridge(provider, mode="managed"):
                                  "mode": mode, "node_id": node_id, "enc_key": "",
                                  "trial": trial, "error": ""}
             else:
-                node_id, enc_key = _full_connect_with_key(tok)
+                node_id, enc_key, trial = _full_connect_with_key(tok)
                 _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
                                  "mode": mode, "node_id": node_id,
-                                 "enc_key": enc_key, "trial": "", "error": ""}
+                                 "enc_key": enc_key, "trial": trial, "error": ""}
         except Exception as e:  # pragma: no cover - defensive
             _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
                              "node_id": "", "enc_key": "", "trial": "",
