@@ -26,3 +26,13 @@ PyGObject==3.56.3; sys_platform == "linux"
 # check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
 # kept in-tree only for the day py2app catches up.
 pyinstaller>=6.21.0
+# TLS trust for the frozen shell's outbound HTTPS (onboarding OTP,
+# OAuth exchange). certifi ships Mozilla's CA bundle and is the
+# guaranteed fallback; truststore hooks the OS-native trust store
+# (Security framework / Schannel / ca-certificates) and is preferred
+# at runtime — it honours user-added and enterprise CAs — but is
+# Python 3.10+ only. Without either, the bundled Python's OpenSSL
+# has NO configured CA bundle and every HTTPS POST from the shell
+# fails CERTIFICATE_VERIFY_FAILED (support 2026-08-12 "Send code").
+certifi>=2024.0.0
+truststore>=0.10; python_version >= "3.10"
