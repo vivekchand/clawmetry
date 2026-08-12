@@ -3008,6 +3008,73 @@ function applyBillingHintToFlow(billingSummary) {
   });
 }
 
+// ── Subscription-coverage helpers ─────────────────────────────────────
+// Goal: on the Cost tab, when a user's Claude Max / ChatGPT Plus / Cursor
+// Pro subscription already covers the shown API-equivalent cost, paint a
+// green "$0 extra — covered by <plan>" banner instead of an alarming
+// bill number they don't actually owe. Detection comes from
+// dashboard.py._get_billing_coverage (same code path the fleet heartbeat
+// uses on-device, so device and dashboard agree on the plan label).
+
+function _planLabel(cov) {
+  if (!cov) return '';
+  var acc = cov.account_plan;
+  if (acc && acc.label) return String(acc.label);
+  var subs = cov.subscription_labels;
+  if (subs && subs.length) return subs.join(' + ');
+  return '';
+}
+
+function renderBillingCoverageBanner(cov, usageData) {
+  var host = document.getElementById('usage-coverage-banner');
+  if (!host) return;
+  if (!cov || !cov.detected || !cov.any_subscription) {
+    host.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  var plan = _planLabel(cov) || 'your subscription';
+  var monthCost  = Number((usageData && usageData.monthCost) || 0);
+  var monthCovered = Number((cov.month && cov.month.covered_usd) || 0);
+  var monthOOP     = Number((cov.month && cov.month.out_of_pocket_usd) || 0);
+  var color, icon, title, body;
+  if (cov.all_covered) {
+    color = { bg: 'rgba(34,197,94,0.10)', bd: 'rgba(34,197,94,0.45)', fg: '#16a34a' };
+    icon = '✅';
+    title = "You're covered by " + plan;
+    body = 'The costs below are the <strong>API-equivalent</strong> — what these tokens would cost against a raw API key. '
+         + 'Your actual out-of-pocket spend is <strong>$0</strong>: ' + plan + ' already covers this usage. '
+         + 'This month: ' + fmtCost(monthCost) + ' shown, <strong>$0</strong> billed to you.';
+  } else if (cov.any_subscription && cov.any_metered) {
+    color = { bg: 'rgba(59,130,246,0.10)', bd: 'rgba(59,130,246,0.45)', fg: '#2563eb' };
+    icon = '🧾';
+    title = 'Partly covered — ' + plan;
+    body = plan + ' covers the OAuth/included models below (~<strong>' + fmtCost(monthCovered) + '</strong> this month, billed as $0 to you). '
+         + 'API-keyed models are billed per-token: about <strong>' + fmtCost(monthOOP) + '</strong> this month. '
+         + 'The card numbers are API-equivalent so both parts compare on the same axis.';
+    if (cov.metered_labels && cov.metered_labels.length) {
+      body += ' <span style="opacity:0.7;">Metered: ' + cov.metered_labels.map(escHtml).join(', ') + '.</span>';
+    }
+  } else {
+    // Subscription detected but every model looks API-keyed — the plan
+    // won't help; fall through to no banner rather than misleading UX.
+    host.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+  host.style.cssText = 'display:block;padding:12px 14px;border-radius:8px;'
+    + 'background:' + color.bg + ';border:1px solid ' + color.bd + ';'
+    + 'font-size:13px;line-height:1.5;color:var(--text-primary,#0f172a);';
+  host.innerHTML =
+      '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    + '<div style="font-size:18px;line-height:1.2;">' + icon + '</div>'
+    + '<div style="flex:1;min-width:0;">'
+    +   '<div style="font-weight:600;color:' + color.fg + ';margin-bottom:3px;">' + escHtml(title) + '</div>'
+    +   '<div style="color:var(--text-secondary,#475569);">' + body + '</div>'
+    + '</div></div>';
+}
+
 function setFlowTextAll(idSuffix, text, maxLen) {
   var fitted = fitFlowLabel(text, maxLen);
   document.querySelectorAll('[id$="' + idSuffix + '"]').forEach(function(el) {
@@ -14894,19 +14961,43 @@ async function loadUsage() {
     }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+    // Subscription-coverage snapshot from /api/usage (dashboard.py
+    // _get_billing_coverage). When the user is on a subscription (e.g.
+    // Claude Max 20x), the headline API-equivalent cost is misleading —
+    // their incremental spend is $0. We paint a green banner + per-card
+    // "$0 out-of-pocket" sub-line so nobody panics over covered spend.
+    var _cov = data.billingCoverage || {};
     // QW3: dollars are the headline (card-value), tokens the sub-line; the
     // estimation marker is the word "about", never the ≈ glyph.
-    function setUsageCard(valId, cost, tokens) {
+    function setUsageCard(valId, cost, tokens, periodKey) {
       var v = document.getElementById(valId);
       var s = document.getElementById(valId + '-cost');
       var costStr = fmtCost(cost || 0);
       var tokStr = fmtTokens(tokens || 0);
       if (v) v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
-      if (s) s.textContent = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+      if (!s) return;
+      var subText = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+      var coverExtra = '';
+      var period = periodKey && _cov[periodKey];
+      if (_cov.all_covered && (cost || 0) > 0) {
+        coverExtra = ' · $0 out-of-pocket';
+      } else if (period && _cov.any_subscription && (period.covered_usd || 0) > 0.005) {
+        coverExtra = ' · ~' + fmtCost(period.covered_usd) + ' covered';
+      }
+      s.textContent = subText + coverExtra;
+      if (coverExtra) {
+        s.style.color = 'var(--success, #16a34a)';
+        s.title = 'Covered by ' + (_planLabel(_cov) || 'your subscription') +
+                  ' — this portion of the shown API-equivalent cost is $0 to you.';
+      } else {
+        s.style.color = '';
+        s.title = '';
+      }
     }
-    setUsageCard('usage-today', data.todayCost, data.today);
-    setUsageCard('usage-week', data.weekCost, data.week);
-    setUsageCard('usage-month', data.monthCost, data.month);
+    setUsageCard('usage-today', data.todayCost, data.today, 'today');
+    setUsageCard('usage-week', data.weekCost, data.week, 'week');
+    setUsageCard('usage-month', data.monthCost, data.month, 'month');
+    try { renderBillingCoverageBanner(_cov, data); } catch (_eBC) { console.error('renderBillingCoverageBanner failed', _eBC); }
     // Runtime-scoped empty state: when a specific runtime is selected but has
     // no cost data in any window, surface a clear note rather than showing all zeros.
     var _uEmptyEl = document.getElementById('usage-runtime-empty-note');
@@ -14957,9 +15048,14 @@ async function loadUsage() {
       // ('likely_api_key'), so an "unknown / billing unconfirmed" account no
       // longer reads as if it owes the displayed dollars (#web-accuracy).
       var bs = data.billingSummary;
+      var _plan = _planLabel(_cov);
       if (bs && bs !== 'likely_api_key') {
         usageInfoIcon.style.display = '';
-        if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
+        if (_plan && _cov.all_covered) {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Your ' + _plan + ' subscription covers this — actual out-of-pocket cost is $0.';
+        } else if (_plan) {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). ' + _plan + ' covers the OAuth/included portion; API-keyed models bill separately.';
+        } else if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
           usageInfoIcon.title = 'API-equivalent (tokens × API rates). OAuth/included models are typically billed $0 at the provider — your subscription covers them.';
         } else {
           usageInfoIcon.title = 'API-equivalent (tokens × API rates). Billing basis unconfirmed — if your account is on a subscription plan (e.g. Claude Max via the Claude CLI), the actual incremental cost is $0.';
