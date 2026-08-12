@@ -45,12 +45,66 @@ import socket
 import subprocess
 import threading
 import time
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Callable, Optional
+
+
+# ─── TLS trust — HTTPS cert verification for outbound API calls ────────
+# The desktop shell runs as a PyInstaller-frozen binary; its bundled
+# Python doesn't inherit the user's `pip install certifi`, and OpenSSL
+# on macOS/Windows/Linux out of the box has NO configured CA bundle,
+# so `urlopen("https://app.clawmetry.com/…")` fails with
+# CERTIFICATE_VERIFY_FAILED (support screenshot 2026-08-12: "Send code"
+# button showed "unable to get local issuer certificate (_ssl.c:1006)").
+#
+# Resolution order matches Python packaging best practice:
+#   1. ``truststore`` (Python 3.10+) — uses the OS-native trust store
+#      (macOS Security framework, Windows Schannel, Linux ca-certificates).
+#      This is the gold standard: it honours user-added and enterprise
+#      CAs without us shipping any bundle.
+#   2. ``certifi`` — ships Mozilla's CA bundle. Bundled by PyInstaller
+#      via ``collect_data_files('certifi')`` in the .spec files. Works
+#      offline, doesn't see enterprise CAs.
+#   3. Default context — last resort; the failure mode the fix exists
+#      to eliminate. Kept so a build without certifi/truststore still
+#      matches previous behaviour rather than crashing at import.
+#
+# Cached because ``create_default_context`` reads and parses the PEM;
+# every OTP request going through _post_email_otp would otherwise re-do
+# the parse.
+_SSL_CTX: Optional["ssl.SSLContext"] = None
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Return an SSLContext that can actually verify public certs from
+    within the frozen desktop shell. Never raises — the last-resort
+    fallback matches the pre-fix behaviour."""
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return _SSL_CTX
+    try:
+        import truststore  # type: ignore
+
+        ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        _SSL_CTX = ctx
+        return ctx
+    except Exception:
+        pass
+    try:
+        import certifi  # type: ignore
+
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        _SSL_CTX = ctx
+        return ctx
+    except Exception:
+        pass
+    _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
 
 # OAuth loopback deadline. The CLI uses 180s; the desktop pane matches
 # so a user who tabs away for a minute doesn't get kicked out.
@@ -1117,8 +1171,13 @@ def _post_email_otp(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    # HTTPS to app.clawmetry.com — pass the resolved trust-store context
+    # (truststore → certifi → default). Without this, the frozen shell's
+    # bundled Python has no CA bundle and every OTP fails
+    # CERTIFICATE_VERIFY_FAILED (fix rationale at _ssl_context()).
+    _ctx = _ssl_context() if req.full_url.startswith("https://") else None
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ctx) as resp:
             raw = json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         # 503 = rate limited (matches CLI's backoff path)

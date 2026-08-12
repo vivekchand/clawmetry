@@ -26,6 +26,20 @@ block_cipher = None
 
 webview_datas, webview_binaries, webview_hidden = collect_all('webview')
 
+# certifi's cacert.pem must land inside the bundle, or the frozen
+# shell's onboarding sign-in POSTs fail CERTIFICATE_VERIFY_FAILED
+# (support 2026-08-12). truststore is preferred at runtime — it uses
+# the OS-native trust store — but is Python 3.10+ only, so certifi
+# stays the guaranteed fallback for older bundled interpreters.
+try:
+    certifi_datas, _, certifi_hidden = collect_all('certifi')
+except Exception:
+    certifi_datas, certifi_hidden = [], []
+try:
+    _, _, truststore_hidden = collect_all('truststore')
+except Exception:
+    truststore_hidden = []
+
 # app.py reads the horizontal-darkbg SVG from bundled assets at
 # runtime (via sys._MEIPASS). The .icns is picked up by BUNDLE().
 brand_datas = [
@@ -55,8 +69,9 @@ a = Analysis(
     # into the runtime venv on first launch.
     pathex=[os.path.join(REPO_ROOT, 'desktop')],
     binaries=webview_binaries,
-    datas=webview_datas + brand_datas,
-    hiddenimports=webview_hidden + extra_hidden,
+    datas=webview_datas + brand_datas + certifi_datas,
+    hiddenimports=(webview_hidden + extra_hidden
+                   + certifi_hidden + truststore_hidden),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
