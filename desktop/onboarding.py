@@ -139,10 +139,54 @@ BRAND_BORDER = "#1f2937"
 # avoids nag-loops on machines where the user genuinely wants local-only.
 ONBOARDING_STAMP_NAME = "onboarding-completed.json"
 
+# The dashboard's onboarding gate reads its own state from
+# ``~/.clawmetry/onboarding.json`` (see ``routes/onboarding.py::_STATE_PATH``
+# and ``_resolve_state``). Our shell stamp above only stops US from
+# reshowing the desktop pane — it does not, on its own, keep the
+# dashboard's gate from re-prompting. See ``mark_onboarding_completed``.
+_DASHBOARD_GATE_STATE_PATH = Path.home() / ".clawmetry" / "onboarding.json"
+
 
 def is_first_launch(runtime_dir: Path) -> bool:
     """True when we have never completed onboarding for this install."""
     return not (Path(runtime_dir) / ONBOARDING_STAMP_NAME).exists()
+
+
+def _record_dashboard_gate_choice(mode: str) -> None:
+    """Write the dashboard gate's ``~/.clawmetry/onboarding.json`` so a
+    user who completed the shell's own onboarding pane isn't asked to
+    onboard AGAIN in the dashboard's gate the moment it loads.
+
+    Schema matches ``routes/onboarding.py::_write_choice_file``:
+    ``{"choice": <_CHOICES value>, "completed_at": <int>}``. We tag with
+    ``source: desktop_shell`` for debuggability; the endpoint ignores
+    unknown keys.
+
+    The dashboard's gate accepts ``managed`` (cloud), ``selfhost_trial``
+    (OAuth or email OTP → trial), and ``selfhost_license`` (pasted
+    CLAW1 key). The shell's own auth pane only produces the first two —
+    users pasting a license key do so from the dashboard's own selfhost
+    modal, which writes the file itself.
+
+    Best-effort: a write failure means the dashboard gate re-prompts,
+    which is annoying but not broken (and preferable to crashing boot).
+    """
+    mode = (mode or "").strip().lower()
+    if mode == "selfhost":
+        choice = "selfhost_trial"
+    elif mode == "cloud":
+        choice = "managed"
+    else:
+        return
+    try:
+        _DASHBOARD_GATE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DASHBOARD_GATE_STATE_PATH.write_text(json.dumps({
+            "choice": choice,
+            "completed_at": int(time.time()),
+            "source": "desktop_shell",
+        }))
+    except OSError:
+        pass
 
 
 def mark_onboarding_completed(
@@ -151,21 +195,36 @@ def mark_onboarding_completed(
     signed_in: bool,
     provider: str = "",
     email: str = "",
+    mode: str = "",
 ) -> None:
     """Stamp the runtime dir so we don't show onboarding again. ``signed_in``
     is False for users who dismissed the pane without authenticating — the
-    stamp still writes so we don't re-prompt on relaunch."""
+    stamp still writes so we don't re-prompt on relaunch.
+
+    When ``signed_in`` is True and ``mode`` is known (``cloud`` or
+    ``selfhost``), ALSO record the choice in the dashboard gate's own
+    state file (see ``_record_dashboard_gate_choice``). Without this
+    second stamp, a self-host user completes the shell's pane, the
+    daemon starts, the dashboard loads, and its gate re-prompts because
+    the two stamp files live in different places and don't share state.
+    That re-prompt was live 2026-08-12: user chose Self-Host in the
+    shell, dashboard immediately showed the same "Self-Host / Sign in
+    for a free 7-day Pro trial" modal on top of the welcome view.
+    """
     stamp = Path(runtime_dir) / ONBOARDING_STAMP_NAME
     payload = {
         "completed": True,
         "signed_in": bool(signed_in),
         "provider": provider or "",
         "email": email or "",
+        "mode": mode or "",
     }
     try:
         stamp.write_text(json.dumps(payload))
     except OSError:
         pass  # onboarding stamp is best-effort; a re-shown pane is not a bug
+    if signed_in and mode:
+        _record_dashboard_gate_choice(mode)
 
 
 def _win_subprocess_kwargs() -> dict:
