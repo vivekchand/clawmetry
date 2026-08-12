@@ -74,6 +74,54 @@ WATCHER_TICK_SECS = 60
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
 
+# Injected after every navigation. WKWebView (macOS) and EdgeWebView2
+# (Windows) silently drop `window.open(...)` and `target="_blank"`
+# clicks that would need a new native window — so the Self-Host OAuth
+# flow (`cloudOauth` in gw-setup.js → `window.open(oauthUrl, '_blank')`)
+# never reaches a browser and the modal spins forever on
+# "Finish sign-in in the new browser tab."
+#
+# Route absolute cross-origin https URLs through the existing
+# DesktopAPI.open_external bridge (which already hands them to
+# webbrowser.open); leave same-origin and relative URLs (e.g. the
+# `/api/usage/export` download click) to the webview.
+_OPEN_EXTERNAL_SHIM = r"""
+(function(){
+  if (window.__clawmetryExternalShim) return;
+  window.__clawmetryExternalShim = true;
+  function isExternalHttps(u) {
+    try {
+      var url = new URL(String(u), window.location.href);
+      if (url.protocol !== 'https:') return false;
+      return url.host !== window.location.host;
+    } catch (e) { return false; }
+  }
+  function toBrowser(u) {
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(String(u));
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  var _open = window.open;
+  window.open = function(u, target, features) {
+    if (u && isExternalHttps(u) && toBrowser(u)) return null;
+    return _open.apply(window, arguments);
+  };
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!href || href.charAt(0) === '#') return;
+    if (isExternalHttps(href) && toBrowser(a.href)) {
+      e.preventDefault();
+    }
+  }, true);
+})();
+"""
+
 # Written by `clawmetry connect`; presence means this node has an account
 # key and the sync daemon can run.
 SYNC_CONFIG_FILE = Path.home() / ".clawmetry" / "config.json"
@@ -1072,6 +1120,79 @@ def main() -> int:
         except Exception:
             pass
 
+    def _do_uninstall_flow() -> None:
+        """Menu handler — confirm, then shell out to
+        ``clawmetry uninstall --yes`` in the runtime venv, then quit.
+
+        The uninstall itself removes the runtime dir the venv lives in;
+        that's safe on POSIX because the venv's clawmetry binary is
+        already mmap'd by the child process (unlinked files stay open
+        for the running process). On Windows the uninstall reschedules
+        the exe delete for after we exit.
+        """
+        try:
+            ok = window.evaluate_js(
+                "confirm('Uninstall ClawMetry?\\n\\n"
+                "This removes the runtime, local event history, and your "
+                "sign-in token.\\n\\n"
+                "The app in /Applications is not deleted — drag it to "
+                "Trash separately.')"
+            )
+        except Exception:
+            ok = True  # If we can't render a dialog, assume the menu click
+            # is intent enough. The CLI would still refuse on a bad flag.
+        if not ok:
+            return
+
+        _set_status("Uninstalling ClawMetry…")
+        # Stop the daemon before removing its files: on Windows a live
+        # process holds an exclusive lock on its exe; on macOS/Linux the
+        # rmtree still works but the sync.log deletion races.
+        try:
+            sup.shutting_down.set()
+        except Exception:
+            pass
+        try:
+            sup.stop()
+        except Exception:
+            pass
+
+        venv_cli = sup._venv_clawmetry()
+        if venv_cli.exists():
+            try:
+                subprocess.run(
+                    [str(venv_cli), "uninstall", "--yes"],
+                    check=False,
+                    timeout=300,
+                )
+            except Exception:
+                pass
+
+        # Quit the app. The runtime dir is gone; a relaunch would re-bootstrap.
+        try:
+            window.destroy()
+        except Exception:
+            os._exit(0)
+
+    def _on_menu_uninstall() -> None:
+        # Menu callbacks run on the GUI thread; move the confirm+shell-out
+        # off it so evaluate_js and subprocess don't block the main loop.
+        threading.Thread(target=_do_uninstall_flow, daemon=True).start()
+
+    # Build the menu — tolerant of pywebview versions without a menu API.
+    # macOS shows this alongside the standard app menu; the item name uses
+    # the platform convention "Uninstall ClawMetry…" (ellipsis = confirms).
+    menu_items: list = []
+    try:
+        from webview.menu import Menu, MenuAction  # type: ignore
+        menu_items = [
+            Menu(APP_TITLE, [
+                MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
+            ]),
+        ]
+    except Exception:
+        menu_items = []
+
     def _boot():
         # Phase 1: bootstrap the runtime venv.
         ok = sup.bootstrap()
@@ -1080,6 +1201,21 @@ def main() -> int:
             # the carousel up with the failure text at the top so the
             # user has something to read while filing a bug.
             return
+
+        # Install the macOS app-vanished watchdog so drag-to-trash of
+        # /Applications/ClawMetry.app triggers a full uninstall without
+        # the user having to open a terminal. No-op on non-macOS and in
+        # dev mode (sys.frozen unset). See clawmetry/watchdog.py.
+        try:
+            from clawmetry.watchdog import ensure_app_watchdog_installed
+            ensure_app_watchdog_installed(
+                runtime_dir=sup.runtime,
+                venv_clawmetry=sup._venv_clawmetry(),
+            )
+        except Exception:
+            # Never let a watchdog install failure block launch — the
+            # in-app menu and manual CLI still work without it.
+            pass
 
         # Expose the CLI globally (PATH shim / symlink) and make sure
         # local ingest is running — both in the background, neither may
@@ -1150,12 +1286,17 @@ def main() -> int:
                 _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
             # Whether it worked or not, mark onboarding as completed so
             # we don't re-prompt on relaunch. Users can re-sign-in from
-            # the dashboard's header.
+            # the dashboard's header. When apply_cm_key succeeded, ALSO
+            # pass the mode so mark_onboarding_completed writes the
+            # dashboard gate's own state file — otherwise the dashboard's
+            # /api/onboarding/state doesn't know we already onboarded and
+            # re-shows the same modal on top of the welcome view.
             onboarding.mark_onboarding_completed(
                 runtime,
                 signed_in=ok_key,
                 provider=api._captured_provider,
                 email=api._captured_email,
+                mode=(api._captured_mode or "cloud") if ok_key else "",
             )
         elif show_pane:
             # User skipped — stamp so we don't re-prompt.
@@ -1198,11 +1339,26 @@ def main() -> int:
         sup.shutting_down.set()
         sup.stop()
 
+    def _install_open_external_shim():
+        # Fires on every navigation (splash, onboarding, dashboard,
+        # daemon-restart reload) so the shim always covers the current
+        # document. `window.__clawmetryExternalShim` guards against
+        # double-install if the event fires twice on one page.
+        try:
+            window.evaluate_js(_OPEN_EXTERNAL_SHIM)
+        except Exception:
+            pass
+
     window.events.closed += _on_closed
+    window.events.loaded += _install_open_external_shim
     threading.Thread(target=_boot, daemon=True).start()
 
     # js_api makes DesktopAPI methods callable as window.pywebview.api.*
-    webview.start(private_mode=False)
+    # Older pywebview versions don't accept `menu=`; fall back cleanly.
+    try:
+        webview.start(private_mode=False, menu=menu_items)
+    except TypeError:
+        webview.start(private_mode=False)
     return 0
 
 

@@ -24,6 +24,18 @@ block_cipher = None
 
 webview_datas, webview_binaries, webview_hidden = collect_all('webview')
 
+# certifi's cacert.pem must land inside the bundle so onboarding sign-in
+# POSTs verify (support 2026-08-12). truststore is preferred at runtime
+# (uses Windows Schannel) but Python 3.10+ only.
+try:
+    certifi_datas, _, certifi_hidden = collect_all('certifi')
+except Exception:
+    certifi_datas, certifi_hidden = [], []
+try:
+    _, _, truststore_hidden = collect_all('truststore')
+except Exception:
+    truststore_hidden = []
+
 brand_datas = [
     (os.path.join(ASSETS_SRC, 'clawmetry-logo-horizontal-darkbg.svg'),
      'desktop/assets'),
@@ -45,8 +57,9 @@ a = Analysis(
     [os.path.join(REPO_ROOT, 'desktop', 'app.py')],
     pathex=[os.path.join(REPO_ROOT, 'desktop')],
     binaries=webview_binaries,
-    datas=webview_datas + brand_datas,
-    hiddenimports=webview_hidden + extra_hidden,
+    datas=webview_datas + brand_datas + certifi_datas,
+    hiddenimports=(webview_hidden + extra_hidden
+                   + certifi_hidden + truststore_hidden),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

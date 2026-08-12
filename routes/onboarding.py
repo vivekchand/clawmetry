@@ -36,8 +36,10 @@ chose managed by signing up.
 import json
 import logging
 import os
+import platform
 import threading
 import time
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
@@ -124,8 +126,112 @@ def _cloud_connected() -> bool:
         return False
 
 
+def _desktop_shell_runtime_dir() -> Path:
+    """Where the desktop shell keeps its per-user runtime state, mirroring
+    ``desktop/app.py::_runtime_dir`` byte-for-byte so the two agree on the
+    file to look for. Duplicated (not imported) because the ``desktop``
+    package is only bundled into the .app; the pip wheel — which serves
+    the dashboard everywhere — does not ship it."""
+    system = platform.system()
+    if system == "Darwin":
+        base = Path.home() / "Library" / "Application Support" / "ClawMetry"
+    elif system == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "ClawMetry"
+    else:
+        base = Path(
+            os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        ) / "ClawMetry"
+    return base / "runtime"
+
+
+def _desktop_shell_stamp() -> dict:
+    """Read the desktop shell's own ``onboarding-completed.json``, if any.
+
+    Written by ``desktop/onboarding.py::mark_onboarding_completed`` after
+    the user completes the shell's native onboarding pane
+    (OAuth / email OTP → hosting choice). Payload:
+    ``{completed, signed_in, provider, email, mode}`` — ``mode`` was added
+    in #4758; pre-#4758 stamps omit it.
+
+    Returns the parsed dict or ``{}`` on any failure (missing file, corrupt
+    JSON, wrong shape). Never raises."""
+    stamp = _desktop_shell_runtime_dir() / "onboarding-completed.json"
+    try:
+        with stamp.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _shell_stamp_choice() -> str:
+    """Map the shell stamp to a value from ``_CHOICES``, or ``''`` when the
+    user hasn't completed the shell pane or dismissed it without signing
+    in — in which case the browser gate still owes a prompt.
+
+    Two failure modes this closes (both live-hit 2026-08-12):
+
+    1. **Deployment lag.** ``desktop/`` code ships only inside the .app
+       bundle and reaches users on a new .dmg download; the pip wheel
+       auto-updates every 6h. If we relied on the shell to also write the
+       browser gate's own file (#4758), every user on any pre-#4758 .dmg
+       would still see the modal re-appear after finishing shell
+       onboarding — until they redownloaded. Reading the shell stamp
+       here inverts that: the fix rides the pip wheel and reaches the
+       whole fleet on the next update, regardless of installer age.
+
+    2. **Silent trial-mint failures.** When the shell's ``apply_cm_key``
+       runs ``clawmetry connect --key … --keep-local``, cloud may accept
+       the key but reject the trial (network blip, cloud-side error).
+       ``connect`` exits 0 anyway, so the shell stamps ``signed_in=True``
+       but no ``license.key`` lands. Then ``_license_state()`` is empty,
+       ``_cloud_connected()`` short-circuits on the nocloud marker, and
+       the gate falls through to ``{required: True}``. Recognising the
+       explicit user choice in the shell stamp resolves the re-prompt;
+       missing entitlement then surfaces inside the dashboard where the
+       user can retry, instead of trapping them in an onboarding loop.
+
+    Mode resolution for older .dmg stamps that lack the field: infer from
+    the nocloud marker, which is the same self-host intent signal
+    ``_cloud_connected()`` respects."""
+    stamp = _desktop_shell_stamp()
+    if not stamp.get("completed"):
+        return ""
+    if not stamp.get("signed_in"):
+        return ""
+    mode = str(stamp.get("mode", "")).strip().lower()
+    if mode == "selfhost":
+        return "selfhost_trial"
+    if mode == "cloud":
+        return "managed"
+    # Pre-#4758 .dmg: mode field wasn't recorded. Infer from what
+    # apply_cm_key would have left behind on the machine.
+    try:
+        from clawmetry.config import is_cloud_disabled as _icd
+
+        if _icd():
+            return "selfhost_trial"
+    except Exception:
+        pass
+    return "managed"
+
+
 def _resolve_state() -> dict:
-    """The single source of truth the gate JS renders from."""
+    """The single source of truth the gate JS renders from.
+
+    Precedence, most-authoritative first:
+      1. Explicit choice recorded in the browser gate's own file.
+      2. Active local license (trial or paid).
+      3. Explicit choice recorded by the DESKTOP SHELL's onboarding pane
+         (see ``_shell_stamp_choice`` — pip-wheel-side mirror of #4758,
+         reaches users regardless of installer age).
+      4. Cloud token with no self-host intent recorded anywhere.
+
+    The shell check sits BELOW the local license check on purpose: a
+    live license is a stronger signal than "user clicked something in
+    the shell N days ago" (they could have since let the trial expire),
+    and we want ``state`` to reflect what the user can actually DO now
+    when the two disagree."""
     recorded = _read_choice_file()
     choice = str(recorded.get("choice", "")).strip().lower()
     if choice in _CHOICES:
@@ -133,6 +239,10 @@ def _resolve_state() -> dict:
     lic = _license_state()
     if lic:
         return {"required": False, "state": lic, "source": "license"}
+    shell_choice = _shell_stamp_choice()
+    if shell_choice:
+        return {"required": False, "state": shell_choice,
+                "source": "desktop_shell"}
     if _cloud_connected():
         return {"required": False, "state": "managed", "source": "cloud"}
     return {"required": True, "state": "none", "source": "none"}
