@@ -1284,19 +1284,25 @@ def main() -> int:
             )
             if not ok_key:
                 _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
-            # Whether it worked or not, mark onboarding as completed so
-            # we don't re-prompt on relaunch. Users can re-sign-in from
-            # the dashboard's header. When apply_cm_key succeeded, ALSO
-            # pass the mode so mark_onboarding_completed writes the
-            # dashboard gate's own state file — otherwise the dashboard's
-            # /api/onboarding/state doesn't know we already onboarded and
-            # re-shows the same modal on top of the welcome view.
+            # We got here because captured_key is a real cm_ key that
+            # cloud minted in this same request (verify_email_otp /
+            # oauth_loopback_flow returned it). Record signed_in=True
+            # and pass the chosen mode regardless of apply_cm_key's exit
+            # code — the subprocess failing is a downstream setup issue
+            # (daemon start, permissions, Pro-wheel network hiccup), not
+            # a sign-in failure. apply_cm_key's fallback has already
+            # persisted the key to ~/.openclaw so the dashboard's cloud
+            # status flips to connected either way. Recording
+            # signed_in=False here used to make the dashboard's
+            # onboarding gate re-prompt for the SAME cloud/self-host
+            # choice on every relaunch even after a "successful" OTP
+            # (founder report 2026-08-12).
             onboarding.mark_onboarding_completed(
                 runtime,
-                signed_in=ok_key,
+                signed_in=True,
                 provider=api._captured_provider,
                 email=api._captured_email,
-                mode=(api._captured_mode or "cloud") if ok_key else "",
+                mode=api._captured_mode or "cloud",
             )
         elif show_pane:
             # User skipped — stamp so we don't re-prompt.
