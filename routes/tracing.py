@@ -322,35 +322,268 @@ def _summarize_trace(session_id, rows):
     }
 
 
+# ── spans-backed traces (#4782) ─────────────────────────────────────────────
+#
+# Everything above reconstructs traces from the EVENTS table, which is right for
+# OpenClaw and the runtimes that ship session transcripts: tracing then works
+# with no exporter at all. But an app that speaks OTLP produces spans and no
+# events, so it appeared in the runtime switcher, the Agent Inventory, and the
+# cost tiles while having nothing to click into in the one view built to show
+# traces. This module's own docstring claimed spans were "merged in when
+# present"; they were not read here at all.
+#
+# So the spans table is a SECOND source, unioned in. Event reconstruction still
+# wins whenever a trace has both, because it carries prompts, tool pairing, and
+# sub-agent nesting that raw spans do not.
+
+
+def _span_traces(limit=200, runtime=None):
+    """Trace rollups straight from the ``spans`` table. Daemon proxy first,
+    read-only fallback for single-process boots (mirrors ``_events_for``)."""
+    kw = {"limit": limit}
+    if runtime:
+        kw["agent_type"] = runtime
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_traces", **kw)
+    except Exception:
+        rows = None
+    if rows is None and is_local_store_read_enabled():
+        try:
+            from clawmetry import local_store
+            rows = local_store.get_store(read_only=True).query_traces(**kw)
+        except Exception:
+            rows = None
+    return rows or []
+
+
+def _spans_for_trace(trace_id, limit=5000):
+    """Raw span rows for one OTel trace id."""
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_spans", trace_id=trace_id, limit=limit)
+    except Exception:
+        rows = None
+    if rows is None and is_local_store_read_enabled():
+        try:
+            from clawmetry import local_store
+            rows = local_store.get_store(read_only=True).query_spans(
+                trace_id=trace_id, limit=limit)
+        except Exception:
+            rows = None
+    return rows or []
+
+
+def _summarize_span_trace(row):
+    """One ``query_traces`` row -> the trace-list contract.
+
+    Same keys the event path returns so the frontend renders both without
+    branching, plus ``source`` so it can label provenance.
+    """
+    start_ts = row.get("start_ts") or 0
+    tokens = int(row.get("tokens_input") or 0) + int(row.get("tokens_output") or 0)
+    service = (row.get("service_name") or "").strip()
+    root = (row.get("root_name") or "").strip()
+    trace_id = row.get("trace_id") or ""
+    # Title reads as "my-langchain-app openai.chat", never a bare hex id. A
+    # first-time user should not have to recognise a trace by its checksum.
+    # ``root_name`` / ``service_name`` are new columns, so a dashboard talking
+    # to a not-yet-upgraded daemon gets neither; fall back to the app's own
+    # agent_type before giving up and showing the id.
+    title = (" ".join(p for p in (service, root) if p)
+             or (row.get("agent_type") or "").strip()
+             or trace_id[:16])
+    has_error = bool(row.get("has_error"))
+    return {
+        "trace_id": trace_id,
+        "name": (root or service or row.get("agent_type") or trace_id)[:40],
+        "title": title,
+        "start_ms": int(start_ts * 1000) if start_ts else None,
+        "duration_ms": row.get("duration_ms") or 0,
+        "span_count": int(row.get("span_count") or 0),
+        "model": row.get("model") or "",
+        "total_tokens": tokens,
+        "total_cost_usd": round(float(row.get("cost_usd") or 0.0), 6),
+        "error_count": 1 if has_error else 0,
+        "has_subagents": False,
+        "status": "error" if has_error else "ok",
+        "source": "spans",
+        "service_name": service,
+        "agent_type": row.get("agent_type") or "",
+        "session_id": row.get("session_id") or "",
+    }
+
+
+def _span_ui_kind(row):
+    """Map an OTel span onto the kinds the waterfall colours by.
+
+    OTel's own ``kind`` (INTERNAL / CLIENT / SERVER) says how a span relates to
+    its peer, not what it did, so it is useless for colouring an agent trace.
+    Read the semantics instead: a tool name means a tool, a model or a GenAI
+    operation means an LLM call.
+    """
+    name = (row.get("name") or "").lower()
+    attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    if row.get("tool_name") or name.startswith("tool.") or "execute_tool" in name:
+        return "tool"
+    op = str(attrs.get("gen_ai.operation.name") or "").lower()
+    if (row.get("model") or op in ("chat", "text_completion", "generate_content")
+            or name.endswith(".chat") or name.endswith(".completion")
+            or "llm" in name):
+        return "llm"
+    if "agent" in name or "workflow" in name:
+        return "agent"
+    if "retriev" in name or "embed" in name or "vector" in name:
+        return "retrieval"
+    return "event"
+
+
+def _build_spans_from_store(rows):
+    """Span rows -> (spans, root_ids) in the same shape ``_build_spans``
+    returns, so the waterfall, the tree, and the detail drawer are one
+    renderer rather than two."""
+    rows = sorted(rows, key=lambda r: (r.get("start_ts") or 0))
+    known = {r.get("span_id") for r in rows if r.get("span_id")}
+    spans, roots = [], []
+    for r in rows:
+        sid = r.get("span_id")
+        if not sid:
+            continue
+        parent = r.get("parent_span_id") or None
+        # A parent we never received (dropped batch, sampling) would orphan the
+        # span out of the tree entirely, so promote it to a root instead.
+        if parent not in known:
+            parent = None
+        start_ts = r.get("start_ts") or 0
+        tokens = int(r.get("tokens_input") or 0) + int(r.get("tokens_output") or 0)
+        if not tokens:
+            tokens = int(r.get("token_count") or 0)
+        status = "error" if (r.get("status") or "").upper() == "ERROR" else "ok"
+        detail = r.get("input") or r.get("output") or ""
+        if not isinstance(detail, str):
+            detail = json.dumps(detail, default=str)
+        out = r.get("output") or ""
+        if not isinstance(out, str):
+            out = json.dumps(out, default=str)
+        span = {
+            "span_id": sid,
+            "parent_span_id": parent,
+            "name": r.get("name") or "span",
+            "kind": _span_ui_kind(r),
+            "event_type": "otel.span",
+            "start_ms": int(start_ts * 1000) if start_ts else 0,
+            "duration_ms": float(r.get("duration_ms") or 0),
+            "model": r.get("model") or "",
+            "tokens": tokens,
+            "cost": round(float(r.get("cost_usd") or 0.0), 6),
+            "status": status,
+            "is_subagent": False,
+            "detail": detail[:8000],
+            "output": out[:8000],
+            "tool": r.get("tool_name") or "",
+        }
+        spans.append(span)
+        if parent is None:
+            roots.append(sid)
+    return spans, roots
+
+
+def _summarize_spans(trace_id, spans):
+    """Trace summary computed from the span list we already hold."""
+    if not spans:
+        return {"trace_id": trace_id, "span_count": 0}
+    start = min(s["start_ms"] for s in spans)
+    end = max(s["start_ms"] + int(s["duration_ms"]) for s in spans)
+    errors = sum(1 for s in spans if s["status"] == "error")
+    model = next((s["model"] for s in spans if s["model"]), "")
+    return {
+        "trace_id": trace_id,
+        "name": trace_id[:40],
+        "title": next((s["name"] for s in spans), "") or trace_id[:16],
+        "start_ms": start,
+        "duration_ms": max(0, end - start),
+        "span_count": len(spans),
+        "model": model,
+        "total_tokens": sum(s["tokens"] for s in spans),
+        "total_cost_usd": round(sum(s["cost"] for s in spans), 6),
+        "error_count": errors,
+        "has_subagents": False,
+        "status": "error" if errors else "ok",
+        "source": "spans",
+    }
+
+
+def _session_runtime(session_id):
+    """Runtime that owns a session id, from its prefix. Mirrors the frontend's
+    ``_cmRuntimeOf``: ``claude_code:abc`` -> ``claude_code``, bare -> openclaw."""
+    sid = (session_id or "").strip()
+    return sid.split(":", 1)[0].lower() if ":" in sid else "openclaw"
+
+
 @bp_tracing.route("/api/traces")
 def api_traces():
-    """List traces (one per session), most-recent first.
+    """List traces, most-recent first, from BOTH sources.
+
+    Event-derived traces (one per session) and span-derived traces (one per
+    OTel ``trace_id``) are unioned. A session carrying both resolves to a single
+    entry: the event reconstruction, which is richer.
+
+    ``runtime=<id>`` scopes the list server-side. Span traces filter on
+    ``agent_type``; event traces filter on the session-id prefix. A foreign OTLP
+    app has no session prefix, so selecting one correctly yields only its own
+    spans rather than leaking the node's OpenClaw sessions into its view.
 
     DuckDB-first; ClawMetry's own helper sessions are hidden (plumbing).
-    Returns ``available:false`` (HTTP 200) when the store can't be read.
+    Returns ``available:false`` (HTTP 200) when neither source can be read.
     """
     try:
         limit = min(int(request.args.get("limit", 100)), 500)
     except (ValueError, TypeError):
         limit = 100
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    runtime = None if runtime in ("", "all") else runtime
 
     # Scan a bounded window of recent events to group into the trace list.
     # 14000 was needlessly heavy on the shared DuckDB connection (it's the
     # main contributor to proxy-timeout empties); 6000 still covers far more
     # than the ``limit`` traces we return, most-recent first.
     rows = _events_for(limit=6000)
-    if rows is None:
+    span_rows = _span_traces(limit=max(limit, 200), runtime=runtime)
+
+    if rows is None and not span_rows:
         return jsonify({"available": False, "traces": [], "total": 0})
 
     by_sid = {}
-    for e in rows:
+    for e in (rows or []):
         sid = (e.get("session_id") or "").strip()
         if not sid or hide_clawmetry_session(sid):
+            continue
+        if runtime and _session_runtime(sid) != runtime:
             continue
         by_sid.setdefault(sid, []).append(e)
 
     traces = [_summarize_trace(sid, evs) for sid, evs in by_sid.items()]
     traces = [t for t in traces if t["span_count"] > 0]
+    for t in traces:
+        t["source"] = "events"
+
+    # Union in the span-only traces. A trace whose session already produced an
+    # event-derived entry is dropped here, not merged: two rows for one run is
+    # the bug this guards against.
+    seen_sessions = set(by_sid)
+    seen_ids = {t["trace_id"] for t in traces}
+    for row in span_rows:
+        sid = (row.get("session_id") or "").strip()
+        if sid and (sid in seen_sessions or hide_clawmetry_session(sid)):
+            continue
+        summary = _summarize_span_trace(row)
+        if not summary["trace_id"] or summary["trace_id"] in seen_ids:
+            continue
+        seen_ids.add(summary["trace_id"])
+        traces.append(summary)
+
     traces.sort(key=lambda t: (t.get("start_ms") or 0), reverse=True)
     return jsonify({
         "available": True,
@@ -605,19 +838,35 @@ def api_trace(session_id):
                         "internal": True})
 
     rows = _events_for(session_id=session_id, limit=14000)
+    if rows:
+        spans, roots = _build_spans(rows)
+        summary = _summarize_trace(session_id, rows)
+        return jsonify({
+            "available": True,
+            "trace_id": session_id,
+            "summary": summary,
+            "spans": spans,
+            "root_span_ids": roots,
+            "agent_graph": _build_agent_graph(spans),
+            "source": "events",
+        })
+
+    # No events. The id may be an OTel trace_id from an app that only speaks
+    # OTLP (#4782) -- before this, those traces were listed nowhere and opened
+    # to a 404, which reads as "ClawMetry lost my data".
+    span_rows = _spans_for_trace(session_id)
+    if span_rows:
+        spans, roots = _build_spans_from_store(span_rows)
+        return jsonify({
+            "available": True,
+            "trace_id": session_id,
+            "summary": _summarize_spans(session_id, spans),
+            "spans": spans,
+            "root_span_ids": roots,
+            "agent_graph": _build_agent_graph(spans),
+            "source": "spans",
+        })
+
     if rows is None:
         return jsonify({"available": False, "spans": []})
-    if not rows:
-        return jsonify({"error": "Trace not found", "spans": []}), 404
-
-    spans, roots = _build_spans(rows)
-    summary = _summarize_trace(session_id, rows)
-    agent_graph = _build_agent_graph(spans)
-    return jsonify({
-        "available": True,
-        "trace_id": session_id,
-        "summary": summary,
-        "spans": spans,
-        "root_span_ids": roots,
-        "agent_graph": agent_graph,
-    })
+    return jsonify({"error": "Trace not found", "spans": []}), 404
