@@ -237,9 +237,8 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
 
     Issue #4781. ``opentelemetry-proto`` is behind the ``otel`` extra, so on a
     default install every OTLP POST used to answer 501 and the advertised
-    receiver was simply off. When the extra is present we decode with protobuf
-    exactly as before (it also handles OTLP/JSON via ``json_format``). When it
-    is absent and the body is JSON, we fall back to the stdlib decoder in
+    receiver was simply off. Binary bodies still decode with protobuf exactly as
+    before; JSON bodies go through the stdlib decoder in
     ``clawmetry.otlp_json``, which returns objects that duck-type the protobuf
     message API -- so ``_process_otlp_*`` and ``_otel_to_row`` run unchanged
     over either format and there is no second mapping path to drift.
@@ -247,7 +246,24 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
     extra (a protobuf body, or JSON metrics); the HTTP layer turns that into
     501 with the install hint. Malformed bodies still raise (caller -> 400).
+
+    OTLP/JSON traces and logs go through the stdlib decoder even when protobuf
+    IS installed. That is deliberate, and it fixes a silent corruption: protobuf
+    JSON maps ``bytes`` fields from BASE64, but the OTLP/JSON spec overrides
+    that for ``traceId`` / ``spanId`` / ``parentSpanId``, which are lowercase
+    HEX. ``json_format.Parse`` therefore base64-decoded every id and we stored
+    the garbage. Measured against a live dashboard: span id ``3333333333333333``
+    persisted as ``df7df7df7df7df7df7df7df7``, and every id in the batch was
+    mangled the same way, so ids never matched the user's own trace ids or any
+    other backend they correlate with.
     """
+    ct = (content_type or "").lower()
+    if ("application/json" in ct or "application/x-ndjson" in ct) and kind in (
+        "traces", "logs",
+    ):
+        from clawmetry.otlp_json import decode as _json_decode
+        return _json_decode(pb_data, kind, content_encoding=content_encoding)
+
     if _HAS_OTEL_PROTO:
         factories = {
             "traces": lambda: trace_service_pb2.ExportTraceServiceRequest(),
@@ -259,15 +275,14 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
             raise ValueError(f"unknown OTLP kind: {kind}")
         return _otlp_decode(pb_data, factory(), content_encoding, content_type)
 
-    from clawmetry.otlp_json import OtlpProtobufUnavailable, decode as _json_decode
+    # No protobuf, and this is either a binary body or JSON metrics (whose
+    # mapper still reaches into sum/gauge/histogram point types).
+    from clawmetry.otlp_json import OtlpProtobufUnavailable
 
-    ct = (content_type or "").lower()
-    if "application/json" not in ct and "application/x-ndjson" not in ct:
-        raise OtlpProtobufUnavailable(
-            "protobuf OTLP needs opentelemetry-proto; send Content-Type: "
-            "application/json to use the dependency-free path"
-        )
-    return _json_decode(pb_data, kind, content_encoding=content_encoding)
+    raise OtlpProtobufUnavailable(
+        "this payload needs opentelemetry-proto; OTLP/JSON traces and logs "
+        "work without it (send Content-Type: application/json)"
+    )
 
 
 def _otlp_service_name_to_agent_type(service_name):
@@ -17571,6 +17586,105 @@ def _get_recent_log_files(days=7):
     return log_files
 
 
+# ── OTLP compatibility listener (issue #4780) ────────────────────────────
+#
+# The receiver has always been reachable at /v1/* on the dashboard port, but
+# every OpenTelemetry SDK and collector defaults to http://localhost:4318. That
+# gap meant an already-instrumented app could not be observed until someone
+# discovered OTEL_EXPORTER_OTLP_ENDPOINT and pointed it at :8900 -- an env var
+# between the user and "it just works".
+#
+# So we also listen on 4318, serving ONLY the receiver blueprint. A span
+# arriving there takes the identical handler / decoder / store path as one
+# arriving on the dashboard port; nothing about the mapping is duplicated.
+
+# Conventional OTLP/HTTP port. Override with CLAWMETRY_OTLP_PORT (0 = pick an
+# ephemeral port, which the tests use). CLAWMETRY_OTLP_PORT_DISABLE=1 turns the
+# listener off for anyone who wants the port left alone.
+_OTLP_COMPAT_DEFAULT_PORT = 4318
+_otlp_compat_server = None
+
+
+def _build_otlp_compat_app():
+    """A minimal Flask app exposing the OTLP receiver and nothing else.
+
+    Deliberately NOT the dashboard app: a second surface serving the UI and
+    /api/* would widen what is reachable for no gain. Everything except /v1/*
+    (and the small /api/otel-status probe on the same blueprint) 404s here.
+
+    The main app's auth guard is registered too, so the loopback-trusted /
+    token-required rule is one rule, not two: binding this listener somewhere
+    other than loopback cannot silently open an unauthenticated ingest.
+    """
+    from flask import Flask as _Flask
+    from routes.meta import bp_otel as _bp_otel
+
+    otlp_app = _Flask("clawmetry_otlp_compat")
+    otlp_app.register_blueprint(_bp_otel)
+    otlp_app.before_request(_check_auth)
+    return otlp_app
+
+
+def _start_otlp_compat_listener(host=None, port=None, debug=False):
+    """Serve the OTLP receiver on the conventional port in a daemon thread.
+
+    Returns the waitress server (for tests) or ``None`` when the listener is
+    disabled, unavailable, or the port is already held. Never raises: a machine
+    already running an OTel Collector keeps its collector, and ClawMetry says so
+    once rather than failing to boot.
+    """
+    global _otlp_compat_server
+    if str(os.environ.get("CLAWMETRY_OTLP_PORT_DISABLE", "")).strip().lower() in (
+        "1", "true", "yes",
+    ):
+        return None
+    # Flask's debug reloader runs main() in BOTH the supervisor and the child.
+    # Only the child serves the dashboard, so let it own the port; otherwise the
+    # supervisor grabs 4318 and the child logs "already in use" on every reload.
+    if debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return None
+    if port is None:
+        try:
+            port = int(os.environ.get("CLAWMETRY_OTLP_PORT", _OTLP_COMPAT_DEFAULT_PORT))
+        except (TypeError, ValueError):
+            port = _OTLP_COMPAT_DEFAULT_PORT
+    # Loopback by default even when the dashboard binds 0.0.0.0. Widening the
+    # ingest surface has to be a deliberate act, not a side effect of the
+    # dashboard's --host.
+    host = host or os.environ.get("CLAWMETRY_OTLP_HOST", "127.0.0.1")
+
+    import logging as _logging
+    log = _logging.getLogger("clawmetry.dashboard")
+    try:
+        from waitress import create_server as _create_server
+    except ImportError:
+        log.debug("waitress missing; OTLP compat listener not started")
+        return None
+    try:
+        server = _create_server(
+            _build_otlp_compat_app(), host=host, port=port,
+            threads=4, channel_timeout=60,
+        )
+    except OSError as e:
+        # Port in use is the common, expected case: the user already runs an
+        # OTel Collector. Not an error -- the dashboard port still serves /v1/*.
+        log.info(
+            "OTLP port %s:%s is already in use (%s); ClawMetry is still "
+            "receiving OTLP on the dashboard port", host, port, e,
+        )
+        return None
+    except Exception as e:
+        log.warning("OTLP compat listener failed to start: %s", e)
+        return None
+
+    threading.Thread(
+        target=server.run, name="clawmetry-otlp-4318", daemon=True,
+    ).start()
+    _otlp_compat_server = server
+    log.info("OTLP receiver listening on http://%s:%s/v1/traces", host, port)
+    return server
+
+
 # ── CLI Entry Point ─────────────────────────────────────────────────────
 
 BANNER = r"""
@@ -19001,6 +19115,11 @@ def _run_server(args):
     except (ValueError, OSError):
         pass  # stdout may be closed/redirected on Windows
 
+    # Start the OTLP compatibility listener BEFORE the banner so the banner can
+    # report the port it actually bound (or stay quiet when it stepped aside for
+    # an existing collector). Issue #4780.
+    _otlp_listener = _start_otlp_compat_listener(debug=args.debug)
+
     try:
         local_ip = get_local_ip()
         public_ip = get_public_ip()
@@ -19011,8 +19130,17 @@ def _run_server(args):
             print(
                 f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)"
             )
-        if _HAS_OTEL_PROTO:
-            print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+        # OTLP ingest is always on now: OTLP/JSON needs no extra (#4781), and
+        # the receiver also listens on the conventional 4318 (#4780). Print the
+        # endpoint an OTel SDK would use with no configuration at all.
+        if _otlp_listener is not None:
+            print(
+                f"  -> OTLP endpoint: http://localhost:{_otlp_listener.effective_port}"
+                "  (OTEL_EXPORTER_OTLP_ENDPOINT)"
+            )
+        else:
+            print(f"  -> OTLP endpoint: http://localhost:{args.port}"
+                  "  (OTEL_EXPORTER_OTLP_ENDPOINT)")
         # One-click login URL when gateway token was detected (#1356 PR-D).
         # Defense against shoulder-surfing screenshots: only the framed URL is
         # printed (never the bare token), and only on the interactive startup

@@ -238,12 +238,18 @@ against the minimal-dependency rule.
 
 Decision: parse OTLP/JSON with the standard library, make that the default
 path, and keep protobuf as an optional accelerator for collectors that only
-emit binary.
+emit binary. JSON traces and logs use the stdlib decoder **even when protobuf
+is installed**, because the protobuf JSON parser is wrong for this payload:
+protobuf maps `bytes` fields from base64, but OTLP/JSON overrides that for
+`traceId` / `spanId` / `parentSpanId`, which are lowercase hex. Routing JSON
+through `json_format.Parse` silently base64-decoded every id (measured live:
+span id `3333333333333333` persisted as `df7df7df7df7df7df7df7df7`).
 
-Consequences: the receiver works on a vanilla install, and the SDK can target
-a format ClawMetry can always read. The JSON parser becomes ClawMetry-owned
-code that must track the OTLP schema, which is stable and versioned, and which
-a fixture test pins.
+Consequences: the receiver works on a vanilla install, ids round-trip so they
+can be correlated with the emitting app and with any other backend, and the SDK
+can target a format ClawMetry can always read. The JSON parser becomes
+ClawMetry-owned code that must track the OTLP schema, which is stable and
+versioned, and which a fixture test pins.
 
 ### ADR-003: The Tracing tab reads spans as a second source, not as a replacement
 

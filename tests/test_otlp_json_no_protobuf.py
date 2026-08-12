@@ -390,6 +390,53 @@ def test_protobuf_path_unchanged(app):
     assert store.query_spans(limit=5)[0]["span_id"] == "00000000000000aa"
 
 
+# ── the base64 id corruption ────────────────────────────────────────────────
+
+
+def test_json_ids_stay_hex_even_with_protobuf_installed(app):
+    """OTLP/JSON ids are HEX, and must survive as hex whether or not the
+    ``otel`` extra is installed. NOTE: no ``no_proto`` fixture here on purpose.
+
+    protobuf's ``json_format`` maps ``bytes`` fields from BASE64, but the
+    OTLP/JSON spec overrides that for ``traceId`` / ``spanId`` /
+    ``parentSpanId``. Routing JSON through ``json_format.Parse`` therefore
+    base64-decoded every id and stored the garbage: measured on a live
+    dashboard, span id ``3333333333333333`` persisted as
+    ``df7df7df7df7df7df7df7df7``. Ids that do not round-trip cannot be
+    correlated with the emitting app or any other backend, and a lookup by the
+    real trace id finds nothing.
+    """
+    a, ls = app
+    c = a.test_client()
+    _post_json(c, ls, _openllmetry_json(
+        span_id="3333333333333333",
+        trace_id="33333333333333333333333333333333",
+    ))
+
+    row = ls.get_store().query_spans(limit=1)[0]
+    assert row["span_id"] == "3333333333333333", (
+        "OTLP/JSON span id was not stored verbatim; it was probably parsed as "
+        "base64 (the pre-#4781 json_format path did exactly that)"
+    )
+    assert row["trace_id"] == "33333333333333333333333333333333"
+
+
+def test_json_parent_child_ids_stay_hex(app):
+    """Parent links must survive too, or the trace tree joins on garbage."""
+    a, ls = app
+    c = a.test_client()
+    payload = json.loads(_openllmetry_json(span_id="00000000000000c1"))
+    child = dict(payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0])
+    child["spanId"] = "00000000000000c2"
+    child["parentSpanId"] = "00000000000000c1"
+    payload["resourceSpans"][0]["scopeSpans"][0]["spans"].append(child)
+
+    _post_json(c, ls, json.dumps(payload).encode("utf-8"))
+    rows = {r["span_id"]: r for r in ls.get_store().query_spans(limit=10)}
+    assert set(rows) == {"00000000000000c1", "00000000000000c2"}
+    assert rows["00000000000000c2"]["parent_span_id"] == "00000000000000c1"
+
+
 # ── decoder unit tests ──────────────────────────────────────────────────────
 
 
