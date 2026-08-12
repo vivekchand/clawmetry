@@ -1286,12 +1286,17 @@ def main() -> int:
                 _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
             # Whether it worked or not, mark onboarding as completed so
             # we don't re-prompt on relaunch. Users can re-sign-in from
-            # the dashboard's header.
+            # the dashboard's header. When apply_cm_key succeeded, ALSO
+            # pass the mode so mark_onboarding_completed writes the
+            # dashboard gate's own state file — otherwise the dashboard's
+            # /api/onboarding/state doesn't know we already onboarded and
+            # re-shows the same modal on top of the welcome view.
             onboarding.mark_onboarding_completed(
                 runtime,
                 signed_in=ok_key,
                 provider=api._captured_provider,
                 email=api._captured_email,
+                mode=(api._captured_mode or "cloud") if ok_key else "",
             )
         elif show_pane:
             # User skipped — stamp so we don't re-prompt.
