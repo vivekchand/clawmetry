@@ -139,7 +139,11 @@ def test_propagation_lag_gets_short_backoff(monkeypatch):
 
 
 def test_auto_update_in_allowed_config_keys(monkeypatch):
-    """The config setter must accept `auto_update` (else the toggle is a no-op)."""
+    """The config setter must accept `auto_update` (else the toggle is a no-op).
+
+    A real POST also stamps auto_update_user_set=True, so the universal
+    self-heal (test_auto_update_self_heal.py) never overwrites a choice a
+    human actually made."""
     from flask import Flask
     uc = _uc()
     captured = {}
@@ -147,7 +151,8 @@ def test_auto_update_in_allowed_config_keys(monkeypatch):
     app = Flask(__name__)
     with app.test_request_context(json={"auto_update": True, "bogus": "x"}):
         uc.api_update_check_config_post()
-    assert captured == {"auto_update": True}, "auto_update must pass the allow-list, bogus keys filtered"
+    assert captured == {"auto_update": True, "auto_update_user_set": True}, \
+        "auto_update must pass the allow-list, bogus keys filtered, and be marked user-set"
 
 
 def test_auto_update_installs_given_target(monkeypatch):

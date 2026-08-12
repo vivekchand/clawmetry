@@ -84,6 +84,15 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("grok", "Grok",
                  ("~/.grok/logs", "~/.grok/sessions", "~/.grok/bin/grok"),
                  env="CLAWMETRY_GROK_HOME"),
+    # qm (github.com/yc-software/qm) has no on-disk session store — it's a
+    # Node service backed by Postgres — so the probe looks for the npm
+    # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME
+    # override. The adapter itself uses DATABASE_URL + qm's tables directly.
+    RuntimeProbe("qm", "QM",
+                 ("~/node_modules/@yc-software/qm",
+                  "~/.qm", "~/qm/package.json",
+                  "/opt/qm/package.json"),
+                 env="CLAWMETRY_QM_HOME"),
 )
 
 

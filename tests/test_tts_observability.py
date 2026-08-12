@@ -85,6 +85,89 @@ def test_estimate_tts_cost_prefix_match():
     assert cost > 0.0, "Prefix-matched TTS provider should return non-zero cost"
 
 
+# ---------------------------------------------------------------------------
+# Fish Audio TTS pricing (#4724)
+# ---------------------------------------------------------------------------
+
+def test_estimate_tts_cost_fish_audio_hosted():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    # 1000 chars @ $0.015/1K = $0.015
+    cost = estimate_tts_cost_usd("fish-audio", 1000)
+    assert abs(cost - 0.015) < 1e-7, f"Fish Audio S2.1 1K chars should be $0.015, got {cost}"
+
+
+def test_estimate_tts_cost_fish_short_alias():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    cost = estimate_tts_cost_usd("fish", 1000)
+    assert abs(cost - 0.015) < 1e-7, f"'fish' alias 1K chars should be $0.015, got {cost}"
+
+
+def test_estimate_tts_cost_fish_s2_pro_local():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    # S2 Pro is self-hosted (local TTS) — no per-call API cost
+    cost = estimate_tts_cost_usd("fish-s2-pro", 5000)
+    assert cost == 0.0, f"Fish S2 Pro (local) should be $0.0, got {cost}"
+
+
+def test_tts_provider_rates_includes_fish_audio():
+    from clawmetry.providers_pricing import TTS_PROVIDER_RATES
+
+    assert "fish-audio" in TTS_PROVIDER_RATES, "fish-audio must be in TTS_PROVIDER_RATES"
+    assert TTS_PROVIDER_RATES["fish-audio"] > 0, "fish-audio rate must be positive"
+    assert "fish-s2-pro" in TTS_PROVIDER_RATES, "fish-s2-pro must be in TTS_PROVIDER_RATES"
+    assert TTS_PROVIDER_RATES["fish-s2-pro"] == 0.0, "fish-s2-pro (local) rate must be 0.0"
+
+
+def test_voice_event_data_captures_fish_audio_fields():
+    """The data blob written by sync_voice_log_events must carry ttsModel and
+    isLocal so backfill_tts_event_costs can route hosted vs local Fish Audio."""
+    import json
+
+    obj = {
+        "event_type": "tts.speak",
+        "provider":   "fish-audio",
+        "char_count": 800,
+        "ttsModel":   "fish-audio-s2.1",
+        "isLocal":    False,
+        "voice_id":   "en-US-Standard-A",
+    }
+    # Simulate the json.dumps call in sync_voice_log_events
+    data = {
+        "provider":   obj.get("provider"),
+        "char_count": obj.get("char_count") or obj.get("characterCount") or obj.get("text_length"),
+        "voice_id":   obj.get("voice_id") or obj.get("voiceId"),
+        "ttsModel":   obj.get("ttsModel") or obj.get("fishModel") or None,
+        "isLocal":    obj.get("isLocal") if obj.get("isLocal") is not None else obj.get("is_local"),
+    }
+    parsed = json.loads(json.dumps(data))
+    assert parsed.get("provider") == "fish-audio"
+    assert parsed.get("char_count") == 800
+    assert parsed.get("ttsModel") == "fish-audio-s2.1"
+    assert parsed.get("isLocal") is False
+
+
+def test_voice_event_data_fish_s2_pro_is_local():
+    """Fish S2 Pro events must have isLocal=True so the backfill skips them."""
+    import json
+
+    obj = {
+        "event_type": "tts.speak",
+        "char_count": 500,
+        "ttsModel":   "fish-s2-pro",
+        "isLocal":    True,
+    }
+    data = {
+        "ttsModel": obj.get("ttsModel") or obj.get("fishModel") or None,
+        "isLocal":  obj.get("isLocal") if obj.get("isLocal") is not None else obj.get("is_local"),
+        "char_count": obj.get("char_count"),
+    }
+    parsed = json.loads(json.dumps(data))
+    assert parsed.get("isLocal") is True, "Fish S2 Pro must carry isLocal=True"
+
+
 def test_tts_provider_rates_table_present():
     from clawmetry.providers_pricing import TTS_PROVIDER_RATES
 

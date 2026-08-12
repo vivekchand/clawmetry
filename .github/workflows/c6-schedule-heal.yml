@@ -4,13 +4,20 @@ name: C6 auto-heal (required-checks application)
 # Runs every 2 hours and once daily at 10:15am UTC.
 # Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
 #
-# NOTE: Push trigger intentionally removed (2026-08-01). It was informational-
-# only (exit 0 regardless of state per the event_name != 'push' guard on the
-# Error step), but caused persistent 0-job failures on the CI dashboard
-# whenever many PRs merged to main in quick succession, due to GitHub
-# repository-level workflow queue pressure. The 2-hourly schedule trigger
-# already provides equivalent status information, so the push trigger is
-# redundant. See issue #4029 for context.
+# NOTE: Push trigger scoped to this file only (paths: c6-schedule-heal.yml,
+# 2026-08-05). A push trigger is required for the job-level `if` guard to
+# take effect: without a push trigger in `on:`, GitHub creates a phantom
+# 0-job run on any push that touches this file, and that run concludes as
+# "failure". With the push trigger defined AND the job-level `if` guard
+# (schedule|workflow_dispatch only), the job is SKIPPED on push events and
+# the run concludes as "success" (skipped). The paths filter limits trigger
+# scope to modifications of this file only -- no queue pressure from normal
+# code pushes. See PR #4553 and issue #4029.
+#
+# Schedule paused: 2026-07-20 (GitHub auto-paused after consecutive failures
+# that predated C6 branch protection being configured on 2026-07-31).
+# Schedule re-enabled: 2026-08-06 (this push re-enables it; per GitHub docs,
+# any push that modifies a workflow file un-pauses a paused schedule).
 #
 # When E2E_ADMIN_PAT is NOT set:
 #   - reads current branch protection state (read-only, no admin needed)
@@ -51,13 +58,16 @@ name: C6 auto-heal (required-checks application)
 #     Value: same PAT from Option B
 #     This workflow picks it up within 2 hours and closes C6.
 #
-# Tracking: vivekchand/clawmetry#4029
+# Tracking: vivekchand/clawmetry#4552
 
 on:
   schedule:
     - cron: '0 */2 * * *'   # every 2 hours -- heals within 2h of E2E_ADMIN_PAT being set
     - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/c6-schedule-heal.yml'
 
 # Prevent two schedule/dispatch runs from overlapping.
 concurrency:
@@ -72,6 +82,14 @@ jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
     runs-on: ubuntu-latest
+    # Guard: only execute on the events this workflow actively uses (schedule
+    # and workflow_dispatch). The push trigger is defined solely so that when
+    # a PR touches this file, GitHub runs the workflow with event=push and
+    # evaluates this `if:` -- which returns false, causing the job to be
+    # SKIPPED. A run with a skipped job concludes as "success", eliminating
+    # the phantom 0-job failure badge that occurred before the push trigger
+    # was added. See PR #4553.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
@@ -250,7 +268,7 @@ print(json.dumps(sorted(set(a) | set(b))))
               echo "- [Settings > Secrets > New secret](https://github.com/vivekchand/clawmetry/settings/secrets/actions/new)"
               echo "  Name: \`E2E_ADMIN_PAT\`, Value: same PAT from Option B"
               echo ""
-              echo "Tracking: [#4029](https://github.com/vivekchand/clawmetry/issues/4029)"
+              echo "Tracking: [#4552](https://github.com/vivekchand/clawmetry/issues/4552)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -263,7 +281,7 @@ print(json.dumps(sorted(set(a) | set(b))))
         run: |
           echo "C6 is GREEN -- all required E2E status checks are configured on clawmetry/main."
           echo "Branch protection is correctly set. E2E_ADMIN_PAT is not needed."
-          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
 
       # Daily ping on the tracking issue when C6 is still unclosed.
       # Runs only on the 10:15 UTC daily schedule (not every 2-hour run)
@@ -282,7 +300,7 @@ print(json.dumps(sorted(set(a) | set(b))))
         run: |
           TODAY=$(date -u +%Y-%m-%d)
           BODY="<!-- c6-daily-ping --> **C6 daily ping ${TODAY}:** clawmetry/main branch protection does not yet require E2E checks. 6/7 criteria green. Fastest close: [Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches) > Required status checks > add \`E2E Gate (required)\` (60 s, no token needed). Or run \`bash scripts/close-c6.sh\` from a terminal."
-          gh issue comment 4029 --repo vivekchand/clawmetry --body "$BODY"
+          gh issue comment 4552 --repo vivekchand/clawmetry --body "$BODY"
 
       # Exit 1 only on schedule (never on push -- this workflow is informational on push).
       # Signals to the admin that E2E_ADMIN_PAT is needed to auto-heal C6.
@@ -296,7 +314,7 @@ print(json.dumps(sorted(set(a) | set(b))))
           echo ""
           echo "ACTION REQUIRED: Add E2E_ADMIN_PAT to close C6."
           echo "See the job summary above for a formatted status report and close options."
-          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+          echo "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
           exit 1
 
       - name: Apply required E2E status checks (C6)
@@ -319,6 +337,6 @@ print(json.dumps(sorted(set(a) | set(b))))
             echo "- [clawmetry-cloud branch protection](https://github.com/vivekchand/clawmetry-cloud/settings/branches)"
             echo "- [clawmetry-landing branch protection](https://github.com/vivekchand/clawmetry-landing/settings/branches)"
             echo ""
-            echo "Tracking: [#4029](https://github.com/vivekchand/clawmetry/issues/4029)"
+            echo "Tracking: [#4552](https://github.com/vivekchand/clawmetry/issues/4552)"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "C6 auto-heal complete. Tracking: https://github.com/vivekchand/clawmetry/issues/4029"
+          echo "C6 auto-heal complete. Tracking: https://github.com/vivekchand/clawmetry/issues/4552"

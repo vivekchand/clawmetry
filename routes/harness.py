@@ -29,7 +29,7 @@ bp_harness = Blueprint("harness", __name__)
 _NON_OPENCLAW_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "nemoclaw",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
-    "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
+    "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
 })
 
 

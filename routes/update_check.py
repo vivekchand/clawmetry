@@ -63,6 +63,22 @@ def _env_auto_update_disabled():
     return ci not in ("", "0", "false")
 
 
+def _running_from_source_checkout():
+    """True when this code runs from a git checkout instead of an installed
+    wheel. Auto-update must never fire there: pip installs into
+    site-packages but the process keeps executing the checkout, so the
+    version can NEVER converge — on Windows the respawn plan then loops
+    forever (exit → pip → relaunch → still stale → repeat), flashing a
+    console window every cycle. Live-hit on the founder's box 2026-08-08:
+    a dev `python dashboard.py` run respawn-looped every ~70s, popping cmd
+    windows during an enterprise call."""
+    try:
+        from pathlib import Path
+        return (Path(__file__).resolve().parents[1] / ".git").exists()
+    except Exception:
+        return False
+
+
 def _daemon_supervised():
     """Best-effort: is the sync daemon under a supervisor that respawns it
     (launchd KeepAlive / systemd Restart=always)? When it is not, exiting to
@@ -77,6 +93,9 @@ def _daemon_supervised():
             unit = (Path.home() / ".config" / "systemd" / "user"
                     / "clawmetry-sync.service")
             return unit.exists() or bool(os.environ.get("INVOCATION_ID"))
+        if os.name == "nt":
+            from clawmetry.daemon_registration import windows_task_registered
+            return windows_task_registered()
     except Exception:
         pass
     return False
@@ -172,7 +191,12 @@ def _schedule_windows_respawn(delay_secs: float = 5.0) -> None:
     def _respawn():
         try:
             import subprocess
-            flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP — a hidden console
+            # the helper's own children inherit, NOT DETACHED_PROCESS (no
+            # console): console-subsystem children of a console-less parent
+            # each allocate a fresh VISIBLE console (persistent Windows
+            # Terminal tab on Win11 — founder report 2026-08-09).
+            flags = 0x08000000 | 0x00000200
             cmd = _respawn_cmdline()
             log_dir = os.path.expanduser("~/.clawmetry")
             try:
@@ -194,6 +218,15 @@ def _schedule_windows_respawn(delay_secs: float = 5.0) -> None:
         except Exception as exc:
             global _auto_update_in_progress
             _auto_update_in_progress = False
+            # The lock was riding the handoff for the HELPER to release; the
+            # helper never launched, so release it here or every check cycle
+            # silently skips ("another process is updating") until the 900s
+            # staleness window breaks it — a 15-minute invisible update
+            # stall (observed as a 12+ minute lag on the Windows lab box).
+            _release_update_lock()
+            _record_update_attempt(
+                _pending_update_target.get("version", "?"), "failed",
+                f"windows respawn handoff failed: {exc}")
             log.warning("auto-update: windows respawn failed (%s); new version "
                         "applies on next manual start", exc)
     t = threading.Timer(2.0, _respawn)
@@ -354,6 +387,17 @@ def _get_update_check_config():
         # nobody, and the hosted dashboard rendered blank cards against old
         # snapshots. An observability sidecar must keep itself current.
         "auto_update": True,
+        # True only once a human has actually POSTed a value for "auto_update"
+        # via /api/update-check/config (see api_update_check_config_post).
+        # Distinguishes a REAL opt-out from a stale row a self-hosted/free
+        # node never gets a chance to self-heal: _sync_auto_update_with_plan
+        # (clawmetry/sync.py) already re-asserts auto_update=True on every
+        # cloud heartbeat, but ONLY for entitled paid tiers -- a self-hosted
+        # or free-tier node with a leftover pre-0.12.494 auto_update=False
+        # row had no path back to True. _update_check_worker's boot-time
+        # heal (below) uses this flag to heal the stale case universally
+        # while still respecting an explicit user opt-out.
+        "auto_update_user_set": False,
         "dismissed_version": "",
         "last_check_at": 0,
     }
@@ -387,6 +431,26 @@ def _set_update_check_config(updates):
             )
         db.commit()
         db.close()
+
+
+def _heal_stale_auto_update_flag(config):
+    """Universal one-time self-heal for a stale ``auto_update=False`` row.
+
+    ``clawmetry/sync.py::_sync_auto_update_with_plan`` already re-asserts
+    auto_update=True on every cloud heartbeat, but ONLY for entitled paid
+    cloud tiers -- a self-hosted or free-tier node that picked up a stale
+    False (pre-0.12.494 default, or a long-gone UI toggle) had no path back
+    to the current True default, "self-hosted or cloud sync" be damned. This
+    runs for every role/tier on worker boot and heals the flag UNLESS a
+    human explicitly set it via POST /api/update-check/config
+    (auto_update_user_set), so a real opt-out is never overridden.
+    """
+    try:
+        if not config.get("auto_update") and not config.get("auto_update_user_set"):
+            _set_update_check_config({"auto_update": True})
+            config["auto_update"] = True
+    except Exception:
+        pass
 
 
 def _record_update_check(current, latest, update_available, changelog_url=""):
@@ -687,6 +751,10 @@ def _maybe_auto_update(current, target, latest=None):
     if _env_auto_update_disabled():
         log.info("auto-update: disabled (CLAWMETRY_AUTO_UPDATE=0 or CI env)")
         return
+    if _running_from_source_checkout():
+        log.info("auto-update: skipped (running from a source checkout — "
+                 "pip cannot update the code this process executes)")
+        return
     cfg = _get_update_check_config()
     if not cfg.get("auto_update"):
         return
@@ -813,11 +881,27 @@ def _update_check_worker(stop_event):
     auto-update is off (CLAWMETRY_AUTO_UPDATE=0 or stored config), the
     dashboard keeps the gentle banner-only cadence.
     """
+    # Boot-time hygiene: prune stale clawmetry-*.dist-info dirs a partially
+    # failed in-place pip upgrade left behind (Windows: pip runs while a
+    # sibling process holds .pyd/.exe files open, so the OLD version's
+    # uninstall half-fails). Stale dist-infos make importlib.metadata — and
+    # pip itself — resolve the OLDEST version (alphabetical listdir order),
+    # which lies to every metadata probe (five stale dist-infos observed
+    # live on a Windows lab box, 2026-08-10). dist-info entries are plain
+    # metadata files, never held open, so this succeeds even while code
+    # files stay locked.
+    try:
+        from clawmetry.distinfo_cleanup import cleanup_stale_dist_info
+        cleanup_stale_dist_info()
+    except Exception as exc:
+        log.debug("stale dist-info cleanup failed: %s", exc)
+
     # Initial check on startup (after a boot-settle delay; interruptible).
     if stop_event.wait(60):
         return
 
     config = _get_update_check_config()
+    _heal_stale_auto_update_flag(config)
     if config.get("check_on_startup", True):
         _check_for_update()
 
@@ -888,6 +972,11 @@ def api_update_check_config_post():
     data = request.get_json(silent=True) or {}
     allowed_keys = ["enabled", "check_on_startup", "check_daily", "auto_update", "dismissed_version"]
     updates = {k: v for k, v in data.items() if k in allowed_keys}
+    # A real POST here is the only thing that means "a human explicitly
+    # chose this" -- mark it so the universal self-heal in
+    # _update_check_worker never overwrites a deliberate auto_update=False.
+    if "auto_update" in updates:
+        updates["auto_update_user_set"] = True
     _set_update_check_config(updates)
     return jsonify({"ok": True})
 

@@ -1187,8 +1187,44 @@ _TRIAL_STATE = {
     "plan": None,
     "trial_days_left": None,
     "upgrade_url": "https://app.clawmetry.com/cloud",
+    "checkout_url": None,    # signed per-account Stripe checkout URL, if any
     "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
 }
+
+# Trial-state cache file the paywall overlay's backend reads
+# (clawmetry/trial_enforcement.py::persisted_trial_state). The daemon writes
+# it from heartbeat responses so the dashboard process's "Continue to payment"
+# button can point at the per-account signed Stripe checkout URL instead of
+# the generic upgrade page. In-memory _TRIAL_STATE alone is useless to the
+# dashboard: it runs in a different process and only ever sees the defaults.
+_TRIAL_STATE_FILE_PATH = os.path.expanduser("~/.clawmetry/trial_state.json")
+
+
+def _persist_trial_state_to_disk() -> None:
+    """Mirror the heartbeat's upgrade/checkout URLs into
+    ``~/.clawmetry/trial_state.json``. Idempotent (skips the write when the
+    file already matches) and best-effort — never raises."""
+    try:
+        payload = {
+            "upgrade_url": _TRIAL_STATE.get("upgrade_url"),
+            "checkout_url": _TRIAL_STATE.get("checkout_url"),
+            "plan": _TRIAL_STATE.get("plan"),
+            "sync_allowed": _TRIAL_STATE.get("sync_allowed"),
+        }
+        try:
+            if os.path.isfile(_TRIAL_STATE_FILE_PATH):
+                with open(_TRIAL_STATE_FILE_PATH, encoding="utf-8") as fh:
+                    if json.load(fh) == payload:
+                        return
+        except Exception:
+            pass
+        os.makedirs(os.path.dirname(_TRIAL_STATE_FILE_PATH), exist_ok=True)
+        tmp = _TRIAL_STATE_FILE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _TRIAL_STATE_FILE_PATH)
+    except Exception as exc:
+        log.debug("trial_state: persist failed: %s", exc)
 
 # Cloud-plan cache file the entitlements resolver reads. The daemon writes it
 # from heartbeat responses so a separate process (the Flask dashboard) can pick
@@ -1344,6 +1380,11 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    if resp.get("checkout_url"):
+        _TRIAL_STATE["checkout_url"] = resp["checkout_url"]
+    # Persist the URLs for the dashboard process (paywall "Continue to
+    # payment" button); idempotent, so cheap on every beat.
+    _persist_trial_state_to_disk()
     # Reconcile the on-disk plan cache on EVERY heartbeat (the founder ask:
     # "check & start sync at every heartbeat, for which plan it is in"). The
     # call is idempotent (a no-op when the cache already matches the live tier),
@@ -1410,6 +1451,48 @@ _TRIAL_WARNING_STATE = {
     "last_warn_day": "",   # YYYY-MM-DD of the last warning we sent
 }
 
+# Same file routes/trial.py's /api/trial/mark-warned writes ({"YYYY-MM-DD":
+# days_left}); sharing it means either writer suppresses the other's re-fire.
+# The in-memory guard alone resets on every daemon restart, and auto-update
+# restarts the daemon on every release (often several per day), so without the
+# disk check each restart re-fired /ingest/trial-warning (2026-08-10 trial-email
+# spam RCA).
+_TRIAL_WARNINGS_PATH = os.path.expanduser("~/.clawmetry/trial_warnings.json")
+
+
+def _trial_warning_sent_on(day: str) -> bool:
+    """True when ``day`` (YYYY-MM-DD) is already recorded on disk. Never raises."""
+    try:
+        if not os.path.isfile(_TRIAL_WARNINGS_PATH):
+            return False
+        with open(_TRIAL_WARNINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return isinstance(data, dict) and day in data
+    except Exception:
+        return False
+
+
+def _record_trial_warning(day: str, days_left: int) -> None:
+    """Persist ``{day: days_left}`` into the warnings file. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(_TRIAL_WARNINGS_PATH), exist_ok=True)
+        existing = {}
+        if os.path.isfile(_TRIAL_WARNINGS_PATH):
+            try:
+                with open(_TRIAL_WARNINGS_PATH, encoding="utf-8") as fh:
+                    existing = json.load(fh) or {}
+            except Exception:
+                existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        existing[day] = days_left
+        tmp = _TRIAL_WARNINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh)
+        os.replace(tmp, _TRIAL_WARNINGS_PATH)
+    except Exception as exc:
+        log.debug("trial-warning persist failed: %s", exc)
+
 
 def _maybe_install_license_from_heartbeat(resp: dict) -> None:
     """Persist a signed license key the cloud attached to this heartbeat.
@@ -1471,10 +1554,12 @@ def _maybe_send_trial_warning(resp: dict) -> None:
     fire ``POST /ingest/trial-warning`` on the cloud so it can send the
     customer a "your trial ends in N days — click to upgrade" email.
 
-    Rate-limited: at most one warning per UTC day per daemon process. The
-    cloud is authoritative on email throttling itself; this guard just
-    prevents a daemon that beats every 30s from spamming the cloud with 2880
-    identical warnings.
+    Rate-limited: at most one warning per UTC day, guarded both in memory
+    (fast path for a daemon that beats every 30s) and on disk
+    (``~/.clawmetry/trial_warnings.json``) so an auto-update restart — which
+    happens on every release, often several times a day — doesn't reset the
+    guard and re-fire the POST. The cloud is authoritative on email
+    throttling itself.
 
     Never raises."""
     if not isinstance(resp, dict):
@@ -1496,7 +1581,12 @@ def _maybe_send_trial_warning(resp: dict) -> None:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _TRIAL_WARNING_STATE["last_warn_day"] == today:
         return
+    if _trial_warning_sent_on(today):
+        # A previous daemon process (pre-restart) already warned today.
+        _TRIAL_WARNING_STATE["last_warn_day"] = today
+        return
     _TRIAL_WARNING_STATE["last_warn_day"] = today
+    _record_trial_warning(today, days_i)
     try:
         cfg = load_config() or {}
         api_key = cfg.get("api_key")
@@ -3680,23 +3770,27 @@ def _local_ingest_session_batch(
     # Non-fatal: span failures never block event ingest.
     try:
         from clawmetry.adapters.openclaw import OpenClawAdapter
-        for sp in OpenClawAdapter._build_spans_from_events(
+        _spans = list(OpenClawAdapter._build_spans_from_events(
             batch, session_id, agent_type=agent_type
-        ):
-            store.ingest_span(sp)
+        ))
+        if _spans:
+            store.ingest_spans_batch(_spans)
     except Exception as _e:
         log.debug("span reconstruction skipped (non-fatal): %s", _e)
 
 
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
     """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
-    into the local DuckDB ``sessions`` table. One upsert per row; safe to call
-    on a store that already has these sessions (ON CONFLICT DO UPDATE)."""
+    into the local DuckDB ``sessions`` table. Batched: ONE
+    ``ingest_sessions_batch`` call (one lock hold / one transaction) instead
+    of a per-row upsert; safe to call on a store that already has these
+    sessions (ON CONFLICT DO UPDATE)."""
     if not rows:
         return
     from clawmetry import local_store
 
     store = local_store.get_store()
+    session_rows: list = []
     for s in rows:
         sid = s.get("session_id") or s.get("session_key") or s.get("id")
         if not sid:
@@ -3715,7 +3809,7 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
                      "session_key", "end_reason", "runtime", "thinking_level")
             and v
         }
-        store.ingest_session({
+        session_rows.append({
             "agent_type": s.get("agent_type") or "openclaw",
             "session_id": sid,
             "node_id": node_id,
@@ -3730,6 +3824,8 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             "message_count": s.get("message_count") or 0,
             "metadata": meta_extras or None,
         })
+    if session_rows:
+        store.ingest_sessions_batch(session_rows)
 
 
 def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
@@ -5648,6 +5744,11 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
                             # are only present on tts.* records; None for others.
                             "char_count":  obj.get("char_count") or obj.get("characterCount") or obj.get("text_length"),
                             "voice_id":    obj.get("voice_id") or obj.get("voiceId"),
+                            # Fish Audio TTS fields (#4724): ttsModel and isLocal
+                            # are needed by backfill_tts_event_costs to route S2
+                            # Pro (local, $0) away from hosted S2.1 synthesis.
+                            "ttsModel":    obj.get("ttsModel") or obj.get("fishModel") or None,
+                            "isLocal":     obj.get("isLocal") if obj.get("isLocal") is not None else obj.get("is_local"),
                         }, separators=(",", ":")),
                     })
                 offsets[fname] = f.tell()
@@ -6416,7 +6517,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
-    "grok": "Grok",
+    "grok": "Grok", "qm": "QM",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -11066,6 +11167,88 @@ def sync_tool_policy(config: dict, state: dict, paths: dict) -> int:
     return n
 
 
+# Issue #4593 — process-lifetime dedup sentinel for device-pairing events.
+# Keyed by "device_id:approval_method"; value is the ISO timestamp of first
+# observation.  A manual→auto upgrade produces a distinct key and a second row.
+_SEEN_PAIRING_DEVICES: dict = {}
+
+
+def sync_device_pairing_events(config: dict, state: dict = None, paths: dict = None) -> int:
+    """Snapshot trusted-proxy device-pairing state and persist new rows to DuckDB.
+
+    Calls the existing ``_gateway_trusted_proxy_devices()`` adapter function
+    (introduced in #3885) which reads ``gateway.status`` / ``gateway.devices``
+    RPCs and normalises device pairing state.  For each device whose
+    ``device_id + approval_method`` hasn't been observed this process lifetime,
+    writes one audit row to ``device_pairing_events``.
+
+    Never raises; all errors are logged at DEBUG level.
+    """
+    global _SEEN_PAIRING_DEVICES
+    try:
+        from clawmetry.adapters.openclaw import _gateway_trusted_proxy_devices
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: adapter unavailable: %s", _e)
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: local_store unavailable: %s", _e)
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    try:
+        result = _gateway_trusted_proxy_devices()
+    except Exception as _e:
+        log.debug("sync_device_pairing_events: RPC failed: %s", _e)
+        return 0
+
+    devices = result.get("gatewayTrustedProxyDevices") or []
+    if not devices:
+        return 0
+
+    import json as _json
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    n = 0
+    for dev in devices:
+        if not isinstance(dev, dict):
+            continue
+        device_id = str(dev.get("id") or "")
+        if not device_id:
+            continue
+        approval_method = "auto" if dev.get("autoApproved") else "manual"
+        seen_key = f"{device_id}:{approval_method}"
+        if seen_key in _SEEN_PAIRING_DEVICES:
+            continue
+        _SEEN_PAIRING_DEVICES[seen_key] = now_iso
+
+        approved_at = dev.get("approvedAt") or now_iso
+        scope_cap = dev.get("scopeCap")
+        scope_str = _json.dumps(scope_cap) if isinstance(scope_cap, (list, dict)) else scope_cap
+
+        try:
+            store.ingest_device_pairing_event({
+                "id": f"device-pairing:{device_id}:{approval_method}",
+                "ts": str(approved_at),
+                "device_id": device_id,
+                "label": dev.get("label"),
+                "approval_method": approval_method,
+                "scope_cap": scope_str,
+                "identity": dev.get("label"),
+                "node_id": node_id,
+            })
+            n += 1
+        except Exception as _e_in:
+            log.debug("sync_device_pairing_events: ingest failed for %s: %s", device_id, _e_in)
+
+    if n:
+        store.flush()
+        log.debug("sync_device_pairing_events: ingested %d new rows", n)
+    return n
+
+
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
@@ -11757,6 +11940,12 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
     ("clawmetry_pro.adapters.grok", "GrokAdapter"),
+    # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
+    # backed multiplayer agent harness. Meta-orchestrator like Hermes;
+    # delegates to Pi / OpenCode / Codex / Claude Code, so a qm user is
+    # definitionally a Pro user. Adapter reads DATABASE_URL /
+    # CLAWMETRY_QM_DATABASE_URL in read-only mode.
+    ("clawmetry_pro.adapters.qm", "QMAdapter"),
 )
 
 
@@ -12565,15 +12754,16 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     # blocks the subagent row / watermark logic.
                     try:
                         from clawmetry import span_reconstruct as _sr
-                        for _sp in _sr.build_family_spans(
+                        _sp_batch = list(_sr.build_family_spans(
                             runtime, s, [], node_id=node_id
-                        ):
-                            store.ingest_span(_sp)
+                        ))
                         _spawn = _sr.build_subagent_spawn_span(
                             runtime, s, node_id=node_id
                         )
                         if _spawn:
-                            store.ingest_span(_spawn)
+                            _sp_batch.append(_spawn)
+                        if _sp_batch:
+                            store.ingest_spans_batch(_sp_batch)
                     except Exception as _spe:
                         log.debug(
                             "family spawn-span ingest failed (%s): %s",
@@ -12704,10 +12894,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # span failures never block event ingest or the watermark.
                 try:
                     from clawmetry import span_reconstruct as _sr
-                    for _sp in _sr.build_family_spans(
+                    _sp_batch = list(_sr.build_family_spans(
                         runtime, s, _events, node_id=node_id
-                    ):
-                        store.ingest_span(_sp)
+                    ))
+                    if _sp_batch:
+                        store.ingest_spans_batch(_sp_batch)
                 except Exception as _spe:
                     log.debug(
                         "family span reconstruction failed (%s): %s",
@@ -12955,7 +13146,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok",
+    "antigravity", "copilot", "grok", "qm",
 })
 
 
@@ -14462,6 +14653,30 @@ def _backfill_event_costs_once(store) -> None:
         log.debug("cost backfill failed: %s", _e)
 
 
+_tts_cost_backfill_done = False
+
+
+def _backfill_tts_event_costs_once(store) -> None:
+    """#4724: drain the TTS cost_usd backfill once per daemon process. Derives
+    cost from char_count × TTS provider rate for tts.* events that arrived with
+    cost_usd=NULL/0. Bounded batches; never raises."""
+    global _tts_cost_backfill_done
+    if _tts_cost_backfill_done:
+        return
+    _tts_cost_backfill_done = True
+    try:
+        total = 0
+        for _ in range(40):  # cap: 40 × 5000 = up to 200k rows / process
+            n = store.backfill_tts_event_costs(batch=5000)
+            total += n
+            if n < 5000:
+                break
+        if total:
+            log.info("TTS cost backfill: populated cost_usd for %d voice events (#4724)", total)
+    except Exception as _e:
+        log.debug("TTS cost backfill failed: %s", _e)
+
+
 _benign_backfill_done = False
 
 
@@ -14511,6 +14726,10 @@ def _build_daily_usage(days=14):
         # so the Cost tab showed ~$0). Runs once per process, on the daemon's
         # writer handle, draining in bounded batches before we read costs.
         _backfill_event_costs_once(store)
+        # #4724: one-time backfill of cost_usd for TTS voice events (tts.*)
+        # that carry char_count + provider but no pre-computed cost. Derives
+        # cost via estimate_tts_cost_usd (Fish Audio S2.1 = $0.015/1K chars).
+        _backfill_tts_event_costs_once(store)
         # #2196: one-time backfill to clear flagged-but-benign tool errors
         # (read-guards / transient timeouts) on history, so error counts match
         # the at-ingest correction. Same writer handle, bounded batches.
@@ -18525,6 +18744,13 @@ def run_daemon() -> None:
             log.info(f"  Tool policy: {tp} agent rows ingested")
     except Exception as e:
         log.warning(f"  Tool-policy ingest error: {e}")
+    # Trusted-proxy device pairing audit events (#4593) — initial snapshot.
+    try:
+        dp = sync_device_pairing_events(config, state, paths)
+        if dp:
+            log.info(f"  Device pairing: {dp} new events ingested")
+    except Exception as e:
+        log.warning(f"  Device-pairing ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -19013,6 +19239,12 @@ def run_daemon() -> None:
                 except Exception as _e_tp:
                     log.debug("sync_tool_policy error (non-fatal): %s", _e_tp)
                 last_tool_policy = now_tp
+
+            # ── Trusted-proxy device pairing events (#4593) ──────────────
+            try:
+                sync_device_pairing_events(config, state, paths)
+            except Exception as _e_dp:
+                log.debug("sync_device_pairing_events error (non-fatal): %s", _e_dp)
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0

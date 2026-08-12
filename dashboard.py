@@ -148,6 +148,7 @@ from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from routes.sla import bp_sla
 from routes.hitl import bp_hitl
+from routes.rules import bp_rules
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -268,7 +269,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.650"
+__version__ = "0.12.681"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11958,6 +11959,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
     app.register_blueprint(bp_hitl)
+    app.register_blueprint(bp_rules)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user
@@ -12097,6 +12099,58 @@ def detect_config(args=None):
             "marker_path": NOCLOUD_MARKER_PATH,
             "env_optout": bool(os.environ.get("CLAWMETRY_NO_CLOUD", "").strip()),
         })
+
+    # E2E encryption key — Settings surface for the secret that decrypts
+    # cloud-synced snapshots client-side in the browser. Deliberately a bare
+    # @app.route in this OSS-only section (like /api/cloud-status above),
+    # NOT a Blueprint: the hosted cloud app never calls this route-registration
+    # code path (it imports only bp_sessions/bp_overview/bp_health + specific
+    # helpers from this module via importlib — see clawmetry-cloud/CLAUDE.md),
+    # so this endpoint architecturally does not exist on app.clawmetry.com.
+    # Belt-and-braces: cloud's own container also has no ~/.clawmetry/config.json
+    # for a user's node in the first place, since the key never leaves this
+    # machine except E2E-encrypted. Auth follows the normal /api/* rule in
+    # _check_auth() (loopback trusted; remote needs the gateway token).
+    @app.route("/api/local/e2e-key", endpoint="e2e_key_get")
+    def _e2e_key_get():
+        from flask import jsonify as _jsonify
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f) or {}
+        except Exception:
+            cfg = {}
+        key = cfg.get("encryption_key", "") or ""
+        return _jsonify({
+            "configured": bool(key),
+            "key": key or None,
+            "node_id": cfg.get("node_id", ""),
+        })
+
+    @app.route("/api/local/e2e-key/regenerate", methods=["POST"], endpoint="e2e_key_regenerate")
+    def _e2e_key_regenerate():
+        from flask import jsonify as _jsonify
+        from clawmetry.sync import generate_encryption_key, save_config
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f) or {}
+        except Exception:
+            cfg = {}
+        if not cfg.get("api_key"):
+            return _jsonify({
+                "error": "Cloud sync isn't set up on this node yet. Run "
+                         "\"clawmetry connect\" first.",
+            }), 400
+        new_key = generate_encryption_key()
+        cfg["encryption_key"] = new_key
+        save_config(cfg)
+        # Restart so the daemon encrypts everything from now on with the new
+        # key. Anything already synced under the old key stays readable by
+        # anyone who has that old key — regenerating protects data going
+        # forward, it does not retroactively re-encrypt history.
+        _restart_sync_daemon()
+        return _jsonify({"key": new_key})
 
     # ────────────────────────────────────────────────────────────────────────
 
@@ -12312,6 +12366,16 @@ DASHBOARD_HTML = r"""
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
+  <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
+       through Enterprise), so it's a one-click UX toggle here rather than a
+       plan-tier decision. Hidden until the initial /api/cloud-cta/status
+       poll resolves so it doesn't flash the wrong state on first paint.
+       Refresh cadence: on load, on click, and after any focus event. -->
+  <div class="theme-toggle" id="sync-toggle-btn" onclick="clawmetryToggleSync()" title="Cloud sync" style="display:none;cursor:pointer;padding:6px 10px;gap:6px;align-items:center;">
+    <svg id="sync-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9"/><polyline points="17 5 21 5 21 9"/></svg>
+    <span id="sync-toggle-label" style="font-size:11px;font-weight:600;letter-spacing:0.2px;">Sync</span>
+  </div>
+
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" data-i18n-title="topbar.logout" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="i18n-switcher" id="i18n-switcher" style="position:relative;">
     <div id="i18n-switcher-btn" onclick="i18nToggleMenu(event)" data-i18n-title="i18n.language" title="Language" style="cursor:pointer;display:flex;align-items:center;gap:6px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;padding:7px 10px;color:var(--text-tertiary,#cbd5e1);background:var(--button-bg,transparent);transition:all 0.15s;" onmouseover="this.style.background='rgba(127,127,127,0.12)'" onmouseout="this.style.background='var(--button-bg,transparent)'">
@@ -12405,9 +12469,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#36;</span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Dig into sessions across channels (Telegram, Signal, WhatsApp, &hellip;)">
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label"><span data-i18n="nav.session_replay">Conversations</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
+        <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
@@ -12419,17 +12483,19 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
-        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
-        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
-      </div>
       {# Notifications sits directly under its two consumers (Approvals,
          Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
          nobody could find where to connect a delivery channel, so enabled
-         alert rules dead-ended at "no channels". #}
+         alert rules dead-ended at "no channels". Evals (#4295) rides Tier-1
+         below that trio so it can't split the Approvals/Alerts/Notifications
+         adjacency. #}
       <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
         <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
+      </div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
+        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
+        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
@@ -12455,7 +12521,7 @@ DASHBOARD_HTML = r"""
         {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
            SESSION-scoped, so they left the global nav and are reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
-           Conversations viewer). Their pages + data-tab ids stay: deep links
+           Sessions viewer). Their pages + data-tab ids stay: deep links
            and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
@@ -12466,8 +12532,8 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
           <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
-          <span class="left-nav-label" data-i18n="nav.runtime_extras">Runtime extras</span>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What a harness is, part by part, and where to watch each part live">
+          <span class="left-nav-label" data-i18n="nav.harness">Harness</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
           <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
@@ -12639,6 +12705,7 @@ DASHBOARD_HTML = r"""
    card below the fold (users saw only the blur backdrop, issue: blank
    blurred dashboard on first run). #}
 {% include 'partials/cloud-modal.html' %}
+{% include 'partials/e2e-key-modal.html' %}
 {% include 'partials/onboarding-modal.html' %}
 {% include 'partials/selfhost-modal.html' %}
 {% include 'partials/budget-modal.html' %}
@@ -17695,6 +17762,118 @@ def _write_cloud_token(token):
         json.dump(data, f, indent=2)
 
 
+# In-memory account-email cache for /api/cloud-cta/status. `fail_at` throttles
+# cloud lookups on offline machines (retry at most once a minute) so opening
+# the profile menu never blocks on a dead network for every click.
+_ACCOUNT_EMAIL_CACHE = {"token": "", "email": "", "fail_at": 0.0}
+
+
+def _account_email_for_token(token):
+    """Resolve the sign-in email behind a cm_ key, '' if unknowable.
+
+    The profile menu needs a "who am I" for cloud-OAuth accounts that hold
+    no local license (license `sub` is empty there) — without this the
+    header says "Not signed in" on a fully signed-in, cloud-connected node
+    (founder report 2026-08-09). Resolution order:
+
+      1. ``~/.clawmetry/config.json`` → ``account_email`` (written at
+         connect time and by the claim watcher in clawmetry/sync.py).
+      2. Cloud ``/api/cloud/account?token=`` (best-effort, cached; the
+         result is persisted back into config.json when that file exists
+         so restarts skip the network hop).
+
+    Placeholder identities (``agent+<hash>@clawmetry.auto`` / ``.linked``)
+    are reported as '' — they are internal pre-claim accounts, not
+    something to show a human. Never raises.
+    """
+    if not token:
+        return ""
+
+    def _real(email):
+        e = (email or "").strip()
+        low = e.lower()
+        if low.endswith("@clawmetry.auto") or low.endswith("@clawmetry.linked"):
+            return ""
+        return e
+
+    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    try:
+        with open(daemon_cfg) as f:
+            cfg = json.load(f)
+        # Only trust the stored email when it belongs to THIS key — after a
+        # reconnect under a different account the old email would be stale.
+        if cfg.get("api_key") == token:
+            e = _real(cfg.get("account_email"))
+            if e:
+                return e
+    except Exception:
+        cfg = None
+
+    if _ACCOUNT_EMAIL_CACHE["token"] == token:
+        if _ACCOUNT_EMAIL_CACHE["email"]:
+            return _ACCOUNT_EMAIL_CACHE["email"]
+        if time.time() - _ACCOUNT_EMAIL_CACHE["fail_at"] < 60:
+            return ""
+
+    email = ""
+    try:
+        import urllib.parse as _up
+        import urllib.request as _ur
+        from clawmetry.endpoints import app_url as _app_url
+
+        url = _app_url() + "/api/cloud/account?token=" + _up.quote(token)
+        with _ur.urlopen(url, timeout=3) as resp:
+            body = json.loads(resp.read() or b"{}")
+        email = _real(body.get("email") if isinstance(body, dict) else "")
+    except Exception:
+        email = ""
+
+    _ACCOUNT_EMAIL_CACHE.update(
+        {"token": token, "email": email,
+         "fail_at": 0.0 if email else time.time()}
+    )
+    if email and isinstance(cfg, dict) and cfg.get("api_key") == token:
+        # Best-effort persist so the daemon and future dashboards see it
+        # without a network hop; config.json stays 0o600 via save_config.
+        try:
+            from clawmetry.sync import save_config
+
+            cfg["account_email"] = email
+            save_config(cfg)
+        except Exception:
+            pass
+    return email
+
+
+def _selfhost_intent():
+    """True when this install's recorded intent is self-host (local-only).
+
+    Two signals, either wins: the nocloud marker (the daemon-facing egress
+    switch), or a recorded selfhost_* choice in ~/.clawmetry/onboarding.json
+    (survives even if some flow clears the marker). Used to pick the
+    default rail for sign-in flows that did not explicitly choose one:
+    founder report 2026-08-09 — a self-host install that signed back in
+    via the profile menu rode the managed rail, which called
+    enable_cloud() and silently started pushing snapshots. Identity and
+    egress are separate choices; sign-in alone must never flip egress on.
+    Never raises.
+    """
+    try:
+        from clawmetry.config import is_cloud_disabled
+
+        if is_cloud_disabled():
+            return True
+    except Exception:
+        pass
+    try:
+        from routes.onboarding import _read_choice_file
+
+        choice = str(_read_choice_file().get("choice", "")).strip().lower()
+        return choice.startswith("selfhost")
+    except Exception:
+        return False
+
+
 # ── One-click cloud connect via GitHub/Google OAuth (dashboard CTA) ────────────
 # The local "Enable Cloud Sync" modal can sign the user up AND connect this node
 # in one click. We reuse the same loopback browser-bridge as `clawmetry connect`:
@@ -17749,6 +17928,17 @@ def _persist_identity_with_key(api_key):
         "connected_at": __import__("datetime").datetime.now().isoformat(),
         "encryption_key": enc_key,
     }
+    # Resolve + store the sign-in email now, while we know the network is up
+    # (we just OAuth'd through it) — the profile menu reads it via
+    # /api/cloud-cta/status and must not show "Not signed in" on a
+    # signed-in node (founder report 2026-08-09).
+    try:
+        _ACCOUNT_EMAIL_CACHE.update({"token": "", "email": "", "fail_at": 0.0})
+        acct_email = _account_email_for_token(api_key)
+        if acct_email:
+            config["account_email"] = acct_email
+    except Exception:
+        pass
     save_config(config)
     try:
         _write_cloud_token(api_key)
@@ -17780,6 +17970,20 @@ def _full_connect_with_key(api_key):
     # (Re)start the sync daemon so it re-reads the new key AND re-evaluates
     # cloud mode. If it is already running in local-only mode, merely "starting
     # if absent" would leave it local-only forever, so we restart unconditionally.
+    _restart_sync_daemon()
+
+    return node_id, enc_key
+
+
+def _restart_sync_daemon():
+    """Restart the sync daemon so it re-reads ~/.clawmetry/config.json.
+
+    Cross-platform: launchctl kickstart on macOS, systemctl restart on
+    Linux, kill+relaunch elsewhere. Best-effort, never raises — callers
+    (cloud connect, E2E key regenerate) proceed either way since the config
+    file write already succeeded and a stale in-memory daemon just means
+    the next natural restart picks up the change.
+    """
     try:
         if _is_macos():
             if os.path.exists(SYNC_LAUNCHD_PLIST):
@@ -17797,8 +18001,6 @@ def _full_connect_with_key(api_key):
             _start_daemon_background()
     except Exception:
         pass
-
-    return node_id, enc_key
 
 
 def _selfhost_signin_with_key(api_key):

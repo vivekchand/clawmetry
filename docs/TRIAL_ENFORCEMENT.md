@@ -48,8 +48,32 @@ in the expired state will:
 
 2. Render a **full-viewport, un-dismissable modal** (`static/js/app.js` top-
    of-file IIFE, `#cm-hard-block-overlay`) that shows the block reason, a
-   "Continue to payment →" CTA pointing at `upgrade_url`, and a paste-in
-   license-key field that hits `/api/license/activate` directly.
+   "Continue to payment →" CTA, and a paste-in license-key field that hits
+   `/api/license/activate` directly. The CTA does NOT just link to the
+   generic `upgrade_url`: on click it POSTs `/api/trial/checkout`, which
+   resolves the best payment destination for THIS install:
+
+   1. **Live Stripe Checkout Session** — the account is already known
+      locally (the node's `api_key`), so the route asks the cloud
+      (`POST /api/billing/checkout-session`, `X-Api-Key` auth) to mint a
+      per-account Checkout Session and sends the browser straight to the
+      card form (`source: "session"`).
+   2. **Heartbeat-cached `checkout_url`** when the live mint fails
+      (`source: "cached"`).
+   3. **Generic `upgrade_url`** as the last resort (`source: "upgrade"`).
+
+   The endpoint always answers HTTP 200 with a usable URL — the CTA never
+   dead-ends. After the click the overlay polls `/api/trial/refresh-license`
+   every 5s (for up to 10 minutes) so the dashboard unlocks within seconds
+   of the license landing, with no key to copy-paste.
+
+   Cross-process plumbing: the daemon persists heartbeat
+   `{upgrade_url, checkout_url}` into `~/.clawmetry/trial_state.json`
+   (`sync.py::_persist_trial_state_to_disk`), which
+   `trial_enforcement.persisted_trial_state()` reads from the dashboard
+   process. (Before this file existed, `resolved_upgrade_url()` read
+   `sync._TRIAL_STATE` in-process and only ever saw the module defaults —
+   the per-account URL never reached the button.)
 
 3. Refuse to load `clawmetry-pro` at daemon startup via
    [`clawmetry/extensions.py::load_plugins`](../clawmetry/extensions.py).
@@ -122,6 +146,17 @@ blocked by this scaffold.
 
 ### `clawmetry-cloud` (ingest + heartbeat + email + billing)
 
+0. **Add `POST /api/billing/checkout-session`** (`X-Api-Key` auth): resolve
+   the account from the node key, create a Stripe Checkout Session for the
+   Pro/Starter price (customer + email prefilled from the account), and
+   return `{ok: true, url: "https://checkout.stripe.com/..."}`. On
+   `checkout.session.completed`, mint the signed license and attach it as
+   `license_key` on the next heartbeat (item 1 below) — that is what makes
+   the OSS overlay's "pay → auto-unlock, no key to paste" loop real. The
+   session's `success_url` should say "Payment received — you can close this
+   tab; your dashboard unlocks automatically." OSS side is already live:
+   `routes/trial.py::api_trial_checkout` calls this and falls back to
+   `checkout_url`/`upgrade_url` when the endpoint 404s.
 1. **Extend heartbeat response** with `license_key` when the account
    completed checkout since the last heartbeat. Payload: raw Ed25519
    `header.payload.signature` token, matching what `clawmetry license

@@ -4,7 +4,7 @@
     <!-- Time-window picker (post-mortem digging): same pattern as the Brain
          range bar — Live is the default; a window filters the conversation
          list to sessions active inside it. -->
-    <div id="tx-range-bar" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-left:auto;" data-i18n-title="transcripts.range_tooltip" title="Show conversations active in a specific time window">
+    <div id="tx-range-bar" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-left:auto;" data-i18n-title="transcripts.range_tooltip" title="Show sessions active in a specific time window">
       <button class="brain-range-btn time-btn active" data-range="live" onclick="setTranscriptTimeRange('live',this)" data-i18n="brain.range_live">● Live</button>
       <button class="brain-range-btn time-btn" data-range="3600" onclick="setTranscriptTimeRange(3600,this)">1h</button>
       <button class="brain-range-btn time-btn" data-range="21600" onclick="setTranscriptTimeRange(21600,this)">6h</button>

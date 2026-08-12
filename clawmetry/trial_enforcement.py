@@ -217,25 +217,67 @@ def allowlisted_path(path: str) -> bool:
         return False
 
 
-def resolved_upgrade_url() -> str:
-    """The URL the "Continue to payment" button points at. Prefers a signed
-    per-account checkout URL the cloud handed us via heartbeat (mirrored into
-    ``CLAWMETRY_CHECKOUT_URL`` by the sync daemon), falls back to the generic
-    upgrade page, and finally to the hard-coded default. Never raises."""
+# The sync daemon persists {upgrade_url, checkout_url} from each heartbeat
+# here so the dashboard — a SEPARATE process whose in-memory copy of
+# ``sync._TRIAL_STATE`` only ever holds the module defaults — can read the
+# per-account URLs the cloud actually handed us.
+_TRIAL_STATE_PATH = "~/.clawmetry/trial_state.json"
+
+
+def persisted_trial_state() -> dict:
+    """The daemon-persisted trial-state file (``~/.clawmetry/trial_state.json``)
+    as a dict, or ``{}`` when absent/unreadable. Never raises."""
+    try:
+        import json
+        path = os.path.expanduser(_TRIAL_STATE_PATH)
+        if not os.path.isfile(path):
+            return {}
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def resolved_checkout_url() -> str:
+    """The signed per-account Stripe checkout URL, or ``""`` when the cloud
+    hasn't handed us one yet. Env override wins (support lever), then the
+    daemon-persisted heartbeat cache. Never raises."""
     try:
         checkout = os.environ.get(_HARD_BLOCK_CHECKOUT_URL_ENV, "").strip()
+        if checkout:
+            return checkout
+        cached = persisted_trial_state().get("checkout_url")
+        if isinstance(cached, str) and cached.strip():
+            return cached.strip()
+        return ""
+    except Exception:
+        return ""
+
+
+def resolved_upgrade_url() -> str:
+    """The URL the "Continue to payment" button points at. Prefers a signed
+    per-account checkout URL the cloud handed us via heartbeat (persisted to
+    ``~/.clawmetry/trial_state.json`` by the sync daemon, or mirrored into
+    ``CLAWMETRY_CHECKOUT_URL``), falls back to the generic upgrade page, and
+    finally to the hard-coded default. Never raises."""
+    try:
+        checkout = resolved_checkout_url()
         if checkout:
             return checkout
         upgrade = os.environ.get(_HARD_BLOCK_UPGRADE_URL_ENV, "").strip()
         if upgrade:
             return upgrade
-        # Best-effort: also read the daemon's live cache if the sync module
-        # is importable (it holds the fresher URL that heartbeats returned).
+        cached = persisted_trial_state().get("upgrade_url")
+        if isinstance(cached, str) and cached.strip():
+            return cached.strip()
+        # Best-effort: also read the daemon's live cache if we happen to run
+        # in the daemon process itself (fresher than the persisted file).
         try:
             from clawmetry import sync as _sync
-            cached = getattr(_sync, "_TRIAL_STATE", {}).get("upgrade_url")
-            if isinstance(cached, str) and cached.strip():
-                return cached.strip()
+            in_proc = getattr(_sync, "_TRIAL_STATE", {}).get("upgrade_url")
+            if isinstance(in_proc, str) and in_proc.strip():
+                return in_proc.strip()
         except Exception:
             pass
         return _DEFAULT_UPGRADE_URL
@@ -286,7 +328,9 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "days_until_expiry": days_left,
             "reason": reason,
             "upgrade_url": resolved_upgrade_url(),
+            "checkout_url": resolved_checkout_url() or None,
             "activation_endpoint": "/api/license/activate",
+            "checkout_endpoint": "/api/trial/checkout",
             "refresh_endpoint": "/api/trial/refresh-license",
             "status_endpoint": "/api/trial/status",
         }
@@ -297,6 +341,7 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "reason": "A valid ClawMetry subscription is required to continue.",
             "upgrade_url": _DEFAULT_UPGRADE_URL,
             "activation_endpoint": "/api/license/activate",
+            "checkout_endpoint": "/api/trial/checkout",
             "refresh_endpoint": "/api/trial/refresh-license",
             "status_endpoint": "/api/trial/status",
         }
@@ -320,6 +365,8 @@ __all__ = [
     "hard_block_enabled",
     "is_hard_blocked",
     "allowlisted_path",
+    "persisted_trial_state",
+    "resolved_checkout_url",
     "resolved_upgrade_url",
     "block_payload",
     "warning_window_days",

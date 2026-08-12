@@ -27,11 +27,17 @@ Usage (spawned by routes/update_check.py, not humans):
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
 
 _DETACHED = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+# This helper runs DETACHED (no console). Any console-subsystem child it
+# spawns WITHOUT this flag gets a brand-new VISIBLE console window — pip
+# runs for seconds-to-minutes, so users watch a mystery cmd window sit on
+# their screen (live-hit during an enterprise demo, 2026-08-08).
+_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
 
 
 def _wait_for_pid_exit(pid: int, timeout_secs: float = 60.0) -> bool:
@@ -65,6 +71,48 @@ def _wait_for_pid_exit(pid: int, timeout_secs: float = 60.0) -> bool:
     return False
 
 
+def _prune_stale_dist_info(target: str, say) -> None:
+    """After a successful pip run, delete ``clawmetry-*.dist-info`` dirs
+    OLDER than ``target`` plus ``~lawmetry*`` pip-uninstall corpses.
+
+    pip's uninstall of the previous version half-fails whenever a sibling
+    clawmetry process still holds ``.pyd``/``.exe`` files open — the new
+    wheel lands but the old dist-info stays, and importlib.metadata (and
+    pip itself) then resolve the OLDEST dist-info present (alphabetical
+    listdir order; five stale dist-infos observed live 2026-08-10).
+    Duplicate of clawmetry.distinfo_cleanup by design: this module runs the
+    OLD wheel's copy and keeps zero imports from the rest of clawmetry.
+    Dist-info entries are plain metadata files, never held open, so removal
+    succeeds even while code files stay locked. Never raises."""
+    try:
+        keep = tuple(int(x) for x in target.split("."))
+    except (TypeError, ValueError):
+        return  # target "latest" / unparseable: the relaunched daemon's
+                # boot-time cleanup (routes/update_check.py) handles it
+    try:
+        import sysconfig
+        sp = sysconfig.get_paths()["purelib"]
+        for name in os.listdir(sp):
+            stale = name.startswith("~lawmetry")
+            if not stale and (name.startswith("clawmetry-")
+                              and name.endswith(".dist-info")):
+                ver = name[len("clawmetry-"):-len(".dist-info")]
+                try:
+                    stale = tuple(int(x) for x in ver.split(".")) < keep
+                except ValueError:
+                    stale = False
+            if not stale:
+                continue
+            path = os.path.join(sp, name)
+            try:
+                shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+                say(f"[update-respawn] pruned stale metadata {name}")
+            except OSError as exc:
+                say(f"[update-respawn] could not prune {name}: {exc}")
+    except Exception as exc:
+        say(f"[update-respawn] stale-metadata prune skipped: {exc}")
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) < 4:
@@ -94,6 +142,14 @@ def main(argv=None) -> int:
     if not _wait_for_pid_exit(int(parent_pid), timeout_secs=90.0):
         _say("[update-respawn] parent did not exit in 90s; aborting (no relaunch, "
              "the still-running parent keeps serving)")
+        # Release the cross-process update lock the parent handed off to us:
+        # no pip ran, and without this the still-running parent's next check
+        # cycles all skip ("another process is updating") until the 900s
+        # staleness window breaks the lock — a silent 15-minute update stall.
+        try:
+            os.remove(os.path.expanduser("~/.clawmetry/update-in-progress.lock"))
+        except OSError:
+            pass
         return 1
 
     spec = f"clawmetry=={target}" if target and target != "latest" else "clawmetry"
@@ -106,13 +162,17 @@ def main(argv=None) -> int:
         # sibling process briefly holding the launcher exe. 10s+10s was too
         # short for either.
         for attempt, wait in ((1, 20), (2, 60), (3, 120)):
+            pip_kwargs = {"stdout": log, "stderr": log, "timeout": 300}
+            if os.name == "nt":
+                pip_kwargs["creationflags"] = _NO_WINDOW
             proc = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--upgrade",
                  "--no-cache-dir", spec],
-                stdout=log, stderr=log, timeout=300,
+                **pip_kwargs,
             )
             if proc.returncode == 0:
                 ok = True
+                _prune_stale_dist_info(target, _say)
                 break
             _say(f"[update-respawn] pip attempt {attempt} failed "
                  f"(exit {proc.returncode}); retrying in {wait}s")
@@ -145,7 +205,14 @@ def main(argv=None) -> int:
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": log,
               "close_fds": True, "env": env}
     if os.name == "nt":
-        kwargs["creationflags"] = _DETACHED
+        # NO_WINDOW (hidden console), NOT _DETACHED (no console): the
+        # relaunched daemon is a console-subsystem exe whose pip-launcher
+        # re-execs python.exe workers — with a DETACHED parent each worker
+        # allocated a fresh VISIBLE console that sat on screen for the
+        # daemon's lifetime (founder report 2026-08-09, persistent Windows
+        # Terminal tab titled with the venv exe path). A hidden console is
+        # inherited by every descendant; new process group unchanged.
+        kwargs["creationflags"] = _NO_WINDOW | 0x00000200
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(relaunch_cmd, **kwargs)

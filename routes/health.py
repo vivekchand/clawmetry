@@ -5,6 +5,7 @@ Extracted from dashboard.py as Phase 5.5 of the incremental modularisation.
 Owns the routes registered on bp_health:
 
   GET  /healthz                   — liveness probe (k8s / load-balancer, unauthenticated)
+  GET  /api/_internal/healthz    — same probe at a GFE-bypass path (GFE intercepts bare /healthz on Cloud Run)
   GET  /api/reliability           — cross-session behavioral reliability trend
   GET  /api/heatmap               — activity heatmap (events per hour, N days)
   GET  /api/system-health         — comprehensive system health (services, disks, crons)
@@ -54,6 +55,7 @@ bp_health = Blueprint('health', __name__)
 
 
 @bp_health.route("/healthz")
+@bp_health.route("/api/_internal/healthz")
 def healthz():
     """Kubernetes/load-balancer liveness probe — always returns 200."""
     import dashboard as _d
