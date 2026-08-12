@@ -9784,6 +9784,460 @@ def api_entitlement_has_all_at_batch():
         )
 
 
+def _missing_all_at_batch_fallback(
+    tier_tokens: list,
+    feature_tokens: list,
+    runtime_tokens: list,
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-at-batch``.
+
+    Row-detail sibling of :func:`_has_all_at_batch_fallback` on the
+    aggregate what-if seat. On any resolver / helper blowup the endpoint
+    still returns 200 with the same envelope shape as the happy path but
+    with ``tiers=[]`` and every fold-rollup fail-open on the row-detail
+    side (``denied_count=0`` / ``all_denied=False`` / ``any_denied=False``)
+    so a pricing-matrix column that lost the resolver never silently
+    renders a bundle denial it can't justify. Caller-supplied tier /
+    feature / runtime tokens echo into ``unknown_tiers`` /
+    ``unknown_features`` / ``unknown_runtimes`` for debugging. Mirrors
+    :func:`_has_all_at_batch_fallback` byte-for-byte on the axis-echo
+    slots (features / runtimes / channels / retention_days / nodes /
+    unknown_features / unknown_runtimes / unknown_tiers / supplied_axes /
+    supplied_count / required_tier / required_tier_label /
+    required_tier_rank / current_tier / current_tier_rank / grace /
+    enforced) so a UI wiring both boolean-fold and row-detail matrices
+    off the same body-builder gets byte-stable envelopes across every
+    input branch on both endpoints. The only per-envelope divergence is
+    the aggregation fold slot -- boolean-fold: allowed_count /
+    all_allowed / any_allowed; row-detail: denied_count / all_denied /
+    any_denied.
+    """
+    return {
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": list(feature_tokens),
+        "unknown_runtimes": list(runtime_tokens),
+        "unknown_tiers": list(tier_tokens),
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "tiers": [],
+        "denied_count": 0,
+        "all_denied": False,
+        "any_denied": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_all_at_batch_body() -> dict:
+    """Happy-path body builder for ``/api/entitlement/missing-all-at-batch``.
+
+    Batch what-if row-detail complement of :func:`_has_all_at_batch_body`:
+    where the paired boolean-fold sibling collapses each
+    ``(perspective_tier, bundle)`` pair to a single ``has_all_at`` bool,
+    this returns WHAT is missing on each supplied axis of the same 5-axis
+    bundle for the same N perspectives so a paywall diagnostics matrix
+    ("out of {fleet, sso, claude_code, 100 channels, 90d retention, 100
+    nodes}, which axes are still blocked at OSS vs Cloud Starter vs
+    Cloud Pro vs Enterprise?") hydrates the per-axis denial column off
+    ONE URL instead of five ``_at-batch`` row-detail round-trips + a
+    client-side per-axis stitch.
+
+    Mixed-axis extension of :func:`_missing_bundle_at_batch_body` (single-
+    axis batch row-detail): where the ``/missing-features-at-batch`` /
+    ``/missing-runtimes-at-batch`` variants answer "which items of this
+    single-axis bundle are denied at each tier?", this one answers
+    "which axes of the whole subscription state are denied at each
+    tier?" so a paywall walkthrough hydrates the mixed-axis per-axis
+    denial column off ONE URL.
+
+    Every axis is OPTIONAL -- a caller can supply any (or none) of the
+    five axis kwargs; the row-detail answers off just those axes per row
+    and every unsupplied axis is skipped (``missing.features`` /
+    ``missing.runtimes`` -> ``[]`` on that row; capacity axis -> ``null``).
+    The envelope always carries every axis' slot for byte-stable shape
+    across every URL branch.
+
+    Grace-independent by construction: :func:`missing_all_at_batch`
+    delegates per-row to :func:`missing_all_at`, which reads the static
+    per-tier grant tables via the singular ``_at`` scalars -- so each
+    row's ``missing`` dict is IDENTICAL under grace vs enforce for the
+    same ``(row.tier, bundle)`` pair, and diverges deliberately from the
+    LIVE ``/missing-all`` sibling (which reports every axis empty for
+    a fully-known bundle in grace via the resolver's grace pass-through).
+    Whole point of the ``_at`` slot:
+    ``/missing-all-at-batch?tiers=oss,cloud_pro&features=fleet``
+    returns the ``oss`` row's ``missing.features=["fleet"]`` even in
+    grace (because OSS statically does not grant ``fleet``).
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-
+    only subsets for parity with the LIVE ``/api/entitlement/missing-all``
+    envelope. Perspective-independent by design; the same bundle rollup
+    is also echoed into each row via ``required_tier`` /
+    ``required_tier_label`` / ``required_tier_rank`` so a per-row cell
+    can render "cheapest tier that unlocks this bundle" alongside the
+    per-axis denial detail off one row bind.
+
+    Per-row ``upgrade_required`` compares the bundle-level
+    ``required_tier`` against each ROW's tier rank (not the live current
+    rank), matching the sibling :func:`_missing_bundle_at_batch_body` /
+    :func:`_has_all_at_batch_body` convention: a pricing-matrix row
+    reads "no upgrade needed at this tier" vs "upgrade needed beyond
+    this tier".
+
+    Per-row ``missing_count`` folds axis-wise: a per-axis list
+    contributes its ``len(...)``; each capacity axis contributes ``1``
+    when denied (non-``None`` on the row's ``missing`` slot). Same
+    semantic as :func:`missing_features_at_batch` /
+    :func:`missing_runtimes_at_batch` extended over five axes.
+
+    Per-row ``any_missing`` folds ``bool(any per-axis denial on the
+    row) or bool(endpoint-level unknown_features or unknown_runtimes)``
+    -- matches the sibling :func:`_missing_bundle_at_batch_body`
+    posture byte-for-byte (an unknown token in the bundle is surfaced
+    per-row as "yes, something's missing" even though the singular
+    ``_at`` scalars fail-open on unknowns per-axis; the pricing tooltip
+    reads the unknown list separately).
+
+    Runtime-alias canonicalisation is applied per-token upstream of the
+    strict scalar (:func:`missing_all_at_batch` inherits the strict-
+    scalar posture from :func:`missing_runtimes_at`), matching the
+    sibling :func:`_missing_bundle_at_batch_body` and
+    :func:`_has_all_at_batch_body` upstream-canonicalise pattern byte-
+    for-byte (an alias-and-canonical pair dedups to ONE entry in
+    ``runtimes`` before the scalar sees it).
+
+    ``denied_count`` counts per-row ``any_missing`` truthy (empty
+    ``tiers`` -> 0). ``all_denied`` is truthy iff ``tiers`` is non-
+    empty AND every row's ``any_missing`` is truthy (empty ``tiers``
+    -> False so the fail-open / grace path can't silently render "every
+    tier denies this bundle"). ``any_denied`` is truthy iff any row's
+    ``any_missing`` is truthy (empty ``tiers`` -> False).
+
+    Envelope shape (21 keys, byte-stable across every input branch)::
+
+        {
+          "features":            ["fleet"],           # known ids only
+          "runtimes":            ["claude_code"],     # canonicalised, known only
+          "channels":            5 | null,            # parsed int or null
+          "retention_days":      30 | null,
+          "nodes":               2 | null,
+          "unknown_features":    ["bogus"],           # tokens not in ALL_FEATURES
+          "unknown_runtimes":    [],                  # tokens not in ALL_RUNTIMES
+          "unknown_tiers":       ["bogus"],           # tier tokens dropped
+          "supplied_axes":       ["features", "channels"],
+          "supplied_count":      2,
+          "tiers": [
+            {
+              "tier":                "cloud_pro",
+              "tier_label":          "Pro",
+              "tier_rank":           <int>,
+              "missing": {
+                  "features":       [<subset denied at row.tier>],
+                  "runtimes":       [<subset denied at row.tier>],
+                  "channels":       <supplied int if denied at row.tier, else null>,
+                  "retention_days": <supplied int if denied at row.tier, else null>,
+                  "nodes":          <supplied int if denied at row.tier, else null>,
+              },
+              "missing_count":       <int>,          # sum of denied axes on row
+              "any_missing":         <bool>,         # row-denial OR endpoint-unknown
+              "required_tier":       "cloud_pro" | null,
+              "required_tier_label": "Pro" | null,
+              "required_tier_rank":  <int>,          # -1 when null
+              "upgrade_required":    <bool>          # req_rank > row.tier_rank
+            }, ...
+          ],
+          "denied_count":        <int>,               # #rows with any_missing=true
+          "all_denied":          <bool>,              # every row has any denial
+          "any_denied":          <bool>,              # at least one row has any denial
+          "required_tier":       "cloud_pro" | null,  # bundle-level rollup
+          "required_tier_label": "Pro" | null,
+          "required_tier_rank":  <int>,
+          "current_tier":        "<live tier id>",
+          "current_tier_rank":   <int>,
+          "grace":               <bool>,              # LIVE resolver grace bit
+          "enforced":            <bool>
+        }
+    """
+    from clawmetry import entitlements as _ent
+
+    tier_tokens = _parse_csv_arg("tiers")
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        _channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        _retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        _nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    # Only the known subset reaches the strict scalar -- unknown feature /
+    # runtime tokens are surfaced separately via ``unknown_features`` /
+    # ``unknown_runtimes`` and folded into per-row ``any_missing`` at
+    # emit time. Non-int capacity axes are dropped from the scalar
+    # (matches :func:`missing_all_at` non-int-``None`` swallow posture);
+    # the paired ``/has-all-at-batch`` collapses every row's fold to
+    # ``False`` on the same input via the boolean scalar's strict typo
+    # posture -- callers wanting the strict typo-``False`` posture read
+    # the paired boolean fold.
+    batch = _ent.missing_all_at_batch(
+        tier_tokens,
+        features=known_features if features_supplied else None,
+        runtimes=known_runtimes if runtimes_supplied else None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    required_label = _ent.tier_label(required) if required else None
+    req_rank = _ent.tier_rank(required) if required else -1
+
+    unknown_any = bool(unknown_features) or bool(unknown_runtimes)
+
+    tiers_out: list[dict] = []
+    for row in batch.get("tiers", []) or []:
+        try:
+            tid = row.get("tier")
+            row_missing = row.get("missing") or {}
+        except AttributeError:
+            continue
+        if not isinstance(row_missing, dict):
+            row_missing = {}
+        missing_features_row = list(row_missing.get("features") or [])
+        missing_runtimes_row = list(row_missing.get("runtimes") or [])
+        missing_channels_row = row_missing.get("channels")
+        missing_retention_row = row_missing.get("retention_days")
+        missing_nodes_row = row_missing.get("nodes")
+        row_rank = row.get("tier_rank", _ent.tier_rank(tid))
+        upgrade_required = (
+            bool(required) and row_rank >= 0 and req_rank > row_rank
+        )
+        row_missing_count = (
+            len(missing_features_row)
+            + len(missing_runtimes_row)
+            + (1 if missing_channels_row is not None else 0)
+            + (1 if missing_retention_row is not None else 0)
+            + (1 if missing_nodes_row is not None else 0)
+        )
+        row_any_missing = bool(row_missing_count) or unknown_any
+        tiers_out.append(
+            {
+                "tier": tid,
+                "tier_label": row.get("tier_label", _ent.tier_label(tid)),
+                "tier_rank": row_rank,
+                "missing": {
+                    "features": missing_features_row,
+                    "runtimes": missing_runtimes_row,
+                    "channels": missing_channels_row,
+                    "retention_days": missing_retention_row,
+                    "nodes": missing_nodes_row,
+                },
+                "missing_count": row_missing_count,
+                "any_missing": row_any_missing,
+                "required_tier": required,
+                "required_tier_label": required_label,
+                "required_tier_rank": req_rank,
+                "upgrade_required": upgrade_required,
+            }
+        )
+
+    denied_count = sum(1 for r in tiers_out if r["any_missing"])
+    all_denied = bool(tiers_out) and all(r["any_missing"] for r in tiers_out)
+    any_denied = any(r["any_missing"] for r in tiers_out)
+
+    return {
+        "features": known_features,
+        "runtimes": known_runtimes,
+        "channels": channels_n if channels_present and channels_ok else None,
+        "retention_days": (
+            retention_n if retention_present and retention_ok else None
+        ),
+        "nodes": nodes_n if nodes_present and nodes_ok else None,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "unknown_tiers": list(batch.get("unknown", []) or []),
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "tiers": tiers_out,
+        "denied_count": denied_count,
+        "all_denied": all_denied,
+        "any_denied": any_denied,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-all-at-batch")
+def api_entitlement_missing_all_at_batch():
+    """``GET /api/entitlement/missing-all-at-batch?tiers=<a,b,...>
+    &features=<x,y,...>&runtimes=<r,s,...>&channels=N&retention_days=K
+    &nodes=M`` -- batch what-if row-detail complement of
+    ``/api/entitlement/has-all-at-batch``.
+
+    Row-detail sibling of ``/api/entitlement/has-all-at-batch`` on the
+    aggregate what-if seat, in the same relationship
+    ``/api/entitlement/missing-features-at-batch`` /
+    ``/api/entitlement/missing-runtimes-at-batch`` have to
+    ``/api/entitlement/has-features-at-batch`` /
+    ``/api/entitlement/has-runtimes-at-batch`` on the single-axis seat.
+    Where the paired boolean-fold sibling collapses each
+    ``(perspective_tier, bundle)`` pair to ONE ``has_all_at`` bool, this
+    returns WHAT is missing on each supplied axis for the same N
+    perspectives in ONE round-trip so a paywall diagnostics matrix ("out
+    of {fleet, sso, claude_code, 100 channels, 90d retention, 100 nodes},
+    which axes are still blocked at OSS vs Cloud Starter vs Cloud Pro vs
+    Enterprise?") hydrates the per-axis denial column off ONE URL
+    instead of five ``_at-batch`` row-detail round-trips + a client-side
+    per-axis stitch. Fills the ``_at_batch`` slot on the mixed-axis row-
+    detail family alongside :func:`missing_all_at` (the singular per-
+    perspective scalar) and ``/api/entitlement/missing-all`` (the LIVE
+    per-install scalar).
+
+    Every axis is OPTIONAL. Supply any non-empty subset; the row-detail
+    answers off just those axes per row and every unsupplied axis is
+    skipped (``missing.features`` / ``missing.runtimes`` -> ``[]`` on
+    that row; capacity axis -> ``null``). Runtime-alias canonicalisation
+    (``claude-code`` -> ``claude_code``) is applied per token upstream
+    of the strict scalar. Capacity axes accept a single int (``5``);
+    blank / non-int values swallow to ``null`` on every row's per-axis
+    slot (matches the singular ``/missing-all-at`` capacity swallow
+    posture); the paired ``/has-all-at-batch`` collapses every row's
+    fold to ``False`` on the same input via the boolean scalar's
+    strict-typo posture so a UI wiring both endpoints together gets a
+    coherent "supplied but denied" story on the paired call.
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (they read the static per-tier tables via the singular
+    ``_at`` delegates, not the resolver's ``grace`` bit) -- the whole
+    point of the ``_at`` slot:
+    ``/missing-all-at-batch?tiers=oss,cloud_pro&features=fleet`` returns
+    the ``oss`` row's ``missing.features=["fleet"]`` even in grace
+    (because OSS statically does not grant ``fleet``), whereas the LIVE
+    ``/missing-all?features=fleet`` reports ``features=[]`` for it via
+    :attr:`Entitlement.grace` pass-through.
+
+    - **Never 4xxs** on any input branch: missing / blank / all-unknown
+      ``tiers=`` returns 200 with ``tiers=[]`` (matches the sibling
+      ``/missing-features-at-batch`` posture -- a paywall matrix binds
+      ``tiers`` directly without a pre-validation round-trip). No axes
+      supplied returns 200 with ``tiers`` still populated but every
+      row's ``missing`` reporting the empty 5-key seat (matches the
+      singular ``/missing-all-at`` empty-per-axis posture; distinct
+      from the paired ``/has-all-at-batch`` which collapses every row's
+      ``has_all_at`` to ``False`` on the same input for typo-``False``
+      posture reasons -- see the paired doc). Unknown token in the
+      bundle surfaces via ``unknown_features`` / ``unknown_runtimes``
+      and folds into per-row ``any_missing``. Non-int capacity swallows
+      to ``null`` on every row's per-axis slot; the paired
+      ``/has-all-at-batch`` denies every row on the same input.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope with ``tiers=[]`` so the pricing walkthrough
+      keeps rendering.
+
+    Envelope shape is fully documented on
+    :func:`_missing_all_at_batch_body`.
+
+    Per-row parity is pinned by tests: each row's ``missing`` byte-
+    equals :func:`missing_all_at` for the same ``(row.tier, bundle)``
+    pair, and each row's per-axis denial byte-equals
+    ``/api/entitlement/missing-all-at?tier=<row.tier>&...``'s ``missing``
+    on the same bundle -- so any future contract change on either side
+    has to update both. The paired boolean-fold sibling's per-row
+    ``has_all_at`` is the strict negation of ``any(row.missing.values())``
+    on every fully-parseable bundle (with the deliberate non-int
+    capacity divergence documented on :func:`missing_all_at`).
+    """
+    try:
+        return jsonify(_missing_all_at_batch_body())
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_at_batch: error: %s", exc
+        )
+        return jsonify(
+            _missing_all_at_batch_fallback(
+                _parse_csv_arg("tiers"),
+                _parse_csv_arg("features"),
+                _parse_csv_arg("runtimes"),
+            )
+        )
+
+
 @bp_entitlement.route("/api/entitlement/has-all")
 def api_entitlement_has_all():
     """``GET /api/entitlement/has-all?features=a,b&runtimes=x,y&channels=5&retention_days=30&nodes=2``
