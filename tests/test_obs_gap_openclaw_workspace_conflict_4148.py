@@ -178,3 +178,138 @@ def test_model_completed_not_broken():
     assert len(turns) == 1
     assert turns[0]["role"] == "assistant"
     assert "Hello world" in turns[0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Adapter list_events + span tests (#4747): workspace.conflict fields must
+# surface in Event.extra and produce an OTel span in _build_spans_from_events.
+# ---------------------------------------------------------------------------
+
+def _adapter():
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    return OpenClawAdapter
+
+
+def _make_db_row(event_type: str, data: dict) -> tuple:
+    """Fake a DuckDB row in the SELECT id, event_type, ts, model, token_count,
+    data, agent_id, node_id shape that list_events iterates over."""
+    import json
+    return (
+        "row-1",          # id
+        event_type,       # event_type
+        "1700000000.0",   # ts
+        None,             # model
+        0,                # token_count
+        json.dumps(data), # data blob
+        None,             # agent_id
+        None,             # node_id
+    )
+
+
+def test_list_events_surfaces_conflicted_paths(monkeypatch):
+    """list_events must populate Event.extra with conflictedPaths (#4747)."""
+    import json
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.base import Event
+
+    blob = {
+        "type": "workspace.conflict",
+        "conflictedPaths": ["src/app.py", "src/utils.py"],
+        "resolution": "use_remote",
+        "stagedRef": "refs/heads/main",
+    }
+    row = _make_db_row("workspace.conflict", blob)
+
+    # Patch the store so no real DuckDB is needed.
+    class _FakeStore:
+        def _fetch(self, *args, **kwargs):
+            return [row]
+
+    import clawmetry.local_store as _ls
+    monkeypatch.setattr(_ls, "get_store", lambda **kw: _FakeStore())
+
+    adapter = OpenClawAdapter()
+    events = adapter.list_events("test-session-id", limit=10)
+
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.type == "workspace.conflict"
+    assert ev.extra.get("conflictedPaths") == ["src/app.py", "src/utils.py"]
+    assert ev.extra.get("resolution") == "use_remote"
+    assert ev.extra.get("stagedRef") == "refs/heads/main"
+    assert "src/app.py" in ev.content
+    assert "use_remote" in ev.content
+
+
+def test_list_events_workspace_conflict_empty_paths(monkeypatch):
+    """Missing conflictedPaths must not crash — extra still has the key."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    blob = {"type": "workspace.conflict"}
+    row = _make_db_row("workspace.conflict", blob)
+
+    class _FakeStore:
+        def _fetch(self, *args, **kwargs):
+            return [row]
+
+    import clawmetry.local_store as _ls
+    monkeypatch.setattr(_ls, "get_store", lambda **kw: _FakeStore())
+
+    adapter = OpenClawAdapter()
+    events = adapter.list_events("test-session-id")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.extra.get("conflictedPaths") == []
+    assert "workspace conflict" in ev.content.lower()
+
+
+def test_build_spans_workspace_conflict_produces_span():
+    """_build_spans_from_events must emit a span for workspace.conflict (#4747)."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    events = [
+        {"type": "session", "version": 1, "timestamp": 1700000000.0},
+        {
+            "type": "workspace.conflict",
+            "timestamp": 1700000010.0,
+            "conflictedPaths": ["README.md", "src/core.py"],
+            "resolution": "stash_local",
+            "stagedRef": "refs/remotes/origin/main",
+        },
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, session_id="span-test")
+    types = [s["name"] for s in spans]
+    assert "workspace.conflict" in types, f"no workspace.conflict span found; got {types}"
+
+    wc = next(s for s in spans if s["name"] == "workspace.conflict")
+    attrs = wc.get("attributes", {})
+    assert attrs.get("conflict.path_count") == 2
+    assert attrs.get("conflict.resolution") == "stash_local"
+    assert attrs.get("conflict.staged_ref") == "refs/remotes/origin/main"
+    assert attrs.get("event.kind") == "workspace.conflict"
+
+
+def test_build_spans_workspace_conflict_no_paths():
+    """_build_spans_from_events must not crash on empty conflictedPaths."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    events = [
+        {"type": "session", "version": 1, "timestamp": 1700000000.0},
+        {"type": "workspace.conflict", "timestamp": 1700000005.0},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, session_id="no-paths-test")
+    types = [s["name"] for s in spans]
+    assert "workspace.conflict" in types
+
+
+def test_build_spans_retry_still_works():
+    """Regression: retry span must not be broken by the new elif branch."""
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+
+    events = [
+        {"type": "session", "version": 1, "timestamp": 1700000000.0},
+        {"type": "retry", "timestamp": 1700000003.0, "reason": "empty_turn"},
+    ]
+    spans = OpenClawAdapter._build_spans_from_events(events, session_id="retry-test")
+    types = [s["name"] for s in spans]
+    assert "retry" in types

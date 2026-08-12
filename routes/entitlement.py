@@ -39918,6 +39918,261 @@ def _has_all_bundle_row_at_to_body(row: dict) -> dict:
     }
 
 
+def _parse_single_bundle_body(body, key: str = "bundle"):
+    """Extract ONE aggregate 5-axis bundle dict from a JSON POST body.
+
+    Singular sibling of :func:`_parse_aggregate_bundles_body` for the
+    scalar ``/has-all-bundle`` / ``/has-all-bundle-at`` endpoints. Accepts
+    either ``{"bundle": {"features": ["fleet"], ...}}`` (the wrapped
+    form matching every other singular POST body in this module) or the
+    bare-dict shorthand ``{"features": ["fleet"], ...}`` (so a caller
+    can post the same body they would GET on ``/has-all`` as one dict
+    without an outer wrapper).
+
+    Returns ``(bundle, err)`` with ``err`` ``None`` on success, or one
+    of:
+
+    * ``bundle_must_be_object`` -- the top-level body is not a dict,
+      OR ``body[key]`` is present but is not a dict.
+    * ``missing`` -- neither ``body[key]`` nor a bare shorthand is
+      present (i.e. body is ``{}`` or contains only unrelated keys).
+
+    A blank ``body[key]={}`` (explicit empty bundle) is a valid input
+    and returns ``({}, None)`` -- the fold layer collapses it to the
+    stable empty row (``has_all=False``) matching the ``has_all`` empty
+    posture.
+    """
+    if not isinstance(body, dict):
+        return None, "bundle_must_be_object"
+    if key in body:
+        raw = body.get(key)
+        if raw is None:
+            return None, "missing"
+        if not isinstance(raw, dict):
+            return None, "bundle_must_be_object"
+        return dict(raw), None
+    # Shorthand: bare-dict body IS the bundle (matches /has-all GET args).
+    known = ("features", "runtimes", "channels", "retention_days", "nodes")
+    if any(axis in body for axis in known):
+        return {axis: body[axis] for axis in known if axis in body}, None
+    return None, "missing"
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-all-bundle",
+    methods=["POST"],
+)
+def api_entitlement_has_all_bundle():
+    """``POST /api/entitlement/has-all-bundle`` -- singular row-detail
+    scalar sibling of ``/api/entitlement/has-all-bundle-batch``.
+
+    Folds ONE caller-supplied aggregate 5-axis bundle
+    (``features + runtimes + channels + retention_days + nodes``) to
+    the canonical batch-row shape at the LIVE resolver in one
+    round-trip so a paywall walkthrough tile rendering one bundle
+    cell at a time (an upgrade-walkthrough carousel, a "does this
+    hypothetical config land granted?" diagnostics popover) reads the
+    row without wrapping in a length-one list and unwrapping ``[0]``
+    from ``/has-all-bundle-batch``.
+
+    Distinct from the singular ``/api/entitlement/has-all`` GET
+    endpoint (whose 19-key diagnostic envelope carries unknown-token
+    splits, ``required_tier`` resolution, and the ``upgrade_required``
+    rollup): this returns the stripped six-key batch-row shape so a UI
+    wiring the singular and the batch off the same helper sees
+    byte-identical rows. Post-tier switch or grace flip the two
+    endpoints stay in lockstep because :func:`has_all_bundle` delegates
+    to the same :func:`_has_all_bundle_row` helper as the batch.
+
+    POST rather than GET so the request body is byte-identical to the
+    batch endpoint's per-row shape -- a caller with a single bundle in
+    hand can POST it as-is without stitching a CSV query string.
+
+    Request body::
+
+        {"bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+                    "channels": 5, "retention_days": 30, "nodes": 2}}
+
+    A shorthand where the top-level body IS the bundle
+    (``{"features": ["fleet"]}``) is also accepted so the same body the
+    ``/has-all`` GET endpoint takes as query args maps 1:1 to a POST
+    body. Missing / non-object ``bundle`` value is a 400.
+
+    Response layers the resolver envelope on top of the batch-row
+    shape (byte-identical to the batch's per-row body plus the
+    envelope so a caller can render "on <tier>, is this granted?"
+    without a second call)::
+
+        {
+          "features":          ["fleet"],
+          "runtimes":          ["claude_code"],
+          "channels":          5 | null,
+          "retention_days":    30 | null,
+          "nodes":             2 | null,
+          "has_all":           <bool>,
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty row shape with ``has_all=false``) so the paywall tile
+      keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        row = _ent.has_all_bundle(bundle)
+        out = _has_all_bundle_row_to_body(row)
+        env = _resolver_envelope(_ent)
+        return jsonify({**out, **env})
+    except Exception as exc:
+        logger.warning("api_entitlement_has_all_bundle: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "has_all": False,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-all-bundle-at",
+    methods=["POST"],
+)
+def api_entitlement_has_all_bundle_at():
+    """``POST /api/entitlement/has-all-bundle-at?tier=<perspective>`` --
+    hypothetical-perspective sibling of
+    ``/api/entitlement/has-all-bundle``.
+
+    Wraps :func:`clawmetry.entitlements.has_all_bundle_at` so a
+    pricing-matrix or upgrade-walkthrough tile can call the aggregate
+    boolean-fold singular from any tier's perspective without first
+    switching the resolver. Fills the ``_at`` slot for the singular
+    aggregate-bundle boolean-fold family alongside the batch
+    ``/has-all-bundle-batch-at`` and the ``_at`` siblings of the
+    per-single-axis bundle helpers so a caller can call the
+    perspective-scoped singular uniformly across every ``_at`` family.
+
+    Grace-independent by construction: :func:`has_all_bundle_at` reads
+    from the static per-tier grant tables via
+    :func:`_hypothetical_entitlement` on the feature / runtime axes and
+    :data:`_TIER_CHANNEL_LIMIT` / :data:`_TIER_RETENTION_DAYS` /
+    :data:`_TIER_NODE_LIMIT` on the capacity axes, so the row body is
+    byte-identical under grace vs enforce for the same
+    ``(perspective, bundle)`` pair. Whole point of the ``_at`` slot: at
+    ``tier=oss`` a paid-feature bundle reports ``has_all_at=false`` even
+    in grace, whereas the LIVE ``/has-all-bundle`` reports
+    ``has_all=true`` for the same bundle via grace pass-through.
+
+    Request body is byte-identical to ``/has-all-bundle``. The extra
+    ``tier=<perspective>`` query arg is required.
+
+    Response layers ``perspective_tier`` /
+    ``perspective_tier_label`` / ``perspective_tier_rank`` on top of
+    the singular row body with the fold slot renamed ``has_all_at``::
+
+        {
+          "perspective_tier":       "cloud_pro",
+          "perspective_tier_label": "Cloud Pro",
+          "perspective_tier_rank":  <int>,
+          "features":               ["fleet"],
+          "runtimes":               ["claude_code"],
+          "channels":               5 | null,
+          "retention_days":         30 | null,
+          "nodes":                  2 | null,
+          "has_all_at":             <bool>,
+          "current_tier":           "...",
+          "current_tier_rank":      <int>,
+          "grace":                  <bool>,
+          "enforced":               <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown (body carries ``which=tier`` so
+      a caller can render the right "unknown tier" message).
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      so the paywall matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        row = _ent.has_all_bundle_at(tier_in, bundle) or {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "has_all_at": False,
+        }
+        out = _has_all_bundle_row_at_to_body(row)
+        env = _resolver_envelope(_ent)
+        label = _ent.tier_label(tier_in)
+        rank = _ent.tier_rank(tier_in)
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": label,
+                "perspective_tier_rank": rank,
+                **out,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_all_bundle_at: error: %s", exc)
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "has_all_at": False,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/has-all-bundle-batch",
     methods=["POST"],

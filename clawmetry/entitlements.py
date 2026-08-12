@@ -12822,6 +12822,47 @@ def _has_all_bundle_row(bundle) -> dict:
     }
 
 
+def has_all_bundle(bundle) -> dict:
+    """Row-detail scalar sibling of :func:`has_all_bundle_batch` for ONE
+    aggregate 5-axis bundle.
+
+    Folds ONE ``{features, runtimes, channels, retention_days, nodes}``
+    bundle to the canonical batch-row shape at the LIVE resolver.
+    A caller that already holds a bundle in batch-row shape (from an
+    upstream :func:`has_all_bundle_batch` echo, a paywall matrix cell,
+    or an upgrade-walkthrough tile that renders one bundle at a time)
+    can re-fold it here without wrapping in a length-one list and
+    unwrapping ``[0]``.
+
+    Distinct from :func:`has_all` (whose diagnostic envelope carries
+    unknown-token splits, ``required_tier`` resolution, and the
+    ``upgrade_required`` rollup): this returns the stripped six-key row
+    shape the bundle-batch family emits so a UI wiring the singular and
+    the batch off the same helper sees byte-identical rows.
+
+    Delegates row construction to :func:`_has_all_bundle_row` so the
+    scalar cannot drift from the batch row helper. Grace posture
+    mirrors :func:`has_all` byte-for-byte: while ``ent.grace`` is
+    ``True`` every fully-known bundle reports ``has_all=True``.
+
+    Never raises: a delegate failure returns the empty row shape
+    (``has_all=False``) so a caller wiring the scalar into a gate
+    cannot 500 on a malformed bundle.
+    """
+    try:
+        return _has_all_bundle_row(bundle)
+    except Exception as exc:
+        logger.warning("entitlements: has_all_bundle fold failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "has_all": False,
+        }
+
+
 def has_all_bundle_batch(bundles) -> list[dict]:
     """Per-bundle aggregate boolean-fold grant for N caller-supplied
     5-axis bundles in ONE round-trip.
@@ -12979,6 +13020,62 @@ def _has_all_bundle_row_at(perspective_tier: str, bundle) -> dict:
         "nodes": nodes,
         "has_all_at": bool(allowed),
     }
+
+
+def has_all_bundle_at(perspective_tier: str, bundle) -> dict | None:
+    """Perspective-shaped row-detail scalar sibling of
+    :func:`has_all_bundle_batch_at` for ONE aggregate 5-axis bundle.
+
+    Folds ONE ``{features, runtimes, channels, retention_days, nodes}``
+    bundle to the canonical batch-row shape against the STATIC
+    per-tier grant tables for ``perspective_tier`` (the ``_at`` slot).
+    Grace-independent by construction: the delegate
+    :func:`_has_all_bundle_row_at` reads from
+    :func:`_hypothetical_entitlement` on the feature / runtime axes
+    and :data:`_TIER_CHANNEL_LIMIT` / :data:`_TIER_RETENTION_DAYS` /
+    :data:`_TIER_NODE_LIMIT` on the capacity axes, so the row body is
+    byte-identical under grace vs enforce for the same
+    ``(perspective, bundle)`` pair.
+
+    Fills the singular-row slot alongside :func:`has_all_bundle` so a
+    paywall walkthrough tile rendering one hypothetical cell at a time
+    ("from Starter, would this whole bundle land granted?") reads the
+    perspective answer without wrapping in a length-one list and
+    unwrapping ``[0]`` from :func:`has_all_bundle_batch_at`.
+
+    Returns ``None`` for an empty / blank / non-string / unknown
+    ``perspective_tier`` -- matches the ``None``-on-unknown posture of
+    :func:`has_all_bundle_batch_at`, :func:`has_all_at`,
+    :func:`min_tier_for_all_at`, and the paired
+    ``/api/entitlement/has-all-bundle-at?tier=`` endpoint (which 400s
+    on missing / blank and 404s on unknown).
+
+    Never raises on the bundle side: a delegate failure on a valid
+    perspective returns the empty row shape (``has_all_at=False``) so a
+    caller wiring the scalar into a gate cannot 500 on a malformed
+    bundle.
+    """
+    if not isinstance(perspective_tier, str):
+        return None
+    tier_key = perspective_tier.strip().lower()
+    if not tier_key or tier_key not in _TIER_ORDER:
+        return None
+    try:
+        return _has_all_bundle_row_at(tier_key, bundle)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_all_bundle_at(%r) fold failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "has_all_at": False,
+        }
 
 
 def has_all_bundle_batch_at(
