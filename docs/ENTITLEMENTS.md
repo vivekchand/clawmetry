@@ -272,6 +272,45 @@ Every endpoint is defensive: a resolver failure falls back to the OSS-
 free snapshot (identical shape) rather than 500-ing, so a UI can rely
 on the response shape being stable.
 
+### Row-detail batch endpoint: `missing-all-at-batch`
+
+`GET /api/entitlement/missing-all-at-batch?tiers=oss,cloud_pro,...&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Batch what-if row-detail complement of `has-all-at-batch`. Fixes ONE
+5-axis mixed bundle and sweeps across N caller-supplied `perspective_tiers`,
+returning per-axis denial detail for each tier in one round-trip. Answers
+"out of {fleet, sso, claude_code, 100 channels, 90d retention, 100 nodes},
+which axes are still blocked at OSS vs Cloud Starter vs Cloud Pro vs
+Enterprise?" for a paywall diagnostics matrix without N separate calls to
+`missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs. This differs from the LIVE `missing-all` endpoint (which
+reads the resolver's grace pass-through).
+
+**Per-tier row:** mirrors `has_all_at_batch` on the axis-echo slots with a
+per-axis `missing` sub-dict instead of a single `has_all_at` bool:
+
+```json
+{
+  "tier":           "oss",
+  "tier_label":     "OSS",
+  "tier_rank":      0,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       ["claude_code"],
+    "channels":       100,
+    "retention_days": 90,
+    "nodes":          100
+  }
+}
+```
+
+The scalar is `clawmetry.entitlements.missing_all_at_batch(perspective_tiers, *, features, runtimes, channels, retention_days, nodes)`.
+
 ---
 
 ## The `clawmetry license` CLI
