@@ -254,3 +254,209 @@ def test_apply_cm_key_selfhost_failure_also_persists(fake_home, tmp_path, monkey
 
     assert ok is False
     assert _openclaw_token(fake_home) == "cm_selfhost"
+
+
+# ─── Trial mint on the fallback path (founder ask 2026-08-13) ────────────
+# The subprocess fallback used to just persist the cm_ key. That left the
+# dashboard reporting "Cloud Connected" but the account on FREE with no
+# trial, because _activate_signup_trial only runs inside the (crashed)
+# `clawmetry connect` subprocess. The fallback must now ALSO mint the
+# trial directly via /api/license/trial/signup.
+
+
+def test_fallback_mints_trial_after_subprocess_failure(fake_home, monkeypatch):
+    """When the connect subprocess fails, the fallback must also POST to
+    /api/license/trial/signup so the user actually gets the trial they
+    just signed up for. Regression guard for founder report 2026-08-13:
+    dashboard showed Cloud Connected but Plan stayed Free because the
+    subprocess crashed on an EOFError before reaching
+    _activate_signup_trial."""
+    posted = {}
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"ok": True, "key": "LIC_test",
+                               "expires_at": 9999999999}).encode()
+
+    def _fake_urlopen(req, timeout=15, context=None):
+        posted["url"] = req.full_url
+        posted["body"] = json.loads(req.data.decode())
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(desk_onb, "_ssl_context", lambda: None)
+
+    # activate() writes ~/.clawmetry/license — capture the call
+    activated = {}
+    class _FakeLic:
+        @staticmethod
+        def activate(key, node_id=None):
+            activated["key"] = key
+            activated["node_id"] = node_id
+            return True, "ok"
+        @staticmethod
+        def _node_id():
+            return "test-node"
+    monkeypatch.setitem(sys.modules, "clawmetry.license", _FakeLic)
+
+    ok = desk_onb._fallback_persist_cm_key("cm_founder_trial")
+
+    assert ok is True
+    assert posted.get("body", {}).get("api_key") == "cm_founder_trial", (
+        "_fallback_persist_cm_key must POST the cm_ key to "
+        "/api/license/trial/signup — otherwise cloud users hit "
+        "subprocess failures land on FREE with no trial"
+    )
+    assert "/api/license/trial/signup" in posted.get("url", "")
+    assert activated.get("key") == "LIC_test", (
+        "returned license key must be activated locally via "
+        "clawmetry.license.activate — otherwise the license file is "
+        "never written and `clawmetry status` still says Free"
+    )
+
+
+def test_fallback_trial_mint_never_raises_on_network_error(fake_home, monkeypatch):
+    """Trial mint is best-effort — network failures must not break
+    pairing. The cm_ key is already saved; the trial can retry later."""
+    def _fake_urlopen(*a, **kw):
+        raise OSError("network unreachable")
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    ok = desk_onb._fallback_persist_cm_key("cm_offline_test")
+
+    assert ok is True, "network failure must not undo the pairing"
+    assert _openclaw_token(fake_home) == "cm_offline_test"
+
+
+def test_fallback_trial_mint_swallows_activate_errors(fake_home, monkeypatch):
+    """A broken clawmetry.license import must not abort the pairing —
+    this fallback runs precisely because the venv might be busted."""
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"ok": True, "key": "LIC_x"}).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **kw: _FakeResp())
+    monkeypatch.setattr(desk_onb, "_ssl_context", lambda: None)
+
+    class _BrokenLic:
+        @staticmethod
+        def activate(*a, **kw):
+            raise RuntimeError("boom")
+        @staticmethod
+        def _node_id():
+            return "n"
+    monkeypatch.setitem(sys.modules, "clawmetry.license", _BrokenLic)
+
+    ok = desk_onb._fallback_persist_cm_key("cm_broken_venv")
+
+    assert ok is True
+
+
+def test_fallback_trial_mint_swallows_server_no_key(fake_home, monkeypatch):
+    """Server returns ok:false or omits key → don't try to activate."""
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"ok": False, "error": "unknown"}).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **kw: _FakeResp())
+    monkeypatch.setattr(desk_onb, "_ssl_context", lambda: None)
+
+    activate_calls = []
+    class _NoLic:
+        @staticmethod
+        def activate(*a, **kw):
+            activate_calls.append(a)
+            return True, ""
+    monkeypatch.setitem(sys.modules, "clawmetry.license", _NoLic)
+
+    ok = desk_onb._fallback_persist_cm_key("cm_bad_signup")
+
+    assert ok is True
+    assert activate_calls == [], (
+        "must not activate when server returned no key"
+    )
+
+
+# ─── cli.py: --start-sync-now / non-TTY stdin must skip input() ──────────
+# The interactive encryption-key prompt raised EOFError inside the desktop
+# pane's non-interactive subprocess, killing `clawmetry connect` before
+# _activate_signup_trial could run. --start-sync-now (and any non-TTY
+# invocation) must now auto-select a key silently.
+
+
+def test_connect_start_sync_now_skips_interactive_enc_key_prompt():
+    """The specific EOFError → founder-on-Free path. Verifies via source
+    inspection that the non-interactive branches never call _input for
+    the encryption key. A previous behavior test would be too coupled
+    to _cmd_connect's many pre-conditions to run in-process; the source
+    guard is what durably prevents the regression."""
+    import inspect
+
+    from clawmetry import cli
+    src = inspect.getsource(cli._cmd_connect)
+
+    # The guard variable must exist and be composed of exactly the
+    # three signals we settled on. Change the assertion when you
+    # intentionally widen or narrow the trigger.
+    assert '_non_interactive = (' in src, (
+        "_cmd_connect must gate enc-key prompts on a _non_interactive "
+        "flag — apply_cm_key subprocesses have no TTY and input() "
+        "raises EOFError otherwise (founder 2026-08-13)"
+    )
+    assert 'getattr(args, "start_sync_now"' in src
+    assert '_keep_local_signin' in src
+    assert 'sys.stdin.isatty()' in src
+
+    # Each of the three branches that used to unconditionally prompt
+    # (_kc_key, _saved_enc_key, no-key-at-all) must now have an
+    # `if _non_interactive:` guard. Count them.
+    assert src.count('if _non_interactive:') == 3, (
+        f"expected 3 `if _non_interactive:` guards (one per enc-key "
+        f"branch that previously always prompted); found "
+        f"{src.count('if _non_interactive:')}. Missing a guard means "
+        "some non-interactive callers still crash on EOFError."
+    )
+
+
+def test_connect_non_interactive_when_stdin_not_a_tty():
+    """The trigger must fire on ANY non-TTY stdin, not just the flags —
+    a user redirecting `echo | clawmetry connect ...` shouldn't hang
+    either. Belt+braces beyond --start-sync-now."""
+    import inspect
+    from clawmetry import cli
+    src = inspect.getsource(cli._cmd_connect)
+
+    # sys.stdin.isatty() must be part of the OR chain, not just any
+    # mention elsewhere in the function. Walk the parens to find the
+    # true closing `)` of `_non_interactive = (...)`.
+    start = src.index('_non_interactive = (')
+    depth = 0
+    end = None
+    for i in range(start + len('_non_interactive = '), len(src)):
+        if src[i] == '(':
+            depth += 1
+        elif src[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    assert end is not None, "malformed _non_interactive assignment"
+    ni_block = src[start:end + 1]
+    assert 'not sys.stdin.isatty()' in ni_block, (
+        "non-interactive gate must also fire when stdin isn't a TTY, "
+        "so piped/redirected invocations don't crash on input()"
+    )

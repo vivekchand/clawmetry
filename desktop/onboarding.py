@@ -330,9 +330,55 @@ def _fallback_persist_cm_key(cm_key: str) -> bool:
         cm["cloudToken"] = cm_key
         data["clawmetry"] = cm
         openclaw_path.write_text(json.dumps(data, indent=2))
-        return True
     except OSError:
         return False
+
+    # Defense-in-depth: also mint the account's 7-day Pro trial directly
+    # via /api/license/trial/signup, so a subprocess failure never leaves
+    # a user paired-but-trial-less. Founder 2026-08-13 hit exactly this:
+    # `clawmetry connect` crashed on an EOFError from an interactive
+    # input() (fixed in this same PR) BEFORE reaching
+    # _activate_signup_trial, so the fallback saved the token but the
+    # account stayed on FREE. The primary fix (non-interactive prompts)
+    # closes the specific hole, but this fallback covers every other
+    # class of subprocess failure — network hiccup, missing binary,
+    # permissions — that would otherwise re-open the same wound.
+    # Best-effort; the pairing already succeeded above, so we always
+    # return True even if trial mint fails (it can retry via CLI later).
+    _fallback_mint_trial(cm_key)
+    return True
+
+
+def _fallback_mint_trial(cm_key: str) -> None:
+    """POST /api/license/trial/signup, activate the returned key locally.
+
+    Standalone from ``clawmetry.cli._activate_signup_trial`` because that
+    function reads its api_key from ``~/.clawmetry/config.json``, which
+    the subprocess didn't get to write. This variant takes the key
+    directly. Never raises."""
+    try:
+        base = resolve_app_base()
+        req = urllib.request.Request(
+            base + "/api/license/trial/signup",
+            data=json.dumps({"api_key": cm_key}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15, context=_ssl_context()) as resp:
+            body = json.loads(resp.read().decode())
+        if not (isinstance(body, dict) and body.get("ok") and body.get("key")):
+            return
+        # Server-side license activation writes ~/.clawmetry/license
+        # via clawmetry.license.activate — import lazily so the shell
+        # keeps starting cleanly even if the venv's clawmetry install
+        # is broken (the whole reason we're in the fallback).
+        try:
+            from clawmetry import license as _lic
+            _lic.activate(body["key"], node_id=_lic._node_id())
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def apply_cm_key(
