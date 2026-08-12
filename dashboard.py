@@ -232,6 +232,44 @@ def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     return proto_msg
 
 
+def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
+    """Decode an OTLP body for ``kind`` ('traces' | 'logs' | 'metrics').
+
+    Issue #4781. ``opentelemetry-proto`` is behind the ``otel`` extra, so on a
+    default install every OTLP POST used to answer 501 and the advertised
+    receiver was simply off. When the extra is present we decode with protobuf
+    exactly as before (it also handles OTLP/JSON via ``json_format``). When it
+    is absent and the body is JSON, we fall back to the stdlib decoder in
+    ``clawmetry.otlp_json``, which returns objects that duck-type the protobuf
+    message API -- so ``_process_otlp_*`` and ``_otel_to_row`` run unchanged
+    over either format and there is no second mapping path to drift.
+
+    Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
+    extra (a protobuf body, or JSON metrics); the HTTP layer turns that into
+    501 with the install hint. Malformed bodies still raise (caller -> 400).
+    """
+    if _HAS_OTEL_PROTO:
+        factories = {
+            "traces": lambda: trace_service_pb2.ExportTraceServiceRequest(),
+            "logs": lambda: logs_service_pb2.ExportLogsServiceRequest(),
+            "metrics": lambda: metrics_service_pb2.ExportMetricsServiceRequest(),
+        }
+        factory = factories.get(kind)
+        if factory is None:
+            raise ValueError(f"unknown OTLP kind: {kind}")
+        return _otlp_decode(pb_data, factory(), content_encoding, content_type)
+
+    from clawmetry.otlp_json import OtlpProtobufUnavailable, decode as _json_decode
+
+    ct = (content_type or "").lower()
+    if "application/json" not in ct and "application/x-ndjson" not in ct:
+        raise OtlpProtobufUnavailable(
+            "protobuf OTLP needs opentelemetry-proto; send Content-Type: "
+            "application/json to use the dependency-free path"
+        )
+    return _json_decode(pb_data, kind, content_encoding=content_encoding)
+
+
 def _otlp_service_name_to_agent_type(service_name):
     """Map an OTLP resource ``service.name`` onto a ClawMetry ``agent_type``.
 
@@ -2304,12 +2342,7 @@ def _get_dp_attrs(dp):
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -2817,12 +2850,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -2965,12 +2993,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
 
     def _f(attrs, *keys):
         for k in keys:
@@ -10760,12 +10783,7 @@ def _get_dp_attrs(dp):
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -11273,12 +11291,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -11421,12 +11434,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
 
     def _f(attrs, *keys):
         for k in keys:
