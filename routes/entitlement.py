@@ -9005,6 +9005,385 @@ def api_entitlement_has_all_at():
         return jsonify(_has_all_at_fallback(tier_in))
 
 
+_MISSING_ALL_AT_KEYS = (
+    "perspective_tier",
+    "perspective_tier_label",
+    "perspective_tier_rank",
+    "features",
+    "runtimes",
+    "channels",
+    "retention_days",
+    "nodes",
+    "unknown_features",
+    "unknown_runtimes",
+    "supplied_axes",
+    "supplied_count",
+    "missing_count",
+    "any_missing",
+    "required_tier",
+    "required_tier_label",
+    "required_tier_rank",
+    "current_tier",
+    "current_tier_rank",
+    "grace",
+    "enforced",
+)
+
+
+def _missing_all_at_fallback(perspective_tier: str) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-at``.
+
+    Mirrors :func:`_has_all_at_fallback` on the paired boolean-fold sibling
+    with the ``has_all_at`` / ``allowed`` slots swapped for the row-detail
+    ``missing_count`` / ``any_missing`` rollups: on a resolver blowup the
+    endpoint still returns 200 with the same envelope shape as the happy
+    path, but every per-axis missing slot empty and ``any_missing=False``
+    so a paywall diagnostics tile that lost the resolver doesn't silently
+    render a denial banner it can no longer justify.
+
+    ``perspective_tier_label`` / ``perspective_tier_rank`` fall back to
+    ``None`` / ``-1`` (matches the sibling ``has-all-at`` fallback
+    envelope) so the envelope shape stays byte-stable across every input
+    branch, including the resolver-blowup fallback.
+    """
+    return {
+        "perspective_tier": perspective_tier,
+        "perspective_tier_label": None,
+        "perspective_tier_rank": -1,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": [],
+        "unknown_runtimes": [],
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "missing_count": 0,
+        "any_missing": False,
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_all_at_body(perspective_tier: str) -> dict:
+    """Happy-path body builder for ``/api/entitlement/missing-all-at``.
+
+    Perspective-shaped row-detail sibling of :func:`_has_all_at_body`:
+    applies the same per-axis normalisation (CSV known/unknown split for
+    features and runtimes with runtime-alias canonicalisation; capacity
+    axes parsed via :func:`_parse_capacity_arg` so a blank / non-int value
+    surfaces the raw string in the per-axis missing slot) then delegates
+    to :func:`clawmetry.entitlements.missing_all_at` against the SUPPLIED
+    axis values so this endpoint stays byte-parity with the module
+    scalar on the per-axis missing detail.
+
+    Every axis is OPTIONAL -- a caller can supply any (or none) of the
+    five kwargs; the envelope always carries every axis' slot for
+    byte-stable shape across every URL branch. No-axes-supplied returns
+    every per-axis slot empty and ``any_missing=False`` (matches
+    :func:`missing_all_at` empty-per-axis posture byte-for-byte and
+    mirrors ``/has-all-at``'s empty-``False`` posture).
+
+    Grace-independent by construction: :func:`missing_all_at` delegates
+    to the static-per-tier ``_at`` singular scalars, so this endpoint's
+    per-axis missing detail is IDENTICAL under grace vs enforce for the
+    same (perspective, bundle) pair -- diverges deliberately from the
+    LIVE ``/missing-all`` sibling (which reports every per-axis slot
+    empty for a fully-known bundle in grace via the resolver's grace
+    pass-through). Whole point of the ``_at`` slot:
+    ``/missing-all-at?tier=oss&features=fleet`` returns
+    ``features=["fleet"]`` even in grace (because OSS statically does
+    not grant ``fleet``), whereas LIVE ``/missing-all?features=fleet``
+    reports ``features=[]`` for it via :attr:`Entitlement.grace`
+    pass-through.
+
+    Unknown feature / runtime tokens are SURFACED inside the per-axis
+    ``features`` / ``runtimes`` missing lists AND echoed in
+    ``unknown_features`` / ``unknown_runtimes`` for a diagnostics
+    tooltip (matches the LIVE ``/missing-all`` unknown-surface posture).
+    A supplied-but-unparseable capacity axis surfaces the raw string in
+    that slot so a UI can flag the typo.
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-only
+    subsets for parity with the ``/has-all`` and ``/has-all-at``
+    envelopes.
+    """
+    from clawmetry import entitlements as _ent
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    # Delegate per-grant-axis to the scalar so the endpoint stays
+    # byte-parity with :func:`missing_all_at` on the known-only subsets;
+    # unknown tokens are appended AFTER the scalar so the endpoint's
+    # diagnostics surface is a strict superset of the module scalar's
+    # (matches the LIVE ``/missing-all`` sibling posture byte-for-byte).
+    features_missing: list = []
+    if features_supplied:
+        features_missing = list(
+            _ent.missing_features_at(perspective_tier, known_features)
+        )
+        for token in unknown_features:
+            if token not in features_missing:
+                features_missing.append(token)
+
+    runtimes_missing: list = []
+    if runtimes_supplied:
+        runtimes_missing = list(
+            _ent.missing_runtimes_at(perspective_tier, known_runtimes)
+        )
+        for token in unknown_runtimes:
+            if token not in runtimes_missing:
+                runtimes_missing.append(token)
+
+    # Capacity axes: raw string surfaces on a supplied-but-unparseable
+    # value so a UI can flag the typo; otherwise the scalar's per-axis
+    # missing rule (SUPPLIED int if denied, None otherwise).
+    def _capacity_missing(present: bool, ok: bool, n, raw, denied_fn):
+        if not present:
+            return None
+        if not ok:
+            return raw
+        try:
+            return n if not denied_fn(perspective_tier, n) else None
+        except Exception:
+            return None
+
+    channels_missing = _capacity_missing(
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+        _ent.has_channel_count_at,
+    )
+    retention_missing = _capacity_missing(
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+        _ent.has_retention_window_at,
+    )
+    nodes_missing = _capacity_missing(
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+        _ent.has_node_count_at,
+    )
+
+    missing_count = 0
+    if features_missing:
+        missing_count += 1
+    if runtimes_missing:
+        missing_count += 1
+    if channels_missing is not None:
+        missing_count += 1
+    if retention_missing is not None:
+        missing_count += 1
+    if nodes_missing is not None:
+        missing_count += 1
+
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    required_label = _ent.tier_label(required) if required else None
+    req_rank = _ent.tier_rank(required) if required else -1
+
+    return {
+        "perspective_tier": perspective_tier,
+        "perspective_tier_label": _ent.tier_label(perspective_tier),
+        "perspective_tier_rank": _ent.tier_rank(perspective_tier),
+        "features": features_missing,
+        "runtimes": runtimes_missing,
+        "channels": channels_missing,
+        "retention_days": retention_missing,
+        "nodes": nodes_missing,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "missing_count": missing_count,
+        "any_missing": missing_count > 0,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-all-at")
+def api_entitlement_missing_all_at():
+    """``GET /api/entitlement/missing-all-at?tier=<perspective>
+    &features=a,b&runtimes=x,y&channels=5&retention_days=30&nodes=2`` --
+    hypothetical-perspective mixed-axis row-detail complement scalar.
+
+    Perspective-shaped row-detail sibling of ``/api/entitlement/missing-all``:
+    same aggregate mixed-axis fold, but the per-axis missing lists answer
+    "which subset would tier ``<perspective>`` NOT grant?" from the static
+    per-tier grant tables instead of "which subset does the resolved
+    entitlement not grant right now?" from the live resolver. A paywall
+    diagnostics tile that renders "on OSS you'd still be missing fleet +
+    claude_code + 100 channels + 90d retention + 99 nodes -- upgrade to
+    unlock" binds every per-axis slot directly off this URL per
+    perspective without switching the resolver.
+
+    Fills the ``_at`` slot on the mixed-axis row-detail complement family
+    alongside :func:`_has_all_at_body` (boolean-fold sibling) and the
+    singular row-detail ``_at`` endpoints ``/missing-features-at`` /
+    ``/missing-runtimes-at`` for the two grant axes.
+
+    Every axis is OPTIONAL. Supply any non-empty subset; the envelope
+    always carries every axis' slot for byte-stable shape across every
+    URL branch. Runtime-alias canonicalisation (``claude-code`` ->
+    ``claude_code``) is applied per token before the known/unknown split.
+    Capacity axes accept a single int (``5``); blank / non-int values
+    surface the raw string in the per-axis missing slot so a UI can flag
+    the typo. Unknown feature / runtime tokens are surfaced INSIDE the
+    per-axis missing list AND echoed in ``unknown_features`` /
+    ``unknown_runtimes`` for a diagnostics tooltip.
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (they read the static per-tier tables via the singular
+    ``_at`` delegates, not the resolver's ``grace`` bit) -- the whole
+    point of the ``_at`` slot: ``/missing-all-at?tier=oss&features=fleet``
+    returns ``features=["fleet"]`` even in grace (because OSS statically
+    does not grant ``fleet``), whereas the LIVE
+    ``/missing-all?features=fleet`` reports ``features=[]`` for it via
+    :attr:`Entitlement.grace` pass-through.
+
+    - **400** on missing / blank ``tier=``.
+    - **404** on unknown ``tier=`` (body carries ``which=tier``).
+    - **Never 4xxs** on axis-side inputs -- no axes supplied returns 200
+      with every per-axis slot empty and ``any_missing=false`` (matches
+      ``/missing-all`` empty posture).
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope with every per-axis slot empty and
+      ``any_missing=false`` so the pricing walkthrough keeps rendering.
+
+    Envelope shape (21 keys, byte-stable across every input branch)::
+
+        {
+          "perspective_tier":       "oss",
+          "perspective_tier_label": "OSS",
+          "perspective_tier_rank":  <int>,
+          "features":               ["fleet"],           # DENIED subset (+ unknowns)
+          "runtimes":               ["claude_code"],     # DENIED subset (+ unknowns)
+          "channels":               100 | null,          # supplied int if denied, else null
+          "retention_days":         90  | null,
+          "nodes":                  99  | null,
+          "unknown_features":       ["bogus"],
+          "unknown_runtimes":       [],
+          "supplied_axes":          ["features"],
+          "supplied_count":         1,
+          "missing_count":          1,
+          "any_missing":            true,
+          "required_tier":          "cloud_pro" | null,
+          "required_tier_label":    "Pro" | null,
+          "required_tier_rank":     <int>,               # -1 when null
+          "current_tier":           "oss",
+          "current_tier_rank":      0,
+          "grace":                  true,
+          "enforced":               false
+        }
+
+    Note the deliberate absence of ``upgrade_required``: this is the
+    perspective-shaped ``_at`` slot, so comparing against the LIVE
+    current-tier rank would double-count the perspective (matches the
+    singular ``/missing-features-at`` / ``/missing-runtimes-at`` and the
+    paired ``/has-all-at`` siblings which omit it for the same reason).
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        return jsonify(_missing_all_at_body(tier_in))
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_all_at: error: %s", exc)
+        return jsonify(_missing_all_at_fallback(tier_in))
+
+
 def _has_all_at_batch_fallback(
     tier_tokens: list,
     feature_tokens: list,
@@ -38708,6 +39087,213 @@ def api_entitlement_min_tier_for_runtimes_batch():
     except Exception as exc:
         logger.warning(
             "api_entitlement_min_tier_for_runtimes_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+def _has_bundle_row_body(row: dict, list_key: str) -> dict:
+    """Normalise a ``has_features_bundle_batch`` /
+    ``has_runtimes_bundle_batch`` helper row for the endpoint response.
+
+    Boolean-fold sibling of :func:`_min_tier_for_bundle_row_to_body`:
+    same ``list_key`` / ``unknown`` / ``kind`` / ``count`` axes, but the
+    tier slots are swapped for a single ``has_<axis>`` bool matching the
+    fold-slot name on the singular ``/api/entitlement/has-features`` /
+    ``/has-runtimes`` endpoint body. Never raises; a missing key
+    surfaces as the empty-row shape with ``has_<axis>=False`` so the
+    batch envelope is byte-stable across every branch.
+    """
+    fold_key = f"has_{list_key}"
+    return {
+        list_key: list(row.get(list_key) or []),
+        "unknown": list(row.get("unknown") or []),
+        "kind": row.get("kind"),
+        "count": int(row.get("count") or 0),
+        fold_key: bool(row.get(fold_key)),
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-features-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_has_features_bundle_batch():
+    """``POST /api/entitlement/has-features-bundle-batch`` -- bundle-axis
+    batch boolean-fold sibling of ``/api/entitlement/has-features``.
+
+    Where the singular endpoint folds ONE bundle of features to ONE
+    ``has_features`` boolean on the LIVE install, this folds N caller-
+    supplied feature bundles to N ``has_features`` rows in ONE round-
+    trip. Distinct from ``/has-features-at-batch`` (which fixes ONE
+    feature bundle and sweeps N perspective tiers): this fixes N
+    bundles and reads the LIVE per-install grant. Boolean-fold sibling
+    of ``/min-tier-for-features-batch`` on the reverse-lookup slot; the
+    two responses pair on the same ``features`` / ``unknown`` / ``kind``
+    / ``count`` axes so a UI can render "granted right now? / cheapest
+    tier that grants it?" side by side per bundle off two calls.
+
+    Use case: a paywall matrix or upgrade-walkthrough surface comparing
+    several hypothetical feature sets ("starter add-ons vs pro add-ons
+    vs enterprise add-ons") hydrates the LIVE-grant column off ONE
+    round-trip instead of N calls to ``/has-features``.
+
+    POST rather than GET because the caller-supplied set of bundles can
+    grow past a comfortable query-string length; the sibling singular
+    endpoint uses GET+CSV where the bundle is small.
+
+    Request body::
+
+        {
+          "bundles": [
+            ["fleet", "sso"],
+            ["otel_export"],
+            []
+          ]
+        }
+
+    A shorthand ``{"bundles": ["fleet", "sso"]}`` (bare list of strings)
+    is treated as ONE bundle, matching the singular endpoint's bare-CSV
+    posture; a missing / non-list ``bundles`` value is a 400. An empty
+    ``bundles=[]`` list is a 400 for the same reason the singular
+    endpoint 400s on an empty ``features=`` -- distinguishes "caller
+    asked for nothing" from "caller asked and every token was unknown".
+
+    Response shape::
+
+        {
+          "bundles": [<row>, ...],
+          "count":   <int>,        # len(bundles)
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` is byte-stable across every input branch::
+
+        {
+          "features":     ["fleet", "sso"],
+          "unknown":      ["bogus"],
+          "kind":         "features",
+          "count":        2,
+          "has_features": <bool>,
+        }
+
+    Per-bundle normalisation matches the singular endpoint: whitespace
+    stripped, lowercased, deduplicated preserving first-seen order;
+    unknown ids bucketed into the per-bundle ``unknown`` list instead
+    of mis-collapsing the fold. Any unknown token collapses that row's
+    ``has_features`` to ``False`` (inherits the singular typo-catches-
+    at-callsite posture). Empty / all-unknown bundles surface as a
+    stable row with ``has_features=False`` (does NOT short-circuit the
+    batch).
+
+    - **400** when ``bundles`` is missing / non-list / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the paywall matrix keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.has_features_bundle_batch(bundles)
+        out_rows = [_has_bundle_row_body(row, "features") for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_features_bundle_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-runtimes-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_has_runtimes_bundle_batch():
+    """``POST /api/entitlement/has-runtimes-bundle-batch`` -- runtime-
+    axis twin of ``/api/entitlement/has-features-bundle-batch``.
+
+    Same never-5xx posture, same partial-unknown bucketing, same POST
+    envelope. Runtime aliases (``claude-code`` -> ``claude_code``) are
+    canonicalised per bundle through
+    :func:`clawmetry.entitlements.canonical_runtime` so a caller does
+    not need to normalise before calling; unknown ids land in the per-
+    bundle ``unknown`` and collapse that row's ``has_runtimes`` to
+    ``False`` (a typo does NOT silently render "granted" even in
+    grace).
+
+    Request body::
+
+        {
+          "bundles": [
+            ["claude_code", "codex"],
+            ["openclaw"],
+            []
+          ]
+        }
+
+    Response shape and error paths mirror
+    ``/has-features-bundle-batch`` exactly, with ``kind="runtimes"``,
+    a ``runtimes`` list in place of ``features``, and ``has_runtimes``
+    in place of ``has_features`` per row.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.has_runtimes_bundle_batch(bundles)
+        out_rows = [_has_bundle_row_body(row, "runtimes") for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_runtimes_bundle_batch: error: %s", exc
         )
         return jsonify(
             {

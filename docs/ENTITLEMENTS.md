@@ -193,15 +193,80 @@ family of preview/diff/batch helpers. The stable everyday endpoints are:
 | `GET /api/entitlement/required-tier?feature=<f>` | Cheapest tier that includes the given feature/runtime/channel-count/etc. |
 
 Beyond these there is a large family of preview / batch / capacity /
-"at-tier" / rollup (`has-all`, `missing-all`) / row-detail
-complement (`missing-features`, `missing-runtimes`) endpoints that
-let a UI answer questions like "what does tier X look like at N
-channels", "which tiers are affordable at this node count", "what
-does the path from tier A to tier B unlock at each step", "does the
-resolved install grant this whole bundle in one boolean fold" and
-"what's blocking the upgrade off ONE per-axis denial payload". They
-all read the same in-memory tier matrix and never mutate state. See
-`routes/entitlement.py` for the full list.
+'at-tier' / rollup (`has-all`, `missing-all`, `missing-all-at`) /
+row-detail complement (`missing-features`, `missing-runtimes`) /
+multi-bundle boolean-fold (`has-features-bundle-batch`,
+`has-runtimes-bundle-batch`) endpoints that let a UI answer questions
+like "what does tier X look like at N channels", "which tiers are
+affordable at this node count", "what does the path from tier A to tier B
+unlock at each step", "does the resolved install grant this whole bundle
+in one boolean fold" and "what's blocking the upgrade off ONE per-axis
+denial payload". They all read the same in-memory tier matrix and never
+mutate state. See `routes/entitlement.py` for the full list.
+
+### Boolean-fold bundle-batch endpoints
+
+`POST /api/entitlement/has-features-bundle-batch` and `POST
+/api/entitlement/has-runtimes-bundle-batch` fold N caller-supplied
+feature/runtime bundles to N `has_*` booleans in one round-trip — the
+boolean-fold sibling of `/min-tier-for-features-batch` /
+`/min-tier-for-runtimes-batch` on the same bundle axis.
+
+**Request body** (byte-identical to the `min-tier-for-*-batch` siblings):
+
+```json
+{"bundles": [["fleet", "sso"], ["otel_export"], []]}
+```
+
+A bare list-of-strings is treated as one bundle (single-bundle shorthand).
+400 on missing / non-list / empty `bundles` key.
+
+**Response envelope** (6 keys):
+
+```json
+{
+  "bundles":          [...],
+  "count":            3,
+  "current_tier":     "oss",
+  "current_tier_rank": 0,
+  "grace":            true,
+  "enforced":         false
+}
+```
+
+**Per-bundle row** (5 keys; `has_features` / `has_runtimes` mirrors the
+singular scalar's return-slot name):
+
+```json
+{
+  "features":     ["fleet", "sso"],
+  "unknown":      [],
+  "kind":         "features",
+  "count":        2,
+  "has_features": true
+}
+```
+
+The `features`/`runtimes`, `unknown`, `kind`, and `count` keys are
+byte-identical to the corresponding `/min-tier-for-*-batch` rows so a UI
+can render "granted right now?" and "cheapest tier that grants it?"
+side-by-side per bundle from two calls.
+
+**Behaviour notes:**
+
+- An unknown token anywhere in a bundle collapses that row's `has_*` to
+  `false` (matches the singular `has_features` / `has_runtimes`
+  typo-at-callsite posture — a typo surfaces via `unknown[]` instead of
+  silently appearing granted).
+- Empty, all-unknown, `None`, and non-iterable bundles surface as a stable
+  row with `has_*: false`.
+- Runtime aliases are canonicalised per-bundle before the membership check
+  (`claude-code` → `claude_code`); unknown ids echo raw into `unknown[]`.
+- Never raises: per-bundle failures short-circuit to the empty row shape so
+  the batch keeps building.
+- Ships in GRACE mode — `has_*` reads the live grant via the same resolver
+  as the singular scalar. A paid feature returns `true` in grace; FREE
+  runtimes return `true` on the live install regardless of rollout state.
 
 Every endpoint is defensive: a resolver failure falls back to the OSS-
 free snapshot (identical shape) rather than 500-ing, so a UI can rely
