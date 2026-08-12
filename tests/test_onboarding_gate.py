@@ -26,6 +26,13 @@ def ob(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_STATE_PATH", str(tmp_path / "onboarding.json"))
     monkeypatch.setattr(mod, "_license_state", lambda: "")
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
+    # Isolate the desktop shell stamp path too: on a dev box with the
+    # real .app installed, ``_desktop_shell_stamp`` would read the real
+    # user's onboarding-completed.json and the fresh-install tests here
+    # would falsely see the machine as already-onboarded.
+    _shell_dir = tmp_path / "desktop-shell-runtime"
+    _shell_dir.mkdir()
+    monkeypatch.setattr(mod, "_desktop_shell_runtime_dir", lambda: _shell_dir)
     monkeypatch.setattr(mod, "_ping_onboarded", lambda choice: None)
     monkeypatch.setattr(mod, "_apply_marker_semantics", lambda choice: None)
     # Must never actually register/spawn a real daemon during a unit test —
