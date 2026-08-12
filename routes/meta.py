@@ -1226,13 +1226,23 @@ def otlp_metrics():
 
 @bp_otel.route("/v1/traces", methods=["POST"])
 def otlp_traces():
-    """OTLP/HTTP receiver for traces (protobuf)."""
+    """OTLP/HTTP receiver for traces (protobuf or JSON).
+
+    JSON bodies (application/json) are decoded with the stdlib — no
+    opentelemetry-proto required — so a default `pip install clawmetry` can
+    receive traces from any OTLP/HTTP exporter. Binary protobuf bodies still
+    require the [otel] extra. (#4781)
+    """
     import dashboard as _d
     if _d._budget_paused:
         return jsonify(
             {"error": "Budget limit exceeded - intake paused", "paused": True}
         ), 429
-    if not _d._HAS_OTEL_PROTO:
+
+    ct = request.headers.get("Content-Type", "")
+    is_json = "application/json" in ct or "application/x-ndjson" in ct
+
+    if not is_json and not _d._HAS_OTEL_PROTO:
         return jsonify(
             {
                 "error": "opentelemetry-proto not installed",
@@ -1243,11 +1253,17 @@ def otlp_traces():
 
     try:
         pb_data = request.get_data()
-        _d._process_otlp_traces(
-            pb_data,
-            content_encoding=request.headers.get("Content-Encoding"),
-            content_type=request.headers.get("Content-Type"),
-        )
+        if is_json and not _d._HAS_OTEL_PROTO:
+            _d._process_otlp_traces_json(
+                pb_data,
+                content_encoding=request.headers.get("Content-Encoding"),
+            )
+        else:
+            _d._process_otlp_traces(
+                pb_data,
+                content_encoding=request.headers.get("Content-Encoding"),
+                content_type=ct,
+            )
         return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
         try:

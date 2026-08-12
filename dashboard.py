@@ -10724,6 +10724,40 @@ def _otel_attr_value(val):
     return str(val)
 
 
+def _otlp_json_attr_value(val_dict):
+    """Extract a Python value from an OTLP/JSON AnyValue dict (#4781).
+
+    OTLP/JSON encodes attribute values as a tagged union dict:
+      {"stringValue": "x"}, {"intValue": "42"}, {"doubleValue": 1.5},
+      {"boolValue": true}, {"arrayValue": {values:[...]}}, {"kvlistValue": ...}.
+    Note: int64 fields arrive as JSON strings per the protobuf JSON spec.
+    """
+    if not isinstance(val_dict, dict):
+        return str(val_dict) if val_dict is not None else ""
+    if "stringValue" in val_dict:
+        return val_dict["stringValue"]
+    if "intValue" in val_dict:
+        try:
+            return int(val_dict["intValue"])
+        except (TypeError, ValueError):
+            return val_dict["intValue"]
+    if "doubleValue" in val_dict:
+        try:
+            return float(val_dict["doubleValue"])
+        except (TypeError, ValueError):
+            return val_dict["doubleValue"]
+    if "boolValue" in val_dict:
+        return bool(val_dict["boolValue"])
+    if "arrayValue" in val_dict:
+        arr = val_dict["arrayValue"]
+        return [_otlp_json_attr_value(v) for v in (arr.get("values", []) if isinstance(arr, dict) else [])]
+    if "kvlistValue" in val_dict:
+        kv = val_dict["kvlistValue"]
+        return {item["key"]: _otlp_json_attr_value(item.get("value", {}))
+                for item in (kv.get("values", []) if isinstance(kv, dict) else []) if "key" in item}
+    return str(val_dict)
+
+
 def _get_data_points(metric):
     """Extract data points from a metric regardless of type."""
     if metric.HasField("sum"):
@@ -11408,6 +11442,262 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             )
                         except Exception:
                             pass
+
+
+def _otlp_json_span_to_row(span, attrs, resource_attrs):
+    """Convert an OTLP/JSON span dict (with pre-extracted attrs) to a DuckDB row.
+
+    Mirrors _otel_to_row but for stdlib-decoded JSON. traceId/spanId are
+    already lowercase hex strings in OTLP/JSON (per the OTLP spec's exception
+    to standard protobuf JSON base64 encoding), so no _hex() conversion is
+    needed. Timestamps arrive as string uint64 nanoseconds. (#4781)
+    """
+    start_ns = int(span.get("startTimeUnixNano") or "0")
+    end_ns = int(span.get("endTimeUnixNano") or "0")
+    start_ts = start_ns / 1e9
+    end_ts = end_ns / 1e9 or start_ts
+    duration_ns = max(0, end_ns - start_ns)
+    duration_ms = duration_ns / 1_000_000.0
+
+    kind_id = span.get("kind") or 0
+    kind_name = _OTEL_SPAN_KIND_NAMES.get(kind_id, str(kind_id))
+
+    status = span.get("status") or {}
+    status_code_id = status.get("code") or 0
+    status_message = status.get("message") or ""
+    status_code_name = _OTEL_STATUS_CODE_NAMES.get(status_code_id, str(status_code_id))
+
+    def _pick(*keys):
+        for k in keys:
+            v = attrs.get(k)
+            if v not in (None, ""):
+                return v
+            v = resource_attrs.get(k)
+            if v not in (None, ""):
+                return v
+        return None
+
+    def _pick_int(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _pick_float(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    model = _pick("gen_ai.request.model", "gen_ai.response.model", "llm.model", "model")
+    tokens_input = _pick_int("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "input_tokens")
+    tokens_output = _pick_int("gen_ai.usage.output_tokens", "llm.usage.completion_tokens", "output_tokens")
+    token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
+    if token_count is None and (tokens_input or tokens_output):
+        token_count = (tokens_input or 0) + (tokens_output or 0)
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
+    cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
+    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
+        try:
+            from clawmetry.providers_pricing import estimate_event_cost_usd
+            derived = estimate_event_cost_usd(
+                model,
+                input_tokens=tokens_input or 0,
+                output_tokens=tokens_output or 0,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                provider=provider,
+            )
+            if derived:
+                cost_usd = derived
+        except Exception:
+            pass
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
+    service_name = resource_attrs.get("service.name") or attrs.get("service.name")
+    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type")
+    if not agent_type:
+        derived_at = _otlp_service_name_to_agent_type(service_name)
+        agent_type = derived_at or "openclaw"
+    node_id = _pick("node.id", "openclaw.node_id", "host.name")
+
+    events = []
+    for ev in span.get("events", []):
+        ev_attrs = {}
+        for a in ev.get("attributes", []):
+            k = a.get("key", "")
+            if k:
+                ev_attrs[k] = _otlp_json_attr_value(a.get("value", {}))
+        events.append({
+            "time_unix_nano": int(ev.get("timeUnixNano") or "0"),
+            "name": ev.get("name", ""),
+            "attributes": ev_attrs,
+        })
+
+    links = []
+    for ln in span.get("links", []):
+        ln_attrs = {}
+        for a in ln.get("attributes", []):
+            k = a.get("key", "")
+            if k:
+                ln_attrs[k] = _otlp_json_attr_value(a.get("value", {}))
+        links.append({
+            "trace_id": ln.get("traceId", ""),
+            "span_id": ln.get("spanId", ""),
+            "attributes": ln_attrs,
+        })
+
+    input_val = (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
+                 or attrs.get("llm.prompts") or attrs.get("input"))
+    output_val = (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
+                  or attrs.get("llm.completions") or attrs.get("output"))
+
+    return {
+        "span_id": span.get("spanId") or "",
+        "trace_id": span.get("traceId") or "",
+        "parent_span_id": span.get("parentSpanId") or None,
+        "agent_type": agent_type,
+        "agent_id": agent_id,
+        "node_id": node_id,
+        "session_id": session_id,
+        "service_name": service_name,
+        "name": span.get("name", ""),
+        "kind": kind_name,
+        "status_code": status_code_name,
+        "status_message": status_message,
+        "status": status_code_name,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_ms": duration_ms,
+        "duration_ns": duration_ns,
+        "model": model,
+        "tool_name": tool_name,
+        "cost_usd": cost_usd,
+        "token_count": token_count,
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "input": input_val,
+        "output": output_val,
+        "attributes": attrs,
+        "events": events,
+        "links": links,
+    }
+
+
+def _process_otlp_traces_json(raw_data, content_encoding=None):
+    """Process an OTLP/JSON trace payload using only the stdlib — no protobuf.
+
+    Called by the /v1/traces route when Content-Type is application/json and
+    opentelemetry-proto is not installed. Produces the same DuckDB rows and
+    in-memory metrics as _process_otlp_traces so both paths are equivalent for
+    all downstream consumers. (#4781)
+    """
+    import json as _json
+    ce = (content_encoding or "").lower()
+    if "gzip" in ce:
+        raw_data = _gunzip_bounded(raw_data)
+    body = raw_data.decode("utf-8") if isinstance(raw_data, (bytes, bytearray)) else raw_data
+    req = _json.loads(body)
+
+    _store = None
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+    except Exception:
+        pass
+
+    for resource_spans in req.get("resourceSpans", []):
+        resource_attrs = {}
+        resource = resource_spans.get("resource") or {}
+        for attr in resource.get("attributes", []):
+            k = attr.get("key", "")
+            if k:
+                resource_attrs[k] = _otlp_json_attr_value(attr.get("value", {}))
+
+        for scope_spans in resource_spans.get("scopeSpans", []):
+            for span in scope_spans.get("spans", []):
+                attrs = {}
+                for attr in span.get("attributes", []):
+                    k = attr.get("key", "")
+                    if k:
+                        attrs[k] = _otlp_json_attr_value(attr.get("value", {}))
+
+                start_ns = int(span.get("startTimeUnixNano") or "0")
+                end_ns = int(span.get("endTimeUnixNano") or "0")
+                duration_ns = max(0, end_ns - start_ns)
+                duration_ms = duration_ns / 1_000_000
+                ts = time.time()
+
+                span_name = (span.get("name") or "").lower()
+                _genai_op = (attrs.get("gen_ai.operation.name") or "").lower()
+                _is_genai_run = (
+                    _genai_op in ("chat", "text_completion", "generate_content")
+                    or span_name.endswith(".chat")
+                    or span_name.endswith(".completion")
+                    or span_name in ("openai.chat", "anthropic.chat")
+                )
+                if "run" in span_name or "completion" in span_name or _is_genai_run:
+                    _add_metric("runs", {
+                        "timestamp": ts, "duration_ms": duration_ms,
+                        "model": attrs.get("model", resource_attrs.get("model", "")),
+                        "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                    })
+                elif "message" in span_name:
+                    _add_metric("messages", {
+                        "timestamp": ts,
+                        "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                        "outcome": "processed", "duration_ms": duration_ms,
+                    })
+
+                _sc = (attrs.get("cost_usd") or attrs.get("cost.usd")
+                       or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
+                if _sc is not None:
+                    try:
+                        _add_metric("cost", {
+                            "timestamp": ts, "usd": float(_sc),
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
+                _si = (attrs.get("gen_ai.usage.input_tokens") or attrs.get("input_tokens")
+                       or attrs.get("tokens.input") or attrs.get("prompt_tokens"))
+                _so = (attrs.get("gen_ai.usage.output_tokens") or attrs.get("output_tokens")
+                       or attrs.get("tokens.output") or attrs.get("completion_tokens"))
+                if _si is not None or _so is not None:
+                    try:
+                        _i, _o = int(_si or 0), int(_so or 0)
+                        _add_metric("tokens", {
+                            "timestamp": ts, "input": _i, "output": _o, "total": _i + _o,
+                            "model": attrs.get("model", resource_attrs.get("model", "")),
+                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
+                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
+                        })
+                    except (TypeError, ValueError):
+                        pass
+
+                if _store is not None:
+                    try:
+                        _store.put_span(span=_otlp_json_span_to_row(span, attrs, resource_attrs))
+                    except Exception as _e:
+                        try:
+                            import logging as _lg
+                            _lg.getLogger("clawmetry.dashboard").warning(
+                                "local_store.put_span failed (JSON path): %s", _e
+                            )
+                        except Exception:
+                            pass
+
 
 
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
