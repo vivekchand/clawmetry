@@ -272,6 +272,49 @@ Every endpoint is defensive: a resolver failure falls back to the OSS-
 free snapshot (identical shape) rather than 500-ing, so a UI can rely
 on the response shape being stable.
 
+### Row-detail path-walk endpoint: `missing-all-at-path`
+
+`GET /api/entitlement/missing-all-at-path?from=<id>&to=<id>&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis path-shaped row-detail complement of `has-all-at-path`.
+Fixes ONE 5-axis bundle and sweeps across every purchasable rung between
+`from` and `to`, returning per-axis denial detail at each rung in one
+round-trip. Answers "at which rung does each per-axis slot in this 5-axis
+bundle clear?" for an upgrade-walkthrough tooltip without first calling
+`/tier-path` for the rung list and then N calls to `missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs.
+
+**Per-rung row:**
+
+```json
+{
+  "tier":       "cloud_starter",
+  "tier_label": "Starter",
+  "tier_rank":  2,
+  "missing": {
+    "features":       ["sso"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-at-path`: `any(row["missing"].values())`
+byte-equals `not row["has_all_at"]` on the paired boolean-fold row for
+every fully-parseable bundle.
+
+Unknown or missing endpoints return 200 with `path=[]` (never 4xxs or 5xxs).
+Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
 ---
 
 ## The `clawmetry license` CLI
