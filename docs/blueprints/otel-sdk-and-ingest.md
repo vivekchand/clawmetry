@@ -30,12 +30,23 @@ already emitting OTel somewhere else.
 The feature composes capabilities that already exist. It does not redefine
 them; it extends their reach.
 
-`#OtlpReceiver` (blueprint: Local Agent Observability) owns
-`POST /v1/traces`, `/v1/metrics`, `/v1/logs` on `bp_otel` in
-`routes/meta.py`. It decodes through `_otlp_decode` and maps spans through
-`_process_otlp_traces` into both the in-memory metric cache and the DuckDB
-`spans` table. This feature adds a second bind address and a decoder path to
-that component but does not change its mapping semantics.
+```component
+name: OtlpReceiver
+container: ClawMetry Dashboard
+responsibilities:
+	- Serving `POST /v1/traces`, `/v1/metrics`, `/v1/logs` on the `bp_otel` blueprint
+	- Decoding protobuf, OTLP/JSON, and gzip request bodies into one request shape
+	- Mapping spans into the in-memory metric cache and the DuckDB `spans` table
+	- Reporting receiver state on `GET /api/otel-status`
+```
+
+`#OtlpReceiver` exists in code today (`routes/meta.py` plus the
+`_process_otlp_*` mappers in `dashboard.py`) but has no component block in the
+@Local Agent Observability Component Blueprint, so it is defined here and
+should move up into that blueprint when someone with Software Factory write
+access next syncs it. This feature adds a second bind address
+(`#OtlpCompatListener`) and a second decoder (`#OtlpJsonDecoder`) to it, and
+changes neither its mapping semantics nor its storage shape.
 
 `#LocalStore` owns the `spans` table and the read surfaces `query_spans`,
 `query_recent_spans`, `query_trace_rollup`, and `query_otlp_app_rollup`. The
@@ -188,6 +199,20 @@ either under `Content-Encoding: gzip`, on both the dashboard port and 4318, and
 answers `200 {}` on success and `400` on a malformed body. It answers `501`
 only when a protobuf payload arrives without `opentelemetry-proto` installed;
 a JSON payload never answers `501` after this feature lands.
+
+`GET /api/otel-status` reports `available` (always true: OTLP/JSON traces and
+logs need no extra), `protobuf` (whether `opentelemetry-proto` is installed,
+which is what `available` alone used to mean), `jsonIngest` (the signals the
+dependency-free decoder covers, currently `["traces", "logs"]`), plus the
+existing `hasData`, `lastReceived`, `counts`, and `export*` fields.
+
+The receiver's listening surface is configured by three environment variables.
+`CLAWMETRY_OTLP_PORT` overrides the conventional port (`4318`; `0` binds an
+ephemeral port, which the tests use). `CLAWMETRY_OTLP_HOST` overrides the bind
+address, which defaults to `127.0.0.1` regardless of the dashboard's own
+`--host`, so widening the ingest surface is always deliberate.
+`CLAWMETRY_OTLP_PORT_DISABLE=1` stops the second listener entirely, leaving
+`/v1/*` served on the dashboard port alone.
 
 `GET /api/traces` returns `{available, traces[], total}` where each trace
 carries `trace_id`, `title`, `start_ms`, `duration_ms`, `span_count`, `model`,
