@@ -7426,6 +7426,279 @@ def has_runtimes_at_batch(perspective_tiers, runtimes) -> dict:
     return {"tiers": rows, "unknown": unknown}
 
 
+def _has_features_bundle_row(bundle) -> dict:
+    """Per-bundle row shape for :func:`has_features_bundle_batch`.
+
+    Normalises the bundle exactly the way the singular
+    ``/api/entitlement/has-features`` endpoint does (whitespace stripped,
+    lowercased, deduplicated preserving first-seen order; unknown ids
+    bucketed into ``unknown`` instead of collapsing the whole fold
+    silently) then folds it through :func:`has_features` for the scalar
+    boolean answer.
+
+    Row keys mirror the reverse-lookup sibling
+    :func:`_min_tier_for_features_bundle_row` on every axis but the fold
+    slot: ``features``, ``unknown``, ``kind``, ``count`` are byte-
+    identical so a caller can pair the two bundle-batch rows on the
+    same input; the fold slot swaps ``min_tier*`` for ``has_features``
+    (bool) matching :func:`has_features` -- the singular scalar in the
+    same relationship :func:`min_tier_for_features` has on the reverse-
+    lookup slot.
+
+    An unknown / non-string token echoes into ``unknown`` but ALSO
+    collapses ``has_features`` to ``False`` (inherits :func:`has_features`
+    fold semantics: a typo fails the fold instead of silently granting
+    the bundle even in grace). An empty / all-unknown bundle surfaces as
+    a stable row with ``has_features=False`` so the batch keeps building.
+    Never raises: a per-bundle failure returns the empty row shape with
+    the fold ``False``.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            fid = str(token).strip().lower()
+        except Exception:
+            continue
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        if fid in ALL_FEATURES:
+            known.append(fid)
+        else:
+            unknown.append(fid)
+    # Fold rule matches has_features: unknown -> False; empty bundle ->
+    # False (vacuous-truth refused so a caller who forgot the bundle does
+    # not silently render "granted"). Delegates to has_features on the
+    # KNOWN list only after enforcing "no unknown items" so the singular
+    # has_features(known)=True answer cannot mask a typo the row surfaces
+    # via ``unknown``.
+    try:
+        if unknown or not known:
+            allowed = False
+        else:
+            allowed = bool(has_features(known))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _has_features_bundle_row fold failed: %s", exc
+        )
+        allowed = False
+    return {
+        "features": known,
+        "unknown": unknown,
+        "kind": "features",
+        "count": len(known),
+        "has_features": allowed,
+    }
+
+
+def _has_runtimes_bundle_row(bundle) -> dict:
+    """Runtime-axis twin of :func:`_has_features_bundle_row`.
+
+    Applies :func:`canonical_runtime` before the :data:`ALL_RUNTIMES`
+    membership check so aliases (``claude-code`` -> ``claude_code``)
+    resolve the same way they do on the singular endpoint; duplicates
+    that collapse after canonicalisation only contribute one row.
+    Unknown runtime tokens are echoed into ``unknown`` using the raw
+    lowercased id (matching :func:`_min_tier_for_runtimes_bundle_row`
+    fallback shape). Same fold semantics as
+    :func:`_has_features_bundle_row`: unknown or empty collapses
+    ``has_runtimes`` to ``False``. Never raises.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            raw = str(token).strip().lower()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        canon = canonical_runtime(raw)
+        if canon and canon in ALL_RUNTIMES:
+            if canon in seen:
+                continue
+            seen.add(canon)
+            known.append(canon)
+        else:
+            if raw in seen:
+                continue
+            seen.add(raw)
+            unknown.append(raw)
+    try:
+        if unknown or not known:
+            allowed = False
+        else:
+            allowed = bool(has_runtimes(known))
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _has_runtimes_bundle_row fold failed: %s", exc
+        )
+        allowed = False
+    return {
+        "runtimes": known,
+        "unknown": unknown,
+        "kind": "runtimes",
+        "count": len(known),
+        "has_runtimes": allowed,
+    }
+
+
+def has_features_bundle_batch(bundles) -> list[dict]:
+    """Per-bundle boolean-fold "does the CURRENT install grant this whole
+    bundle?" for N caller-supplied feature bundles in ONE round-trip.
+
+    Bundle-axis batch sibling of :func:`has_features` (which folds ONE
+    bundle to ONE boolean) in the same relationship
+    :func:`min_tier_for_features_batch` has to
+    :func:`min_tier_for_features` on the reverse-lookup slot. Where the
+    singular scalar answers "does the CURRENT install allow all these
+    features?" this batches the same question for N distinct feature
+    bundles at once so a paywall matrix or upgrade-walkthrough surface
+    comparing several hypothetical feature sets ("starter add-ons vs
+    pro add-ons vs enterprise add-ons") reads the LIVE grant answer off
+    ONE call instead of N calls to :func:`has_features`.
+
+    Distinct from :func:`has_features_at_batch` (which fixes ONE feature
+    bundle and sweeps N perspective tiers): this fixes N bundles and
+    reads the LIVE per-install grant. Boolean-fold sibling of
+    :func:`min_tier_for_features_batch` on the same input; the two rows
+    pair on the same ``features`` / ``unknown`` / ``kind`` / ``count``
+    axes so a UI can render "granted here? / cheapest tier that grants
+    it?" side by side per bundle.
+
+    Row shape (5 keys) mirrors the reverse-lookup sibling row minus the
+    tier slots plus the boolean-fold slot::
+
+        {
+          "features":     ["fleet", "sso"],
+          "unknown":      ["bogus"],
+          "kind":         "features",
+          "count":        2,
+          "has_features": <bool>,
+        }
+
+    Per-bundle normalisation matches :func:`has_features` /
+    :func:`_min_tier_for_features_bundle_row`: whitespace stripped,
+    lowercased, deduplicated preserving first-seen order; unknown ids
+    bucketed into ``unknown`` instead of silently collapsing the fold
+    without surfacing the typo. Any unknown token collapses the row's
+    ``has_features`` to ``False`` (inherits :func:`has_features` typo-
+    catches-at-callsite posture: ``has_features(["fleet", "Fleeet"])``
+    is ``False`` even in grace). Empty / all-unknown bundles surface as
+    a stable row with ``has_features=False``.
+
+    Argument handling:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]``.
+    * Each bundle may itself be ``None``, non-iterable, or empty -- the
+      helper emits the empty row shape rather than raising.
+    * Non-string tokens inside a bundle are coerced via ``str(...)``
+      (matches the singular endpoint's silent-drop posture for garbage).
+
+    Grace pass-through: while ``ent.grace`` is ``True`` and every item
+    is a known id, the per-row fold reports ``True`` (each
+    :func:`has_feature` reports ``True`` in grace), so wiring this into
+    a paywall matrix today changes NO current behavior. Diverges
+    deliberately from :func:`_min_tier_for_features_bundle_row` (which
+    is grace-independent by construction, backed by the static per-tier
+    grant map); the LIVE row here reflects the running install so the
+    matrix can pair "cheapest tier" and "granted right now" per bundle.
+
+    Never raises: per-bundle failures short-circuit to the empty row
+    shape (``has_features=False``) so the batch keeps building.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_has_features_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_features_bundle_batch row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "features": [],
+                    "unknown": [],
+                    "kind": "features",
+                    "count": 0,
+                    "has_features": False,
+                }
+            )
+    return out
+
+
+def has_runtimes_bundle_batch(bundles) -> list[dict]:
+    """Runtime-axis twin of :func:`has_features_bundle_batch`: per-bundle
+    boolean-fold "does the CURRENT install grant this whole bundle?" for
+    N caller-supplied runtime bundles in ONE round-trip.
+
+    Same relationship to :func:`has_runtimes` that
+    :func:`has_features_bundle_batch` has to :func:`has_features` and
+    that :func:`min_tier_for_runtimes_batch` has to
+    :func:`min_tier_for_runtimes` on the reverse-lookup slot. Pairs
+    with :func:`has_features_bundle_batch` the same way
+    :func:`min_tier_for_runtimes_batch` pairs with
+    :func:`min_tier_for_features_batch`: together the two boolean-fold
+    bundle-batch helpers let a pricing matrix column ("does the LIVE
+    install admit {claude_code, cursor}? {openclaw}? {aider, goose}?")
+    hydrate every bundle off ONE call per axis instead of N calls to
+    :func:`has_runtimes`.
+
+    Row shape (5 keys) mirrors :func:`has_features_bundle_batch` with
+    ``runtimes`` in the axis slot and ``has_runtimes`` in the fold slot;
+    runtime-alias posture is inherited from
+    :func:`_has_runtimes_bundle_row` -- aliases canonicalise before the
+    :data:`ALL_RUNTIMES` membership check so a caller does not need to
+    normalise before calling.
+
+    Never raises. Contract otherwise mirrors
+    :func:`has_features_bundle_batch` byte-for-byte.
+    """
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_has_runtimes_bundle_row(bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_runtimes_bundle_batch row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "runtimes": [],
+                    "unknown": [],
+                    "kind": "runtimes",
+                    "count": 0,
+                    "has_runtimes": False,
+                }
+            )
+    return out
+
+
 def missing_features(features) -> list:
     """Row-level complement of :func:`has_features`: return the subset of
     ``features`` NOT granted by the resolved entitlement.
