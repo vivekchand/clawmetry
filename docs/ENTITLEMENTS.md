@@ -312,6 +312,38 @@ per-axis `missing` sub-dict instead of a single `has_all_at` bool:
 The scalar is `clawmetry.entitlements.missing_all_at_batch(perspective_tiers, *, features, runtimes, channels, retention_days, nodes)`.
 
 
+### Path-walk endpoint: `has-all-at-path`
+
+`GET /api/entitlement/has-all-at-path?from=<id>&to=<id>&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis path-shaped boolean-fold. Fixes ONE 5-axis bundle
+and sweeps across every purchasable rung between `from` and `to`, returning
+one row per rung with the aggregate `has_all_at` fold at that rung. Answers
+"at which tier does this whole 5-axis bundle unlock?" in one round-trip.
+
+Per-rung `has_all_at` byte-equals `has_all_at()` for the same (rung, bundle)
+pair. **Grace-independent by construction**: reads static per-tier grant
+tables via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs.
+
+**Per-rung row:** `{ tier, tier_label, tier_rank, has_all_at }`.
+
+**Envelope keys:** `from`, `from_label`, `from_rank`, `to`, `to_label`,
+`to_rank`, `direction` (`upgrade` | `downgrade` | `lateral` | `identity` |
+`unknown`), `features`, `runtimes`, `channels`, `retention_days`, `nodes`,
+`unknown_features`, `unknown_runtimes`, `supplied_axes`, `supplied_count`,
+`path`, `path_length`, `allowed_count`, `all_allowed`, `any_allowed`,
+`required_tier`, `required_tier_label`, `required_tier_rank`, plus the
+standard resolver envelope (`current_tier`, `current_tier_rank`, `grace`,
+`enforced`).
+
+Unknown or missing endpoints return 200 with `path=[]` and
+`direction="unknown"` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
 ### Row-detail path-walk endpoint: `missing-all-at-path`
 
 `GET /api/entitlement/missing-all-at-path?from=<id>&to=<id>&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`

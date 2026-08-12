@@ -12909,6 +12909,199 @@ def has_all_at_batch(
     return {"tiers": rows, "unknown": unknown}
 
 
+def has_all_at_path(
+    from_tier: str,
+    to_tier: str,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> list[dict] | None:
+    """Arbitrary-endpoint stepwise :func:`has_all_at` walk between two
+    tiers -- fixes ONE 5-axis mixed bundle and sweeps across every rung
+    between ``from_tier`` and ``to_tier``, returning one row per rung
+    with the aggregate fold boolean at that rung.
+
+    Aggregate mixed-axis sibling of :func:`has_features_at_path` /
+    :func:`has_runtimes_at_path` (per-axis path walkers) and path-shaped
+    complement of :func:`has_all_at_batch` (fixes ONE bundle and sweeps
+    across N caller-supplied perspective tiers) in the same relationship
+    :func:`has_all_at` has to :func:`has_features_at` /
+    :func:`has_runtimes_at`. Lets an upgrade-walkthrough tooltip render
+    "at which rung does this WHOLE 5-axis bundle unlock?" off ONE call
+    instead of first calling :func:`tier_path` and then N calls to
+    :func:`has_all_at`, or 5 * N calls fanned out across the per-axis
+    path walkers plus a client-side AND-chain per rung.
+
+    Per-rung row shape byte-equals the single-axis path helpers with
+    the aggregate ``has_all_at`` slot::
+
+        {
+          "tier":       "<id>",
+          "tier_label": "...",
+          "tier_rank":  <int>,
+          "has_all_at": <bool>,
+        }
+
+    Each ``has_all_at`` byte-equals :func:`has_all_at` for the same
+    (rung, bundle) pair -- a parity test pins this so the scalar,
+    batch and path what-if boolean-fold helpers cannot drift.
+
+    Walk semantics mirror :func:`has_features_at_path` /
+    :func:`has_runtimes_at_path` byte-for-byte (same
+    :data:`_PURCHASABLE_TIERS` filter + same sort key + same
+    destination-sibling exclusion) so the rung ``tier`` ids from this
+    helper line up rung-for-rung against the per-axis path walkers as
+    well as the rest of the ``_path`` family. Same-rank siblings
+    strictly between the endpoints are both included; same-rank
+    siblings of the destination are excluded so the path terminates
+    exactly at ``to_tier``.
+
+    Direction semantics (all rows share the same shape; only the
+    sequence changes):
+
+    * ``upgrade`` (ascending) -- rows climb rung by rung from the rung
+      above ``from_tier`` toward ``to_tier``; each rung's ``has_all_at``
+      only flips ``False -> True`` as grants accumulate (never the
+      reverse).
+    * ``downgrade`` (descending) -- rows shrink rung by rung; the
+      cancellation-walkthrough counterpart; each rung's ``has_all_at``
+      only flips ``True -> False`` (never the reverse).
+    * ``lateral`` (same rank, different id) -- single-row path; row
+      carries the ``has_all_at`` at ``to_tier``.
+    * ``identity`` (``from == to``) -- empty path; no rungs to walk.
+
+    Endpoint semantics match :func:`has_features_at_path` /
+    :func:`has_runtimes_at_path` / :func:`feature_catalog_path` /
+    :func:`tier_path` / :func:`tier_diff`: both ids accept any entry in
+    :data:`_TIER_FEATURES` (including :data:`TIER_TRIAL`, which is not
+    purchasable -- it is excluded from the walked intermediate rungs
+    but is a valid endpoint via the lateral branch). Unknown ids on
+    either side short-circuit to ``None``.
+
+    Bundle-fold semantics per rung inherit :func:`has_all_at` byte-for-
+    byte (fail-closed on empty / unknown / typo -- the same posture the
+    singular helper carries so a bundle typo never silently renders
+    "granted" on any rung):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to the per-rung fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty:
+      collapses every rung's ``has_all_at`` to ``False`` (matches
+      :func:`has_features_at` / :func:`has_runtimes_at` empty-``False``
+      typo posture).
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- matches :func:`has_all_at`.
+    * Non-int capacity value (str, list, ...) on ``channels`` /
+      ``nodes`` / ``retention_days`` -- collapses every rung's
+      ``has_all_at`` to ``False`` (mirrors :func:`has_all_at` strict-
+      ``False`` typo posture on the same axis).
+    * No axes supplied at all -- every rung's ``has_all_at`` reports
+      ``False`` (matches :func:`has_all_at` empty-``False`` posture; a
+      caller who forgot to pass any kwarg sees the typo at the callsite
+      instead of a silent grant on every rung).
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses every rung's ``has_all_at`` to ``False`` via
+      the singular :func:`has_features_at` / :func:`has_runtimes_at`
+      typo posture inherited through :func:`has_all_at`. A UI wanting
+      to distinguish "denied by tier" from "typo" should call the
+      per-axis singular ``_at`` scalars for the per-axis story.
+
+    Grace-independent by construction: delegates per-rung to
+    :func:`has_all_at`, which reads the static per-tier grant tables
+    (via :func:`_hypothetical_entitlement` on the feature / runtime
+    axes and by the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the
+    capacity axes), so the answer is byte-identical under grace vs
+    enforce for the same (perspective, bundle) pair -- same property
+    the rest of the ``_path`` family guarantees.
+
+    Never raises: any per-rung delegate failure logs a warning and
+    returns ``None`` so a pricing-page surface keeps rendering instead
+    of breaking; matches the sibling :func:`has_features_at_path`
+    contract.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+        t = (to_tier or "").strip().lower()
+        if f not in _TIER_FEATURES or t not in _TIER_FEATURES:
+            return None
+
+        # Canonicalise iterables ONCE so a generator / one-shot iterable
+        # is reused across rungs. Non-iterables collapse to [], matching
+        # the singular scalars' typo posture (fold to False on the rung).
+        def _snap(items):
+            if items is None:
+                return None
+            try:
+                return list(items)
+            except TypeError:
+                return []
+
+        feat_items = _snap(features)
+        rt_items = _snap(runtimes)
+
+        def _row(rung: str) -> dict:
+            return {
+                "tier": rung,
+                "tier_label": tier_label(rung),
+                "tier_rank": _TIER_RANK.get(rung, -1),
+                "has_all_at": bool(
+                    has_all_at(
+                        rung,
+                        features=feat_items,
+                        runtimes=rt_items,
+                        channels=channels,
+                        retention_days=retention_days,
+                        nodes=nodes,
+                    )
+                ),
+            }
+
+        if f == t:
+            return []
+        from_rank = _TIER_RANK.get(f, -1)
+        to_rank = _TIER_RANK.get(t, -1)
+        if from_rank == to_rank:
+            return [_row(t)]
+        ascending = to_rank > from_rank
+        if ascending:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (_TIER_RANK.get(x, -1), x),
+            )
+        else:
+            ordered = sorted(
+                _PURCHASABLE_TIERS,
+                key=lambda x: (-_TIER_RANK.get(x, -1), x),
+            )
+        path: list[dict] = []
+        for tid in ordered:
+            r = _TIER_RANK.get(tid, -1)
+            if ascending:
+                if r <= from_rank or r > to_rank:
+                    continue
+            else:
+                if r >= from_rank or r < to_rank:
+                    continue
+            if r == to_rank and tid != t:
+                continue
+            path.append(_row(tid))
+        return path
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_all_at_path(%r, %r, ...) failed: %s",
+            from_tier,
+            to_tier,
+            exc,
+        )
+        return None
+
+
+
 def missing_all_at_batch(
     perspective_tiers,
     *,

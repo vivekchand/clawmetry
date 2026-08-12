@@ -12575,7 +12575,9 @@ function _traceCost(s) { return (s.rolled_cost != null ? s.rolled_cost : s.cost)
 function _traceTokens(s) { return (s.rolled_tokens != null ? s.rolled_tokens : s.tokens) || 0; }
 function _traceFmtDur(ms) {
   ms = ms || 0;
-  if (ms < 1000) return ms + 'ms';
+  // Round: span durations are floats (end_ts - start_ts), and an unrounded
+  // one rendered as '900.0000953674316ms' in the trace list.
+  if (ms < 1000) return Math.round(ms) + 'ms';
   if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
   if (ms < 3600000) return (ms / 60000).toFixed(1) + 'm';
   if (ms < 86400000) return (ms / 3600000).toFixed(1) + 'h';
@@ -12621,7 +12623,11 @@ async function loadTurnAnatomy() {
   el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_sessions_hellip", null, "Loading sessions&hellip;") + '</div>';
   var data;
   try {
-    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
+    // Scope server-side by the active runtime (#4782). A foreign OTLP app
+    // has no session-id prefix, so client-side filtering would empty the
+    // list; the server filters spans by agent_type and events by prefix.
+    data = await fetch('/api/traces?limit=200&runtime='
+      + encodeURIComponent(_cmRuntimeFilter())).then(function(r){ return r.json(); });
   } catch (e) {
     el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_sessions", null, "Could not load sessions.") + '</div>';
     return;
@@ -12789,7 +12795,11 @@ async function loadTracing() {
   el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_traces_hellip", null, "Loading traces&hellip;") + '</div>';
   var data;
   try {
-    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
+    // Scope server-side by the active runtime (#4782). A foreign OTLP app
+    // has no session-id prefix, so client-side filtering would empty the
+    // list; the server filters spans by agent_type and events by prefix.
+    data = await fetch('/api/traces?limit=200&runtime='
+      + encodeURIComponent(_cmRuntimeFilter())).then(function(r){ return r.json(); });
   } catch (e) {
     el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_traces", null, "Could not load traces.") + '</div>';
     return;
@@ -12838,13 +12848,12 @@ function _renderTraceRows() {
   var box = document.getElementById('trace-rows');
   if (!box) return;
   var traces = (window._allTraces || []).slice();
-  // Global runtime switcher (header): scope traces to one runtime. Each
-  // event-derived trace's `trace_id` IS its session_id, whose prefix is the
-  // runtime discriminator (OTLP traces with hex ids fall through to OpenClaw).
-  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
-  if (_trRt && _trRt !== 'all') {
-    traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _trRt; });
-  }
+  // Runtime scoping is SERVER-side now (#4782): /api/traces?runtime= filters
+  // spans by agent_type and events by session prefix. The old client-side pass
+  // keyed off `trace_id` alone, so a span-derived trace (whose id is a hex OTel
+  // trace id, not a session id) always resolved to 'openclaw' and was filtered
+  // out of its own app's view -- the list rendered empty for the very runtime
+  // you had selected. Re-filtering here would just reintroduce that.
   var f = window._traceListFilter, q = window._traceListSearch;
   if (q) traces = traces.filter(function(t) {
     return (((t.trace_id || '') + ' ' + (t.model || '')).toLowerCase().indexOf(q) !== -1);
@@ -12870,8 +12879,11 @@ function _renderTraceRows() {
       + 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
       + '<span style="flex:1;min-width:0;">'
         + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDot + ';margin-right:8px;"></span>'
-        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 26)) + '</span>'
+        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.title || t.name || t.trace_id).slice(0, 34)) + '</span>'
         + (t.has_subagents ? '<span style="margin-left:8px;background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">sub-agents</span>' : '')
+        // Provenance chip: this trace came from OTel spans, not a session
+        // transcript. Makes it obvious which of your own apps sent it.
+        + (t.source === 'spans' ? '<span style="margin-left:8px;background:rgba(56,189,248,0.15);color:#38bdf8;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">OTel</span>' : '')
         + '<span style="margin-left:8px;color:var(--text-muted);font-size:11px;">' + escHtml(when) + '</span>'
       + '</span>'
       + '<span style="width:64px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'

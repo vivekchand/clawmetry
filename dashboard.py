@@ -12541,11 +12541,17 @@ DASHBOARD_HTML = r"""
            usage (context-economics) shows the same story from real per-turn
            readings, session + runtime scoped. switchTab('context') aliases
            there so old deep links keep working. #}
-        {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
-           SESSION-scoped, so they left the global nav and are reached from a
+        {# Phase B (UX_AUDIT.md) removed Tracing, Turn timing and Compare
+           sessions from the global nav as SESSION-scoped views, reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
-           Sessions viewer). Their pages + data-tab ids stay: deep links
-           and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
+           Sessions viewer). Turn timing and Compare sessions still are.
+           TRACING IS BACK (#4782): a bring-your-own-agent app that speaks OTLP
+           has no session at all -- its traces are keyed by OTel trace_id and
+           never appear in the Sessions viewer -- so a drill-down-only entry
+           point left those traces reachable by deep link only. #}
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" title="Every run as a trace: the span waterfall, the span tree and the agent graph. Includes apps that send OpenTelemetry.">
+          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
         </div>
