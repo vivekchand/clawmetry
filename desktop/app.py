@@ -74,6 +74,54 @@ WATCHER_TICK_SECS = 60
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
 
+# Injected after every navigation. WKWebView (macOS) and EdgeWebView2
+# (Windows) silently drop `window.open(...)` and `target="_blank"`
+# clicks that would need a new native window — so the Self-Host OAuth
+# flow (`cloudOauth` in gw-setup.js → `window.open(oauthUrl, '_blank')`)
+# never reaches a browser and the modal spins forever on
+# "Finish sign-in in the new browser tab."
+#
+# Route absolute cross-origin https URLs through the existing
+# DesktopAPI.open_external bridge (which already hands them to
+# webbrowser.open); leave same-origin and relative URLs (e.g. the
+# `/api/usage/export` download click) to the webview.
+_OPEN_EXTERNAL_SHIM = r"""
+(function(){
+  if (window.__clawmetryExternalShim) return;
+  window.__clawmetryExternalShim = true;
+  function isExternalHttps(u) {
+    try {
+      var url = new URL(String(u), window.location.href);
+      if (url.protocol !== 'https:') return false;
+      return url.host !== window.location.host;
+    } catch (e) { return false; }
+  }
+  function toBrowser(u) {
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(String(u));
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  var _open = window.open;
+  window.open = function(u, target, features) {
+    if (u && isExternalHttps(u) && toBrowser(u)) return null;
+    return _open.apply(window, arguments);
+  };
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!href || href.charAt(0) === '#') return;
+    if (isExternalHttps(href) && toBrowser(a.href)) {
+      e.preventDefault();
+    }
+  }, true);
+})();
+"""
+
 # Written by `clawmetry connect`; presence means this node has an account
 # key and the sync daemon can run.
 SYNC_CONFIG_FILE = Path.home() / ".clawmetry" / "config.json"
@@ -1286,7 +1334,18 @@ def main() -> int:
         sup.shutting_down.set()
         sup.stop()
 
+    def _install_open_external_shim():
+        # Fires on every navigation (splash, onboarding, dashboard,
+        # daemon-restart reload) so the shim always covers the current
+        # document. `window.__clawmetryExternalShim` guards against
+        # double-install if the event fires twice on one page.
+        try:
+            window.evaluate_js(_OPEN_EXTERNAL_SHIM)
+        except Exception:
+            pass
+
     window.events.closed += _on_closed
+    window.events.loaded += _install_open_external_shim
     threading.Thread(target=_boot, daemon=True).start()
 
     # js_api makes DesktopAPI methods callable as window.pywebview.api.*
