@@ -337,15 +337,31 @@ jobs:
         run: |
           sudo apt-get update
           # GTK WebKit2 is the pywebview backend on Linux. The
-          # libgirepository1.0-dev / libcairo2-dev / pkg-config trio is
+          # libgirepository-2.0-dev / libcairo2-dev / pkg-config trio is
           # needed to compile PyGObject (see requirements-dev.txt) against
           # THIS job's actions/setup-python interpreter — without a
           # matching build, the frozen binary can't import `gi` at all
           # and crashes before ever opening a window.
+          #
+          # PyGObject 3.52+ (we pin 3.56.3) requires girepository-2.0 —
+          # 3.50.x was the last release on girepository-1.0. This job was
+          # installing ONLY libgirepository1.0-dev, so every meson build
+          # failed at `Dependency 'girepository-2.0' is required but not
+          # found`, the whole Linux job errored out, the strict attach
+          # step (fail_on_unmatched_files: true) skipped publishing, every
+          # release since 2026-08-10 stayed a draft, and
+          # ``releases/latest`` kept serving the 2026-08-10 build. Users
+          # downloading from clawmetry.com never got any fix shipped
+          # after that date — including the SSL cert verify fix (#4752)
+          # that the "Send code" button depends on. Install both -1.0
+          # (still needed for webkit2gtk-4.1 headers on older subdeps)
+          # and -2.0 (what PyGObject 3.52+ compiles against). ubuntu-24.04
+          # (current ubuntu-latest) has both in the default archive.
           sudo apt-get install -y \
             libgtk-3-0 libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 \
             libayatana-appindicator3-1 libnotify4 \
-            libgirepository1.0-dev libcairo2-dev pkg-config
+            libgirepository1.0-dev libgirepository-2.0-dev \
+            libcairo2-dev pkg-config
 
       - name: Install build deps
         run: |
