@@ -40618,6 +40618,193 @@ def api_entitlement_missing_all_bundle_batch_at():
         )
 
 
+
+
+def _missing_all_bundle_row_to_body(row: dict) -> dict:
+    """Row-body helper for ``/api/entitlement/missing-all-bundle-batch``.
+
+    Row-detail sibling of :func:`_has_all_bundle_row_to_body` on the
+    aggregate LIVE seat. Byte-identical on the axis-echo slots
+    (``features`` / ``runtimes`` / ``channels`` / ``retention_days`` /
+    ``nodes``) with the ``has_all`` bool swapped for a per-axis
+    ``missing`` dict matching :func:`missing_all`'s return shape.
+
+    Kept alongside :func:`_has_all_bundle_row_to_body` and
+    :func:`_min_tier_for_all_row_to_body` so future per-row envelope
+    adjustments have one obvious edit-site per family instead of
+    drifting inside the endpoint bodies. Never raises: a missing key
+    surfaces as the empty-row shape.
+    """
+    missing = row.get("missing") or {}
+    if not isinstance(missing, dict):
+        missing = {}
+    return {
+        "features": list(row.get("features") or []),
+        "runtimes": list(row.get("runtimes") or []),
+        "channels": row.get("channels"),
+        "retention_days": row.get("retention_days"),
+        "nodes": row.get("nodes"),
+        "missing": {
+            "features": list(missing.get("features") or []),
+            "runtimes": list(missing.get("runtimes") or []),
+            "channels": missing.get("channels"),
+            "retention_days": missing.get("retention_days"),
+            "nodes": missing.get("nodes"),
+        },
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle-batch",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle_batch():
+    """``POST /api/entitlement/missing-all-bundle-batch`` -- bundle-axis
+    row-detail complement of ``/api/entitlement/has-all-bundle-batch``
+    on the LIVE aggregate seat.
+
+    Where the paired boolean-fold sibling
+    ``/has-all-bundle-batch`` collapses each 5-axis bundle to ONE
+    ``has_all`` boolean, this returns the per-axis denial detail for
+    the same N bundles in ONE round-trip so a paywall diagnostics
+    matrix or upgrade-walkthrough surface comparing several
+    hypothetical *whole* configs ("Starter-shaped install vs Pro-
+    shaped install vs Enterprise-shaped install -- for each, which
+    axes are still blocked on the LIVE grant?") hydrates the per-axis
+    denial column off ONE call instead of N calls to the singular
+    aggregate helper.
+
+    Symmetric to the reverse-lookup
+    ``/api/entitlement/required-tier-bundle-batch`` and the paired
+    ``/has-all-bundle-batch`` on the same input shape: same POST body,
+    same per-row axis echoes, same never-crash posture. The only per-
+    row divergence is the fold slot -- this returns a per-axis
+    ``missing`` dict where the boolean-fold sibling returns
+    ``has_all`` (bool) and the reverse-lookup returns
+    ``required_tier`` (id).
+
+    Distinct from ``/missing-features-bundle-batch`` /
+    ``/missing-runtimes-bundle-batch`` (which batch N *single-axis*
+    bundles): each row here spans the same five axes
+    ``/missing-all`` does, so the per-row ``missing`` dict carries
+    denial detail across features, runtimes, and the three capacity
+    scalars in ONE shape.
+
+    Also distinct from ``/missing-all-at`` (which fixes ONE bundle
+    and reads ONE hypothetical perspective tier): this fixes N
+    bundles and reads the LIVE per-install grant.
+
+    POST rather than GET because each bundle already carries five
+    axes and N of them can grow well past a comfortable query-string
+    length; the sibling singular ``/missing-all`` endpoint uses GET
+    where the input is small.
+
+    Request body::
+
+        {
+          "bundles": [
+            {"features": ["fleet"], "runtimes": ["claude_code"]},
+            {"channels": 5, "retention_days": 30, "nodes": 2},
+            {}
+          ]
+        }
+
+    A shorthand ``{"bundles": {"features": ["fleet"]}}`` (a bare
+    dict) is treated as ONE bundle for symmetry with the sibling
+    ``/has-all-bundle-batch`` posture; a missing / non-list-non-dict
+    ``bundles`` value is a 400. An empty ``bundles=[]`` list is a
+    400 for the same reason ``/has-all-bundle-batch`` 400s on empty
+    input -- distinguishes "caller asked for nothing" from "caller
+    asked and every bundle was empty".
+
+    Response shape::
+
+        {
+          "bundles": [<row>, ...],
+          "count":   <int>,        # len(bundles)
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Each ``<row>`` mirrors the ``/has-all-bundle-batch`` per-row axis
+    echoes byte-for-byte with the fold slot swapped from ``has_all``
+    to a per-axis ``missing`` dict::
+
+        {
+          "features":       ["fleet"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | null,
+          "retention_days": 30 | null,
+          "nodes":          2 | null,
+          "missing": {
+              "features":       [<subset not granted on LIVE>],
+              "runtimes":       [<subset not granted on LIVE>],
+              "channels":       <requested int if denied, else null>,
+              "retention_days": <requested int if denied, else null>,
+              "nodes":          <requested int if denied, else null>,
+          }
+        }
+
+    Per-bundle normalisation matches the singular ``/missing-all`` and
+    the sibling ``/has-all-bundle-batch``: CSV normalisation on
+    ``features`` / ``runtimes`` (whitespace stripped, lowercased,
+    deduplicated preserving first-seen order); runtime aliases
+    (``claude-code`` -> ``claude_code``) canonicalised; the three
+    capacity axes coerced through ``int(...)`` with a blank / non-int
+    collapsing to ``null`` so a typo cannot silently register as
+    denied on the aggregate. Critically, ``retention_days=null`` here
+    means *unset*, NOT *unlimited* -- matches every other batch
+    endpoint's posture.
+
+    Grace posture per-row mirrors the LIVE ``/missing-all`` byte-for-
+    byte: while ``grace`` is ``true`` (the current rollout state)
+    every fully-known bundle reports the empty ``missing`` shape
+    (list ``[]`` per grant axis / capacity ``null``); post-enforcement
+    each slot reflects the underlying denial per axis.
+
+    - **400** when ``bundles`` is missing / non-list-non-dict / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty ``bundles`` list) so the paywall matrix keeps rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        rows = _ent.missing_all_bundle_batch(bundles)
+        out_rows = [_missing_all_bundle_row_to_body(row) for row in rows]
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "bundles": out_rows,
+                "count": len(out_rows),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_bundle_batch: error: %s", exc
+        )
+        return jsonify(
+            {
+                "bundles": [],
+                "count": 0,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/tiers-for-features-batch",
     methods=["POST"],
