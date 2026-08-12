@@ -344,6 +344,84 @@ Unknown or missing endpoints return 200 with `path=[]` and
 
 The scalar is `clawmetry.entitlements.has_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
 
+### Bundle-batch perspective row-detail endpoint: `missing-all-bundle-batch-at`
+
+`POST /api/entitlement/missing-all-bundle-batch-at?tier=<perspective>`
+
+Hypothetical-perspective row-detail sibling of `has-all-bundle-batch-at`
+(boolean fold) and `missing-all-bundle-batch` (LIVE row detail). Folds N
+caller-supplied 5-axis bundles to N per-axis `missing` dicts scoped by a
+caller-supplied `perspective_tier` in one round-trip. Answers "which axes
+of each bundle would tier `<perspective>` NOT grant?" for a pricing-matrix
+walkthrough without N separate calls to `missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so grace vs enforce yields byte-identical row bodies.
+At `tier=oss`, a paid-feature bundle reports `missing.features=["fleet"]`
+even in grace, whereas the LIVE `missing-all-bundle-batch` reports
+`missing.features=[]` for the same bundle via grace pass-through.
+
+**Request body** (byte-identical to `missing-all-bundle-batch` and
+`has-all-bundle-batch-at`):
+
+```json
+{"bundles": [{"features": ["fleet"], "runtimes": ["claude_code"]}, {"channels": 5}]}
+```
+
+A bare dict is treated as one bundle (single-bundle shorthand).
+
+**Response envelope** (9 keys):
+
+```json
+{
+  "perspective_tier":       "cloud_pro",
+  "perspective_tier_label": "Cloud Pro",
+  "perspective_tier_rank":  4,
+  "bundles":                [...],
+  "count":                  2,
+  "current_tier":           "oss",
+  "current_tier_rank":      0,
+  "grace":                  true,
+  "enforced":               false
+}
+```
+
+**Per-bundle row:** mirrors `has-all-bundle-batch-at` byte-for-byte on the
+axis-echo slots (`features`, `runtimes`, `channels`, `retention_days`,
+`nodes`) with the fold slot swapped from `has_all_at` bool to a per-axis
+`missing` dict:
+
+```json
+{
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       null,
+  "retention_days": null,
+  "nodes":          null,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-bundle-batch-at`: `any(row["missing"].values())`
+strictly negates the paired `has_all_at` for every fully-parseable bundle
+on a valid perspective.
+
+- **400** on missing/blank `tier=`, missing/empty/non-list `bundles`
+- **404** on unknown `tier=` (body carries `which=tier`)
+- Never 5xxs.
+
+Ships in GRACE mode. The scalars are
+`clawmetry.entitlements.missing_all_bundle_batch_at(perspective_tier, bundles)`
+and the private `_missing_all_bundle_row_at(perspective_tier, bundle)`.
+
 ---
 
 ## The `clawmetry license` CLI

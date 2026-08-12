@@ -1931,8 +1931,28 @@ def cloud_cta_verify_otp():
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
             if result.get("token"):
-                _d._write_cloud_token(result["token"])
-                return jsonify({"ok": True, "token": result["token"]})
+                # Route through _full_connect_with_key so this path is
+                # symmetric with the OAuth loopback bridge AND with
+                # `clawmetry connect --start-sync-now` — persist identity
+                # into ~/.clawmetry/config.json, mint-or-reuse the 7-day
+                # Pro trial, enable cloud egress, restart the sync daemon.
+                # The earlier one-liner _write_cloud_token() persisted only
+                # the cm_ key and left the account on FREE with no trial;
+                # founder ask 2026-08-12: cloud users must get the same
+                # 7-day trial self-host gets, or they can't experience the
+                # full product before deciding to pay.
+                trial = "unavailable"
+                try:
+                    _node_id, _enc_key, trial = _d._full_connect_with_key(result["token"])
+                except Exception:
+                    # If _full_connect_with_key fails, still persist the
+                    # token — pairing is more important than daemon restart
+                    # or trial activation, which recover naturally later.
+                    try:
+                        _d._write_cloud_token(result["token"])
+                    except Exception:
+                        pass
+                return jsonify({"ok": True, "token": result["token"], "trial": trial})
             return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
     except Exception as _ex:
         try:
