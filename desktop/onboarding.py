@@ -286,6 +286,55 @@ def detect_runtimes_via_venv(venv_python: Path, *, timeout: float = 6.0) -> list
 
 # ─── Post-auth: hand key to clawmetry connect ───────────────────────────
 
+def _fallback_persist_cm_key(cm_key: str) -> bool:
+    """Last-resort local pairing when ``clawmetry connect`` fails.
+
+    The user just completed OTP / OAuth successfully — the cm_ key is
+    real, minted by cloud in the SAME request that got us here. But the
+    downstream ``clawmetry connect`` subprocess can still fail for
+    reasons that have nothing to do with identity: daemon start denied
+    (launchctl/systemctl), Pro-wheel provisioning network hiccup, an
+    interactive ownership prompt hanging the non-interactive subprocess.
+    When any of that happens, the whole desktop pane used to record
+    ``signed_in:false, mode:""`` — which then made the dashboard's
+    onboarding gate re-prompt on every relaunch even though the user
+    clearly signed in (founder report 2026-08-12).
+
+    Write the key to the same location ``dashboard._write_cloud_token``
+    uses (``~/.openclaw/openclaw.json → clawmetry.cloudToken``) so the
+    dashboard's ``_read_cloud_token`` / ``_cloud_connected`` / cloud-cta
+    status recognize this machine as paired. That's enough to satisfy
+    the onboarding gate; the daemon / Pro-wheel side gets retried by
+    the shell's watcher and the daemon-registration path in
+    ``routes/onboarding.py::_ensure_daemon_for_choice`` when the
+    dashboard writes the choice file.
+
+    Best-effort — returns True on success, False on any failure. Never
+    raises: this runs on an already-failing path, we do not want the
+    fallback to compound the failure.
+    """
+    if not (cm_key or "").startswith("cm_"):
+        return False
+    try:
+        openclaw_path = Path.home() / ".openclaw" / "openclaw.json"
+        openclaw_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(openclaw_path.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except (FileNotFoundError, ValueError):
+            data = {}
+        cm = data.get("clawmetry")
+        if not isinstance(cm, dict):
+            cm = {}
+        cm["cloudToken"] = cm_key
+        data["clawmetry"] = cm
+        openclaw_path.write_text(json.dumps(data, indent=2))
+        return True
+    except OSError:
+        return False
+
+
 def apply_cm_key(
     venv_clawmetry: Path, cm_key: str, *, mode: str = "cloud", timeout: float = 60.0
 ) -> tuple[bool, str]:
@@ -309,9 +358,20 @@ def apply_cm_key(
 
     We avoid duplicating any of that in the shell. Returns
     (ok, short_message). The message is user-safe (no key/token
-    fragments)."""
+    fragments).
+
+    Failure mode this closes (founder report 2026-08-12): when the
+    subprocess fails for a downstream reason (daemon start, permissions,
+    Pro-wheel provisioning), the caller used to see False and record
+    ``signed_in:false, mode:""`` in the onboarding stamp — even though
+    the user's identity IS real (the cm_ key was just minted by cloud).
+    Before returning False we now persist the key locally via
+    ``_fallback_persist_cm_key`` so the dashboard at least recognizes
+    the machine as paired; the pane's status line still surfaces the
+    partial failure so the user knows to re-check daemon health."""
     bin_ = Path(venv_clawmetry)
     if not bin_.exists():
+        _fallback_persist_cm_key(cm_key)
         return False, "runtime venv is not ready yet"
     if not (cm_key or "").startswith("cm_"):
         return False, "invalid sign-in key"
@@ -343,11 +403,19 @@ def apply_cm_key(
             except Exception:
                 pass  # ensure_sync_daemon() in app.py retries
     except subprocess.TimeoutExpired:
+        _fallback_persist_cm_key(cm_key)
         return False, "sign-in timed out — check your connection and try again"
     except Exception as exc:
+        _fallback_persist_cm_key(cm_key)
         return False, f"sign-in error: {exc}"
     if r.returncode == 0:
         return True, "signed in"
+    # Subprocess failed but the cm_ key itself is valid (OTP/OAuth just
+    # minted it). Persist it locally so the dashboard's onboarding gate
+    # recognizes the machine as paired even though the connect+daemon
+    # step didn't fully complete — the alternative is a hard modal loop
+    # on every relaunch (see _fallback_persist_cm_key docstring).
+    _fallback_persist_cm_key(cm_key)
     # Trim to the last non-empty line — clawmetry connect prints a
     # user-friendly one-liner on failure.
     tail = next(
