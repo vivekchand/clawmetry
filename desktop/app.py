@@ -1335,6 +1335,26 @@ def main() -> int:
                 # launch instead of wedging the install in a signed-in-
                 # not-really state that the pane can never fix again.
                 _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
+                # We got here because captured_key is a real cm_ key that
+                # cloud minted in this same request (verify_email_otp /
+                # oauth_loopback_flow returned it). Record signed_in=True
+                # and pass the chosen mode regardless of apply_cm_key's exit
+                # code — the subprocess failing is a downstream setup issue
+                # (daemon start, permissions, Pro-wheel network hiccup), not
+                # a sign-in failure. apply_cm_key's fallback has already
+                # persisted the key to ~/.openclaw so the dashboard's cloud
+                # status flips to connected either way. Recording
+                # signed_in=False here used to make the dashboard's
+                # onboarding gate re-prompt for the SAME cloud/self-host
+                # choice on every relaunch even after a "successful" OTP
+                # (founder report 2026-08-12).
+                onboarding.mark_onboarding_completed(
+                    runtime,
+                    signed_in=True,
+                    provider=api._captured_provider,
+                    email=api._captured_email,
+                    mode=api._captured_mode or "cloud",
+                )
         elif show_pane and api._skipped:
             # User explicitly skipped — stamp so we don't nag on every
             # launch. (A walk-away timeout deliberately does NOT stamp.)

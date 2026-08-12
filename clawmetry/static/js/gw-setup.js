@@ -251,13 +251,40 @@ function cloudVerifyOtp() {
     err.style.display = '';
     return;
   }
-  fetch('https://app.clawmetry.com/api/otp/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
+  // Route through the LOCAL dashboard endpoint (not app.clawmetry.com
+  // directly): /api/cloud-cta/verify-otp proxies to cloud AND persists the
+  // returned cm_ key via _write_cloud_token(). Bypassing this seam — as the
+  // previous direct fetch to https://app.clawmetry.com/api/otp/verify did —
+  // set the browser cookie but left the local machine with no token, so
+  // /api/cloud-cta/status kept reporting connected=false, the onboarding
+  // gate stayed required=true, and the modal reappeared on every launch
+  // (founder report 2026-08-12).
+  fetch('/api/cloud-cta/verify-otp', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: _cloudEmail, code: code}),
+  })
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok && (d.token || d.api_key)) {
+      if (d.ok && d.token) {
+        // Record the choice in the dashboard's onboarding gate so the
+        // hard-gate modal never re-fires. _apply_marker_semantics() there
+        // also runs enable_cloud() + registers a persistent daemon.
+        fetch('/api/onboarding/complete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({choice: 'managed'}),
+        }).catch(function(){ /* best-effort — the token write above is what actually pairs */ });
         document.getElementById('cloud-step-otp').style.display = 'none';
         document.getElementById('cloud-step-done').style.display = '';
-        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token || d.api_key), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
+        setTimeout(function(){
+          try { window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token), '_blank'); } catch (e) {}
+          closeCloudModal();
+          _updateCloudStatus();
+          // Reload so /api/onboarding/state re-reads the freshly written
+          // gate file and the dashboard boots without the modal.
+          try { location.reload(); } catch (e) {}
+        }, 1800);
       } else {
         var err = document.getElementById('cloud-otp-error');
         err.textContent = d.error || 'Invalid code. Try again.';
