@@ -154,10 +154,14 @@ def test_full_connect_writes_config_and_clears_nocloud(tmp_path, monkeypatch):
     monkeypatch.setattr(_d, "_is_macos", lambda: False)
     monkeypatch.setattr(_d, "_is_linux", lambda: False)
     monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
+    # Neutralize trial activation — its own semantics are covered by
+    # test_full_connect_activates_trial below.
+    monkeypatch.setattr(_d, "_activate_trial_for_key", lambda tok: "unavailable")
 
-    node_id, enc_key = _d._full_connect_with_key("cm_testkey123")
+    node_id, enc_key, trial = _d._full_connect_with_key("cm_testkey123")
     assert node_id == "node-xyz"
     assert enc_key  # auto-generated
+    assert trial in ("active", "expired", "unavailable")
 
     cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
     assert cfg["api_key"] == "cm_testkey123"
@@ -441,3 +445,216 @@ def test_selfhost_intent_signals(monkeypatch, tmp_path):
     assert _d._selfhost_intent() is False
     monkeypatch.setattr(_ob, "_read_choice_file", lambda: {})
     assert _d._selfhost_intent() is False
+
+
+# ─── 7-day Pro trial parity (founder ask 2026-08-12) ────────────────────
+# Cloud sign-in used to leave the account on FREE while self-host activated
+# the 7-day Pro trial. Both rails must now hit the same
+# /api/license/trial/signup endpoint via _activate_trial_for_key so cloud
+# users can experience every runtime before deciding to pay.
+
+
+def test_activate_trial_for_key_rejects_non_cm_prefix(monkeypatch):
+    """Guard: only real cm_ keys reach the cloud trial endpoint."""
+    import dashboard as _d
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not call urlopen for non-cm_ keys")
+
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+    assert _d._activate_trial_for_key("") == "unavailable"
+    assert _d._activate_trial_for_key("bogus") == "unavailable"
+    assert _d._activate_trial_for_key(None) == "unavailable"
+
+
+def test_activate_trial_for_key_returns_active_on_fresh_signup(monkeypatch):
+    """Happy path: cloud mints a key, _lic.activate accepts it → 'active'."""
+    import dashboard as _d
+    from clawmetry import license as _lic
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            import json as _j
+            return _j.dumps(self._body).encode()
+
+    def _fake_urlopen(_req, timeout=15):
+        return _FakeResp({"ok": True, "key": "LIC_test", "expires_at": 9999999999})
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(_lic, "activate", lambda key, node_id=None: (True, "ok"))
+    monkeypatch.setattr(_lic, "_node_id", lambda: "node-xyz")
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://app.example.com")
+
+    assert _d._activate_trial_for_key("cm_valid_signup_key") == "active"
+
+
+def test_activate_trial_for_key_returns_expired_when_server_says_so(monkeypatch):
+    """A returning user whose trial has ended must NOT be reported as active."""
+    import dashboard as _d
+    from clawmetry import license as _lic
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            import json as _j
+            return _j.dumps({"ok": True, "expired": True}).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+    # activate() must not be called on an expired trial.
+    monkeypatch.setattr(_lic, "activate", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("expired trial must not activate")))
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://app.example.com")
+
+    assert _d._activate_trial_for_key("cm_returning_expired") == "expired"
+
+
+def test_activate_trial_for_key_swallows_network_errors(monkeypatch):
+    """Offline / server-down must never crash the pairing path."""
+    import dashboard as _d
+    from clawmetry import license as _lic
+
+    def _fake_urlopen(*_a, **_k):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(_lic, "_cloud_base", lambda: "https://app.example.com")
+
+    assert _d._activate_trial_for_key("cm_offline_test") == "unavailable"
+
+
+def test_full_connect_activates_trial(monkeypatch, tmp_path):
+    """The cloud sign-in path (_full_connect_with_key) MUST call
+    _activate_trial_for_key with the freshly-verified cm_ key.
+
+    Regression guard for founder report 2026-08-12: before this fix cloud
+    signup left the account on FREE with no trial, so cloud users saw
+    Runtimes locked and couldn't experience the paid product before the
+    paywall — while self-host users got the 7-day trial automatically."""
+    import dashboard as _d
+    from clawmetry import sync as _sync
+
+    home = tmp_path / "home"
+    (home / ".clawmetry").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(_d.os.path, "expanduser",
+                        lambda p: p.replace("~", str(home)))
+    monkeypatch.setattr(_sync, "CONFIG_DIR", home / ".clawmetry")
+    monkeypatch.setattr(_sync, "CONFIG_FILE", home / ".clawmetry" / "config.json")
+    monkeypatch.setattr(_sync, "validate_key", lambda *a, **k: {"node_id": "n1"})
+    monkeypatch.setattr(_d, "_write_cloud_token", lambda tok: None)
+    monkeypatch.setattr(_d, "_is_sync_running", lambda: True)
+    monkeypatch.setattr(_d, "_is_macos", lambda: False)
+    monkeypatch.setattr(_d, "_is_linux", lambda: False)
+    monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
+
+    seen = {}
+    def _fake_trial(tok):
+        seen["key"] = tok
+        return "active"
+    monkeypatch.setattr(_d, "_activate_trial_for_key", _fake_trial)
+
+    node_id, enc_key, trial = _d._full_connect_with_key("cm_founder_signup")
+
+    assert seen.get("key") == "cm_founder_signup", (
+        "_full_connect_with_key must forward the exact cm_ key to "
+        "_activate_trial_for_key — cloud users get NO trial otherwise"
+    )
+    assert trial == "active"
+    assert node_id == "n1"
+    assert enc_key
+
+
+def test_verify_otp_activates_trial(monkeypatch):
+    """The dashboard cloud modal OTP path (/api/cloud-cta/verify-otp) must
+    route through _full_connect_with_key so trial activation happens for
+    OTP signups the same way it happens for OAuth signups."""
+    import dashboard as _d
+    import routes.overview as _ov
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.register_blueprint(_ov.bp_overview)
+
+    # Fake cloud OTP verify — returns a valid cm_ token.
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            import json as _j
+            return _j.dumps({"ok": True, "token": "cm_from_otp"}).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+
+    seen = {}
+    def _fake_full_connect(tok):
+        seen["key"] = tok
+        return "n2", "enc", "active"
+    monkeypatch.setattr(_d, "_full_connect_with_key", _fake_full_connect)
+
+    client = app.test_client()
+    resp = client.post("/api/cloud-cta/verify-otp",
+                       json={"email": "user@test.com", "code": "123456"})
+    body = resp.get_json()
+
+    assert body.get("ok") is True
+    assert body.get("token") == "cm_from_otp"
+    assert body.get("trial") == "active", (
+        "verify-otp must surface the trial state so the frontend can "
+        "confirm the 7-day rail activated"
+    )
+    assert seen.get("key") == "cm_from_otp", (
+        "verify-otp must route the token through _full_connect_with_key "
+        "(NOT just _write_cloud_token) — otherwise cloud OTP users get "
+        "no trial and can't experience paid runtimes before paywall"
+    )
+
+
+def test_selfhost_and_cloud_use_same_trial_helper(monkeypatch, tmp_path):
+    """DRY guard: both signin helpers must share _activate_trial_for_key
+    so cloud and self-host can never drift on trial semantics again."""
+    import dashboard as _d
+    from clawmetry import sync as _sync, config as _cfg
+
+    home = tmp_path / "home"
+    (home / ".clawmetry").mkdir(parents=True)
+    marker = home / ".clawmetry" / "nocloud"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(_d.os.path, "expanduser",
+                        lambda p: p.replace("~", str(home)))
+    monkeypatch.setattr(_sync, "CONFIG_DIR", home / ".clawmetry")
+    monkeypatch.setattr(_sync, "CONFIG_FILE", home / ".clawmetry" / "config.json")
+    monkeypatch.setattr(_sync, "validate_key", lambda *a, **k: {"node_id": "n"})
+    monkeypatch.setattr(_cfg, "NOCLOUD_MARKER_PATH", str(marker))
+    monkeypatch.setattr(_d, "_write_cloud_token", lambda tok: None)
+    monkeypatch.setattr(_d, "_is_sync_running", lambda: True)
+    monkeypatch.setattr(_d, "_is_macos", lambda: False)
+    monkeypatch.setattr(_d, "_is_linux", lambda: False)
+    monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
+    # Neutralize the routes.trial ensure_local_daemon call.
+    import types as _t
+    fake_mod = _t.SimpleNamespace(_ensure_local_daemon=lambda: None)
+    monkeypatch.setitem(__import__("sys").modules, "routes.trial", fake_mod)
+
+    calls = []
+    monkeypatch.setattr(_d, "_activate_trial_for_key",
+                        lambda tok: calls.append(tok) or "active")
+
+    _d._full_connect_with_key("cm_cloud")
+    _d._selfhost_signin_with_key("cm_selfhost")
+
+    assert calls == ["cm_cloud", "cm_selfhost"], (
+        "both cloud and self-host sign-in helpers must call the SAME "
+        "trial helper — the founder ask 2026-08-12 was exactly that "
+        "parity between the two rails"
+    )

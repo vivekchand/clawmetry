@@ -1160,6 +1160,27 @@ def _cmd_connect(args) -> None:
     print()
     if not _keep_local_signin and not _server_plaintext:
         print("🔐 Encryption key protects your data end-to-end.")
+
+    # Non-interactive callers (--start-sync-now / --keep-local from the
+    # dashboard's OTP paste-and-go and the desktop pane's apply_cm_key
+    # subprocess; also any pipe/redirect where stdin isn't a TTY) must
+    # never hit `input()` — the desktop pane runs connect with
+    # capture_output=True and `input()` raises EOFError, killing the
+    # whole subprocess and leaving the user paired-but-trial-less.
+    # Founder 2026-08-13 hit exactly this: signed up via the desktop
+    # pane cloud pane, saw `Cloud Connected` in the dashboard (my
+    # _fallback_persist_cm_key from #4776 caught the failure and saved
+    # the token), but `clawmetry status` showed Free with no trial
+    # because the subprocess crashed BEFORE reaching
+    # _activate_signup_trial. In non-interactive mode we silently keep
+    # the existing key (keychain/config) or auto-generate one — the
+    # user can re-key later from Settings if they want a custom secret.
+    _non_interactive = (
+        bool(getattr(args, "start_sync_now", False))
+        or _keep_local_signin
+        or not sys.stdin.isatty()
+    )
+
     if _keep_local_signin:
         pass  # enc_key already chosen above, silently
     elif _server_plaintext:
@@ -1171,18 +1192,28 @@ def _cmd_connect(args) -> None:
     elif _kc_key:
         masked = _kc_key[:6] + "…" + _kc_key[-4:]
         print(f"  Key from OS keychain: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
+        if _non_interactive:
+            enc_key = _kc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
+        if _non_interactive:
+            enc_key = _saved_enc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
     else:
-        custom_key = _input(
-            "  Enter a custom secret key (or press Enter to auto-generate): "
-        ).strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
+        if _non_interactive:
+            enc_key = generate_encryption_key()
+            print("  Encryption key auto-generated (change in Settings).")
+        else:
+            custom_key = _input(
+                "  Enter a custom secret key (or press Enter to auto-generate): "
+            ).strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
 
     if enc_key:
         _keychain_set(node_id, enc_key)  # persist to OS keychain when available
