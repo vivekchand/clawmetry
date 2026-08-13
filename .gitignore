@@ -42,5 +42,10 @@ node_modules/
 # Desktop app build outputs (PyInstaller)
 desktop/build/
 desktop/dist/
+# Auto-generated at every pyinstaller run from dashboard.py __version__.
+desktop/installer/version_info.txt
+# Any local signing cert must never land in the tree.
+*.pfx
+*.p12
 build/
 dist/

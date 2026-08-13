@@ -6370,13 +6370,143 @@ def _cmd_login(args) -> None:
     _cmd_connect(args)
 
 
+def _purge_cloud_data(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """POST /api/account/purge-data — flush every trace of THIS account's
+    telemetry from the cloud while keeping the account itself.
+
+    Sister of the local ``--turn-off-cloud-sync`` marker flip: the marker
+    stops future egress; this call deletes what already landed on the cloud.
+    Best-effort — returns ``(ok, message)`` and never raises: if the network
+    is down or the cloud rejects, local-only mode is still in effect and
+    the user can retry the purge later. Skipped for self-hosted endpoints
+    (``CLAWMETRY_ENDPOINT`` set) — the operator owns that data plane.
+    """
+    if not api_key:
+        return (True, "no account linked")
+    try:
+        from clawmetry.endpoints import ingest_url, is_custom_endpoint
+    except Exception as e:
+        return (False, f"endpoints module unavailable: {e}")
+    if is_custom_endpoint():
+        return (True, "self-hosted endpoint — skipping managed-cloud purge")
+    import json as _json
+    import urllib.error as _ue
+    import urllib.request as _ur
+    url = ingest_url().rstrip("/") + "/api/account/purge-data"
+    req = _ur.Request(
+        url,
+        data=_json.dumps({"confirm": "PURGE_DATA"}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        # A cloud that predates this endpoint answers 404. Fall back to
+        # per-node DELETE so at least the visible node disappears.
+        if e.code in (404, 405):
+            return _purge_cloud_node_fallback(api_key, timeout=timeout)
+        return (False, f"HTTP {e.code}{': ' + detail if detail else ''}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"network error: {e}")
+    except Exception as e:
+        return (False, f"unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"deleted {total} row(s) across {len(purged)} table(s)")
+
+
+def _purge_cloud_node_fallback(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """Older cloud without ``/api/account/purge-data``: purge just this
+    node via the per-node DELETE endpoint. Covers the visible fleet row
+    even when the account-scoped purge isn't deployed yet.
+    """
+    import json as _json
+    import urllib.error as _ue
+    import urllib.parse as _up
+    import urllib.request as _ur
+    from clawmetry.endpoints import ingest_url
+    from clawmetry.sync import CONFIG_FILE
+
+    node_id = ""
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            node_id = (_json.load(f) or {}).get("node_id") or ""
+    except Exception:
+        pass
+    if not node_id:
+        return (False, "no node_id in config; cloud already has no /api/account/purge-data")
+    url = (ingest_url().rstrip("/") + "/api/cloud/nodes/"
+           + _up.quote(node_id, safe=""))
+    req = _ur.Request(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="DELETE",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        return (False, f"per-node DELETE HTTP {e.code}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"per-node DELETE network error: {e}")
+    except Exception as e:
+        return (False, f"per-node DELETE unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"per-node fallback: deleted {total} row(s) (upgrade cloud for account-scoped purge)")
+
+
+def _kick_daemon_for_toggle() -> None:
+    """Bounce the sync daemon so any in-flight snapshot upload aborts.
+
+    The nocloud marker gates every subsequent ``_post`` call, so the
+    daemon self-stops within seconds even without a restart. But a
+    snapshot POST that is ALREADY streaming its body can complete before
+    the next marker check — restarting kills it mid-stream, so the user's
+    "no more data goes to the cloud" expectation holds instantly. Best-
+    effort; a machine without launchd/systemd (or without permission to
+    poke either) just falls back to the marker-check behaviour.
+    """
+    import platform
+    import subprocess as _sp
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            uid = os.getuid()
+            _sp.run(["launchctl", "kickstart", "-k",
+                     f"gui/{uid}/com.clawmetry.sync"],
+                    capture_output=True, check=False, timeout=5)
+        elif system == "Linux":
+            import shutil
+            if shutil.which("systemctl"):
+                for _scope in (["--user"], []):
+                    _sp.run(["systemctl", *_scope, "restart", "clawmetry-sync"],
+                            capture_output=True, check=False, timeout=5)
+    except Exception:
+        pass
+
+
 def _cmd_cloud_toggle(enable: bool) -> int:
     """--turn-on-cloud-sync / --turn-off-cloud-sync.
 
-    Pure marker flip: the daemon checks ``is_cloud_disabled()`` on every
-    cloud POST, so the switch takes effect within seconds WITHOUT a daemon
-    restart. OFF keeps the account key (unlike `clawmetry disconnect`) —
-    it only stops data egress; the local dashboard keeps working.
+    OFF: writes the ``~/.clawmetry/nocloud`` marker (stops future egress),
+    then flushes every trace of this account's data from the cloud so the
+    fleet page immediately shows zero data — best-effort; local-only still
+    applies even if the purge call fails. Keeps the account key (unlike
+    ``clawmetry disconnect``) so the user can flip sync back on later.
+
+    ON: pure marker flip — the daemon checks ``is_cloud_disabled()`` on
+    every cloud POST, so egress resumes within seconds without a restart.
     """
     import json as _json
     from clawmetry import config as _cfg
@@ -6423,6 +6553,34 @@ def _cmd_cloud_toggle(enable: bool) -> int:
     print("    • The local dashboard at http://localhost:8900 keeps working.")
     print("    • Your account login is kept; turn back on any time with:")
     print("        clawmetry --turn-on-cloud-sync")
+
+    # Kick the daemon so an in-flight snapshot upload can't outrace the
+    # marker check that gates the NEXT POST.
+    _kick_daemon_for_toggle()
+
+    # Flush every trace of this account's data from the cloud. Best-effort:
+    # local-only is already in effect regardless of what the network does.
+    api_key = ""
+    try:
+        with open(os.path.expanduser("~/.clawmetry/config.json"), "r",
+                  encoding="utf-8") as f:
+            api_key = (_json.load(f) or {}).get("api_key") or ""
+    except Exception:
+        pass
+    if os.environ.get("CLAWMETRY_TOGGLE_SKIP_PURGE") == "1":
+        print("    (skipping cloud purge: CLAWMETRY_TOGGLE_SKIP_PURGE=1)")
+    elif api_key:
+        print()
+        print("  Deleting cloud copy of your data…")
+        ok, msg = _purge_cloud_data(api_key)
+        if ok:
+            print(f"    ✅  Cloud data purged: {msg}")
+            print("       Your account (login, plan) is kept.")
+        else:
+            print(f"    ⚠️  Cloud purge did not complete: {msg}")
+            print("       Local-only is still in effect (nothing new is being")
+            print("       uploaded). Retry the purge with:")
+            print("         clawmetry --turn-off-cloud-sync")
     return 0
 
 
