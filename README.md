@@ -205,7 +205,13 @@ CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**Ingest** — the built-in OTLP receiver accepts traces and metrics from anything else at `/v1/traces` and `/v1/metrics` (`pip install clawmetry[otel]` for protobuf ingest).
+**Ingest** — the built-in OTLP receiver accepts traces, logs, and metrics from anything else at `/v1/traces`, `/v1/logs`, and `/v1/metrics`. Point any OpenTelemetry-instrumented app at it:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8900 OTEL_EXPORTER_OTLP_PROTOCOL=http/json your-app
+```
+
+OTLP/JSON traces and logs work on a plain `pip install clawmetry`, no extras. Protobuf ingest (and OTLP/JSON metrics) needs `pip install clawmetry[otel]`. An app that sets its own `service.name` shows up as its own agent in the runtime switcher, with its cost and tokens.
 
 You get the zero-config, local-first ClawMetry dashboard **and** your data in whatever backend your team already runs — no lock-in, no second agent to install.
 
