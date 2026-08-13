@@ -24,23 +24,48 @@ enforce mode blocks the NSIS uninstaller too.
 
 ---
 
-## The three certificate paths, ranked
+## The four paths, ranked
 
-| Path | Yearly cost | SmartScreen | Setup effort | Best when |
+| Path | Cost | SmartScreen | Setup effort | Best when |
 |---|---|---|---|---|
-| **1. EV code-signing cert** *(recommended — matches wired CI)* | ~$300–500 | **Instant** — EV = "reputation from first signature" | Low (~1 day: buy, verify, paste 2 secrets) | You want to ship today. Zero CI changes. |
-| **2. Azure Artifact Signing** (formerly "Trusted Signing") | ~$120 ($9.99/mo + $0.005/sig) | **Instant** — Microsoft-issued cert chain | Medium (~1 week: portal setup + identity verify + CI PR to add signtool `/dlib` mode) | Ongoing cost matters more than time-to-ship |
-| **3. OV code-signing cert** | ~$70–200 | **Warns until reputation builds** (weeks of downloads or an MSRC submission) | Low (same as #1) | You have downloads-per-day to burn |
+| **1. SignPath Foundation** *(free for OSS — try this first)* | **$0** | **Instant** — SignPath signs with a publicly-trusted OV via their own HSM; reputation attaches to their publisher identity, so new projects inherit trust immediately. | Medium — GitHub-integration onboarding, needs an application + review (typically days to a few weeks). Needs a follow-up PR to wire their signing action into the workflow. | ClawMetry is OSS on GitHub — likely qualifies. Try this before paying. |
+| **2. EV code-signing cert** *(recommended paid — matches wired CI)* | **$149–349/yr** (SSL.com: 5-yr $149/yr, 3-yr $249/yr, 1-yr $349) | **Instant** — EV = "reputation from first signature" | Low (~1 day: buy, verify, paste 2 secrets) | You want to ship today. Zero CI changes. |
+| **3. Azure Artifact Signing** (formerly "Trusted Signing") | **~$120/yr** ($9.99/mo + $0.005/sig) | **Instant** — Microsoft-issued cert chain | Medium (~1 week: portal setup + identity verify + CI PR to add signtool `/dlib` mode) | Ongoing cost matters more than time-to-ship |
+| **4. OV code-signing cert** | ~$70–200/yr | **Warns until reputation builds** (weeks of downloads or MSRC submission) | Low (same as #2) | Not recommended — false economy |
 
-**Do path 1 today.** The CI is already shaped for a .pfx-based signtool
-flow — an EV cert delivered as a cloud-signable PFX drops in with two
-secrets and zero code changes. Path 2 is objectively cheaper ongoing
-but adds a PR to rework the sign path around `signtool /dlib`, so save
-it for the EV cert renewal cycle.
+**Playbook:** apply for SignPath Foundation the same day you buy the EV
+cert. SignPath is free but takes days/weeks to approve; the EV cert
+ships in ~1–3 days and unblocks the current release cycle immediately.
+When SignPath approves, migrate to it and let the EV cert lapse at
+renewal.
 
 ---
 
-## Path 1 — Buy an EV cert (recommended)
+## Path 1 — SignPath Foundation (free for OSS — try first)
+
+SignPath Foundation is a nonprofit that provides free code signing for
+qualifying OSS projects through the enterprise SignPath.io platform.
+They sign through a managed pipeline using their own publicly-trusted
+OV cert — reputation is theirs, so new projects inherit trust from day
+one (no per-file SmartScreen wait).
+
+**Eligibility checklist** — ClawMetry meets these today:
+- OSI-approved OSS license, no commercial dual-licensing → MIT ✅
+- Actively maintained → ✅ (daily releases)
+- No malware / no PUP → ✅
+- Publicly released in the exact form being signed → ✅ (the desktop `.exe` is a GitHub Release asset)
+
+### The application
+
+1. Start at https://signpath.io/solutions/open-source-community — the OSS landing page. Click "Contact us" or "Request a Demo" (Foundation program funnels through the standard contact form; explain "SignPath Foundation for OSS project" in the message).
+2. Also read the Foundation terms at https://signpath.org/terms.html — you'll be asked to accept them during onboarding.
+3. Provide: GitHub repo URL (github.com/vivekchand/clawmetry), OSI license (MIT), project maintainers, release channel (GitHub Releases), signing target (the Windows `.exe` and `.exe` installer inside the release artifact).
+4. Review turnaround is a few days to a few weeks. In the meantime, activate **Path 2 (EV cert)** to unblock releases today.
+5. Once approved, SignPath supplies a GitHub Action that signs artifacts as a webhook: CI uploads unsigned artifacts, waits for the countersigned artifact to come back. That's a follow-up PR that swaps the current `signtool sign /f <pfx>` steps for their action.
+
+---
+
+## Path 2 — Buy an EV cert (fastest paid path — matches wired CI)
 
 ### Where to buy
 
@@ -50,7 +75,7 @@ rules ban downloadable EV private keys. You want the "cloud" or
 "eSigner" variant, not the shipped-Yubikey variant, so CI can sign
 without a physical token plugged into a runner.
 
-- **SSL.com** — https://www.ssl.com/certificates/ev-code-signing/ — **~$249/yr**, eSigner cloud signing. Fastest identity verification (~24h for an established LLC).
+- **SSL.com** — https://www.ssl.com/products/software-integrity/code-signing/ev/ — **1yr $349, 3yr $249/yr, 5yr $149/yr**. eSigner cloud signing (HSM-backed PFX). Fastest identity verification (~24h for an established LLC). *Cheapest per-year at 5yr; least commitment at 1yr.*
 - **DigiCert KeyLocker** — https://www.digicert.com/signing/code-signing-certificates — ~$474/yr, industry standard.
 - **Sectigo (formerly Comodo)** — https://sectigo.com/ssl-certificates-tls/code-signing — ~$399/yr.
 
@@ -89,7 +114,7 @@ EV certs are supposed to give instant reputation, but Microsoft occasionally sti
 
 ---
 
-## Path 2 — Azure Artifact Signing (cheaper ongoing, needs a PR)
+## Path 3 — Azure Artifact Signing (cheaper ongoing, needs a PR)
 
 Best-in-class economics: ~$120/yr and instant SmartScreen reputation via the Microsoft cert chain. **Downside:** the current CI pipeline uses `signtool sign /f <pfx>` — Azure Artifact Signing needs `signtool sign /dlib <Trusted.Signing.dll> /dmdf <metadata.json>` instead. That's a follow-up PR to rework the sign wrapper, not something the current secrets flow supports as-is.
 
@@ -112,7 +137,7 @@ If you want to go this route:
 
 ---
 
-## Path 3 — OV cert (not recommended; only if budget-locked)
+## Path 4 — OV cert (not recommended)
 
 An Organization Validation (OV) cert is cheaper (~$70–200/yr) and drops into the same signtool flow as an EV cert. But **OV certs don't grant instant SmartScreen reputation** — Microsoft treats them as a lower-trust tier. The workflow warning fades only after ClawMetry accumulates thousands of downloads per unique file hash, which for a rapidly-versioning app means it never fades in practice.
 
