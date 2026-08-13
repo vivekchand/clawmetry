@@ -4285,6 +4285,12 @@ class LocalStore:
                 trace_id,
                 MAX(session_id)    AS session_id,
                 MAX(agent_type)    AS agent_type,
+                -- Display identity for the trace list (#4782). The earliest
+                -- span's name is the closest thing a span-only trace has to a
+                -- title; service_name/model label which app and model it was.
+                arg_min(name, start_ts) AS root_name,
+                MAX(service_name)  AS service_name,
+                MAX(model)         AS model,
                 MIN(start_ts)      AS start_ts,
                 MAX(end_ts)        AS end_ts,
                 CAST((MAX(end_ts) - MIN(start_ts)) * 1000 AS DOUBLE) AS duration_ms,
@@ -4302,6 +4308,7 @@ class LocalStore:
         params.append(int(limit))
         cols = [
             "trace_id", "session_id", "agent_type",
+            "root_name", "service_name", "model",
             "start_ts", "end_ts", "duration_ms", "span_count",
             "cost_usd", "tokens_input", "tokens_output", "has_error",
         ]
