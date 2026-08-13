@@ -16915,7 +16915,14 @@ function _jumpToTurn(turnIdx) {
 
 // Toolbar toggle — flip the whole trace between oldest-first (default,
 // chat-native) and newest-first (skim recent activity for long sessions).
-window._transcriptSort = 'oldest';
+//
+// INVARIANT: This is a display-time reversal ONLY. `window._replayEvents`
+// (the LocalStore-supplied event sequence) is NEVER mutated. The reversal
+// operates on a temporary array of turn groups inside _replayRenderCurrent
+// (`turns.slice().reverse()`) that lives for one render pass and is thrown
+// away. Every downstream consumer that reads `_replayEvents` — the scrubber,
+// the filter, the state panel, the raw-mode toggle — still sees events in
+// the original LocalStore order.
 function toggleTranscriptSort() {
   window._transcriptSort = (window._transcriptSort === 'oldest') ? 'newest' : 'oldest';
   var btn = document.getElementById('replay-sort-toggle');
