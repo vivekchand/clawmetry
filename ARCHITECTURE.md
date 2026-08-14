@@ -92,7 +92,7 @@ Rel(daemon, cloud, "E2E snapshot push", "HTTPS")
 
 ## Claude Code as a Second Data Source
 
-ClawMetry also supports **Claude Code** (`~/.claude/projects/`) as a data source via a dedicated dashboard (`dashboard_claudecode.py`). Claude Code stores session transcripts as JSONL files with a similar schema to OpenClaw sessions.
+ClawMetry supports **Claude Code** (`~/.claude/projects/`) as a data source through the main dashboard's runtime scope — pick `claude_code` in the runtime switcher and the same `/api/sessions`, `/api/transcripts`, etc. render its data. Claude Code stores session transcripts as JSONL files with a similar schema to OpenClaw sessions.
 
 ```
 ~/.claude/
@@ -103,11 +103,6 @@ ClawMetry also supports **Claude Code** (`~/.claude/projects/`) as a data source
 │   └── ...more projects
 └── settings.json
 ```
-
-The Claude Code dashboard is a standalone Flask app that can be:
-- Run independently: `python dashboard_claudecode.py --port 8901`
-- Mounted as a Blueprint: `app.register_blueprint(bp_claudecode, url_prefix='/claudecode')`
-- Deployed at `clawmetry.com/claudecode`
 
 Key differences from the OpenClaw data source:
 | Aspect | OpenClaw | Claude Code |

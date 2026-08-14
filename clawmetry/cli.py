@@ -1160,6 +1160,27 @@ def _cmd_connect(args) -> None:
     print()
     if not _keep_local_signin and not _server_plaintext:
         print("🔐 Encryption key protects your data end-to-end.")
+
+    # Non-interactive callers (--start-sync-now / --keep-local from the
+    # dashboard's OTP paste-and-go and the desktop pane's apply_cm_key
+    # subprocess; also any pipe/redirect where stdin isn't a TTY) must
+    # never hit `input()` — the desktop pane runs connect with
+    # capture_output=True and `input()` raises EOFError, killing the
+    # whole subprocess and leaving the user paired-but-trial-less.
+    # Founder 2026-08-13 hit exactly this: signed up via the desktop
+    # pane cloud pane, saw `Cloud Connected` in the dashboard (my
+    # _fallback_persist_cm_key from #4776 caught the failure and saved
+    # the token), but `clawmetry status` showed Free with no trial
+    # because the subprocess crashed BEFORE reaching
+    # _activate_signup_trial. In non-interactive mode we silently keep
+    # the existing key (keychain/config) or auto-generate one — the
+    # user can re-key later from Settings if they want a custom secret.
+    _non_interactive = (
+        bool(getattr(args, "start_sync_now", False))
+        or _keep_local_signin
+        or not sys.stdin.isatty()
+    )
+
     if _keep_local_signin:
         pass  # enc_key already chosen above, silently
     elif _server_plaintext:
@@ -1171,18 +1192,28 @@ def _cmd_connect(args) -> None:
     elif _kc_key:
         masked = _kc_key[:6] + "…" + _kc_key[-4:]
         print(f"  Key from OS keychain: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
+        if _non_interactive:
+            enc_key = _kc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
+        if _non_interactive:
+            enc_key = _saved_enc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
     else:
-        custom_key = _input(
-            "  Enter a custom secret key (or press Enter to auto-generate): "
-        ).strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
+        if _non_interactive:
+            enc_key = generate_encryption_key()
+            print("  Encryption key auto-generated (change in Settings).")
+        else:
+            custom_key = _input(
+                "  Enter a custom secret key (or press Enter to auto-generate): "
+            ).strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
 
     if enc_key:
         _keychain_set(node_id, enc_key)  # persist to OS keychain when available
@@ -2312,6 +2343,45 @@ def _cmd_uninstall(args=None) -> None:
         except Exception:
             pass
 
+    # 10. Runtime hooks (#4817). MUST run before pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every entry in
+    # ``~/.clawmetry/hooks/installed.json`` names a hook file we dropped
+    # into a runtime's config dir (Claude Code, Cursor, opencode, Pi, …)
+    # plus the config-file key we merged. Draining the manifest removes
+    # both, so the runtime never boots into a settings.json referencing
+    # a script that pip just deleted. Non-negotiable per goal thread
+    # 2026-08-14 ("runtime should not error out when clawmetry is
+    # uninstalled").
+    try:
+        from clawmetry import hooks as _cm_hooks
+        for _installed in _cm_hooks.status():
+            items.append((
+                "Hook",
+                f"Runtime hook: {_installed.runtime}/{_installed.hook_id} "
+                f"({_installed.install_path})",
+            ))
+    except Exception:
+        pass
+
+    # 10b. numbat (agent-EDR) — only if `clawmetry secure enable` installed
+    # it (managed binary in ~/.clawmetry/bin). Its hooks live in each
+    # harness's own config and reference that binary, so they must be
+    # de-registered before the ~/.clawmetry purge deletes it — the same
+    # stale-hook class as #4817. A user-installed numbat (PATH) is never
+    # touched. Skipped under --keep-data: that path keeps ~/.clawmetry, so
+    # binary + hooks stay valid for the reinstall-later flow.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _numbat_bin = _cm_secure.managed_numbat()
+            if _numbat_bin:
+                items.append((
+                    "Numbat",
+                    f"numbat hooks (all agent configs) + binary: {_numbat_bin}",
+                ))
+        except Exception:
+            pass
+
     # 9. pip package
     items.append(("Package", "pip package: clawmetry"))
 
@@ -2483,6 +2553,41 @@ def _cmd_uninstall(args=None) -> None:
     _stray_dash = 0 if system == "Windows" else _kill_dashboard_processes()
     if _stray_dash:
         print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
+
+    # 1b. Drain runtime hooks (#4817). MUST run BEFORE pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every registered hook
+    # gets its config-file key merged-removed (only ClawMetry-owned keys are
+    # touched; user config survives) and its hook file deleted. If this
+    # doesn't run cleanly, a runtime like Claude Code boots into a
+    # settings.json referencing a script pip is about to delete, and
+    # errors out on next start — the exact scenario the goal thread
+    # 2026-08-14 flagged as non-negotiable.
+    try:
+        from clawmetry import hooks as _cm_hooks
+        _drained = _cm_hooks.uninstall_all()
+        if _drained:
+            print(f"  ✅  Drained {len(_drained)} runtime hook(s): "
+                  f"{', '.join(_drained)}")
+    except Exception as _e:
+        print(f"  ⚠️  Could not drain runtime hooks: {_e}")
+
+    # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
+    # ~/.clawmetry purge below: the drain shells out to the managed binary
+    # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
+    # own config (Claude Code settings.json, Codex hooks.json, …) reference
+    # that binary by absolute path. Purge first and every harness boots
+    # into a config pointing at a deleted binary (#4817's bug class).
+    # No-ops when numbat isn't ours (PATH install) or under --keep-data.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _nb_acted, _nb_msg = _cm_secure.drain_hooks_for_uninstall()
+            if _nb_acted:
+                print(f"  ✅  {_nb_msg}")
+            elif _nb_msg:
+                print(f"  ⚠️  {_nb_msg}")
+        except Exception as _e:
+            print(f"  ⚠️  Could not drain numbat hooks: {_e}")
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
@@ -6339,13 +6444,143 @@ def _cmd_login(args) -> None:
     _cmd_connect(args)
 
 
+def _purge_cloud_data(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """POST /api/account/purge-data — flush every trace of THIS account's
+    telemetry from the cloud while keeping the account itself.
+
+    Sister of the local ``--turn-off-cloud-sync`` marker flip: the marker
+    stops future egress; this call deletes what already landed on the cloud.
+    Best-effort — returns ``(ok, message)`` and never raises: if the network
+    is down or the cloud rejects, local-only mode is still in effect and
+    the user can retry the purge later. Skipped for self-hosted endpoints
+    (``CLAWMETRY_ENDPOINT`` set) — the operator owns that data plane.
+    """
+    if not api_key:
+        return (True, "no account linked")
+    try:
+        from clawmetry.endpoints import ingest_url, is_custom_endpoint
+    except Exception as e:
+        return (False, f"endpoints module unavailable: {e}")
+    if is_custom_endpoint():
+        return (True, "self-hosted endpoint — skipping managed-cloud purge")
+    import json as _json
+    import urllib.error as _ue
+    import urllib.request as _ur
+    url = ingest_url().rstrip("/") + "/api/account/purge-data"
+    req = _ur.Request(
+        url,
+        data=_json.dumps({"confirm": "PURGE_DATA"}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        # A cloud that predates this endpoint answers 404. Fall back to
+        # per-node DELETE so at least the visible node disappears.
+        if e.code in (404, 405):
+            return _purge_cloud_node_fallback(api_key, timeout=timeout)
+        return (False, f"HTTP {e.code}{': ' + detail if detail else ''}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"network error: {e}")
+    except Exception as e:
+        return (False, f"unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"deleted {total} row(s) across {len(purged)} table(s)")
+
+
+def _purge_cloud_node_fallback(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """Older cloud without ``/api/account/purge-data``: purge just this
+    node via the per-node DELETE endpoint. Covers the visible fleet row
+    even when the account-scoped purge isn't deployed yet.
+    """
+    import json as _json
+    import urllib.error as _ue
+    import urllib.parse as _up
+    import urllib.request as _ur
+    from clawmetry.endpoints import ingest_url
+    from clawmetry.sync import CONFIG_FILE
+
+    node_id = ""
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            node_id = (_json.load(f) or {}).get("node_id") or ""
+    except Exception:
+        pass
+    if not node_id:
+        return (False, "no node_id in config; cloud already has no /api/account/purge-data")
+    url = (ingest_url().rstrip("/") + "/api/cloud/nodes/"
+           + _up.quote(node_id, safe=""))
+    req = _ur.Request(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="DELETE",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        return (False, f"per-node DELETE HTTP {e.code}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"per-node DELETE network error: {e}")
+    except Exception as e:
+        return (False, f"per-node DELETE unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"per-node fallback: deleted {total} row(s) (upgrade cloud for account-scoped purge)")
+
+
+def _kick_daemon_for_toggle() -> None:
+    """Bounce the sync daemon so any in-flight snapshot upload aborts.
+
+    The nocloud marker gates every subsequent ``_post`` call, so the
+    daemon self-stops within seconds even without a restart. But a
+    snapshot POST that is ALREADY streaming its body can complete before
+    the next marker check — restarting kills it mid-stream, so the user's
+    "no more data goes to the cloud" expectation holds instantly. Best-
+    effort; a machine without launchd/systemd (or without permission to
+    poke either) just falls back to the marker-check behaviour.
+    """
+    import platform
+    import subprocess as _sp
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            uid = os.getuid()
+            _sp.run(["launchctl", "kickstart", "-k",
+                     f"gui/{uid}/com.clawmetry.sync"],
+                    capture_output=True, check=False, timeout=5)
+        elif system == "Linux":
+            import shutil
+            if shutil.which("systemctl"):
+                for _scope in (["--user"], []):
+                    _sp.run(["systemctl", *_scope, "restart", "clawmetry-sync"],
+                            capture_output=True, check=False, timeout=5)
+    except Exception:
+        pass
+
+
 def _cmd_cloud_toggle(enable: bool) -> int:
     """--turn-on-cloud-sync / --turn-off-cloud-sync.
 
-    Pure marker flip: the daemon checks ``is_cloud_disabled()`` on every
-    cloud POST, so the switch takes effect within seconds WITHOUT a daemon
-    restart. OFF keeps the account key (unlike `clawmetry disconnect`) —
-    it only stops data egress; the local dashboard keeps working.
+    OFF: writes the ``~/.clawmetry/nocloud`` marker (stops future egress),
+    then flushes every trace of this account's data from the cloud so the
+    fleet page immediately shows zero data — best-effort; local-only still
+    applies even if the purge call fails. Keeps the account key (unlike
+    ``clawmetry disconnect``) so the user can flip sync back on later.
+
+    ON: pure marker flip — the daemon checks ``is_cloud_disabled()`` on
+    every cloud POST, so egress resumes within seconds without a restart.
     """
     import json as _json
     from clawmetry import config as _cfg
@@ -6392,6 +6627,34 @@ def _cmd_cloud_toggle(enable: bool) -> int:
     print("    • The local dashboard at http://localhost:8900 keeps working.")
     print("    • Your account login is kept; turn back on any time with:")
     print("        clawmetry --turn-on-cloud-sync")
+
+    # Kick the daemon so an in-flight snapshot upload can't outrace the
+    # marker check that gates the NEXT POST.
+    _kick_daemon_for_toggle()
+
+    # Flush every trace of this account's data from the cloud. Best-effort:
+    # local-only is already in effect regardless of what the network does.
+    api_key = ""
+    try:
+        with open(os.path.expanduser("~/.clawmetry/config.json"), "r",
+                  encoding="utf-8") as f:
+            api_key = (_json.load(f) or {}).get("api_key") or ""
+    except Exception:
+        pass
+    if os.environ.get("CLAWMETRY_TOGGLE_SKIP_PURGE") == "1":
+        print("    (skipping cloud purge: CLAWMETRY_TOGGLE_SKIP_PURGE=1)")
+    elif api_key:
+        print()
+        print("  Deleting cloud copy of your data…")
+        ok, msg = _purge_cloud_data(api_key)
+        if ok:
+            print(f"    ✅  Cloud data purged: {msg}")
+            print("       Your account (login, plan) is kept.")
+        else:
+            print(f"    ⚠️  Cloud purge did not complete: {msg}")
+            print("       Local-only is still in effect (nothing new is being")
+            print("       uploaded). Retry the purge with:")
+            print("         clawmetry --turn-off-cloud-sync")
     return 0
 
 

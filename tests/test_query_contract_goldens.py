@@ -48,6 +48,8 @@ DISPATCH_ARGS = {
     "rollup_sessions": {},
     # #1012 (Agent Graph tab, Phase 6 Tracing): spawn topology from spans.
     "agent_graph": {},
+    # #4813 session-replay: canonical replay-event rows for one session.
+    "replay_events": {"session_id": "sess-a"},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.

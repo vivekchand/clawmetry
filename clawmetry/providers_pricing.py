@@ -79,6 +79,13 @@ PROVIDER_MAP: dict[str, dict] = {
         "input_per_1m": 3.00,
         "output_per_1m": 15.00,
     },
+    "api.deepseek.com": {
+        "name": "deepseek",
+        # deepseek-v4-flash baseline, per api-docs.deepseek.com/quick_start/
+        # pricing (2026-08-14); overrides below cover the pro tier
+        "input_per_1m": 0.14,
+        "output_per_1m": 0.28,
+    },
 }
 
 # Model-specific overrides (provider, model_prefix) -> (input_per_1m, output_per_1m)
@@ -140,6 +147,13 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("xai", "grok-2"): (2.00, 10.00),
     ("xai", "grok-2-vision"): (2.00, 10.00),
     ("xai", "grok-2-latest"): (2.00, 10.00),
+    # DeepSeek official API, per api-docs.deepseek.com/quick_start/pricing
+    # (2026-08-14; cache-miss input rates — cache-hit input is ~50x cheaper,
+    # so callers that pass uncached input only slightly underbill). Note the
+    # docs announce peak/off-peak billing from 2026-08-16 (off-peak = half);
+    # these are the peak rates.
+    ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
+    ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
 }
 
 

@@ -6517,7 +6517,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
-    "grok": "Grok", "qm": "QM",
+    "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6560,6 +6560,9 @@ def _runtime_data_paths(rid: str) -> list:
         "copilot": [os.path.join(home, ".copilot", "session-state")],
         "grok": [os.path.join(home, ".grok", d) for d in
                  ("logs", "sessions")],
+        "deepseek_harness": [os.path.join(
+            os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
+                               os.path.join(home, ".dsh")), "sessions")],
     }
     return _M.get(rid, [])
 
@@ -6691,6 +6694,9 @@ def _detect_runtimes_lite() -> list:
         "copilot": [os.path.join(home, ".copilot", "session-state")],
         "grok": [os.path.join(home, ".grok", d) for d in
                  ("logs", "sessions")],
+        "deepseek_harness": [os.path.join(
+            os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
+                               os.path.join(home, ".dsh")), "sessions")],
     }
     for rid, paths in _present.items():
         try:
@@ -11946,6 +11952,11 @@ _FAMILY_ADAPTER_SPECS = (
     # definitionally a Pro user. Adapter reads DATABASE_URL /
     # CLAWMETRY_QM_DATABASE_URL in read-only mode.
     ("clawmetry_pro.adapters.qm", "QMAdapter"),
+    # DeepSeek Harness (github.com/deepseek-ai/deepseek-harness) — JSONL
+    # session logs under $DSH_HOME/sessions (default ~/.dsh/sessions),
+    # zstd-compressed by default; the adapter lazily installs `zstandard`
+    # only after compressed dsh data is positively detected.
+    ("clawmetry_pro.adapters.deepseek_harness", "DeepSeekHarnessAdapter"),
 )
 
 
@@ -13146,7 +13157,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok", "qm",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness",
 })
 
 
@@ -14076,6 +14087,50 @@ def _build_traces(limit_traces=5, span_cap=100):
                 "agent_graph": _tr._build_agent_graph(spans),
                 "_truncated": truncated,
             }
+        for t in summaries:
+            t["source"] = "events"
+
+        # Span-only traces (#4782). A bring-your-own-agent app that speaks OTLP
+        # emits spans and no events, so it is absent from everything above. The
+        # hosted dashboard has no DuckDB, so without this slice the cloud
+        # Tracing tab would show the app in the runtime switcher and nothing in
+        # the trace list -- exactly the blank-card failure the cloud-parity gate
+        # exists to prevent. Read on the daemon's OWN handle: a read_only
+        # re-open here would brick the writer lock (#1771).
+        try:
+            seen_sessions = set(by_sid)
+            for row in (store.query_traces(limit=limit_traces * 4) or []):
+                if len(summaries) >= limit_traces * 2:
+                    break
+                sid = (row.get("session_id") or "").strip()
+                if sid and (sid in seen_sessions or hide_clawmetry_session(sid)):
+                    continue
+                summary = _tr._summarize_span_trace(row)
+                tid = summary["trace_id"]
+                if not tid or tid in detail:
+                    continue
+                span_rows = store.query_spans(trace_id=tid, limit=span_cap) or []
+                if not span_rows:
+                    continue
+                spans, roots = _tr._build_spans_from_store(span_rows)
+                for s in spans:
+                    if s.get("detail"):
+                        s["detail"] = s["detail"][:400]
+                    if s.get("output"):
+                        s["output"] = s["output"][:400]
+                summaries.append(summary)
+                detail[tid] = {
+                    "trace_id": tid,
+                    "summary": summary,
+                    "spans": spans,
+                    "root_span_ids": roots,
+                    "agent_graph": _tr._build_agent_graph(spans),
+                    "_truncated": len(span_rows) >= span_cap,
+                }
+        except Exception as _se:
+            log.debug("span-trace snapshot merge failed: %s", _se)
+
+        summaries.sort(key=lambda t: (t.get("start_ms") or 0), reverse=True)
         return {"list": summaries, "detail": detail}
     except Exception as _e:
         log.debug("traces snapshot build failed: %s", _e)

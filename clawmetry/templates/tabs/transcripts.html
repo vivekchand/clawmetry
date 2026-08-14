@@ -68,6 +68,36 @@
           min-width:120px;
           accent-color:#6366f1;
           ">
+        <button id="replay-sort-toggle" onclick="toggleTranscriptSort()" title="Oldest turn at top — click to flip to newest first" style="
+          padding:5px 12px;
+          border-radius:6px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          cursor:pointer;
+          font-size:12px;
+          white-space:nowrap;
+          ">↓ Oldest first</button>
+        <button id="replay-expand-tools" onclick="expandAllToolDives()" title="Open every tool call/result in this trace" style="
+          padding:5px 10px;
+          border-radius:6px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          cursor:pointer;
+          font-size:12px;
+          white-space:nowrap;
+          ">⤢ Expand tools</button>
+        <button id="replay-collapse-tools" onclick="collapseAllToolDives()" title="Collapse every tool call/result — turns the trace back into a skimmable chat" style="
+          padding:5px 10px;
+          border-radius:6px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          cursor:pointer;
+          font-size:12px;
+          white-space:nowrap;
+          ">⤡ Collapse tools</button>
         <button id="replay-raw-toggle" onclick="toggleTranscriptRaw()" data-i18n-title="transcripts.raw_tooltip" title="Toggle between the beautified turn and the exact JSON payload OpenClaw recorded" style="
           padding:5px 12px;
           border-radius:6px;
@@ -145,6 +175,14 @@
       <span>💡 <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">—</strong></span>
       <span>📈 <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
     </div>
-    <div class="chat-messages" id="transcript-messages"></div>
+    <!-- Turn-anchored layout (session-trace redesign): messages on the left,
+         sticky jump-to-turn TOC on the right. TOC is populated by
+         _renderTurnTOC() each time _replayRenderCurrent() runs; it hides on
+         narrow viewports so mobile falls back to plain vertical scroll. -->
+    <div class="transcript-layout">
+      <div class="chat-messages" id="transcript-messages"></div>
+      <aside class="transcript-toc" id="transcript-toc"
+             title="Every user prompt in this session — click to jump"></aside>
+    </div>
   </div>
 </div>

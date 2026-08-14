@@ -17,7 +17,6 @@ on:
   pull_request:
     paths:
       - "dashboard.py"
-      - "dashboard_claudecode.py"
       - "routes/**"
       - "clawmetry/static/**"
       - "clawmetry/templates/**"

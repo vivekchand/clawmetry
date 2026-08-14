@@ -84,6 +84,10 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("grok", "Grok",
                  ("~/.grok/logs", "~/.grok/sessions", "~/.grok/bin/grok"),
                  env="CLAWMETRY_GROK_HOME"),
+    # DeepSeek Harness (`dsh`) keeps everything under one home ($DSH_HOME,
+    # default ~/.dsh); JSONL session logs live in <home>/sessions.
+    RuntimeProbe("deepseek_harness", "DeepSeek Harness",
+                 ("~/.dsh/sessions",), env="DSH_HOME"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME

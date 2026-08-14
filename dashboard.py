@@ -117,6 +117,7 @@ from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_tr
 from routes.compliance import bp_compliance
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
+from routes.runtime_memory import bp_runtime_memory
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
@@ -132,6 +133,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
@@ -232,6 +234,59 @@ def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     return proto_msg
 
 
+def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
+    """Decode an OTLP body for ``kind`` ('traces' | 'logs' | 'metrics').
+
+    Issue #4781. ``opentelemetry-proto`` is behind the ``otel`` extra, so on a
+    default install every OTLP POST used to answer 501 and the advertised
+    receiver was simply off. Binary bodies still decode with protobuf exactly as
+    before; JSON bodies go through the stdlib decoder in
+    ``clawmetry.otlp_json``, which returns objects that duck-type the protobuf
+    message API -- so ``_process_otlp_*`` and ``_otel_to_row`` run unchanged
+    over either format and there is no second mapping path to drift.
+
+    Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
+    extra (a protobuf body, or JSON metrics); the HTTP layer turns that into
+    501 with the install hint. Malformed bodies still raise (caller -> 400).
+
+    OTLP/JSON traces and logs go through the stdlib decoder even when protobuf
+    IS installed. That is deliberate, and it fixes a silent corruption: protobuf
+    JSON maps ``bytes`` fields from BASE64, but the OTLP/JSON spec overrides
+    that for ``traceId`` / ``spanId`` / ``parentSpanId``, which are lowercase
+    HEX. ``json_format.Parse`` therefore base64-decoded every id and we stored
+    the garbage. Measured against a live dashboard: span id ``3333333333333333``
+    persisted as ``df7df7df7df7df7df7df7df7``, and every id in the batch was
+    mangled the same way, so ids never matched the user's own trace ids or any
+    other backend they correlate with.
+    """
+    ct = (content_type or "").lower()
+    if ("application/json" in ct or "application/x-ndjson" in ct) and kind in (
+        "traces", "logs",
+    ):
+        from clawmetry.otlp_json import decode as _json_decode
+        return _json_decode(pb_data, kind, content_encoding=content_encoding)
+
+    if _HAS_OTEL_PROTO:
+        factories = {
+            "traces": lambda: trace_service_pb2.ExportTraceServiceRequest(),
+            "logs": lambda: logs_service_pb2.ExportLogsServiceRequest(),
+            "metrics": lambda: metrics_service_pb2.ExportMetricsServiceRequest(),
+        }
+        factory = factories.get(kind)
+        if factory is None:
+            raise ValueError(f"unknown OTLP kind: {kind}")
+        return _otlp_decode(pb_data, factory(), content_encoding, content_type)
+
+    # No protobuf, and this is either a binary body or JSON metrics (whose
+    # mapper still reaches into sum/gauge/histogram point types).
+    from clawmetry.otlp_json import OtlpProtobufUnavailable
+
+    raise OtlpProtobufUnavailable(
+        "this payload needs opentelemetry-proto; OTLP/JSON traces and logs "
+        "work without it (send Content-Type: application/json)"
+    )
+
+
 def _otlp_service_name_to_agent_type(service_name):
     """Map an OTLP resource ``service.name`` onto a ClawMetry ``agent_type``.
 
@@ -269,7 +324,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.689"
+__version__ = "0.12.704"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -2304,12 +2359,7 @@ def _get_dp_attrs(dp):
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -2817,12 +2867,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -2965,12 +3010,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
 
     def _f(attrs, *keys):
         for k in keys:
@@ -10760,12 +10800,7 @@ def _get_dp_attrs(dp):
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -11273,12 +11308,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -11421,12 +11451,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
 
     def _f(attrs, *keys):
         for k in keys:
@@ -11867,6 +11892,7 @@ def detect_config(args=None):
         app.register_blueprint(bp_nemoclaw)
         app.register_blueprint(bp_compliance)
     app.register_blueprint(bp_skills)
+    app.register_blueprint(bp_runtime_memory)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
@@ -11911,7 +11937,10 @@ def detect_config(args=None):
     # When the resolver reports an unpaid / expired entitlement, every non-
     # allowlisted request 402s with a machine-readable body carrying
     # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
-    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. See
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. The gate honours a per-request
+    # ``runtime`` scope hint so an operator who chose the "continue with free
+    # runtimes only" fallback (POST /api/trial/continue-free) still gets the
+    # OpenClaw / NanoClaw surface while paid runtimes stay blocked. See
     # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
     from clawmetry import trial_enforcement as _te_gate
 
@@ -11921,7 +11950,21 @@ def detect_config(args=None):
             path = request.path or ""
             if _te_gate.allowlisted_path(path):
                 return None
-            if not _te_gate.is_hard_blocked():
+            # Runtime hint sources, in preference order:
+            #   1. ?runtime=<name> (canonical UI param)
+            #   2. ?scope=<name>   (older alias some routes still emit)
+            #   3. X-Clawmetry-Runtime header (used by CLI + adapters)
+            rt_hint = None
+            try:
+                rt_hint = (
+                    (request.args.get("runtime") or "").strip()
+                    or (request.args.get("scope") or "").strip()
+                    or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                    or None
+                )
+            except Exception:
+                rt_hint = None
+            if not _te_gate.is_hard_blocked(path=path, runtime=rt_hint):
                 return None
             payload = _te_gate.block_payload()
             resp = jsonify(payload)
@@ -11958,6 +12001,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
 
@@ -12493,9 +12537,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
-        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
-        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
@@ -12518,11 +12562,17 @@ DASHBOARD_HTML = r"""
            usage (context-economics) shows the same story from real per-turn
            readings, session + runtime scoped. switchTab('context') aliases
            there so old deep links keep working. #}
-        {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
-           SESSION-scoped, so they left the global nav and are reached from a
+        {# Phase B (UX_AUDIT.md) removed Tracing, Turn timing and Compare
+           sessions from the global nav as SESSION-scoped views, reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
-           Sessions viewer). Their pages + data-tab ids stay: deep links
-           and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
+           Sessions viewer). Turn timing and Compare sessions still are.
+           TRACING IS BACK (#4782): a bring-your-own-agent app that speaks OTLP
+           has no session at all -- its traces are keyed by OTel trace_id and
+           never appear in the Sessions viewer -- so a drill-down-only entry
+           point left those traces reachable by deep link only. #}
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" title="Every run as a trace: the span waterfall, the span tree and the agent graph. Includes apps that send OpenTelemetry.">
+          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
         </div>
@@ -12552,8 +12602,15 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
+      {# Memory + Skills stay under Advanced while the multi-runtime file
+         browser matures (founder call 2026-08-14): known gaps — redundant
+         runtime chips, file click not loading content, Skills rendering the
+         Memory catalog. Promote to Tier-1 once those are fixed. #}
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
         <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live runtime log stream">
         <span class="left-nav-label">Logs</span>
@@ -12563,9 +12620,6 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
         <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
         <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>
@@ -17563,6 +17617,105 @@ def _get_recent_log_files(days=7):
     return log_files
 
 
+# ── OTLP compatibility listener (issue #4780) ────────────────────────────
+#
+# The receiver has always been reachable at /v1/* on the dashboard port, but
+# every OpenTelemetry SDK and collector defaults to http://localhost:4318. That
+# gap meant an already-instrumented app could not be observed until someone
+# discovered OTEL_EXPORTER_OTLP_ENDPOINT and pointed it at :8900 -- an env var
+# between the user and "it just works".
+#
+# So we also listen on 4318, serving ONLY the receiver blueprint. A span
+# arriving there takes the identical handler / decoder / store path as one
+# arriving on the dashboard port; nothing about the mapping is duplicated.
+
+# Conventional OTLP/HTTP port. Override with CLAWMETRY_OTLP_PORT (0 = pick an
+# ephemeral port, which the tests use). CLAWMETRY_OTLP_PORT_DISABLE=1 turns the
+# listener off for anyone who wants the port left alone.
+_OTLP_COMPAT_DEFAULT_PORT = 4318
+_otlp_compat_server = None
+
+
+def _build_otlp_compat_app():
+    """A minimal Flask app exposing the OTLP receiver and nothing else.
+
+    Deliberately NOT the dashboard app: a second surface serving the UI and
+    /api/* would widen what is reachable for no gain. Everything except /v1/*
+    (and the small /api/otel-status probe on the same blueprint) 404s here.
+
+    The main app's auth guard is registered too, so the loopback-trusted /
+    token-required rule is one rule, not two: binding this listener somewhere
+    other than loopback cannot silently open an unauthenticated ingest.
+    """
+    from flask import Flask as _Flask
+    from routes.meta import bp_otel as _bp_otel
+
+    otlp_app = _Flask("clawmetry_otlp_compat")
+    otlp_app.register_blueprint(_bp_otel)
+    otlp_app.before_request(_check_auth)
+    return otlp_app
+
+
+def _start_otlp_compat_listener(host=None, port=None, debug=False):
+    """Serve the OTLP receiver on the conventional port in a daemon thread.
+
+    Returns the waitress server (for tests) or ``None`` when the listener is
+    disabled, unavailable, or the port is already held. Never raises: a machine
+    already running an OTel Collector keeps its collector, and ClawMetry says so
+    once rather than failing to boot.
+    """
+    global _otlp_compat_server
+    if str(os.environ.get("CLAWMETRY_OTLP_PORT_DISABLE", "")).strip().lower() in (
+        "1", "true", "yes",
+    ):
+        return None
+    # Flask's debug reloader runs main() in BOTH the supervisor and the child.
+    # Only the child serves the dashboard, so let it own the port; otherwise the
+    # supervisor grabs 4318 and the child logs "already in use" on every reload.
+    if debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return None
+    if port is None:
+        try:
+            port = int(os.environ.get("CLAWMETRY_OTLP_PORT", _OTLP_COMPAT_DEFAULT_PORT))
+        except (TypeError, ValueError):
+            port = _OTLP_COMPAT_DEFAULT_PORT
+    # Loopback by default even when the dashboard binds 0.0.0.0. Widening the
+    # ingest surface has to be a deliberate act, not a side effect of the
+    # dashboard's --host.
+    host = host or os.environ.get("CLAWMETRY_OTLP_HOST", "127.0.0.1")
+
+    import logging as _logging
+    log = _logging.getLogger("clawmetry.dashboard")
+    try:
+        from waitress import create_server as _create_server
+    except ImportError:
+        log.debug("waitress missing; OTLP compat listener not started")
+        return None
+    try:
+        server = _create_server(
+            _build_otlp_compat_app(), host=host, port=port,
+            threads=4, channel_timeout=60,
+        )
+    except OSError as e:
+        # Port in use is the common, expected case: the user already runs an
+        # OTel Collector. Not an error -- the dashboard port still serves /v1/*.
+        log.info(
+            "OTLP port %s:%s is already in use (%s); ClawMetry is still "
+            "receiving OTLP on the dashboard port", host, port, e,
+        )
+        return None
+    except Exception as e:
+        log.warning("OTLP compat listener failed to start: %s", e)
+        return None
+
+    threading.Thread(
+        target=server.run, name="clawmetry-otlp-4318", daemon=True,
+    ).start()
+    _otlp_compat_server = server
+    log.info("OTLP receiver listening on http://%s:%s/v1/traces", host, port)
+    return server
+
+
 # ── CLI Entry Point ─────────────────────────────────────────────────────
 
 BANNER = r"""
@@ -18037,15 +18190,70 @@ def _persist_identity_with_key(api_key):
     return node_id, enc_key
 
 
+def _activate_trial_for_key(api_key) -> str:
+    """Mint-or-reuse the account's 7-day Pro trial for ``api_key``.
+
+    Mirrors ``clawmetry.cli._activate_signup_trial`` — same
+    ``/api/license/trial/signup`` endpoint, same idempotent server
+    semantics — but takes the key as an argument so in-process pairing
+    paths (dashboard cloud modal OTP, OAuth loopback bridge) can call it
+    without having to first round-trip through
+    ``~/.clawmetry/config.json``. Returns
+    ``'active' | 'expired' | 'unavailable'`` for the caller to surface;
+    every failure path returns ``'unavailable'`` (never raises).
+
+    Founder ask 2026-08-12: cloud users MUST get the same 7-day Pro
+    trial that self-host users get on sign-in, so they can experience
+    the full product before deciding to pay. Previously the cloud rail
+    only enabled sync and left the account on FREE.
+    """
+    if not (api_key or "").startswith("cm_"):
+        return "unavailable"
+    try:
+        import urllib.request as _ur
+        from clawmetry import license as _lic
+
+        req = _ur.Request(
+            _lic._cloud_base() + "/api/license/trial/signup",
+            data=json.dumps({"api_key": api_key}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode())
+        if not (isinstance(body, dict) and body.get("ok")):
+            return "unavailable"
+        if body.get("expired"):
+            return "expired"
+        if not body.get("key"):
+            return "unavailable"
+        ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
+        return "active" if ok else "unavailable"
+    except Exception:
+        return "unavailable"
+
+
 def _full_connect_with_key(api_key):
     """Register this node with a verified cm_ key and start syncing.
 
     Mirrors the non-interactive parts of `clawmetry connect`: persist the
-    identity (_persist_identity_with_key), then opt into egress and ensure
-    the sync daemon is running. Returns (node_id, enc_key). Never raises
-    for non-fatal issues.
+    identity (_persist_identity_with_key), mint-or-reuse the account's
+    7-day Pro trial (same rail as the CLI's ``_activate_signup_trial``
+    and as ``_selfhost_signin_with_key``), opt into egress, and ensure
+    the sync daemon is running. Returns (node_id, enc_key, trial) where
+    trial is ``'active' | 'expired' | 'unavailable'``. Never raises for
+    non-fatal issues.
     """
     node_id, enc_key = _persist_identity_with_key(api_key)
+
+    # Mint-or-reuse the 7-day Pro trial so cloud users get the same
+    # "unlock every runtime for 7 days" onboarding self-host already
+    # gets. Founder ask 2026-08-12 — without this the cloud rail was
+    # asymmetric: self-host signup started the trial, cloud signup did
+    # not, so cloud users couldn't experience the full product before
+    # the paywall. Runs BEFORE _restart_sync_daemon so the daemon sees
+    # the freshly activated license on its first poll.
+    trial = _activate_trial_for_key(api_key)
 
     # Clear the local-only marker so the daemon actually pushes to cloud. A
     # local-only install writes ~/.clawmetry/nocloud; without this the connect
@@ -18062,7 +18270,7 @@ def _full_connect_with_key(api_key):
     # if absent" would leave it local-only forever, so we restart unconditionally.
     _restart_sync_daemon()
 
-    return node_id, enc_key
+    return node_id, enc_key, trial
 
 
 def _restart_sync_daemon():
@@ -18117,28 +18325,11 @@ def _selfhost_signin_with_key(api_key):
 
     node_id, _enc = _persist_identity_with_key(api_key)
 
-    trial = "unavailable"
-    try:
-        import urllib.request as _ur
-        from clawmetry import license as _lic
-
-        req = _ur.Request(
-            _lic._cloud_base() + "/api/license/trial/signup",
-            data=json.dumps({"api_key": api_key}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with _ur.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode())
-        if isinstance(body, dict) and body.get("ok"):
-            if body.get("expired"):
-                trial = "expired"
-            elif body.get("key"):
-                ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
-                if ok:
-                    trial = "active"
-    except Exception:
-        pass
+    # Same trial rail as _full_connect_with_key (cloud) and
+    # clawmetry.cli._activate_signup_trial — mint-or-reuse the 7-day
+    # Pro trial. Delegated to the shared helper so cloud + self-host
+    # never drift on trial semantics again (founder ask 2026-08-12).
+    trial = _activate_trial_for_key(api_key)
 
     # Same as the email-OTP trial path: make sure the local ingest daemon is
     # running (it stays local-only under the marker written above).
@@ -18234,10 +18425,10 @@ def _start_oauth_bridge(provider, mode="managed"):
                                  "mode": mode, "node_id": node_id, "enc_key": "",
                                  "trial": trial, "error": ""}
             else:
-                node_id, enc_key = _full_connect_with_key(tok)
+                node_id, enc_key, trial = _full_connect_with_key(tok)
                 _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
                                  "mode": mode, "node_id": node_id,
-                                 "enc_key": enc_key, "trial": "", "error": ""}
+                                 "enc_key": enc_key, "trial": trial, "error": ""}
         except Exception as e:  # pragma: no cover - defensive
             _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
                              "node_id": "", "enc_key": "", "trial": "",
@@ -18993,6 +19184,11 @@ def _run_server(args):
     except (ValueError, OSError):
         pass  # stdout may be closed/redirected on Windows
 
+    # Start the OTLP compatibility listener BEFORE the banner so the banner can
+    # report the port it actually bound (or stay quiet when it stepped aside for
+    # an existing collector). Issue #4780.
+    _otlp_listener = _start_otlp_compat_listener(debug=args.debug)
+
     try:
         local_ip = get_local_ip()
         public_ip = get_public_ip()
@@ -19003,8 +19199,17 @@ def _run_server(args):
             print(
                 f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)"
             )
-        if _HAS_OTEL_PROTO:
-            print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+        # OTLP ingest is always on now: OTLP/JSON needs no extra (#4781), and
+        # the receiver also listens on the conventional 4318 (#4780). Print the
+        # endpoint an OTel SDK would use with no configuration at all.
+        if _otlp_listener is not None:
+            print(
+                f"  -> OTLP endpoint: http://localhost:{_otlp_listener.effective_port}"
+                "  (OTEL_EXPORTER_OTLP_ENDPOINT)"
+            )
+        else:
+            print(f"  -> OTLP endpoint: http://localhost:{args.port}"
+                  "  (OTEL_EXPORTER_OTLP_ENDPOINT)")
         # One-click login URL when gateway token was detected (#1356 PR-D).
         # Defense against shoulder-surfing screenshots: only the framed URL is
         # printed (never the bare token), and only on the interactive startup

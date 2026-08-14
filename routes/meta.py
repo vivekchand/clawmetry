@@ -48,6 +48,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, make_response, render_template_string, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry.otlp_json import OtlpProtobufUnavailable
 
 bp_version = Blueprint('version', __name__)
 bp_gateway = Blueprint('gateway', __name__)
@@ -1186,116 +1187,70 @@ def index():
 
 
 # ── OTLP receiver routes ──────────────────────────────────────────────────────────────────
+#
+# All three signals share one body (#4781). The old shape pre-checked
+# ``_HAS_OTEL_PROTO`` and answered 501 for EVERY request when the ``otel`` extra
+# was missing, which is the default install -- so the receiver we advertise was
+# off for most users. Now the decoder decides: OTLP/JSON goes through the
+# dependency-free path in ``clawmetry.otlp_json``, and only a payload that
+# genuinely needs protobuf raises ``OtlpProtobufUnavailable`` -> 501.
+
+
+def _otlp_receive(signal, process):
+    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper."""
+    import dashboard as _d
+    if _d._budget_paused:
+        return jsonify(
+            {"error": "Budget limit exceeded - intake paused", "paused": True}
+        ), 429
+    try:
+        process(
+            request.get_data(),
+            content_encoding=request.headers.get("Content-Encoding"),
+            content_type=request.headers.get("Content-Type"),
+        )
+        return "{}", 200, {"Content-Type": "application/json"}
+    except OtlpProtobufUnavailable as e:
+        return jsonify(
+            {
+                "error": "opentelemetry-proto not installed",
+                "message": "Install OTLP support: pip install clawmetry[otel]  "
+                "or: pip install opentelemetry-proto protobuf",
+                "hint": str(e),
+            }
+        ), 501
+    except Exception as e:
+        try:
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard").warning(
+                "OTLP /v1/%s rejected malformed payload: %s", signal, e
+            )
+        except Exception:
+            pass
+        return jsonify({"error": str(e)}), 400
 
 
 @bp_otel.route("/v1/metrics", methods=["POST"])
 def otlp_metrics():
-    """OTLP/HTTP receiver for metrics (protobuf)."""
+    """OTLP/HTTP receiver for metrics (protobuf; JSON needs the otel extra)."""
     import dashboard as _d
-    if _d._budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
-    if not _d._HAS_OTEL_PROTO:
-        return jsonify(
-            {
-                "error": "opentelemetry-proto not installed",
-                "message": "Install OTLP support: pip install clawmetry[otel]  "
-                "or: pip install opentelemetry-proto protobuf",
-            }
-        ), 501
-
-    try:
-        pb_data = request.get_data()
-        _d._process_otlp_metrics(
-            pb_data,
-            content_encoding=request.headers.get("Content-Encoding"),
-            content_type=request.headers.get("Content-Type"),
-        )
-        return "{}", 200, {"Content-Type": "application/json"}
-    except Exception as e:
-        try:
-            import logging as _lg
-            _lg.getLogger("clawmetry.dashboard").warning(
-                "OTLP /v1/metrics rejected malformed payload: %s", e
-            )
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 400
+    return _otlp_receive("metrics", _d._process_otlp_metrics)
 
 
 @bp_otel.route("/v1/traces", methods=["POST"])
 def otlp_traces():
-    """OTLP/HTTP receiver for traces (protobuf)."""
+    """OTLP/HTTP receiver for traces (protobuf or OTLP/JSON)."""
     import dashboard as _d
-    if _d._budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
-    if not _d._HAS_OTEL_PROTO:
-        return jsonify(
-            {
-                "error": "opentelemetry-proto not installed",
-                "message": "Install OTLP support: pip install clawmetry[otel]  "
-                "or: pip install opentelemetry-proto protobuf",
-            }
-        ), 501
-
-    try:
-        pb_data = request.get_data()
-        _d._process_otlp_traces(
-            pb_data,
-            content_encoding=request.headers.get("Content-Encoding"),
-            content_type=request.headers.get("Content-Type"),
-        )
-        return "{}", 200, {"Content-Type": "application/json"}
-    except Exception as e:
-        try:
-            import logging as _lg
-            _lg.getLogger("clawmetry.dashboard").warning(
-                "OTLP /v1/traces rejected malformed payload: %s", e
-            )
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 400
+    return _otlp_receive("traces", _d._process_otlp_traces)
 
 
 @bp_otel.route("/v1/logs", methods=["POST"])
 def otlp_logs():
-    """OTLP/HTTP receiver for logs (protobuf). Ingests the agent EVENT stream
-    that Claude Code / Codex export as OTel logs (cost/token/model per record),
-    mapping them into the cost + usage tiles. Closes obs-gap #2596."""
+    """OTLP/HTTP receiver for logs (protobuf or OTLP/JSON). Ingests the agent
+    EVENT stream that Claude Code / Codex export as OTel logs (cost/token/model
+    per record), mapping them into the cost + usage tiles. Closes obs-gap #2596."""
     import dashboard as _d
-    if _d._budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
-    if not _d._HAS_OTEL_PROTO:
-        return jsonify(
-            {
-                "error": "opentelemetry-proto not installed",
-                "message": "Install OTLP support: pip install clawmetry[otel]  "
-                "or: pip install opentelemetry-proto protobuf",
-            }
-        ), 501
-
-    try:
-        pb_data = request.get_data()
-        _d._process_otlp_logs(
-            pb_data,
-            content_encoding=request.headers.get("Content-Encoding"),
-            content_type=request.headers.get("Content-Type"),
-        )
-        return "{}", 200, {"Content-Type": "application/json"}
-    except Exception as e:
-        try:
-            import logging as _lg
-            _lg.getLogger("clawmetry.dashboard").warning(
-                "OTLP /v1/logs rejected malformed payload: %s", e
-            )
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 400
+    return _otlp_receive("logs", _d._process_otlp_logs)
 
 
 @bp_otel.route("/api/otel-status")
@@ -1314,7 +1269,13 @@ def api_otel_status():
         pass
     return jsonify(
         {
-            "available": _d._HAS_OTEL_PROTO,
+            # The receiver is always up now (#4781): OTLP/JSON traces + logs
+            # need no extra. ``protobuf`` reports whether the binary encoding
+            # (and OTLP/JSON metrics) is also available, which is what
+            # ``available`` used to mean on its own.
+            "available": True,
+            "protobuf": _d._HAS_OTEL_PROTO,
+            "jsonIngest": ["traces", "logs"],
             "hasData": _d._has_otel_data(),
             "lastReceived": _d._otel_last_received,
             "counts": counts,

@@ -1181,6 +1181,33 @@ _DDL = [
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS input_tokens INTEGER",
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS output_tokens INTEGER",
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS model VARCHAR",
+    # Issue #4813 — canonical replay-event stream. Feeds the runtime-aware
+    # replay UI (Task/Agent/Workflow fanouts, subagent DAGs, cascades,
+    # per-turn mode changes, approval decisions). Written by adapter
+    # ``iter_replay_events`` implementations via the sync daemon; read by
+    # ``/api/replay-tree/<session_id>``. See ``clawmetry/replay_schema.py``
+    # for the canonical event shape.
+    #
+    # parent_span_id is the DELEGATION edge (parent Task spawned this
+    # child). NOT the transcript-chain parent — do not conflate.
+    """
+    CREATE TABLE IF NOT EXISTS replay_events (
+        span_id        VARCHAR PRIMARY KEY,
+        parent_span_id VARCHAR,
+        session_id     VARCHAR NOT NULL,
+        runtime        VARCHAR NOT NULL,
+        kind           VARCHAR NOT NULL,
+        ts             DOUBLE  NOT NULL,
+        payload        BLOB,
+        mode           BLOB,
+        approval       BLOB,
+        created_at     BIGINT  NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_session_ts   ON replay_events(session_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_parent       ON replay_events(parent_span_id)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_runtime_kind ON replay_events(runtime, kind)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_created_at   ON replay_events(created_at)",
 ]
 
 
@@ -4285,6 +4312,12 @@ class LocalStore:
                 trace_id,
                 MAX(session_id)    AS session_id,
                 MAX(agent_type)    AS agent_type,
+                -- Display identity for the trace list (#4782). The earliest
+                -- span's name is the closest thing a span-only trace has to a
+                -- title; service_name/model label which app and model it was.
+                arg_min(name, start_ts) AS root_name,
+                MAX(service_name)  AS service_name,
+                MAX(model)         AS model,
                 MIN(start_ts)      AS start_ts,
                 MAX(end_ts)        AS end_ts,
                 CAST((MAX(end_ts) - MIN(start_ts)) * 1000 AS DOUBLE) AS duration_ms,
@@ -4302,6 +4335,7 @@ class LocalStore:
         params.append(int(limit))
         cols = [
             "trace_id", "session_id", "agent_type",
+            "root_name", "service_name", "model",
             "start_ts", "end_ts", "duration_ms", "span_count",
             "cost_usd", "tokens_input", "tokens_output", "has_error",
         ]
@@ -7977,6 +8011,58 @@ class LocalStore:
             out.append(d)
         return out
 
+    def query_replay_events(
+        self,
+        *,
+        session_id: str,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Read canonical replay-event rows for one session (#4813).
+
+        Returned rows are in ``ts`` ascending, then ``span_id`` ascending
+        order — replay is played forward, and the tie-break by span_id
+        gives a deterministic order when many events share the same
+        millisecond (adapter emissions in a tight loop).
+
+        BLOB columns (``payload``, ``mode``, ``approval``) are decoded
+        back to JSON dicts where valid so ``/api/replay-tree`` can hand
+        rows to the tree-builder without a second decode. The endpoint
+        layer (routes/sessions.py) then groups the flat list into
+        turns/delegations/workflows/approvals.
+
+        Empty list is the expected shape until adapter ``iter_replay_events``
+        implementations start writing (per-runtime issues #4815, #4816, +
+        13 Pro adapters). Not an error.
+        """
+        sql = """
+            SELECT span_id, parent_span_id, session_id, runtime, kind, ts,
+                   payload, mode, approval, created_at
+            FROM replay_events
+            WHERE session_id = ?
+            ORDER BY ts ASC, span_id ASC
+            LIMIT ?
+        """
+        cols = ["span_id", "parent_span_id", "session_id", "runtime", "kind",
+                "ts", "payload", "mode", "approval", "created_at"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, [session_id, int(limit)]):
+            d = dict(zip(cols, r))
+            for blob_col in ("payload", "mode", "approval"):
+                raw = d.get(blob_col)
+                if raw is None:
+                    continue
+                try:
+                    text = (raw.decode("utf-8")
+                            if isinstance(raw, (bytes, bytearray)) else raw)
+                    try:
+                        d[blob_col] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d[blob_col] = text
+                except UnicodeDecodeError:
+                    d[blob_col] = None
+            out.append(d)
+        return out
+
     def query_approvals(
         self,
         *,
@@ -8851,6 +8937,52 @@ class LocalStore:
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
         }
+
+    def query_session_eval_detail(
+        self,
+        *,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Everything the Evals drill-down panel needs for one session, in a
+        single row. Composes the judge fields the "Recently Scored" table
+        already shows with the outcome + reliability signals the tile grid
+        used to bury, plus cost/tokens so users can weigh a bad score against
+        what it cost. Metric verdicts are fetched separately by the endpoint
+        so this stays a scalar SELECT.
+
+        Returns ``None`` when the session is unknown, so the endpoint can 404
+        cleanly instead of returning a shell with every field null.
+        """
+        if not session_id:
+            return None
+        sql = """
+            SELECT s.session_id, s.agent_type, s.agent_id, s.title,
+                   s.started_at, s.last_active_at, s.ended_at, s.status,
+                   s.total_tokens, s.cost_usd,
+                   s.eval_score, s.eval_reason, s.eval_judge_model,
+                   s.eval_scored_at, s.eval_rubric,
+                   s.outcome, s.outcome_confidence, s.outcome_classified_at,
+                   s.reliability_score, s.faithfulness_score
+              FROM sessions s
+             WHERE s.session_id = ?
+             LIMIT 1
+        """
+        try:
+            rows = self._fetch(sql, [str(session_id)])
+        except Exception as e:
+            log.warning("local store: query_session_eval_detail failed: %s", e)
+            return None
+        if not rows:
+            return None
+        r = rows[0]
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "started_at", "last_active_at", "ended_at", "status",
+                "total_tokens", "cost_usd",
+                "eval_score", "eval_reason", "eval_judge_model",
+                "eval_scored_at", "eval_rubric",
+                "outcome", "outcome_confidence", "outcome_classified_at",
+                "reliability_score", "faithfulness_score"]
+        return dict(zip(cols, r))
 
     def query_session_quality(
         self,
@@ -12055,7 +12187,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "picoclaw", "nanoclaw", "hermes",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
-    "qm",
+    "qm", "deepseek_harness",
 )
 
 def _runtime_session_id_clause(runtime: str | None) -> tuple[str | None, list[str]]:
