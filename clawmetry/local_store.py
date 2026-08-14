@@ -2394,11 +2394,17 @@ class LocalStore:
                 continue
         return out
 
-    def ingest_memory_blob(self, blob_row: dict[str, Any]) -> None:
+    def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
 
         Required: agent_type, path. Optional: agent_id, blob, sha256, ts.
-        Re-ingesting with the same sha256 is a no-op (cheap dedup)."""
+        Re-ingesting with the same sha256 is a no-op (cheap dedup).
+
+        Returns True when a row was actually written, False on the dedup
+        no-op — the sync daemon uses this to decide whether the cloud
+        memory cache blob needs rebuilding (it changes rarely; rebuilding
+        it every heartbeat would re-read + re-encrypt megabytes for
+        nothing)."""
         atype = blob_row.get("agent_type")
         path = blob_row.get("path")
         if not atype or not path:
@@ -2424,7 +2430,7 @@ class LocalStore:
                 )
                 row = cur.fetchone()
                 if row and row[0] == sha:
-                    return
+                    return False
             self._conn.execute("""
                 INSERT INTO memory_blobs (
                     agent_type, agent_id, path, ts, blob, sha256, size_bytes, updated_at
@@ -2436,6 +2442,7 @@ class LocalStore:
                     size_bytes = excluded.size_bytes,
                     updated_at = excluded.updated_at
             """, [atype, agent_id, path, blob_row.get("ts"), blob, sha, size, now_ms])
+        return True
 
     def ingest_channel(self, ch: dict[str, Any]) -> None:
         """Upsert one OpenClaw channel-context row. Required: session_id.

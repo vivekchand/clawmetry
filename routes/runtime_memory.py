@@ -41,6 +41,7 @@ from flask import Blueprint, jsonify, request
 
 from clawmetry.runtime_memory import (
     CATEGORIES,
+    list_all_files,
     list_files,
     list_runtimes,
     read_runtime_file,
@@ -111,11 +112,25 @@ def api_runtime_files(runtime_id: str):
     Query params:
       - category: optional filter (memory | skills | commands | agents | hooks)
 
+    ``runtime_id='all'`` merges every runtime the caller is entitled to
+    into one listing — the Memory / Skills browser uses it when the
+    global runtime switcher is on "All". Locked paid runtimes are dropped
+    from the merge rather than 402-ing the whole request, so a free user
+    still sees their OpenClaw files instead of an error page.
+
     Returns HTTP 402 ``upgrade_required`` when the runtime is a paid
     runtime and the resolved entitlement does not cover it. This is the
     OSS conversion moment prescribed by ``FLYWHEEL.md`` §1b — never
     silently disable, always surface the upgrade CTA.
     """
+    if runtime_id == "all":
+        category = (request.args.get("category") or "").strip() or None
+        if category and category not in CATEGORIES:
+            return jsonify({"error": "invalid category"}), 400
+        locked = [rt["id"] for rt in list_runtimes()
+                  if _runtime_is_locked(rt["id"])]
+        return jsonify(list_all_files(category=category,
+                                      exclude_runtimes=locked))
     if _runtime_is_locked(runtime_id):
         return jsonify({
             "error": "upgrade_required",
@@ -137,7 +152,18 @@ def api_runtime_file(runtime_id: str):
 
     Same entitlement gate as ``/files``: paid runtimes return HTTP 402
     when the resolved entitlement does not cover them.
+
+    ``runtime_id='all'`` is gated on the runtime that actually OWNS the
+    requested root (the merged listing groups carry it), so the merged
+    view cannot be used to read a locked runtime's files. The browser
+    normally sends the owning runtime directly; this is the backstop.
     """
+    if runtime_id == "all":
+        _root = request.args.get("root", "")
+        for _g in list_all_files().get("groups", []):
+            if _g.get("root") == _root:
+                runtime_id = _g.get("runtime") or runtime_id
+                break
     if _runtime_is_locked(runtime_id):
         return jsonify({
             "error": "upgrade_required",

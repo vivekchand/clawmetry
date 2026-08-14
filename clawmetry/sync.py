@@ -3844,13 +3844,137 @@ def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
     for name, content in all_files:
         if name not in changed_set:
             continue
-        store.ingest_memory_blob({
+        if store.ingest_memory_blob({
             "agent_type": "openclaw",  # OpenClaw harness writes these files
             "agent_id": "main",
             "path": name,
             "ts": now_iso,
             "blob": content,
-        })
+        }):
+            _mark_memory_cache_dirty()
+
+
+# ── Per-runtime memory ingest ──────────────────────────────────────────────
+# The OpenClaw workspace is only one of the places an agent keeps long-lived
+# memory: Claude Code has ``~/.claude`` (CLAUDE.md + per-project auto-memory),
+# Codex/opencode/Copilot read ``AGENTS.md``, Cursor has ``.cursor/rules``, and
+# so on. ``clawmetry/runtime_memory.py`` is the catalog of those locations.
+#
+# Before this, the daemon only ingested the OpenClaw workspace files, so a node
+# that runs Claude Code (and no OpenClaw) had ZERO rows in ``memory_blobs`` —
+# which meant ``_build_memory_cache_pushes`` returned [], the cloud memory cache
+# key was never written, and the cloud Memory tab sat on "Syncing memory files…"
+# forever waiting for a heartbeat that had nothing to send.
+#
+# Caps exist because per-project auto-memory can be large (429 files / 1.4 MB on
+# the author's laptop). We take the most recently modified files per runtime and
+# stop at a byte budget; the dashboard's local file browser still reads
+# everything straight off disk, so nothing is hidden locally — the cap only
+# bounds what we persist + ship.
+RUNTIME_MEMORY_MAX_FILES_PER_RUNTIME = 120
+RUNTIME_MEMORY_MAX_FILE_BYTES = 200_000
+RUNTIME_MEMORY_MAX_TOTAL_BYTES = 6_000_000
+
+
+def _memory_display_path(abs_path: str) -> str:
+    """``/Users/x/.claude/CLAUDE.md`` -> ``~/.claude/CLAUDE.md``.
+
+    The Memory UI groups by directory prefix and shows the path verbatim, so a
+    home-relative path is both unique (the DuckDB PK is (agent_type, agent_id,
+    path)) and readable. Paths outside $HOME stay absolute."""
+    home = os.path.expanduser("~")
+    if abs_path.startswith(home + os.sep):
+        return "~/" + abs_path[len(home) + 1:]
+    return abs_path
+
+
+def _local_ingest_runtime_memory() -> int:
+    """Ingest every DETECTED runtime's memory files into local DuckDB.
+
+    Returns the number of files whose contents CHANGED (the store dedups on
+    sha256, so a steady state writes nothing and returns 0). Never raises —
+    a missing runtime dir, an unreadable file, or an import error degrades
+    to "fewer files", never to a crashed sync tick.
+    """
+    try:
+        from clawmetry import local_store, runtime_memory
+    except Exception as e:
+        log.debug("runtime memory ingest unavailable: %s", e)
+        return 0
+
+    try:
+        store = local_store.get_store()
+    except Exception as e:
+        log.debug("runtime memory ingest: no store: %s", e)
+        return 0
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    budget = RUNTIME_MEMORY_MAX_TOTAL_BYTES
+    written = 0
+
+    for entry in runtime_memory.list_runtimes():
+        runtime_id = entry.get("id") or ""
+        if not runtime_id or not entry.get("present"):
+            continue
+        if runtime_id == "openclaw":
+            # Already covered by _local_ingest_memory_files (which also owns
+            # the cloud-facing OpenClaw path names). Skip to avoid two rows
+            # for the same file under different path spellings.
+            continue
+        try:
+            listing = runtime_memory.list_files(runtime_id, category="memory")
+        except Exception as e:
+            log.debug("runtime memory list failed (%s): %s", runtime_id, e)
+            continue
+
+        candidates: list = []
+        for group in listing.get("groups", []):
+            root = group.get("root") or ""
+            if not group.get("exists"):
+                continue
+            for f in group.get("files", []):
+                rel = f.get("path") or ""
+                full = os.path.join(root, rel) if rel else root
+                candidates.append((int(f.get("mtime") or 0), full,
+                                   int(f.get("size") or 0)))
+
+        # Most recently modified first — an agent's newest notes are the ones
+        # worth carrying when we have to truncate.
+        candidates.sort(reverse=True)
+        for _mtime, full, size in candidates[:RUNTIME_MEMORY_MAX_FILES_PER_RUNTIME]:
+            if budget <= 0:
+                break
+            if size > RUNTIME_MEMORY_MAX_FILE_BYTES:
+                continue
+            try:
+                with open(full, "rb") as fh:
+                    raw = fh.read(RUNTIME_MEMORY_MAX_FILE_BYTES)
+            except OSError:
+                continue
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # binary file in a memory dir — not renderable
+            budget -= len(raw)
+            try:
+                if store.ingest_memory_blob({
+                    "agent_type": runtime_id,
+                    "agent_id": "main",
+                    "path": _memory_display_path(full),
+                    "ts": now_iso,
+                    "blob": content,
+                }):
+                    written += 1
+            except Exception as e:
+                log.debug("runtime memory ingest failed (%s): %s", full, e)
+        if budget <= 0:
+            log.debug("runtime memory ingest hit the %d-byte budget",
+                      RUNTIME_MEMORY_MAX_TOTAL_BYTES)
+            break
+
+    if written:
+        _mark_memory_cache_dirty()
+    return written
 
 
 _sessions_json_cache: dict = {"ts": 0.0, "data": None, "mtime": 0.0}
@@ -8446,8 +8570,47 @@ def _build_brain_cache_pushes(config: dict) -> list:
 # Cloud read path: ``routes/cloud.py:cloud_memory_files``.
 
 MEMORY_CACHE_TTL_SEC = 21600       # 6h — matches Brain TTL; files change slowly
-MEMORY_CACHE_LIMIT = 200            # plenty for SOUL.md/USER.md/AGENTS.md/etc.
-MEMORY_CONTENT_TRUNCATE = 500_000   # mirrors routes/infra.py truncation
+MEMORY_CACHE_LIMIT = 200            # per RUNTIME, so one chatty agent can't
+                                    # crowd the others out of the blob
+MEMORY_CONTENT_TRUNCATE = 200_000   # per file, bounds the heartbeat blob
+
+# Runtimes whose memory we ship to cloud. Derived from the on-disk catalog so a
+# new runtime added to clawmetry/runtime_memory.py is carried automatically.
+# 'openclaw' is always included (its rows come from _local_ingest_memory_files,
+# which predates the catalog).
+
+# How often an UNCHANGED memory blob is re-pushed purely to refresh the cache
+# key's TTL. Memory files change on the order of hours but the heartbeat fires
+# every ~60s, so pushing every tick would ship the same ~700 KB of ciphertext
+# 60x an hour (~1 GB/node/day of egress) for an identical result. One refresh an
+# hour keeps a 6h TTL comfortably alive with 60x less traffic.
+MEMORY_CACHE_REFRESH_SEC = 3600
+
+# Cached built entry. Rebuilt when the dirty flag is set (an ingest helper wrote
+# a changed blob); otherwise the cached ciphertext is re-pushed on the refresh
+# cadence above and skipped entirely in between.
+_memory_cache_entry: dict = {"dirty": True, "pushes": [], "key": "",
+                             "pushed_at": 0.0}
+
+
+def _mark_memory_cache_dirty() -> None:
+    """Invalidate the cached memory cache-push blob. Called by the ingest
+    helpers whenever a memory file's contents actually changed."""
+    _memory_cache_entry["dirty"] = True
+
+
+def _memory_runtime_ids() -> list:
+    """Runtime ids to pull memory rows for, catalog-derived + openclaw."""
+    ids = ["openclaw"]
+    try:
+        from clawmetry import runtime_memory
+        for entry in runtime_memory.list_runtimes():
+            rid = entry.get("id")
+            if rid and rid not in ids:
+                ids.append(rid)
+    except Exception:
+        pass
+    return ids
 
 
 def _build_memory_cache_pushes(config: dict) -> list:
@@ -8462,9 +8625,19 @@ def _build_memory_cache_pushes(config: dict) -> list:
     ``_cloudLoadMemory``):
 
         {
-          "memory_state":   {"files": [{"name": <path>, "size": <bytes>}, ...]},
-          "memory_content": [{"path": <path>, "content": <utf8 str>}, ...]
+          "memory_state":   {"files": [{"name", "path", "size", "runtime"}, ...]},
+          "memory_content": [{"path", "content", "runtime"}, ...],
+          "runtimes":       [{"id", "files"}, ...]
         }
+
+    ``runtime`` is the per-file owner (``openclaw``, ``claude_code``, …) so the
+    cloud Memory tab can scope to the runtime picked in the header switcher.
+    Older cloud builds ignore the extra key and render the merged list, so this
+    is backwards compatible in both directions.
+
+    Rows are pulled PER RUNTIME rather than as one global most-recent-200: a
+    node with 400 Claude Code auto-memory files would otherwise push a blob
+    containing nothing else, and the OpenClaw Memory tab would go blank.
 
     The browser holds the key; cloud only ever stores ciphertext.
     """
@@ -8475,25 +8648,48 @@ def _build_memory_cache_pushes(config: dict) -> list:
     node_id = config.get("node_id", "")
     if not (api_key and node_id):
         return []
+    owner_hash = _owner_hash_for_token(api_key)
+    cache_key = f"memory:{owner_hash}:{node_id}:files"
+
+    if not _memory_cache_entry["dirty"] and _memory_cache_entry["key"] == cache_key:
+        age = time.time() - float(_memory_cache_entry.get("pushed_at") or 0)
+        if age < MEMORY_CACHE_REFRESH_SEC:
+            return []          # unchanged and recently pushed — nothing to ship
+        _memory_cache_entry["pushed_at"] = time.time()
+        return list(_memory_cache_entry["pushes"])
+
     try:
         from clawmetry import local_store
     except Exception:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        rows = store.query_memory_blobs(limit=MEMORY_CACHE_LIMIT)
     except Exception:
         return []
+
+    rows: list = []
+    for runtime_id in _memory_runtime_ids():
+        try:
+            rows.extend(store.query_memory_blobs(agent_type=runtime_id,
+                                                 limit=MEMORY_CACHE_LIMIT))
+        except Exception:
+            continue
     if not rows:
         return []
     files: list[dict] = []
     contents: list[dict] = []
+    per_runtime: dict = {}
     seen: set = set()
     for r in rows:
         path = r.get("path") or ""
-        if not path or path in seen:
+        runtime_id = r.get("agent_type") or "openclaw"
+        # Several runtimes read the same on-disk file (AGENTS.md is shared by
+        # Codex, opencode, Copilot…), so dedup on (runtime, path) — not path
+        # alone, which would hide the file from every runtime but the first.
+        dedup_key = (runtime_id, path)
+        if not path or dedup_key in seen:
             continue
-        seen.add(path)
+        seen.add(dedup_key)
         blob_raw = r.get("blob")
         if isinstance(blob_raw, (bytes, bytearray)):
             try:
@@ -8507,16 +8703,21 @@ def _build_memory_cache_pushes(config: dict) -> list:
         size = r.get("size_bytes")
         if size is None:
             size = len(content.encode("utf-8", errors="replace"))
-        files.append({"name": path, "path": path, "size": int(size or 0)})
+        files.append({"name": path, "path": path, "size": int(size or 0),
+                      "runtime": runtime_id})
         # Truncate per-file content to bound the encrypted blob size — the
-        # cloud Memory IDE shows a viewer pane (no diffing), so >500KB per
+        # cloud Memory IDE shows a viewer pane (no diffing), so a huge single
         # file is wasted heartbeat bandwidth.
-        contents.append({"path": path, "content": content[:MEMORY_CONTENT_TRUNCATE]})
+        contents.append({"path": path, "runtime": runtime_id,
+                         "content": content[:MEMORY_CONTENT_TRUNCATE]})
+        per_runtime[runtime_id] = per_runtime.get(runtime_id, 0) + 1
     if not files:
         return []
     payload = {
         "memory_state":   {"files": files},
         "memory_content": contents,
+        "runtimes":       [{"id": k, "files": v}
+                           for k, v in sorted(per_runtime.items())],
         "_source":        "local_store",
         "_shape":         "memory_files",
     }
@@ -8524,12 +8725,14 @@ def _build_memory_cache_pushes(config: dict) -> list:
         blob = encrypt_payload(payload, enc_key)
     except Exception:
         return []
-    owner_hash = _owner_hash_for_token(api_key)
-    return [{
-        "key":    f"memory:{owner_hash}:{node_id}:files",
+    pushes = [{
+        "key":    cache_key,
         "ttl_s":  MEMORY_CACHE_TTL_SEC,
         "blob":   blob,
     }]
+    _memory_cache_entry.update({"dirty": False, "pushes": pushes,
+                                "key": cache_key, "pushed_at": time.time()})
+    return list(pushes)
 
 
 # ── Crons list cache push (cloud#948 — Crons tab fix) ───────────────────────
@@ -11532,12 +11735,31 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
 
 
 def sync_memory(config: dict, state: dict, paths: dict) -> int:
-    """Sync memory files (MEMORY.md + memory/*.md) to cloud.
+    """Sync memory files to the local store (and, for OpenClaw, to cloud).
+
+    Two halves:
+      1. Every DETECTED runtime's memory files -> local DuckDB, via the
+         ``clawmetry.runtime_memory`` catalog. This is what the Memory tab
+         (local and cloud) reads, so a Claude-Code-only node gets a working
+         Memory tab instead of an endless "Syncing memory files…".
+      2. The OpenClaw workspace files (MEMORY.md + memory/*.md), which also
+         POST to the legacy ``/ingest/memory`` endpoint.
 
     Skipped when sync is paused (expired trial)."""
     if not _sync_allowed():
         return 0
     _record_sync_progress("memory", 0)
+
+    # Per-runtime memory first: it is independent of the OpenClaw workspace
+    # (which may not exist at all on a Claude Code / Codex-only machine) and
+    # must not be skipped by the "no workspace memory files" early return below.
+    try:
+        rt_written = _local_ingest_runtime_memory()
+        if rt_written:
+            log.info("  Memory: %d runtime memory file(s) updated", rt_written)
+    except Exception as e:
+        log.warning("Runtime memory ingest error: %s", e)
+
     workspace = paths.get("workspace", "")
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")

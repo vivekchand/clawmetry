@@ -666,8 +666,44 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
             "scope": spec.scope,
             "exists": exists,
             "files": files,
+            "runtime": entry.id,
+            "runtime_label": entry.label,
         })
     return {"runtime": entry.id, "label": entry.label, "groups": groups}
+
+
+def list_all_files(category: Optional[str] = None,
+                   exclude_runtimes: Optional[Iterable] = None) -> dict:
+    """Merge every runtime that has files on disk into one grouped listing.
+
+    Backs the "All runtimes" scope of the Memory / Skills browser. Each
+    group keeps its ``runtime`` / ``runtime_label`` so the UI can say which
+    agent owns the files, and the label is prefixed with the runtime name
+    (two runtimes both calling a root "Global memory" is otherwise
+    indistinguishable once merged).
+
+    Empty roots are dropped: a runtime the user has not installed should
+    read as absent, not as a broken empty folder. Same shape as
+    :func:`list_files` so one renderer handles both.
+
+    ``exclude_runtimes`` drops runtime ids entirely — the route layer
+    passes the paid runtimes the caller is not entitled to, so "All
+    runtimes" can never become a side door around the per-runtime 402.
+    """
+    skip = set(exclude_runtimes or ())
+    groups: list = []
+    for entry in _catalog():
+        if entry.id in skip:
+            continue
+        payload = list_files(entry.id, category=category)
+        for g in payload.get("groups", []):
+            if not g.get("exists") or not g.get("files"):
+                continue
+            merged = dict(g)
+            base = merged.get("label") or ""
+            merged["label"] = f"{entry.label} - {base}" if base else entry.label
+            groups.append(merged)
+    return {"runtime": "all", "label": "All runtimes", "groups": groups}
 
 
 def read_runtime_file(runtime_id: str, root: str, path: str,
@@ -679,17 +715,29 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
     interpreted **relative to ``root``**; ``root`` MUST match one of the
     runtime's catalog roots verbatim (post-expansion), so callers can only
     read what the UI has already listed.
+
+    ``runtime_id='all'`` matches ``root`` against EVERY runtime's roots —
+    the "All runtimes" listing merges groups from several runtimes, so a
+    click there has no single owning runtime. The traversal guarantee is
+    unchanged: the root must still appear verbatim in some catalog entry.
     """
-    entry = _entry_by_id(runtime_id)
-    if entry is None:
-        return {"ok": False, "error": "unknown_runtime", "status": 404}
+    if runtime_id == "all":
+        candidates = list(_catalog())
+    else:
+        entry = _entry_by_id(runtime_id)
+        if entry is None:
+            return {"ok": False, "error": "unknown_runtime", "status": 404}
+        candidates = [entry]
 
     # Match root against catalog (post-expansion)
     matched_spec: Optional[RootSpec] = None
     root_norm = os.path.abspath(os.path.expanduser(root))
-    for spec in entry.roots:
-        if os.path.abspath(spec.expanded_root()) == root_norm:
-            matched_spec = spec
+    for _entry in candidates:
+        for spec in _entry.roots:
+            if os.path.abspath(spec.expanded_root()) == root_norm:
+                matched_spec = spec
+                break
+        if matched_spec is not None:
             break
     if matched_spec is None:
         return {"ok": False, "error": "root not in catalog for runtime", "status": 403}
