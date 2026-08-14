@@ -1319,6 +1319,49 @@ def create_app(claude_home: Optional[str] = None) -> Flask:
         )
 
     app.register_blueprint(bp_claudecode, url_prefix="/")
+
+    # ── Trial-end hard-block gate (mirrors dashboard.py) ────────────────────
+    # Primary bug fix: without this hook, every /api/sessions, /api/session/*,
+    # /api/analytics, /api/projects, /api/health that ``bp_claudecode`` serves
+    # kept returning paid-runtime data after a trial expired — the user was
+    # seeing live Claude Code activity with no paywall in sight. This surface
+    # is entirely claude_code-scoped (a PAID runtime), so we pass the runtime
+    # hint explicitly: even in free-only mode the block stays on for this
+    # dashboard; the user must navigate to the OpenClaw / NanoClaw surface
+    # instead. See ``clawmetry/trial_enforcement.py`` for the full policy.
+    try:
+        from clawmetry import trial_enforcement as _te_gate
+        from flask import request as _flask_request, jsonify as _flask_jsonify
+
+        @app.before_request
+        def _claudecode_trial_hard_block_gate():
+            try:
+                path = _flask_request.path or ""
+                if _te_gate.allowlisted_path(path):
+                    return None
+                if not _te_gate.is_hard_blocked(
+                    path=path, runtime="claude_code"
+                ):
+                    return None
+                payload = _te_gate.block_payload()
+                resp = _flask_jsonify(payload)
+                resp.status_code = 402
+                resp.headers["X-Clawmetry-Trial-Blocked"] = "1"
+                resp.headers["Cache-Control"] = "no-store"
+                return resp
+            except Exception as exc:  # pragma: no cover - defensive
+                try:
+                    logger.warning(
+                        "claudecode trial_hard_block_gate: %s", exc
+                    )
+                except Exception:
+                    pass
+                return None
+    except Exception as _gate_exc:  # pragma: no cover - defensive
+        logger.warning(
+            "claudecode: hard-block gate wiring failed: %s", _gate_exc
+        )
+
     return app
 
 

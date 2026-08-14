@@ -210,17 +210,33 @@ _HB_WARNINGS_PATH = os.path.expanduser("~/.clawmetry/trial_warnings.json")
 
 
 def _hb_snapshot() -> dict:
-    """Build the ``/api/trial/status`` payload. Never raises."""
+    """Build the ``/api/trial/status`` payload. Never raises.
+
+    Reads an optional ``?runtime=<name>`` (or ``?scope=`` / ``X-Clawmetry-Runtime``
+    header) so the overlay poll sitting on ``/?runtime=openclaw`` sees
+    ``hard_blocked=false`` in free-only mode and stays dismissed. The gate
+    in ``dashboard.py`` uses the same hint sources so both stay in agreement."""
     try:
         from clawmetry import trial_enforcement as _te
         from clawmetry import entitlements as _ent
 
         ent = _ent.get_entitlement()
-        blocked = _te.is_hard_blocked(ent)
+        rt_hint = None
+        try:
+            rt_hint = (
+                (request.args.get("runtime") or "").strip()
+                or (request.args.get("scope") or "").strip()
+                or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                or None
+            )
+        except Exception:
+            rt_hint = None
+        blocked = _te.is_hard_blocked(ent, runtime=rt_hint)
         payload = _te.block_payload(ent)
         payload["hard_blocked"] = bool(blocked)
         payload["hard_block_enabled"] = bool(_te.hard_block_enabled())
         payload["warning_window_days"] = int(_te.warning_window_days())
+        payload["free_only_mode"] = bool(_te.free_only_mode_enabled())
         return payload
     except Exception as exc:
         _hb_log.warning("trial.status: resolver failed: %s", exc)
@@ -234,6 +250,10 @@ def _hb_snapshot() -> dict:
             "activation_endpoint": "/api/license/activate",
             "refresh_endpoint": "/api/trial/refresh-license",
             "status_endpoint": "/api/trial/status",
+            "free_only_endpoint": "/api/trial/continue-free",
+            "exit_free_endpoint": "/api/trial/exit-free",
+            "free_only_mode": False,
+            "free_runtimes": ["openclaw", "nemoclaw"],
         }
 
 
@@ -252,6 +272,41 @@ def api_trial_refresh_license():
         _ent.invalidate()
     except Exception as exc:
         _hb_log.warning("trial.refresh: invalidate failed: %s", exc)
+    return jsonify(_hb_snapshot())
+
+
+@bp_trial.route("/api/trial/continue-free", methods=["POST"])
+def api_trial_continue_free():
+    """Opt into "free runtimes only" mode. Writes ``~/.clawmetry/free_only.marker``
+    so the hard-block gate keeps 402-ing paid-runtime scoped requests but lets
+    ``openclaw`` / ``nemoclaw`` scoped requests through. The overlay closes
+    itself when the caller redirects to ``/?runtime=openclaw``. Never raises.
+
+    Payload: none. Response: the fresh ``/api/trial/status`` snapshot so the
+    overlay can update its state without a second round-trip."""
+    try:
+        from clawmetry import trial_enforcement as _te
+        enabled = _te.set_free_only_mode(True)
+        _hb_log.info(
+            "trial.continue_free: free-only mode is now %s", enabled
+        )
+    except Exception as exc:
+        _hb_log.warning("trial.continue_free: %s", exc)
+    return jsonify(_hb_snapshot())
+
+
+@bp_trial.route("/api/trial/exit-free", methods=["POST"])
+def api_trial_exit_free():
+    """Leave free-only mode. Removes the marker so the block reverts to
+    "whole app locked" until a license lands. Idempotent. Never raises."""
+    try:
+        from clawmetry import trial_enforcement as _te
+        enabled = _te.set_free_only_mode(False)
+        _hb_log.info(
+            "trial.exit_free: free-only mode is now %s", enabled
+        )
+    except Exception as exc:
+        _hb_log.warning("trial.exit_free: %s", exc)
     return jsonify(_hb_snapshot())
 
 

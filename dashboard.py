@@ -324,7 +324,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.695"
+__version__ = "0.12.696"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11937,7 +11937,10 @@ def detect_config(args=None):
     # When the resolver reports an unpaid / expired entitlement, every non-
     # allowlisted request 402s with a machine-readable body carrying
     # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
-    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. See
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. The gate honours a per-request
+    # ``runtime`` scope hint so an operator who chose the "continue with free
+    # runtimes only" fallback (POST /api/trial/continue-free) still gets the
+    # OpenClaw / NanoClaw surface while paid runtimes stay blocked. See
     # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
     from clawmetry import trial_enforcement as _te_gate
 
@@ -11947,7 +11950,21 @@ def detect_config(args=None):
             path = request.path or ""
             if _te_gate.allowlisted_path(path):
                 return None
-            if not _te_gate.is_hard_blocked():
+            # Runtime hint sources, in preference order:
+            #   1. ?runtime=<name> (canonical UI param)
+            #   2. ?scope=<name>   (older alias some routes still emit)
+            #   3. X-Clawmetry-Runtime header (used by CLI + adapters)
+            rt_hint = None
+            try:
+                rt_hint = (
+                    (request.args.get("runtime") or "").strip()
+                    or (request.args.get("scope") or "").strip()
+                    or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                    or None
+                )
+            except Exception:
+                rt_hint = None
+            if not _te_gate.is_hard_blocked(path=path, runtime=rt_hint):
                 return None
             payload = _te_gate.block_payload()
             resp = jsonify(payload)
