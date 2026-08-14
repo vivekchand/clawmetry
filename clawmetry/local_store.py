@@ -8859,6 +8859,52 @@ class LocalStore:
             "failure_rate":      failure_rate,
         }
 
+    def query_session_eval_detail(
+        self,
+        *,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Everything the Evals drill-down panel needs for one session, in a
+        single row. Composes the judge fields the "Recently Scored" table
+        already shows with the outcome + reliability signals the tile grid
+        used to bury, plus cost/tokens so users can weigh a bad score against
+        what it cost. Metric verdicts are fetched separately by the endpoint
+        so this stays a scalar SELECT.
+
+        Returns ``None`` when the session is unknown, so the endpoint can 404
+        cleanly instead of returning a shell with every field null.
+        """
+        if not session_id:
+            return None
+        sql = """
+            SELECT s.session_id, s.agent_type, s.agent_id, s.title,
+                   s.started_at, s.last_active_at, s.ended_at, s.status,
+                   s.total_tokens, s.cost_usd,
+                   s.eval_score, s.eval_reason, s.eval_judge_model,
+                   s.eval_scored_at, s.eval_rubric,
+                   s.outcome, s.outcome_confidence, s.outcome_classified_at,
+                   s.reliability_score, s.faithfulness_score
+              FROM sessions s
+             WHERE s.session_id = ?
+             LIMIT 1
+        """
+        try:
+            rows = self._fetch(sql, [str(session_id)])
+        except Exception as e:
+            log.warning("local store: query_session_eval_detail failed: %s", e)
+            return None
+        if not rows:
+            return None
+        r = rows[0]
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "started_at", "last_active_at", "ended_at", "status",
+                "total_tokens", "cost_usd",
+                "eval_score", "eval_reason", "eval_judge_model",
+                "eval_scored_at", "eval_rubric",
+                "outcome", "outcome_confidence", "outcome_classified_at",
+                "reliability_score", "faithfulness_score"]
+        return dict(zip(cols, r))
+
     def query_session_quality(
         self,
         *,

@@ -10,12 +10,18 @@
     </div>
   </div>
 
-  <!-- Judge status: which model scores sessions, whether a key exists on this
-       box, and how many sessions it scored in the last day. This is the honest
-       heart of the tab: it never claims scoring is happening when it is not. -->
-  <div id="evals-judge-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin:14px 0;box-shadow:var(--card-shadow);">
-    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">⚖️ <span data-i18n="evals.judge_title">The judge</span></div>
-    <div id="evals-judge-body" style="font-size:13px;color:var(--text-primary);"><span data-i18n="app.loading">Loading...</span></div>
+  <!-- feat/evals-simplify: reorder score-first. The Recently Scored table
+       and the 24h summary now sit at the TOP so a first-time visitor sees a
+       working scored row (or the "no scores yet" honest state) before they
+       see the judge setup / evaluator catalogue. The judge card itself moves
+       to the BOTTOM as a configuration section, not the first thing users
+       must engage with. -->
+
+  <!-- Recently scored sessions, newest first. Row click opens the drill-down
+       drawer with judge reason + per-check breakdown + rubric. -->
+  <div id="evals-recent-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin:14px 0;box-shadow:var(--card-shadow);">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">🧾 <span data-i18n="evals.recent_title">Recently scored sessions</span></div>
+    <div id="evals-recent-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
   </div>
 
   <!-- Score summary over the last 24h + the 7d regression-replay line. -->
@@ -32,7 +38,9 @@
   </div>
 
   <!-- The named evaluator library (moved here from Overview). Same element ids
-       the shared loadEvaluators() renderer targets. -->
+       the shared loadEvaluators() renderer targets. Feat/evals-simplify:
+       loadEvaluators() now splits primary (per-session value_field) vs
+       secondary (aggregate-only) so the grid stops reading as a 12-box wall. -->
   <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">🔬 <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
@@ -42,15 +50,18 @@
     <div id="evaluators-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;"></div>
   </div>
 
-  <!-- Recently scored sessions, newest first, with a per-row re-score button. -->
-  <div id="evals-recent-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
-    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">🧾 <span data-i18n="evals.recent_title">Recently scored sessions</span></div>
-    <div id="evals-recent-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
-  </div>
-
   <!-- Golden test suites: release-gating evals run from the CLI / CI. -->
   <div id="evals-suites-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
     <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">🏅 <span data-i18n="evals.suites_title">Golden test suites</span></div>
     <div id="evals-suites-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
+  </div>
+
+  <!-- Judge status: which model scores sessions, whether a key exists on this
+       box, and how many sessions it scored in the last day. Sits at the
+       BOTTOM as a config section: users configure it AFTER they've seen the
+       Recently Scored table, not BEFORE. -->
+  <div id="evals-judge-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">⚖️ <span data-i18n="evals.judge_title">The judge</span></div>
+    <div id="evals-judge-body" style="font-size:13px;color:var(--text-primary);"><span data-i18n="app.loading">Loading...</span></div>
   </div>
 </div><!-- end page-evals -->

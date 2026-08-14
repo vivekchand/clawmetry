@@ -3938,8 +3938,17 @@ async function loadEvaluators() {
     safety:      { c: '#ef4444', label: t("evaluators.cat_safety", null, "Safety") },
     agent:       { c: '#10b981', label: t("evaluators.cat_agent", null, "Agent") }
   };
+  // feat/evals-simplify: split the catalogue so the Evals tab stops reading
+  // as a 12-box marketing wall. Primary = entries whose per-session number
+  // actually lands in a session row (outcome, reliability_score, eval_score,
+  // faithfulness_score) — these are what the drill-down surfaces per session.
+  // Secondary = aggregate-only signals we still compute; collapsed by default
+  // so users can see they exist without the wall reading as vaporbox.
+  var primary = evs.filter(function(e){ return e.value_field; });
+  var secondary = evs.filter(function(e){ return !e.value_field; });
+  var renderList = primary.length ? primary : evs;
   var html = '';
-  evs.forEach(function(e) {
+  renderList.forEach(function(e) {
     var cat = CAT[e.category] || { c: 'var(--text-muted)', label: e.category };
     var statusLabel, statusColor;
     if (e.status === 'live') {
@@ -3981,6 +3990,29 @@ async function loadEvaluators() {
     }
     html += '</div>';
   });
+  // Secondary signals: aggregate-only checks (safety scans, per-call
+  // heuristics, DeepEval nice-to-haves). Rendered as compact chips inside a
+  // collapsed <details> so they're honestly present without dominating the
+  // tab. Fresh installs with no primary entries fall back to the old grid
+  // above so the secondary block never renders alone.
+  if (primary.length && secondary.length) {
+    html += '<details style="grid-column:1/-1;margin-top:4px;">';
+    html += '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);padding:6px 2px;list-style:none;">' +
+      '+ ' + secondary.length + ' ' +
+      t("evaluators.other_signals", null, "other signals ClawMetry tracks aggregate-only") +
+      '</summary>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">';
+    secondary.forEach(function(e) {
+      var cat = CAT[e.category] || { c: 'var(--text-muted)' };
+      var lockIcon = e.locked ? ' 🔒' : '';
+      html += '<span title="' + escHtml(e.description) + '" style="font-size:11px;padding:3px 8px;border-radius:8px;' +
+        'background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);' +
+        (e.locked ? 'opacity:0.7;' : '') + '">' +
+        '<span style="color:' + cat.c + ';font-weight:600;">●</span> ' +
+        escHtml(e.name) + lockIcon + '</span>';
+    });
+    html += '</div></details>';
+  }
   listEl.innerHTML = html;
 }
 
@@ -4306,14 +4338,21 @@ async function loadEvalsRecent() {
     var score = (row.eval_score == null) ? '--' : Number(row.eval_score).toFixed(1);
     var sc = row.eval_score == null ? 'var(--text-muted)' :
       (row.eval_score >= 4 ? '#22c55e' : (row.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
-    html += '<tr style="border-top:1px solid var(--border-primary);">';
+    // feat/evals-simplify: rows are clickable — open the drill-down drawer
+    // with judge reason + per-check breakdown + rubric. The Re-score button
+    // stopPropagation so it doesn't ALSO open the drawer.
+    var sidJs = escHtml(sid).replace(/'/g, "\\'");
+    html += '<tr onclick="openEvalSessionDrawer(\'' + sidJs + '\')" ' +
+      'style="border-top:1px solid var(--border-primary);cursor:pointer;" ' +
+      'onmouseover="this.style.background=\'var(--bg-primary)\'" ' +
+      'onmouseout="this.style.background=\'\'">';
     html += '<td style="padding:6px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(sid) + '">' +
       (row.agent_type ? '<span style="color:var(--text-muted);">' + escHtml(row.agent_type) + '</span> ' : '') + escHtml(label) + '</td>';
     html += '<td style="padding:6px 8px;font-weight:700;color:' + sc + ';">' + score + '</td>';
     html += '<td style="padding:6px 8px;max-width:240px;">' + _evalMetricChips(chipsBySid[sid]) + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(row.eval_reason || '') + '">' + escHtml(row.eval_reason || '') + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">' + (row.eval_scored_at ? timeAgo(row.eval_scored_at) : '') + '</td>';
-    html += '<td style="padding:6px 8px;"><button onclick="evalsRescore(\'' + escHtml(sid).replace(/'/g, "\\'") + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
+    html += '<td style="padding:6px 8px;"><button onclick="event.stopPropagation();evalsRescore(\'' + sidJs + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
       t("evals.rescore", null, "Re-score") + '</button></td>';
     html += '</tr>';
   });
@@ -4335,6 +4374,219 @@ async function evalsRescore(sid, btn) {
     if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
   }
   setTimeout(function(){ loadEvalsRecent(); loadEvalsTabSummary(); }, 1500);
+}
+
+// feat/evals-simplify: per-session eval drill-down drawer.
+// Row click in the Recently Scored table opens a right-side panel with the
+// judge's FULL reason (not the truncated one-liner the table shows), every
+// deterministic check verdict + reason, the rubric text the judge used, and
+// a Re-score button that hits /api/evals/rescore/<sid> in place. Anchor
+// element is created on demand and appended to <body> so no template change
+// is required beyond the row's onclick handler.
+function closeEvalSessionDrawer() {
+  var d = document.getElementById('eval-session-drawer');
+  var s = document.getElementById('eval-session-drawer-scrim');
+  if (d) d.remove();
+  if (s) s.remove();
+  document.body.style.overflow = '';
+}
+
+async function openEvalSessionDrawer(sid) {
+  if (!sid) return;
+  closeEvalSessionDrawer();  // one at a time; a second row click replaces it
+  var scrim = document.createElement('div');
+  scrim.id = 'eval-session-drawer-scrim';
+  scrim.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998;';
+  scrim.onclick = closeEvalSessionDrawer;
+  var drawer = document.createElement('div');
+  drawer.id = 'eval-session-drawer';
+  drawer.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:min(680px,100vw);' +
+    'background:var(--bg-secondary);border-left:2px solid var(--border-primary);' +
+    'z-index:9999;overflow-y:auto;box-shadow:-4px 0 24px rgba(0,0,0,0.5);' +
+    'font-size:13px;color:var(--text-primary);';
+  drawer.innerHTML = '<div style="padding:20px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+    '<div style="font-size:15px;font-weight:700;">🔬 ' + t("evals.drawer_title", null, "Eval detail") + '</div>' +
+    '<button onclick="closeEvalSessionDrawer()" style="background:transparent;border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:4px 10px;color:var(--text-secondary);cursor:pointer;font-size:12px;">✕</button>' +
+    '</div>' +
+    '<div id="eval-session-drawer-body" style="color:var(--text-muted);">' +
+    t("app.loading", null, "Loading...") + '</div></div>';
+  document.body.appendChild(scrim);
+  document.body.appendChild(drawer);
+  document.body.style.overflow = 'hidden';
+
+  var body = document.getElementById('eval-session-drawer-body');
+  var r = await fetch('/api/evals/session/' + encodeURIComponent(sid))
+    .catch(function(){return null;});
+  if (!r || !r.ok) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var data = await r.json().catch(function(){return null;});
+  if (!data || !data.session) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var s = data.session;
+  var metrics = data.metrics || [];
+  var sidJs = escHtml(sid).replace(/'/g, "\\'");
+
+  var scoreColor = s.eval_score == null ? 'var(--text-muted)' :
+    (s.eval_score >= 4 ? '#22c55e' : (s.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
+  var scoreText = s.eval_score == null ? '--' : Number(s.eval_score).toFixed(1);
+
+  var html = '';
+  // Header block: session label + score + Re-score / open-transcript actions.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">';
+  html += '<div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' +
+    escHtml(s.agent_type || '') + '</div>';
+  html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-top:2px;">' +
+    escHtml(s.title || sid) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:monospace;">' + escHtml(sid) + '</div>';
+  html += '</div>';
+  html += '<div style="text-align:right;">';
+  html += '<div style="font-size:28px;font-weight:800;color:' + scoreColor + ';line-height:1;">' + scoreText + '</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' +
+    t("evals.drawer_score_out_of", null, "out of 5") + '</div>';
+  html += '</div></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">';
+  html += '<button onclick="evalsRescoreFromDrawer(\'' + sidJs + '\', this)" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">↻ ' +
+    t("evals.rescore", null, "Re-score") + '</button>';
+  html += '<a href="#" onclick="closeEvalSessionDrawer();switchTab(\'transcripts\');' +
+    'setTimeout(function(){if(typeof viewTranscript===\'function\')viewTranscript(\'' + sidJs + '\')},80);return false;" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;text-decoration:none;">📜 ' +
+    t("evals.drawer_open_transcript", null, "Open full transcript") + '</a>';
+  html += '</div></div>';
+
+  // Judge reason (FULL — the table shows a truncated one-liner).
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+    '⚖️ ' + t("evals.drawer_judge_reason", null, "Judge reason") + '</div>';
+  if (s.eval_reason) {
+    html += '<div style="font-size:13px;color:var(--text-primary);line-height:1.55;white-space:pre-wrap;">' +
+      escHtml(s.eval_reason) + '</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_judge_reason", null, "No judge reason for this session yet. Add a judge API key and click Re-score to fill this in.") +
+      '</div>';
+  }
+  if (s.eval_judge_model || s.eval_scored_at) {
+    html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
+    if (s.eval_judge_model) html += t("evals.drawer_judge_model", null, "Judge:") + ' <code>' + escHtml(s.eval_judge_model) + '</code>';
+    if (s.eval_judge_model && s.eval_scored_at) html += ' · ';
+    if (s.eval_scored_at) html += t("evals.drawer_scored", null, "Scored") + ' ' + timeAgo(s.eval_scored_at);
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Per-check breakdown. The tile grid's aggregate signals become per-session
+  // rows here, which is where they actually belong. Outcome + reliability +
+  // faithfulness come straight from the session row; DeepEval + policy-scan
+  // verdicts come from eval_metrics.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">' +
+    '🧪 ' + t("evals.drawer_checks", null, "Per-check breakdown") + '</div>';
+  var checks = [];
+  if (s.outcome) {
+    var outColor = (s.outcome === 'success') ? '#22c55e' :
+      ((s.outcome === 'failed' || s.outcome === 'tool_call_stuck' || s.outcome === 'cognitive_loop') ? '#ef4444' : '#f59e0b');
+    checks.push({ label: t("evaluators.did_finish", null, "Did the agent finish the job?"),
+      value: s.outcome, color: outColor, meta: s.outcome_confidence != null ?
+      ('confidence ' + Math.round(s.outcome_confidence * 100) + '%') : '' });
+  }
+  if (s.reliability_score != null) {
+    var relColor = s.reliability_score >= 0.8 ? '#22c55e' : (s.reliability_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.did_work_cleanly", null, "Did the agent work cleanly?"),
+      value: Number(s.reliability_score).toFixed(2), color: relColor, meta: 'reliability score' });
+  }
+  if (s.faithfulness_score != null) {
+    var faithColor = s.faithfulness_score >= 0.8 ? '#22c55e' : (s.faithfulness_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.claims_backed", null, "Was every claim backed by the evidence?"),
+      value: Number(s.faithfulness_score).toFixed(2), color: faithColor, meta: 'faithfulness score (Pro)' });
+  }
+  metrics.forEach(function(m) {
+    var passed = m.passed;
+    var col = passed === true ? '#22c55e' : (passed === false ? '#ef4444' : 'var(--text-muted)');
+    var val = passed === true ? '✓ pass' : (passed === false ? '✗ fail' : '—');
+    checks.push({ label: m.label || m.metric_slug, value: val, color: col,
+      meta: m.reason || (m.engine ? ('via ' + m.engine) : '') });
+  });
+  if (!checks.length) {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_checks", null, "No per-check verdicts for this session yet.") + '</div>';
+  } else {
+    checks.forEach(function(c) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;' +
+        'padding:6px 0;border-bottom:1px solid var(--border-primary);">';
+      html += '<div style="font-size:12px;color:var(--text-primary);">' + escHtml(c.label) + '</div>';
+      html += '<div style="text-align:right;">';
+      html += '<div style="font-size:12px;font-weight:700;color:' + c.color + ';">' + escHtml(String(c.value)) + '</div>';
+      if (c.meta) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(c.meta) + '</div>';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Rubric the judge used (verbatim). Users often want to sanity-check "did
+  // this score against the rubric I THINK it did?" — this makes that a glance.
+  if (s.eval_rubric) {
+    html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+      'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+      '📜 ' + t("evals.drawer_rubric", null, "Rubric the judge used") + '</div>';
+    html += '<pre style="font-size:11px;font-family:monospace;color:var(--text-secondary);white-space:pre-wrap;' +
+      'margin:0;line-height:1.5;">' + escHtml(s.eval_rubric) + '</pre>';
+    html += '<div style="margin-top:8px;"><a href="#" onclick="closeEvalSessionDrawer();openEvalRubricModal();return false;" ' +
+      'style="font-size:11px;color:#3b82f6;text-decoration:none;">' +
+      t("evals.drawer_edit_rubric", null, "Edit rubric →") + '</a></div>';
+    html += '</div>';
+  }
+
+  // Cost + tokens footer — a bad score costs less to fix if you see what it
+  // cost to produce. Inline formatters (the module-level ones are function-
+  // scoped elsewhere and not reachable here).
+  var _tk = Number(s.total_tokens || 0);
+  var tokens = _tk >= 1e6 ? (_tk / 1e6).toFixed(1) + 'M' :
+               _tk >= 1e3 ? (_tk / 1e3).toFixed(0) + 'K' : String(_tk);
+  var _c = Number(s.cost_usd || 0);
+  var cost = _c >= 0.01 ? '$' + _c.toFixed(2) : (_c > 0 ? '<$0.01' : '$0.00');
+  html += '<div style="font-size:11px;color:var(--text-muted);text-align:right;">' +
+    escHtml(tokens) + ' ' + t("evals.drawer_tokens", null, "tokens") + ' · ' + escHtml(cost) + '</div>';
+
+  if (body) body.innerHTML = html;
+}
+
+// Re-score button INSIDE the drawer — same POST as the table's Re-score,
+// but reloads the drawer in place instead of the table row.
+async function evalsRescoreFromDrawer(sid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), { method: 'POST' });
+    var data = await r.json().catch(function(){return {};});
+    if (!r.ok || data.error) {
+      if (btn) btn.textContent = data.skip_reason || data.error || t("evals.rescore_failed", null, "failed");
+      return;
+    }
+  } catch (e) {
+    if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
+    return;
+  }
+  // Reload both the drawer and the table underneath so the row's score/reason
+  // update to match.
+  openEvalSessionDrawer(sid);
+  loadEvalsRecent();
+  loadEvalsTabSummary();
 }
 
 async function loadEvalsSuites() {
