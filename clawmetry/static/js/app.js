@@ -105,6 +105,20 @@
       + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
       + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
       + '  border-radius: 3px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
+      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #b5b8be;'
+      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
+      + '  transition: color 120ms ease, border-color 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
+      + '  color: #e8eaed; border-color: #4a5058;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
+      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center; line-height: 1.45;'
       + '}';
     document.head.appendChild(st);
   }
@@ -123,6 +137,17 @@
     var subline = daysLeft !== null && daysLeft > 0
       ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
       : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
+    var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
+      ? state.free_runtimes
+      : ['openclaw', 'nemoclaw'];
+    var freeRuntimesLabel = freeRuntimes
+      .map(function (r) {
+        if (r === 'openclaw') return 'OpenClaw';
+        if (r === 'nemoclaw') return 'NanoClaw';
+        return r;
+      })
+      .join(' + ');
     el.innerHTML = ''
       + '<div class="cm-hbo-card">'
       + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
@@ -136,6 +161,10 @@
       + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
       + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
       + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
+      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
+      + '  </button>'
+      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
       + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
       + '</div>';
 
@@ -234,6 +263,44 @@
         });
     });
 
+    // Free-mode escape: expired-trial users can drop back to
+    // OpenClaw/NanoClaw-only mode instead of paying. Posts to the
+    // continue-free endpoint (allowlisted), then reloads to a
+    // free-runtime-scoped URL so the gate short-circuits and the overlay
+    // stays down. Paid-runtime tabs on the free scope render a locked
+    // padlock CTA (handled by the existing paywall banner system).
+    var freeBtn = el.querySelector('.cm-hbo-free');
+    if (freeBtn) {
+      freeBtn.addEventListener('click', function () {
+        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+        statusEl.className = 'cm-hbo-status';
+        statusEl.textContent = 'Switching to free mode…';
+        freeBtn.disabled = true;
+        activateBtn.disabled = true;
+        fetch(ep, { method: 'POST' })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function () {
+            statusEl.className = 'cm-hbo-status ok';
+            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
+            // Force the URL onto a free runtime so the gate lets the page
+            // in even though the entitlement is still expired.
+            try {
+              var url = new URL(window.location.href);
+              url.searchParams.set('runtime', 'openclaw');
+              window.location.replace(url.toString());
+            } catch (e) {
+              window.location.replace('/?runtime=openclaw');
+            }
+          })
+          .catch(function (err) {
+            freeBtn.disabled = false;
+            activateBtn.disabled = false;
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
+          });
+      });
+    }
+
     // Belt & braces: block ESC / TAB-out / right-click chrome from letting
     // the user reach controls behind the overlay while it's mounted.
     el.addEventListener('keydown', function (e) {
@@ -266,8 +333,24 @@
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 
+  function currentRuntimeScope() {
+    try {
+      var u = new URL(window.location.href);
+      var r = (u.searchParams.get('runtime') || u.searchParams.get('scope') || '').trim();
+      return r || '';
+    } catch (e) { return ''; }
+  }
+
+  function withRuntime(path) {
+    var scope = currentRuntimeScope();
+    if (!scope) return path;
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    return path + sep + 'runtime=' + encodeURIComponent(scope);
+  }
+
   function refreshAndMaybeUnblock(force) {
     var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    endpoint = withRuntime(endpoint);
     var opts = force ? { method: 'POST' } : { method: 'GET' };
     return fetch(endpoint, opts)
       .then(function (r) { return r.json().catch(function () { return {}; }); })

@@ -21,7 +21,6 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 | File | Lines | Purpose |
 |------|-------|---------|
 | `dashboard.py` | ~17,300 | Flask app, blueprint registration, shared helpers (live frontend now lives in `static/` + `templates/`) |
-| `dashboard_claudecode.py` | ~1,350 | Claude Code session dashboard variant (standalone or Blueprint) |
 | `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
 
 ### Route modules (`routes/`)

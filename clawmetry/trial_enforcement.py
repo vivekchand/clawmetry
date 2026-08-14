@@ -61,6 +61,35 @@ _HARD_BLOCK_CHECKOUT_URL_ENV = "CLAWMETRY_CHECKOUT_URL"
 _HARD_BLOCK_ESCAPE_ENV = "CLAWMETRY_HARD_BLOCK_ESCAPE"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
+# Free-only mode marker. Written by ``POST /api/trial/continue-free`` when an
+# expired-trial user chooses to keep only the FREE_RUNTIMES (openclaw +
+# nemoclaw) working rather than upgrade. Presence of this file flips the gate
+# from "block everything" to "block only paid-runtime scoped requests" so
+# ``openclaw`` observability keeps working; ``claude_code`` etc. still 402.
+# Documented in the TrialHardBlockPaywall component of the Local Agent
+# Observability blueprint (v4+ describes this fallback).
+_FREE_ONLY_MARKER = os.path.expanduser("~/.clawmetry/free_only.marker")
+
+# Paid-runtime URL prefixes the request-time gate can use to classify a
+# request as paid-runtime scope even when the caller did NOT pass ``runtime=``.
+# Defense-in-depth for any /api/<runtime>/ shard, present or future. Additive
+# per runtime.
+_PAID_URL_PREFIXES_BY_RUNTIME = {
+    "claude_code": ("/api/claude_code/", "/api/claudecode/"),
+    "codex": ("/api/codex/",),
+    "cursor": ("/api/cursor/",),
+    "aider": ("/api/aider/",),
+    "goose": ("/api/goose/",),
+    "opencode": ("/api/opencode/",),
+    "qwen_code": ("/api/qwen_code/", "/api/qwen/"),
+    "hermes": ("/api/hermes/",),
+    "picoclaw": ("/api/picoclaw/",),
+    "nanoclaw": ("/api/nanoclaw/",),
+    "pi": ("/api/pi/",),
+    "deepagents": ("/api/deepagents/",),
+    "antigravity": ("/api/antigravity/",),
+}
+
 # The allowlist. Prefixes are matched with ``str.startswith``; exact paths are
 # matched with ``==``. Kept intentionally small — every entry added here is a
 # potential bypass, so new entries need a comment saying WHY the overlay
@@ -119,6 +148,80 @@ def hard_block_enabled() -> bool:
         return True
 
 
+def free_only_mode_enabled() -> bool:
+    """True when the operator has chosen the "keep free runtimes only"
+    fallback instead of upgrading. Written by ``POST /api/trial/continue-free``
+    and cleared by ``POST /api/trial/exit-free``. Presence-based marker file
+    at ``~/.clawmetry/free_only.marker`` so it survives daemon restarts and
+    is easy to wipe by hand. Never raises."""
+    try:
+        return os.path.isfile(_FREE_ONLY_MARKER)
+    except Exception:
+        return False
+
+
+def set_free_only_mode(enabled: bool) -> bool:
+    """Toggle the free-only marker. Returns the resulting state. Never raises
+    — a filesystem error just returns the pre-call state so the caller can
+    render a "try again" message without swallowing the error silently."""
+    try:
+        d = os.path.dirname(_FREE_ONLY_MARKER)
+        if enabled:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                pass
+            try:
+                with open(_FREE_ONLY_MARKER, "w", encoding="utf-8") as fh:
+                    fh.write(str(int(time.time())))
+            except Exception as exc:
+                logger.warning("trial_enforcement: set_free_only_mode write "
+                               "failed: %s", exc)
+                return free_only_mode_enabled()
+            return True
+        try:
+            if os.path.isfile(_FREE_ONLY_MARKER):
+                os.remove(_FREE_ONLY_MARKER)
+        except Exception as exc:
+            logger.warning("trial_enforcement: set_free_only_mode remove "
+                           "failed: %s", exc)
+            return free_only_mode_enabled()
+        return False
+    except Exception as exc:
+        logger.warning("trial_enforcement: set_free_only_mode: %s", exc)
+        return free_only_mode_enabled()
+
+
+def _classify_scope(path: str | None, runtime: str | None) -> str | None:
+    """Return "free", "paid", or None (unknown) for the given request scope.
+
+    The gate uses this in free-only mode to let ``openclaw`` / ``nemoclaw``
+    requests through while still 402-ing every paid-runtime surface. Never
+    raises — an unclassifiable request returns None and the caller falls back
+    to the safe "treat as paid" branch."""
+    try:
+        try:
+            from clawmetry.entitlements import FREE_RUNTIMES, PAID_RUNTIMES
+        except Exception:
+            FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+            PAID_RUNTIMES = frozenset()
+        rt = (runtime or "").strip().lower()
+        if rt:
+            if rt in FREE_RUNTIMES:
+                return "free"
+            if rt in PAID_RUNTIMES:
+                return "paid"
+        if path:
+            p = str(path)
+            for rt_name, prefixes in _PAID_URL_PREFIXES_BY_RUNTIME.items():
+                for pref in prefixes:
+                    if p.startswith(pref):
+                        return "paid"
+        return None
+    except Exception:
+        return None
+
+
 def _escape_hatch_active() -> bool:
     """Founder-only escape hatch. When ``CLAWMETRY_HARD_BLOCK_ESCAPE=1`` is
     set, the block is bypassed even while enabled — a documented last-resort
@@ -172,14 +275,33 @@ def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
         return True
 
 
-def is_hard_blocked(ent: "Entitlement | None" = None) -> bool:
-    """The core predicate. True when the daemon must refuse to serve anything
-    except the payment surface.
+def is_hard_blocked(
+    ent: "Entitlement | None" = None,
+    *,
+    path: str | None = None,
+    runtime: str | None = None,
+) -> bool:
+    """The core predicate. True when the daemon must refuse to serve this
+    request (except the payment surface).
 
     Reads :func:`hard_block_enabled` and :func:`_resolver_says_unpaid_or_expired`
-    together so a call site never has to compose them by hand. Falls through
-    to ``False`` on internal error — we would rather leak a request than
-    accidentally brick a paying customer."""
+    together so a call site never has to compose them by hand.
+
+    Two additional scope hints let the request-time gate honour the
+    "continue with free runtimes only" fallback:
+
+    * ``path`` — the request path (e.g. ``request.path``)
+    * ``runtime`` — an explicit runtime string (e.g. ``?runtime=openclaw`` on
+      the query string)
+
+    When :func:`free_only_mode_enabled` is on AND the scope classifies as
+    ``free``, the request is allowed through even if the entitlement is
+    expired. Paid-runtime scoped requests still 402. Requests with no
+    identifiable runtime scope fall back to the whole-app block, so the free
+    fallback never accidentally unlocks a paid data surface.
+
+    Falls through to ``False`` on internal error — we would rather leak a
+    request than accidentally brick a paying customer."""
     try:
         if _escape_hatch_active():
             return False
@@ -193,7 +315,17 @@ def is_hard_blocked(ent: "Entitlement | None" = None) -> bool:
                 logger.warning("trial_enforcement: entitlement lookup failed: "
                                "%s", exc)
                 return False  # fail-open: no lockout without a positive signal
-        return _resolver_says_unpaid_or_expired(ent)
+        if not _resolver_says_unpaid_or_expired(ent):
+            return False
+        # Trial is expired / unpaid. If the operator has opted into free-only
+        # mode and this specific request is scoped to a FREE_RUNTIMES surface,
+        # let it through. Paid-runtime scoped requests and unknown scopes
+        # remain blocked.
+        if free_only_mode_enabled():
+            scope = _classify_scope(path, runtime)
+            if scope == "free":
+                return False
+        return True
     except Exception as exc:
         logger.warning("trial_enforcement: is_hard_blocked failed: %s", exc)
         return False
@@ -333,6 +465,10 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "checkout_endpoint": "/api/trial/checkout",
             "refresh_endpoint": "/api/trial/refresh-license",
             "status_endpoint": "/api/trial/status",
+            "free_only_endpoint": "/api/trial/continue-free",
+            "exit_free_endpoint": "/api/trial/exit-free",
+            "free_only_mode": free_only_mode_enabled(),
+            "free_runtimes": ["openclaw", "nemoclaw"],
         }
     except Exception as exc:
         logger.warning("trial_enforcement: block_payload failed: %s", exc)
@@ -344,6 +480,10 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "checkout_endpoint": "/api/trial/checkout",
             "refresh_endpoint": "/api/trial/refresh-license",
             "status_endpoint": "/api/trial/status",
+            "free_only_endpoint": "/api/trial/continue-free",
+            "exit_free_endpoint": "/api/trial/exit-free",
+            "free_only_mode": free_only_mode_enabled(),
+            "free_runtimes": ["openclaw", "nemoclaw"],
         }
 
 
@@ -370,4 +510,6 @@ __all__ = [
     "resolved_upgrade_url",
     "block_payload",
     "warning_window_days",
+    "free_only_mode_enabled",
+    "set_free_only_mode",
 ]
