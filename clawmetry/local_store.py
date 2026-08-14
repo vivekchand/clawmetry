@@ -1181,6 +1181,33 @@ _DDL = [
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS input_tokens INTEGER",
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS output_tokens INTEGER",
     "ALTER TABLE external_api_calls ADD COLUMN IF NOT EXISTS model VARCHAR",
+    # Issue #4813 — canonical replay-event stream. Feeds the runtime-aware
+    # replay UI (Task/Agent/Workflow fanouts, subagent DAGs, cascades,
+    # per-turn mode changes, approval decisions). Written by adapter
+    # ``iter_replay_events`` implementations via the sync daemon; read by
+    # ``/api/replay-tree/<session_id>``. See ``clawmetry/replay_schema.py``
+    # for the canonical event shape.
+    #
+    # parent_span_id is the DELEGATION edge (parent Task spawned this
+    # child). NOT the transcript-chain parent — do not conflate.
+    """
+    CREATE TABLE IF NOT EXISTS replay_events (
+        span_id        VARCHAR PRIMARY KEY,
+        parent_span_id VARCHAR,
+        session_id     VARCHAR NOT NULL,
+        runtime        VARCHAR NOT NULL,
+        kind           VARCHAR NOT NULL,
+        ts             DOUBLE  NOT NULL,
+        payload        BLOB,
+        mode           BLOB,
+        approval       BLOB,
+        created_at     BIGINT  NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_session_ts   ON replay_events(session_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_parent       ON replay_events(parent_span_id)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_runtime_kind ON replay_events(runtime, kind)",
+    "CREATE INDEX IF NOT EXISTS idx_replay_events_created_at   ON replay_events(created_at)",
 ]
 
 
