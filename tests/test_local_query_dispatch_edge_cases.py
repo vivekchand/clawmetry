@@ -80,7 +80,11 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                "models", "runtimes", "rollup_sessions",
                                # #1012 Agent Graph tab (Phase 6 Tracing):
                                # cross-session spawn topology from spans.
-                               "agent_graph"}, (
+                               "agent_graph",
+                               # #4813 session-replay: canonical replay-event
+                               # rows for one session, e2e-classed (carries
+                               # LLM message + tool-arg payloads).
+                               "replay_events"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

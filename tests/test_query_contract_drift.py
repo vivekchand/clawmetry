@@ -173,6 +173,8 @@ EXPECTED_TRUST = {
     "search": "e2e",
     # #1012 Agent Graph: aggregate node/edge counts only, no content.
     "agent_graph": "plaintext",
+    # #4813 replay events: carry LLM message/tool-arg payloads -> e2e.
+    "replay_events": "e2e",
 }
 
 

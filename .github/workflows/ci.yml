@@ -35,7 +35,7 @@ jobs:
           # covers every .py the server actually loads.
           errors = 0
           files = (
-              ['dashboard.py', 'dashboard_claudecode.py', 'history.py']
+              ['dashboard.py', 'history.py']
               + glob.glob('clawmetry/**/*.py', recursive=True)
               + glob.glob('routes/**/*.py', recursive=True)
               + glob.glob('tests/**/*.py', recursive=True)

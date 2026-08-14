@@ -561,6 +561,19 @@ def _hard_block_flag_safe(ent) -> bool:
         return False
 
 
+def _free_only_mode_flag_safe() -> bool:
+    """True when the user has opted into the "free runtimes only" fallback
+    after their trial expired. Kept alongside ``hard_blocked`` on every
+    :meth:`Entitlement.to_dict` payload so the frontend can render the
+    "you're on free-only mode" banner without a second round-trip. Never
+    raises — a missing module or filesystem error returns False."""
+    try:
+        from clawmetry import trial_enforcement as _te
+        return bool(_te.free_only_mode_enabled())
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class Entitlement:
     """Resolved entitlement for this install. Immutable; rebuild via
@@ -2350,6 +2363,7 @@ class Entitlement:
             # request, so a UI that missed the flag still fails closed. Imported
             # late to avoid a circular import at module-load time.
             "hard_blocked": _hard_block_flag_safe(self),
+            "free_only_mode": _free_only_mode_flag_safe(),
         }
 
 
