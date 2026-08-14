@@ -12517,18 +12517,6 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
-      {# Memory + Skills promoted from Advanced to top-level (2026-08-14) after
-         the multi-runtime file browser landed (PR #4821). Previously buried,
-         nobody could find their agent's on-disk memory files. Now every user
-         sees them one click away, per-runtime scoped. #}
-      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
-        <span class="left-nav-icon" aria-hidden="true">&#128218;</span>
-        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
-      </div>
-      <div class="left-nav-item" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
-        <span class="left-nav-icon" aria-hidden="true">&#128736;</span>
-        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
-      </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
@@ -12614,7 +12602,16 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
       </div>
-      {# Memory + Skills moved to top-level nav 2026-08-14 (PR #4821 follow-up) — no longer buried in Advanced. #}
+      {# Memory + Skills stay under Advanced while the multi-runtime file
+         browser matures (founder call 2026-08-14): known gaps — redundant
+         runtime chips, file click not loading content, Skills rendering the
+         Memory catalog. Promote to Tier-1 once those are fixed. #}
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
+        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
+      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live runtime log stream">
         <span class="left-nav-label">Logs</span>
       </div>
