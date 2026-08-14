@@ -10165,7 +10165,10 @@ var _CM_RT_NODEWIDE = {
   // approvals + alerts left this map 2026-08-03: approvals rows filter by
   // the requesting session's runtime prefix, and alert rules carry their own
   // per-rule scope (runtime column, node-wide chip when 'all').
-  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1,
+  // memory + skills left this map 2026-08-14: the multi-runtime file
+  // browser scopes both tabs to the selected runtime (catalog in
+  // clawmetry/runtime_memory.py), so the "node-wide" banner would lie.
+  crons: 1, security: 1, selfevolve: 1,
   policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
   clusters: 1, actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
@@ -25826,18 +25829,31 @@ setTimeout(checkLicenseExpiry, 1200);
 // Runtime Memory & Skills browser (multi-runtime file explorer).
 //
 // Each supported runtime stores its long-lived memory and its skills in
-// different places on disk (see clawmetry/runtime_memory.py). This module
-// renders two things across the Memory + Skills tabs:
-//   1. A chip bar of runtimes (dimmed if not present on this machine)
-//   2. A file-browser view (left tree, right preview) for the picked runtime
+// different places on disk (see clawmetry/runtime_memory.py). Both tabs
+// scope to the GLOBAL runtime selection (_cmRuntimeFilter — the top
+// dropdown / ?runtime= pin); there is deliberately no second picker
+// inside the tab (founder: "there are already 2 dropdowns to switch
+// runtime").
 //
-// OpenClaw remains the default; picking it hides the browser and shows the
-// existing rich Memory / Skills UI. All other runtimes route through the
-// browser. Backwards compatible — the old view is untouched.
+// Per-tab category split: Memory shows the runtime's `memory` roots;
+// Skills shows `skills` + `commands` + `agents` + `hooks`.
+//
+// Data path: locally the browser reads /api/runtimes/<id>/files straight
+// off the disk. On cloud the container has none of those paths, so the
+// cloud dashboard overrides window._cmCloudRuntimeFiles to serve the
+// E2E-encrypted catalog the daemon pushes on heartbeat
+// (sync.py:_build_runtime_files_cache_pushes) — decrypted client-side,
+// file contents inline.
+//
+// OpenClaw keeps its rich native Memory UI (editor, history, access log)
+// in both environments; every other runtime routes through the browser.
+// Skills on cloud routes through the browser for ALL runtimes including
+// OpenClaw (the native skills view has no cloud data path).
 // ─────────────────────────────────────────────────────────────────────────
 
 var _cmRuntimeCatalog = null;
-var _cmRuntimeSelected = { memory: 'openclaw', skills: 'openclaw' };
+var _CM_RT_TAB_CATS = { memory: ['memory'], skills: ['skills', 'commands', 'agents', 'hooks'] };
+var _cmRtBrowserPollTries = { memory: 0, skills: 0 };
 
 function _cmRuntimeIsCloud() {
   try {
@@ -25869,96 +25885,64 @@ function _cmRuntimeIcon(id) {
   return map[id] || '•';
 }
 
-function _cmRuntimeChip(runtime, selected, tab, category) {
-  var count = 0;
-  if (category && runtime.counts) count = runtime.counts[category] || 0;
-  else if (runtime.counts) {
-    Object.keys(runtime.counts).forEach(function(k) { count += runtime.counts[k] || 0; });
-  }
-  var isSel = runtime.id === selected;
-  var isPresent = !!runtime.present;
-  var isLocked = !!runtime.locked;
-  var bg = isSel ? '#6366f1' : (isPresent ? 'var(--bg-secondary)' : 'transparent');
-  var color = isSel ? '#fff' : (isPresent ? 'var(--text-primary)' : 'var(--text-muted)');
-  var border = isSel ? '#6366f1' : 'var(--border-primary)';
-  var op = (isPresent || isSel) ? 1 : 0.55;
-  var badge = '';
-  if (isLocked) {
-    badge = '<span title="Paid runtime — upgrade to browse its files" style="margin-left:6px;font-size:10px;opacity:0.85;">🔒</span>';
-  } else if (count > 0) {
-    badge = '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>';
-  }
-  var titleTip = isLocked
-    ? escHtml(runtime.label) + ' — paid runtime, upgrade to browse'
-    : escHtml(runtime.label) + (isPresent ? '' : ' (not detected on this machine)');
-  return '<div class="cm-runtime-chip" data-runtime="' + runtime.id + '" '
-    + 'onclick="cmRuntimeSelect(\'' + tab + '\',\'' + runtime.id + '\')" '
-    + 'style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;'
-    + 'background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';opacity:' + op + ';'
-    + 'display:inline-flex;align-items:center;gap:4px;" title="' + titleTip + '">'
-    + escHtml(runtime.label) + badge + '</div>';
+// Which runtime the Memory/Skills tabs are scoped to right now: the global
+// runtime selection, defaulting to OpenClaw when 'all' / unset.
+function cmRuntimeCurrent() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (!rt || rt === 'all') return 'openclaw';
+  return rt;
 }
 
-async function cmRuntimeMountChips(chipsEl) {
-  if (!chipsEl) return;
-  var tab = chipsEl.getAttribute('data-tab') || 'memory';
-  var category = chipsEl.getAttribute('data-category') || null;
-  chipsEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Loading runtimes…</span>';
-  var cat = await _cmRuntimeFetchCatalog();
-  var runtimes = (cat.runtimes || []).slice();
-  // Sort: present first, then by label
-  runtimes.sort(function(a, b) {
-    if (!!a.present !== !!b.present) return a.present ? -1 : 1;
-    return (a.label || '').localeCompare(b.label || '');
-  });
-  var sel = _cmRuntimeSelected[tab] || 'openclaw';
-  var chips = runtimes.map(function(rt) {
-    return _cmRuntimeChip(rt, sel, tab, category);
-  });
-  chipsEl.innerHTML = chips.join('');
+// Full file payload for one runtime. Local: disk via /api/runtimes. Cloud:
+// window._cmCloudRuntimeFiles (decrypted heartbeat blob, contents inline).
+// Normalised result: {runtime, label, groups} | {locked:true} |
+// {pending:true} | {error: str}.
+async function _cmRuntimeFilesPayload(runtimeId) {
+  if (typeof window._cmCloudRuntimeFiles === 'function') {
+    return window._cmCloudRuntimeFiles(runtimeId);
+  }
+  var r = await fetch('/api/runtimes/' + encodeURIComponent(runtimeId) + '/files');
+  if (r.status === 402) return { locked: true, runtime: runtimeId };
+  if (r.status === 404) return { runtime: runtimeId, label: runtimeId, groups: [], unknown: true };
+  if (!r.ok) throw new Error('http ' + r.status);
+  return r.json();
 }
 
-function cmRuntimeSelect(tab, runtimeId) {
-  _cmRuntimeSelected[tab] = runtimeId;
-  // Re-render both chip bars if present (keeps them in sync visually)
-  var chips = document.querySelectorAll('[id$="-runtime-chips"][data-tab="' + tab + '"]');
-  chips.forEach(function(el) { cmRuntimeMountChips(el); });
-  // Toggle native OpenClaw view vs runtime file browser
+// Show either the native OpenClaw view or the runtime file browser on a
+// tab, based on the global runtime. Called on tab switch AND on runtime
+// switch (both hooks installed below).
+function cmRuntimeApplyView(tab) {
   var browser = document.getElementById(tab + '-runtime-browser');
-  if (tab === 'memory') {
-    var nativeIds = ['memory-summary-view', 'memory-access-view', 'memory-all-view'];
-    if (runtimeId === 'openclaw') {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        // Only restore the summary view by default; the other two are toggled
-        // by memorySwitchView independently.
-        if (id === 'memory-summary-view') el.style.display = '';
-      });
-      if (browser) browser.style.display = 'none';
-    } else {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-      });
-      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'memory'); }
-    }
-  } else if (tab === 'skills') {
-    var nativeIds = ['skills-summary-row', 'skills-list', 'skills-browser'];
-    if (runtimeId === 'openclaw') {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        if (id === 'skills-summary-row' || id === 'skills-list') el.style.display = '';
-      });
-      if (browser) browser.style.display = 'none';
-    } else {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-      });
-      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'skills'); }
-    }
+  if (!browser) return;
+  var rt = cmRuntimeCurrent();
+  var isCloud = _cmRuntimeIsCloud();
+  // OpenClaw memory keeps its rich native editor everywhere. OpenClaw
+  // skills keeps the native catalog locally only — on cloud that view has
+  // no data path, so the browser (fed by the heartbeat blob) takes over.
+  var useNative = rt === 'openclaw' && !(isCloud && tab === 'skills');
+  var nativeIds = tab === 'memory'
+    ? ['memory-summary-view', 'memory-access-view', 'memory-all-view']
+    : ['skills-summary-row', 'skills-list', 'skills-browser'];
+  var restoreIds = tab === 'memory'
+    ? { 'memory-summary-view': 1 }
+    : { 'skills-summary-row': 1, 'skills-list': 1 };
+  var toggles = document.querySelectorAll('#page-' + tab + ' .mem-view-tab');
+  if (useNative) {
+    nativeIds.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && restoreIds[id]) el.style.display = '';
+    });
+    Array.prototype.forEach.call(toggles, function(el) { el.style.display = ''; });
+    browser.style.display = 'none';
+  } else {
+    nativeIds.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    Array.prototype.forEach.call(toggles, function(el) { el.style.display = 'none'; });
+    browser.style.display = '';
+    _cmRtBrowserPollTries[tab] = 0;
+    cmRuntimeMountBrowser(browser, rt, tab);
   }
 }
 
@@ -25968,36 +25952,75 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     + escHtml(runtimeId) + '…</div>';
   var payload;
   try {
-    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files';
-    if (tab === 'memory' || tab === 'skills') {
-      // No category filter — show everything the runtime exposes.
-    }
-    var r = await fetch(url);
-    if (r.status === 402) {
-      // Paid runtime the caller isn't entitled to. Show upsell CTA
-      // instead of an error — matches the OSS conversion-moment pattern.
-      var rtLabel = (_cmRuntimeCatalog && _cmRuntimeCatalog.runtimes || [])
-        .filter(function(x) { return x.id === runtimeId; })[0];
-      var label = (rtLabel && rtLabel.label) || runtimeId;
-      container.innerHTML =
-        '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.55;max-width:520px;margin:0 auto;">'
-        + '<div style="font-size:28px;margin-bottom:8px;">🔒</div>'
-        + '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;font-size:15px;">' + escHtml(label) + ' is a paid runtime</div>'
-        + 'Upgrade your ClawMetry plan to browse this runtime\'s memory and skills files. '
-        + 'Everything ClawMetry knows about ' + escHtml(label) + ' — including where its memory lives on disk — is bundled with the paid tier that ships its adapter.'
-        + '<div style="margin-top:16px;"><a href="https://clawmetry.com/pricing" target="_blank" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px;">See pricing</a></div>'
-        + '</div>';
-      return;
-    }
-    if (!r.ok) throw new Error('http ' + r.status);
-    payload = await r.json();
+    payload = await _cmRuntimeFilesPayload(runtimeId);
   } catch (e) {
     container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
       + escHtml(String(e)) + '</div>';
     return;
   }
-  var groups = (payload.groups || []).filter(function(g) { return g.exists; });
-  var absent = (payload.groups || []).filter(function(g) { return !g.exists; });
+  if (payload && payload.pending) {
+    // Cloud cache miss — the daemon pushes the catalog on its next
+    // heartbeat. Poll a bounded number of times, then settle into an
+    // honest "not synced yet" state.
+    var tries = _cmRtBrowserPollTries[tab] || 0;
+    if (tries < 8) {
+      _cmRtBrowserPollTries[tab] = tries + 1;
+      container.innerHTML =
+        '<div style="padding:60px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+        + '<div style="font-size:28px;margin-bottom:10px;">🔄</div>'
+        + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;">Syncing files from your machine…</div>'
+        + 'Your agent pushes its memory &amp; skills files on the next heartbeat.<br>This usually takes under a minute.</div>';
+      setTimeout(function() {
+        var el = document.getElementById(tab + '-runtime-browser');
+        if (el && el.style.display !== 'none' && cmRuntimeCurrent() === runtimeId) {
+          cmRuntimeMountBrowser(el, runtimeId, tab);
+        }
+      }, 12000);
+      return;
+    }
+    container.innerHTML =
+      '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+      + 'No file snapshot from this node yet. Make sure the ClawMetry daemon is running '
+      + '(<code>clawmetry status</code>) and on version 0.12.705 or newer, then check back.</div>';
+    return;
+  }
+  if (payload && payload.needkey) {
+    // Cloud with no stored E2E key: reuse the cloud dashboard's key
+    // prompt (it stores the key and re-mounts this view on unlock).
+    if (typeof window._cmRenderKeyPrompt === 'function') {
+      window._cmRenderKeyPrompt(container);
+    } else {
+      container.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;">'
+        + 'Files are end-to-end encrypted. Open the Memory tab to enter your secret key.</div>';
+    }
+    return;
+  }
+  if (payload && payload.locked) {
+    // Paid runtime the caller isn't entitled to. Show upsell CTA
+    // instead of an error — matches the OSS conversion-moment pattern.
+    var rtLabel = (_cmRuntimeCatalog && _cmRuntimeCatalog.runtimes || [])
+      .filter(function(x) { return x.id === runtimeId; })[0];
+    var label = payload.label || (rtLabel && rtLabel.label) || runtimeId;
+    container.innerHTML =
+      '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.55;max-width:520px;margin:0 auto;">'
+      + '<div style="font-size:28px;margin-bottom:8px;">🔒</div>'
+      + '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;font-size:15px;">' + escHtml(label) + ' is a paid runtime</div>'
+      + 'Upgrade your ClawMetry plan to browse this runtime\'s memory and skills files. '
+      + 'Everything ClawMetry knows about ' + escHtml(label) + ' — including where its memory lives on disk — is bundled with the paid tier that ships its adapter.'
+      + '<div style="margin-top:16px;"><a href="https://clawmetry.com/pricing" target="_blank" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px;">See pricing</a></div>'
+      + '</div>';
+    return;
+  }
+  _cmRtBrowserPollTries[tab] = 0;
+  // Per-tab category split: Memory shows memory roots, Skills shows
+  // skills/commands/agents/hooks. This is what makes the two tabs show
+  // DIFFERENT content (they previously shared one unfiltered listing).
+  var cats = _CM_RT_TAB_CATS[tab] || null;
+  var allGroups = (payload.groups || []).filter(function(g) {
+    return !cats || cats.indexOf(g.category) !== -1;
+  });
+  var groups = allGroups.filter(function(g) { return g.exists; });
+  var absent = allGroups.filter(function(g) { return !g.exists; });
   var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
 
   if (!groups.length) {
@@ -26055,17 +26078,18 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     + '<div style="color:var(--text-muted);font-family:inherit;">Pick a file on the left to view its contents.</div>'
     + '</div></div></div>';
 
-  // Stash the payload on the container so cmRuntimeOpenFile can look up
-  // (root, path) by (gi, fi) without another fetch.
-  container._cmRuntimePayload = payload;
+  // Stash the RENDERED (category-filtered, exists-only) groups so
+  // cmRuntimeOpenFile resolves (gi, fi) against exactly what the tree
+  // shows. Indexing into the raw payload was the "click does nothing"
+  // bug: the tree skipped absent groups, so gi pointed at the wrong root.
+  container._cmRuntimeGroups = groups;
 }
 
 async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   var container = clickEl.closest('.runtime-file-browser');
-  if (!container || !container._cmRuntimePayload) return;
+  if (!container || !container._cmRuntimeGroups) return;
   var tab = container.getAttribute('data-tab') || 'memory';
-  var groups = container._cmRuntimePayload.groups || [];
-  var group = groups[gi];
+  var group = container._cmRuntimeGroups[gi];
   if (!group) return;
   var file = (group.files || [])[fi];
   if (!file) return;
@@ -26083,12 +26107,20 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
 
   try {
-    var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
-      + '/file?root=' + encodeURIComponent(group.root)
-      + '&path=' + encodeURIComponent(file.path || '');
-    var r = await fetch(url);
-    var d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    var d;
+    if (typeof file.content === 'string') {
+      // Cloud path: contents ship inline in the decrypted heartbeat blob —
+      // there is no per-file endpoint to hit.
+      var lang = /\.md$/i.test(file.path || group.root || '') ? 'markdown' : 'text';
+      d = { content: file.content, size: file.size, mtime: file.mtime, language: lang };
+    } else {
+      var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
+        + '/file?root=' + encodeURIComponent(group.root)
+        + '&path=' + encodeURIComponent(file.path || '');
+      var r = await fetch(url);
+      d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    }
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
     var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
@@ -26117,23 +26149,38 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   }
 }
 
-// Hook into tab switches so the chip bars mount on first paint.
+// Hooks: apply the right view (native vs browser) when the user opens the
+// tab AND when the global runtime selection changes while the tab is open.
 (function _cmRuntimeInstallHooks() {
   var origSwitchTab = (typeof switchTab === 'function') ? switchTab : null;
-  if (!origSwitchTab || origSwitchTab._cmRuntimeWrapped) return;
-  var wrapped = function(name) {
-    var out = origSwitchTab.apply(this, arguments);
-    try {
-      if (name === 'memory') {
-        cmRuntimeMountChips(document.getElementById('memory-runtime-chips'));
-      } else if (name === 'skills') {
-        cmRuntimeMountChips(document.getElementById('skills-runtime-chips'));
-      }
-    } catch (e) {}
-    return out;
-  };
-  wrapped._cmRuntimeWrapped = true;
-  window.switchTab = wrapped;
+  if (origSwitchTab && !origSwitchTab._cmRuntimeWrapped) {
+    var wrapped = function(name) {
+      var out = origSwitchTab.apply(this, arguments);
+      try {
+        if (name === 'memory' || name === 'skills') cmRuntimeApplyView(name);
+      } catch (e) {}
+      return out;
+    };
+    wrapped._cmRuntimeWrapped = true;
+    window.switchTab = wrapped;
+  }
+  // Runtime switch entry point: every runtime change funnels through
+  // _cmApplyRuntimeTabVisibility, so piggyback on it to re-scope an open
+  // Memory/Skills tab without a reload.
+  var origVis = (typeof _cmApplyRuntimeTabVisibility === 'function') ? _cmApplyRuntimeTabVisibility : null;
+  if (origVis && !origVis._cmRuntimeWrapped) {
+    var wrappedVis = function() {
+      var out = origVis.apply(this, arguments);
+      try {
+        var cur = (typeof _cmCurrentTab !== 'undefined') ? _cmCurrentTab : null;
+        if (cur === 'memory' || cur === 'skills') cmRuntimeApplyView(cur);
+      } catch (e) {}
+      return out;
+    };
+    wrappedVis._cmRuntimeWrapped = true;
+    window._cmApplyRuntimeTabVisibility = wrappedVis;
+    _cmApplyRuntimeTabVisibility = wrappedVis;
+  }
 })();
 
 // ═══════════════════════════════════════════════════════════════════════

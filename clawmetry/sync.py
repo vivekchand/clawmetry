@@ -7731,6 +7731,16 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(mem_pushes)
     except Exception as _mp_e:
         log.debug("memory cache_push build failed (continuing): %s", _mp_e)
+    # Multi-runtime Memory & Skills browser: every runtime's on-disk
+    # memory/skills/commands/agents/hooks files, E2E-encrypted, so the
+    # cloud file browser paints real content instead of an empty shell.
+    # Throttled internally (10 min rebuild). Best-effort.
+    try:
+        rtf_pushes = _build_runtime_files_cache_pushes(config)
+        if rtf_pushes:
+            payload.setdefault("cache_pushes", []).extend(rtf_pushes)
+    except Exception as _rtf_e:
+        log.debug("runtime-files cache_push build failed (continuing): %s", _rtf_e)
     # Phase 6 of relay-v2 (#1640): cron-run history per job so the cloud Cron
     # modal paints run timelines from cache instead of showing cache_pending.
     try:
@@ -8481,7 +8491,14 @@ def _build_memory_cache_pushes(config: dict) -> list:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        rows = store.query_memory_blobs(limit=MEMORY_CACHE_LIMIT)
+        # agent_type + agent_id filters matter: memory_blobs also holds
+        # every runtime's catalog files (see _build_runtime_files_cache_
+        # pushes — those rows use agent_id=<category> with absolute paths).
+        # The OpenClaw Memory IDE must only list the workspace-relative
+        # rows the legacy ingest writes under agent_id='main'.
+        rows = store.query_memory_blobs(agent_type="openclaw",
+                                        agent_id="main",
+                                        limit=MEMORY_CACHE_LIMIT)
     except Exception:
         return []
     if not rows:
@@ -8530,6 +8547,160 @@ def _build_memory_cache_pushes(config: dict) -> list:
         "ttl_s":  MEMORY_CACHE_TTL_SEC,
         "blob":   blob,
     }]
+
+
+# ── Runtime files cache push (multi-runtime Memory & Skills browser) ────────
+# The Memory / Skills file browser (clawmetry/runtime_memory.py catalog)
+# resolves where EVERY runtime keeps its on-disk memory, skills, commands,
+# agents and hooks files. Locally the dashboard reads the disk directly via
+# /api/runtimes/<id>/files; on cloud the container has none of those paths,
+# so without this push the browser is an empty shell. Same E2E envelope as
+# the memory push: encrypted blob under
+# ``runtime_files:{owner_hash}:{node_id}:catalog``; the browser holds the
+# key, cloud only stores ciphertext.
+#
+# Decrypted payload shape (consumed by app.js cmRuntimeMountBrowser via the
+# cloud override in clawmetry-cloud/dashboard.py):
+#
+#   {"runtimes": [{"id", "label", "locked", "groups": [
+#       {"category", "root", "label", "scope", "exists",
+#        "files": [{"path", "size", "mtime", "content"}, ...]}]}],
+#    "_shape": "runtime_files"}
+#
+# The full-catalog disk walk is throttled to every RUNTIME_FILES_REBUILD_SEC
+# — these files change slowly and the walk stats hundreds of paths.
+
+RUNTIME_FILES_CACHE_TTL_SEC = 21600     # 6h — matches memory/brain TTL
+RUNTIME_FILES_REBUILD_SEC = 600         # rebuild the blob at most every 10 min
+RUNTIME_FILES_MAX_PER_FILE = 100_000    # per-file content truncation (bytes)
+RUNTIME_FILES_MAX_TOTAL = 2_500_000     # total content budget pre-encryption
+RUNTIME_FILES_MAX_FILES = 500           # across all runtimes
+
+_runtime_files_push_cache: dict = {"ts": 0.0, "pushes": None}
+
+
+def _runtime_locked_for_push(runtime_id: str) -> bool:
+    """Mirror routes/runtime_memory.py:_runtime_is_locked (fall-open)."""
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES, get_entitlement
+        if runtime_id in FREE_RUNTIMES:
+            return False
+        return not bool(get_entitlement().allows_runtime(runtime_id))
+    except Exception:
+        return False
+
+
+def _build_runtime_files_cache_pushes(config: dict) -> list:
+    """Heartbeat cache_push entry with every runtime's memory/skills files.
+
+    One throttled pass does double duty: it snapshots file contents for the
+    encrypted cloud push AND ingests the same plaintext rows into the local
+    DuckDB store (``memory_blobs`` with ``agent_type=<runtime_id>``,
+    ``agent_id=<category>``) so the moat keeps a queryable copy. Both halves
+    are best-effort; any failure returns ``[]`` and the heartbeat continues.
+    """
+    enc_key = config.get("encryption_key")
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (enc_key and api_key and node_id):
+        return []
+    now = time.time()
+    cached = _runtime_files_push_cache
+    if cached["pushes"] is not None and now - cached["ts"] < RUNTIME_FILES_REBUILD_SEC:
+        return cached["pushes"]
+    try:
+        from clawmetry.runtime_memory import list_files, list_runtimes, read_runtime_file
+    except Exception:
+        return []
+
+    total_bytes = 0
+    total_files = 0
+    runtimes_out: list = []
+    blob_rows: list = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        catalog = list_runtimes()
+    except Exception:
+        return []
+    for rt in catalog:
+        locked = _runtime_locked_for_push(rt["id"])
+        if not rt.get("present"):
+            continue
+        if locked:
+            # Honest upsell on cloud: the runtime exists on this machine but
+            # the plan doesn't cover it. Label only, no file contents.
+            runtimes_out.append({"id": rt["id"], "label": rt["label"],
+                                 "locked": True, "groups": []})
+            continue
+        try:
+            listing = list_files(rt["id"])
+        except Exception:
+            continue
+        groups_out: list = []
+        for g in listing.get("groups", []):
+            if not g.get("exists"):
+                groups_out.append({k: g[k] for k in
+                                   ("category", "root", "label", "scope", "exists")} | {"files": []})
+                continue
+            files_out: list = []
+            for f in g.get("files", []):
+                if total_files >= RUNTIME_FILES_MAX_FILES or total_bytes >= RUNTIME_FILES_MAX_TOTAL:
+                    break
+                content = ""
+                try:
+                    got = read_runtime_file(rt["id"], g["root"], f.get("path") or "",
+                                            max_bytes=RUNTIME_FILES_MAX_PER_FILE)
+                    if got.get("ok") and not got.get("binary"):
+                        content = got.get("content") or ""
+                except Exception:
+                    content = ""
+                total_files += 1
+                total_bytes += len(content)
+                files_out.append({"path": f.get("path") or "", "size": f.get("size", 0),
+                                  "mtime": f.get("mtime", 0), "content": content})
+                if content:
+                    rel = f.get("path") or ""
+                    blob_rows.append({
+                        "agent_type": rt["id"],
+                        "agent_id": g.get("category") or "memory",
+                        "path": (g["root"] + "/" + rel) if rel else g["root"],
+                        "ts": now_iso,
+                        "blob": content,
+                    })
+            groups_out.append({"category": g.get("category"), "root": g.get("root"),
+                               "label": g.get("label"), "scope": g.get("scope"),
+                               "exists": True, "files": files_out})
+        runtimes_out.append({"id": rt["id"], "label": rt["label"],
+                             "locked": False, "groups": groups_out})
+
+    # Moat: keep the plaintext copy queryable in DuckDB (sha256 dedup in the
+    # store makes re-ingest of unchanged files a no-op).
+    if blob_rows:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            for row in blob_rows:
+                store.ingest_memory_blob(row)
+        except Exception as _ie:
+            log.debug("runtime-files DuckDB ingest failed (push continues): %s", _ie)
+
+    if not runtimes_out:
+        _runtime_files_push_cache.update(ts=now, pushes=[])
+        return []
+    payload = {"runtimes": runtimes_out, "_shape": "runtime_files",
+               "_source": "runtime_memory_catalog"}
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    pushes = [{
+        "key":    f"runtime_files:{owner_hash}:{node_id}:catalog",
+        "ttl_s":  RUNTIME_FILES_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+    _runtime_files_push_cache.update(ts=now, pushes=pushes)
+    return pushes
 
 
 # ── Crons list cache push (cloud#948 — Crons tab fix) ───────────────────────
