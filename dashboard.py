@@ -117,6 +117,7 @@ from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_tr
 from routes.compliance import bp_compliance
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
+from routes.runtime_memory import bp_runtime_memory
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
@@ -11890,6 +11891,7 @@ def detect_config(args=None):
         app.register_blueprint(bp_nemoclaw)
         app.register_blueprint(bp_compliance)
     app.register_blueprint(bp_skills)
+    app.register_blueprint(bp_runtime_memory)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)

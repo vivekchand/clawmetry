@@ -25447,3 +25447,294 @@ async function checkLicenseExpiry() {
   }
 }
 setTimeout(checkLicenseExpiry, 1200);
+// ─────────────────────────────────────────────────────────────────────────
+// Runtime Memory & Skills browser (multi-runtime file explorer).
+//
+// Each supported runtime stores its long-lived memory and its skills in
+// different places on disk (see clawmetry/runtime_memory.py). This module
+// renders two things across the Memory + Skills tabs:
+//   1. A chip bar of runtimes (dimmed if not present on this machine)
+//   2. A file-browser view (left tree, right preview) for the picked runtime
+//
+// OpenClaw remains the default; picking it hides the browser and shows the
+// existing rich Memory / Skills UI. All other runtimes route through the
+// browser. Backwards compatible — the old view is untouched.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmRuntimeCatalog = null;
+var _cmRuntimeSelected = { memory: 'openclaw', skills: 'openclaw' };
+
+function _cmRuntimeIsCloud() {
+  try {
+    return typeof window !== 'undefined' && window.location &&
+           /clawmetry\.com/.test(window.location.hostname);
+  } catch (e) { return false; }
+}
+
+async function _cmRuntimeFetchCatalog(force) {
+  if (_cmRuntimeCatalog && !force) return _cmRuntimeCatalog;
+  try {
+    var r = await fetch('/api/runtimes/memory-catalog');
+    if (!r.ok) throw new Error('http ' + r.status);
+    _cmRuntimeCatalog = await r.json();
+  } catch (e) {
+    _cmRuntimeCatalog = { categories: [], runtimes: [] };
+  }
+  return _cmRuntimeCatalog;
+}
+
+function _cmRuntimeIcon(id) {
+  var map = {
+    openclaw: '🦀', claude_code: '🅲', codex: '🅾', cursor: '🅲',
+    antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
+    qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
+    picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
+    n8n: '🅽', grok: '🅶',
+  };
+  return map[id] || '•';
+}
+
+function _cmRuntimeChip(runtime, selected, tab, category) {
+  var count = 0;
+  if (category && runtime.counts) count = runtime.counts[category] || 0;
+  else if (runtime.counts) {
+    Object.keys(runtime.counts).forEach(function(k) { count += runtime.counts[k] || 0; });
+  }
+  var isSel = runtime.id === selected;
+  var isPresent = !!runtime.present;
+  var bg = isSel ? '#6366f1' : (isPresent ? 'var(--bg-secondary)' : 'transparent');
+  var color = isSel ? '#fff' : (isPresent ? 'var(--text-primary)' : 'var(--text-muted)');
+  var border = isSel ? '#6366f1' : 'var(--border-primary)';
+  var op = (isPresent || isSel) ? 1 : 0.55;
+  var badge = count > 0
+    ? '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>'
+    : '';
+  return '<div class="cm-runtime-chip" data-runtime="' + runtime.id + '" '
+    + 'onclick="cmRuntimeSelect(\'' + tab + '\',\'' + runtime.id + '\')" '
+    + 'style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;'
+    + 'background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';opacity:' + op + ';'
+    + 'display:inline-flex;align-items:center;gap:4px;" title="' + escHtml(runtime.label)
+    + (isPresent ? '' : ' (not detected on this machine)') + '">'
+    + escHtml(runtime.label) + badge + '</div>';
+}
+
+async function cmRuntimeMountChips(chipsEl) {
+  if (!chipsEl) return;
+  var tab = chipsEl.getAttribute('data-tab') || 'memory';
+  var category = chipsEl.getAttribute('data-category') || null;
+  chipsEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Loading runtimes…</span>';
+  var cat = await _cmRuntimeFetchCatalog();
+  var runtimes = (cat.runtimes || []).slice();
+  // Sort: present first, then by label
+  runtimes.sort(function(a, b) {
+    if (!!a.present !== !!b.present) return a.present ? -1 : 1;
+    return (a.label || '').localeCompare(b.label || '');
+  });
+  var sel = _cmRuntimeSelected[tab] || 'openclaw';
+  var chips = runtimes.map(function(rt) {
+    return _cmRuntimeChip(rt, sel, tab, category);
+  });
+  chipsEl.innerHTML = chips.join('');
+}
+
+function cmRuntimeSelect(tab, runtimeId) {
+  _cmRuntimeSelected[tab] = runtimeId;
+  // Re-render both chip bars if present (keeps them in sync visually)
+  var chips = document.querySelectorAll('[id$="-runtime-chips"][data-tab="' + tab + '"]');
+  chips.forEach(function(el) { cmRuntimeMountChips(el); });
+  // Toggle native OpenClaw view vs runtime file browser
+  var browser = document.getElementById(tab + '-runtime-browser');
+  if (tab === 'memory') {
+    var nativeIds = ['memory-summary-view', 'memory-access-view', 'memory-all-view'];
+    if (runtimeId === 'openclaw') {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        // Only restore the summary view by default; the other two are toggled
+        // by memorySwitchView independently.
+        if (id === 'memory-summary-view') el.style.display = '';
+      });
+      if (browser) browser.style.display = 'none';
+    } else {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'memory'); }
+    }
+  } else if (tab === 'skills') {
+    var nativeIds = ['skills-summary-row', 'skills-list', 'skills-browser'];
+    if (runtimeId === 'openclaw') {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        if (id === 'skills-summary-row' || id === 'skills-list') el.style.display = '';
+      });
+      if (browser) browser.style.display = 'none';
+    } else {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'skills'); }
+    }
+  }
+}
+
+async function cmRuntimeMountBrowser(container, runtimeId, tab) {
+  if (!container) return;
+  container.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;">Loading '
+    + escHtml(runtimeId) + '…</div>';
+  var payload;
+  try {
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files';
+    if (tab === 'memory' || tab === 'skills') {
+      // No category filter — show everything the runtime exposes.
+    }
+    var r = await fetch(url);
+    if (!r.ok) throw new Error('http ' + r.status);
+    payload = await r.json();
+  } catch (e) {
+    container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
+      + escHtml(String(e)) + '</div>';
+    return;
+  }
+  var groups = (payload.groups || []).filter(function(g) { return g.exists; });
+  var absent = (payload.groups || []).filter(function(g) { return !g.exists; });
+  var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
+
+  if (!groups.length) {
+    container.innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
+      + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">Nothing found on disk for ' + escHtml(payload.label || runtimeId) + '</div>'
+      + 'ClawMetry looks for this runtime\'s memory and skills at these paths:'
+      + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
+      + absent.map(function(g) {
+          return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.category)
+            + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
+        }).join('')
+      + '</div>'
+      + '<div style="margin-top:14px;font-size:11px;">Install ' + escHtml(payload.label || runtimeId)
+      + ' or drop files at one of these paths to make them appear here.</div>'
+      + '</div>';
+    return;
+  }
+
+  // Build the two-pane layout: left tree, right preview.
+  var treeHtml = groups.map(function(g, gi) {
+    var scopePill = '<span style="font-size:9px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:0 5px;margin-left:6px;color:var(--text-muted);">'
+      + escHtml(g.scope) + '</span>';
+    var catPill = '<span style="font-size:9px;background:rgba(99,102,241,0.15);color:#a5b4fc;border-radius:8px;padding:0 5px;margin-left:4px;">'
+      + escHtml(g.category) + '</span>';
+    var files = (g.files || []).map(function(f, fi) {
+      var name = f.path || g.label || '(file)';
+      var basename = name.split('/').pop();
+      var indent = (name.split('/').length - 1) * 12;
+      var kb = f.size >= 1024 ? (f.size / 1024).toFixed(1) + 'K' : f.size + 'B';
+      return '<div class="cm-rt-file" data-gi="' + gi + '" data-fi="' + fi
+        + '" onclick="cmRuntimeOpenFile(this,\'' + runtimeId + '\','
+        + gi + ',' + fi + ')" style="padding:3px 10px 3px ' + (18 + indent) + 'px;font-size:11.5px;cursor:pointer;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center;gap:8px;" '
+        + 'title="' + escHtml(name) + '">'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(basename) + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);flex-shrink:0;">' + kb + '</span>'
+        + '</div>';
+    }).join('');
+    return '<div class="cm-rt-group" style="margin-bottom:8px;">'
+      + '<div style="padding:6px 10px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);display:flex;align-items:center;flex-wrap:wrap;">'
+      + escHtml(g.label) + catPill + scopePill + '</div>'
+      + '<div style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:10px;color:var(--text-muted);padding:0 10px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(g.root) + '">' + escHtml(g.root) + '</div>'
+      + files + '</div>';
+  }).join('');
+
+  container.innerHTML =
+    '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
+    + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
+    + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
+    + escHtml(payload.label) + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
+    + '</div>' + treeHtml + '</div>'
+    + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
+    + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
+    + '<div id="cm-rt-file-body-' + tab + '" style="flex:1;overflow:auto;padding:16px 22px;background:var(--bg-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12.5px;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;">'
+    + '<div style="color:var(--text-muted);font-family:inherit;">Pick a file on the left to view its contents.</div>'
+    + '</div></div></div>';
+
+  // Stash the payload on the container so cmRuntimeOpenFile can look up
+  // (root, path) by (gi, fi) without another fetch.
+  container._cmRuntimePayload = payload;
+}
+
+async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
+  var container = clickEl.closest('.runtime-file-browser');
+  if (!container || !container._cmRuntimePayload) return;
+  var tab = container.getAttribute('data-tab') || 'memory';
+  var groups = container._cmRuntimePayload.groups || [];
+  var group = groups[gi];
+  if (!group) return;
+  var file = (group.files || [])[fi];
+  if (!file) return;
+
+  // Highlight selection
+  container.querySelectorAll('.cm-rt-file').forEach(function(el) {
+    el.style.background = ''; el.style.color = 'var(--text-primary)';
+  });
+  clickEl.style.background = 'rgba(99,102,241,0.15)';
+  clickEl.style.color = '#a5b4fc';
+
+  var header = document.getElementById('cm-rt-file-header-' + tab);
+  var body = document.getElementById('cm-rt-file-body-' + tab);
+  if (header) header.innerHTML = escHtml(group.root + '/' + (file.path || ''));
+  if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
+
+  try {
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
+      + '/file?root=' + encodeURIComponent(group.root)
+      + '&path=' + encodeURIComponent(file.path || '');
+    var r = await fetch(url);
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    var content = d.content || '';
+    var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
+    var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
+    if (header) header.innerHTML =
+      '<span style="color:var(--text-primary);font-weight:600;">' + escHtml((file.path || group.label || '')) + '</span>'
+      + '<span style="opacity:0.6;">·</span><span>' + escHtml(sizeStr) + '</span>'
+      + (mstr ? '<span style="opacity:0.6;">·</span><span>' + escHtml(mstr) + '</span>' : '')
+      + '<span style="opacity:0.6;">·</span><span>' + escHtml(d.language || 'text') + '</span>';
+    if (body) {
+      // Render markdown as preview when we have it (matches Memory tab UX),
+      // otherwise show raw content. cmSafeMarkdown is defined earlier in
+      // app.js and sanitizes output.
+      if ((d.language || '') === 'markdown' && typeof cmSafeMarkdown === 'function') {
+        body.style.whiteSpace = 'normal';
+        body.style.fontFamily = '';
+        body.innerHTML = cmSafeMarkdown(content);
+      } else {
+        body.style.whiteSpace = 'pre-wrap';
+        body.style.fontFamily = "'JetBrains Mono','SF Mono',monospace";
+        body.textContent = content;
+      }
+    }
+  } catch (e) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">Failed to load: '
+      + escHtml(String(e && e.message || e)) + '</div>';
+  }
+}
+
+// Hook into tab switches so the chip bars mount on first paint.
+(function _cmRuntimeInstallHooks() {
+  var origSwitchTab = (typeof switchTab === 'function') ? switchTab : null;
+  if (!origSwitchTab || origSwitchTab._cmRuntimeWrapped) return;
+  var wrapped = function(name) {
+    var out = origSwitchTab.apply(this, arguments);
+    try {
+      if (name === 'memory') {
+        cmRuntimeMountChips(document.getElementById('memory-runtime-chips'));
+      } else if (name === 'skills') {
+        cmRuntimeMountChips(document.getElementById('skills-runtime-chips'));
+      }
+    } catch (e) {}
+    return out;
+  };
+  wrapped._cmRuntimeWrapped = true;
+  window.switchTab = wrapped;
+})();
