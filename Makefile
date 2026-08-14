@@ -90,7 +90,7 @@ lint-daemon-allowlist:
 
 lint-py:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Python syntax OK')"
-	ruff check dashboard.py dashboard_claudecode.py clawmetry/
+	ruff check dashboard.py clawmetry/
 
 # v0.12.165 shipped clawmetry/static/js/app.js with a missing `}` (PR #753).
 # Browsers threw "Unexpected end of input" on first parse, killing every

@@ -6517,7 +6517,7 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
-    "grok": "Grok", "qm": "QM",
+    "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6560,6 +6560,9 @@ def _runtime_data_paths(rid: str) -> list:
         "copilot": [os.path.join(home, ".copilot", "session-state")],
         "grok": [os.path.join(home, ".grok", d) for d in
                  ("logs", "sessions")],
+        "deepseek_harness": [os.path.join(
+            os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
+                               os.path.join(home, ".dsh")), "sessions")],
     }
     return _M.get(rid, [])
 
@@ -6691,6 +6694,9 @@ def _detect_runtimes_lite() -> list:
         "copilot": [os.path.join(home, ".copilot", "session-state")],
         "grok": [os.path.join(home, ".grok", d) for d in
                  ("logs", "sessions")],
+        "deepseek_harness": [os.path.join(
+            os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
+                               os.path.join(home, ".dsh")), "sessions")],
     }
     for rid, paths in _present.items():
         try:
@@ -11946,6 +11952,11 @@ _FAMILY_ADAPTER_SPECS = (
     # definitionally a Pro user. Adapter reads DATABASE_URL /
     # CLAWMETRY_QM_DATABASE_URL in read-only mode.
     ("clawmetry_pro.adapters.qm", "QMAdapter"),
+    # DeepSeek Harness (github.com/deepseek-ai/deepseek-harness) — JSONL
+    # session logs under $DSH_HOME/sessions (default ~/.dsh/sessions),
+    # zstd-compressed by default; the adapter lazily installs `zstandard`
+    # only after compressed dsh data is positively detected.
+    ("clawmetry_pro.adapters.deepseek_harness", "DeepSeekHarnessAdapter"),
 )
 
 
@@ -13146,7 +13157,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok", "qm",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness",
 })
 
 

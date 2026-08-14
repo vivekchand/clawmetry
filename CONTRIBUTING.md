@@ -42,7 +42,6 @@ clawmetry/
 ├── routes/               # 🧩 Per-feature Blueprints (sessions, channels, brain, usage, health, …)
 ├── clawmetry/            # 📦 Installable package — CLI, sync daemon, proxy, interceptor, providers
 ├── history.py            # 📈 Optional time-series collector (SQLite)
-├── dashboard_claudecode.py  # 🪶 Claude Code dashboard variant
 ├── README.md             # 📖 Documentation
 ├── setup.py              # 📦 Package configuration
 ├── requirements.txt      # 🔧 Dependencies

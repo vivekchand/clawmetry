@@ -262,6 +262,14 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "until": raw.get("until"),
             "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=2000),
         }
+    if shape == "replay_events":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("replay_events shape requires session_id")
+        return {
+            "session_id": sid,
+            "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
+        }
     raise ValueError(f"unknown shape: {shape}")
 
 
@@ -479,6 +487,26 @@ def http_agent_graph():
     try:
         args = _coerce_args("agent_graph", request.args.to_dict())
         return jsonify(_dispatch("agent_graph", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/replay-events/<path:session_id>", methods=["GET"])
+def http_replay_events(session_id: str):
+    """Flat canonical replay-event rows for one session (#4813).
+
+    Powers ``/api/replay-tree/<session_id>`` (the tree-building endpoint
+    lives in ``routes/sessions.py``). Returned rows are ts-ascending; the
+    endpoint layer groups them into turns/delegations/workflows.
+    Empty ``rows`` is the honest shape until adapter mappers land.
+    """
+    try:
+        raw = dict(request.args.to_dict())
+        raw["session_id"] = session_id
+        args = _coerce_args("replay_events", raw)
+        return jsonify(_dispatch("replay_events", args))
+    except ValueError as e:
+        return jsonify({"error": str(e)[:300]}), 400
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 
@@ -745,6 +773,10 @@ _DAEMON_METHODS = frozenset({
     # /api/run-compare's quality rows. Read-only; routed through the daemon
     # proxy so the dashboard process never opens the writer-locked DuckDB.
     "query_session_quality",
+    # Evals drill-down (feat/evals-simplify): one-shot per-session eval detail
+    # for the Recently Scored row-click drawer. Read-only through the daemon
+    # so the dashboard never opens the writer-locked DuckDB itself.
+    "query_session_eval_detail",
     "health",
     # Issue #876 — NemoClaw guardrail enforcement events + metrics.
     # Routed through the daemon proxy so /api/nemoclaw/events and

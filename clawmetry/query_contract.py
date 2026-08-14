@@ -276,6 +276,18 @@ QUERY_CONTRACT: dict = {
                "spawn edges. Optional runtime arg scopes to one runtime "
                "('openclaw' matches legacy NULL agent_type).",
     },
+    "replay_events": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "limit": _arg(default=2000, lo=1, hi=10000),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_replay_events",
+        "doc": "Canonical replay-event rows for one session (#4813). Rows in "
+               "kind-agnostic order; the /api/replay-tree endpoint groups "
+               "them into turns/delegations/workflows/approvals.",
+    },
 }
 
 

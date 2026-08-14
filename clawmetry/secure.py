@@ -84,6 +84,13 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def build_hook_uninstall_cmd(numbat: str) -> list:
+    """The exact hook-uninstall invocation (pure; unit-tested) — shared by
+    `clawmetry secure disable` and `clawmetry uninstall` so both paths
+    de-register the same thing hook install registered."""
+    return [numbat, "hook", "uninstall", "--agent", "all"]
+
+
 def build_hook_install_cmd(numbat: str, port: int, emit: str,
                            agents: str = "all") -> list:
     """The exact hook-install invocation (pure; unit-tested). File sink is
@@ -114,6 +121,42 @@ def find_numbat() -> str | None:
     if managed.exists():
         return str(managed)
     return shutil.which("numbat")
+
+
+def managed_numbat() -> str | None:
+    """The numbat binary ONLY if `clawmetry secure enable` installed it
+    (i.e. it lives in ~/.clawmetry/bin). A numbat the user put on PATH
+    themselves returns None — clawmetry uninstall must never touch it."""
+    managed = numbat_binary_path()
+    return str(managed) if managed.exists() else None
+
+
+def drain_hooks_for_uninstall() -> tuple[bool, str]:
+    """Called by `clawmetry uninstall` BEFORE ~/.clawmetry is purged (the
+    binary must still exist to run its own uninstaller). If we installed
+    numbat, run `numbat hook uninstall --agent all` so no agent config is
+    left referencing a binary the purge is about to delete — the same
+    stale-hook bug class #4817 fixed for ClawMetry's own hooks.
+
+    Returns (acted, message). Never raises: a failed drain must not crash
+    the uninstall, but the message tells the user the manual command."""
+    numbat = managed_numbat()
+    if not numbat:
+        return (False, "")
+    try:
+        proc = subprocess.run(build_hook_uninstall_cmd(numbat),
+                              capture_output=True, text=True, timeout=120)
+        if proc.returncode == 0:
+            return (True, "numbat hooks removed from all agent configs")
+        err = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = err[-1] if err else f"exit {proc.returncode}"
+        return (False, f"numbat hook uninstall failed ({detail}); run "
+                       f"`{numbat} hook uninstall --agent all` manually "
+                       "before deleting ~/.clawmetry/bin")
+    except Exception as e:
+        return (False, f"numbat hook uninstall failed ({e}); run "
+                       f"`{numbat} hook uninstall --agent all` manually "
+                       "before deleting ~/.clawmetry/bin")
 
 
 def _http_get(url: str) -> bytes:
@@ -304,7 +347,7 @@ def cmd_disable(args) -> int:
     if not numbat:
         print("numbat: not installed — nothing to disable")
         return 0
-    proc = subprocess.run([numbat, "hook", "uninstall", "--agent", "all"],
+    proc = subprocess.run(build_hook_uninstall_cmd(numbat),
                           capture_output=True, text=True, timeout=120)
     sys.stdout.write(proc.stdout or "")
     sys.stderr.write(proc.stderr or "")

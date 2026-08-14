@@ -448,12 +448,12 @@ _MINIMAL_OSS_FREE_SNAPSHOT = {
     "prev_tier_unlocks": None,
     "next_tier_locks": None,
     "prev_tier_locks": None,
-    # Parity with Entitlement.to_dict()'s ``hard_blocked`` field (see
-    # clawmetry/trial_enforcement.py). This snapshot is the fall-through
-    # for a resolver import failure — if we can't import the entitlements
-    # module we also can't compute the block state, so default to False
-    # (fail-open, matching :func:`trial_enforcement._hard_block_flag_safe`).
+    # Parity with Entitlement.to_dict(). The fallback branch below merges
+    # the *live* value on top of these keys so the overlay never sees a
+    # stale ``False`` on the resolver-crashed path (which would let an
+    # expired-trial user silently through).
     "hard_blocked": False,
+    "free_only_mode": False,
 }
 
 
@@ -483,7 +483,16 @@ def api_entitlement():
             "api_entitlement: OSS-free fallback also failed, using minimal snapshot: %s",
             exc2,
         )
-    return jsonify(dict(_MINIMAL_OSS_FREE_SNAPSHOT))
+    snap = dict(_MINIMAL_OSS_FREE_SNAPSHOT)
+    # Merge the live hard-block signal on top of the frozen snapshot so the
+    # overlay never sees a stale ``False`` on the resolver-crashed path.
+    try:
+        from clawmetry import trial_enforcement as _te
+        snap["hard_blocked"] = bool(_te.is_hard_blocked())
+        snap["free_only_mode"] = bool(_te.free_only_mode_enabled())
+    except Exception:
+        pass
+    return jsonify(snap)
 
 
 @bp_entitlement.route("/api/entitlement/refresh", methods=["POST"])

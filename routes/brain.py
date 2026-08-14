@@ -200,6 +200,83 @@ def _v3_message_content_to_text(content) -> str:
     return ""
 
 
+_TOOL_INPUT_PRIORITY_KEYS = (
+    "command", "cmd",
+    "file_path", "path", "filename",
+    "pattern", "query", "q",
+    "url",
+    "description",
+    "prompt",
+)
+
+
+def _summarise_tool_call_input(inp) -> str:
+    """Compress a tool-call input blob into a one-line preview.
+
+    Prefers a known "primary" key (command for Bash, file_path for Read/Write,
+    pattern for Grep, url for WebFetch, description/prompt as narrative
+    fallbacks). Falls back to the first string-valued entry, then a compact
+    JSON dump. Kept generic — new tool schemas fall through to the JSON path
+    without changes here.
+    """
+    if inp is None:
+        return ""
+    if isinstance(inp, str):
+        return inp
+    if isinstance(inp, dict):
+        for k in _TOOL_INPUT_PRIORITY_KEYS:
+            v = inp.get(k)
+            if isinstance(v, str) and v:
+                return v
+        for k, v in inp.items():
+            if isinstance(v, str) and v:
+                return "{}={}".format(k, v)
+        try:
+            import json as _json
+            return _json.dumps(inp, default=str)
+        except Exception:
+            return str(inp)
+    if isinstance(inp, list):
+        return ", ".join(str(x) for x in inp if x)[:180]
+    return str(inp)
+
+
+def _summarise_tool_calls(data: dict) -> str:
+    """Render the tool-call payload as ``Tool(arg preview)`` for the Brain feed.
+
+    v3 mapper stores tool-call rows with ``data.tool_calls = [{name, input}]``
+    (Anthropic/OpenAI-flavoured) and a flat ``data.tool_name`` mirror; the
+    generic flat-key extractor below returns "" for these because the top-level
+    ``content`` is an empty string and ``name`` doesn't sit at the top. Without
+    this branch the Brain feed prints TOOL_CALL rows with a blank body.
+    """
+    tool_calls = data.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        parts = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name") or tc.get("tool_name") or ""
+            inp = tc.get("input")
+            if inp is None:
+                inp = tc.get("arguments")
+            summary = _summarise_tool_call_input(inp)
+            if len(summary) > 140:
+                summary = summary[:140] + "…"
+            if name and summary:
+                parts.append("{}({})".format(name, summary))
+            elif name:
+                parts.append(str(name))
+            elif summary:
+                parts.append(summary)
+        if parts:
+            return " · ".join(parts)
+    tn = data.get("tool_name")
+    if isinstance(tn, str) and tn:
+        return tn
+    return ""
+
+
 def _extract_brain_detail(row: dict) -> str:
     """Pull a human-readable ``detail`` snippet from a DuckDB event row, then
     collapse any OpenClaw ``<task-notification>`` envelope to its summary so the
@@ -253,6 +330,14 @@ def _extract_brain_detail_raw(row: dict) -> str:
         role = msg.get("role")
         if role in ("assistant", "user"):
             return "(thinking)" if role == "assistant" else ""
+
+    # --- Tool-call shape: data.tool_calls[i].{name,input} + data.tool_name --
+    # Emitted by the v3 mapper for TOOL_CALL rows. content is "" on these
+    # rows, so the generic flat-key loop below returns nothing and Brain
+    # prints a blank body next to the TOOL_CALL badge (user-visible bug).
+    tool_call_detail = _summarise_tool_calls(data)
+    if tool_call_detail:
+        return tool_call_detail
 
     # --- v3 mapper shape: top-level projection -----------------------------
     for k in ("finalPromptText", "completionText", "output", "result",

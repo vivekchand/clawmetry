@@ -300,4 +300,4 @@ jobs:
             echo "[Settings > Branches > main](https://github.com/vivekchand/clawmetry/settings/branches)"
             echo "This single check replaces the need to add all 4 individual check names."
           } >> "$GITHUB_STEP_SUMMARY"
-# ci-trigger
+# ci-trigger (auto-mergeability sweep 2026-08-14)

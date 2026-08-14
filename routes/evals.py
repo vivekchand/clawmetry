@@ -149,6 +149,48 @@ def evals_recent():
     return jsonify({"evals": rows, "limit": limit})
 
 
+@bp_evals.route("/api/evals/session/<session_id>", methods=["GET"])
+@gate("eval_suite")
+def evals_session_detail(session_id: str):
+    """Per-session drill-down for the Recently Scored row-click drawer.
+
+    Returns everything a user needs to answer "why did this session get this
+    score?" without leaving the Evals tab: the judge's full reason (not the
+    truncated one-liner the table shows), the rubric text the judge used, the
+    outcome + reliability + faithfulness signals the tile grid used to bury,
+    and every deterministic metric verdict the session accumulated.
+
+    Ungated (mirrors ``/api/evals/metrics`` + ``/api/evaluators``): the shape
+    is a read of already-computed values, no LLM call. 404 on unknown session.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return jsonify({"error": "session_id required"}), 400
+    detail = _store_via_daemon_or_direct("query_session_eval_detail", session_id=sid)
+    if not detail:
+        return jsonify({"error": "session not found"}), 404
+    metrics = _store_via_daemon_or_direct(
+        "query_eval_metrics", session_id=sid, metric_slug=None, limit=100,
+    ) or []
+    # Attach the catalogue name for each metric slug so the drawer can render
+    # a plain-language label ("Did the agent finish the job?") instead of a
+    # raw slug. Best-effort — a missing catalogue keeps the raw slug.
+    try:
+        from clawmetry import evaluators as _evaluators
+        by_slug = {e["slug"]: e for e in _evaluators.EVALUATOR_CATALOGUE}
+    except Exception:
+        by_slug = {}
+    for m in metrics:
+        spec = by_slug.get(m.get("metric_slug"))
+        if spec:
+            m["label"] = spec["name"]
+            m["category"] = spec["category"]
+    return jsonify({
+        "session":  detail,
+        "metrics":  metrics,
+    })
+
+
 @bp_evals.route("/api/evals/metrics", methods=["GET"])
 def evals_metrics():
     """Per-session, per-metric verdicts (#2862 resurrected). The built-in
