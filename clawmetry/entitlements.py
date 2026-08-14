@@ -219,6 +219,9 @@ RUNTIME_ALIASES = {
     "nano_claw": "nanoclaw",
     "deep-agents": "deepagents",
     "deep_agents": "deepagents",
+    "deepseek-harness": "deepseek_harness",
+    "deepseekharness": "deepseek_harness",
+    "dsh": "deepseek_harness",
 }
 
 TIER_LABELS = {
@@ -5481,7 +5484,15 @@ def canonical_runtime(runtime: str) -> str:
         return ""
     if rt in ALL_RUNTIMES:
         return rt
-    return RUNTIME_ALIASES.get(rt, rt)
+    if rt in RUNTIME_ALIASES:
+        return RUNTIME_ALIASES[rt]
+    # Any underscore runtime accepts its dashed form even when the alias
+    # table misses it (deepseek_harness shipped without one and the gap
+    # only surfaced under a CI hash seed that iterated it first).
+    swapped = rt.replace("-", "_")
+    if swapped in ALL_RUNTIMES:
+        return swapped
+    return rt
 
 
 def runtime_label(runtime: str) -> str:
