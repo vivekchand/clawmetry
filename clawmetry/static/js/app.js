@@ -25984,6 +25984,47 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   // header reading "skills,commands,agents,hooks" is an implementation detail.
   var catWord = (tab === 'skills') ? 'skills' : 'memory';
   try {
+    if (typeof window._cmCloudRuntimeFiles === 'function') {
+      // Cloud: the container has no runtime home dirs, so /api/runtimes/*
+      // would list nothing. The cloud dashboard installs this override,
+      // which decrypts the heartbeat file snapshot client-side and slices
+      // out (runtime, category). Contract: {pending:true} on cache miss,
+      // {needkey:true} with no stored E2E key, else the /files shape with
+      // per-file `content` inline (there is no per-file cloud endpoint).
+      payload = await window._cmCloudRuntimeFiles(runtimeId, category);
+      if (payload && payload.pending) {
+        var tries = (container._cmRtPollTries || 0);
+        if (tries < 8) {
+          container._cmRtPollTries = tries + 1;
+          container.innerHTML =
+            '<div style="padding:60px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+            + '<div style="font-size:28px;margin-bottom:10px;">🔄</div>'
+            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;">Syncing files from your machine…</div>'
+            + 'Your agent pushes its memory &amp; skills files on the next heartbeat.<br>This usually takes under a minute.</div>';
+          setTimeout(function() {
+            if (container.style.display !== 'none' && _cmRuntimeSelected[tab] === runtimeId) {
+              cmRuntimeMountBrowser(container, runtimeId, tab);
+            }
+          }, 12000);
+          return;
+        }
+        container.innerHTML =
+          '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+          + 'No file snapshot from this node yet. Make sure the ClawMetry daemon is running '
+          + '(<code>clawmetry status</code>) and up to date, then check back.</div>';
+        return;
+      }
+      container._cmRtPollTries = 0;
+      if (payload && payload.needkey) {
+        if (typeof window._cmRenderKeyPrompt === 'function') {
+          window._cmRenderKeyPrompt(container);
+        } else {
+          container.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;">'
+            + 'Files are end-to-end encrypted. Open the Memory tab to enter your secret key.</div>';
+        }
+        return;
+      }
+    } else {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files'
       + '?category=' + encodeURIComponent(category);
     var r = await fetch(url);
@@ -26005,6 +26046,7 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     }
     if (!r.ok) throw new Error('http ' + r.status);
     payload = await r.json();
+    }
   } catch (e) {
     container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
       + escHtml(String(e)) + '</div>';
@@ -26122,12 +26164,20 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
 
   try {
-    var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
-      + '/file?root=' + encodeURIComponent(group.root)
-      + '&path=' + encodeURIComponent(file.path || '');
-    var r = await fetch(url);
-    var d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    var d;
+    if (typeof file.content === 'string') {
+      // Cloud: contents ship inline in the decrypted heartbeat snapshot —
+      // there is no per-file cloud endpoint to fetch from.
+      var lang = /\.(md|mdc|markdown)$/i.test(file.path || group.root || '') ? 'markdown' : 'text';
+      d = { content: file.content, size: file.size, mtime: file.mtime, language: lang };
+    } else {
+      var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
+        + '/file?root=' + encodeURIComponent(group.root)
+        + '&path=' + encodeURIComponent(file.path || '');
+      var r = await fetch(url);
+      d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    }
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
     var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
