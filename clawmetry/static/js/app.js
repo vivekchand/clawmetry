@@ -25980,6 +25980,9 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   // like a copy of Memory; splitting Skills down to `skills` alone would
   // instead leave commands/agents/hooks collected but displayed nowhere.
   var category = (tab === 'skills') ? 'skills,commands,agents,hooks' : 'memory';
+  // What to CALL that set in copy. The tab name, not the raw filter — a
+  // header reading "skills,commands,agents,hooks" is an implementation detail.
+  var catWord = (tab === 'skills') ? 'skills' : 'memory';
   try {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files'
       + '?category=' + encodeURIComponent(category);
@@ -26012,7 +26015,6 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
 
   if (!groups.length) {
-    var catWord = (category === 'skills') ? 'skills' : 'memory';
     var emptyHead = (runtimeId === 'all')
       ? 'No ' + catWord + ' files found for any runtime'
       : 'No ' + catWord + ' files found for ' + escHtml(payload.label || scopeLabel);
@@ -26069,7 +26071,7 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
     + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
     + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
-    + escHtml(payload.label || scopeLabel) + ' · ' + category + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
+    + escHtml(payload.label || scopeLabel) + ' · ' + catWord + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
     + '</div>' + treeHtml + '</div>'
     + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
     + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
