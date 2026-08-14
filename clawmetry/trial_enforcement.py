@@ -70,8 +70,8 @@ _FREE_ONLY_MARKER = os.path.expanduser("~/.clawmetry/free_only.marker")
 
 # Paid-runtime URL prefixes the request-time gate can use to classify a
 # request as paid-runtime scope even when the caller did NOT pass ``runtime=``.
-# This catches ``dashboard_claudecode.py``'s /api/sessions surface (mounted at
-# url_prefix="/") plus any future /api/<runtime>/ shard. Additive per runtime.
+# Defense-in-depth for any /api/<runtime>/ shard, present or future. Additive
+# per runtime.
 _PAID_URL_PREFIXES_BY_RUNTIME = {
     "claude_code": ("/api/claude_code/", "/api/claudecode/"),
     "codex": ("/api/codex/",),

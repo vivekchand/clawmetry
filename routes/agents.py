@@ -16,13 +16,11 @@ contained inside the adapter.
 Runtime gating
 --------------
 ``/api/agents/<name>/sessions`` returns per-runtime session data and is
-therefore gated with :func:`require_runtime` — mirrors what
-``dashboard_claudecode.py`` does with ``@gate_runtime("claude_code")``
-for the standalone Claude Code dashboard. The two detection endpoints
-(``/api/agents`` and ``/api/agents/<name>``) stay ungated so the UI can
-render locked runtime chips + an upgrade CTA in context (same reasoning
-``dashboard_claudecode.py`` uses to keep ``/api/health`` reachable in
-enforce mode).
+therefore gated with :func:`require_runtime` so a locked runtime 402s.
+The two detection endpoints (``/api/agents`` and ``/api/agents/<name>``)
+stay ungated so the UI can render locked runtime chips + an upgrade CTA
+in context, and diagnostic endpoints like ``/api/health`` remain reachable
+in enforce mode.
 """
 from __future__ import annotations
 

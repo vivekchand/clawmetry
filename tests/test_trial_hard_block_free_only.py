@@ -134,8 +134,9 @@ def test_free_only_mode_unknown_scope_stays_blocked(te):
 
 
 def test_classify_scope_url_prefix_wins(te):
-    """URL prefix classification catches dashboard_claudecode.py's routes even
-    when the caller did not pass ``runtime=``."""
+    """URL prefix classification treats /api/<paid-runtime>/* as paid scope
+    even when the caller did not pass ``runtime=`` — defense in depth for any
+    per-runtime shard the app may grow."""
     ent = _expired_trial_ent()
     te.set_free_only_mode(True)
     # No runtime kwarg, but path is /api/claude_code/* → paid.
