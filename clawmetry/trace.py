@@ -291,7 +291,7 @@ def tool_call(
     trace_id = stack[0]._trace_id if stack else _rand_hex(16)
 
     sp = _Span(name, trace_id=trace_id, parent_span_id=parent_span_id)
-    sp._attrs.append(_otlp_attr("gen_ai.operation.name", "tool"))
+    sp._attrs.append(_otlp_attr("gen_ai.operation.name", "execute_tool"))
     if input is not None:
         try:
             sp._attrs.append(_otlp_attr("gen_ai.tool.input", json.dumps(input)[:4096]))
