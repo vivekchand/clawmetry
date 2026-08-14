@@ -324,7 +324,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.698"
+__version__ = "0.12.697"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11937,7 +11937,10 @@ def detect_config(args=None):
     # When the resolver reports an unpaid / expired entitlement, every non-
     # allowlisted request 402s with a machine-readable body carrying
     # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
-    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. See
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. The gate honours a per-request
+    # ``runtime`` scope hint so an operator who chose the "continue with free
+    # runtimes only" fallback (POST /api/trial/continue-free) still gets the
+    # OpenClaw / NanoClaw surface while paid runtimes stay blocked. See
     # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
     from clawmetry import trial_enforcement as _te_gate
 
@@ -11947,7 +11950,21 @@ def detect_config(args=None):
             path = request.path or ""
             if _te_gate.allowlisted_path(path):
                 return None
-            if not _te_gate.is_hard_blocked():
+            # Runtime hint sources, in preference order:
+            #   1. ?runtime=<name> (canonical UI param)
+            #   2. ?scope=<name>   (older alias some routes still emit)
+            #   3. X-Clawmetry-Runtime header (used by CLI + adapters)
+            rt_hint = None
+            try:
+                rt_hint = (
+                    (request.args.get("runtime") or "").strip()
+                    or (request.args.get("scope") or "").strip()
+                    or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                    or None
+                )
+            except Exception:
+                rt_hint = None
+            if not _te_gate.is_hard_blocked(path=path, runtime=rt_hint):
                 return None
             payload = _te_gate.block_payload()
             resp = jsonify(payload)
@@ -12500,6 +12517,18 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
+      {# Memory + Skills promoted from Advanced to top-level (2026-08-14) after
+         the multi-runtime file browser landed (PR #4821). Previously buried,
+         nobody could find their agent's on-disk memory files. Now every user
+         sees them one click away, per-runtime scoped. #}
+      <div class="left-nav-item" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
+        <span class="left-nav-icon" aria-hidden="true">&#128218;</span>
+        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      </div>
+      <div class="left-nav-item" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
+        <span class="left-nav-icon" aria-hidden="true">&#128736;</span>
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
+      </div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
         <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
@@ -12585,9 +12614,7 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
-        <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
-      </div>
+      {# Memory + Skills moved to top-level nav 2026-08-14 (PR #4821 follow-up) — no longer buried in Advanced. #}
       <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live runtime log stream">
         <span class="left-nav-label">Logs</span>
       </div>
@@ -12596,9 +12623,6 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
         <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
         <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>

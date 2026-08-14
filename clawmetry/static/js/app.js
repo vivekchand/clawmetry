@@ -105,6 +105,20 @@
       + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
       + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
       + '  border-radius: 3px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
+      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #b5b8be;'
+      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
+      + '  transition: color 120ms ease, border-color 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
+      + '  color: #e8eaed; border-color: #4a5058;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
+      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center; line-height: 1.45;'
       + '}';
     document.head.appendChild(st);
   }
@@ -123,6 +137,17 @@
     var subline = daysLeft !== null && daysLeft > 0
       ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
       : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
+    var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
+      ? state.free_runtimes
+      : ['openclaw', 'nemoclaw'];
+    var freeRuntimesLabel = freeRuntimes
+      .map(function (r) {
+        if (r === 'openclaw') return 'OpenClaw';
+        if (r === 'nemoclaw') return 'NanoClaw';
+        return r;
+      })
+      .join(' + ');
     el.innerHTML = ''
       + '<div class="cm-hbo-card">'
       + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
@@ -136,6 +161,10 @@
       + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
       + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
       + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
+      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
+      + '  </button>'
+      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
       + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
       + '</div>';
 
@@ -234,6 +263,44 @@
         });
     });
 
+    // Free-mode escape: expired-trial users can drop back to
+    // OpenClaw/NanoClaw-only mode instead of paying. Posts to the
+    // continue-free endpoint (allowlisted), then reloads to a
+    // free-runtime-scoped URL so the gate short-circuits and the overlay
+    // stays down. Paid-runtime tabs on the free scope render a locked
+    // padlock CTA (handled by the existing paywall banner system).
+    var freeBtn = el.querySelector('.cm-hbo-free');
+    if (freeBtn) {
+      freeBtn.addEventListener('click', function () {
+        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+        statusEl.className = 'cm-hbo-status';
+        statusEl.textContent = 'Switching to free mode…';
+        freeBtn.disabled = true;
+        activateBtn.disabled = true;
+        fetch(ep, { method: 'POST' })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function () {
+            statusEl.className = 'cm-hbo-status ok';
+            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
+            // Force the URL onto a free runtime so the gate lets the page
+            // in even though the entitlement is still expired.
+            try {
+              var url = new URL(window.location.href);
+              url.searchParams.set('runtime', 'openclaw');
+              window.location.replace(url.toString());
+            } catch (e) {
+              window.location.replace('/?runtime=openclaw');
+            }
+          })
+          .catch(function (err) {
+            freeBtn.disabled = false;
+            activateBtn.disabled = false;
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
+          });
+      });
+    }
+
     // Belt & braces: block ESC / TAB-out / right-click chrome from letting
     // the user reach controls behind the overlay while it's mounted.
     el.addEventListener('keydown', function (e) {
@@ -266,8 +333,24 @@
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 
+  function currentRuntimeScope() {
+    try {
+      var u = new URL(window.location.href);
+      var r = (u.searchParams.get('runtime') || u.searchParams.get('scope') || '').trim();
+      return r || '';
+    } catch (e) { return ''; }
+  }
+
+  function withRuntime(path) {
+    var scope = currentRuntimeScope();
+    if (!scope) return path;
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    return path + sep + 'runtime=' + encodeURIComponent(scope);
+  }
+
   function refreshAndMaybeUnblock(force) {
     var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    endpoint = withRuntime(endpoint);
     var opts = force ? { method: 'POST' } : { method: 'GET' };
     return fetch(endpoint, opts)
       .then(function (r) { return r.json().catch(function () { return {}; }); })
@@ -26042,4 +26125,197 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   };
   wrapped._cmRuntimeWrapped = true;
   window.switchTab = wrapped;
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Runtime-aware replay tree — skeleton (#4813 part 3)
+// ═══════════════════════════════════════════════════════════════════════
+// Fetches /api/replay-tree/<sid> and renders the nested runtime-aware
+// view (mode chip, workflow lane, turn chapters with inline delegations,
+// approvals rail). Dormant until adapter mappers land — when the tree
+// returns row_count=0 the caller falls back to the flat _replayRenderCurrent
+// path (no dead UI per FLYWHEEL §0a.4).
+//
+// Wire-up into openTranscriptModal happens in #4814 (mode + approvals)
+// once there's real data to render. For now the skeleton is reachable
+// via window._debugReplayTree(sessionId) for manual verification during
+// per-runtime mapper development.
+(function _cmReplayTree() {
+  'use strict';
+
+  async function fetchReplayTree(sessionId) {
+    var url = '/api/replay-tree/' + encodeURIComponent(sessionId);
+    var r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('replay-tree ' + r.status);
+    return await r.json();
+  }
+
+  function _escape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  // Runtime dispatcher — mirrors the pattern at app.js:16729 (Harness tab
+  // templates). Each runtime can register a per-kind override; unknown
+  // runtimes fall through to the neutral renderer.
+  var _KIND_RENDERERS = {};   // key = runtime + ':' + kind, value = fn(ev) -> html
+  function registerKindRenderer(runtime, kind, fn) {
+    _KIND_RENDERERS[runtime + ':' + kind] = fn;
+  }
+  function _renderEvent(ev, runtime) {
+    var custom = _KIND_RENDERERS[(runtime || ev.runtime) + ':' + ev.kind];
+    if (typeof custom === 'function') return custom(ev);
+    // Neutral fallback — one line per event, prefix by kind.
+    var kindLabel = _escape(ev.kind || 'event');
+    var body = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+      body = _escape(JSON.stringify(ev.payload).slice(0, 200));
+    }
+    return '<div class="replay-tree-event replay-tree-kind-' +
+           _escape((ev.kind || '').split('.')[0]) + '">' +
+           '<span class="replay-tree-kind">' + kindLabel + '</span>' +
+           (body ? '<span class="replay-tree-body">' + body + '</span>' : '') +
+           '</div>';
+  }
+
+  function _renderDelegations(delegations, runtime, depth) {
+    depth = depth || 1;
+    if (!delegations || !delegations.length) return '';
+    var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
+    for (var i = 0; i < delegations.length; i++) {
+      var d = delegations[i];
+      html += '<details class="replay-tree-delegation" open>';
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      for (var j = 0; j < (d.events || []).length; j++) {
+        html += _renderEvent(d.events[j], runtime);
+      }
+      // Nested delegations render recursively — arbitrary depth (issue
+      // #4815 Claude Code Task nesting stresses this).
+      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _renderTurn(turn, runtime) {
+    var html = '<section class="replay-tree-turn" data-turn-id="' +
+               _escape(turn.turn_id) + '">';
+    // Approvals rail summary badge on the turn header.
+    var approvalCount = (turn.approvals || []).length;
+    var deniedCount = (turn.approvals || []).filter(function(a) {
+      return a.approval && a.approval.status === 'denied';
+    }).length;
+    var badges = '';
+    if (approvalCount) {
+      badges += ' <span class="replay-tree-badge approvals" title="' +
+                approvalCount + ' approvals (' + deniedCount + ' denied)">' +
+                '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
+                '</span>';
+    }
+    html += '<header class="replay-tree-turn-header">' +
+            '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
+            badges + '</header>';
+    // Events (llm.*, tool.*, thinking, mode.changed, compaction).
+    for (var i = 0; i < (turn.events || []).length; i++) {
+      html += _renderEvent(turn.events[i], runtime);
+    }
+    // Inline delegations under the turn that spawned them.
+    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += '</section>';
+    return html;
+  }
+
+  function _renderModeChip(mode) {
+    if (!mode || !mode.permission) return '';
+    var isYolo = mode.permission === 'bypassPermissions' || mode.permission === 'yolo';
+    return '<div class="replay-tree-mode-chip" data-yolo="' +
+           (isYolo ? '1' : '0') + '" title="sandbox: ' +
+           _escape(mode.sandbox || 'unknown') + '">' +
+           _escape(mode.permission) + '</div>';
+  }
+
+  function _renderWorkflows(workflows, runtime) {
+    if (!workflows || !workflows.length) return '';
+    var html = '<div class="replay-tree-workflows">';
+    for (var i = 0; i < workflows.length; i++) {
+      var wf = workflows[i];
+      html += '<details class="replay-tree-workflow" open>';
+      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
+              (wf.events || []).length + ' stages)</summary>';
+      for (var j = 0; j < (wf.events || []).length; j++) {
+        html += _renderEvent(wf.events[j], runtime);
+      }
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTree(tree, mountEl) {
+    if (!mountEl) return false;
+    if (!tree || !tree.row_count) {
+      // Honest empty state — caller falls back to the flat renderer.
+      mountEl.innerHTML = '';
+      return false;
+    }
+    var html = '<div class="replay-tree" data-runtime="' +
+               _escape(tree.runtime || 'unknown') + '">';
+    html += _renderModeChip(tree.mode);
+    html += _renderWorkflows(tree.workflows, tree.runtime);
+    for (var i = 0; i < (tree.turns || []).length; i++) {
+      html += _renderTurn(tree.turns[i], tree.runtime);
+    }
+    html += '</div>';
+    mountEl.innerHTML = html;
+    return true;
+  }
+
+  async function debugReplayTree(sessionId) {
+    // Manual verification hook — creates a floating panel with the
+    // rendered tree. Adapter authors call this to visualize their
+    // iter_replay_events output during development.
+    var panel = document.getElementById('_replay-tree-debug-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_replay-tree-debug-panel';
+      panel.style.cssText = 'position:fixed;top:20px;right:20px;width:600px;' +
+        'max-height:80vh;overflow:auto;background:var(--bg-elevated,#111);' +
+        'color:var(--text,#eee);border:1px solid var(--border,#444);padding:12px;' +
+        'z-index:10000;font-family:monospace;font-size:12px;';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:none;color:inherit;border:none;font-size:20px;cursor:pointer;';
+      close.onclick = function() { panel.remove(); };
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = '<div>Fetching /api/replay-tree/' +
+                      _escape(sessionId) + ' …</div>';
+    try {
+      var tree = await fetchReplayTree(sessionId);
+      var mount = document.createElement('div');
+      panel.appendChild(mount);
+      var rendered = renderTree(tree, mount);
+      if (!rendered) {
+        mount.innerHTML = '<div style="color:var(--text-muted,#888);padding:16px;">' +
+          'Empty tree — no replay_events for this session yet. ' +
+          'Adapter mappers land in #4815 (Claude Code), #4816 (OpenClaw), ' +
+          'and 13 Pro adapter issues.</div>';
+      }
+    } catch (e) {
+      panel.innerHTML += '<div style="color:#f66;">error: ' +
+                        _escape(String(e)) + '</div>';
+    }
+  }
+
+  // Public surface — small, so #4814 and per-runtime mappers can extend.
+  window._cmReplayTree = {
+    fetchReplayTree: fetchReplayTree,
+    renderTree: renderTree,
+    registerKindRenderer: registerKindRenderer,
+  };
+  window._debugReplayTree = debugReplayTree;
 })();
