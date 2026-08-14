@@ -117,6 +117,30 @@ def api_runtime_memory_catalog():
     })
 
 
+@bp_runtime_memory.route("/api/runtimes/all/files")
+def api_runtime_files_all():
+    """Aggregate every entitled runtime's files for one category.
+
+    A dedicated rule rather than a magic value inside
+    :func:`api_runtime_files` — Werkzeug matches this static rule ahead of
+    the ``<runtime_id>`` converter either way, and a grep for the URL the
+    frontend actually calls should land on a handler.
+
+    Never returns 402. This is the DEFAULT scope of the Memory and Skills
+    tabs, so paywalling it because the user also happens to have an
+    unentitled runtime installed would paywall the free runtimes they ARE
+    entitled to. Locked runtimes are simply left out of the sweep; the
+    conversion moment stays on an explicit per-runtime selection, which
+    still 402s below.
+    """
+    category = (request.args.get("category") or "").strip() or None
+    if category and category not in CATEGORIES:
+        return jsonify({"error": "invalid category"}), 400
+    allowed = [rt["id"] for rt in list_runtimes()
+               if not _runtime_is_locked(rt["id"])]
+    return jsonify(list_all_files(category=category, allowed=allowed))
+
+
 @bp_runtime_memory.route("/api/runtimes/<runtime_id>/files")
 def api_runtime_files(runtime_id: str):
     """List every file under one runtime, grouped by root.
@@ -139,9 +163,10 @@ def api_runtime_files(runtime_id: str):
     if category and category not in CATEGORIES:
         return jsonify({"error": "invalid category"}), 400
     if runtime_id == "all":
-        allowed = [rt["id"] for rt in list_runtimes()
-                   if not _runtime_is_locked(rt["id"])]
-        return jsonify(list_all_files(category=category, allowed=allowed))
+        # Defensive: the static rule above normally wins the match. Kept so
+        # a caller that reaches here (a blueprint mounted under a prefix, a
+        # hand-built url_for) still gets the aggregate rather than a 404.
+        return api_runtime_files_all()
     if _runtime_is_locked(runtime_id):
         return jsonify({
             "error": "upgrade_required",
