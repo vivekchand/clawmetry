@@ -10152,7 +10152,13 @@ var _CM_CAP_TABS = {
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals'];
+// memory + skills: the multi-runtime file browser (PR #4821) resolves every
+// runtime's on-disk memory/skills paths, so both tabs are node-level (not
+// gated by a per-adapter capability). Without this, the runtime chip bar
+// inside Memory/Skills would be unreachable because the whole tab was
+// hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
+// was selected in the top-of-page runtime dropdown.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','skills'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
