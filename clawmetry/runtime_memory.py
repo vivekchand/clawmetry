@@ -49,6 +49,7 @@ paths and this catalog's memory roots share the same on-disk prefix
 from __future__ import annotations
 
 import glob as _glob
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -126,6 +127,53 @@ def _openclaw_home() -> str:
     return _env_root("OPENCLAW_HOME", os.path.expanduser("~/.openclaw"))
 
 
+def _claude_plugin_skill_roots(claude_home: str) -> list:
+    """RootSpecs for Claude Code skills that ship inside installed plugins.
+
+    Most Claude Code users never create ``~/.claude/skills`` — their skills
+    arrive as plugins — so without this the Skills tab reads "nothing found"
+    on a machine with dozens of live skills.
+
+    The authority is ``plugins/installed_plugins.json``, NOT a walk of
+    ``~/.claude/plugins``:
+
+      - ``marketplaces/`` is the catalogue of AVAILABLE plugins. Walking it
+        lists skills the user has not installed.
+      - ``cache/`` retains superseded versions side by side (telegram 0.0.6
+        next to the live 0.0.7), so a blind walk double-counts.
+
+    Reading the manifest gives exactly the installPaths that are live. Never
+    raises — a malformed manifest just yields no plugin roots.
+    """
+    manifest = os.path.join(claude_home, "plugins", "installed_plugins.json")
+    out: list = []
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return out
+    seen: set = set()
+    for name, entries in (data.get("plugins") or {}).items():
+        if not isinstance(entries, list):
+            continue
+        for ent in entries:
+            path = (ent or {}).get("installPath") or ""
+            if not path:
+                continue
+            skills_dir = os.path.join(path, "skills")
+            if skills_dir in seen or not os.path.isdir(skills_dir):
+                continue
+            seen.add(skills_dir)
+            short = str(name).split("@")[0]
+            out.append(RootSpec(
+                "skills", skills_dir, ("**/SKILL.md",),
+                f"Plugin: {short}",
+                "project" if (ent or {}).get("scope") == "project" else "global",
+                max_depth=4,
+            ))
+    return out
+
+
 def _catalog() -> list:
     """Build the canonical runtime → roots catalog.
 
@@ -185,11 +233,9 @@ def _catalog() -> list:
                      label="Global skills", scope="global"),
             RootSpec("skills", os.path.join(ws, ".claude", "skills"),
                      label="Project skills", scope="project"),
-            # Most Claude Code users never write a ~/.claude/skills file —
-            # their skills arrive as plugins. Without this root the Skills
-            # tab read "nothing found" for a machine with 30+ live skills.
-            RootSpec("skills", os.path.join(claude_home, "plugins", "marketplaces"),
-                     ("**/SKILL.md",), "Plugin skills", "global", max_depth=8),
+            # Plugin skills are appended below from installed_plugins.json —
+            # see _claude_plugin_skill_roots() for why that file and not a
+            # walk of ~/.claude/plugins.
             RootSpec("agents", os.path.join(claude_home, "agents"),
                      ("*.md",), "Global sub-agents", "global"),
             RootSpec("agents", os.path.join(ws, ".claude", "agents"),
@@ -206,7 +252,7 @@ def _catalog() -> list:
                      label="Project settings.json", scope="project"),
             RootSpec("hooks", os.path.join(ws, ".claude", "settings.local.json"),
                      label="Project settings.local.json", scope="project"),
-        ),
+        ) + tuple(_claude_plugin_skill_roots(claude_home)),
     ))
 
     # ── Codex (OpenAI CLI) ──────────────────────────────────────────
@@ -543,7 +589,22 @@ def _walk_dir(root: str, include_globs: tuple, max_depth: int) -> list:
     if not root or not os.path.isdir(root):
         return out
     root_abs = os.path.abspath(root)
-    for cur_dir, dirs, files in os.walk(root_abs):
+    # followlinks=True: a skill directory is very often a SYMLINK
+    # (``<repo>/.claude/skills/x -> <repo>/.agents/skills/x`` is how one skill
+    # serves several runtimes). os.walk defaults to followlinks=False, which
+    # reports the link in ``dirs`` and never descends — the skill vanishes
+    # with no error. ``visited`` on realpath keeps a symlink cycle from
+    # walking forever.
+    visited: set = set()
+    for cur_dir, dirs, files in os.walk(root_abs, followlinks=True):
+        try:
+            real = os.path.realpath(cur_dir)
+        except OSError:
+            real = cur_dir
+        if real in visited:
+            dirs[:] = []
+            continue
+        visited.add(real)
         rel_dir = os.path.relpath(cur_dir, root_abs)
         depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
         if depth > max_depth:
