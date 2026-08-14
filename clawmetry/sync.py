@@ -8514,6 +8514,23 @@ def _build_memory_cache_pushes(config: dict) -> list:
             and (_now - float(_memory_push_state.get("ts") or 0)) < MEMORY_PUSH_MIN_INTERVAL_SEC):
         return []
 
+    # Catalog labels for the roots these rows came from, so a cloud viewer can
+    # head a group "Plugin: telegram" / "Global settings.json" the way the
+    # local browser does, instead of falling back to the last path segment
+    # (which renders every installed plugin as "skills" and one as "0.0.7").
+    # Derived here rather than stored per row: the label is static catalog
+    # config, not per-file data, and deriving costs one catalog walk per push.
+    root_meta: dict = {}
+    try:
+        from clawmetry import runtime_memory as _rm
+        for _entry in _rm.list_runtimes():
+            for _root in _entry.get("roots") or ():
+                root_meta[(_entry.get("id"), _root.get("root"))] = (
+                    _root.get("label") or "", _root.get("scope") or "",
+                )
+    except Exception:
+        root_meta = {}
+
     files: list[dict] = []
     contents: list[dict] = []
     seen: set = set()
@@ -8544,14 +8561,20 @@ def _build_memory_cache_pushes(config: dict) -> list:
         # file on a cloud that hasn't deployed yet. `rel` is the new
         # display-only field (path relative to the root it was found under).
         rel = path[len(root):].lstrip("/") if (root and path.startswith(root)) else path
+        rt_id = r.get("agent_type") or "openclaw"
+        label, scope = root_meta.get((rt_id, root), ("", ""))
         files.append({
             "name":     path,
             "path":     path,
             "rel":      rel or path,
             "size":     int(size or 0),
-            "runtime":  r.get("agent_type") or "openclaw",
+            "runtime":  rt_id,
             "category": r.get("category") or "memory",
             "root":     root,
+            # Display-only, and both optional: a consumer that predates them
+            # falls back to the path segment / omits the scope pill.
+            "label":    label,
+            "scope":    scope,
         })
         body = content[:MEMORY_CONTENT_TRUNCATE]
         if spent + len(body) > MEMORY_CACHE_TOTAL_BUDGET:
@@ -11684,9 +11707,16 @@ def sync_runtime_memory_files(config: dict, state: dict, paths: dict) -> int:
                     try:
                         with open(abs_path, "rb") as fh:
                             raw = fh.read(RUNTIME_MEMORY_MAX_BYTES)
-                        text = raw.decode("utf-8", errors="replace")
                     except Exception:
                         continue
+                    # Some catalogued roots are single non-text files —
+                    # Hermes' state.db, n8n's database.sqlite. Decoding those
+                    # with errors="replace" would push 200KB of mojibake per
+                    # heartbeat and render as garbage in the viewer. A NUL in
+                    # the head is the cheap, reliable binary tell.
+                    if b"\x00" in raw[:8192]:
+                        continue
+                    text = raw.decode("utf-8", errors="replace")
                     try:
                         if store.ingest_memory_blob({
                             "agent_type": rt_id,
