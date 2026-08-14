@@ -16444,6 +16444,37 @@ function _buildReplayEvent(m, idx) {
   var role = m.role || 'unknown';
   // Determine event type for filtering
   var type = m.type || role;
+  // Legacy tool events (majority path) arrive as role='tool' with a prose
+  // content like "[Tool Call: Bash]\n{ ... json ... }" plus a structured
+  // `raw.input`, or as a bare result (raw text output, no prefix). The
+  // deep-dive chip renderer only fires when `m.tool` is set — synthesize
+  // one here so those events collapse into the same clean chip instead of
+  // dumping raw JSON/text into a giant prose bubble.
+  if (!m.tool && role === 'tool' && m.content) {
+    var _tcHead = String(m.content);
+    var _tcCall = _tcHead.match(/^\[Tool Call:\s*([^\]]+)\]\s*/);
+    if (_tcCall) {
+      var _tcName = _tcCall[1].trim();
+      var _tcBody = _tcHead.slice(_tcCall[0].length).trim();
+      // Prefer the structured input from raw.input if present — it's the
+      // authoritative payload and pretty-prints better than the prose blob.
+      var _tcInput = _tcBody;
+      if (m.raw && m.raw.input && typeof m.raw.input === 'object') {
+        try { _tcInput = JSON.stringify(m.raw.input, null, 2); } catch (e) {}
+      }
+      m = Object.assign({}, m, {
+        tool: { kind: 'call', name: _tcName, input: _tcInput, output: '', is_error: false }
+      });
+    } else {
+      // Bare content = raw tool result. Detect obvious error signatures so
+      // the chip badges it red.
+      var _tcLow = _tcHead.toLowerCase();
+      var _tcErr = /^(fatal:|error:|traceback|permission denied|no such file)/i.test(_tcHead) || _tcLow.indexOf('command not found') !== -1;
+      m = Object.assign({}, m, {
+        tool: { kind: 'result', name: 'result', input: '', output: _tcHead, is_error: _tcErr }
+      });
+    }
+  }
   // #1911: tool turns carry a structured `tool` object (name + input/output);
   // classify them as tool_use so the "Tools" filter and deep-dive chip pick up.
   if (m.tool) type = 'tool_use';
@@ -16547,6 +16578,8 @@ function _fmtDecodingParams(p) {
 // #1911: render a tool call/result as a named, expandable deep-dive chip.
 // The header shows the tool name (and an error badge for failed results); the
 // body — the exact input args or result output — toggles open on click.
+// Collapsed by default so a long session reads as a chat, not a raw log dump.
+// Users open the ones they care about (or use "Expand tools" in the toolbar).
 function _renderToolDiveChip(ev, highlighted) {
   var t = ev.tool || {};
   var isResult = t.kind === 'result';
@@ -16559,21 +16592,57 @@ function _renderToolDiveChip(ev, highlighted) {
   var hasBody = !!(body && String(body).trim());
   var did = 'tooldive-' + ev.originalIndex;
   var labelText = isResult ? (name + ' · result') : name;
+  // One-line preview so the collapsed chip still tells you what happened
+  // (e.g. "Bash · git status" or "Read · dashboard.py") without expanding.
+  var previewText = hasBody ? _summarizeToolBody(String(body), t.name || '') : '';
   var html = '<div class="chat-tool-chip chat-tool-dive ' + (isResult ? 'tc-user' : 'tc-asst') + '"'
     + ' id="replay-msg-' + ev.originalIndex + '" style="align-self:' + side + ';' + ring + '">';
   html += '<div class="ctd-head"' + (hasBody ? ' onclick="toggleToolDive(\'' + did + '\')"' : '') + '>';
   html += '<span class="chat-tool-chip-label">' + icon + ' ' + labelText + '</span>';
+  if (previewText) html += '<span class="ctd-preview">' + escHtml(previewText) + '</span>';
   if (isResult && t.is_error) html += '<span class="chat-tool-chip-meta" style="color:#e0625a;">error</span>';
-  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▾</span>';
+  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▸</span>';
   if (ts) html += '<span class="chat-tool-chip-meta">' + ts + '</span>';
   html += '</div>';
   if (hasBody) {
-    // Default expanded so the args/output (the debugging signal) are visible
-    // without an extra click. Click the header to collapse a noisy tool turn.
-    html += '<pre class="ctd-body" id="' + did + '" style="display:block;">' + escHtml(String(body)) + '</pre>';
+    // Collapsed by default — a 500-turn session with every tool expanded is
+    // unreadable. Users click the header (or "Expand tools" in the toolbar) to
+    // reveal the exact args/output for the calls they want to inspect.
+    html += '<pre class="ctd-body" id="' + did + '" style="display:none;">' + escHtml(String(body)) + '</pre>';
   }
   html += '</div>';
   return html;
+}
+
+// _summarizeToolBody returns a compact one-liner for the collapsed chip
+// header. Tries to pick out the most informative field per tool (Bash's
+// `command`, Read/Edit/Write's `file_path`, etc.) and falls back to the first
+// non-empty line trimmed to 100 chars.
+function _summarizeToolBody(body, toolName) {
+  var s = body || '';
+  var name = (toolName || '').toLowerCase();
+  // Structured tool inputs arrive as pretty-printed JSON — pull the
+  // most useful key out so the collapsed line reads well.
+  try {
+    var parsed = JSON.parse(s);
+    if (parsed && typeof parsed === 'object') {
+      if (name === 'bash' && parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+      if ((name === 'read' || name === 'edit' || name === 'write') && parsed.file_path) return String(parsed.file_path);
+      if (parsed.file_path) return String(parsed.file_path);
+      if (parsed.pattern) return String(parsed.pattern).slice(0, 120);
+      if (parsed.query)   return String(parsed.query).slice(0, 120);
+      if (parsed.url)     return String(parsed.url).slice(0, 120);
+      if (parsed.description) return String(parsed.description).slice(0, 120);
+      if (parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+    }
+  } catch (e) {}
+  // Fallback: first non-empty line, tightened.
+  var lines = s.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line) return line.length > 100 ? (line.slice(0, 100) + '…') : line;
+  }
+  return '';
 }
 
 function toggleToolDive(id) {
@@ -16583,6 +16652,26 @@ function toggleToolDive(id) {
   var open = pre.style.display !== 'none';
   pre.style.display = open ? 'none' : 'block';
   if (caret) caret.textContent = open ? '▸' : '▾';
+}
+
+// Expand or collapse every tool-dive body in the current transcript view.
+// Wired to the "⤢ Expand tools" / "⤡ Collapse tools" toolbar buttons.
+function expandAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'block';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▾';
+  });
+}
+
+function collapseAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'none';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▸';
+  });
 }
 
 function _renderReplayEvent(ev, highlighted) {
@@ -16711,11 +16800,151 @@ function _replayFilteredEvents() {
   return window._replayEvents.filter(function(ev) { return ev.type === f || ev.role === f; });
 }
 
+// Group a flat event list into "turns" anchored on each USER event, so a long
+// session reads like a book with chapters instead of a wall of bubbles.
+// Anything before the first USER goes into a synthetic "Setup" turn 0.
+function _groupIntoTurns(events) {
+  var turns = [];
+  var current = null;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    var isUserPrompt = (ev.role === 'user' && !ev.tool && ev.content && String(ev.content).trim().length > 0);
+    if (isUserPrompt || !current) {
+      current = {
+        turn: turns.length,
+        anchor: ev,
+        firstTs: ev.timestamp || null,
+        lastTs: ev.timestamp || null,
+        events: [],
+        toolCount: 0,
+        errorCount: 0
+      };
+      turns.push(current);
+    }
+    current.events.push(ev);
+    if (ev.timestamp) current.lastTs = ev.timestamp;
+    if (ev.tool) current.toolCount++;
+    if (ev.tool && ev.tool.is_error) current.errorCount++;
+  }
+  return turns;
+}
+
+// Human-readable turn duration (from first event to last within the turn).
+function _turnDurationLabel(turn) {
+  if (!turn.firstTs || !turn.lastTs || turn.lastTs <= turn.firstTs) return '';
+  var ms = turn.lastTs - turn.firstTs;
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  var rem = s % 60;
+  if (m < 60) return m + 'm' + (rem ? ' ' + rem + 's' : '');
+  var h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+// Short one-liner used both in the chapter header and the TOC sidebar.
+function _turnAnchorPreview(turn) {
+  var a = turn.anchor;
+  if (!a) return '(empty turn)';
+  if (a.role === 'user' && a.content && String(a.content).trim()) {
+    var s = String(a.content).trim().replace(/\s+/g, ' ');
+    return s.length > 90 ? (s.slice(0, 90) + '…') : s;
+  }
+  if (turn.turn === 0) return 'Session setup';
+  return '(system turn)';
+}
+
+function _renderTurnChapter(turn, highlightOriginal) {
+  var previewLabel = escHtml(_turnAnchorPreview(turn));
+  var timeLabel = turn.firstTs ? new Date(turn.firstTs).toLocaleString() : '';
+  var duration = _turnDurationLabel(turn);
+  var pieces = [];
+  if (turn.toolCount > 0) pieces.push('🔧 ' + turn.toolCount);
+  if (turn.errorCount > 0) pieces.push('<span style="color:#e0625a;">✕ ' + turn.errorCount + '</span>');
+  if (duration) pieces.push('⏱ ' + duration);
+  var meta = pieces.join(' · ');
+  var html = '<section class="turn-chapter" id="turn-chapter-' + turn.turn + '">';
+  html += '<header class="turn-chapter-head">';
+  html +=   '<div class="turn-chapter-title">';
+  html +=     '<span class="turn-chapter-num">Turn ' + turn.turn + '</span>';
+  html +=     '<span class="turn-chapter-preview">' + previewLabel + '</span>';
+  html +=   '</div>';
+  html +=   '<div class="turn-chapter-meta">' + (timeLabel ? escHtml(timeLabel) : '') + (meta ? ' <span class="turn-chapter-sep">·</span> ' + meta : '') + '</div>';
+  html += '</header>';
+  html += '<div class="turn-chapter-body">';
+  for (var i = 0; i < turn.events.length; i++) {
+    var ev = turn.events[i];
+    html += _renderReplayEvent(ev, ev.originalIndex === highlightOriginal);
+  }
+  html += '</div>';
+  html += '</section>';
+  return html;
+}
+
+function _renderTurnTOC(turns, activeTurn) {
+  if (!turns.length) return '';
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '<div class="turn-toc-head">Turns <span class="turn-toc-count">' + turns.length + '</span></div>';
+  html += '<div class="turn-toc-list">';
+  for (var i = 0; i < order.length; i++) {
+    var trn = order[i];
+    var isActive = (trn.turn === activeTurn);
+    var preview = escHtml(_turnAnchorPreview(trn));
+    var timeLabel = trn.firstTs ? new Date(trn.firstTs).toLocaleTimeString() : '';
+    var toolBadge = trn.toolCount > 0 ? '<span class="turn-toc-tools">🔧 ' + trn.toolCount + '</span>' : '';
+    var errBadge  = trn.errorCount > 0 ? '<span class="turn-toc-err">✕ ' + trn.errorCount + '</span>' : '';
+    html += '<a class="turn-toc-item' + (isActive ? ' turn-toc-item-active' : '') + '" href="#turn-chapter-' + trn.turn + '"'
+         + ' onclick="return _jumpToTurn(' + trn.turn + ');" title="' + preview + '">';
+    html += '<span class="turn-toc-num">' + trn.turn + '</span>';
+    html += '<span class="turn-toc-body">';
+    html +=   '<span class="turn-toc-preview">' + preview + '</span>';
+    html +=   '<span class="turn-toc-metaline">' + (timeLabel ? '<span class="turn-toc-time">' + timeLabel + '</span>' : '')
+         + ' ' + toolBadge + ' ' + errBadge + '</span>';
+    html += '</span>';
+    html += '</a>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _jumpToTurn(turnIdx) {
+  var el = document.getElementById('turn-chapter-' + turnIdx);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return false;
+}
+
+// Toolbar toggle — flip the whole trace between oldest-first (default,
+// chat-native) and newest-first (skim recent activity for long sessions).
+//
+// INVARIANT: This is a display-time reversal ONLY. `window._replayEvents`
+// (the LocalStore-supplied event sequence) is NEVER mutated. The reversal
+// operates on a temporary array of turn groups inside _replayRenderCurrent
+// (`turns.slice().reverse()`) that lives for one render pass and is thrown
+// away. Every downstream consumer that reads `_replayEvents` — the scrubber,
+// the filter, the state panel, the raw-mode toggle — still sees events in
+// the original LocalStore order.
+function toggleTranscriptSort() {
+  window._transcriptSort = (window._transcriptSort === 'oldest') ? 'newest' : 'oldest';
+  var btn = document.getElementById('replay-sort-toggle');
+  if (btn) {
+    var isNewest = window._transcriptSort === 'newest';
+    btn.textContent = isNewest ? '↑ Newest first' : '↓ Oldest first';
+    btn.title = isNewest ? 'Newest turn at top — click to flip back' : 'Oldest turn at top — click to flip to newest first';
+  }
+  if (typeof _replayRenderCurrent === 'function') _replayRenderCurrent();
+  // Jump to the top so the sort change is visible without a manual scroll.
+  var wrap = document.getElementById('transcript-messages');
+  if (wrap) wrap.scrollTop = 0;
+}
+
 function _replayRenderCurrent() {
   var filtered = _replayFilteredEvents();
+  var wrap = document.getElementById('transcript-messages');
+  var tocEl = document.getElementById('transcript-toc');
   if (!filtered.length) {
-    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
+    wrap.innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
     document.getElementById('replay-pos').textContent = '0/0';
+    if (tocEl) tocEl.innerHTML = '';
     return;
   }
   var idx = window._replayIndex;
@@ -16723,20 +16952,39 @@ function _replayRenderCurrent() {
   if (idx >= filtered.length) idx = filtered.length - 1;
   window._replayIndex = idx;
 
-  // Render all filtered events up to current index (show history)
-  var html = '';
-  for (var i = 0; i <= idx; i++) {
-    html += _renderReplayEvent(filtered[i], i === idx);
+  var highlightOriginal = filtered[idx] ? filtered[idx].originalIndex : -1;
+
+  // Turn-anchored chapter render. Group first, then reverse whole turns for
+  // newest-first — reversing individual events would scramble tool_use /
+  // tool_result pairs within a turn.
+  var turns = _groupIntoTurns(filtered);
+  var activeTurn = 0;
+  for (var i = 0; i < turns.length; i++) {
+    for (var j = 0; j < turns[i].events.length; j++) {
+      if (turns[i].events[j].originalIndex === highlightOriginal) { activeTurn = turns[i].turn; break; }
+    }
   }
-  document.getElementById('transcript-messages').innerHTML = html;
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '';
+  for (var k = 0; k < order.length; k++) {
+    html += _renderTurnChapter(order[k], highlightOriginal);
+  }
+  wrap.innerHTML = html;
+  if (tocEl) tocEl.innerHTML = _renderTurnTOC(turns, activeTurn);
+
   document.getElementById('replay-pos').textContent = (idx + 1) + '/' + filtered.length;
   var scrubber = document.getElementById('replay-scrubber');
   scrubber.max = filtered.length - 1;
   scrubber.value = idx;
 
-  // Scroll highlighted message into view
-  var el = document.getElementById('replay-msg-' + filtered[idx].originalIndex);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Only scroll the highlighted event into view when the scrubber is what
+  // moved us (play mode / next / prev / jumpTo). On a fresh render we let the
+  // user stay wherever they were scrolled.
+  if (window._replayScrollOnRender) {
+    window._replayScrollOnRender = false;
+    var el = document.getElementById('replay-msg-' + highlightOriginal);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
   _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
 }
 
@@ -16744,6 +16992,7 @@ function replayNext() {
   var filtered = _replayFilteredEvents();
   if (window._replayIndex < filtered.length - 1) {
     window._replayIndex++;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
@@ -16751,12 +17000,14 @@ function replayNext() {
 function replayPrev() {
   if (window._replayIndex > 0) {
     window._replayIndex--;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
 
 function replayJumpTo(index) {
   window._replayIndex = index;
+  window._replayScrollOnRender = true;
   _replayRenderCurrent();
 }
 
@@ -16820,6 +17071,7 @@ function replayTogglePlay() {
         return;
       }
       window._replayIndex++;
+      window._replayScrollOnRender = true;
       _replayRenderCurrent();
     }, 100);
   }

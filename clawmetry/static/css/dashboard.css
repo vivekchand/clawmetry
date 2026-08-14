@@ -652,6 +652,77 @@
   .chat-msg.assistant .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,58,42,0.9)); }
   .chat-msg.tool .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,26,36,0.9)); }
 
+  /* === Transcript layout (turn-anchored trace redesign) ===================
+     Two-column grid: message stream on the left, sticky jump-to-turn TOC on
+     the right. TOC hides on narrow viewports (< 1100px) so mobile falls
+     back to plain vertical scroll. */
+  .transcript-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; align-items: start; }
+  .transcript-toc {
+    position: sticky; top: 12px; align-self: start;
+    max-height: calc(100vh - 40px); overflow-y: auto;
+    background: var(--bg-secondary); border: 1px solid var(--border-secondary);
+    border-radius: 10px; padding: 10px 0; font-size: 12px;
+  }
+  .transcript-toc:empty { display: none; }
+  .turn-toc-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 12px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; color: var(--text-muted); border-bottom: 1px solid var(--border-secondary); margin-bottom: 6px; }
+  .turn-toc-count { background: var(--button-bg); color: var(--text-secondary); border-radius: 999px; padding: 1px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
+  .turn-toc-list { display: flex; flex-direction: column; }
+  .turn-toc-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 7px 12px; border-left: 2px solid transparent;
+    text-decoration: none; color: var(--text-secondary);
+    line-height: 1.35; cursor: pointer;
+    transition: background 90ms ease, border-color 90ms ease;
+  }
+  .turn-toc-item:hover { background: var(--bg-hover); border-left-color: #6366f1; }
+  .turn-toc-item-active { background: rgba(99,102,241,0.12); border-left-color: #6366f1; color: var(--text-primary); }
+  .turn-toc-num { flex: 0 0 22px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
+  .turn-toc-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .turn-toc-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .turn-toc-metaline { font-size: 10px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
+  .turn-toc-time { font-variant-numeric: tabular-nums; }
+  .turn-toc-tools { color: #a5b4fc; }
+  .turn-toc-err { color: #e0625a; font-weight: 700; }
+
+  /* === Turn chapter (each USER prompt anchors a chapter of assistant+tool
+     events, so a 500-message session reads like a book). ================= */
+  .turn-chapter { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; scroll-margin-top: 12px; }
+  .turn-chapter + .turn-chapter { border-top: 1px dashed var(--border-secondary); margin-top: 14px; padding-top: 14px; }
+  .turn-chapter-head {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 6px 10px; margin: -2px 0 4px;
+    background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--border-secondary); border-radius: 8px;
+    font-size: 12px;
+  }
+  .turn-chapter-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1 1 auto; }
+  .turn-chapter-num { font-weight: 800; letter-spacing: 0.5px; color: #a5b4fc; font-size: 11px; text-transform: uppercase; flex-shrink: 0; }
+  .turn-chapter-preview { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .turn-chapter-meta { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .turn-chapter-sep { opacity: 0.4; margin: 0 2px; }
+  .turn-chapter-body { display: flex; flex-direction: column; gap: 8px; }
+
+  /* Collapsed tool-dive chip refinements — one-line preview + subtle divider.
+     The parent .chat-tool-dive keeps its display:flex/column, so ctd-head
+     lays out in a single row when collapsed. */
+  .chat-tool-dive { max-width: 92%; }
+  .chat-tool-dive .ctd-head { padding: 4px 6px; }
+  .chat-tool-dive .ctd-head:hover { background: rgba(255,255,255,0.03); border-radius: 6px; }
+  .ctd-preview {
+    color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1 1 auto; min-width: 0;
+  }
+  .ctd-caret { transition: transform 100ms ease; }
+
+  @media (max-width: 1100px) {
+    .transcript-layout { grid-template-columns: minmax(0, 1fr); }
+    .transcript-toc { display: none; }
+    .turn-chapter-head { position: static; }
+  }
+
   /* === Mini Dashboard Widgets === */
   .tool-spark { font-size: 11px; color: var(--text-muted); padding: 3px 8px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border-secondary); }
   .tool-spark span { color: var(--text-accent); font-weight: 600; }
