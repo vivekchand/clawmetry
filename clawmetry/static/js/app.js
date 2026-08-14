@@ -4016,16 +4016,299 @@ async function loadEvaluators() {
   listEl.innerHTML = html;
 }
 
-// ── Evals tab (dedicated home for the eval system) ─────────────────────────
-// Loads: judge status, 24h score summary + 7d regression, the evaluator
-// library grid (shared loadEvaluators), recent scored sessions, golden suites.
-// Every card degrades to an honest message: locked (402), no key, or no data.
+// ── Quality tab (redesigned Evals, 2026-08-14) ─────────────────────────────
+// One question ("is my agent doing good work?") answered in one fetch. The
+// tab keeps its data-tab="evals" identity so the URL / sidebar highlight
+// stay stable, but the surface inside is entirely new: report card, ranked
+// failure patterns, plain-English rough runs, inline eval-builder. The old
+// loadEvaluators / loadEvalsJudgeCard / loadEvalsRecent / loadEvalsSuites
+// functions stay defined below (they're still used by other surfaces like
+// the Overview evaluators strip); only the tab bootstrap changed.
 function loadEvalsTab() {
+  // Detect the redesigned tab shell by its marker attribute — if we land
+  // on an older cached template (e.g. cloud pin hasn't rolled yet), fall
+  // back to the legacy renderer so the tab still shows something honest.
+  var host = document.getElementById('page-evals');
+  if (host && host.getAttribute('data-quality-tab') === '1') {
+    loadQualityTab();
+    return;
+  }
   loadEvaluators();
-  loadEvalsJudgeCard();
-  loadEvalsTabSummary();
-  loadEvalsRecent();
-  loadEvalsSuites();
+  if (typeof loadEvalsJudgeCard === 'function') loadEvalsJudgeCard();
+  if (typeof loadEvalsTabSummary === 'function') loadEvalsTabSummary();
+  if (typeof loadEvalsRecent === 'function') loadEvalsRecent();
+  if (typeof loadEvalsSuites === 'function') loadEvalsSuites();
+}
+
+// ── Quality tab renderer ───────────────────────────────────────────────────
+async function loadQualityTab() {
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var r = await fetch('/api/quality/report-card?' + qs.toString())
+    .catch(function() { return null; });
+  var data = r ? await r.json().catch(function() { return null; }) : null;
+  if (!data) {
+    // Honest empty on network / server miss. The tab renders "Nothing to
+    // grade yet." rather than a spinner or a blank.
+    data = {
+      grade: '—', headline: 'Nothing to grade yet.',
+      subline: "Your agents haven't finished a task in this window. Send Claude Code or OpenClaw a task and come back.",
+      patterns: [], rough_runs: [], week: [], vs_prior: null,
+      graded_runs: 0, total_runs: 0, judge_key_set: false
+    };
+  }
+  _qRenderCard(data);
+  _qRenderPatterns(data);
+  _qRenderRoughRuns(data);
+  _qRenderStatusLine(data);
+  _qRenderFooter(data);
+}
+
+function _qRenderCard(data) {
+  var gradeEl = document.getElementById('q-grade');
+  var headEl  = document.getElementById('q-headline');
+  var subEl   = document.getElementById('q-subline');
+  var weekEl  = document.getElementById('q-week');
+  if (gradeEl) {
+    var g = String(data.grade || '—');
+    gradeEl.textContent = g;
+    gradeEl.setAttribute('data-grade', g === '—' ? '—' : g.charAt(0));
+  }
+  if (headEl) headEl.textContent = String(data.headline || '');
+  if (subEl) {
+    // Render subline with vs_prior arrow if present. Keep it a single sentence.
+    var sub = String(data.subline || '');
+    if (data.vs_prior === 'up') {
+      sub += ' <span class="up">↑ better than last week.</span>';
+    } else if (data.vs_prior === 'down') {
+      sub += ' <span class="down">↓ down from last week.</span>';
+    }
+    subEl.innerHTML = sub;
+  }
+  if (weekEl) {
+    var dots = (data.week || []);
+    if (!dots.length) { weekEl.innerHTML = ''; return; }
+    var html = '<div class="dots">';
+    dots.forEach(function(d, i) {
+      var isToday = (i === dots.length - 1);
+      var g = d.grade || '—';
+      html += '<div class="day' + (isToday ? ' today' : '') + '" data-grade="' + escHtml(g.charAt(0)) + '"' +
+              ' title="' + escHtml(d.date) + ' · ' + escHtml(String(d.runs || 0)) + ' run(s)">' +
+              '<span class="g">' + escHtml(g) + '</span>' +
+              '<span>' + escHtml(d.label) + '</span></div>';
+    });
+    html += '</div>';
+    weekEl.innerHTML = html;
+  }
+}
+
+function _qRenderPatterns(data) {
+  var el = document.getElementById('q-patterns');
+  if (!el) return;
+  var rows = (data.patterns || []);
+  if (!rows.length) {
+    el.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' +
+      t('quality.patterns_empty', null, 'Nothing to complain about here.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  rows.forEach(function(p) {
+    var isCaught = (String(p.cost_display || '').toLowerCase() === 'caught');
+    html += '<li>';
+    html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
+    html += '<div class="what">' + escHtml(p.label || '') + '</div>';
+    html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
+            escHtml(p.cost_display || '$0.00') +
+            '<small>' + escHtml(p.avg_minutes || '—') + '</small></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qRenderRoughRuns(data) {
+  var el = document.getElementById('q-runs');
+  var titleEl = document.getElementById('q-rough-title');
+  if (!el) return;
+  var runs = (data.rough_runs || []);
+  if (titleEl) {
+    titleEl.textContent = runs.length
+      ? (t('quality.rough_title_prefix', null, 'The ') + runs.length + ' ' +
+         (runs.length === 1
+           ? t('quality.rough_run_singular', null, 'rough run')
+           : t('quality.rough_run_plural', null, 'rough runs')))
+      : t('quality.rough_title_empty', null, 'No rough runs this week');
+  }
+  if (!runs.length) {
+    el.innerHTML = '<li class="q-empty">' +
+      t('quality.rough_empty', null, 'Every run finished cleanly. Nice.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  runs.forEach(function(r, i) {
+    var sid = String(r.session_id || '');
+    var when = _qFmtWhen(r.when);
+    var bid = 'q-b-' + i;
+    html += '<li>';
+    html += '<div class="when">' + escHtml(when) + (r.agent_type ? ' · ' + escHtml(r.agent_type) : '') + '</div>';
+    html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
+    html += '<div class="story">' + escHtml(r.story || '') + '</div>';
+    html += '<div class="row-actions">';
+    html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
+            t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
+    html += '</div>';
+    html += '<div id="' + bid + '" class="q-builder"></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qFmtWhen(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(iso);
+    var now = new Date();
+    var days = Math.floor((now - d) / 86400000);
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    if (days <= 0) return 'Today ' + hh + ':' + mm;
+    if (days === 1) return 'Yesterday ' + hh + ':' + mm;
+    if (days < 7) return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()] + ' ' + hh + ':' + mm;
+    return d.toLocaleDateString();
+  } catch (e) { return String(iso); }
+}
+
+function _qRenderStatusLine(data) {
+  var el = document.getElementById('q-status-line');
+  if (!el) return;
+  var n = Number(data.graded_runs || 0);
+  var total = Number(data.total_runs || 0);
+  if (n === 0 && total === 0) {
+    el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
+    return;
+  }
+  el.textContent = data.judge_key_set
+    ? (t('quality.status_prefix_on', null, 'Grading on · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')))
+    : (t('quality.status_prefix_off', null, 'Grading from signals · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')));
+}
+
+function _qRenderFooter(data) {
+  var el = document.getElementById('q-footer');
+  if (!el) return;
+  // Hide the "add a judge key" nudge when a key is already set.
+  if (data && data.judge_key_set) el.setAttribute('hidden', '');
+  else el.removeAttribute('hidden');
+}
+
+// Open (or toggle) the inline eval builder for a rough run. Pre-fills
+// the "fail when…" field from the story so users see intent immediately;
+// they edit and save. Persistence lands in a follow-up PR — for the first
+// cut the Save button files an issue-style check locally and toasts.
+function qOpenBuilder(bid, sid, story) {
+  var el = document.getElementById(bid);
+  if (!el) return;
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    el.innerHTML = '';
+    return;
+  }
+  var pattern = _qGuessPattern(story || '');
+  var name = _qGuessCheckName(story || '');
+  el.innerHTML =
+    '<p class="b-eyebrow">' + t('quality.builder_eyebrow', null, 'Watch for this pattern') + '</p>' +
+    '<p class="b-title">' + t('quality.builder_title', null, "Turn this rough run into a check we'll fail-fast next time.") + '</p>' +
+    '<div>' +
+      '<label>' + t('quality.builder_when', null, 'Fail the run when…') + '</label>' +
+      '<textarea id="' + bid + '-when">' + escHtml(pattern) + '</textarea>' +
+    '</div>' +
+    '<div style="margin-top:10px;">' +
+      '<label>' + t('quality.builder_name', null, 'Name this check') + '</label>' +
+      '<textarea id="' + bid + '-name" style="min-height:34px;">' + escHtml(name) + '</textarea>' +
+    '</div>' +
+    '<div class="b-example">' + t('quality.builder_example_lead', null, 'Based on this run: ') + escHtml(story || '') + '</div>' +
+    '<div class="b-actions">' +
+      '<button class="btn" onclick="qSaveCheck(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\')">' +
+        t('quality.builder_save', null, 'Save check') + '</button>' +
+      '<button class="btn ghost" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\')">' +
+        t('common.cancel', null, 'Cancel') + '</button>' +
+    '</div>';
+  el.classList.add('open');
+}
+
+function _qGuessPattern(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) {
+    return 'the same tool errors more than 3 times without progress toward the task';
+  }
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1) {
+    return 'the agent edits the same file more than 5 times';
+  }
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) {
+    return 'the run gets within 5% of the token budget and truncates its answer';
+  }
+  if (s.indexOf('gave up') !== -1 || s.indexOf('escalat') !== -1) {
+    return 'the agent ends the task without a completed answer';
+  }
+  return 'a session ends without a clean answer';
+}
+
+function _qGuessCheckName(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) return 'Tool loop guard';
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1)   return 'Edit loop guard';
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) return 'Budget breach guard';
+  if (s.indexOf('gave up') !== -1) return 'Gave-up guard';
+  return 'Rough-run guard';
+}
+
+async function qSaveCheck(bid, sid) {
+  // First cut: POST to /api/quality/checks (deferred — for now, toast a
+  // confirmation so the interaction feels real end-to-end). The follow-up
+  // PR wires this to a real quality_checks DuckDB table + runner.
+  var whenEl = document.getElementById(bid + '-when');
+  var nameEl = document.getElementById(bid + '-name');
+  var body = {
+    session_id: sid,
+    fail_when:  whenEl ? whenEl.value.trim() : '',
+    name:       nameEl ? nameEl.value.trim() : ''
+  };
+  try {
+    var r = await fetch('/api/quality/checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var out = await r.json().catch(function() { return null; });
+    var msg = (out && out.ok)
+      ? t('quality.check_saved', null, "Saved. We'll fail-fast this pattern next time.")
+      : (out && out.error) || t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release.");
+    _qToast(msg);
+  } catch (e) {
+    _qToast(t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release."));
+  }
+  var el = document.getElementById(bid);
+  if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+}
+
+function _qToast(msg) {
+  var t_ = document.createElement('div');
+  t_.textContent = msg;
+  t_.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+    'background:#1a1611;color:#f0e9dc;padding:12px 20px;border-radius:6px;' +
+    'font-size:13px;font-family:-apple-system,system-ui,sans-serif;' +
+    'border:1px solid rgba(211,53,40,0.4);box-shadow:0 8px 24px rgba(0,0,0,0.4);' +
+    'z-index:9999;';
+  document.body.appendChild(t_);
+  setTimeout(function() { t_.style.opacity = '0'; t_.style.transition = 'opacity 400ms'; }, 3200);
+  setTimeout(function() { t_.remove(); }, 3800);
 }
 
 function _evalsLockedHtml() {

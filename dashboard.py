@@ -132,6 +132,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
@@ -11981,6 +11982,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
 
@@ -12516,9 +12518,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
-        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
-        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
