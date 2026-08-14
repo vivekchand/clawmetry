@@ -2363,6 +2363,25 @@ def _cmd_uninstall(args=None) -> None:
     except Exception:
         pass
 
+    # 10b. numbat (agent-EDR) — only if `clawmetry secure enable` installed
+    # it (managed binary in ~/.clawmetry/bin). Its hooks live in each
+    # harness's own config and reference that binary, so they must be
+    # de-registered before the ~/.clawmetry purge deletes it — the same
+    # stale-hook class as #4817. A user-installed numbat (PATH) is never
+    # touched. Skipped under --keep-data: that path keeps ~/.clawmetry, so
+    # binary + hooks stay valid for the reinstall-later flow.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _numbat_bin = _cm_secure.managed_numbat()
+            if _numbat_bin:
+                items.append((
+                    "Numbat",
+                    f"numbat hooks (all agent configs) + binary: {_numbat_bin}",
+                ))
+        except Exception:
+            pass
+
     # 9. pip package
     items.append(("Package", "pip package: clawmetry"))
 
@@ -2551,6 +2570,24 @@ def _cmd_uninstall(args=None) -> None:
                   f"{', '.join(_drained)}")
     except Exception as _e:
         print(f"  ⚠️  Could not drain runtime hooks: {_e}")
+
+    # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
+    # ~/.clawmetry purge below: the drain shells out to the managed binary
+    # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
+    # own config (Claude Code settings.json, Codex hooks.json, …) reference
+    # that binary by absolute path. Purge first and every harness boots
+    # into a config pointing at a deleted binary (#4817's bug class).
+    # No-ops when numbat isn't ours (PATH install) or under --keep-data.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _nb_acted, _nb_msg = _cm_secure.drain_hooks_for_uninstall()
+            if _nb_acted:
+                print(f"  ✅  {_nb_msg}")
+            elif _nb_msg:
+                print(f"  ⚠️  {_nb_msg}")
+        except Exception as _e:
+            print(f"  ⚠️  Could not drain numbat hooks: {_e}")
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
