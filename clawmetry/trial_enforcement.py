@@ -66,6 +66,8 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 # nemoclaw) working rather than upgrade. Presence of this file flips the gate
 # from "block everything" to "block only paid-runtime scoped requests" so
 # ``openclaw`` observability keeps working; ``claude_code`` etc. still 402.
+# Documented in the TrialHardBlockPaywall component of the Local Agent
+# Observability blueprint (v4+ describes this fallback).
 _FREE_ONLY_MARKER = os.path.expanduser("~/.clawmetry/free_only.marker")
 
 # Paid-runtime URL prefixes the request-time gate can use to classify a
