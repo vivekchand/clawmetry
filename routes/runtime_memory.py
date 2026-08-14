@@ -22,6 +22,18 @@ endpoint at ``/api/file``). Traversal-safety is enforced inside
       not cover them (grace still permissive — see the entitlements
       module).
 
+      ``runtime_id`` may be the literal ``all``, which sweeps every
+      entitled runtime and returns only groups that exist on disk, each
+      tagged with its owning ``runtime`` / ``runtime_label``. This is the
+      DEFAULT scope of the Memory and Skills tabs (the global runtime
+      switcher's "All runtimes"), so it never 402s — a locked runtime is
+      left out of the sweep instead, because paywalling the aggregate
+      would also paywall the free runtimes the user IS entitled to. The
+      conversion moment stays on an explicit per-runtime selection.
+
+      ``all`` is a list-only sentinel: read a file back through the
+      ``runtime`` its group carries, never through ``all``.
+
   GET /api/runtimes/<runtime_id>/file?root=<root>&path=<rel>
       Read one file from within a registered root. Same entitlement gate
       as ``/files``.
