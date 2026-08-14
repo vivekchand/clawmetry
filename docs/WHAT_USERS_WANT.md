@@ -1,14 +1,14 @@
 # What Users Want — August 2026 Edition
 
-*Auto-generated weekly by the roadmap synthesis bot. Last updated: 2026-08-07 09:00 UTC. Aggregates signal across both `vivekchand/clawmetry` (OSS) and `vivekchand/clawmetry-cloud` (cloud).*
+*Auto-generated weekly by the roadmap synthesis bot. Last updated: 2026-08-14 09:00 UTC. Aggregates signal across both `vivekchand/clawmetry` (OSS) and `vivekchand/clawmetry-cloud` (cloud).*
 
-> **Cloud data note:** The roadmap-synthesis session is scoped to `vivekchand/clawmetry` only this run — `vivekchand/clawmetry-cloud` is inaccessible (same scope misconfiguration blocking the intel-scout bot for 12 consecutive runs, issues `#3466`–`#3834`). Cloud signals are carried forward from the 2026-07-31 synthesis, which had live dual-repo access. **Fix (one-time):** Add `vivekchand/clawmetry-cloud` to the roadmap-synthesis and intel-scout session scopes at https://code.claude.com.
+> **Cloud data note:** The roadmap-synthesis session is scoped to `vivekchand/clawmetry` only this run — `vivekchand/clawmetry-cloud` is inaccessible (same scope misconfiguration blocking the intel-scout and roadmap-synthesis bots for **13 consecutive runs**). Cloud signals are carried forward from the 2026-07-31 synthesis, which had live dual-repo access. **Fix (one-time):** Add `vivekchand/clawmetry-cloud` to the roadmap-synthesis and intel-scout session scopes at https://code.claude.com.
 
 ---
 
 ## TL;DR (this week)
 
-Evals got the most concentrated engineering investment in recent memory — 12 PRs in 4 days (Aug 3–6) shipping verdict chips, Score button per conversation, DeepEval integration, and deterministic evaluators. The spend-flow visualization also landed (“Where the money goes”). Neither was requested by a user issue. None of the five persistently HOT user themes moved: cost enforcement, the agent kill-switch, the P0 security bug, the tracing EPIC, and the React v2 migration each closed the week exactly where they opened it. The plaintext-API-keys security bug (`clawmetry-cloud#315`) is now **136 days old**.
+The OTel/Tracing EPIC broke its 12-week stall: OTLP receiver (JSON, port 4318, no protobuf), a working Tracing tab, turn-anchored trace UI, and a dependency-free `clawmetry.trace` SDK all landed in a 48-hour window (Aug 12–14). The Desktop App also had a major launch week — signed macOS .dmg, Authenticode-signed Windows installer, Linux .deb, global CLI, self-healing daemon. Both were founder-initiated with zero user-issue demand in OSS. The three persistently HOT user themes — cost enforcement, the proxy kill-switch, and the P0 security bug — each closed the week exactly where they opened it: 0 PRs, 10+ weeks open.
 
 ---
 
@@ -18,114 +18,115 @@ Evals got the most concentrated engineering investment in recent memory — 12 P
 
 - **Demand**: 9+ open issues across both repos (5 cloud intel + 4 OSS proxy issues), last raised cloud intel 2026-06-25. Intel scores 7–9/10.
 - **Representative quotes** (carried from 2026-07-31 synthesis; cloud repo inaccessible this run):
-  - *“Just a number climbing in silence while five engineers stared at dashboards that gave us totals and nothing else.”* — `clawmetry-cloud#1683` (dev.to post, $1,800 silent GPT-4o spike)
-  - *“I use LLMs daily… anywhere from $200–$400 tops… I just can’t figure how to burn that much money a month responsibly.”* — `clawmetry-cloud#653` (HN 474-comment thread, intel-score 9/10)
-  - *“By step nine you have a context window the size of a small novel and a per-call cost that has tripled because cache writes accumulated.”* — `clawmetry-cloud#655` (dev.to $47K retroactive bill)
-- **Why it matters**: The **spend-flow visualization shipped this week** — users can now see “where the money goes” at the node level. That’s the visibility half. What’s still missing: graduated budget alerts (50/80/95% cap), a weekly spend digest to Slack/email, and hard enforcement before the limit is hit. Visibility without enforcement is watching a fire you can’t put out. `clawmetry-cloud#1484` (scheduled spend digest + graduated alerts) remains unstarted. Competitors Helicone and AgentPulse ship budget alerts on day one.
+  - *"Just a number climbing in silence while five engineers stared at dashboards that gave us totals and nothing else."* — `clawmetry-cloud#1683` (dev.to post, $1,800 silent GPT-4o spike)
+  - *"I use LLMs daily… anywhere from $200–$400 tops… I just can't figure how to burn that much money a month responsibly."* — `clawmetry-cloud#653` (HN 474-comment thread, intel-score 9/10)
+  - *"By step nine you have a context window the size of a small novel and a per-call cost that has tripled because cache writes accumulated."* — `clawmetry-cloud#655` (dev.to $47K retroactive bill)
+- **Why it matters**: The spend-flow visualization shipped Aug 3. The Cost tab now shows "$0 out-of-pocket — covered by" for flat-rate users (Aug 12), partially addressing subscription-mode cost inflation. Those are the visibility layers. What's still missing: graduated budget alerts (50%/80%/95% cap), a weekly spend digest to Slack/email, and hard enforcement before the limit is hit. Visibility without enforcement is watching a fire you can't put out. `clawmetry-cloud#1484` (scheduled spend digest + graduated alerts) remains unstarted. Competitors Helicone and AgentPulse ship budget alerts on day one.
 - **Linked issues**: `clawmetry-cloud#1683`, `clawmetry-cloud#1694`, `clawmetry-cloud#1695`, `clawmetry-cloud#1696`, `clawmetry-cloud#1701`, `clawmetry-cloud#653`, `clawmetry-cloud#652`, `clawmetry-cloud#655`, `clawmetry-cloud#1484`, `clawmetry-cloud#1088`, `clawmetry#2816`, `clawmetry#2817`, `clawmetry#2818`
 - **Likely scope**: Both — OSS proxy (port 4100) gets enforcement rules; cloud gets budget alerts + weekly digest
-- **Suggested first step**: Land `clawmetry-cloud#1484` (scheduled spend digest + graduated alerts). The spend-flow visualization is now in place; the alert layer on top is the natural next PR.
-- **Weeks unaddressed** (enforcement half): **9+** (up from 8+)
+- **Suggested first step**: Land `clawmetry-cloud#1484` (scheduled spend digest + graduated alerts). The spend-flow visualization and "$0 out-of-pocket" display are in place; the alert layer on top is the natural next PR.
+- **Weeks unaddressed** (enforcement half): **10+** (up from 9+ last week)
 
 ---
 
 ### 2. Agent Kill-Switch / Proxy Policy Engine
 
-- **Demand**: 6+ open issues (3 OSS + 3+ cloud). TokPinch launched with 250 stars in 2 weeks on exactly these features. `clawmetry-cloud#4` is now **154 days old** (filed 2026-03-06).
+- **Demand**: 6+ open issues (3 OSS + 3+ cloud). TokPinch launched with 250 stars in 2 weeks on exactly these features. `clawmetry-cloud#4` is now **163 days old** (filed 2026-03-06).
 - **Representative quotes** (carried):
-  - *“TokPinch intercepts heartbeat pings to Claude Opus and routes them to Haiku or Sonnet… saving 10–50% API cost.”* — `clawmetry#2816`
-  - *“An agent at a real customer deleted the production DB in 9 seconds. We need a kill switch.”* — `clawmetry-cloud#692`
-  - *“Managed cloud proxy endpoint — fleet-wide enforcement + observability without running anything locally.”* — `clawmetry-cloud#53`
-- **Why it matters**: The phone-push approval notification shipped July 25–26. That’s the *alert* half. The *policy* half — smart model routing, dollar cost-spiral breaker, rate breaker — is still unbuilt. Users can see the fire and get a phone ping; they still cannot set a rule that prevents the action. `clawmetry#2816`–`#2818` have been open 9 weeks with zero PRs.
+  - *"TokPinch intercepts heartbeat pings to Claude Opus and routes them to Haiku or Sonnet… saving 10–50% API cost."* — `clawmetry#2816`
+  - *"An agent at a real customer deleted the production DB in 9 seconds. We need a kill switch."* — `clawmetry-cloud#692`
+  - *"Managed cloud proxy endpoint — fleet-wide enforcement + observability without running anything locally."* — `clawmetry-cloud#53`
+- **Why it matters**: Rule Builder Phase 1 (`#4735`) landed the `/api/v2/rules` REST backend this week — that's the configuration layer. But the enforcement layer — `proxy.py` applying those rules at the interception point (port 4100) to actually block/reroute/pause calls — is still not built. A rule you can define but the proxy doesn't enforce is a database row, not a kill-switch. Cache Hit Rate + Routing Advisor tiles (`#4610`) give routing *visibility*; they don't give routing *control*. `clawmetry#2816`–`#2818` remain open with 0 PRs.
 - **Linked issues**: `clawmetry#2816`, `clawmetry#2817`, `clawmetry#2818`, `clawmetry-cloud#4`, `clawmetry-cloud#53`, `clawmetry-cloud#54`, `clawmetry-cloud#692`
-- **Likely scope**: Both — OSS proxy gets the policy rules; cloud gets the managed proxy endpoint with fleet-wide enforcement
-- **Suggested first step**: Ship `clawmetry#2816` (auto smart model routing: heartbeat/cheap tasks → Haiku/Sonnet). The proxy at port 4100 already exists. One PR, immediate “saved $X” proof.
-- **Weeks unaddressed**: **9+** (OSS `#2816`–`#2818`); **22+** (`clawmetry-cloud#4`, filed 2026-03-06)
+- **Likely scope**: Both — OSS proxy gets the policy rules wired in; cloud gets the managed proxy endpoint with fleet-wide enforcement
+- **Suggested first step**: Wire `#4735`'s rule schema into `proxy.py` so a rule with `action: block` actually intercepts calls at port 4100. The REST backend is already in place; this is the enforcement bridge PR.
+- **Weeks unaddressed**: **10+** (OSS `#2816`–`#2818`); **23+** (`clawmetry-cloud#4`, filed 2026-03-06)
 
 ---
 
 ### 3. P0 Security — Plaintext API Keys in Production DB ⚠️
 
-- **Demand**: 1 issue (`clawmetry-cloud#315`, labeled `bug`, filed **2026-04-14**, now **136 days old**).
+- **Demand**: 1 issue (`clawmetry-cloud#315`, labeled `bug`, filed **2026-04-14**, now **143 days old**).
 - **What it says**: `users.api_key` stores raw `cm_*` tokens in cleartext in the production database. Confirmed in prod. Anyone with read access — developer access, backups, GCP logs, support tooling — can impersonate any user.
-- **Why it matters**: This is not a roadmap priority dispute — it is a security emergency that is now 19+ weeks old. Every week paying customers onboard while the exposure window grows. The fix is a single PR: bcrypt the stored keys, run a one-time migration script, update the verification flow. It has not been touched.
+- **Why it matters**: This is not a prioritization dispute — it is a confirmed security exposure that is now **20+ weeks old**. Every week paying customers onboard while the exposure window grows. The fix is a single PR: bcrypt the stored keys, run a one-time migration script, update the verification flow.
 - **Linked issues**: `clawmetry-cloud#315`
 - **Likely scope**: Cloud only
 - **Suggested first step**: Bcrypt stored keys with a one-time migration. Estimated 1 day of work.
-- **Weeks unaddressed**: **19+** (up from 15+ the week prior)
-
----
-
-### 4. Session Tracing EPIC — OTel-Compatible Trace Tree & Span Hierarchy
-
-- **Demand**: 5+ open issues (1 OSS EPIC + 4 cloud), last raised 2026-05-16. EPIC `#1006` open **12+ weeks**.
-- **Representative quotes** (carried):
-  - *“My main problem with Claude Code right now is observability. I’ve been experimenting a lot with vibe coding, but nowadays I can’t even tell what it’s doing.”* — `clawmetry-cloud#652` (HN thread, intel-score 8/10)
-  - *“Today ClawMetry captures events (tool_call, message) but loses the hierarchy — parent→child relationships… Without that hierarchy, ‘why did this run take 30s?’ is unanswerable.”* — `clawmetry#1006`
-- **Why it matters**: Observability is ClawMetry’s stated identity. The Brain session swimlane shipped this week; the spend-flow visualization shipped this week. Both are useful. Neither substitutes for a span tree. A flat list of events is not a trace. `clawmetry#1006` is 12+ weeks old with zero PRs; AgentPulse and Faros are actively pitching on exactly this gap.
-- **Linked issues**: `clawmetry#1006`, `clawmetry-cloud#321`, `clawmetry-cloud#322`, `clawmetry-cloud#320`, `clawmetry-cloud#703`
-- **Likely scope**: Both — OSS owns event capture + OTel ingestion; cloud surfaces the visual trace tree + replay scrubber
-- **Suggested first step**: Land `clawmetry-cloud#321` (compaction markers with expandable summary) — one new event type, one UI widget, highest signal-to-scope ratio in the cluster.
-- **Weeks unaddressed**: **12+** (up from 11+)
+- **Weeks unaddressed**: **20+** (up from 19+ last week)
 
 ---
 
 ## Warm themes (worth tracking)
 
-- **React v2 Migration** (`clawmetry#1492`, RFCs `#1493`/`#1494`/`#1497`/`#1519`): 12+ weeks open, **0 PRs**. Design handoff exists (`/Users/vivek/Downloads/design_handoff_clawmetry_v2/`). At 12 weeks with no commits against the branch, this is approaching stalled-or-cancelled. A decision — either a first PR or an explicit close — would clean up 5 open issues.
+- **Session Tracing EPIC** (`clawmetry#1006`, `clawmetry-cloud#321`, `#322`, `#320`, `#703`): **Major movement this week — demoted from HOT to WARM.** OTLP receiver shipped (JSON, port 4318, hex ids — `#4785`), Tracing tab restored and populated (`#4789`), turn-anchored trace UI with collapsed tools and jump-to-turn TOC (`#4802`), and `clawmetry.trace` dependency-free SDK in review (`#4804`). The full span hierarchy and replay scrubber (the core ask of `#1006`) remain unbuilt, but the ingest and display foundation now exists. Watch for users requesting parent→child relationship rendering and distributed trace stitching as the next filed issue.
 
-- **DuckDB-everywhere + Redis hot cache** (`clawmetry#1032`): Foundational for Dives (`#999`) and the trace tree (`#1006`). Open since May 12. 0 PRs.
+- **OTel Emitter Discovery** (`clawmetry#4783`): New this week. Now that the OTLP receiver works, auto-detection of OTel-emitting applications on the same machine (process env scan for `OTEL_EXPORTER_OTLP_ENDPOINT`, port probing on 4317/4318) is the natural follow-on. Filed as a scoped enhancement; not a blocker.
 
-- **Remote Approval Gates — Policy Layer** (`clawmetry#881`, `clawmetry-cloud#1192`): Push-notification half shipped July 25. Declarative policy engine (auto-approve rules, tool-call gates, audit log, replay) is still unbuilt. Enterprise monetization tier.
+- **React v2 Migration** (`clawmetry#1492`, RFCs `#1493`/`#1494`/`#1497`/`#1519`): **13+ weeks open, 0 PRs.** Design handoff exists at `/Users/vivek/Downloads/design_handoff_clawmetry_v2/`. At 13 weeks with no commits, this is stalled or cancelled. A decision — either a first PR or an explicit close — would clean up 5 open issues.
 
-- **Subscription-Mode Cost Accounting** (`clawmetry-cloud#1088`): Claude Max / ChatGPT-Plus / Codex OAuth users see ~100x inflated cost numbers because per-token pricing is applied to flat-rate traffic. High trust-damage risk. 0 PRs.
+- **Remote Approval Gates — Policy Layer** (`clawmetry#881`, `clawmetry-cloud#1192`): Push-notification half shipped Jul 25. Rule Builder REST backend shipped (`#4735`) this week. The enforcement bridge — wiring rules into `proxy.py` so a matched call actually pauses — is still the missing piece. Overlaps with HOT Theme #2.
 
-- **Claude Code First-Class Observability** (`clawmetry-cloud#703` EPIC): 10-phase epic for native Claude Code adapter + dedicated dashboard. AgentPulse and Faros are pitching on this. 0 PRs.
+- **Subscription-Mode Cost Accounting** (`clawmetry-cloud#1088`): Partially addressed — Cost tab now shows "$0 out-of-pocket — covered by" for flat-rate users (`#4774`, Aug 12). The visual ~100x cost inflation for Claude Max / ChatGPT Plus / Codex OAuth users is mitigated at the display layer. Watch for follow-up on whether the underlying per-token accounting is also suppressed for flat-rate traffic.
 
-- **Version-Aware Health Regression Detection** (`clawmetry#2861`): “Did deploy X cause this regression?” surfaced as a correlation banner. Useful, differentiated. 0 PRs.
+- **DuckDB-everywhere + Redis hot cache** (`clawmetry#1032`): Foundational for Dives (`#999`) and the trace tree (`#1006`). Open since May 12. 0 PRs. The 80x ingest speedup (`#4669`) hit the write path this week; the read-path hot cache is still unbuilt.
+
+- **ClawMetry Dives — AI SQL→Chart** (`clawmetry#999`): 14+ weeks open, 0 PRs. Enables NL questions over local DuckDB agent data. Foundational for advanced analytics. DuckDB is the right backend; just needs the prompt template + endpoint + chart rendering layer.
+
+- **Version-Aware Health Regression Detection** (`clawmetry#2861`): **Shipped this week** via `#4625` — version-regression banner now appears in the System Health panel. Issue `#2861` can be closed.
+
+- **ClickClack channel adapter** (`clawmetry#3837` et al.): **7 automated filings** in ~25 days (`severity:high`). Fix is one string (`"clickclack"`) added to `_CHANNEL_DIRS` in `clawmetry/sync.py` + one route in `routes/channels.py`. Each new filing is a harness cycle spent on a known one-line gap.
 
 - **Helicone-Refugee Importer** (`clawmetry-cloud#962`): One-click import of Helicone JSON logs + cache analytics panel. Real acquisition channel. 0 PRs.
-
-- **ClickClack channel adapter** (`clawmetry#3837`, `#3990`, `#4147`, `#4240` + 2 earlier): Filed **6 times** by the harness scanner, each flagged `severity:high`. The fix is one string (`"clickclack"`) added to `_CHANNEL_DIRS` in `clawmetry/sync.py` plus a new route in `routes/channels.py`. The scanner will keep refiling this until it’s fixed or suppressed.
 
 ---
 
 ## Closed-loop themes (we shipped this)
 
-**New this week (2026-08-01 → 2026-08-07):**
+**New this week (2026-08-08 → 2026-08-14):**
 
-- **Evals major push** (`clawmetry#4505`/`#4509`/`#4557`/`#4487`/`#4492`/`#4493`/`#4496`/`#4572`, merged Aug 3–6): Verdict chips on Evals tab and transcript detail view, Score button per conversation, optional DeepEval metric engine (`clawmetry[deepeval]`), deterministic evaluators wired to real stored events, golden-suite rubric fix, free checks visible without a judge key, cloud-mode Score fix. 12 PRs in 4 days. No user issues requested this; founder-initiated push. Watch for: Android reliability reports, Telegram parity requests.
+- **OTel / Tracing foundation** (`#4785`, `#4789`, `#4796`, `#4802`, `#4804`): OTLP receiver works out of the box (JSON, port 4318, hex ids — no protobuf). Tracing tab restored and populated from local DuckDB. Turn-anchored trace UI with collapsed tools + jump-to-turn TOC. `clawmetry.trace` dependency-free SDK (in review). E2E smoke test. **Largest single-week movement on a HOT user theme in 3 months.** Watch for span-hierarchy and distributed-trace-stitching follow-ups from users who asked for `clawmetry#1006`.
 
-- **Spend-flow visualization** (`clawmetry#4494`/`#4513`, merged Aug 3): Node-wide AI spend flow (“Where the money goes”: context in → runtime → output out) + `thinking_trim` savings idea surfaced from measured spend. **Partially closes HOT Theme #1** — visibility delivered, enforcement still open.
+- **Desktop App native installers** (`#4602`, `#4614`, `#4646`, `#4648`, `#4705`): First signed macOS .dmg with drag-to-Applications layout. Authenticode-signed Windows installer (fixes Smart App Control uninstall block). Linux .deb. Global CLI, self-healing sync daemon, 6-hour background auto-update (`#4706`). First-launch onboarding pane — sign in, auto Pro trial, cross-sell carousel (`#4614`). **No OSS user issues requested this; founder-initiated distribution investment.**
 
-- **Two new runtimes**: QM as 17th observable runtime (`clawmetry#4582`, Aug 7); xAI Grok as 18th runtime (`clawmetry#4547`, Aug 5). Now **18 runtimes** total. Directionally addresses `clawmetry#882`.
+- **Onboarding & trial lifecycle** (`#4788`, `#4792`, `#4775`, `#4776`, `#4694`, `#4799`, `#4707`): Root cause of trial-less cloud signups fixed (subprocess EOFError on non-interactive encryption-key prompt — `#4792`). Cloud sign-in activates 7-day Pro trial at signup. Onboarding gate + login prompt no longer re-appear after successful OTP. Self-host sign-in provisions the 7-day trial. `--turn-off-cloud-sync` now purges every cloud trace. Uninstall removes all ClawMetry traces so fresh install re-onboards cleanly.
 
-- **Trial-end hard-block + expired-trial banner** (`clawmetry#4566`/`#4444`, Aug 2–6): Trial-end hard-block enforcement (default ON) and an expired-trial banner with a buy path. Funnel closure.
+- **Rule Builder Phase 1 REST backend** (`#4735`, merged Aug 11): `/api/v2/rules` REST backend — configuration layer for the policy engine. Issue `clawmetry#1517` partially closed. Enforcement in `proxy.py` still pending (see HOT Theme #2).
 
-- **Auth & daemon fixes** (`clawmetry#4579`/`#4495`, Aug 3–6): Auto-update root cause fix, self-host trial silently-failing bug, runtime-chip cloud redirect, and explicit sign-out sticks (no silent zero-click re-login).
+- **Version health regression banner** (`#4625`, merged Aug 8): "Did deploy X cause this regression?" now surfaces as a correlation banner in System Health. Closes `clawmetry#2861`.
 
-- **Profile menu upgrade** (`clawmetry#4524`, Aug 3): Self-hosted upgrade sells the self-hosted license; legacy gateway settings entry points removed. Closes the self-hosted → paid conversion path.
+- **Cache Hit Rate + Routing Advisor tiles** (`#4610`, merged Aug 7): Routing visibility — cache-hit rate and model routing suggestions in the dashboard. Visibility only; the control half (auto-rerouting) is still in `clawmetry#2816`.
 
-- **Runtime feature parity** (`clawmetry#4464`/`#4472`, Aug 2): Real Agent Graph, Approvals (Claude Code hooks), Logs & Security now live for all 16 runtimes. Directionally closes `clawmetry#882`.
+- **Grafana-style date/time range picker** (`#4771`, merged Aug 12): Activity and Sessions tabs now have a polished date/time-range picker. Addresses implicit UX complaint about time-range filtering.
 
-**Continuing from prior weeks (selected):**
+- **80x faster fresh-install ingest** (`#4669`, merged Aug 9): Bulk flush, pre-insert integrity chain, batch session/span APIs. Significant perf milestone for new users with large session history.
 
-- Web Push Phone Approvals (`clawmetry-cloud#1766`–`#1790`, Jul 25–26): Watching for Android reliability and Telegram parity follow-ups.
-- n8n runtime — 15th runtime (`clawmetry#4251`, Jul 30).
-- Onboarding funnel / 7-day Pro trial (`clawmetry#4288`/`#4287`, Jul 28–31).
-- Brain time-window picker (`clawmetry#4284`, Jul 31).
+- **Windows UX fixes** (`#4673`, `#4705`, `#4717`, `#4752`, `#4754`): Python 3 auto-install on Windows. Authenticode signing (fixes Smart App Control uninstall block). `pythonw.exe` for Claude Code hook (no console popup). TLS cert verification on OTP/OAuth POSTs. Cross-origin URLs routed to system browser.
+
+- **Cloud-sync toggle in header** (`#4623`, merged Aug 8): One-click pause/resume for cloud sync without a full `--turn-off-cloud-sync`.
+
+- **Fish Audio TTS cost tracking** (`#4768`, `#4726`, merged Aug 10–12): Fish Audio S2.1 TTS calls captured as `tts_call` events with cost backfill. Extends coverage of non-LLM AI spend.
+
+- **Evals: score-first reorder + per-session drill-down drawer** (`#4806`/`#4818`, merged Aug 14): Evals tab reordered by score; per-session drill-down drawer added. Second evals push in 2 weeks; still no user-issue demand in OSS.
+
+- **Cost tab subscription display** (`#4774`, merged Aug 12): Shows "$0 out-of-pocket — covered by" for flat-rate users instead of inflated per-token API costs. Partially addresses `clawmetry-cloud#1088`.
+
+**Continuing from prior weeks:**
+- Spend-flow visualization (`#4494`/`#4513`, Aug 3) — partial HOT Theme #1 close (visibility delivered, enforcement open).
+- Web Push Phone Approvals (`clawmetry-cloud#1766`–`#1790`, Jul 25–26) — watching for Android reliability follow-ups.
+- 18 runtimes total (QM Aug 7; xAI Grok Aug 5).
+- Trial-end hard-block + expired-trial banner (`#4566`/`#4444`, Aug 2–6).
 
 ---
 
 ## Quiet noise (likely not signal)
 
-- **Harness-observability gap issues** (38 of 62 open OSS issues): Automated bot filings for `[obs-gap:openclaw]` and `[obs-gap:nemoclaw]`. These are not user pain; they are coverage gaps the harness bot identified. The **ClickClack obs-gap** (`severity:high`) has been filed 6 times in 18 days — it is the loudest automated signal in the repo by volume. One-line fix in `sync.py`.
+- **Harness-observability gap issues** (~40 open OSS issues outside the enhancement set): Automated bot filings for `[obs-gap:openclaw]` and `[obs-gap:nemoclaw]`. Not user pain; coverage gaps the harness scanner identified. The **ClickClack obs-gap** (`severity:high`) is the loudest automated signal by volume — **7 filings in ~25 days**. One-line fix in `sync.py`.
 
-- **Intel-scout scope blockers** (8 issues, `#3466`–`#3834`): The intel-scout bot still cannot access `vivekchand/clawmetry-cloud`. 12 consecutive blocked runs. Real cloud user pain is accumulating unfiled. Fix: add `vivekchand/clawmetry-cloud` to the bot’s session scope.
+- **Intel-scout / roadmap-synthesis scope blockers** (`#3466`–`#3834`+): Both bots blocked from `vivekchand/clawmetry-cloud` for **13 consecutive runs**. Real cloud user pain is accumulating unfiled. Fix: add `vivekchand/clawmetry-cloud` to both bots' session scope at https://code.claude.com.
 
-- **Entitlement API buildout** (19+ OSS PRs in the last 30 days): Time-indexed scalar helpers (`has_feature_at`, `missing_features_at_path_batch`, etc.) building the open-core paywall engine. Legitimate founder-driven infrastructure. Zero user issues requested these.
+- **Entitlement API buildout** (40+ OSS PRs since Aug 1): Time-indexed scalar helpers building the open-core paywall engine. Legitimate infrastructure. Zero user issues requested these.
 
-- **CI/C6 harness PRs** (~8 PRs this week): Branch-protection applier fixes, Playwright caching, e2e-gate guard and concurrency fixes. Internal quality work.
+- **CI/harness housekeeping** (~8 PRs): Branch-protection applier fixes, Playwright caching, e2e-gate guard and concurrency fixes. Internal quality work.
 
 ---
 
@@ -133,35 +134,35 @@ Evals got the most concentrated engineering investment in recent memory — 12 P
 
 | Metric | Value |
 |--------|-------|
-| OSS PRs merged (Aug 1–7, estimated) | ~100 |
-| OSS PRs merged (last 30d, total) | **601** |
-| User-signal themes shipped (Aug 1–7) | 5 (evals, spend-flow viz, 2 runtimes, runtime parity) |
-| Largest PR cluster (Aug 1–7, excl. bumps/RELEASE) | Entitlement API scalars (~20 PRs) — **0 user issues requested** |
-| 2nd largest PR cluster | Evals push (~12 PRs) — **0 user issues requested** |
-| **Cost enforcement / kill-switch: PRs shipped** | **0 (9+ weeks; `clawmetry-cloud#4` open 154 days)** |
-| **Tracing EPIC (`clawmetry#1006`): PRs shipped** | **0 (12+ weeks)** |
-| **React v2 EPIC (`clawmetry#1492`): PRs shipped** | **0 (12+ weeks — approaching stalled/cancelled)** |
-| **Security bug `clawmetry-cloud#315` (plaintext API keys)** | **0 PRs in 136 days** |
+| OSS PRs merged (Aug 8–14, estimated excl. bumps/RELEASE/i18n) | ~50 |
+| OSS PRs merged (last 30d, estimated) | **~600+** |
+| User-signal themes shipped (Aug 8–14) | 2 (Tracing foundation; version health regression `#2861`) |
+| **Largest PR cluster (Aug 8–14, excl. bumps/RELEASE)** | Desktop App native installers (~15 PRs) — **0 user issues requested** |
+| **2nd largest PR cluster** | Entitlement API scalars (~15 PRs) — **0 user issues requested** |
+| **OTel/Tracing EPIC: first meaningful PRs** | **This week** (after 12 weeks of 0 PRs) |
+| **Cost enforcement / kill-switch: PRs shipped** | **0 (10+ weeks; `clawmetry-cloud#4` open 163 days)** |
+| **P0 Security `clawmetry-cloud#315`** | **0 PRs in 143 days** |
+| **React v2 EPIC (`clawmetry#1492`): PRs shipped** | **0 (13+ weeks — stalled or cancelled)** |
 | Themes HOT for 2+ weeks without action | Cost enforcement (`#2816`–`#2818`, since 2026-06-07) |
-| Themes HOT for 5+ months without action | `clawmetry-cloud#4` (emergency stop, filed 2026-03-06, **154 days**) |
-| Intel-scout failures (consecutive) | **12** — cloud intel accumulating unfiled |
+| Themes HOT for 5+ months without action | `clawmetry-cloud#4` (emergency stop, filed 2026-03-06, **163 days**) |
+| Intel-scout/roadmap-synthesis failures (consecutive) | **13** — cloud intel accumulating unfiled |
 
 **Uncomfortable truths this week:**
 
-1. **The two biggest PR clusters had zero user-issue demand.** Entitlement API (~20 PRs) and Evals (~12 PRs) were both founder-initiated. That’s a legitimate call — founders know things that don’t show up in issues. But objectively, the product was shaped entirely by gut this week, not by user signal.
+1. **The OTel/Tracing push is real progress — but the span hierarchy is still missing.** Users asked for `clawmetry#1006` (OTel-compatible trace tree with parent→child relationships). What shipped is the ingest and display foundation: OTLP receiver, Tracing tab, turn-anchored session UI. That's the right first step. What's unbuilt: parent→child span rendering and distributed trace stitching. The filed EPIC (`#1006`) is not closed. Watch for users filing that ask explicitly now that the Tracing tab exists.
 
-2. **The security bug is now 136 days old.** `clawmetry-cloud#315` (plaintext API keys, confirmed in prod) has had 0 PRs in 19+ weeks. A single DB read or log dump exposes every customer credential. This is not a prioritization decision anymore — it is a liability that grows every week paying customers onboard.
+2. **Desktop App was the week's biggest shipping story with zero user-issue demand.** The macOS .dmg, Windows Authenticode installer, Linux .deb, global CLI, and self-healing daemon are legitimate distribution investments. But no OSS user issue requested any of these. Distribution expands reach; it doesn't serve the users already here who want cost enforcement, kill-switches, and trace hierarchies.
 
-3. **Spend enforcement is the missing half of what just shipped.** The “Where the money goes” spend-flow visualization is a real step forward. Users can now see what they’re spending. They still cannot set a budget alert or trigger a kill-switch at 80% of limit. The most-requested user outcome — “stop before I go over” — is undelivered.
+3. **Cost enforcement is in its 10th week with 0 PRs.** Spend-flow visualization (Aug 3) and the "$0 out-of-pocket" label (Aug 12) delivered full visibility. Enforcement — budget caps, graduated alerts, weekly digest — is the unbuilt half of the most-requested user outcome. The visibility shipped in two weeks; the enforcement has been waiting 10+ weeks.
 
-4. **The ClickClack gap has been filed 6 times.** Each scan generates a new `severity:high` issue. The fix is one string. The harness is spending real audit cycles on a known gap that has a one-line fix.
+4. **The security bug is 143 days old and growing.** `clawmetry-cloud#315` (plaintext API keys, confirmed in prod) has had 0 PRs in 20+ weeks. Estimated fix: 1 day. Every paying customer who onboarded since 2026-04-14 has had their credential stored in cleartext.
 
-5. **Cloud repo is blind again.** The July 31 synthesis had live access to `vivekchand/clawmetry-cloud`. This week’s run does not. The same scope misconfiguration that has blocked the intel-scout bot for 12 consecutive runs is now also blocking the roadmap-synthesis run. Cloud user pain is carried forward from a week-old snapshot.
+5. **Cloud blindspot is worsening — 14 days of unseen signal.** The last live read of `vivekchand/clawmetry-cloud` was 2026-07-31. This synthesis carries cloud signals that are now 14 days stale. Both bots are blocked for the 13th consecutive run. The scope fix takes one configuration change.
 
 ---
 
 ## How this list is built
 
-Reads every open `intel-feedback` / `intel-pain` / `bug` / `enhancement` issue across BOTH repos (`vivekchand/clawmetry` and `vivekchand/clawmetry-cloud`), clusters semantically, ranks by reaction count + recency. Cross-references the last 30 days of merged PRs in both repos to detect what’s already addressed — in either repo.
+Reads every open `intel-feedback` / `intel-pain` / `bug` / `enhancement` issue across BOTH repos (`vivekchand/clawmetry` and `vivekchand/clawmetry-cloud`), clusters semantically, ranks by reaction count + recency. Cross-references the last 30 days of merged PRs in both repos to detect what's already addressed — in either repo.
 
-This run: **62 open OSS issues analyzed** (cloud inaccessible — signals carried from 2026-07-31 synthesis). **601 merged PRs** in the 30-day window from the OSS repo. No `intel-feedback` or `intel-pain` label exists in OSS; all demand signal is inferred from cloud issues (carried) and human-filed OSS enhancement issues. Note: 38 of 62 OSS issues are automated harness-gap filings, not user pain.
+This run: **24 open OSS enhancement issues analyzed** (cloud inaccessible — signals carried from 2026-07-31 synthesis). **~600+ merged PRs** in the 30-day window from the OSS repo. No `intel-feedback` or `intel-pain` label exists in OSS; demand signal is inferred from cloud issues (carried) and human-filed OSS enhancement issues. The `bug` label exists in OSS and contains predominantly automated harness-gap filings, not user-reported defects.
