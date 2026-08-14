@@ -34,6 +34,17 @@ If you add a new runtime, add an entry to :data:`RUNTIME_CATALOG` and — if
 its adapter reads a per-project file (like ``AGENTS.md`` / ``GEMINI.md``) —
 include it under the ``project`` roots so the workspace-relative file shows
 up alongside the global ones.
+
+Relationship to the AgentAdapter layer
+--------------------------------------
+This module is intentionally NOT sourced from ``clawmetry.adapters``.
+Adapters normalise live Session / Event streams for a runtime; this catalog
+resolves on-disk memory / skills paths. A runtime's adapter can be
+unshipped (Pro tier not installed on a free machine) while the runtime's
+memory files still exist on the user's filesystem, so the browser must
+resolve independently. When both exist, the OpenClaw adapter's session
+paths and this catalog's memory roots share the same on-disk prefix
+(``~/.openclaw/…``) but neither imports the other.
 """
 from __future__ import annotations
 

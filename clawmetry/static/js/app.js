@@ -25502,19 +25502,25 @@ function _cmRuntimeChip(runtime, selected, tab, category) {
   }
   var isSel = runtime.id === selected;
   var isPresent = !!runtime.present;
+  var isLocked = !!runtime.locked;
   var bg = isSel ? '#6366f1' : (isPresent ? 'var(--bg-secondary)' : 'transparent');
   var color = isSel ? '#fff' : (isPresent ? 'var(--text-primary)' : 'var(--text-muted)');
   var border = isSel ? '#6366f1' : 'var(--border-primary)';
   var op = (isPresent || isSel) ? 1 : 0.55;
-  var badge = count > 0
-    ? '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>'
-    : '';
+  var badge = '';
+  if (isLocked) {
+    badge = '<span title="Paid runtime — upgrade to browse its files" style="margin-left:6px;font-size:10px;opacity:0.85;">🔒</span>';
+  } else if (count > 0) {
+    badge = '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>';
+  }
+  var titleTip = isLocked
+    ? escHtml(runtime.label) + ' — paid runtime, upgrade to browse'
+    : escHtml(runtime.label) + (isPresent ? '' : ' (not detected on this machine)');
   return '<div class="cm-runtime-chip" data-runtime="' + runtime.id + '" '
     + 'onclick="cmRuntimeSelect(\'' + tab + '\',\'' + runtime.id + '\')" '
     + 'style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;'
     + 'background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';opacity:' + op + ';'
-    + 'display:inline-flex;align-items:center;gap:4px;" title="' + escHtml(runtime.label)
-    + (isPresent ? '' : ' (not detected on this machine)') + '">'
+    + 'display:inline-flex;align-items:center;gap:4px;" title="' + titleTip + '">'
     + escHtml(runtime.label) + badge + '</div>';
 }
 
@@ -25592,6 +25598,22 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
       // No category filter — show everything the runtime exposes.
     }
     var r = await fetch(url);
+    if (r.status === 402) {
+      // Paid runtime the caller isn't entitled to. Show upsell CTA
+      // instead of an error — matches the OSS conversion-moment pattern.
+      var rtLabel = (_cmRuntimeCatalog && _cmRuntimeCatalog.runtimes || [])
+        .filter(function(x) { return x.id === runtimeId; })[0];
+      var label = (rtLabel && rtLabel.label) || runtimeId;
+      container.innerHTML =
+        '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.55;max-width:520px;margin:0 auto;">'
+        + '<div style="font-size:28px;margin-bottom:8px;">🔒</div>'
+        + '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;font-size:15px;">' + escHtml(label) + ' is a paid runtime</div>'
+        + 'Upgrade your ClawMetry plan to browse this runtime\'s memory and skills files. '
+        + 'Everything ClawMetry knows about ' + escHtml(label) + ' — including where its memory lives on disk — is bundled with the paid tier that ships its adapter.'
+        + '<div style="margin-top:16px;"><a href="https://clawmetry.com/pricing" target="_blank" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px;">See pricing</a></div>'
+        + '</div>';
+      return;
+    }
     if (!r.ok) throw new Error('http ' + r.status);
     payload = await r.json();
   } catch (e) {
