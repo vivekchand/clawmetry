@@ -41,6 +41,7 @@ from flask import Blueprint, jsonify, request
 
 from clawmetry.runtime_memory import (
     CATEGORIES,
+    list_all_files,
     list_files,
     list_runtimes,
     read_runtime_file,
@@ -111,20 +112,30 @@ def api_runtime_files(runtime_id: str):
     Query params:
       - category: optional filter (memory | skills | commands | agents | hooks)
 
+    ``runtime_id`` may be the literal ``all``, which aggregates every
+    runtime the caller is entitled to. That is the default scope of the
+    Memory / Skills tabs (the global runtime switcher's "All runtimes"),
+    so it must never 402 — locked runtimes are simply left out of the
+    sweep rather than turning the whole page into an upsell.
+
     Returns HTTP 402 ``upgrade_required`` when the runtime is a paid
     runtime and the resolved entitlement does not cover it. This is the
     OSS conversion moment prescribed by ``FLYWHEEL.md`` §1b — never
     silently disable, always surface the upgrade CTA.
     """
+    category = (request.args.get("category") or "").strip() or None
+    if category and category not in CATEGORIES:
+        return jsonify({"error": "invalid category"}), 400
+    if runtime_id == "all":
+        allowed = [rt["id"] for rt in list_runtimes()
+                   if not _runtime_is_locked(rt["id"])]
+        return jsonify(list_all_files(category=category, allowed=allowed))
     if _runtime_is_locked(runtime_id):
         return jsonify({
             "error": "upgrade_required",
             "runtime": runtime_id,
             "reason": "paid_runtime_not_entitled",
         }), 402
-    category = (request.args.get("category") or "").strip() or None
-    if category and category not in CATEGORIES:
-        return jsonify({"error": "invalid category"}), 400
     payload = list_files(runtime_id, category=category)
     if payload.get("error") == "unknown_runtime":
         return jsonify(payload), 404

@@ -185,6 +185,11 @@ def _catalog() -> list:
                      label="Global skills", scope="global"),
             RootSpec("skills", os.path.join(ws, ".claude", "skills"),
                      label="Project skills", scope="project"),
+            # Most Claude Code users never write a ~/.claude/skills file —
+            # their skills arrive as plugins. Without this root the Skills
+            # tab read "nothing found" for a machine with 30+ live skills.
+            RootSpec("skills", os.path.join(claude_home, "plugins", "marketplaces"),
+                     ("**/SKILL.md",), "Plugin skills", "global", max_depth=8),
             RootSpec("agents", os.path.join(claude_home, "agents"),
                      ("*.md",), "Global sub-agents", "global"),
             RootSpec("agents", os.path.join(ws, ".claude", "agents"),
@@ -667,7 +672,36 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
             "exists": exists,
             "files": files,
         })
+    for g in groups:
+        g["runtime"] = entry.id
+        g["runtime_label"] = entry.label
     return {"runtime": entry.id, "label": entry.label, "groups": groups}
+
+
+def list_all_files(category: Optional[str] = None,
+                   allowed: Optional[Iterable] = None) -> dict:
+    """Aggregate :func:`list_files` across every catalogued runtime.
+
+    Backs the "All runtimes" scope of the Memory / Skills browser. Only
+    groups that actually exist on disk are returned — the per-runtime
+    view is where we spell out the paths we looked at and came up empty,
+    because listing every absent root for 20 runtimes would be a wall of
+    noise rather than an answer.
+
+    ``allowed``, when given, restricts the sweep to that set of runtime
+    ids (the caller passes the entitled ones so a locked paid runtime's
+    file paths never leak into an aggregate the user can't open).
+    """
+    allowed_set = set(allowed) if allowed is not None else None
+    groups: list = []
+    for entry in _catalog():
+        if allowed_set is not None and entry.id not in allowed_set:
+            continue
+        payload = list_files(entry.id, category=category)
+        for g in payload.get("groups") or ():
+            if g.get("exists") and (g.get("files") or []):
+                groups.append(g)
+    return {"runtime": "all", "label": "All runtimes", "groups": groups}
 
 
 def read_runtime_file(runtime_id: str, root: str, path: str,
