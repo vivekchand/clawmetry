@@ -25973,10 +25973,13 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   container.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;">Loading '
     + escHtml(scopeLabel) + '…</div>';
   var payload;
-  // The Memory tab shows memory files; the Skills tab shows skills. Without
-  // this the two tabs rendered byte-identical trees (every category the
-  // runtime exposes), which is what made Skills look like a copy of Memory.
-  var category = (tab === 'skills') ? 'skills' : 'memory';
+  // Memory owns the `memory` bucket; Skills owns the other four — skills,
+  // slash commands, sub-agent definitions and hooks are all "things the agent
+  // can invoke or is configured by". Without this split the two tabs rendered
+  // byte-identical trees (every category), which is what made Skills look
+  // like a copy of Memory; splitting Skills down to `skills` alone would
+  // instead leave commands/agents/hooks collected but displayed nowhere.
+  var category = (tab === 'skills') ? 'skills,commands,agents,hooks' : 'memory';
   try {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files'
       + '?category=' + encodeURIComponent(category);

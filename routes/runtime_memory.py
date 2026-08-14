@@ -56,6 +56,7 @@ from clawmetry.runtime_memory import (
     list_all_files,
     list_files,
     list_runtimes,
+    parse_categories,
     read_runtime_file,
 )
 
@@ -134,7 +135,7 @@ def api_runtime_files_all():
     still 402s below.
     """
     category = (request.args.get("category") or "").strip() or None
-    if category and category not in CATEGORIES:
+    if category and not parse_categories(category):
         return jsonify({"error": "invalid category"}), 400
     allowed = [rt["id"] for rt in list_runtimes()
                if not _runtime_is_locked(rt["id"])]
@@ -160,7 +161,7 @@ def api_runtime_files(runtime_id: str):
     silently disable, always surface the upgrade CTA.
     """
     category = (request.args.get("category") or "").strip() or None
-    if category and category not in CATEGORIES:
+    if category and not parse_categories(category):
         return jsonify({"error": "invalid category"}), 400
     if runtime_id == "all":
         # Defensive: the static rule above normally wins the match. Kept so

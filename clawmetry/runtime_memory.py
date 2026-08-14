@@ -682,6 +682,31 @@ def list_runtimes() -> list:
     return out
 
 
+#: The Skills tab's buckets. The catalog has five categories and the UI has
+#: two tabs: Memory owns ``memory``, Skills owns everything else — the things
+#: an agent can invoke or is configured by. Splitting Skills down to the
+#: ``skills`` bucket alone would leave slash commands, sub-agent definitions
+#: and hooks collected but displayed nowhere.
+SKILLS_TAB_CATEGORIES: tuple = ("skills", "commands", "agents", "hooks")
+
+
+def parse_categories(category) -> set:
+    """Normalise a category filter into a set of valid category names.
+
+    Accepts ``None`` (no filter), one name, a comma-separated string, or an
+    iterable. Unknown names are dropped rather than raising — the caller
+    validates for a 400; this stays permissive so an internal caller can't
+    trip on a stray empty segment.
+    """
+    if not category:
+        return set()
+    if isinstance(category, str):
+        parts = [c.strip() for c in category.split(",")]
+    else:
+        parts = [str(c).strip() for c in category]
+    return {c for c in parts if c in CATEGORIES}
+
+
 def _entry_by_id(runtime_id: str) -> Optional[RuntimeCatalogEntry]:
     for entry in _catalog():
         if entry.id == runtime_id:
@@ -695,18 +720,24 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
     Returns ``{'runtime': id, 'label': str, 'groups': [{root, label,
     category, scope, exists, files: [...]}]}``.
 
-    ``category``, when set, filters roots to that one bucket. ``files``
-    entries are ``{path, size, mtime}`` with ``path`` relative to the
-    group's root. A root that is a single file gets one entry with
+    ``category`` filters roots. It accepts one bucket (``"memory"``) or a
+    comma-separated set (``"skills,commands,agents,hooks"``) — the catalog
+    has five categories and the UI has two tabs, so the Skills tab asks for
+    the four non-memory buckets in one call rather than leaving commands,
+    sub-agent definitions and hooks with nowhere to appear.
+
+    ``files`` entries are ``{path, size, mtime}`` with ``path`` relative to
+    the group's root. A root that is a single file gets one entry with
     ``path=''`` (empty relpath) so the client can still address it.
     """
     entry = _entry_by_id(runtime_id)
     if entry is None:
         return {"runtime": runtime_id, "label": "", "groups": [], "error": "unknown_runtime"}
 
+    wanted = parse_categories(category)
     groups: list = []
     for spec in entry.roots:
-        if category and spec.category != category:
+        if wanted and spec.category not in wanted:
             continue
         root = spec.expanded_root()
         exists = os.path.exists(root)

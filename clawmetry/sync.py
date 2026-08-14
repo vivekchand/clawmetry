@@ -11656,7 +11656,10 @@ def sync_runtime_memory_files(config: dict, state: dict, paths: dict) -> int:
         rt_id = entry.get("id") or ""
         if not rt_id or not _allowed(rt_id):
             continue
-        for category in ("memory", "skills"):
+        # Memory tab reads `memory`; Skills tab reads the other four. Ingest
+        # all five or the Skills tab is empty in cloud for everything except
+        # the `skills` bucket.
+        for category in ("memory",) + runtime_memory.SKILLS_TAB_CATEGORIES:
             try:
                 payload = runtime_memory.list_files(rt_id, category=category)
             except Exception:
