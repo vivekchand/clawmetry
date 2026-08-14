@@ -238,7 +238,7 @@ def test_runtime_label_falls_back_to_id(ent):
 
 
 def test_paid_runtimes_exact_membership(ent):
-    # Asserts the exact 13-entry PAID_RUNTIMES set so any accidental add/remove
+    # Asserts the exact PAID_RUNTIMES set so any accidental add/remove
     # breaks loudly instead of silently skipping gate coverage.
     expected = frozenset(
         {
@@ -259,10 +259,11 @@ def test_paid_runtimes_exact_membership(ent):
             "copilot",
             "grok",
             "qm",
+            "deepseek_harness",
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 17
+    assert len(ent.PAID_RUNTIMES) == 18
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):

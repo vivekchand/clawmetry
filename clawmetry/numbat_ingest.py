@@ -68,6 +68,8 @@ _AGENT_TO_RUNTIME = {
     "grok": "grok",
     "pi": "pi",
     "qm": "qm",
+    "deepseek-harness": "deepseek_harness",
+    "dsh": "deepseek_harness",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

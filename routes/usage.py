@@ -57,6 +57,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "picoclaw", "nanoclaw", "hermes",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
+    "deepseek_harness",
 ))
 
 def _event_runtime(ev) -> str:
@@ -919,7 +920,7 @@ def _try_local_store_usage_forecast():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok", "qm",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness",
 })
 
 
