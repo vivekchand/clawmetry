@@ -41,6 +41,7 @@ test enforces both directions).
 | `external_calls` | live | e2e | `query_external_calls` | `session_id`, `since`, `until`, `limit` (default 200, range 1..2000) | External (non-LLM) API calls captured by the interceptor. |
 | `health` | live | plaintext | `health` | (none) | Store health snapshot (engine, size, ring depth, flush age). |
 | `models` | live | plaintext | `query_rollup_model_daily` | `runtime`, `since`, `until`, `limit` (default 1000, range 1..10000) | Per-model daily token/cost rollup across runtimes. |
+| `replay_events` | live | e2e | `query_replay_events` | `session_id` (required), `limit` (default 2000, range 1..10000) | Canonical replay-event rows for one session (#4813). Rows in kind-agnostic order; the /api/replay-tree endpoint groups them into turns/delegations/workflows/approvals. |
 | `rollup_sessions` | live | e2e | `query_rollup_sessions` | `runtime`, `limit` (default 200, range 1..2000) | Per-session materialized summary (title, status, totals, stuck flag). |
 | `runtimes` | live | plaintext | `query_rollup_runtime_daily` | `since`, `until`, `limit` (default 1000, range 1..10000) | Per-runtime daily activity/cost rollup (claude_code, openclaw, ...). |
 | `search` | live | e2e | `query_search` | `q` (required), `model`, `status`, `since`, `until`, `limit` (default 50, range 1..500) | Full-text search over session titles and eval reasons. |
@@ -54,4 +55,4 @@ test enforces both directions).
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 13. Planned methods: 5.
+Live methods: 14. Planned methods: 5.

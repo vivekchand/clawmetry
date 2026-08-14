@@ -7,6 +7,9 @@ name: OSS Golden Path (C1)
 # the user-reported bug (2026-05-17): "gateway token not passed for OSS,
 # never displays other screens." test_e2e_oss_all_tabs.py covers all 33
 # tabs; this is the first time it runs as a hard per-PR gate.
+# OTLP smoke (added 2026-08-13): POST /v1/traces -> DuckDB spans table ->
+# /api/spans round-trip (commit #4785). Runs before Playwright browser
+# install (~5s overhead, no browser needed).
 # Budget: 12 minutes wall-clock (raised from 8; Playwright chromium download
 # ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s;
 # C5 33-tab Playwright sweep adds ~90 s on top of the C1 9-tab sweep).
@@ -191,6 +194,22 @@ jobs:
             fi
             sleep 1
           done
+
+      # Step 5b -- OTLP trace ingest smoke (no Playwright required).
+      # Verifies the full pipeline: POST /v1/traces -> DuckDB spans table ->
+      # /api/spans returns the synthetic span. Catches regressions in the
+      # out-of-the-box OTLP receiver shipped in commit #4785 (2026-08-12).
+      # Runs BEFORE the Playwright browser install so it adds ~5s overhead
+      # regardless of whether the browser cache is warm.
+      - name: Run OTLP ingest E2E smoke
+        env:
+          CLAWMETRY_URL: http://localhost:8920
+          CLAWMETRY_TOKEN: ci-golden-token
+        run: |
+          /tmp/oss-golden/bin/python -m pytest \
+            tests/test_e2e_otlp_ingest.py \
+            -v --tb=short --junitxml=/tmp/junit-otlp.xml \
+            -m 'not quarantine'
 
       # Step 6 -- Playwright tab sweeps.
       - name: Install Playwright browsers

@@ -208,6 +208,11 @@ _ENFORCE_MATRIX = [
     ("GET",  "/api/evals/regression-summary"),
     ("GET",  "/api/evals/key"),
     ("POST", "/api/evals/key"),
+    # feat/evals-simplify: per-session drill-down endpoint. Gated for
+    # consistency with /api/evals/recent (both surface judge scores that
+    # cost LLM tokens to produce). The drawer degrades to the free
+    # deterministic checks via /api/evals/metrics on a 402.
+    ("GET",  "/api/evals/session/sid-42"),
 ]
 
 
@@ -397,6 +402,60 @@ def test_evals_key_grace_payload_shape(monkeypatch, grace):
         assert "api_key" not in body
 
 
+def test_evals_session_detail_grace_payload_shape(monkeypatch, grace):
+    """Grace mode: GET /api/evals/session/<sid> must return the drill-down
+    envelope ({session, metrics}) or a clean 404 when the session is
+    unknown. Pins the shape the drawer in app.js reads back."""
+    from routes import evals as evals_module
+
+    def _fake_store(method_name, **kwargs):
+        if method_name == "query_session_eval_detail":
+            return {
+                "session_id": kwargs.get("session_id"),
+                "agent_type": "claude_code",
+                "title": "sample session",
+                "eval_score": 4.2,
+                "eval_reason": "Judge said the answer was solid.",
+                "eval_rubric": "default",
+                "eval_judge_model": "claude-haiku-4-5",
+                "outcome": "success",
+                "reliability_score": 0.85,
+            }
+        if method_name == "query_eval_metrics":
+            return [
+                {"metric_slug": "agent-goal-accuracy", "passed": True,
+                 "reason": "reached success", "engine": "builtin",
+                 "session_id": kwargs.get("session_id"), "scored_at": 0},
+            ]
+        return None
+
+    monkeypatch.setattr(evals_module, "_store_via_daemon_or_direct", _fake_store)
+
+    app = _make_app()
+    with app.test_client() as c:
+        r = c.get("/api/evals/session/sid-42")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert "session" in body and "metrics" in body
+        assert body["session"]["session_id"] == "sid-42"
+        assert body["session"]["eval_score"] == 4.2
+        assert isinstance(body["metrics"], list) and body["metrics"]
+        # Catalogue-derived label attached so the drawer renders plain
+        # language, not a raw slug.
+        assert body["metrics"][0].get("label")
+
+    # 404 when the store returns None (unknown session).
+    def _no_session(method_name, **kwargs):
+        if method_name == "query_session_eval_detail":
+            return None
+        return []
+    monkeypatch.setattr(evals_module, "_store_via_daemon_or_direct", _no_session)
+    with app.test_client() as c:
+        r = c.get("/api/evals/session/unknown-sid")
+        assert r.status_code == 404
+        assert r.get_json().get("error") == "session not found"
+
+
 def test_evals_regression_summary_grace_payload_shape(monkeypatch, grace):
     """Grace mode: /api/evals/regression-summary must still emit the
     aggregate envelope."""
@@ -501,13 +560,14 @@ def test_evals_routes_wear_gate_decorator():
     assert 'from clawmetry._gate import gate' in src, (
         "routes/evals.py must import @gate from clawmetry._gate"
     )
-    # Nine distinct paid endpoints exist today (recent, summary, rescore,
-    # rubric GET+POST, regression-summary, key GET+POST, suites = 9
-    # route entries, one route decorator each). If a tenth is added it
-    # should also wear the gate, so this pin should be updated in the
-    # same PR that adds it (a mismatch is a signal to inspect).
-    assert src.count('@gate("eval_suite")') == 9, (
-        'routes/evals.py must decorate all nine paid eval routes with '
+    # Ten distinct paid endpoints exist today (recent, summary, rescore,
+    # rubric GET+POST, regression-summary, key GET+POST, suites,
+    # session/<sid> = 10 route entries, one route decorator each). If an
+    # eleventh is added it should also wear the gate, so this pin should
+    # be updated in the same PR that adds it (a mismatch is a signal to
+    # inspect).
+    assert src.count('@gate("eval_suite")') == 10, (
+        'routes/evals.py must decorate all ten paid eval routes with '
         '@gate("eval_suite") -- this is the only enforcement point '
         'until the closed-source clawmetry-pro package overrides the '
         'blueprint via the extensions entry point.'

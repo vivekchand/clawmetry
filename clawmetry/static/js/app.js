@@ -105,6 +105,20 @@
       + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
       + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
       + '  border-radius: 3px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
+      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #b5b8be;'
+      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
+      + '  transition: color 120ms ease, border-color 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
+      + '  color: #e8eaed; border-color: #4a5058;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
+      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center; line-height: 1.45;'
       + '}';
     document.head.appendChild(st);
   }
@@ -123,6 +137,17 @@
     var subline = daysLeft !== null && daysLeft > 0
       ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
       : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
+    var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
+      ? state.free_runtimes
+      : ['openclaw', 'nemoclaw'];
+    var freeRuntimesLabel = freeRuntimes
+      .map(function (r) {
+        if (r === 'openclaw') return 'OpenClaw';
+        if (r === 'nemoclaw') return 'NanoClaw';
+        return r;
+      })
+      .join(' + ');
     el.innerHTML = ''
       + '<div class="cm-hbo-card">'
       + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
@@ -136,6 +161,10 @@
       + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
       + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
       + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
+      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
+      + '  </button>'
+      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
       + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
       + '</div>';
 
@@ -234,6 +263,44 @@
         });
     });
 
+    // Free-mode escape: expired-trial users can drop back to
+    // OpenClaw/NanoClaw-only mode instead of paying. Posts to the
+    // continue-free endpoint (allowlisted), then reloads to a
+    // free-runtime-scoped URL so the gate short-circuits and the overlay
+    // stays down. Paid-runtime tabs on the free scope render a locked
+    // padlock CTA (handled by the existing paywall banner system).
+    var freeBtn = el.querySelector('.cm-hbo-free');
+    if (freeBtn) {
+      freeBtn.addEventListener('click', function () {
+        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+        statusEl.className = 'cm-hbo-status';
+        statusEl.textContent = 'Switching to free mode…';
+        freeBtn.disabled = true;
+        activateBtn.disabled = true;
+        fetch(ep, { method: 'POST' })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function () {
+            statusEl.className = 'cm-hbo-status ok';
+            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
+            // Force the URL onto a free runtime so the gate lets the page
+            // in even though the entitlement is still expired.
+            try {
+              var url = new URL(window.location.href);
+              url.searchParams.set('runtime', 'openclaw');
+              window.location.replace(url.toString());
+            } catch (e) {
+              window.location.replace('/?runtime=openclaw');
+            }
+          })
+          .catch(function (err) {
+            freeBtn.disabled = false;
+            activateBtn.disabled = false;
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
+          });
+      });
+    }
+
     // Belt & braces: block ESC / TAB-out / right-click chrome from letting
     // the user reach controls behind the overlay while it's mounted.
     el.addEventListener('keydown', function (e) {
@@ -266,8 +333,24 @@
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 
+  function currentRuntimeScope() {
+    try {
+      var u = new URL(window.location.href);
+      var r = (u.searchParams.get('runtime') || u.searchParams.get('scope') || '').trim();
+      return r || '';
+    } catch (e) { return ''; }
+  }
+
+  function withRuntime(path) {
+    var scope = currentRuntimeScope();
+    if (!scope) return path;
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    return path + sep + 'runtime=' + encodeURIComponent(scope);
+  }
+
   function refreshAndMaybeUnblock(force) {
     var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    endpoint = withRuntime(endpoint);
     var opts = force ? { method: 'POST' } : { method: 'GET' };
     return fetch(endpoint, opts)
       .then(function (r) { return r.json().catch(function () { return {}; }); })
@@ -3938,8 +4021,17 @@ async function loadEvaluators() {
     safety:      { c: '#ef4444', label: t("evaluators.cat_safety", null, "Safety") },
     agent:       { c: '#10b981', label: t("evaluators.cat_agent", null, "Agent") }
   };
+  // feat/evals-simplify: split the catalogue so the Evals tab stops reading
+  // as a 12-box marketing wall. Primary = entries whose per-session number
+  // actually lands in a session row (outcome, reliability_score, eval_score,
+  // faithfulness_score) — these are what the drill-down surfaces per session.
+  // Secondary = aggregate-only signals we still compute; collapsed by default
+  // so users can see they exist without the wall reading as vaporbox.
+  var primary = evs.filter(function(e){ return e.value_field; });
+  var secondary = evs.filter(function(e){ return !e.value_field; });
+  var renderList = primary.length ? primary : evs;
   var html = '';
-  evs.forEach(function(e) {
+  renderList.forEach(function(e) {
     var cat = CAT[e.category] || { c: 'var(--text-muted)', label: e.category };
     var statusLabel, statusColor;
     if (e.status === 'live') {
@@ -3981,19 +4073,325 @@ async function loadEvaluators() {
     }
     html += '</div>';
   });
+  // Secondary signals: aggregate-only checks (safety scans, per-call
+  // heuristics, DeepEval nice-to-haves). Rendered as compact chips inside a
+  // collapsed <details> so they're honestly present without dominating the
+  // tab. Fresh installs with no primary entries fall back to the old grid
+  // above so the secondary block never renders alone.
+  if (primary.length && secondary.length) {
+    html += '<details style="grid-column:1/-1;margin-top:4px;">';
+    html += '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);padding:6px 2px;list-style:none;">' +
+      '+ ' + secondary.length + ' ' +
+      t("evaluators.other_signals", null, "other signals ClawMetry tracks aggregate-only") +
+      '</summary>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">';
+    secondary.forEach(function(e) {
+      var cat = CAT[e.category] || { c: 'var(--text-muted)' };
+      var lockIcon = e.locked ? ' 🔒' : '';
+      html += '<span title="' + escHtml(e.description) + '" style="font-size:11px;padding:3px 8px;border-radius:8px;' +
+        'background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);' +
+        (e.locked ? 'opacity:0.7;' : '') + '">' +
+        '<span style="color:' + cat.c + ';font-weight:600;">●</span> ' +
+        escHtml(e.name) + lockIcon + '</span>';
+    });
+    html += '</div></details>';
+  }
   listEl.innerHTML = html;
 }
 
-// ── Evals tab (dedicated home for the eval system) ─────────────────────────
-// Loads: judge status, 24h score summary + 7d regression, the evaluator
-// library grid (shared loadEvaluators), recent scored sessions, golden suites.
-// Every card degrades to an honest message: locked (402), no key, or no data.
+// ── Quality tab (redesigned Evals, 2026-08-14) ─────────────────────────────
+// One question ("is my agent doing good work?") answered in one fetch. The
+// tab keeps its data-tab="evals" identity so the URL / sidebar highlight
+// stay stable, but the surface inside is entirely new: report card, ranked
+// failure patterns, plain-English rough runs, inline eval-builder. The old
+// loadEvaluators / loadEvalsJudgeCard / loadEvalsRecent / loadEvalsSuites
+// functions stay defined below (they're still used by other surfaces like
+// the Overview evaluators strip); only the tab bootstrap changed.
 function loadEvalsTab() {
+  // Detect the redesigned tab shell by its marker attribute — if we land
+  // on an older cached template (e.g. cloud pin hasn't rolled yet), fall
+  // back to the legacy renderer so the tab still shows something honest.
+  var host = document.getElementById('page-evals');
+  if (host && host.getAttribute('data-quality-tab') === '1') {
+    loadQualityTab();
+    return;
+  }
   loadEvaluators();
-  loadEvalsJudgeCard();
-  loadEvalsTabSummary();
-  loadEvalsRecent();
-  loadEvalsSuites();
+  if (typeof loadEvalsJudgeCard === 'function') loadEvalsJudgeCard();
+  if (typeof loadEvalsTabSummary === 'function') loadEvalsTabSummary();
+  if (typeof loadEvalsRecent === 'function') loadEvalsRecent();
+  if (typeof loadEvalsSuites === 'function') loadEvalsSuites();
+}
+
+// ── Quality tab renderer ───────────────────────────────────────────────────
+async function loadQualityTab() {
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var r = await fetch('/api/quality/report-card?' + qs.toString())
+    .catch(function() { return null; });
+  var data = r ? await r.json().catch(function() { return null; }) : null;
+  if (!data) {
+    // Honest empty on network / server miss. The tab renders "Nothing to
+    // grade yet." rather than a spinner or a blank.
+    data = {
+      grade: '—', headline: 'Nothing to grade yet.',
+      subline: "Your agents haven't finished a task in this window. Send Claude Code or OpenClaw a task and come back.",
+      patterns: [], rough_runs: [], week: [], vs_prior: null,
+      graded_runs: 0, total_runs: 0, judge_key_set: false
+    };
+  }
+  _qRenderCard(data);
+  _qRenderPatterns(data);
+  _qRenderRoughRuns(data);
+  _qRenderStatusLine(data);
+  _qRenderFooter(data);
+}
+
+function _qRenderCard(data) {
+  var gradeEl = document.getElementById('q-grade');
+  var headEl  = document.getElementById('q-headline');
+  var subEl   = document.getElementById('q-subline');
+  var weekEl  = document.getElementById('q-week');
+  if (gradeEl) {
+    var g = String(data.grade || '—');
+    gradeEl.textContent = g;
+    gradeEl.setAttribute('data-grade', g === '—' ? '—' : g.charAt(0));
+  }
+  if (headEl) headEl.textContent = String(data.headline || '');
+  if (subEl) {
+    // Render subline with vs_prior arrow if present. Keep it a single sentence.
+    var sub = String(data.subline || '');
+    if (data.vs_prior === 'up') {
+      sub += ' <span class="up">↑ better than last week.</span>';
+    } else if (data.vs_prior === 'down') {
+      sub += ' <span class="down">↓ down from last week.</span>';
+    }
+    subEl.innerHTML = sub;
+  }
+  if (weekEl) {
+    var dots = (data.week || []);
+    if (!dots.length) { weekEl.innerHTML = ''; return; }
+    var html = '<div class="dots">';
+    dots.forEach(function(d, i) {
+      var isToday = (i === dots.length - 1);
+      var g = d.grade || '—';
+      html += '<div class="day' + (isToday ? ' today' : '') + '" data-grade="' + escHtml(g.charAt(0)) + '"' +
+              ' title="' + escHtml(d.date) + ' · ' + escHtml(String(d.runs || 0)) + ' run(s)">' +
+              '<span class="g">' + escHtml(g) + '</span>' +
+              '<span>' + escHtml(d.label) + '</span></div>';
+    });
+    html += '</div>';
+    weekEl.innerHTML = html;
+  }
+}
+
+function _qRenderPatterns(data) {
+  var el = document.getElementById('q-patterns');
+  if (!el) return;
+  var rows = (data.patterns || []);
+  if (!rows.length) {
+    el.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' +
+      t('quality.patterns_empty', null, 'Nothing to complain about here.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  rows.forEach(function(p) {
+    var isCaught = (String(p.cost_display || '').toLowerCase() === 'caught');
+    html += '<li>';
+    html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
+    html += '<div class="what">' + escHtml(p.label || '') + '</div>';
+    html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
+            escHtml(p.cost_display || '$0.00') +
+            '<small>' + escHtml(p.avg_minutes || '—') + '</small></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qRenderRoughRuns(data) {
+  var el = document.getElementById('q-runs');
+  var titleEl = document.getElementById('q-rough-title');
+  if (!el) return;
+  var runs = (data.rough_runs || []);
+  if (titleEl) {
+    titleEl.textContent = runs.length
+      ? (t('quality.rough_title_prefix', null, 'The ') + runs.length + ' ' +
+         (runs.length === 1
+           ? t('quality.rough_run_singular', null, 'rough run')
+           : t('quality.rough_run_plural', null, 'rough runs')))
+      : t('quality.rough_title_empty', null, 'No rough runs this week');
+  }
+  if (!runs.length) {
+    el.innerHTML = '<li class="q-empty">' +
+      t('quality.rough_empty', null, 'Every run finished cleanly. Nice.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  runs.forEach(function(r, i) {
+    var sid = String(r.session_id || '');
+    var when = _qFmtWhen(r.when);
+    var bid = 'q-b-' + i;
+    html += '<li>';
+    html += '<div class="when">' + escHtml(when) + (r.agent_type ? ' · ' + escHtml(r.agent_type) : '') + '</div>';
+    html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
+    html += '<div class="story">' + escHtml(r.story || '') + '</div>';
+    html += '<div class="row-actions">';
+    html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
+            t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
+    html += '</div>';
+    html += '<div id="' + bid + '" class="q-builder"></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qFmtWhen(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(iso);
+    var now = new Date();
+    var days = Math.floor((now - d) / 86400000);
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    if (days <= 0) return 'Today ' + hh + ':' + mm;
+    if (days === 1) return 'Yesterday ' + hh + ':' + mm;
+    if (days < 7) return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()] + ' ' + hh + ':' + mm;
+    return d.toLocaleDateString();
+  } catch (e) { return String(iso); }
+}
+
+function _qRenderStatusLine(data) {
+  var el = document.getElementById('q-status-line');
+  if (!el) return;
+  var n = Number(data.graded_runs || 0);
+  var total = Number(data.total_runs || 0);
+  if (n === 0 && total === 0) {
+    el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
+    return;
+  }
+  el.textContent = data.judge_key_set
+    ? (t('quality.status_prefix_on', null, 'Grading on · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')))
+    : (t('quality.status_prefix_off', null, 'Grading from signals · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')));
+}
+
+function _qRenderFooter(data) {
+  var el = document.getElementById('q-footer');
+  if (!el) return;
+  // Hide the "add a judge key" nudge when a key is already set.
+  if (data && data.judge_key_set) el.setAttribute('hidden', '');
+  else el.removeAttribute('hidden');
+}
+
+// Open (or toggle) the inline eval builder for a rough run. Pre-fills
+// the "fail when…" field from the story so users see intent immediately;
+// they edit and save. Persistence lands in a follow-up PR — for the first
+// cut the Save button files an issue-style check locally and toasts.
+function qOpenBuilder(bid, sid, story) {
+  var el = document.getElementById(bid);
+  if (!el) return;
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    el.innerHTML = '';
+    return;
+  }
+  var pattern = _qGuessPattern(story || '');
+  var name = _qGuessCheckName(story || '');
+  el.innerHTML =
+    '<p class="b-eyebrow">' + t('quality.builder_eyebrow', null, 'Watch for this pattern') + '</p>' +
+    '<p class="b-title">' + t('quality.builder_title', null, "Turn this rough run into a check we'll fail-fast next time.") + '</p>' +
+    '<div>' +
+      '<label>' + t('quality.builder_when', null, 'Fail the run when…') + '</label>' +
+      '<textarea id="' + bid + '-when">' + escHtml(pattern) + '</textarea>' +
+    '</div>' +
+    '<div style="margin-top:10px;">' +
+      '<label>' + t('quality.builder_name', null, 'Name this check') + '</label>' +
+      '<textarea id="' + bid + '-name" style="min-height:34px;">' + escHtml(name) + '</textarea>' +
+    '</div>' +
+    '<div class="b-example">' + t('quality.builder_example_lead', null, 'Based on this run: ') + escHtml(story || '') + '</div>' +
+    '<div class="b-actions">' +
+      '<button class="btn" onclick="qSaveCheck(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\')">' +
+        t('quality.builder_save', null, 'Save check') + '</button>' +
+      '<button class="btn ghost" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\')">' +
+        t('common.cancel', null, 'Cancel') + '</button>' +
+    '</div>';
+  el.classList.add('open');
+}
+
+function _qGuessPattern(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) {
+    return 'the same tool errors more than 3 times without progress toward the task';
+  }
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1) {
+    return 'the agent edits the same file more than 5 times';
+  }
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) {
+    return 'the run gets within 5% of the token budget and truncates its answer';
+  }
+  if (s.indexOf('gave up') !== -1 || s.indexOf('escalat') !== -1) {
+    return 'the agent ends the task without a completed answer';
+  }
+  return 'a session ends without a clean answer';
+}
+
+function _qGuessCheckName(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) return 'Tool loop guard';
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1)   return 'Edit loop guard';
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) return 'Budget breach guard';
+  if (s.indexOf('gave up') !== -1) return 'Gave-up guard';
+  return 'Rough-run guard';
+}
+
+async function qSaveCheck(bid, sid) {
+  // First cut: POST to /api/quality/checks (deferred — for now, toast a
+  // confirmation so the interaction feels real end-to-end). The follow-up
+  // PR wires this to a real quality_checks DuckDB table + runner.
+  var whenEl = document.getElementById(bid + '-when');
+  var nameEl = document.getElementById(bid + '-name');
+  var body = {
+    session_id: sid,
+    fail_when:  whenEl ? whenEl.value.trim() : '',
+    name:       nameEl ? nameEl.value.trim() : ''
+  };
+  try {
+    var r = await fetch('/api/quality/checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var out = await r.json().catch(function() { return null; });
+    var msg = (out && out.ok)
+      ? t('quality.check_saved', null, "Saved. We'll fail-fast this pattern next time.")
+      : (out && out.error) || t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release.");
+    _qToast(msg);
+  } catch (e) {
+    _qToast(t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release."));
+  }
+  var el = document.getElementById(bid);
+  if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+}
+
+function _qToast(msg) {
+  var t_ = document.createElement('div');
+  t_.textContent = msg;
+  t_.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+    'background:#1a1611;color:#f0e9dc;padding:12px 20px;border-radius:6px;' +
+    'font-size:13px;font-family:-apple-system,system-ui,sans-serif;' +
+    'border:1px solid rgba(211,53,40,0.4);box-shadow:0 8px 24px rgba(0,0,0,0.4);' +
+    'z-index:9999;';
+  document.body.appendChild(t_);
+  setTimeout(function() { t_.style.opacity = '0'; t_.style.transition = 'opacity 400ms'; }, 3200);
+  setTimeout(function() { t_.remove(); }, 3800);
 }
 
 function _evalsLockedHtml() {
@@ -4306,14 +4704,21 @@ async function loadEvalsRecent() {
     var score = (row.eval_score == null) ? '--' : Number(row.eval_score).toFixed(1);
     var sc = row.eval_score == null ? 'var(--text-muted)' :
       (row.eval_score >= 4 ? '#22c55e' : (row.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
-    html += '<tr style="border-top:1px solid var(--border-primary);">';
+    // feat/evals-simplify: rows are clickable — open the drill-down drawer
+    // with judge reason + per-check breakdown + rubric. The Re-score button
+    // stopPropagation so it doesn't ALSO open the drawer.
+    var sidJs = escHtml(sid).replace(/'/g, "\\'");
+    html += '<tr onclick="openEvalSessionDrawer(\'' + sidJs + '\')" ' +
+      'style="border-top:1px solid var(--border-primary);cursor:pointer;" ' +
+      'onmouseover="this.style.background=\'var(--bg-primary)\'" ' +
+      'onmouseout="this.style.background=\'\'">';
     html += '<td style="padding:6px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(sid) + '">' +
       (row.agent_type ? '<span style="color:var(--text-muted);">' + escHtml(row.agent_type) + '</span> ' : '') + escHtml(label) + '</td>';
     html += '<td style="padding:6px 8px;font-weight:700;color:' + sc + ';">' + score + '</td>';
     html += '<td style="padding:6px 8px;max-width:240px;">' + _evalMetricChips(chipsBySid[sid]) + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(row.eval_reason || '') + '">' + escHtml(row.eval_reason || '') + '</td>';
     html += '<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">' + (row.eval_scored_at ? timeAgo(row.eval_scored_at) : '') + '</td>';
-    html += '<td style="padding:6px 8px;"><button onclick="evalsRescore(\'' + escHtml(sid).replace(/'/g, "\\'") + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
+    html += '<td style="padding:6px 8px;"><button onclick="event.stopPropagation();evalsRescore(\'' + sidJs + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
       t("evals.rescore", null, "Re-score") + '</button></td>';
     html += '</tr>';
   });
@@ -4335,6 +4740,219 @@ async function evalsRescore(sid, btn) {
     if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
   }
   setTimeout(function(){ loadEvalsRecent(); loadEvalsTabSummary(); }, 1500);
+}
+
+// feat/evals-simplify: per-session eval drill-down drawer.
+// Row click in the Recently Scored table opens a right-side panel with the
+// judge's FULL reason (not the truncated one-liner the table shows), every
+// deterministic check verdict + reason, the rubric text the judge used, and
+// a Re-score button that hits /api/evals/rescore/<sid> in place. Anchor
+// element is created on demand and appended to <body> so no template change
+// is required beyond the row's onclick handler.
+function closeEvalSessionDrawer() {
+  var d = document.getElementById('eval-session-drawer');
+  var s = document.getElementById('eval-session-drawer-scrim');
+  if (d) d.remove();
+  if (s) s.remove();
+  document.body.style.overflow = '';
+}
+
+async function openEvalSessionDrawer(sid) {
+  if (!sid) return;
+  closeEvalSessionDrawer();  // one at a time; a second row click replaces it
+  var scrim = document.createElement('div');
+  scrim.id = 'eval-session-drawer-scrim';
+  scrim.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998;';
+  scrim.onclick = closeEvalSessionDrawer;
+  var drawer = document.createElement('div');
+  drawer.id = 'eval-session-drawer';
+  drawer.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:min(680px,100vw);' +
+    'background:var(--bg-secondary);border-left:2px solid var(--border-primary);' +
+    'z-index:9999;overflow-y:auto;box-shadow:-4px 0 24px rgba(0,0,0,0.5);' +
+    'font-size:13px;color:var(--text-primary);';
+  drawer.innerHTML = '<div style="padding:20px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+    '<div style="font-size:15px;font-weight:700;">🔬 ' + t("evals.drawer_title", null, "Eval detail") + '</div>' +
+    '<button onclick="closeEvalSessionDrawer()" style="background:transparent;border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:4px 10px;color:var(--text-secondary);cursor:pointer;font-size:12px;">✕</button>' +
+    '</div>' +
+    '<div id="eval-session-drawer-body" style="color:var(--text-muted);">' +
+    t("app.loading", null, "Loading...") + '</div></div>';
+  document.body.appendChild(scrim);
+  document.body.appendChild(drawer);
+  document.body.style.overflow = 'hidden';
+
+  var body = document.getElementById('eval-session-drawer-body');
+  var r = await fetch('/api/evals/session/' + encodeURIComponent(sid))
+    .catch(function(){return null;});
+  if (!r || !r.ok) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var data = await r.json().catch(function(){return null;});
+  if (!data || !data.session) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var s = data.session;
+  var metrics = data.metrics || [];
+  var sidJs = escHtml(sid).replace(/'/g, "\\'");
+
+  var scoreColor = s.eval_score == null ? 'var(--text-muted)' :
+    (s.eval_score >= 4 ? '#22c55e' : (s.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
+  var scoreText = s.eval_score == null ? '--' : Number(s.eval_score).toFixed(1);
+
+  var html = '';
+  // Header block: session label + score + Re-score / open-transcript actions.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">';
+  html += '<div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' +
+    escHtml(s.agent_type || '') + '</div>';
+  html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-top:2px;">' +
+    escHtml(s.title || sid) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:monospace;">' + escHtml(sid) + '</div>';
+  html += '</div>';
+  html += '<div style="text-align:right;">';
+  html += '<div style="font-size:28px;font-weight:800;color:' + scoreColor + ';line-height:1;">' + scoreText + '</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' +
+    t("evals.drawer_score_out_of", null, "out of 5") + '</div>';
+  html += '</div></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">';
+  html += '<button onclick="evalsRescoreFromDrawer(\'' + sidJs + '\', this)" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">↻ ' +
+    t("evals.rescore", null, "Re-score") + '</button>';
+  html += '<a href="#" onclick="closeEvalSessionDrawer();switchTab(\'transcripts\');' +
+    'setTimeout(function(){if(typeof viewTranscript===\'function\')viewTranscript(\'' + sidJs + '\')},80);return false;" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;text-decoration:none;">📜 ' +
+    t("evals.drawer_open_transcript", null, "Open full transcript") + '</a>';
+  html += '</div></div>';
+
+  // Judge reason (FULL — the table shows a truncated one-liner).
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+    '⚖️ ' + t("evals.drawer_judge_reason", null, "Judge reason") + '</div>';
+  if (s.eval_reason) {
+    html += '<div style="font-size:13px;color:var(--text-primary);line-height:1.55;white-space:pre-wrap;">' +
+      escHtml(s.eval_reason) + '</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_judge_reason", null, "No judge reason for this session yet. Add a judge API key and click Re-score to fill this in.") +
+      '</div>';
+  }
+  if (s.eval_judge_model || s.eval_scored_at) {
+    html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
+    if (s.eval_judge_model) html += t("evals.drawer_judge_model", null, "Judge:") + ' <code>' + escHtml(s.eval_judge_model) + '</code>';
+    if (s.eval_judge_model && s.eval_scored_at) html += ' · ';
+    if (s.eval_scored_at) html += t("evals.drawer_scored", null, "Scored") + ' ' + timeAgo(s.eval_scored_at);
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Per-check breakdown. The tile grid's aggregate signals become per-session
+  // rows here, which is where they actually belong. Outcome + reliability +
+  // faithfulness come straight from the session row; DeepEval + policy-scan
+  // verdicts come from eval_metrics.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">' +
+    '🧪 ' + t("evals.drawer_checks", null, "Per-check breakdown") + '</div>';
+  var checks = [];
+  if (s.outcome) {
+    var outColor = (s.outcome === 'success') ? '#22c55e' :
+      ((s.outcome === 'failed' || s.outcome === 'tool_call_stuck' || s.outcome === 'cognitive_loop') ? '#ef4444' : '#f59e0b');
+    checks.push({ label: t("evaluators.did_finish", null, "Did the agent finish the job?"),
+      value: s.outcome, color: outColor, meta: s.outcome_confidence != null ?
+      ('confidence ' + Math.round(s.outcome_confidence * 100) + '%') : '' });
+  }
+  if (s.reliability_score != null) {
+    var relColor = s.reliability_score >= 0.8 ? '#22c55e' : (s.reliability_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.did_work_cleanly", null, "Did the agent work cleanly?"),
+      value: Number(s.reliability_score).toFixed(2), color: relColor, meta: 'reliability score' });
+  }
+  if (s.faithfulness_score != null) {
+    var faithColor = s.faithfulness_score >= 0.8 ? '#22c55e' : (s.faithfulness_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.claims_backed", null, "Was every claim backed by the evidence?"),
+      value: Number(s.faithfulness_score).toFixed(2), color: faithColor, meta: 'faithfulness score (Pro)' });
+  }
+  metrics.forEach(function(m) {
+    var passed = m.passed;
+    var col = passed === true ? '#22c55e' : (passed === false ? '#ef4444' : 'var(--text-muted)');
+    var val = passed === true ? '✓ pass' : (passed === false ? '✗ fail' : '—');
+    checks.push({ label: m.label || m.metric_slug, value: val, color: col,
+      meta: m.reason || (m.engine ? ('via ' + m.engine) : '') });
+  });
+  if (!checks.length) {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_checks", null, "No per-check verdicts for this session yet.") + '</div>';
+  } else {
+    checks.forEach(function(c) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;' +
+        'padding:6px 0;border-bottom:1px solid var(--border-primary);">';
+      html += '<div style="font-size:12px;color:var(--text-primary);">' + escHtml(c.label) + '</div>';
+      html += '<div style="text-align:right;">';
+      html += '<div style="font-size:12px;font-weight:700;color:' + c.color + ';">' + escHtml(String(c.value)) + '</div>';
+      if (c.meta) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(c.meta) + '</div>';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Rubric the judge used (verbatim). Users often want to sanity-check "did
+  // this score against the rubric I THINK it did?" — this makes that a glance.
+  if (s.eval_rubric) {
+    html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+      'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+      '📜 ' + t("evals.drawer_rubric", null, "Rubric the judge used") + '</div>';
+    html += '<pre style="font-size:11px;font-family:monospace;color:var(--text-secondary);white-space:pre-wrap;' +
+      'margin:0;line-height:1.5;">' + escHtml(s.eval_rubric) + '</pre>';
+    html += '<div style="margin-top:8px;"><a href="#" onclick="closeEvalSessionDrawer();openEvalRubricModal();return false;" ' +
+      'style="font-size:11px;color:#3b82f6;text-decoration:none;">' +
+      t("evals.drawer_edit_rubric", null, "Edit rubric →") + '</a></div>';
+    html += '</div>';
+  }
+
+  // Cost + tokens footer — a bad score costs less to fix if you see what it
+  // cost to produce. Inline formatters (the module-level ones are function-
+  // scoped elsewhere and not reachable here).
+  var _tk = Number(s.total_tokens || 0);
+  var tokens = _tk >= 1e6 ? (_tk / 1e6).toFixed(1) + 'M' :
+               _tk >= 1e3 ? (_tk / 1e3).toFixed(0) + 'K' : String(_tk);
+  var _c = Number(s.cost_usd || 0);
+  var cost = _c >= 0.01 ? '$' + _c.toFixed(2) : (_c > 0 ? '<$0.01' : '$0.00');
+  html += '<div style="font-size:11px;color:var(--text-muted);text-align:right;">' +
+    escHtml(tokens) + ' ' + t("evals.drawer_tokens", null, "tokens") + ' · ' + escHtml(cost) + '</div>';
+
+  if (body) body.innerHTML = html;
+}
+
+// Re-score button INSIDE the drawer — same POST as the table's Re-score,
+// but reloads the drawer in place instead of the table row.
+async function evalsRescoreFromDrawer(sid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), { method: 'POST' });
+    var data = await r.json().catch(function(){return {};});
+    if (!r.ok || data.error) {
+      if (btn) btn.textContent = data.skip_reason || data.error || t("evals.rescore_failed", null, "failed");
+      return;
+    }
+  } catch (e) {
+    if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
+    return;
+  }
+  // Reload both the drawer and the table underneath so the row's score/reason
+  // update to match.
+  openEvalSessionDrawer(sid);
+  loadEvalsRecent();
+  loadEvalsTabSummary();
 }
 
 async function loadEvalsSuites() {
@@ -9443,7 +10061,8 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
-  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM'
+  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
+  deepseek_harness: 'DeepSeek Harness'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -9452,7 +10071,7 @@ var _CM_RT_LABEL = {
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
-  n8n: 1, antigravity: 1, copilot: 1, grok: 1
+  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -9584,6 +10203,7 @@ var _CM_RT_CAPS = {
   antigravity: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   copilot:     ['SESSIONS','EVENTS','COST'],
   grok:        ['SESSIONS','EVENTS','COST'],
+  deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -9617,7 +10237,13 @@ var _CM_CAP_TABS = {
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals'];
+// memory + skills: the multi-runtime file browser (PR #4821) resolves every
+// runtime's on-disk memory/skills paths, so both tabs are node-level (not
+// gated by a per-adapter capability). Without this, the runtime chip bar
+// inside Memory/Skills would be unreachable because the whole tab was
+// hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
+// was selected in the top-of-page runtime dropdown.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','skills'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
@@ -16444,6 +17070,37 @@ function _buildReplayEvent(m, idx) {
   var role = m.role || 'unknown';
   // Determine event type for filtering
   var type = m.type || role;
+  // Legacy tool events (majority path) arrive as role='tool' with a prose
+  // content like "[Tool Call: Bash]\n{ ... json ... }" plus a structured
+  // `raw.input`, or as a bare result (raw text output, no prefix). The
+  // deep-dive chip renderer only fires when `m.tool` is set — synthesize
+  // one here so those events collapse into the same clean chip instead of
+  // dumping raw JSON/text into a giant prose bubble.
+  if (!m.tool && role === 'tool' && m.content) {
+    var _tcHead = String(m.content);
+    var _tcCall = _tcHead.match(/^\[Tool Call:\s*([^\]]+)\]\s*/);
+    if (_tcCall) {
+      var _tcName = _tcCall[1].trim();
+      var _tcBody = _tcHead.slice(_tcCall[0].length).trim();
+      // Prefer the structured input from raw.input if present — it's the
+      // authoritative payload and pretty-prints better than the prose blob.
+      var _tcInput = _tcBody;
+      if (m.raw && m.raw.input && typeof m.raw.input === 'object') {
+        try { _tcInput = JSON.stringify(m.raw.input, null, 2); } catch (e) {}
+      }
+      m = Object.assign({}, m, {
+        tool: { kind: 'call', name: _tcName, input: _tcInput, output: '', is_error: false }
+      });
+    } else {
+      // Bare content = raw tool result. Detect obvious error signatures so
+      // the chip badges it red.
+      var _tcLow = _tcHead.toLowerCase();
+      var _tcErr = /^(fatal:|error:|traceback|permission denied|no such file)/i.test(_tcHead) || _tcLow.indexOf('command not found') !== -1;
+      m = Object.assign({}, m, {
+        tool: { kind: 'result', name: 'result', input: '', output: _tcHead, is_error: _tcErr }
+      });
+    }
+  }
   // #1911: tool turns carry a structured `tool` object (name + input/output);
   // classify them as tool_use so the "Tools" filter and deep-dive chip pick up.
   if (m.tool) type = 'tool_use';
@@ -16547,6 +17204,8 @@ function _fmtDecodingParams(p) {
 // #1911: render a tool call/result as a named, expandable deep-dive chip.
 // The header shows the tool name (and an error badge for failed results); the
 // body — the exact input args or result output — toggles open on click.
+// Collapsed by default so a long session reads as a chat, not a raw log dump.
+// Users open the ones they care about (or use "Expand tools" in the toolbar).
 function _renderToolDiveChip(ev, highlighted) {
   var t = ev.tool || {};
   var isResult = t.kind === 'result';
@@ -16559,21 +17218,57 @@ function _renderToolDiveChip(ev, highlighted) {
   var hasBody = !!(body && String(body).trim());
   var did = 'tooldive-' + ev.originalIndex;
   var labelText = isResult ? (name + ' · result') : name;
+  // One-line preview so the collapsed chip still tells you what happened
+  // (e.g. "Bash · git status" or "Read · dashboard.py") without expanding.
+  var previewText = hasBody ? _summarizeToolBody(String(body), t.name || '') : '';
   var html = '<div class="chat-tool-chip chat-tool-dive ' + (isResult ? 'tc-user' : 'tc-asst') + '"'
     + ' id="replay-msg-' + ev.originalIndex + '" style="align-self:' + side + ';' + ring + '">';
   html += '<div class="ctd-head"' + (hasBody ? ' onclick="toggleToolDive(\'' + did + '\')"' : '') + '>';
   html += '<span class="chat-tool-chip-label">' + icon + ' ' + labelText + '</span>';
+  if (previewText) html += '<span class="ctd-preview">' + escHtml(previewText) + '</span>';
   if (isResult && t.is_error) html += '<span class="chat-tool-chip-meta" style="color:#e0625a;">error</span>';
-  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▾</span>';
+  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▸</span>';
   if (ts) html += '<span class="chat-tool-chip-meta">' + ts + '</span>';
   html += '</div>';
   if (hasBody) {
-    // Default expanded so the args/output (the debugging signal) are visible
-    // without an extra click. Click the header to collapse a noisy tool turn.
-    html += '<pre class="ctd-body" id="' + did + '" style="display:block;">' + escHtml(String(body)) + '</pre>';
+    // Collapsed by default — a 500-turn session with every tool expanded is
+    // unreadable. Users click the header (or "Expand tools" in the toolbar) to
+    // reveal the exact args/output for the calls they want to inspect.
+    html += '<pre class="ctd-body" id="' + did + '" style="display:none;">' + escHtml(String(body)) + '</pre>';
   }
   html += '</div>';
   return html;
+}
+
+// _summarizeToolBody returns a compact one-liner for the collapsed chip
+// header. Tries to pick out the most informative field per tool (Bash's
+// `command`, Read/Edit/Write's `file_path`, etc.) and falls back to the first
+// non-empty line trimmed to 100 chars.
+function _summarizeToolBody(body, toolName) {
+  var s = body || '';
+  var name = (toolName || '').toLowerCase();
+  // Structured tool inputs arrive as pretty-printed JSON — pull the
+  // most useful key out so the collapsed line reads well.
+  try {
+    var parsed = JSON.parse(s);
+    if (parsed && typeof parsed === 'object') {
+      if (name === 'bash' && parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+      if ((name === 'read' || name === 'edit' || name === 'write') && parsed.file_path) return String(parsed.file_path);
+      if (parsed.file_path) return String(parsed.file_path);
+      if (parsed.pattern) return String(parsed.pattern).slice(0, 120);
+      if (parsed.query)   return String(parsed.query).slice(0, 120);
+      if (parsed.url)     return String(parsed.url).slice(0, 120);
+      if (parsed.description) return String(parsed.description).slice(0, 120);
+      if (parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+    }
+  } catch (e) {}
+  // Fallback: first non-empty line, tightened.
+  var lines = s.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line) return line.length > 100 ? (line.slice(0, 100) + '…') : line;
+  }
+  return '';
 }
 
 function toggleToolDive(id) {
@@ -16583,6 +17278,26 @@ function toggleToolDive(id) {
   var open = pre.style.display !== 'none';
   pre.style.display = open ? 'none' : 'block';
   if (caret) caret.textContent = open ? '▸' : '▾';
+}
+
+// Expand or collapse every tool-dive body in the current transcript view.
+// Wired to the "⤢ Expand tools" / "⤡ Collapse tools" toolbar buttons.
+function expandAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'block';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▾';
+  });
+}
+
+function collapseAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'none';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▸';
+  });
 }
 
 function _renderReplayEvent(ev, highlighted) {
@@ -16711,11 +17426,151 @@ function _replayFilteredEvents() {
   return window._replayEvents.filter(function(ev) { return ev.type === f || ev.role === f; });
 }
 
+// Group a flat event list into "turns" anchored on each USER event, so a long
+// session reads like a book with chapters instead of a wall of bubbles.
+// Anything before the first USER goes into a synthetic "Setup" turn 0.
+function _groupIntoTurns(events) {
+  var turns = [];
+  var current = null;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    var isUserPrompt = (ev.role === 'user' && !ev.tool && ev.content && String(ev.content).trim().length > 0);
+    if (isUserPrompt || !current) {
+      current = {
+        turn: turns.length,
+        anchor: ev,
+        firstTs: ev.timestamp || null,
+        lastTs: ev.timestamp || null,
+        events: [],
+        toolCount: 0,
+        errorCount: 0
+      };
+      turns.push(current);
+    }
+    current.events.push(ev);
+    if (ev.timestamp) current.lastTs = ev.timestamp;
+    if (ev.tool) current.toolCount++;
+    if (ev.tool && ev.tool.is_error) current.errorCount++;
+  }
+  return turns;
+}
+
+// Human-readable turn duration (from first event to last within the turn).
+function _turnDurationLabel(turn) {
+  if (!turn.firstTs || !turn.lastTs || turn.lastTs <= turn.firstTs) return '';
+  var ms = turn.lastTs - turn.firstTs;
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  var rem = s % 60;
+  if (m < 60) return m + 'm' + (rem ? ' ' + rem + 's' : '');
+  var h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+// Short one-liner used both in the chapter header and the TOC sidebar.
+function _turnAnchorPreview(turn) {
+  var a = turn.anchor;
+  if (!a) return '(empty turn)';
+  if (a.role === 'user' && a.content && String(a.content).trim()) {
+    var s = String(a.content).trim().replace(/\s+/g, ' ');
+    return s.length > 90 ? (s.slice(0, 90) + '…') : s;
+  }
+  if (turn.turn === 0) return 'Session setup';
+  return '(system turn)';
+}
+
+function _renderTurnChapter(turn, highlightOriginal) {
+  var previewLabel = escHtml(_turnAnchorPreview(turn));
+  var timeLabel = turn.firstTs ? new Date(turn.firstTs).toLocaleString() : '';
+  var duration = _turnDurationLabel(turn);
+  var pieces = [];
+  if (turn.toolCount > 0) pieces.push('🔧 ' + turn.toolCount);
+  if (turn.errorCount > 0) pieces.push('<span style="color:#e0625a;">✕ ' + turn.errorCount + '</span>');
+  if (duration) pieces.push('⏱ ' + duration);
+  var meta = pieces.join(' · ');
+  var html = '<section class="turn-chapter" id="turn-chapter-' + turn.turn + '">';
+  html += '<header class="turn-chapter-head">';
+  html +=   '<div class="turn-chapter-title">';
+  html +=     '<span class="turn-chapter-num">Turn ' + turn.turn + '</span>';
+  html +=     '<span class="turn-chapter-preview">' + previewLabel + '</span>';
+  html +=   '</div>';
+  html +=   '<div class="turn-chapter-meta">' + (timeLabel ? escHtml(timeLabel) : '') + (meta ? ' <span class="turn-chapter-sep">·</span> ' + meta : '') + '</div>';
+  html += '</header>';
+  html += '<div class="turn-chapter-body">';
+  for (var i = 0; i < turn.events.length; i++) {
+    var ev = turn.events[i];
+    html += _renderReplayEvent(ev, ev.originalIndex === highlightOriginal);
+  }
+  html += '</div>';
+  html += '</section>';
+  return html;
+}
+
+function _renderTurnTOC(turns, activeTurn) {
+  if (!turns.length) return '';
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '<div class="turn-toc-head">Turns <span class="turn-toc-count">' + turns.length + '</span></div>';
+  html += '<div class="turn-toc-list">';
+  for (var i = 0; i < order.length; i++) {
+    var trn = order[i];
+    var isActive = (trn.turn === activeTurn);
+    var preview = escHtml(_turnAnchorPreview(trn));
+    var timeLabel = trn.firstTs ? new Date(trn.firstTs).toLocaleTimeString() : '';
+    var toolBadge = trn.toolCount > 0 ? '<span class="turn-toc-tools">🔧 ' + trn.toolCount + '</span>' : '';
+    var errBadge  = trn.errorCount > 0 ? '<span class="turn-toc-err">✕ ' + trn.errorCount + '</span>' : '';
+    html += '<a class="turn-toc-item' + (isActive ? ' turn-toc-item-active' : '') + '" href="#turn-chapter-' + trn.turn + '"'
+         + ' onclick="return _jumpToTurn(' + trn.turn + ');" title="' + preview + '">';
+    html += '<span class="turn-toc-num">' + trn.turn + '</span>';
+    html += '<span class="turn-toc-body">';
+    html +=   '<span class="turn-toc-preview">' + preview + '</span>';
+    html +=   '<span class="turn-toc-metaline">' + (timeLabel ? '<span class="turn-toc-time">' + timeLabel + '</span>' : '')
+         + ' ' + toolBadge + ' ' + errBadge + '</span>';
+    html += '</span>';
+    html += '</a>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _jumpToTurn(turnIdx) {
+  var el = document.getElementById('turn-chapter-' + turnIdx);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return false;
+}
+
+// Toolbar toggle — flip the whole trace between oldest-first (default,
+// chat-native) and newest-first (skim recent activity for long sessions).
+//
+// INVARIANT: This is a display-time reversal ONLY. `window._replayEvents`
+// (the LocalStore-supplied event sequence) is NEVER mutated. The reversal
+// operates on a temporary array of turn groups inside _replayRenderCurrent
+// (`turns.slice().reverse()`) that lives for one render pass and is thrown
+// away. Every downstream consumer that reads `_replayEvents` — the scrubber,
+// the filter, the state panel, the raw-mode toggle — still sees events in
+// the original LocalStore order.
+function toggleTranscriptSort() {
+  window._transcriptSort = (window._transcriptSort === 'oldest') ? 'newest' : 'oldest';
+  var btn = document.getElementById('replay-sort-toggle');
+  if (btn) {
+    var isNewest = window._transcriptSort === 'newest';
+    btn.textContent = isNewest ? '↑ Newest first' : '↓ Oldest first';
+    btn.title = isNewest ? 'Newest turn at top — click to flip back' : 'Oldest turn at top — click to flip to newest first';
+  }
+  if (typeof _replayRenderCurrent === 'function') _replayRenderCurrent();
+  // Jump to the top so the sort change is visible without a manual scroll.
+  var wrap = document.getElementById('transcript-messages');
+  if (wrap) wrap.scrollTop = 0;
+}
+
 function _replayRenderCurrent() {
   var filtered = _replayFilteredEvents();
+  var wrap = document.getElementById('transcript-messages');
+  var tocEl = document.getElementById('transcript-toc');
   if (!filtered.length) {
-    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
+    wrap.innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
     document.getElementById('replay-pos').textContent = '0/0';
+    if (tocEl) tocEl.innerHTML = '';
     return;
   }
   var idx = window._replayIndex;
@@ -16723,20 +17578,39 @@ function _replayRenderCurrent() {
   if (idx >= filtered.length) idx = filtered.length - 1;
   window._replayIndex = idx;
 
-  // Render all filtered events up to current index (show history)
-  var html = '';
-  for (var i = 0; i <= idx; i++) {
-    html += _renderReplayEvent(filtered[i], i === idx);
+  var highlightOriginal = filtered[idx] ? filtered[idx].originalIndex : -1;
+
+  // Turn-anchored chapter render. Group first, then reverse whole turns for
+  // newest-first — reversing individual events would scramble tool_use /
+  // tool_result pairs within a turn.
+  var turns = _groupIntoTurns(filtered);
+  var activeTurn = 0;
+  for (var i = 0; i < turns.length; i++) {
+    for (var j = 0; j < turns[i].events.length; j++) {
+      if (turns[i].events[j].originalIndex === highlightOriginal) { activeTurn = turns[i].turn; break; }
+    }
   }
-  document.getElementById('transcript-messages').innerHTML = html;
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '';
+  for (var k = 0; k < order.length; k++) {
+    html += _renderTurnChapter(order[k], highlightOriginal);
+  }
+  wrap.innerHTML = html;
+  if (tocEl) tocEl.innerHTML = _renderTurnTOC(turns, activeTurn);
+
   document.getElementById('replay-pos').textContent = (idx + 1) + '/' + filtered.length;
   var scrubber = document.getElementById('replay-scrubber');
   scrubber.max = filtered.length - 1;
   scrubber.value = idx;
 
-  // Scroll highlighted message into view
-  var el = document.getElementById('replay-msg-' + filtered[idx].originalIndex);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Only scroll the highlighted event into view when the scrubber is what
+  // moved us (play mode / next / prev / jumpTo). On a fresh render we let the
+  // user stay wherever they were scrolled.
+  if (window._replayScrollOnRender) {
+    window._replayScrollOnRender = false;
+    var el = document.getElementById('replay-msg-' + highlightOriginal);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
   _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
 }
 
@@ -16744,6 +17618,7 @@ function replayNext() {
   var filtered = _replayFilteredEvents();
   if (window._replayIndex < filtered.length - 1) {
     window._replayIndex++;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
@@ -16751,12 +17626,14 @@ function replayNext() {
 function replayPrev() {
   if (window._replayIndex > 0) {
     window._replayIndex--;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
 
 function replayJumpTo(index) {
   window._replayIndex = index;
+  window._replayScrollOnRender = true;
   _replayRenderCurrent();
 }
 
@@ -16820,6 +17697,7 @@ function replayTogglePlay() {
         return;
       }
       window._replayIndex++;
+      window._replayScrollOnRender = true;
       _replayRenderCurrent();
     }, 100);
   }
@@ -19351,6 +20229,7 @@ var _RT_FLOW = {
   antigravity: { label:'Antigravity', src:['🪐','IDE'],      accent:'#4285f4', stroke:'#2f6ad9', tools:[['📝','Write'],['⚡','Command'],['📖','View'],['🌐','Search']] },
   copilot:     { label:'GitHub Copilot', src:['⌨️','Terminal'], accent:'#8b5cf6', stroke:'#7c3aed', tools:[['⚡','Bash'],['📖','View'],['📝','Edit'],['🌐','Web']] },
   grok:        { label:'Grok',        src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
+  deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -24943,3 +25822,509 @@ async function checkLicenseExpiry() {
   }
 }
 setTimeout(checkLicenseExpiry, 1200);
+// ─────────────────────────────────────────────────────────────────────────
+// Runtime Memory & Skills browser (multi-runtime file explorer).
+//
+// Each supported runtime stores its long-lived memory and its skills in
+// different places on disk (see clawmetry/runtime_memory.py). This module
+// renders two things across the Memory + Skills tabs:
+//   1. A chip bar of runtimes (dimmed if not present on this machine)
+//   2. A file-browser view (left tree, right preview) for the picked runtime
+//
+// OpenClaw remains the default; picking it hides the browser and shows the
+// existing rich Memory / Skills UI. All other runtimes route through the
+// browser. Backwards compatible — the old view is untouched.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmRuntimeCatalog = null;
+var _cmRuntimeSelected = { memory: 'openclaw', skills: 'openclaw' };
+
+function _cmRuntimeIsCloud() {
+  try {
+    return typeof window !== 'undefined' && window.location &&
+           /clawmetry\.com/.test(window.location.hostname);
+  } catch (e) { return false; }
+}
+
+async function _cmRuntimeFetchCatalog(force) {
+  if (_cmRuntimeCatalog && !force) return _cmRuntimeCatalog;
+  try {
+    var r = await fetch('/api/runtimes/memory-catalog');
+    if (!r.ok) throw new Error('http ' + r.status);
+    _cmRuntimeCatalog = await r.json();
+  } catch (e) {
+    _cmRuntimeCatalog = { categories: [], runtimes: [] };
+  }
+  return _cmRuntimeCatalog;
+}
+
+function _cmRuntimeIcon(id) {
+  var map = {
+    openclaw: '🦀', claude_code: '🅲', codex: '🅾', cursor: '🅲',
+    antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
+    qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
+    picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
+    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋',
+  };
+  return map[id] || '•';
+}
+
+function _cmRuntimeChip(runtime, selected, tab, category) {
+  var count = 0;
+  if (category && runtime.counts) count = runtime.counts[category] || 0;
+  else if (runtime.counts) {
+    Object.keys(runtime.counts).forEach(function(k) { count += runtime.counts[k] || 0; });
+  }
+  var isSel = runtime.id === selected;
+  var isPresent = !!runtime.present;
+  var isLocked = !!runtime.locked;
+  var bg = isSel ? '#6366f1' : (isPresent ? 'var(--bg-secondary)' : 'transparent');
+  var color = isSel ? '#fff' : (isPresent ? 'var(--text-primary)' : 'var(--text-muted)');
+  var border = isSel ? '#6366f1' : 'var(--border-primary)';
+  var op = (isPresent || isSel) ? 1 : 0.55;
+  var badge = '';
+  if (isLocked) {
+    badge = '<span title="Paid runtime — upgrade to browse its files" style="margin-left:6px;font-size:10px;opacity:0.85;">🔒</span>';
+  } else if (count > 0) {
+    badge = '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>';
+  }
+  var titleTip = isLocked
+    ? escHtml(runtime.label) + ' — paid runtime, upgrade to browse'
+    : escHtml(runtime.label) + (isPresent ? '' : ' (not detected on this machine)');
+  return '<div class="cm-runtime-chip" data-runtime="' + runtime.id + '" '
+    + 'onclick="cmRuntimeSelect(\'' + tab + '\',\'' + runtime.id + '\')" '
+    + 'style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;'
+    + 'background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';opacity:' + op + ';'
+    + 'display:inline-flex;align-items:center;gap:4px;" title="' + titleTip + '">'
+    + escHtml(runtime.label) + badge + '</div>';
+}
+
+async function cmRuntimeMountChips(chipsEl) {
+  if (!chipsEl) return;
+  var tab = chipsEl.getAttribute('data-tab') || 'memory';
+  var category = chipsEl.getAttribute('data-category') || null;
+  chipsEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Loading runtimes…</span>';
+  var cat = await _cmRuntimeFetchCatalog();
+  var runtimes = (cat.runtimes || []).slice();
+  // Sort: present first, then by label
+  runtimes.sort(function(a, b) {
+    if (!!a.present !== !!b.present) return a.present ? -1 : 1;
+    return (a.label || '').localeCompare(b.label || '');
+  });
+  var sel = _cmRuntimeSelected[tab] || 'openclaw';
+  var chips = runtimes.map(function(rt) {
+    return _cmRuntimeChip(rt, sel, tab, category);
+  });
+  chipsEl.innerHTML = chips.join('');
+}
+
+function cmRuntimeSelect(tab, runtimeId) {
+  _cmRuntimeSelected[tab] = runtimeId;
+  // Re-render both chip bars if present (keeps them in sync visually)
+  var chips = document.querySelectorAll('[id$="-runtime-chips"][data-tab="' + tab + '"]');
+  chips.forEach(function(el) { cmRuntimeMountChips(el); });
+  // Toggle native OpenClaw view vs runtime file browser
+  var browser = document.getElementById(tab + '-runtime-browser');
+  if (tab === 'memory') {
+    var nativeIds = ['memory-summary-view', 'memory-access-view', 'memory-all-view'];
+    if (runtimeId === 'openclaw') {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        // Only restore the summary view by default; the other two are toggled
+        // by memorySwitchView independently.
+        if (id === 'memory-summary-view') el.style.display = '';
+      });
+      if (browser) browser.style.display = 'none';
+    } else {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'memory'); }
+    }
+  } else if (tab === 'skills') {
+    var nativeIds = ['skills-summary-row', 'skills-list', 'skills-browser'];
+    if (runtimeId === 'openclaw') {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        if (id === 'skills-summary-row' || id === 'skills-list') el.style.display = '';
+      });
+      if (browser) browser.style.display = 'none';
+    } else {
+      nativeIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'skills'); }
+    }
+  }
+}
+
+async function cmRuntimeMountBrowser(container, runtimeId, tab) {
+  if (!container) return;
+  container.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;">Loading '
+    + escHtml(runtimeId) + '…</div>';
+  var payload;
+  try {
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files';
+    if (tab === 'memory' || tab === 'skills') {
+      // No category filter — show everything the runtime exposes.
+    }
+    var r = await fetch(url);
+    if (r.status === 402) {
+      // Paid runtime the caller isn't entitled to. Show upsell CTA
+      // instead of an error — matches the OSS conversion-moment pattern.
+      var rtLabel = (_cmRuntimeCatalog && _cmRuntimeCatalog.runtimes || [])
+        .filter(function(x) { return x.id === runtimeId; })[0];
+      var label = (rtLabel && rtLabel.label) || runtimeId;
+      container.innerHTML =
+        '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.55;max-width:520px;margin:0 auto;">'
+        + '<div style="font-size:28px;margin-bottom:8px;">🔒</div>'
+        + '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;font-size:15px;">' + escHtml(label) + ' is a paid runtime</div>'
+        + 'Upgrade your ClawMetry plan to browse this runtime\'s memory and skills files. '
+        + 'Everything ClawMetry knows about ' + escHtml(label) + ' — including where its memory lives on disk — is bundled with the paid tier that ships its adapter.'
+        + '<div style="margin-top:16px;"><a href="https://clawmetry.com/pricing" target="_blank" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px;">See pricing</a></div>'
+        + '</div>';
+      return;
+    }
+    if (!r.ok) throw new Error('http ' + r.status);
+    payload = await r.json();
+  } catch (e) {
+    container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
+      + escHtml(String(e)) + '</div>';
+    return;
+  }
+  var groups = (payload.groups || []).filter(function(g) { return g.exists; });
+  var absent = (payload.groups || []).filter(function(g) { return !g.exists; });
+  var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
+
+  if (!groups.length) {
+    container.innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
+      + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">Nothing found on disk for ' + escHtml(payload.label || runtimeId) + '</div>'
+      + 'ClawMetry looks for this runtime\'s memory and skills at these paths:'
+      + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
+      + absent.map(function(g) {
+          return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.category)
+            + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
+        }).join('')
+      + '</div>'
+      + '<div style="margin-top:14px;font-size:11px;">Install ' + escHtml(payload.label || runtimeId)
+      + ' or drop files at one of these paths to make them appear here.</div>'
+      + '</div>';
+    return;
+  }
+
+  // Build the two-pane layout: left tree, right preview.
+  var treeHtml = groups.map(function(g, gi) {
+    var scopePill = '<span style="font-size:9px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:0 5px;margin-left:6px;color:var(--text-muted);">'
+      + escHtml(g.scope) + '</span>';
+    var catPill = '<span style="font-size:9px;background:rgba(99,102,241,0.15);color:#a5b4fc;border-radius:8px;padding:0 5px;margin-left:4px;">'
+      + escHtml(g.category) + '</span>';
+    var files = (g.files || []).map(function(f, fi) {
+      var name = f.path || g.label || '(file)';
+      var basename = name.split('/').pop();
+      var indent = (name.split('/').length - 1) * 12;
+      var kb = f.size >= 1024 ? (f.size / 1024).toFixed(1) + 'K' : f.size + 'B';
+      return '<div class="cm-rt-file" data-gi="' + gi + '" data-fi="' + fi
+        + '" onclick="cmRuntimeOpenFile(this,\'' + runtimeId + '\','
+        + gi + ',' + fi + ')" style="padding:3px 10px 3px ' + (18 + indent) + 'px;font-size:11.5px;cursor:pointer;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center;gap:8px;" '
+        + 'title="' + escHtml(name) + '">'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(basename) + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);flex-shrink:0;">' + kb + '</span>'
+        + '</div>';
+    }).join('');
+    return '<div class="cm-rt-group" style="margin-bottom:8px;">'
+      + '<div style="padding:6px 10px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);display:flex;align-items:center;flex-wrap:wrap;">'
+      + escHtml(g.label) + catPill + scopePill + '</div>'
+      + '<div style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:10px;color:var(--text-muted);padding:0 10px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(g.root) + '">' + escHtml(g.root) + '</div>'
+      + files + '</div>';
+  }).join('');
+
+  container.innerHTML =
+    '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
+    + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
+    + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
+    + escHtml(payload.label) + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
+    + '</div>' + treeHtml + '</div>'
+    + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
+    + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
+    + '<div id="cm-rt-file-body-' + tab + '" style="flex:1;overflow:auto;padding:16px 22px;background:var(--bg-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12.5px;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;">'
+    + '<div style="color:var(--text-muted);font-family:inherit;">Pick a file on the left to view its contents.</div>'
+    + '</div></div></div>';
+
+  // Stash the payload on the container so cmRuntimeOpenFile can look up
+  // (root, path) by (gi, fi) without another fetch.
+  container._cmRuntimePayload = payload;
+}
+
+async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
+  var container = clickEl.closest('.runtime-file-browser');
+  if (!container || !container._cmRuntimePayload) return;
+  var tab = container.getAttribute('data-tab') || 'memory';
+  var groups = container._cmRuntimePayload.groups || [];
+  var group = groups[gi];
+  if (!group) return;
+  var file = (group.files || [])[fi];
+  if (!file) return;
+
+  // Highlight selection
+  container.querySelectorAll('.cm-rt-file').forEach(function(el) {
+    el.style.background = ''; el.style.color = 'var(--text-primary)';
+  });
+  clickEl.style.background = 'rgba(99,102,241,0.15)';
+  clickEl.style.color = '#a5b4fc';
+
+  var header = document.getElementById('cm-rt-file-header-' + tab);
+  var body = document.getElementById('cm-rt-file-body-' + tab);
+  if (header) header.innerHTML = escHtml(group.root + '/' + (file.path || ''));
+  if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
+
+  try {
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
+      + '/file?root=' + encodeURIComponent(group.root)
+      + '&path=' + encodeURIComponent(file.path || '');
+    var r = await fetch(url);
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    var content = d.content || '';
+    var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
+    var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
+    if (header) header.innerHTML =
+      '<span style="color:var(--text-primary);font-weight:600;">' + escHtml((file.path || group.label || '')) + '</span>'
+      + '<span style="opacity:0.6;">·</span><span>' + escHtml(sizeStr) + '</span>'
+      + (mstr ? '<span style="opacity:0.6;">·</span><span>' + escHtml(mstr) + '</span>' : '')
+      + '<span style="opacity:0.6;">·</span><span>' + escHtml(d.language || 'text') + '</span>';
+    if (body) {
+      // Render markdown as preview when we have it (matches Memory tab UX),
+      // otherwise show raw content. cmSafeMarkdown is defined earlier in
+      // app.js and sanitizes output.
+      if ((d.language || '') === 'markdown' && typeof cmSafeMarkdown === 'function') {
+        body.style.whiteSpace = 'normal';
+        body.style.fontFamily = '';
+        body.innerHTML = cmSafeMarkdown(content);
+      } else {
+        body.style.whiteSpace = 'pre-wrap';
+        body.style.fontFamily = "'JetBrains Mono','SF Mono',monospace";
+        body.textContent = content;
+      }
+    }
+  } catch (e) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">Failed to load: '
+      + escHtml(String(e && e.message || e)) + '</div>';
+  }
+}
+
+// Hook into tab switches so the chip bars mount on first paint.
+(function _cmRuntimeInstallHooks() {
+  var origSwitchTab = (typeof switchTab === 'function') ? switchTab : null;
+  if (!origSwitchTab || origSwitchTab._cmRuntimeWrapped) return;
+  var wrapped = function(name) {
+    var out = origSwitchTab.apply(this, arguments);
+    try {
+      if (name === 'memory') {
+        cmRuntimeMountChips(document.getElementById('memory-runtime-chips'));
+      } else if (name === 'skills') {
+        cmRuntimeMountChips(document.getElementById('skills-runtime-chips'));
+      }
+    } catch (e) {}
+    return out;
+  };
+  wrapped._cmRuntimeWrapped = true;
+  window.switchTab = wrapped;
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Runtime-aware replay tree — skeleton (#4813 part 3)
+// ═══════════════════════════════════════════════════════════════════════
+// Fetches /api/replay-tree/<sid> and renders the nested runtime-aware
+// view (mode chip, workflow lane, turn chapters with inline delegations,
+// approvals rail). Dormant until adapter mappers land — when the tree
+// returns row_count=0 the caller falls back to the flat _replayRenderCurrent
+// path (no dead UI per FLYWHEEL §0a.4).
+//
+// Wire-up into openTranscriptModal happens in #4814 (mode + approvals)
+// once there's real data to render. For now the skeleton is reachable
+// via window._debugReplayTree(sessionId) for manual verification during
+// per-runtime mapper development.
+(function _cmReplayTree() {
+  'use strict';
+
+  async function fetchReplayTree(sessionId) {
+    var url = '/api/replay-tree/' + encodeURIComponent(sessionId);
+    var r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('replay-tree ' + r.status);
+    return await r.json();
+  }
+
+  function _escape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  // Runtime dispatcher — mirrors the pattern at app.js:16729 (Harness tab
+  // templates). Each runtime can register a per-kind override; unknown
+  // runtimes fall through to the neutral renderer.
+  var _KIND_RENDERERS = {};   // key = runtime + ':' + kind, value = fn(ev) -> html
+  function registerKindRenderer(runtime, kind, fn) {
+    _KIND_RENDERERS[runtime + ':' + kind] = fn;
+  }
+  function _renderEvent(ev, runtime) {
+    var custom = _KIND_RENDERERS[(runtime || ev.runtime) + ':' + ev.kind];
+    if (typeof custom === 'function') return custom(ev);
+    // Neutral fallback — one line per event, prefix by kind.
+    var kindLabel = _escape(ev.kind || 'event');
+    var body = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+      body = _escape(JSON.stringify(ev.payload).slice(0, 200));
+    }
+    return '<div class="replay-tree-event replay-tree-kind-' +
+           _escape((ev.kind || '').split('.')[0]) + '">' +
+           '<span class="replay-tree-kind">' + kindLabel + '</span>' +
+           (body ? '<span class="replay-tree-body">' + body + '</span>' : '') +
+           '</div>';
+  }
+
+  function _renderDelegations(delegations, runtime, depth) {
+    depth = depth || 1;
+    if (!delegations || !delegations.length) return '';
+    var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
+    for (var i = 0; i < delegations.length; i++) {
+      var d = delegations[i];
+      html += '<details class="replay-tree-delegation" open>';
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      for (var j = 0; j < (d.events || []).length; j++) {
+        html += _renderEvent(d.events[j], runtime);
+      }
+      // Nested delegations render recursively — arbitrary depth (issue
+      // #4815 Claude Code Task nesting stresses this).
+      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _renderTurn(turn, runtime) {
+    var html = '<section class="replay-tree-turn" data-turn-id="' +
+               _escape(turn.turn_id) + '">';
+    // Approvals rail summary badge on the turn header.
+    var approvalCount = (turn.approvals || []).length;
+    var deniedCount = (turn.approvals || []).filter(function(a) {
+      return a.approval && a.approval.status === 'denied';
+    }).length;
+    var badges = '';
+    if (approvalCount) {
+      badges += ' <span class="replay-tree-badge approvals" title="' +
+                approvalCount + ' approvals (' + deniedCount + ' denied)">' +
+                '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
+                '</span>';
+    }
+    html += '<header class="replay-tree-turn-header">' +
+            '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
+            badges + '</header>';
+    // Events (llm.*, tool.*, thinking, mode.changed, compaction).
+    for (var i = 0; i < (turn.events || []).length; i++) {
+      html += _renderEvent(turn.events[i], runtime);
+    }
+    // Inline delegations under the turn that spawned them.
+    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += '</section>';
+    return html;
+  }
+
+  function _renderModeChip(mode) {
+    if (!mode || !mode.permission) return '';
+    var isYolo = mode.permission === 'bypassPermissions' || mode.permission === 'yolo';
+    return '<div class="replay-tree-mode-chip" data-yolo="' +
+           (isYolo ? '1' : '0') + '" title="sandbox: ' +
+           _escape(mode.sandbox || 'unknown') + '">' +
+           _escape(mode.permission) + '</div>';
+  }
+
+  function _renderWorkflows(workflows, runtime) {
+    if (!workflows || !workflows.length) return '';
+    var html = '<div class="replay-tree-workflows">';
+    for (var i = 0; i < workflows.length; i++) {
+      var wf = workflows[i];
+      html += '<details class="replay-tree-workflow" open>';
+      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
+              (wf.events || []).length + ' stages)</summary>';
+      for (var j = 0; j < (wf.events || []).length; j++) {
+        html += _renderEvent(wf.events[j], runtime);
+      }
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTree(tree, mountEl) {
+    if (!mountEl) return false;
+    if (!tree || !tree.row_count) {
+      // Honest empty state — caller falls back to the flat renderer.
+      mountEl.innerHTML = '';
+      return false;
+    }
+    var html = '<div class="replay-tree" data-runtime="' +
+               _escape(tree.runtime || 'unknown') + '">';
+    html += _renderModeChip(tree.mode);
+    html += _renderWorkflows(tree.workflows, tree.runtime);
+    for (var i = 0; i < (tree.turns || []).length; i++) {
+      html += _renderTurn(tree.turns[i], tree.runtime);
+    }
+    html += '</div>';
+    mountEl.innerHTML = html;
+    return true;
+  }
+
+  async function debugReplayTree(sessionId) {
+    // Manual verification hook — creates a floating panel with the
+    // rendered tree. Adapter authors call this to visualize their
+    // iter_replay_events output during development.
+    var panel = document.getElementById('_replay-tree-debug-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_replay-tree-debug-panel';
+      panel.style.cssText = 'position:fixed;top:20px;right:20px;width:600px;' +
+        'max-height:80vh;overflow:auto;background:var(--bg-elevated,#111);' +
+        'color:var(--text,#eee);border:1px solid var(--border,#444);padding:12px;' +
+        'z-index:10000;font-family:monospace;font-size:12px;';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:none;color:inherit;border:none;font-size:20px;cursor:pointer;';
+      close.onclick = function() { panel.remove(); };
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = '<div>Fetching /api/replay-tree/' +
+                      _escape(sessionId) + ' …</div>';
+    try {
+      var tree = await fetchReplayTree(sessionId);
+      var mount = document.createElement('div');
+      panel.appendChild(mount);
+      var rendered = renderTree(tree, mount);
+      if (!rendered) {
+        mount.innerHTML = '<div style="color:var(--text-muted,#888);padding:16px;">' +
+          'Empty tree — no replay_events for this session yet. ' +
+          'Adapter mappers land in #4815 (Claude Code), #4816 (OpenClaw), ' +
+          'and 13 Pro adapter issues.</div>';
+      }
+    } catch (e) {
+      panel.innerHTML += '<div style="color:#f66;">error: ' +
+                        _escape(String(e)) + '</div>';
+    }
+  }
+
+  // Public surface — small, so #4814 and per-runtime mappers can extend.
+  window._cmReplayTree = {
+    fetchReplayTree: fetchReplayTree,
+    renderTree: renderTree,
+    registerKindRenderer: registerKindRenderer,
+  };
+  window._debugReplayTree = debugReplayTree;
+})();

@@ -117,6 +117,7 @@ from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_tr
 from routes.compliance import bp_compliance
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
+from routes.runtime_memory import bp_runtime_memory
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
@@ -132,6 +133,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
@@ -322,7 +324,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.689"
+__version__ = "0.12.704"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11890,6 +11892,7 @@ def detect_config(args=None):
         app.register_blueprint(bp_nemoclaw)
         app.register_blueprint(bp_compliance)
     app.register_blueprint(bp_skills)
+    app.register_blueprint(bp_runtime_memory)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
@@ -11934,7 +11937,10 @@ def detect_config(args=None):
     # When the resolver reports an unpaid / expired entitlement, every non-
     # allowlisted request 402s with a machine-readable body carrying
     # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
-    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. See
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. The gate honours a per-request
+    # ``runtime`` scope hint so an operator who chose the "continue with free
+    # runtimes only" fallback (POST /api/trial/continue-free) still gets the
+    # OpenClaw / NanoClaw surface while paid runtimes stay blocked. See
     # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
     from clawmetry import trial_enforcement as _te_gate
 
@@ -11944,7 +11950,21 @@ def detect_config(args=None):
             path = request.path or ""
             if _te_gate.allowlisted_path(path):
                 return None
-            if not _te_gate.is_hard_blocked():
+            # Runtime hint sources, in preference order:
+            #   1. ?runtime=<name> (canonical UI param)
+            #   2. ?scope=<name>   (older alias some routes still emit)
+            #   3. X-Clawmetry-Runtime header (used by CLI + adapters)
+            rt_hint = None
+            try:
+                rt_hint = (
+                    (request.args.get("runtime") or "").strip()
+                    or (request.args.get("scope") or "").strip()
+                    or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                    or None
+                )
+            except Exception:
+                rt_hint = None
+            if not _te_gate.is_hard_blocked(path=path, runtime=rt_hint):
                 return None
             payload = _te_gate.block_payload()
             resp = jsonify(payload)
@@ -11981,6 +12001,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
 
@@ -12516,9 +12537,9 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.evals_tooltip" title="Automatic quality checks and LLM-judge scores for your agent's work">
-        <span class="left-nav-icon" aria-hidden="true">&#128300;</span>
-        <span class="left-nav-label" data-i18n="nav.evals">Evals</span>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
@@ -12581,8 +12602,15 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
+      {# Memory + Skills stay under Advanced while the multi-runtime file
+         browser matures (founder call 2026-08-14): known gaps — redundant
+         runtime chips, file click not loading content, Skills rendering the
+         Memory catalog. Promote to Tier-1 once those are fixed. #}
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
         <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
+      </div>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live runtime log stream">
         <span class="left-nav-label">Logs</span>
@@ -12592,9 +12620,6 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
         <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
         <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>

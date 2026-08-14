@@ -330,6 +330,12 @@ def _entry_view(entry: dict[str, Any]) -> dict[str, Any]:
         "tier": entry["tier"],
         "status": entry["status"],
         "computed_in": entry["computed_in"],
+        # feat/evals-simplify: expose value_field so the Evals tab can promote
+        # entries whose per-session number actually lands somewhere (outcome,
+        # reliability_score, eval_score, faithfulness_score) over the ones
+        # that only produce aggregate signals. Both stay in the catalogue;
+        # the tab picks which to feature.
+        "value_field": entry.get("value_field"),
     }
     if entry["tier"] == TIER_PRO:
         view["locked"] = not has_pro_hook(entry["slug"])

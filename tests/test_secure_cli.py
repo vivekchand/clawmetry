@@ -78,3 +78,71 @@ def test_hook_install_cmd_custom_port_and_emit_all():
     cmd = secure.build_hook_install_cmd("numbat", 9001, "all")
     assert "http://127.0.0.1:9001/api/numbat/ingest" in cmd
     assert cmd[cmd.index("--emit") + 1] == "all"
+
+
+# ── hook uninstall / clawmetry-uninstall drain ─────────────────────────────
+
+def test_hook_uninstall_cmd_mirrors_install_scope():
+    cmd = secure.build_hook_uninstall_cmd("/x/numbat")
+    assert cmd == ["/x/numbat", "hook", "uninstall", "--agent", "all"]
+
+
+def test_managed_numbat_only_matches_our_install(monkeypatch, tmp_path):
+    monkeypatch.setattr(secure, "BIN_DIR", tmp_path)
+    # PATH-installed numbat must NOT count as managed.
+    monkeypatch.setattr(secure.shutil, "which", lambda _n: "/usr/local/bin/numbat")
+    assert secure.managed_numbat() is None
+    binary = secure.numbat_binary_path()
+    binary.write_bytes(b"#!fake")
+    assert secure.managed_numbat() == str(binary)
+
+
+def test_drain_noops_without_managed_binary(monkeypatch, tmp_path):
+    monkeypatch.setattr(secure, "BIN_DIR", tmp_path)
+    monkeypatch.setattr(secure.shutil, "which", lambda _n: "/usr/local/bin/numbat")
+
+    def _boom(*a, **k):  # pragma: no cover - must never be reached
+        raise AssertionError("drain must not touch a user-installed numbat")
+
+    monkeypatch.setattr(secure.subprocess, "run", _boom)
+    assert secure.drain_hooks_for_uninstall() == (False, "")
+
+
+def test_drain_runs_hook_uninstall_on_managed_binary(monkeypatch, tmp_path):
+    monkeypatch.setattr(secure, "BIN_DIR", tmp_path)
+    binary = secure.numbat_binary_path()
+    binary.write_bytes(b"#!fake")
+    calls = []
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(secure.subprocess, "run",
+                        lambda cmd, **k: calls.append(cmd) or _Proc())
+    acted, msg = secure.drain_hooks_for_uninstall()
+    assert acted is True and "removed" in msg
+    assert calls == [[str(binary), "hook", "uninstall", "--agent", "all"]]
+
+
+def test_drain_failure_reports_manual_command_and_never_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(secure, "BIN_DIR", tmp_path)
+    secure.numbat_binary_path().write_bytes(b"#!fake")
+
+    class _Proc:
+        returncode = 3
+        stdout = ""
+        stderr = "config locked\n"
+
+    monkeypatch.setattr(secure.subprocess, "run", lambda *a, **k: _Proc())
+    acted, msg = secure.drain_hooks_for_uninstall()
+    assert acted is False
+    assert "config locked" in msg and "hook uninstall --agent all" in msg
+
+    def _raise(*a, **k):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(secure.subprocess, "run", _raise)
+    acted, msg = secure.drain_hooks_for_uninstall()
+    assert acted is False and "exec format error" in msg
