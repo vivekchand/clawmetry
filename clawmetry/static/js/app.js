@@ -26043,3 +26043,196 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   wrapped._cmRuntimeWrapped = true;
   window.switchTab = wrapped;
 })();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Runtime-aware replay tree — skeleton (#4813 part 3)
+// ═══════════════════════════════════════════════════════════════════════
+// Fetches /api/replay-tree/<sid> and renders the nested runtime-aware
+// view (mode chip, workflow lane, turn chapters with inline delegations,
+// approvals rail). Dormant until adapter mappers land — when the tree
+// returns row_count=0 the caller falls back to the flat _replayRenderCurrent
+// path (no dead UI per FLYWHEEL §0a.4).
+//
+// Wire-up into openTranscriptModal happens in #4814 (mode + approvals)
+// once there's real data to render. For now the skeleton is reachable
+// via window._debugReplayTree(sessionId) for manual verification during
+// per-runtime mapper development.
+(function _cmReplayTree() {
+  'use strict';
+
+  async function fetchReplayTree(sessionId) {
+    var url = '/api/replay-tree/' + encodeURIComponent(sessionId);
+    var r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('replay-tree ' + r.status);
+    return await r.json();
+  }
+
+  function _escape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  // Runtime dispatcher — mirrors the pattern at app.js:16729 (Harness tab
+  // templates). Each runtime can register a per-kind override; unknown
+  // runtimes fall through to the neutral renderer.
+  var _KIND_RENDERERS = {};   // key = runtime + ':' + kind, value = fn(ev) -> html
+  function registerKindRenderer(runtime, kind, fn) {
+    _KIND_RENDERERS[runtime + ':' + kind] = fn;
+  }
+  function _renderEvent(ev, runtime) {
+    var custom = _KIND_RENDERERS[(runtime || ev.runtime) + ':' + ev.kind];
+    if (typeof custom === 'function') return custom(ev);
+    // Neutral fallback — one line per event, prefix by kind.
+    var kindLabel = _escape(ev.kind || 'event');
+    var body = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+      body = _escape(JSON.stringify(ev.payload).slice(0, 200));
+    }
+    return '<div class="replay-tree-event replay-tree-kind-' +
+           _escape((ev.kind || '').split('.')[0]) + '">' +
+           '<span class="replay-tree-kind">' + kindLabel + '</span>' +
+           (body ? '<span class="replay-tree-body">' + body + '</span>' : '') +
+           '</div>';
+  }
+
+  function _renderDelegations(delegations, runtime, depth) {
+    depth = depth || 1;
+    if (!delegations || !delegations.length) return '';
+    var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
+    for (var i = 0; i < delegations.length; i++) {
+      var d = delegations[i];
+      html += '<details class="replay-tree-delegation" open>';
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      for (var j = 0; j < (d.events || []).length; j++) {
+        html += _renderEvent(d.events[j], runtime);
+      }
+      // Nested delegations render recursively — arbitrary depth (issue
+      // #4815 Claude Code Task nesting stresses this).
+      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _renderTurn(turn, runtime) {
+    var html = '<section class="replay-tree-turn" data-turn-id="' +
+               _escape(turn.turn_id) + '">';
+    // Approvals rail summary badge on the turn header.
+    var approvalCount = (turn.approvals || []).length;
+    var deniedCount = (turn.approvals || []).filter(function(a) {
+      return a.approval && a.approval.status === 'denied';
+    }).length;
+    var badges = '';
+    if (approvalCount) {
+      badges += ' <span class="replay-tree-badge approvals" title="' +
+                approvalCount + ' approvals (' + deniedCount + ' denied)">' +
+                '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
+                '</span>';
+    }
+    html += '<header class="replay-tree-turn-header">' +
+            '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
+            badges + '</header>';
+    // Events (llm.*, tool.*, thinking, mode.changed, compaction).
+    for (var i = 0; i < (turn.events || []).length; i++) {
+      html += _renderEvent(turn.events[i], runtime);
+    }
+    // Inline delegations under the turn that spawned them.
+    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += '</section>';
+    return html;
+  }
+
+  function _renderModeChip(mode) {
+    if (!mode || !mode.permission) return '';
+    var isYolo = mode.permission === 'bypassPermissions' || mode.permission === 'yolo';
+    return '<div class="replay-tree-mode-chip" data-yolo="' +
+           (isYolo ? '1' : '0') + '" title="sandbox: ' +
+           _escape(mode.sandbox || 'unknown') + '">' +
+           _escape(mode.permission) + '</div>';
+  }
+
+  function _renderWorkflows(workflows, runtime) {
+    if (!workflows || !workflows.length) return '';
+    var html = '<div class="replay-tree-workflows">';
+    for (var i = 0; i < workflows.length; i++) {
+      var wf = workflows[i];
+      html += '<details class="replay-tree-workflow" open>';
+      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
+              (wf.events || []).length + ' stages)</summary>';
+      for (var j = 0; j < (wf.events || []).length; j++) {
+        html += _renderEvent(wf.events[j], runtime);
+      }
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTree(tree, mountEl) {
+    if (!mountEl) return false;
+    if (!tree || !tree.row_count) {
+      // Honest empty state — caller falls back to the flat renderer.
+      mountEl.innerHTML = '';
+      return false;
+    }
+    var html = '<div class="replay-tree" data-runtime="' +
+               _escape(tree.runtime || 'unknown') + '">';
+    html += _renderModeChip(tree.mode);
+    html += _renderWorkflows(tree.workflows, tree.runtime);
+    for (var i = 0; i < (tree.turns || []).length; i++) {
+      html += _renderTurn(tree.turns[i], tree.runtime);
+    }
+    html += '</div>';
+    mountEl.innerHTML = html;
+    return true;
+  }
+
+  async function debugReplayTree(sessionId) {
+    // Manual verification hook — creates a floating panel with the
+    // rendered tree. Adapter authors call this to visualize their
+    // iter_replay_events output during development.
+    var panel = document.getElementById('_replay-tree-debug-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_replay-tree-debug-panel';
+      panel.style.cssText = 'position:fixed;top:20px;right:20px;width:600px;' +
+        'max-height:80vh;overflow:auto;background:var(--bg-elevated,#111);' +
+        'color:var(--text,#eee);border:1px solid var(--border,#444);padding:12px;' +
+        'z-index:10000;font-family:monospace;font-size:12px;';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:none;color:inherit;border:none;font-size:20px;cursor:pointer;';
+      close.onclick = function() { panel.remove(); };
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = '<div>Fetching /api/replay-tree/' +
+                      _escape(sessionId) + ' …</div>';
+    try {
+      var tree = await fetchReplayTree(sessionId);
+      var mount = document.createElement('div');
+      panel.appendChild(mount);
+      var rendered = renderTree(tree, mount);
+      if (!rendered) {
+        mount.innerHTML = '<div style="color:var(--text-muted,#888);padding:16px;">' +
+          'Empty tree — no replay_events for this session yet. ' +
+          'Adapter mappers land in #4815 (Claude Code), #4816 (OpenClaw), ' +
+          'and 13 Pro adapter issues.</div>';
+      }
+    } catch (e) {
+      panel.innerHTML += '<div style="color:#f66;">error: ' +
+                        _escape(String(e)) + '</div>';
+    }
+  }
+
+  // Public surface — small, so #4814 and per-runtime mappers can extend.
+  window._cmReplayTree = {
+    fetchReplayTree: fetchReplayTree,
+    renderTree: renderTree,
+    registerKindRenderer: registerKindRenderer,
+  };
+  window._debugReplayTree = debugReplayTree;
+})();

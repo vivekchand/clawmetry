@@ -2378,3 +2378,63 @@ body.has-profile-menu #logout-btn { display: none !important; }
   .cm-tr-pop-cols { grid-template-columns: 1fr; }
   .cm-tr-abs { border-right: none; border-bottom: 1px solid var(--border-primary); }
 }
+
+/* === Runtime-aware replay tree — skeleton (#4813 part 3) ==============
+   Dormant until an adapter populates replay_events. Compact, monochrome
+   defaults; per-runtime templates (Claude Code #4815, OpenClaw #4816,
+   Pro adapters) may layer richer styles via registerKindRenderer().
+*/
+.replay-tree { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.replay-tree-mode-chip {
+  display: inline-block; padding: 3px 10px; border-radius: 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  border: 1px solid var(--border-primary); align-self: flex-start;
+}
+.replay-tree-mode-chip[data-yolo="1"] {
+  background: color-mix(in srgb, #d63b3b 24%, var(--bg-tertiary));
+  border-color: #d63b3b; color: #fff;
+}
+.replay-tree-workflows { display: flex; flex-direction: column; gap: 6px; }
+.replay-tree-workflow { border-left: 3px solid var(--accent); padding: 6px 10px;
+  background: var(--bg-secondary); border-radius: 6px; }
+.replay-tree-workflow > summary { cursor: pointer; font-weight: 600;
+  color: var(--text-primary); }
+.replay-tree-turn {
+  border: 1px solid var(--border-secondary); border-radius: 8px;
+  padding: 10px 12px; background: var(--bg-secondary);
+}
+.replay-tree-turn-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-muted);
+  margin-bottom: 6px; padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border-secondary);
+}
+.replay-tree-turn-id { font-weight: 600; color: var(--text-secondary); }
+.replay-tree-badge {
+  padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+}
+.replay-tree-badge.approvals { background: color-mix(in srgb, #4a9eff 18%, var(--bg-tertiary)); }
+.replay-tree-event {
+  padding: 3px 0; font-family: var(--font-mono, monospace); font-size: 12px;
+  color: var(--text-secondary); display: flex; gap: 8px;
+}
+.replay-tree-kind {
+  min-width: 100px; color: var(--accent); font-weight: 600;
+}
+.replay-tree-body { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay-tree-kind-agent .replay-tree-kind { color: #b070ff; }
+.replay-tree-kind-workflow .replay-tree-kind { color: #ffa060; }
+.replay-tree-kind-approval .replay-tree-kind { color: #4a9eff; }
+.replay-tree-kind-tool .replay-tree-kind { color: #70cfa0; }
+.replay-tree-delegations {
+  margin-left: 16px; padding-left: 10px;
+  border-left: 2px solid var(--border-secondary);
+}
+.replay-tree-delegations[data-depth="2"] { border-left-color: var(--accent); }
+.replay-tree-delegations[data-depth="3"] { border-left-color: #b070ff; }
+.replay-tree-delegation > summary {
+  cursor: pointer; font-size: 12px; color: var(--text-muted);
+  padding: 2px 0;
+}
