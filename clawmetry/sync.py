@@ -8579,6 +8579,13 @@ MEMORY_CACHE_TTL_SEC = 21600       # 6h — matches Brain TTL; files change slow
 MEMORY_CACHE_LIMIT = 200            # per RUNTIME, so one chatty agent can't
                                     # crowd the others out of the blob
 MEMORY_CONTENT_TRUNCATE = 200_000   # per file, bounds the heartbeat blob
+# Ceiling for the whole pushed payload. Per-file and per-runtime caps alone
+# still multiply out to something no one wants riding a heartbeat, so cut the
+# list off here as well. Rows arrive newest-first, so what survives is the
+# memory the agent touched most recently. Dropped files are left OUT of the
+# file list entirely rather than listed with missing content — a tree entry
+# that opens to nothing reads as a broken tab.
+MEMORY_CACHE_MAX_TOTAL_BYTES = 4_000_000
 
 # Runtimes whose memory we ship to cloud. Derived from the on-disk catalog so a
 # new runtime added to clawmetry/runtime_memory.py is carried automatically.
@@ -8690,6 +8697,8 @@ def _build_memory_cache_pushes(config: dict) -> list:
     contents: list[dict] = []
     per_runtime: dict = {}
     seen: set = set()
+    budget = MEMORY_CACHE_MAX_TOTAL_BYTES
+    dropped = 0
     for r in rows:
         path = r.get("path") or ""
         runtime_id = r.get("agent_type") or "openclaw"
@@ -8713,14 +8722,24 @@ def _build_memory_cache_pushes(config: dict) -> list:
         size = r.get("size_bytes")
         if size is None:
             size = len(content.encode("utf-8", errors="replace"))
-        files.append({"name": path, "path": path, "size": int(size or 0),
-                      "runtime": runtime_id})
         # Truncate per-file content to bound the encrypted blob size — the
         # cloud Memory IDE shows a viewer pane (no diffing), so a huge single
         # file is wasted heartbeat bandwidth.
-        contents.append({"path": path, "runtime": runtime_id,
-                         "content": content[:MEMORY_CONTENT_TRUNCATE]})
+        body = content[:MEMORY_CONTENT_TRUNCATE]
+        if len(body) > budget:
+            dropped += 1
+            continue
+        budget -= len(body)
+        files.append({"name": path, "path": path, "size": int(size or 0),
+                      "runtime": runtime_id})
+        contents.append({"path": path, "runtime": runtime_id, "content": body})
         per_runtime[runtime_id] = per_runtime.get(runtime_id, 0) + 1
+    if dropped:
+        log.info(
+            "Memory cache push: %d file(s) left out of the %d-byte payload "
+            "budget (oldest first); %d shipped",
+            dropped, MEMORY_CACHE_MAX_TOTAL_BYTES, len(files),
+        )
     if not files:
         return []
     payload = {

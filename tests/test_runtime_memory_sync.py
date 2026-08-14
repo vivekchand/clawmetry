@@ -219,6 +219,23 @@ def test_one_chatty_runtime_cannot_crowd_out_the_others(sync_env, monkeypatch):
     assert by_rt["codex"] == 1            # still represented
 
 
+def test_payload_budget_drops_files_instead_of_listing_unopenable_ones(
+        sync_env, monkeypatch):
+    """A tree entry that opens to nothing reads as a broken tab, so files that
+    do not fit the payload budget are left out of the list entirely."""
+    s, ls, config = sync_env
+    monkeypatch.setattr(s, "MEMORY_CACHE_MAX_TOTAL_BYTES", 40)
+    s._local_ingest_runtime_memory()
+    payload = s.decrypt_payload(
+        s._build_memory_cache_pushes(config)[0]["blob"],
+        config["encryption_key"])
+    listed = payload["memory_state"]["files"]
+    carried = {c["path"] for c in payload["memory_content"]}
+    assert len(listed) < 3, "budget must actually drop something here"
+    assert {f["path"] for f in listed} == carried, \
+        "every listed file must have its content in the same payload"
+
+
 def test_unchanged_blob_is_not_repushed_every_heartbeat(sync_env):
     s, _, config = sync_env
     s._local_ingest_runtime_memory()
