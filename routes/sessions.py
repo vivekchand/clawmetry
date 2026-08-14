@@ -2981,6 +2981,147 @@ def api_session_lineage(session_id):
     })
 
 
+@bp_sessions.route("/api/replay-tree/<path:session_id>")
+def api_replay_tree(session_id):
+    """Runtime-aware replay-tree for one session (#4813).
+
+    Reads canonical replay-event rows from the ``replay_events`` DuckDB
+    table (populated by adapter ``iter_replay_events`` mappers — Claude
+    Code #4815, OpenClaw #4816, Pro adapters #123–#135) and groups them
+    into the nested shape the runtime-aware transcript viewer consumes.
+
+    Returns::
+
+        {
+          "session_id": ...,
+          "runtime":    <latest runtime seen, or null>,
+          "mode":       <latest mode.changed payload, or null>,
+          "turns":      [{turn_id, events[], delegations[], approvals[]}],
+          "workflows":  [{span_id, kind, events[]}]
+        }
+
+    Empty ``turns`` / ``workflows`` is the honest shape until adapter
+    mappers land — the JS renderer falls back to the flat transcript
+    viewer when the tree comes back empty (no dead UI per FLYWHEEL
+    §0a.4). Cloud parity: the cloud dashboard reads the same shape
+    from its snapshot slice once the snapshot writer path lands.
+    """
+    try:
+        rows = _ls_call("query_replay_events", session_id=session_id) or []
+    except Exception:
+        rows = []
+    return jsonify(_build_replay_tree(session_id, rows))
+
+
+def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
+    """Group flat canonical replay-event rows into the tree the transcript
+    viewer consumes. Pure function, easy to test.
+
+    Grouping rules (see clawmetry/replay_schema.py for kind semantics):
+
+    - ``mode.changed`` events feed the top-level ``mode`` field (latest
+      value wins) — the mode chip in the UI header.
+    - ``workflow.*`` events are collected into ``workflows`` at the top
+      level; workflow.start creates the group, workflow.stage/end append.
+    - ``agent.spawn`` / ``agent.return`` establish the delegation edges.
+      A child span (``parent_span_id`` set) attaches under its parent as
+      a ``delegations`` entry; the parent turn shows the delegation
+      inline. Nested delegation (child of child) attaches under that
+      child, arbitrary depth.
+    - Everything else (llm.*, tool.*, thinking, approval.*, compaction)
+      is a "turn" event. Turns are chunked by the ordering of
+      ``llm.call``/``llm.response`` roots — one root = one turn — so a
+      transcript with 12 user prompts renders as 12 turn chapters.
+    """
+    latest_mode = None
+    latest_runtime = None
+    workflows_by_span: dict[str, dict] = {}
+    turns: list[dict] = []
+    events_by_span: dict[str, dict] = {}
+    children_by_parent: dict[str, list[dict]] = {}
+    approvals_by_span: dict[str, list[dict]] = {}
+    _current_turn: dict | None = None
+
+    for row in rows:
+        kind = row.get("kind") or ""
+        latest_runtime = row.get("runtime") or latest_runtime
+        events_by_span[row.get("span_id") or ""] = row
+        parent = row.get("parent_span_id")
+        if parent:
+            children_by_parent.setdefault(parent, []).append(row)
+
+        if kind == "mode.changed":
+            latest_mode = row.get("mode") or latest_mode
+            continue
+        if kind.startswith("workflow."):
+            root = row.get("parent_span_id") or row.get("span_id") or ""
+            grp = workflows_by_span.setdefault(root, {
+                "span_id": root,
+                "kind": "workflow",
+                "events": [],
+            })
+            grp["events"].append(row)
+            continue
+        if kind.startswith("approval."):
+            gate = row.get("parent_span_id") or row.get("span_id") or ""
+            approvals_by_span.setdefault(gate, []).append(row)
+            continue
+        # llm.*, tool.*, thinking, agent.*, compaction — turn-level events.
+        # Start a new turn on every llm.call at the session root (no parent).
+        if kind == "llm.call" and not parent:
+            _current_turn = {
+                "turn_id": row.get("span_id"),
+                "events": [row],
+                "delegations": [],
+                "approvals": [],
+            }
+            turns.append(_current_turn)
+        elif _current_turn is not None:
+            _current_turn["events"].append(row)
+        else:
+            # Event before any llm.call — synthetic turn-0 bucket.
+            if not turns:
+                turns.append({
+                    "turn_id": "turn-0",
+                    "events": [],
+                    "delegations": [],
+                    "approvals": [],
+                })
+            turns[0]["events"].append(row)
+
+    # Fold delegations into the turn that spawned them. agent.spawn events
+    # carry parent_span_id pointing at the parent's llm.response; the
+    # child session's events live under events_by_span keyed on the
+    # spawn's span_id.
+    for turn in turns:
+        spawn_ids = [
+            e.get("span_id") for e in turn["events"]
+            if (e.get("kind") or "").startswith("agent.spawn")
+        ]
+        for spawn_id in spawn_ids:
+            children = children_by_parent.get(spawn_id, [])
+            turn["delegations"].append({
+                "span_id": spawn_id,
+                "events": children,
+                # nested-depth support lands with #4815 (Claude Code mapper).
+                "delegations": [],
+            })
+        # Attach approvals gated on any event in this turn.
+        for e in turn["events"]:
+            sid = e.get("span_id")
+            if sid and sid in approvals_by_span:
+                turn["approvals"].extend(approvals_by_span[sid])
+
+    return {
+        "session_id": session_id,
+        "runtime":    latest_runtime,
+        "mode":       latest_mode,
+        "turns":      turns,
+        "workflows":  list(workflows_by_span.values()),
+        "row_count":  len(rows),
+    }
+
+
 @bp_sessions.route("/api/delegation-tree")
 def api_delegation_tree():
     """Agent delegation chains -- inspired by AgentWeave provenance tracing.

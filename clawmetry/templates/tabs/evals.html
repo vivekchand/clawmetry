@@ -1,67 +1,64 @@
-<div class="page" id="page-evals">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:8px;">
+{# Quality tab (formerly "Evals"). Redesigned 2026-08-14 per founder feedback:
+   the old 12-tile grid + hash-list table read as vaporbox. Reshaped around
+   the single question "is my agent doing good work?" — one graded letter
+   card, ranked failure patterns, plain-English rough runs. Inline eval
+   builder ("Prevent this →") lives on each rough run so a real trace can
+   become a persistent check without leaving the tab.
+
+   DOM ids here are what clawmetry/static/js/app.js::loadEvalsTab reads
+   after the redesign. The tab is still selected via data-tab="evals" from
+   the sidebar so the URL / muscle-memory stays stable; only the surface
+   inside changed. See clawmetry/quality.py + routes/quality.py. #}
+<div class="page" id="page-evals" data-quality-tab="1">
+
+  <div class="q-topbar">
+    <div class="q-brand">
+      <span data-i18n="quality.title">Quality</span>
+      <em data-i18n="quality.subtitle_period">this week</em>
+    </div>
+    <div class="q-status">
+      <span class="q-dot" aria-hidden="true"></span>
+      <span id="q-status-line" data-i18n="quality.status_loading">Loading…</span>
+      <button class="q-picker" type="button" onclick="loadEvalsTab()" title="Refresh" data-i18n-title="common.refresh">↻</button>
+    </div>
+  </div>
+
+  {# ── The report card: giant stamped letter + one sentence + week dots ── #}
+  <section class="q-card" id="q-card" aria-label="This week's grade">
+    <div class="q-grade" id="q-grade" aria-hidden="true">—</div>
+    <div class="q-verdict">
+      <h2 id="q-headline"><span data-i18n="quality.headline_loading">Loading grade…</span></h2>
+      <p id="q-subline"><span data-i18n="quality.subline_loading">Reading your agent's recent work.</span></p>
+      <div class="q-week" id="q-week" aria-label="Grade by day"></div>
+    </div>
+  </section>
+
+  {# ── Two panels: patterns + rough runs. Both read from the same fetch. ── #}
+  <div class="q-below">
+
+    <section class="q-panel" aria-label="What went wrong">
+      <h3 data-i18n="quality.patterns_title">What went wrong</h3>
+      <p class="q-sub" data-i18n="quality.patterns_sub">Ranked by what it cost you.</p>
+      <ul class="q-patterns" id="q-patterns"></ul>
+    </section>
+
+    <section class="q-panel" aria-label="The rough runs">
+      <h3 id="q-rough-title" data-i18n="quality.rough_title">The rough runs</h3>
+      <p class="q-sub" data-i18n="quality.rough_sub">Click any to see the trace, or turn one into a check.</p>
+      <ul class="q-runs" id="q-runs"></ul>
+    </section>
+
+  </div>
+
+  {# ── Footer strip: judge upgrade path. Hidden once a key is set. ── #}
+  <footer class="q-footer" id="q-footer" hidden>
     <div>
-      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">🔬 <span data-i18n="evals.title">Evals</span></div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="evals.subtitle">Automatic checks that tell you if your agent is doing good work. Everything runs on your machine, on your own key.</div>
+      <span data-i18n="quality.footer_lead">Grading uses signals we already track</span>
+      <span data-i18n="quality.footer_signals"> — cleanliness, tool errors, wasted context, budget breaches.</span>
+      <br>
+      <span data-i18n="quality.footer_upgrade">Add a judge key to also grade the writing quality of the answer.</span>
     </div>
-    <div style="display:flex;gap:8px;">
-      <button class="refresh-btn" onclick="openEvalRubricModal()" title="Judge key &amp; rubric">⚙ <span data-i18n="evals.setup">Judge setup</span></button>
-      <button class="refresh-btn" onclick="loadEvalsTab()">↻ <span data-i18n="common.refresh">Refresh</span></button>
-    </div>
-  </div>
+    <a href="#" onclick="openEvalRubricModal();return false;" data-i18n="quality.footer_cta">Grade the writing too →</a>
+  </footer>
 
-  <!-- feat/evals-simplify: reorder score-first. The Recently Scored table
-       and the 24h summary now sit at the TOP so a first-time visitor sees a
-       working scored row (or the "no scores yet" honest state) before they
-       see the judge setup / evaluator catalogue. The judge card itself moves
-       to the BOTTOM as a configuration section, not the first thing users
-       must engage with. -->
-
-  <!-- Recently scored sessions, newest first. Row click opens the drill-down
-       drawer with judge reason + per-check breakdown + rubric. -->
-  <div id="evals-recent-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin:14px 0;box-shadow:var(--card-shadow);">
-    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">🧾 <span data-i18n="evals.recent_title">Recently scored sessions</span></div>
-    <div id="evals-recent-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
-  </div>
-
-  <!-- Score summary over the last 24h + the 7d regression-replay line. -->
-  <div id="evals-summary-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
-    <div>
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;" data-i18n="evals.summary_title">Session quality, last 24 hours</div>
-      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-        <span id="evals-tab-avg" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
-        <span id="evals-tab-coverage" style="font-size:12px;color:var(--text-muted);"></span>
-      </div>
-      <div id="evals-tab-regression" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
-    </div>
-    <div id="evals-tab-percentiles" style="font-size:12px;color:var(--text-muted);text-align:right;"></div>
-  </div>
-
-  <!-- The named evaluator library (moved here from Overview). Same element ids
-       the shared loadEvaluators() renderer targets. Feat/evals-simplify:
-       loadEvaluators() now splits primary (per-session value_field) vs
-       secondary (aggregate-only) so the grid stops reading as a 12-box wall. -->
-  <div id="evaluators-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
-    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">🔬 <span data-i18n="evaluators.title">Evaluators on your agent</span></div>
-      <div id="evaluators-count" style="font-size:11px;color:var(--text-muted);"></div>
-    </div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" data-i18n="evaluators.subtitle">Named checks ClawMetry runs to tell you if your agent is doing good work. Each one answers a plain question.</div>
-    <div id="evaluators-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;"></div>
-  </div>
-
-  <!-- Golden test suites: release-gating evals run from the CLI / CI. -->
-  <div id="evals-suites-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
-    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">🏅 <span data-i18n="evals.suites_title">Golden test suites</span></div>
-    <div id="evals-suites-body" style="font-size:12px;color:var(--text-muted);"><span data-i18n="app.loading">Loading...</span></div>
-  </div>
-
-  <!-- Judge status: which model scores sessions, whether a key exists on this
-       box, and how many sessions it scored in the last day. Sits at the
-       BOTTOM as a config section: users configure it AFTER they've seen the
-       Recently Scored table, not BEFORE. -->
-  <div id="evals-judge-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--card-shadow);">
-    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">⚖️ <span data-i18n="evals.judge_title">The judge</span></div>
-    <div id="evals-judge-body" style="font-size:13px;color:var(--text-primary);"><span data-i18n="app.loading">Loading...</span></div>
-  </div>
-</div><!-- end page-evals -->
+</div>{# end page-evals #}

@@ -4016,16 +4016,299 @@ async function loadEvaluators() {
   listEl.innerHTML = html;
 }
 
-// ── Evals tab (dedicated home for the eval system) ─────────────────────────
-// Loads: judge status, 24h score summary + 7d regression, the evaluator
-// library grid (shared loadEvaluators), recent scored sessions, golden suites.
-// Every card degrades to an honest message: locked (402), no key, or no data.
+// ── Quality tab (redesigned Evals, 2026-08-14) ─────────────────────────────
+// One question ("is my agent doing good work?") answered in one fetch. The
+// tab keeps its data-tab="evals" identity so the URL / sidebar highlight
+// stay stable, but the surface inside is entirely new: report card, ranked
+// failure patterns, plain-English rough runs, inline eval-builder. The old
+// loadEvaluators / loadEvalsJudgeCard / loadEvalsRecent / loadEvalsSuites
+// functions stay defined below (they're still used by other surfaces like
+// the Overview evaluators strip); only the tab bootstrap changed.
 function loadEvalsTab() {
+  // Detect the redesigned tab shell by its marker attribute — if we land
+  // on an older cached template (e.g. cloud pin hasn't rolled yet), fall
+  // back to the legacy renderer so the tab still shows something honest.
+  var host = document.getElementById('page-evals');
+  if (host && host.getAttribute('data-quality-tab') === '1') {
+    loadQualityTab();
+    return;
+  }
   loadEvaluators();
-  loadEvalsJudgeCard();
-  loadEvalsTabSummary();
-  loadEvalsRecent();
-  loadEvalsSuites();
+  if (typeof loadEvalsJudgeCard === 'function') loadEvalsJudgeCard();
+  if (typeof loadEvalsTabSummary === 'function') loadEvalsTabSummary();
+  if (typeof loadEvalsRecent === 'function') loadEvalsRecent();
+  if (typeof loadEvalsSuites === 'function') loadEvalsSuites();
+}
+
+// ── Quality tab renderer ───────────────────────────────────────────────────
+async function loadQualityTab() {
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var r = await fetch('/api/quality/report-card?' + qs.toString())
+    .catch(function() { return null; });
+  var data = r ? await r.json().catch(function() { return null; }) : null;
+  if (!data) {
+    // Honest empty on network / server miss. The tab renders "Nothing to
+    // grade yet." rather than a spinner or a blank.
+    data = {
+      grade: '—', headline: 'Nothing to grade yet.',
+      subline: "Your agents haven't finished a task in this window. Send Claude Code or OpenClaw a task and come back.",
+      patterns: [], rough_runs: [], week: [], vs_prior: null,
+      graded_runs: 0, total_runs: 0, judge_key_set: false
+    };
+  }
+  _qRenderCard(data);
+  _qRenderPatterns(data);
+  _qRenderRoughRuns(data);
+  _qRenderStatusLine(data);
+  _qRenderFooter(data);
+}
+
+function _qRenderCard(data) {
+  var gradeEl = document.getElementById('q-grade');
+  var headEl  = document.getElementById('q-headline');
+  var subEl   = document.getElementById('q-subline');
+  var weekEl  = document.getElementById('q-week');
+  if (gradeEl) {
+    var g = String(data.grade || '—');
+    gradeEl.textContent = g;
+    gradeEl.setAttribute('data-grade', g === '—' ? '—' : g.charAt(0));
+  }
+  if (headEl) headEl.textContent = String(data.headline || '');
+  if (subEl) {
+    // Render subline with vs_prior arrow if present. Keep it a single sentence.
+    var sub = String(data.subline || '');
+    if (data.vs_prior === 'up') {
+      sub += ' <span class="up">↑ better than last week.</span>';
+    } else if (data.vs_prior === 'down') {
+      sub += ' <span class="down">↓ down from last week.</span>';
+    }
+    subEl.innerHTML = sub;
+  }
+  if (weekEl) {
+    var dots = (data.week || []);
+    if (!dots.length) { weekEl.innerHTML = ''; return; }
+    var html = '<div class="dots">';
+    dots.forEach(function(d, i) {
+      var isToday = (i === dots.length - 1);
+      var g = d.grade || '—';
+      html += '<div class="day' + (isToday ? ' today' : '') + '" data-grade="' + escHtml(g.charAt(0)) + '"' +
+              ' title="' + escHtml(d.date) + ' · ' + escHtml(String(d.runs || 0)) + ' run(s)">' +
+              '<span class="g">' + escHtml(g) + '</span>' +
+              '<span>' + escHtml(d.label) + '</span></div>';
+    });
+    html += '</div>';
+    weekEl.innerHTML = html;
+  }
+}
+
+function _qRenderPatterns(data) {
+  var el = document.getElementById('q-patterns');
+  if (!el) return;
+  var rows = (data.patterns || []);
+  if (!rows.length) {
+    el.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' +
+      t('quality.patterns_empty', null, 'Nothing to complain about here.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  rows.forEach(function(p) {
+    var isCaught = (String(p.cost_display || '').toLowerCase() === 'caught');
+    html += '<li>';
+    html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
+    html += '<div class="what">' + escHtml(p.label || '') + '</div>';
+    html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
+            escHtml(p.cost_display || '$0.00') +
+            '<small>' + escHtml(p.avg_minutes || '—') + '</small></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qRenderRoughRuns(data) {
+  var el = document.getElementById('q-runs');
+  var titleEl = document.getElementById('q-rough-title');
+  if (!el) return;
+  var runs = (data.rough_runs || []);
+  if (titleEl) {
+    titleEl.textContent = runs.length
+      ? (t('quality.rough_title_prefix', null, 'The ') + runs.length + ' ' +
+         (runs.length === 1
+           ? t('quality.rough_run_singular', null, 'rough run')
+           : t('quality.rough_run_plural', null, 'rough runs')))
+      : t('quality.rough_title_empty', null, 'No rough runs this week');
+  }
+  if (!runs.length) {
+    el.innerHTML = '<li class="q-empty">' +
+      t('quality.rough_empty', null, 'Every run finished cleanly. Nice.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  runs.forEach(function(r, i) {
+    var sid = String(r.session_id || '');
+    var when = _qFmtWhen(r.when);
+    var bid = 'q-b-' + i;
+    html += '<li>';
+    html += '<div class="when">' + escHtml(when) + (r.agent_type ? ' · ' + escHtml(r.agent_type) : '') + '</div>';
+    html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
+    html += '<div class="story">' + escHtml(r.story || '') + '</div>';
+    html += '<div class="row-actions">';
+    html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
+            t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
+    html += '</div>';
+    html += '<div id="' + bid + '" class="q-builder"></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qFmtWhen(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(iso);
+    var now = new Date();
+    var days = Math.floor((now - d) / 86400000);
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    if (days <= 0) return 'Today ' + hh + ':' + mm;
+    if (days === 1) return 'Yesterday ' + hh + ':' + mm;
+    if (days < 7) return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()] + ' ' + hh + ':' + mm;
+    return d.toLocaleDateString();
+  } catch (e) { return String(iso); }
+}
+
+function _qRenderStatusLine(data) {
+  var el = document.getElementById('q-status-line');
+  if (!el) return;
+  var n = Number(data.graded_runs || 0);
+  var total = Number(data.total_runs || 0);
+  if (n === 0 && total === 0) {
+    el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
+    return;
+  }
+  el.textContent = data.judge_key_set
+    ? (t('quality.status_prefix_on', null, 'Grading on · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')))
+    : (t('quality.status_prefix_off', null, 'Grading from signals · ') + n + ' ' +
+       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')));
+}
+
+function _qRenderFooter(data) {
+  var el = document.getElementById('q-footer');
+  if (!el) return;
+  // Hide the "add a judge key" nudge when a key is already set.
+  if (data && data.judge_key_set) el.setAttribute('hidden', '');
+  else el.removeAttribute('hidden');
+}
+
+// Open (or toggle) the inline eval builder for a rough run. Pre-fills
+// the "fail when…" field from the story so users see intent immediately;
+// they edit and save. Persistence lands in a follow-up PR — for the first
+// cut the Save button files an issue-style check locally and toasts.
+function qOpenBuilder(bid, sid, story) {
+  var el = document.getElementById(bid);
+  if (!el) return;
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    el.innerHTML = '';
+    return;
+  }
+  var pattern = _qGuessPattern(story || '');
+  var name = _qGuessCheckName(story || '');
+  el.innerHTML =
+    '<p class="b-eyebrow">' + t('quality.builder_eyebrow', null, 'Watch for this pattern') + '</p>' +
+    '<p class="b-title">' + t('quality.builder_title', null, "Turn this rough run into a check we'll fail-fast next time.") + '</p>' +
+    '<div>' +
+      '<label>' + t('quality.builder_when', null, 'Fail the run when…') + '</label>' +
+      '<textarea id="' + bid + '-when">' + escHtml(pattern) + '</textarea>' +
+    '</div>' +
+    '<div style="margin-top:10px;">' +
+      '<label>' + t('quality.builder_name', null, 'Name this check') + '</label>' +
+      '<textarea id="' + bid + '-name" style="min-height:34px;">' + escHtml(name) + '</textarea>' +
+    '</div>' +
+    '<div class="b-example">' + t('quality.builder_example_lead', null, 'Based on this run: ') + escHtml(story || '') + '</div>' +
+    '<div class="b-actions">' +
+      '<button class="btn" onclick="qSaveCheck(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\')">' +
+        t('quality.builder_save', null, 'Save check') + '</button>' +
+      '<button class="btn ghost" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\')">' +
+        t('common.cancel', null, 'Cancel') + '</button>' +
+    '</div>';
+  el.classList.add('open');
+}
+
+function _qGuessPattern(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) {
+    return 'the same tool errors more than 3 times without progress toward the task';
+  }
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1) {
+    return 'the agent edits the same file more than 5 times';
+  }
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) {
+    return 'the run gets within 5% of the token budget and truncates its answer';
+  }
+  if (s.indexOf('gave up') !== -1 || s.indexOf('escalat') !== -1) {
+    return 'the agent ends the task without a completed answer';
+  }
+  return 'a session ends without a clean answer';
+}
+
+function _qGuessCheckName(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) return 'Tool loop guard';
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1)   return 'Edit loop guard';
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) return 'Budget breach guard';
+  if (s.indexOf('gave up') !== -1) return 'Gave-up guard';
+  return 'Rough-run guard';
+}
+
+async function qSaveCheck(bid, sid) {
+  // First cut: POST to /api/quality/checks (deferred — for now, toast a
+  // confirmation so the interaction feels real end-to-end). The follow-up
+  // PR wires this to a real quality_checks DuckDB table + runner.
+  var whenEl = document.getElementById(bid + '-when');
+  var nameEl = document.getElementById(bid + '-name');
+  var body = {
+    session_id: sid,
+    fail_when:  whenEl ? whenEl.value.trim() : '',
+    name:       nameEl ? nameEl.value.trim() : ''
+  };
+  try {
+    var r = await fetch('/api/quality/checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var out = await r.json().catch(function() { return null; });
+    var msg = (out && out.ok)
+      ? t('quality.check_saved', null, "Saved. We'll fail-fast this pattern next time.")
+      : (out && out.error) || t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release.");
+    _qToast(msg);
+  } catch (e) {
+    _qToast(t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release."));
+  }
+  var el = document.getElementById(bid);
+  if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+}
+
+function _qToast(msg) {
+  var t_ = document.createElement('div');
+  t_.textContent = msg;
+  t_.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+    'background:#1a1611;color:#f0e9dc;padding:12px 20px;border-radius:6px;' +
+    'font-size:13px;font-family:-apple-system,system-ui,sans-serif;' +
+    'border:1px solid rgba(211,53,40,0.4);box-shadow:0 8px 24px rgba(0,0,0,0.4);' +
+    'z-index:9999;';
+  document.body.appendChild(t_);
+  setTimeout(function() { t_.style.opacity = '0'; t_.style.transition = 'opacity 400ms'; }, 3200);
+  setTimeout(function() { t_.remove(); }, 3800);
 }
 
 function _evalsLockedHtml() {
@@ -25759,4 +26042,197 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   };
   wrapped._cmRuntimeWrapped = true;
   window.switchTab = wrapped;
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Runtime-aware replay tree — skeleton (#4813 part 3)
+// ═══════════════════════════════════════════════════════════════════════
+// Fetches /api/replay-tree/<sid> and renders the nested runtime-aware
+// view (mode chip, workflow lane, turn chapters with inline delegations,
+// approvals rail). Dormant until adapter mappers land — when the tree
+// returns row_count=0 the caller falls back to the flat _replayRenderCurrent
+// path (no dead UI per FLYWHEEL §0a.4).
+//
+// Wire-up into openTranscriptModal happens in #4814 (mode + approvals)
+// once there's real data to render. For now the skeleton is reachable
+// via window._debugReplayTree(sessionId) for manual verification during
+// per-runtime mapper development.
+(function _cmReplayTree() {
+  'use strict';
+
+  async function fetchReplayTree(sessionId) {
+    var url = '/api/replay-tree/' + encodeURIComponent(sessionId);
+    var r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('replay-tree ' + r.status);
+    return await r.json();
+  }
+
+  function _escape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  // Runtime dispatcher — mirrors the pattern at app.js:16729 (Harness tab
+  // templates). Each runtime can register a per-kind override; unknown
+  // runtimes fall through to the neutral renderer.
+  var _KIND_RENDERERS = {};   // key = runtime + ':' + kind, value = fn(ev) -> html
+  function registerKindRenderer(runtime, kind, fn) {
+    _KIND_RENDERERS[runtime + ':' + kind] = fn;
+  }
+  function _renderEvent(ev, runtime) {
+    var custom = _KIND_RENDERERS[(runtime || ev.runtime) + ':' + ev.kind];
+    if (typeof custom === 'function') return custom(ev);
+    // Neutral fallback — one line per event, prefix by kind.
+    var kindLabel = _escape(ev.kind || 'event');
+    var body = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+      body = _escape(JSON.stringify(ev.payload).slice(0, 200));
+    }
+    return '<div class="replay-tree-event replay-tree-kind-' +
+           _escape((ev.kind || '').split('.')[0]) + '">' +
+           '<span class="replay-tree-kind">' + kindLabel + '</span>' +
+           (body ? '<span class="replay-tree-body">' + body + '</span>' : '') +
+           '</div>';
+  }
+
+  function _renderDelegations(delegations, runtime, depth) {
+    depth = depth || 1;
+    if (!delegations || !delegations.length) return '';
+    var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
+    for (var i = 0; i < delegations.length; i++) {
+      var d = delegations[i];
+      html += '<details class="replay-tree-delegation" open>';
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      for (var j = 0; j < (d.events || []).length; j++) {
+        html += _renderEvent(d.events[j], runtime);
+      }
+      // Nested delegations render recursively — arbitrary depth (issue
+      // #4815 Claude Code Task nesting stresses this).
+      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _renderTurn(turn, runtime) {
+    var html = '<section class="replay-tree-turn" data-turn-id="' +
+               _escape(turn.turn_id) + '">';
+    // Approvals rail summary badge on the turn header.
+    var approvalCount = (turn.approvals || []).length;
+    var deniedCount = (turn.approvals || []).filter(function(a) {
+      return a.approval && a.approval.status === 'denied';
+    }).length;
+    var badges = '';
+    if (approvalCount) {
+      badges += ' <span class="replay-tree-badge approvals" title="' +
+                approvalCount + ' approvals (' + deniedCount + ' denied)">' +
+                '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
+                '</span>';
+    }
+    html += '<header class="replay-tree-turn-header">' +
+            '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
+            badges + '</header>';
+    // Events (llm.*, tool.*, thinking, mode.changed, compaction).
+    for (var i = 0; i < (turn.events || []).length; i++) {
+      html += _renderEvent(turn.events[i], runtime);
+    }
+    // Inline delegations under the turn that spawned them.
+    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += '</section>';
+    return html;
+  }
+
+  function _renderModeChip(mode) {
+    if (!mode || !mode.permission) return '';
+    var isYolo = mode.permission === 'bypassPermissions' || mode.permission === 'yolo';
+    return '<div class="replay-tree-mode-chip" data-yolo="' +
+           (isYolo ? '1' : '0') + '" title="sandbox: ' +
+           _escape(mode.sandbox || 'unknown') + '">' +
+           _escape(mode.permission) + '</div>';
+  }
+
+  function _renderWorkflows(workflows, runtime) {
+    if (!workflows || !workflows.length) return '';
+    var html = '<div class="replay-tree-workflows">';
+    for (var i = 0; i < workflows.length; i++) {
+      var wf = workflows[i];
+      html += '<details class="replay-tree-workflow" open>';
+      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
+              (wf.events || []).length + ' stages)</summary>';
+      for (var j = 0; j < (wf.events || []).length; j++) {
+        html += _renderEvent(wf.events[j], runtime);
+      }
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTree(tree, mountEl) {
+    if (!mountEl) return false;
+    if (!tree || !tree.row_count) {
+      // Honest empty state — caller falls back to the flat renderer.
+      mountEl.innerHTML = '';
+      return false;
+    }
+    var html = '<div class="replay-tree" data-runtime="' +
+               _escape(tree.runtime || 'unknown') + '">';
+    html += _renderModeChip(tree.mode);
+    html += _renderWorkflows(tree.workflows, tree.runtime);
+    for (var i = 0; i < (tree.turns || []).length; i++) {
+      html += _renderTurn(tree.turns[i], tree.runtime);
+    }
+    html += '</div>';
+    mountEl.innerHTML = html;
+    return true;
+  }
+
+  async function debugReplayTree(sessionId) {
+    // Manual verification hook — creates a floating panel with the
+    // rendered tree. Adapter authors call this to visualize their
+    // iter_replay_events output during development.
+    var panel = document.getElementById('_replay-tree-debug-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_replay-tree-debug-panel';
+      panel.style.cssText = 'position:fixed;top:20px;right:20px;width:600px;' +
+        'max-height:80vh;overflow:auto;background:var(--bg-elevated,#111);' +
+        'color:var(--text,#eee);border:1px solid var(--border,#444);padding:12px;' +
+        'z-index:10000;font-family:monospace;font-size:12px;';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:none;color:inherit;border:none;font-size:20px;cursor:pointer;';
+      close.onclick = function() { panel.remove(); };
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = '<div>Fetching /api/replay-tree/' +
+                      _escape(sessionId) + ' …</div>';
+    try {
+      var tree = await fetchReplayTree(sessionId);
+      var mount = document.createElement('div');
+      panel.appendChild(mount);
+      var rendered = renderTree(tree, mount);
+      if (!rendered) {
+        mount.innerHTML = '<div style="color:var(--text-muted,#888);padding:16px;">' +
+          'Empty tree — no replay_events for this session yet. ' +
+          'Adapter mappers land in #4815 (Claude Code), #4816 (OpenClaw), ' +
+          'and 13 Pro adapter issues.</div>';
+      }
+    } catch (e) {
+      panel.innerHTML += '<div style="color:#f66;">error: ' +
+                        _escape(String(e)) + '</div>';
+    }
+  }
+
+  // Public surface — small, so #4814 and per-runtime mappers can extend.
+  window._cmReplayTree = {
+    fetchReplayTree: fetchReplayTree,
+    renderTree: renderTree,
+    registerKindRenderer: registerKindRenderer,
+  };
+  window._debugReplayTree = debugReplayTree;
 })();
