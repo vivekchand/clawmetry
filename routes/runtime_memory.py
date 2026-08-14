@@ -58,44 +58,14 @@ from clawmetry.runtime_memory import (
     list_runtimes,
     parse_categories,
     read_runtime_file,
+    # THE paywall predicate. It lives in clawmetry/runtime_memory.py rather
+    # than here because the sync daemon needs the same answer twice — once to
+    # decide what it may ingest, once to decide what it may ship — and a copy
+    # per caller is how the daemon ended up pushing files this route 402s on.
+    runtime_is_locked as _runtime_is_locked,
 )
 
-try:
-    # ``allows_runtime`` returns True for OpenClaw/NemoClaw (free) and
-    # for any paid runtime covered by the resolved entitlement. In grace
-    # mode it is intentionally permissive; the OSS enforcement layer at
-    # request time is what turns a denial into HTTP 402.
-    from clawmetry.entitlements import (
-        FREE_RUNTIMES,
-        get_entitlement,
-    )
-except Exception:  # pragma: no cover — entitlements is core; only fails in tests
-    FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
-
-    def get_entitlement(*_a, **_k):
-        return None
-
-
 bp_runtime_memory = Blueprint("runtime_memory", __name__)
-
-
-def _runtime_is_locked(runtime_id: str) -> bool:
-    """True when this runtime needs a paid entitlement the user lacks.
-
-    Free runtimes are never locked. For paid runtimes, ``allows_runtime``
-    on the resolved entitlement is authoritative (it already honours
-    grace mode). Any exception (entitlement resolution failure) falls
-    open — we prefer showing content on the local dashboard over a
-    silent lock-out from a resolver hiccup; the actual read endpoint
-    still returns 402 if the resolver later hardens.
-    """
-    if runtime_id in FREE_RUNTIMES:
-        return False
-    try:
-        ent = get_entitlement()
-        return not bool(ent.allows_runtime(runtime_id))
-    except Exception:
-        return False
 
 
 @bp_runtime_memory.route("/api/runtimes/memory-catalog")
