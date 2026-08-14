@@ -143,6 +143,45 @@ def test_openclaw_is_left_to_the_workspace_ingest(sync_env):
     assert "openclaw" not in _rows_by_runtime(ls)
 
 
+def test_locked_paid_runtime_is_never_ingested_or_shipped(sync_env, monkeypatch):
+    """The daemon must not be a side door around the memory paywall.
+
+    ``/api/runtimes/<rt>/files`` returns 402 for a paid runtime the user is
+    not entitled to. If the daemon ingested it anyway, the file would ride the
+    heartbeat to the cloud Memory tab and render there for free — so both use
+    the same predicate."""
+    s, ls, config = sync_env
+    from clawmetry import runtime_memory as rm
+    monkeypatch.setattr(rm, "runtime_is_locked",
+                        lambda rt: rt == "claude_code")
+
+    assert s._local_ingest_runtime_memory() == 1        # codex only
+    by_rt = _rows_by_runtime(ls)
+    assert "claude_code" not in by_rt
+    assert "codex" in by_rt
+
+    payload = s.decrypt_payload(
+        s._build_memory_cache_pushes(config)[0]["blob"],
+        config["encryption_key"])
+    assert {f["runtime"] for f in payload["memory_state"]["files"]} == {"codex"}
+
+
+def test_downgrade_stops_shipping_rows_ingested_while_entitled(sync_env, monkeypatch):
+    """Rows already in the store from a paid period must stop riding the
+    heartbeat once the entitlement lapses — otherwise a downgrade keeps
+    serving them to the cloud Memory tab."""
+    s, ls, config = sync_env
+    s._local_ingest_runtime_memory()
+    from clawmetry import runtime_memory as rm
+    monkeypatch.setattr(rm, "runtime_is_locked", lambda rt: rt == "claude_code")
+    s._mark_memory_cache_dirty()
+
+    payload = s.decrypt_payload(
+        s._build_memory_cache_pushes(config)[0]["blob"],
+        config["encryption_key"])
+    assert {f["runtime"] for f in payload["memory_state"]["files"]} == {"codex"}
+
+
 def test_cache_push_tags_each_file_with_its_runtime(sync_env):
     s, _, config = sync_env
     s._local_ingest_runtime_memory()

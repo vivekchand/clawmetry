@@ -672,6 +672,33 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
     return {"runtime": entry.id, "label": entry.label, "groups": groups}
 
 
+def runtime_is_locked(runtime_id: str) -> bool:
+    """True when this runtime needs a paid entitlement the caller lacks.
+
+    Single source of truth for the memory/skills paywall: ``routes/
+    runtime_memory.py`` uses it to decide 402, and the sync daemon uses it to
+    decide what it may ingest and ship to cloud. Keeping the two on one
+    predicate is the point — the daemon used to sync every detected runtime's
+    memory regardless of entitlement, so a free user's paid-runtime files
+    reached the cloud Memory tab that the local API would have refused.
+
+    Free runtimes are never locked. For paid runtimes ``allows_runtime`` on
+    the resolved entitlement is authoritative (it already honours grace mode).
+    Any exception falls OPEN — a resolver hiccup should not blank out a
+    paying user's memory; the read endpoints re-check on every request.
+    """
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES, get_entitlement
+    except Exception:
+        return False
+    if runtime_id in FREE_RUNTIMES:
+        return False
+    try:
+        return not bool(get_entitlement().allows_runtime(runtime_id))
+    except Exception:
+        return False
+
+
 def list_all_files(category: Optional[str] = None,
                    exclude_runtimes: Optional[Iterable] = None) -> dict:
     """Merge every runtime that has files on disk into one grouped listing.

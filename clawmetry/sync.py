@@ -3921,6 +3921,12 @@ def _local_ingest_runtime_memory() -> int:
             # the cloud-facing OpenClaw path names). Skip to avoid two rows
             # for the same file under different path spellings.
             continue
+        if runtime_memory.runtime_is_locked(runtime_id):
+            # Same predicate the /api/runtimes/<rt>/files route 402s on. The
+            # daemon must not become the side door: without this, a free
+            # user's paid-runtime memory would be ingested and shipped to the
+            # cloud Memory tab that the local API refuses to serve.
+            continue
         try:
             listing = runtime_memory.list_files(runtime_id, category="memory")
         except Exception as e:
@@ -8600,13 +8606,17 @@ def _mark_memory_cache_dirty() -> None:
 
 
 def _memory_runtime_ids() -> list:
-    """Runtime ids to pull memory rows for, catalog-derived + openclaw."""
+    """Runtime ids to pull memory rows for, catalog-derived + openclaw.
+
+    Locked paid runtimes are excluded here as well as at ingest: rows already
+    in the store from an entitled period must stop being shipped when the
+    entitlement lapses, or a downgrade would keep serving them to cloud."""
     ids = ["openclaw"]
     try:
         from clawmetry import runtime_memory
         for entry in runtime_memory.list_runtimes():
             rid = entry.get("id")
-            if rid and rid not in ids:
+            if rid and rid not in ids and not runtime_memory.runtime_is_locked(rid):
                 ids.append(rid)
     except Exception:
         pass
