@@ -98,6 +98,7 @@ PAID_RUNTIMES = frozenset(
         "copilot",
         "grok",
         "qm",
+        "deepseek_harness",
     }
 )
 
@@ -124,6 +125,7 @@ RUNTIME_LABELS = {
     "copilot": "GitHub Copilot",
     "grok": "Grok",
     "qm": "QM",
+    "deepseek_harness": "DeepSeek Harness",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the

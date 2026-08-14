@@ -26,6 +26,7 @@ EXPECTED_PAID_RUNTIMES = frozenset({
     "claude_code", "codex", "cursor", "aider", "goose",
     "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
+    "deepseek_harness",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 

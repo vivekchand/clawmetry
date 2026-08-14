@@ -2343,6 +2343,45 @@ def _cmd_uninstall(args=None) -> None:
         except Exception:
             pass
 
+    # 10. Runtime hooks (#4817). MUST run before pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every entry in
+    # ``~/.clawmetry/hooks/installed.json`` names a hook file we dropped
+    # into a runtime's config dir (Claude Code, Cursor, opencode, Pi, …)
+    # plus the config-file key we merged. Draining the manifest removes
+    # both, so the runtime never boots into a settings.json referencing
+    # a script that pip just deleted. Non-negotiable per goal thread
+    # 2026-08-14 ("runtime should not error out when clawmetry is
+    # uninstalled").
+    try:
+        from clawmetry import hooks as _cm_hooks
+        for _installed in _cm_hooks.status():
+            items.append((
+                "Hook",
+                f"Runtime hook: {_installed.runtime}/{_installed.hook_id} "
+                f"({_installed.install_path})",
+            ))
+    except Exception:
+        pass
+
+    # 10b. numbat (agent-EDR) — only if `clawmetry secure enable` installed
+    # it (managed binary in ~/.clawmetry/bin). Its hooks live in each
+    # harness's own config and reference that binary, so they must be
+    # de-registered before the ~/.clawmetry purge deletes it — the same
+    # stale-hook class as #4817. A user-installed numbat (PATH) is never
+    # touched. Skipped under --keep-data: that path keeps ~/.clawmetry, so
+    # binary + hooks stay valid for the reinstall-later flow.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _numbat_bin = _cm_secure.managed_numbat()
+            if _numbat_bin:
+                items.append((
+                    "Numbat",
+                    f"numbat hooks (all agent configs) + binary: {_numbat_bin}",
+                ))
+        except Exception:
+            pass
+
     # 9. pip package
     items.append(("Package", "pip package: clawmetry"))
 
@@ -2514,6 +2553,41 @@ def _cmd_uninstall(args=None) -> None:
     _stray_dash = 0 if system == "Windows" else _kill_dashboard_processes()
     if _stray_dash:
         print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
+
+    # 1b. Drain runtime hooks (#4817). MUST run BEFORE pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every registered hook
+    # gets its config-file key merged-removed (only ClawMetry-owned keys are
+    # touched; user config survives) and its hook file deleted. If this
+    # doesn't run cleanly, a runtime like Claude Code boots into a
+    # settings.json referencing a script pip is about to delete, and
+    # errors out on next start — the exact scenario the goal thread
+    # 2026-08-14 flagged as non-negotiable.
+    try:
+        from clawmetry import hooks as _cm_hooks
+        _drained = _cm_hooks.uninstall_all()
+        if _drained:
+            print(f"  ✅  Drained {len(_drained)} runtime hook(s): "
+                  f"{', '.join(_drained)}")
+    except Exception as _e:
+        print(f"  ⚠️  Could not drain runtime hooks: {_e}")
+
+    # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
+    # ~/.clawmetry purge below: the drain shells out to the managed binary
+    # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
+    # own config (Claude Code settings.json, Codex hooks.json, …) reference
+    # that binary by absolute path. Purge first and every harness boots
+    # into a config pointing at a deleted binary (#4817's bug class).
+    # No-ops when numbat isn't ours (PATH install) or under --keep-data.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _nb_acted, _nb_msg = _cm_secure.drain_hooks_for_uninstall()
+            if _nb_acted:
+                print(f"  ✅  {_nb_msg}")
+            elif _nb_msg:
+                print(f"  ⚠️  {_nb_msg}")
+        except Exception as _e:
+            print(f"  ⚠️  Could not drain numbat hooks: {_e}")
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")

@@ -10061,7 +10061,8 @@ var _CM_RT_LABEL = {
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
-  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM'
+  copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
+  deepseek_harness: 'DeepSeek Harness'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -10070,7 +10071,7 @@ var _CM_RT_LABEL = {
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
-  n8n: 1, antigravity: 1, copilot: 1, grok: 1
+  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -10202,6 +10203,7 @@ var _CM_RT_CAPS = {
   antigravity: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   copilot:     ['SESSIONS','EVENTS','COST'],
   grok:        ['SESSIONS','EVENTS','COST'],
+  deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -10235,7 +10237,13 @@ var _CM_CAP_TABS = {
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals'];
+// memory + skills: the multi-runtime file browser (PR #4821) resolves every
+// runtime's on-disk memory/skills paths, so both tabs are node-level (not
+// gated by a per-adapter capability). Without this, the runtime chip bar
+// inside Memory/Skills would be unreachable because the whole tab was
+// hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
+// was selected in the top-of-page runtime dropdown.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','skills'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
@@ -20221,6 +20229,7 @@ var _RT_FLOW = {
   antigravity: { label:'Antigravity', src:['🪐','IDE'],      accent:'#4285f4', stroke:'#2f6ad9', tools:[['📝','Write'],['⚡','Command'],['📖','View'],['🌐','Search']] },
   copilot:     { label:'GitHub Copilot', src:['⌨️','Terminal'], accent:'#8b5cf6', stroke:'#7c3aed', tools:[['⚡','Bash'],['📖','View'],['📝','Edit'],['🌐','Web']] },
   grok:        { label:'Grok',        src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
+  deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -25855,7 +25864,7 @@ function _cmRuntimeIcon(id) {
     antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
-    n8n: '🅽', grok: '🅶',
+    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋',
   };
   return map[id] || '•';
 }

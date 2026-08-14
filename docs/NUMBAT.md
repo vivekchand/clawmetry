@@ -27,6 +27,14 @@ default. Enforce mode is never enabled. First-time setup surfaces the same
 step: `clawmetry onboard` ends with a default-yes "Agent security
 monitoring" offer, and that answer is the consent (no second prompt).
 
+`clawmetry uninstall` cleans up after itself: if ClawMetry installed the
+numbat binary (it lives in `~/.clawmetry/bin`), the uninstall first runs
+`numbat hook uninstall --agent all` — de-registering the hooks from every
+agent config — and then the binary goes with the `~/.clawmetry` purge, so
+no harness is left pointing at a deleted binary. A numbat you installed
+yourself (found on PATH) is never touched, and `--keep-data` leaves both
+hooks and binary in place for the reinstall-later flow.
+
 ### Manual setup (what `clawmetry secure enable` runs for you)
 
 1. [Install numbat](https://github.com/perplexityai/numbat/releases) (single
