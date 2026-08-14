@@ -8011,6 +8011,58 @@ class LocalStore:
             out.append(d)
         return out
 
+    def query_replay_events(
+        self,
+        *,
+        session_id: str,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Read canonical replay-event rows for one session (#4813).
+
+        Returned rows are in ``ts`` ascending, then ``span_id`` ascending
+        order — replay is played forward, and the tie-break by span_id
+        gives a deterministic order when many events share the same
+        millisecond (adapter emissions in a tight loop).
+
+        BLOB columns (``payload``, ``mode``, ``approval``) are decoded
+        back to JSON dicts where valid so ``/api/replay-tree`` can hand
+        rows to the tree-builder without a second decode. The endpoint
+        layer (routes/sessions.py) then groups the flat list into
+        turns/delegations/workflows/approvals.
+
+        Empty list is the expected shape until adapter ``iter_replay_events``
+        implementations start writing (per-runtime issues #4815, #4816, +
+        13 Pro adapters). Not an error.
+        """
+        sql = """
+            SELECT span_id, parent_span_id, session_id, runtime, kind, ts,
+                   payload, mode, approval, created_at
+            FROM replay_events
+            WHERE session_id = ?
+            ORDER BY ts ASC, span_id ASC
+            LIMIT ?
+        """
+        cols = ["span_id", "parent_span_id", "session_id", "runtime", "kind",
+                "ts", "payload", "mode", "approval", "created_at"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, [session_id, int(limit)]):
+            d = dict(zip(cols, r))
+            for blob_col in ("payload", "mode", "approval"):
+                raw = d.get(blob_col)
+                if raw is None:
+                    continue
+                try:
+                    text = (raw.decode("utf-8")
+                            if isinstance(raw, (bytes, bytearray)) else raw)
+                    try:
+                        d[blob_col] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d[blob_col] = text
+                except UnicodeDecodeError:
+                    d[blob_col] = None
+            out.append(d)
+        return out
+
     def query_approvals(
         self,
         *,
