@@ -2343,6 +2343,26 @@ def _cmd_uninstall(args=None) -> None:
         except Exception:
             pass
 
+    # 10. Runtime hooks (#4817). MUST run before pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every entry in
+    # ``~/.clawmetry/hooks/installed.json`` names a hook file we dropped
+    # into a runtime's config dir (Claude Code, Cursor, opencode, Pi, …)
+    # plus the config-file key we merged. Draining the manifest removes
+    # both, so the runtime never boots into a settings.json referencing
+    # a script that pip just deleted. Non-negotiable per goal thread
+    # 2026-08-14 ("runtime should not error out when clawmetry is
+    # uninstalled").
+    try:
+        from clawmetry import hooks as _cm_hooks
+        for _installed in _cm_hooks.status():
+            items.append((
+                "Hook",
+                f"Runtime hook: {_installed.runtime}/{_installed.hook_id} "
+                f"({_installed.install_path})",
+            ))
+    except Exception:
+        pass
+
     # 9. pip package
     items.append(("Package", "pip package: clawmetry"))
 
@@ -2514,6 +2534,23 @@ def _cmd_uninstall(args=None) -> None:
     _stray_dash = 0 if system == "Windows" else _kill_dashboard_processes()
     if _stray_dash:
         print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
+
+    # 1b. Drain runtime hooks (#4817). MUST run BEFORE pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every registered hook
+    # gets its config-file key merged-removed (only ClawMetry-owned keys are
+    # touched; user config survives) and its hook file deleted. If this
+    # doesn't run cleanly, a runtime like Claude Code boots into a
+    # settings.json referencing a script pip is about to delete, and
+    # errors out on next start — the exact scenario the goal thread
+    # 2026-08-14 flagged as non-negotiable.
+    try:
+        from clawmetry import hooks as _cm_hooks
+        _drained = _cm_hooks.uninstall_all()
+        if _drained:
+            print(f"  ✅  Drained {len(_drained)} runtime hook(s): "
+                  f"{', '.join(_drained)}")
+    except Exception as _e:
+        print(f"  ⚠️  Could not drain runtime hooks: {_e}")
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
