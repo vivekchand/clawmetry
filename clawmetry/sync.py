@@ -8538,12 +8538,16 @@ def _build_memory_cache_pushes(config: dict) -> list:
         if size is None:
             size = len(content.encode("utf-8", errors="replace"))
         root = r.get("root") or ""
-        # Display name: relative to the root the file was found under, so the
-        # cloud tree can group the same way the local browser does.
+        # `name` stays the join key the cloud viewer matches against
+        # memory_content[].path — an older cloud build looks the content up by
+        # files[].name, so changing it to a display string would blank every
+        # file on a cloud that hasn't deployed yet. `rel` is the new
+        # display-only field (path relative to the root it was found under).
         rel = path[len(root):].lstrip("/") if (root and path.startswith(root)) else path
         files.append({
-            "name":     rel or path,
+            "name":     path,
             "path":     path,
+            "rel":      rel or path,
             "size":     int(size or 0),
             "runtime":  r.get("agent_type") or "openclaw",
             "category": r.get("category") or "memory",
