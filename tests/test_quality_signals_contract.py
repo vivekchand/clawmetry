@@ -447,3 +447,30 @@ def test_stale_classification_detection():
     assert _is_stale_classification({"outcome": "tool_call_stuck",
                                      "outcome_classified_at": None})
     assert not _is_stale_classification({"outcome": None})
+
+
+def test_thrash_counts_failures_over_all_repeats_not_just_exhibits():
+    """`failed` and `identical_calls` must share a denominator.
+
+    Exhibits are capped at 12 for payload size. Counting failures only over
+    that slice would report "identical_calls: 30, failed: 12" for a session
+    where 25 actually failed — two numbers from different denominators inside
+    one evidence block, on a surface whose whole promise is that its numbers
+    survive being looked at.
+    """
+    events, t = [], 1_780_000_000
+    for _ in range(30):
+        events.append(_family_tool_call(t, "Bash", {"command": "same"}))
+        events.append(_family_tool_result(t + 1, "boom", is_error=True))
+        t += 15
+    a = assess_session(events, runtime="claude_code", session_id="cap",
+                       thresholds={"tool_error_pct": 8.0, "thrash_repeats": 4})
+    thrash = [v for v in a.verdicts if v.name == "tool_thrash"]
+    assert thrash, "expected thrash on 30 identical failing calls"
+    obs = thrash[0].observed
+    assert obs["identical_calls"] == 30, obs
+    assert obs["failed"] == 30, (
+        "failures must be counted across every repeat, not just the "
+        "12 exhibited: %r" % obs
+    )
+    assert len(thrash[0].exhibits) == 12, "exhibits stay capped"

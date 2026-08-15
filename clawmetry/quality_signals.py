@@ -536,13 +536,18 @@ def _sig_tool_thrash(events, *, runtime, thresholds, session_id) -> Verdict | No
     limit = int(thresholds.get("thrash_repeats", 4))
 
     # Pair each call with the result that follows it, so "repeated AND failing"
-    # is provable rather than assumed.
-    results = [e for e in events if e.kind == "tool_result"]
+    # is provable rather than assumed. Binary search over the sorted result
+    # timestamps: a linear rescan per call is O(calls x results), which on a
+    # long session is tens of thousands of comparisons inside the ingest pass.
+    import bisect
+    results = [e for e in events if e.kind == "tool_result" and e.ts is not None]
+    result_ts = [r.ts for r in results]
+
     def _next_result(after_ts):
-        for r in results:
-            if r.ts is not None and after_ts is not None and r.ts >= after_ts:
-                return r
-        return None
+        if after_ts is None or not results:
+            return None
+        i = bisect.bisect_left(result_ts, after_ts)
+        return results[i] if i < len(results) else None
 
     by_digest: dict[str, list[NormalizedEvent]] = {}
     for c in calls:
@@ -555,19 +560,25 @@ def _sig_tool_thrash(events, *, runtime, thresholds, session_id) -> Verdict | No
     if len(worst) < limit:
         return None
 
+    # Count failures across EVERY repeat, but build exhibits from the first
+    # dozen. Counting only the exhibit slice would put `failed` and
+    # `identical_calls` on different denominators inside one evidence block —
+    # and the whole point of this surface is that its numbers survive being
+    # looked at.
     failing = 0
     exhibits: list[dict[str, Any]] = []
-    for c in worst[:12]:
+    for i, c in enumerate(worst):
         res = _next_result(c.ts)
         errored = bool(res and res.is_error and not res.benign_error)
         if errored:
             failing += 1
-        exhibits.append({
-            "ts":     c.ts,
-            "tool":   c.tool_name,
-            "file":   c.file_path,
-            "errored": errored,
-        })
+        if i < 12:
+            exhibits.append({
+                "ts":      c.ts,
+                "tool":    c.tool_name,
+                "file":    c.file_path,
+                "errored": errored,
+            })
     # Identical repeats that all SUCCEED are not thrash (a poll loop, a
     # formatter run). Require that the repetition is actually going wrong.
     if failing < 2:
