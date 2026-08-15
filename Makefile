@@ -77,7 +77,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-js lint-daemon-allowlist
+lint: lint-py lint-js lint-daemon-allowlist lint-runtime-count
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -87,6 +87,11 @@ lint: lint-py lint-js lint-daemon-allowlist
 # legacy paths; surfaced as 6 s timeouts).
 lint-daemon-allowlist:
 	@python3 scripts/lint_daemon_allowlist.py
+
+# The advertised runtime count must match FREE_RUNTIMES | PAID_RUNTIMES.
+# Fix drift with: python3 scripts/sync_runtime_count.py
+lint-runtime-count:
+	@python3 scripts/sync_runtime_count.py --check
 
 lint-py:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Python syntax OK')"

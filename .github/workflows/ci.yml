@@ -65,6 +65,14 @@ jobs:
       - name: Lint (warnings only, don't fail)
         run: ruff check dashboard.py --select E,W --ignore E501,W503 || true
 
+      # The advertised runtime count lives in prose across the README, its
+      # translations, FLYWHEEL.md, the CLI and the desktop copy, and every one
+      # of those drifted from the catalogue before this guard existed
+      # (2026-08-15: catalogue 20, README 14, PyPI 12). setup.py derives the
+      # PyPI summary; this keeps the rest honest.
+      - name: Runtime count matches the entitlement catalogue
+        run: python3 scripts/sync_runtime_count.py --check
+
       # Silent-CLI class guard (#3791): rebinding sys.stdout/sys.stderr to a
       # new TextIOWrapper over the same buffer orphans the previous wrapper;
       # its GC finalizer closes the SHARED buffer, and every later print(),
@@ -226,6 +234,7 @@ jobs:
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
             tests/test_moat_bug_class_v3_event_shape_gate.py \
+            tests/test_runtime_count_copy_sync.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
             tests/test_query_contract_drift.py \

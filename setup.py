@@ -8,10 +8,29 @@ with open("README.md", "r", encoding="utf-8") as f:
 with open("dashboard.py", "r", encoding="utf-8") as f:
     version = re.search(r'__version__\s*=\s*"(.+?)"', f.read()).group(1)
 
+# Single source of truth: FREE_RUNTIMES | PAID_RUNTIMES in
+# clawmetry/entitlements.py. Parsed rather than imported because setup.py
+# runs before the package is installed. Keeping the PyPI summary derived
+# means it cannot go stale when a runtime lands (it said 12 while the
+# catalogue said 20 until 2026-08-15).
+with open("clawmetry/entitlements.py", "r", encoding="utf-8") as f:
+    _ent_src = f.read()
+runtime_count = sum(
+    len(re.findall(r'"[a-z0-9_]+"', re.search(block, _ent_src, re.S).group(1)))
+    for block in (
+        r"FREE_RUNTIMES = frozenset\(\{(.*?)\}\)",
+        r"PAID_RUNTIMES = frozenset\(\s*\{(.*?)\}\s*\)",
+    )
+)
+assert runtime_count > 1, "failed to parse runtime catalogue from entitlements.py"
+
 setup(
     name="clawmetry",
     version=version,
-    description="ClawMetry - Real-time observability for 12 AI agent runtimes (OpenClaw, NVIDIA NemoClaw, Claude Code, Codex & more)",
+    description=(
+        f"ClawMetry - Real-time observability for {runtime_count} AI agent runtimes "
+        "(OpenClaw, NVIDIA NemoClaw, Claude Code, Codex & more)"
+    ),
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Vivek Chand",
