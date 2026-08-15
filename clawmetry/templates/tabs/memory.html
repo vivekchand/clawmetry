@@ -47,8 +47,13 @@
             </div>
             <div style="flex:1;"></div>
             <div id="selfconfig-editor-toolbar" style="display:none;align-items:center;gap:0;padding-right:8px;">
-              <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-primary);border-bottom:2px solid #6366f1;" data-i18n="memory.mode_preview">Preview</div>
+              <div class="sc-mode-btn" data-mode="code" onclick="selfconfigSetMode('code')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-primary);border-bottom:2px solid #6366f1;" data-i18n="memory.mode_code">Code</div>
+              <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;" data-i18n="memory.mode_preview">Preview</div>
               <div class="sc-mode-btn" data-mode="edit" onclick="selfconfigSetMode('edit')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;" data-i18n="memory.mode_edit">Edit</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding-right:10px;">
+              <button class="cm-fv-btn" onclick="memIdeCopy(this)" title="Copy the whole file">⧉ <span data-i18n="common.copy">Copy</span></button>
+              <button class="cm-fv-btn" onclick="memIdeToggleFullscreen(this)" title="Full screen (Esc to exit)">⤡ <span data-i18n="memory.full_screen">Full screen</span></button>
             </div>
           </div>
 

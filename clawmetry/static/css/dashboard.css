@@ -2438,3 +2438,120 @@ body.has-profile-menu #logout-btn { display: none !important; }
   cursor: pointer; font-size: 12px; color: var(--text-muted);
   padding: 2px 0;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   cm-fileview — GitHub-style file viewer (Skills + Memory browsers)
+
+   Raw source by default (line-number gutter, monospace, no syntax colouring),
+   with a Preview toggle for markdown, soft-wrap toggle, copy button and a
+   fullscreen mode for long reads. Everything inside is selectable; the gutter
+   is user-select:none so copying a range yields clean source without the
+   line numbers.
+   ───────────────────────────────────────────────────────────────────────── */
+.cm-fileview {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+.cm-fileview.cm-fileview-fs {
+  position: fixed; inset: 0; z-index: 9000;
+  height: 100vh !important; width: 100vw; max-height: 100vh;
+  border-radius: 0; border: none;
+}
+.cm-fv-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap;
+  padding: 7px 10px 7px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-primary);
+  min-height: 34px;
+}
+.cm-fv-meta {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 220px;
+  flex-wrap: nowrap; min-width: 0; overflow: hidden;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.cm-fv-meta > span { flex-shrink: 0; }
+.cm-fv-meta .cm-fv-name {
+  color: var(--text-primary); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 auto; min-width: 0;
+}
+.cm-fv-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cm-fv-seg {
+  display: inline-flex; border: 1px solid var(--border-primary);
+  border-radius: 6px; overflow: hidden;
+}
+.cm-fv-btn {
+  font: inherit; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; cursor: pointer;
+  background: var(--bg-primary); color: var(--text-secondary);
+  border: 1px solid var(--border-primary); border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+  line-height: 18px; white-space: nowrap;
+}
+.cm-fv-btn:hover { color: var(--text-primary); border-color: #6366f1; }
+.cm-fv-seg .cm-fv-btn { border: none; border-radius: 0; }
+.cm-fv-seg .cm-fv-btn + .cm-fv-btn { border-left: 1px solid var(--border-primary); }
+.cm-fv-btn.active { background: #6366f1; color: #fff; }
+.cm-fv-btn.active:hover { color: #fff; }
+.cm-fv-body {
+  flex: 1; min-height: 0; overflow: auto;
+  background: var(--bg-primary);
+}
+.cm-fv-empty { padding: 40px 22px; color: var(--text-muted); font-size: 12.5px; }
+
+/* Code view: one row per source line so numbers stay aligned even when
+   soft-wrap is on. Rows are block-level, so a multi-line selection copies
+   with real newlines. */
+.cm-fv-code {
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 12.5px; line-height: 1.55;
+  color: var(--text-primary);
+  padding: 8px 0 40px;
+  -webkit-user-select: text; user-select: text;
+  cursor: text;
+}
+.cm-fv-row { display: flex; width: max-content; min-width: 100%; min-height: 1.55em; }
+.cm-fv-row:hover { background: color-mix(in srgb, var(--text-primary) 5%, transparent); }
+.cm-fv-ln {
+  position: sticky; left: 0; z-index: 1;
+  flex: 0 0 auto;
+  width: calc(var(--cm-ln-w, 3ch) + 22px);
+  padding-right: 12px; text-align: right;
+  color: var(--text-muted); opacity: 0.55;
+  background: var(--bg-primary);
+  -webkit-user-select: none; user-select: none;
+  border-right: 1px solid var(--border-primary);
+}
+.cm-fv-row:hover .cm-fv-ln { opacity: 0.85; }
+.cm-fv-lc { padding: 0 18px 0 14px; white-space: pre; }
+.cm-fv-wrap .cm-fv-row { width: auto; }
+.cm-fv-wrap .cm-fv-lc { white-space: pre-wrap; word-break: break-word; flex: 1; min-width: 0; }
+.cm-fv-plain {
+  margin: 0; padding: 12px 18px 40px;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-primary);
+  white-space: pre;
+}
+
+/* Markdown preview */
+.cm-fv-preview { padding: 20px 26px 48px; max-width: 940px; }
+.cm-fv-fm {
+  margin: 0 0 18px; padding: 10px 12px;
+  background: var(--bg-secondary); border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.6; color: var(--text-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+.cm-fv-fm b { color: var(--text-secondary); font-weight: 600; }
+
+/* Full screen for panels that are not cm-fileview hosts (Memory IDE). */
+.cm-panel-fs {
+  position: fixed; inset: 0; z-index: 9000;
+  height: 100vh !important; width: 100vw; max-height: 100vh;
+  border-radius: 0 !important; border: none !important;
+}

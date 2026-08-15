@@ -140,7 +140,6 @@ CANONICAL_TABS = [
     "context-economics", # context-economics.html: context economics
     "agents",            # agents.html: multi-agent orchestration view
     "evals",             # evals.html: LLM-judge scores + evaluator library
-    "gateway",           # gateway.html: opt-in manual OpenClaw gateway config
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.
