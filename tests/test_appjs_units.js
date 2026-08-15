@@ -1476,6 +1476,48 @@ console.log('\ncmRuntimeIcon (runtime pixel logos, runtime-logos.js)');
   truthy(win.cmRuntimeKnown('codex') === true && win.cmRuntimeKnown('nope') === false, 'cmRuntimeKnown known/unknown');
 }
 
+// ── Runtime file tree: every row names a file ─────────────────────────────
+console.log('_cmRtDisplayName (disambiguate generic filenames, never drop them)');
+{
+  const maps = src.match(/var _CM_RT_GENERIC_FILE = \{[\s\S]*?\};/)[0]
+    + '\n' + src.match(/var _CM_RT_GENERIC_DIR = \{[\s\S]*?\};/)[0];
+  const sandbox = { String: String };
+  vm.createContext(sandbox);
+  vm.runInContext(maps + '\n' + extractFunction('_cmRtDisplayName')
+    + '\nthis.dn = _cmRtDisplayName;', sandbox);
+  const dn = sandbox.dn;
+
+  // A distinctive filename is already the answer.
+  eq(dn('no-em-dashes.md'), 'no-em-dashes.md', 'distinctive basename passes through');
+  eq(dn('a/b/vivek-clawmetry-founder.md'), 'vivek-clawmetry-founder.md',
+     'distinctive basename wins over any nesting');
+
+  // Generic container filenames get a disambiguating PREFIX — the filename
+  // itself must survive. Live regression on 0.12.706: rows rendered as a bare
+  // "-Users-vivek--openclaw-workspace" with no MEMORY.md on them, right next
+  // to sibling rows that did show their filename.
+  eq(dn('-Users-vivek--openclaw-workspace/memory/MEMORY.md'),
+     '-Users-vivek--openclaw-workspace/MEMORY.md',
+     'generic name keeps its filename, prefixed by the identifying folder');
+  eq(dn('.claude/skills/pdf-tools/SKILL.md'), 'pdf-tools/SKILL.md',
+     'structural dirs dropped, skill folder + filename kept');
+
+  // Nothing to disambiguate with -> the bare name is still correct.
+  eq(dn('MEMORY.md'), 'MEMORY.md', 'top-level generic file keeps its name');
+  eq(dn('memory/MEMORY.md'), 'MEMORY.md',
+     'an all-structural path falls back to the bare filename');
+  eq(dn('', 'Global CLAUDE.md'), 'Global CLAUDE.md',
+     'empty rel falls back to the group label');
+
+  // Whatever the rule, a row must never render empty or as a stray slash.
+  ['SKILL.md', 'a/SKILL.md', 'x/y/z/settings.json', '', 'memory/AGENTS.md']
+    .forEach(function (p) {
+      const out = dn(p, 'fallback');
+      truthy(out && out !== '/' && out.indexOf('//') === -1,
+        'row label is never empty or a stray slash for ' + JSON.stringify(p));
+    });
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed
