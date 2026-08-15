@@ -1237,11 +1237,26 @@ _CLOUD_PLAN_CACHE_PATH = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 # Heartbeat ``plan`` strings → entitlement tier codes. Anything not in this map
 # (incl. ``trial_expired`` / None / "") clears the cache so the resolver falls
 # back to OSS-free instead of mistakenly granting an expired Pro plan.
+# Tiers that carry a real subscription. A trial_end must never be stamped onto
+# these as an expiry (see _persist_cloud_plan_to_disk): trial-by-default signup
+# means a paying customer's trial_end is always in the past.
+_PAID_PLAN_TIERS = frozenset({
+    "trial", "cloud_starter", "cloud_pro", "pro", "enterprise",
+})
+
 _HEARTBEAT_PLAN_TO_TIER = {
     "free": "cloud_free",
     "cloud_free": "cloud_free",
     "trial": "trial",
     "cloud_trial": "trial",
+    # A LAPSED trial is cloud_free with a burnt trial, not "unknown". Mapping it
+    # here (instead of falling through to tier=None, which DELETES the cache and
+    # loses the verdict) is what actually arms the paywall for the population
+    # that matters: 2,378 prod accounts sit at plan='trial' with a past
+    # trial_end, vs 40 that have already been flipped to plan='free'. It grants
+    # nothing -- cloud_free has no paid runtimes -- it only carries the
+    # trial_used/trial_end verdict through to the resolver.
+    "trial_expired": "cloud_free",
     "starter": "cloud_starter",
     "cloud_starter": "cloud_starter",
     "pro": "cloud_pro",
@@ -1412,11 +1427,19 @@ def _persist_cloud_plan_to_disk(
                     expiry = time.time() + float(trial_days_left) * 86400.0
             except Exception:
                 expiry = None
-            # An authoritative trial_end from the cloud always wins over the
-            # derived days-left countdown: it is the same value Stripe/billing
-            # reconcile against, and it keeps working after the trial lapses
-            # (days_left goes to 0/None but trial_end stays meaningful).
-            if _trial_end_epoch is not None:
+            # An authoritative trial_end from the cloud wins over the derived
+            # days-left countdown for UNPAID tiers: it is the same value
+            # Stripe/billing reconcile against, and it keeps working after the
+            # trial lapses (days_left goes to 0/None but trial_end stays
+            # meaningful).
+            #
+            # NEVER for a paid tier. Signup is trial-by-default, so essentially
+            # every paying customer carries trial_used=True and a trial_end
+            # that is long past -- stamping that onto their entitlement makes
+            # Entitlement.expired True and hard-blocks a subscriber who is
+            # paying us right now. Their subscription expiry comes from the
+            # plan, not from the trial they took before they bought.
+            if _trial_end_epoch is not None and tier not in _PAID_PLAN_TIERS:
                 expiry = _trial_end_epoch
             payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
             if _trial_used is not None:
