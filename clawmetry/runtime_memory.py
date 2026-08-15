@@ -690,6 +690,36 @@ def list_runtimes() -> list:
 SKILLS_TAB_CATEGORIES: tuple = ("skills", "commands", "agents", "hooks")
 
 
+def runtime_is_locked(runtime_id: str) -> bool:
+    """True when this runtime needs a paid entitlement the caller lacks.
+
+    THE single predicate for the memory/skills paywall. Three callers must
+    agree or the paywall leaks:
+
+      * ``routes/runtime_memory.py`` — returns 402 / omits from the ``all``
+        sweep.
+      * the sync daemon's ingest — never writes a locked runtime's files.
+      * the sync daemon's cache-push build — never SHIPS them, which is a
+        separate decision: rows written while entitled would otherwise keep
+        riding the heartbeat after the entitlement lapsed.
+
+    Free runtimes are never locked. For paid runtimes ``allows_runtime`` on
+    the resolved entitlement is authoritative (it already honours grace mode).
+    Any exception falls OPEN — a resolver hiccup must not blank out a paying
+    user's memory, and the read endpoints re-check on every request.
+    """
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES, get_entitlement
+    except Exception:
+        return False
+    if runtime_id in FREE_RUNTIMES:
+        return False
+    try:
+        return not bool(get_entitlement().allows_runtime(runtime_id))
+    except Exception:
+        return False
+
+
 def parse_categories(category) -> set:
     """Normalise a category filter into a set of valid category names.
 
