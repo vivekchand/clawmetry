@@ -70,21 +70,32 @@ class TrialHardBlockGateTest(unittest.TestCase):
         from clawmetry import entitlements
         entitlements.invalidate()
 
+    @staticmethod
+    def _plan_path():
+        """The path the RESOLVER actually reads.
+
+        ``entitlements._CLOUD_PLAN_CACHE`` is expanded at import time, so if
+        any earlier test in the session imported the module under a different
+        HOME it is pinned to that old directory. Deriving the path from
+        ``$HOME`` here instead would write somewhere the resolver never looks
+        — the test then passes alone and fails in the full suite, which is
+        exactly how it behaved before this was fixed."""
+        from clawmetry import entitlements
+        return entitlements._CLOUD_PLAN_CACHE
+
     def _write_cloud_plan(self, **fields):
-        """Stamp ``$HOME/.clawmetry/cloud_plan.json`` (the cache the daemon
-        writes from the heartbeat) and drop the resolver cache so the next
-        request sees it."""
+        """Stamp the cloud-plan cache (what the daemon writes from the
+        heartbeat) and drop the resolver cache so the next request sees it."""
         import json
-        d = os.path.join(os.environ["HOME"], ".clawmetry")
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "cloud_plan.json"), "w") as fh:
+        p = self._plan_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
             json.dump(fields, fh)
         self._invalidate()
 
     def _clear_cloud_plan(self):
-        p = os.path.join(os.environ["HOME"], ".clawmetry", "cloud_plan.json")
         try:
-            os.remove(p)
+            os.remove(self._plan_path())
         except OSError:
             pass
         self._invalidate()

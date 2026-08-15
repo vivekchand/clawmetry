@@ -142,7 +142,7 @@ def test_update_trial_state_reconciles_persist_each_heartbeat(sync, monkeypatch)
     test_persist_is_idempotent_when_tier_unchanged), NOT by skipping the call."""
     calls = {"n": 0}
 
-    def _spy(plan, trial_days_left=None):
+    def _spy(plan, trial_days_left=None, trial_end=None, trial_used=None):
         calls["n"] += 1
 
     monkeypatch.setattr(sync, "_persist_cloud_plan_to_disk", _spy)
