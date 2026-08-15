@@ -280,10 +280,24 @@ def compute_report_card(
             f"{n_clean} tasks came back clean. {n_rough} rough "
             f"{'one' if n_rough == 1 else 'ones'} cost you {cost_str}."
         )
-    if unmeasured:
+    # Two different reasons a session is excluded, and they are not
+    # interchangeable. "Too little activity to judge" is a fact about the
+    # session; "not graded yet" is a fact about us. Reporting the second as
+    # the first tells the user their work was too thin when the truth is the
+    # collector hasn't caught up — the same species of wrong-but-reassuring
+    # copy this rebuild exists to remove.
+    thin = [1 for (_r, a) in unmeasured
+            if "too little activity" in str(a.get("reason") or "").lower()]
+    pending = len(unmeasured) - len(thin)
+    if thin:
         subline += (
-            f" {len(unmeasured)} more had too little activity to judge, "
+            f" {len(thin)} more had too little activity to judge, "
             "so they are left out of the grade."
+        )
+    if pending:
+        subline += (
+            f" {pending} {'is' if pending == 1 else 'are'} still being "
+            "graded and will appear shortly."
         )
 
     return {

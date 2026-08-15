@@ -266,3 +266,40 @@ def test_empty_store_still_reads_as_nothing_to_grade(monkeypatch):
         body = c.get("/api/quality/report-card").get_json()
     assert body["store_available"] is True
     assert "nothing to grade" in body["headline"].lower()
+
+
+def test_excluded_sessions_report_the_right_reason(monkeypatch):
+    """"Not graded yet" must not be reported as "too little activity".
+
+    The first is a fact about us, the second a fact about the session.
+    Collapsing them tells the user their work was too thin when the truth is
+    the collector hasn't caught up — wrong, and reassuring in the wrong
+    direction, which is the species of copy this rebuild exists to remove.
+    """
+    from clawmetry.quality import compute_report_card
+
+    rows = [{"session_id": "s%d" % i, "title": "t%d" % i, "cost_usd": 1.0}
+            for i in range(6)]
+
+    def unmeasured(reason):
+        return {"measurable": False, "reason": reason, "verdicts": []}
+
+    assessments = {
+        "s0": {"measurable": True, "verdicts": []},
+        "s1": {"measurable": True, "verdicts": []},
+        "s2": unmeasured("Too little activity to judge — 3 events, 0 tool results."),
+        "s3": unmeasured("Too little activity to judge — 2 events, 0 tool results."),
+        "s4": unmeasured("Not graded yet — the collector will pick this up."),
+        "s5": unmeasured("Not graded yet — the collector will pick this up."),
+    }
+    sub = compute_report_card(rows, assessments)["subline"]
+    assert "2 more had too little activity" in sub, sub
+    assert "2 are still being graded" in sub, sub
+
+    # All-thin must not invent a "still being graded" clause.
+    all_thin = dict(assessments)
+    for k in ("s4", "s5"):
+        all_thin[k] = unmeasured("Too little activity to judge — 1 events, 0 tool results.")
+    sub2 = compute_report_card(rows, all_thin)["subline"]
+    assert "still being graded" not in sub2, sub2
+    assert "4 more had too little activity" in sub2, sub2
