@@ -8446,8 +8446,21 @@ def _build_brain_cache_pushes(config: dict) -> list:
 # Cloud read path: ``routes/cloud.py:cloud_memory_files``.
 
 MEMORY_CACHE_TTL_SEC = 21600       # 6h — matches Brain TTL; files change slowly
-MEMORY_CACHE_LIMIT = 200            # plenty for SOUL.md/USER.md/AGENTS.md/etc.
-MEMORY_CONTENT_TRUNCATE = 500_000   # mirrors routes/infra.py truncation
+MEMORY_CACHE_LIMIT = 600            # every runtime's memory + skills, not just OpenClaw's
+MEMORY_CONTENT_TRUNCATE = 120_000   # per file
+# Total plaintext budget for one push. MEMORY_CACHE_LIMIT × the per-file cap is
+# a 72MB worst case, which is not a heartbeat payload. Files past the budget
+# are still LISTED (so the tree is honest about what exists) with empty
+# content, and the viewer says to open them locally.
+MEMORY_CACHE_TOTAL_BUDGET = 6_000_000
+# Re-push floor. The snapshot used to be a handful of OpenClaw markdown files,
+# so rebuilding it on every 60s heartbeat cost nothing. Now that it carries
+# every runtime's memory AND skills it can run to several MB, and pushing that
+# once a minute would be gigabytes of egress a day for data that changes
+# hourly at best. Push when the content actually changed, or when we're
+# halfway to the cache TTL and the cloud copy needs refreshing either way.
+MEMORY_PUSH_MIN_INTERVAL_SEC = MEMORY_CACHE_TTL_SEC // 2
+_memory_push_state: dict = {"fingerprint": None, "ts": 0.0}
 
 
 def _build_memory_cache_pushes(config: dict) -> list:
@@ -8486,9 +8499,43 @@ def _build_memory_cache_pushes(config: dict) -> list:
         return []
     if not rows:
         return []
+    # Change-gate before the expensive part (JSON encode + AES of several MB).
+    # The sha256 column is exactly the per-file content hash we need.
+    try:
+        import hashlib as _hl
+        fp = _hl.sha256("|".join(sorted(
+            f"{r.get('path')}:{r.get('sha256')}" for r in rows
+        )).encode()).hexdigest()
+    except Exception:
+        fp = None
+    _now = time.time()
+    if (fp is not None
+            and fp == _memory_push_state.get("fingerprint")
+            and (_now - float(_memory_push_state.get("ts") or 0)) < MEMORY_PUSH_MIN_INTERVAL_SEC):
+        return []
+
+    # Catalog labels for the roots these rows came from, so a cloud viewer can
+    # head a group "Plugin: telegram" / "Global settings.json" the way the
+    # local browser does, instead of falling back to the last path segment
+    # (which renders every installed plugin as "skills" and one as "0.0.7").
+    # Derived here rather than stored per row: the label is static catalog
+    # config, not per-file data, and deriving costs one catalog walk per push.
+    root_meta: dict = {}
+    try:
+        from clawmetry import runtime_memory as _rm
+        for _entry in _rm.list_runtimes():
+            for _root in _entry.get("roots") or ():
+                root_meta[(_entry.get("id"), _root.get("root"))] = (
+                    _root.get("label") or "", _root.get("scope") or "",
+                )
+    except Exception:
+        root_meta = {}
+
     files: list[dict] = []
     contents: list[dict] = []
     seen: set = set()
+    spent = 0
+    dropped = 0
     for r in rows:
         path = r.get("path") or ""
         if not path or path in seen:
@@ -8507,23 +8554,58 @@ def _build_memory_cache_pushes(config: dict) -> list:
         size = r.get("size_bytes")
         if size is None:
             size = len(content.encode("utf-8", errors="replace"))
-        files.append({"name": path, "path": path, "size": int(size or 0)})
-        # Truncate per-file content to bound the encrypted blob size — the
-        # cloud Memory IDE shows a viewer pane (no diffing), so >500KB per
-        # file is wasted heartbeat bandwidth.
-        contents.append({"path": path, "content": content[:MEMORY_CONTENT_TRUNCATE]})
+        root = r.get("root") or ""
+        # `name` stays the join key the cloud viewer matches against
+        # memory_content[].path — an older cloud build looks the content up by
+        # files[].name, so changing it to a display string would blank every
+        # file on a cloud that hasn't deployed yet. `rel` is the new
+        # display-only field (path relative to the root it was found under).
+        rel = path[len(root):].lstrip("/") if (root and path.startswith(root)) else path
+        rt_id = r.get("agent_type") or "openclaw"
+        label, scope = root_meta.get((rt_id, root), ("", ""))
+        files.append({
+            "name":     path,
+            "path":     path,
+            "rel":      rel or path,
+            "size":     int(size or 0),
+            "runtime":  rt_id,
+            "category": r.get("category") or "memory",
+            "root":     root,
+            # Display-only, and both optional: a consumer that predates them
+            # falls back to the path segment / omits the scope pill.
+            "label":    label,
+            "scope":    scope,
+        })
+        body = content[:MEMORY_CONTENT_TRUNCATE]
+        if spent + len(body) > MEMORY_CACHE_TOTAL_BUDGET:
+            body = ""
+            dropped += 1
+        else:
+            spent += len(body)
+        contents.append({"path": path, "content": body})
     if not files:
         return []
+    if dropped:
+        log.info("memory cache push: %d of %d files listed without content "
+                 "(%d byte budget reached)", dropped, len(files),
+                 MEMORY_CACHE_TOTAL_BUDGET)
     payload = {
         "memory_state":   {"files": files},
         "memory_content": contents,
         "_source":        "local_store",
         "_shape":         "memory_files",
+        "_content_dropped": dropped,
     }
     try:
         blob = encrypt_payload(payload, enc_key)
     except Exception:
         return []
+    # Only arm the gate once we have a blob to hand back — a failed encode
+    # must not suppress the next attempt for three hours.
+    _memory_push_state["fingerprint"] = fp
+    _memory_push_state["ts"] = _now
+    log.info("memory cache push: %d files, %.1f MB plaintext",
+             len(files), spent / 1_000_000.0)
     owner_hash = _owner_hash_for_token(api_key)
     return [{
         "key":    f"memory:{owner_hash}:{node_id}:files",
@@ -11529,6 +11611,130 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         log.warning(f"Session metadata sync failed: {e}")
         _record_sync_progress("session_metadata", 0, 0)
         return 0
+
+
+# ── Per-runtime memory + skills ingest ───────────────────────────────────────
+#
+# ``sync_memory`` below only ever looked at the OpenClaw workspace
+# (MEMORY.md / SOUL.md / memory/*.md). On a machine that runs Claude Code,
+# Codex or Cursor and has no OpenClaw workspace memory, that collected zero
+# files, so nothing landed in ``memory_blobs``, so the heartbeat had nothing
+# to push, so the cloud Memory tab sat on "Syncing memory files…" forever and
+# then fell through to "No memory data synced". The files were right there on
+# disk the whole time — we just never read them.
+#
+# This walks the same catalog the local Memory/Skills browser uses
+# (``clawmetry.runtime_memory``) so local and cloud show the same thing.
+
+# Bounds. These are per (runtime, category) and exist to keep the heartbeat
+# blob sane on a machine with hundreds of memory files — a Claude Code user
+# with 30 projects has ~430 auto-memory files alone.
+RUNTIME_MEMORY_MAX_FILES = 250
+RUNTIME_MEMORY_MAX_BYTES = 200_000
+
+
+def sync_runtime_memory_files(config: dict, state: dict, paths: dict) -> int:
+    """Ingest every entitled runtime's memory + skills files into DuckDB.
+
+    Local-first and local-only: this writes to the store, and the existing
+    heartbeat cache push (``_build_memory_cache_pushes``) is what carries it
+    to cloud. Returns the number of files written (dedup means a steady-state
+    tick returns 0). Never raises — a runtime whose root has moved must not
+    take the daemon down.
+    """
+    if not _sync_allowed():
+        return 0
+    try:
+        from clawmetry import local_store, runtime_memory
+    except Exception:
+        return 0
+
+    # Never ingest a paid runtime the user isn't entitled to — that would
+    # push its file contents to cloud behind the paywall's back.
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES, get_entitlement
+        ent = get_entitlement()
+
+        def _allowed(rt_id: str) -> bool:
+            if rt_id in FREE_RUNTIMES:
+                return True
+            try:
+                return bool(ent.allows_runtime(rt_id))
+            except Exception:
+                return False
+    except Exception:
+        def _allowed(rt_id: str) -> bool:
+            return True
+
+    try:
+        store = local_store.get_store()
+    except Exception as e:
+        log.debug("runtime memory ingest: store unavailable (%s)", e)
+        return 0
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    written = 0
+    scanned = 0
+    for entry in runtime_memory.list_runtimes():
+        rt_id = entry.get("id") or ""
+        if not rt_id or not _allowed(rt_id):
+            continue
+        # Memory tab reads `memory`; Skills tab reads the other four. Ingest
+        # all five or the Skills tab is empty in cloud for everything except
+        # the `skills` bucket.
+        for category in ("memory",) + runtime_memory.SKILLS_TAB_CATEGORIES:
+            try:
+                payload = runtime_memory.list_files(rt_id, category=category)
+            except Exception:
+                continue
+            for group in payload.get("groups") or ():
+                if not group.get("exists"):
+                    continue
+                root = group.get("root") or ""
+                files = list(group.get("files") or ())
+                # Newest first, then cap — if we have to drop files, drop the
+                # stale ones rather than an arbitrary alphabetical tail.
+                files.sort(key=lambda f: f.get("mtime") or 0, reverse=True)
+                if len(files) > RUNTIME_MEMORY_MAX_FILES:
+                    log.debug("runtime memory: %s/%s capped %d→%d files under %s",
+                              rt_id, category, len(files),
+                              RUNTIME_MEMORY_MAX_FILES, root)
+                    files = files[:RUNTIME_MEMORY_MAX_FILES]
+                for f in files:
+                    rel = f.get("path") or ""
+                    abs_path = os.path.join(root, rel) if rel else root
+                    scanned += 1
+                    try:
+                        with open(abs_path, "rb") as fh:
+                            raw = fh.read(RUNTIME_MEMORY_MAX_BYTES)
+                    except Exception:
+                        continue
+                    # Some catalogued roots are single non-text files —
+                    # Hermes' state.db, n8n's database.sqlite. Decoding those
+                    # with errors="replace" would push 200KB of mojibake per
+                    # heartbeat and render as garbage in the viewer. A NUL in
+                    # the head is the cheap, reliable binary tell.
+                    if b"\x00" in raw[:8192]:
+                        continue
+                    text = raw.decode("utf-8", errors="replace")
+                    try:
+                        if store.ingest_memory_blob({
+                            "agent_type": rt_id,
+                            "agent_id":   "main",
+                            # Absolute path: `rel` alone collides across the
+                            # several roots one runtime registers per category.
+                            "path":       abs_path,
+                            "category":   category,
+                            "root":       root,
+                            "ts":         now_iso,
+                            "blob":       text,
+                        }):
+                            written += 1
+                    except Exception:
+                        continue
+    if written:
+        log.info("  Runtime memory/skills: %d of %d files ingested", written, scanned)
+    return written
 
 
 def sync_memory(config: dict, state: dict, paths: dict) -> int:
@@ -18742,6 +18948,10 @@ def run_daemon() -> None:
     except Exception as e:
         log.warning(f"  Memory sync error: {e}")
     try:
+        sync_runtime_memory_files(config, state, paths)
+    except Exception as e:
+        log.warning(f"  Runtime memory/skills sync error: {e}")
+    try:
         recent_ev = sync_sessions_recent(config, state, paths, minutes=60)
         save_state(state)
         log.info(f"  Recent sessions: {recent_ev} events synced")
@@ -19166,6 +19376,10 @@ def run_daemon() -> None:
 
             # ── High-priority: memory, flow metrics, subagents, recent sessions ──
             mem = sync_memory(config, state, paths)
+            try:
+                sync_runtime_memory_files(config, state, paths)
+            except Exception as _rme:
+                log.warning("runtime memory/skills sync error: %s", _rme)
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:

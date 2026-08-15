@@ -22,6 +22,18 @@ endpoint at ``/api/file``). Traversal-safety is enforced inside
       not cover them (grace still permissive — see the entitlements
       module).
 
+      ``runtime_id`` may be the literal ``all``, which sweeps every
+      entitled runtime and returns only groups that exist on disk, each
+      tagged with its owning ``runtime`` / ``runtime_label``. This is the
+      DEFAULT scope of the Memory and Skills tabs (the global runtime
+      switcher's "All runtimes"), so it never 402s — a locked runtime is
+      left out of the sweep instead, because paywalling the aggregate
+      would also paywall the free runtimes the user IS entitled to. The
+      conversion moment stays on an explicit per-runtime selection.
+
+      ``all`` is a list-only sentinel: read a file back through the
+      ``runtime`` its group carries, never through ``all``.
+
   GET /api/runtimes/<runtime_id>/file?root=<root>&path=<rel>
       Read one file from within a registered root. Same entitlement gate
       as ``/files``.
@@ -41,8 +53,10 @@ from flask import Blueprint, jsonify, request
 
 from clawmetry.runtime_memory import (
     CATEGORIES,
+    list_all_files,
     list_files,
     list_runtimes,
+    parse_categories,
     read_runtime_file,
 )
 
@@ -104,6 +118,30 @@ def api_runtime_memory_catalog():
     })
 
 
+@bp_runtime_memory.route("/api/runtimes/all/files")
+def api_runtime_files_all():
+    """Aggregate every entitled runtime's files for one category.
+
+    A dedicated rule rather than a magic value inside
+    :func:`api_runtime_files` — Werkzeug matches this static rule ahead of
+    the ``<runtime_id>`` converter either way, and a grep for the URL the
+    frontend actually calls should land on a handler.
+
+    Never returns 402. This is the DEFAULT scope of the Memory and Skills
+    tabs, so paywalling it because the user also happens to have an
+    unentitled runtime installed would paywall the free runtimes they ARE
+    entitled to. Locked runtimes are simply left out of the sweep; the
+    conversion moment stays on an explicit per-runtime selection, which
+    still 402s below.
+    """
+    category = (request.args.get("category") or "").strip() or None
+    if category and not parse_categories(category):
+        return jsonify({"error": "invalid category"}), 400
+    allowed = [rt["id"] for rt in list_runtimes()
+               if not _runtime_is_locked(rt["id"])]
+    return jsonify(list_all_files(category=category, allowed=allowed))
+
+
 @bp_runtime_memory.route("/api/runtimes/<runtime_id>/files")
 def api_runtime_files(runtime_id: str):
     """List every file under one runtime, grouped by root.
@@ -111,20 +149,31 @@ def api_runtime_files(runtime_id: str):
     Query params:
       - category: optional filter (memory | skills | commands | agents | hooks)
 
+    ``runtime_id`` may be the literal ``all``, which aggregates every
+    runtime the caller is entitled to. That is the default scope of the
+    Memory / Skills tabs (the global runtime switcher's "All runtimes"),
+    so it must never 402 — locked runtimes are simply left out of the
+    sweep rather than turning the whole page into an upsell.
+
     Returns HTTP 402 ``upgrade_required`` when the runtime is a paid
     runtime and the resolved entitlement does not cover it. This is the
     OSS conversion moment prescribed by ``FLYWHEEL.md`` §1b — never
     silently disable, always surface the upgrade CTA.
     """
+    category = (request.args.get("category") or "").strip() or None
+    if category and not parse_categories(category):
+        return jsonify({"error": "invalid category"}), 400
+    if runtime_id == "all":
+        # Defensive: the static rule above normally wins the match. Kept so
+        # a caller that reaches here (a blueprint mounted under a prefix, a
+        # hand-built url_for) still gets the aggregate rather than a 404.
+        return api_runtime_files_all()
     if _runtime_is_locked(runtime_id):
         return jsonify({
             "error": "upgrade_required",
             "runtime": runtime_id,
             "reason": "paid_runtime_not_entitled",
         }), 402
-    category = (request.args.get("category") or "").strip() or None
-    if category and category not in CATEGORIES:
-        return jsonify({"error": "invalid category"}), 400
     payload = list_files(runtime_id, category=category)
     if payload.get("error") == "unknown_runtime":
         return jsonify(payload), 404

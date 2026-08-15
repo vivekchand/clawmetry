@@ -9,8 +9,8 @@
       <button class="refresh-btn" onclick="loadSkills()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
   </div>
-  <div id="skills-runtime-chips" data-tab="skills" data-category="skills" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:10px 0 4px 0;"></div>
-  <div id="skills-runtime-browser" class="runtime-file-browser" data-tab="skills" data-category="skills" style="display:none;"></div>
+  <!-- No runtime picker here on purpose — the global runtime switcher owns it. -->
+  <div id="skills-runtime-browser" class="runtime-file-browser" data-tab="skills" data-category="skills" style="display:none;margin-top:10px;"></div>
   <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin:14px 0 16px 0;"></div>
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;" data-i18n="app.loading">Loading...</div></div>
   <!-- Skills Browser (file explorer view) -->

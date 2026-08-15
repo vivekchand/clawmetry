@@ -398,6 +398,8 @@ _DDL = [
         sha256        VARCHAR,
         size_bytes    INTEGER,
         updated_at    BIGINT NOT NULL,
+        category      VARCHAR DEFAULT 'memory',
+        root          VARCHAR,
         PRIMARY KEY (agent_type, agent_id, path)
     )
     """,
@@ -1259,6 +1261,15 @@ _MIGRATIONS_V2 = [
     # Issue #3719 — per-cron-job model attribution (openclaw Quick Create
     # lets users pick an agent-turn model; harness exposes it per job).
     ("crons",    "model",             "VARCHAR"),
+    # memory_blobs used to hold only OpenClaw workspace memory, so the bucket
+    # was implicit. It now carries every runtime's memory AND skills files
+    # (clawmetry/runtime_memory.py), which the Memory and Skills tabs must be
+    # able to tell apart — hence an explicit category. Existing rows are all
+    # OpenClaw memory, which the default covers.
+    ("memory_blobs", "category",      "VARCHAR DEFAULT 'memory'"),
+    # Absolute root the relative `path` hangs off, so a cloud viewer can show
+    # where on disk the file lives without re-deriving it from the runtime.
+    ("memory_blobs", "root",          "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -2394,11 +2405,14 @@ class LocalStore:
                 continue
         return out
 
-    def ingest_memory_blob(self, blob_row: dict[str, Any]) -> None:
+    def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
 
-        Required: agent_type, path. Optional: agent_id, blob, sha256, ts.
-        Re-ingesting with the same sha256 is a no-op (cheap dedup)."""
+        Required: agent_type, path. Optional: agent_id, blob, sha256, ts,
+        category, root. Re-ingesting with the same sha256 is a no-op (cheap
+        dedup). Returns True when a row was actually written, False when the
+        content was unchanged — callers that report "N files ingested" need
+        to be able to tell a steady-state tick from a real one."""
         atype = blob_row.get("agent_type")
         path = blob_row.get("path")
         if not atype or not path:
@@ -2424,18 +2438,23 @@ class LocalStore:
                 )
                 row = cur.fetchone()
                 if row and row[0] == sha:
-                    return
+                    return False
             self._conn.execute("""
                 INSERT INTO memory_blobs (
-                    agent_type, agent_id, path, ts, blob, sha256, size_bytes, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    agent_type, agent_id, path, ts, blob, sha256, size_bytes,
+                    updated_at, category, root
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (agent_type, agent_id, path) DO UPDATE SET
                     ts         = excluded.ts,
                     blob       = excluded.blob,
                     sha256     = excluded.sha256,
                     size_bytes = excluded.size_bytes,
-                    updated_at = excluded.updated_at
-            """, [atype, agent_id, path, blob_row.get("ts"), blob, sha, size, now_ms])
+                    updated_at = excluded.updated_at,
+                    category   = excluded.category,
+                    root       = excluded.root
+            """, [atype, agent_id, path, blob_row.get("ts"), blob, sha, size, now_ms,
+                  blob_row.get("category") or "memory", blob_row.get("root")])
+        return True
 
     def ingest_channel(self, ch: dict[str, Any]) -> None:
         """Upsert one OpenClaw channel-context row. Required: session_id.
@@ -8571,6 +8590,7 @@ class LocalStore:
         agent_type: str | None = None,
         agent_id: str | None = None,
         path_prefix: str | None = None,
+        category: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Read memory-blob rows. Defaults to most recent first.
@@ -8601,10 +8621,12 @@ class LocalStore:
             clauses.append("agent_id = ?"); params.append(agent_id)
         if path_prefix:
             clauses.append("path LIKE ?"); params.append(f"{path_prefix}%")
+        if category:
+            clauses.append("category = ?"); params.append(category)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT agent_type, agent_id, path, ts, blob, sha256,
-                   size_bytes, updated_at
+                   size_bytes, updated_at, category, root
             FROM memory_blobs
             {where}
             ORDER BY updated_at DESC
@@ -8612,7 +8634,7 @@ class LocalStore:
         """
         params.append(int(limit))
         cols = ["agent_type", "agent_id", "path", "ts", "blob", "sha256",
-                "size_bytes", "updated_at"]
+                "size_bytes", "updated_at", "category", "root"]
         out: list[dict[str, Any]] = []
         for r in self._fetch(sql, params):
             d = dict(zip(cols, r))
