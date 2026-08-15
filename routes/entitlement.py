@@ -42737,6 +42737,438 @@ def api_entitlement_missing_all_bundle_at_path():
         )
 
 
+def _has_all_bundle_batch_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all-bundle-batch-at-path``.
+
+    Bundle-batch sibling of :func:`_has_all_bundle_at_path_fallback`.
+    On any resolver / helper blowup the endpoint still returns 200
+    with the same envelope shape as the happy path, but
+    ``bundles=[]`` / ``count=0`` so a paywall matrix that lost the
+    resolver never silently renders a bundle grant it can't verify.
+    ``direction`` collapses to ``"identity"`` when ``from == to``
+    (matches the happy-path branch for that case) and ``"unknown"``
+    otherwise. Mirrors :func:`_has_all_bundle_at_path_fallback` on
+    the endpoint metadata so a UI wiring both endpoints sees the
+    same envelope prefix.
+    """
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "bundles": [],
+        "count": 0,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_all_bundle_batch_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-bundle-batch-at-path``.
+
+    Row-detail bundle-batch sibling of :func:`_missing_all_bundle_at_path_fallback`
+    and row-detail complement of :func:`_has_all_bundle_batch_at_path_fallback`.
+    Byte-identical envelope prefix to the has-side fallback so a UI
+    wiring both endpoints sees the same shape on the resolver-lost
+    branch.
+    """
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "bundles": [],
+        "count": 0,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _bundle_batch_path_row_out(
+    cell: dict, row_to_body, fold_key: str
+) -> dict:
+    """Coerce one per-bundle cell from
+    :func:`clawmetry.entitlements.has_all_bundle_batch_at_path` /
+    :func:`missing_all_bundle_batch_at_path` to a stable endpoint
+    body. Pulls the ``path`` list through ``row_to_body`` per rung so
+    the per-rung shape byte-equals the singular
+    ``/has-all-bundle-at-path`` / ``/missing-all-bundle-at-path``
+    endpoints, then layers the per-bundle rollups (``path_length`` +
+    fold-slot ``allowed_count`` / ``all_allowed`` / ``any_allowed`` for
+    the has-side; ``denied_count`` / ``all_denied`` / ``any_denied``
+    for the missing-side) so a UI can render the "would this bundle
+    unlock anywhere on the path?" / "is this bundle denied at every
+    rung?" copy off ONE call.
+
+    Never raises: a missing per-rung key surfaces as the empty-row
+    shape via ``row_to_body`` and per-bundle rollups collapse to
+    fail-closed / fail-open defaults matching the sibling fallback
+    envelope. ``fold_key`` selects ``"has_all_at"`` (has-side) vs
+    ``"missing"`` (missing-side) for the per-rung rollup logic.
+    """
+    from clawmetry import entitlements as _ent
+
+    path_in = cell.get("path") or []
+    path_out: list[dict] = []
+    for row in path_in:
+        try:
+            tid = row.get("tier")
+        except AttributeError:
+            continue
+        path_out.append(
+            {
+                "tier": tid,
+                "tier_label": row.get("tier_label", _ent.tier_label(tid)),
+                "tier_rank": row.get("tier_rank", _ent.tier_rank(tid)),
+                **row_to_body(row),
+            }
+        )
+    body = {
+        "bundle_index": int(cell.get("bundle_index") or 0),
+        "features": list(cell.get("features") or []),
+        "runtimes": list(cell.get("runtimes") or []),
+        "channels": cell.get("channels"),
+        "retention_days": cell.get("retention_days"),
+        "nodes": cell.get("nodes"),
+        "path": path_out,
+        "path_length": len(path_out),
+    }
+    if fold_key == "has_all_at":
+        allowed_count = sum(1 for r in path_out if r.get("has_all_at"))
+        body["allowed_count"] = allowed_count
+        body["all_allowed"] = bool(path_out) and all(
+            r.get("has_all_at") for r in path_out
+        )
+        body["any_allowed"] = any(r.get("has_all_at") for r in path_out)
+    else:
+        denied_count = sum(
+            1
+            for r in path_out
+            if any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+        )
+        body["denied_count"] = denied_count
+        body["all_denied"] = bool(path_out) and all(
+            any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+            for r in path_out
+        )
+        body["any_denied"] = any(
+            any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+            for r in path_out
+        )
+    return body
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-all-bundle-batch-at-path",
+    methods=["POST"],
+)
+def api_entitlement_has_all_bundle_batch_at_path():
+    """``POST /api/entitlement/has-all-bundle-batch-at-path?from=<id>&to=<id>``
+    -- bundle-axis batch sibling of
+    ``/api/entitlement/has-all-bundle-at-path`` (singular bundle) and
+    path-shaped counterpart of ``/api/entitlement/has-all-bundle-batch-at``
+    (perspective-batch, no path).
+
+    Wraps :func:`clawmetry.entitlements.has_all_bundle_batch_at_path`
+    so a paywall matrix comparing several hypothetical whole configs
+    ("Starter-shaped install vs Pro-shaped install vs Enterprise-
+    shaped install") can render the per-config "at which rung does
+    this WHOLE bundle unlock?" walk for EVERY column off ONE round-
+    trip instead of N calls to ``/has-all-bundle-at-path``.
+
+    Request body::
+
+        {
+          "bundles": [
+            {"features": ["fleet"], "runtimes": ["claude_code"]},
+            {"channels": 5, "retention_days": 30, "nodes": 2},
+            {}
+          ]
+        }
+
+    Also accepts the ``{"bundles": {...}}`` bare-dict shorthand for
+    ONE bundle (matches ``/has-all-bundle-batch`` posture). ``from``
+    and ``to`` are required query args.
+
+    Each per-bundle cell in ``bundles`` byte-equals the scalar
+    :func:`clawmetry.entitlements.has_all_bundle_batch_at_path` return
+    per cell::
+
+        {
+          "bundle_index":   <int>,
+          "features":       ["fleet"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | null,
+          "retention_days": 30 | null,
+          "nodes":          2 | null,
+          "path": [
+              {tier, tier_label, tier_rank,
+               features, runtimes, channels, retention_days, nodes,
+               has_all_at},
+              ...
+          ],
+          "path_length":    <int>,
+          "allowed_count":  <int>,   # rungs with has_all_at=True
+          "all_allowed":    <bool>,
+          "any_allowed":    <bool>,
+        }
+
+    Per-cell per-rung ``has_all_at`` byte-equals the singular
+    ``/has-all-bundle-at-path?from=&to=`` return for the same
+    ``(from, to, bundle)`` triple. Pinned by tests so the batch and
+    singular endpoints cannot drift.
+
+    Rung walk in every cell's ``path`` is byte-stable against
+    ``/tier-path``, ``/has-features-at-path``, ``/has-runtimes-at-path``,
+    ``/has-all-at-path``, ``/has-all-bundle-at-path``,
+    ``/has-all-bundle-at-path-batch`` and ``/has-all-from-path-batch``
+    (same :data:`_PURCHASABLE_TIERS` filter + same sort + same
+    destination-sibling exclusion, inherited through the singular
+    scalar). ``direction`` values (envelope-level, shared across every
+    cell): ``upgrade`` | ``downgrade`` | ``lateral`` | ``identity`` |
+    ``unknown``.
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (read the static per-tier tables via
+    :func:`_has_all_bundle_row_at`, not the resolver's ``grace`` bit).
+
+    - **400** when ``bundles`` is missing / non-list-non-dict / empty.
+    - **Never 4xxs on endpoint validity**: missing / blank / unknown
+      ``from`` / ``to`` returns 200 with ``bundles=[]`` (``direction``
+      reads ``"unknown"``); same posture as ``/has-all-bundle-at-path``.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope
+      (:func:`_has_all_bundle_batch_at_path_fallback`) with
+      ``bundles=[]``.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        cells = _ent.has_all_bundle_batch_at_path(
+            from_tier, to_tier, bundles
+        )
+        env = _resolver_envelope(_ent)
+        if cells is None:
+            direction = "unknown"
+            out_cells: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+        else:
+            out_cells = [
+                _bundle_batch_path_row_out(
+                    cell, _has_all_bundle_row_at_to_body, "has_all_at"
+                )
+                for cell in cells
+            ]
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "bundles": out_cells,
+                "count": len(out_cells),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_all_bundle_batch_at_path: error: %s", exc
+        )
+        return jsonify(
+            _has_all_bundle_batch_at_path_fallback(from_tier, to_tier)
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle-batch-at-path",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle_batch_at_path():
+    """``POST /api/entitlement/missing-all-bundle-batch-at-path?from=<id>&to=<id>``
+    -- row-detail bundle-axis batch sibling of
+    ``/api/entitlement/missing-all-bundle-at-path`` (singular bundle)
+    and row-detail complement of
+    ``/api/entitlement/has-all-bundle-batch-at-path``.
+
+    Wraps :func:`clawmetry.entitlements.missing_all_bundle_batch_at_path`
+    so a paywall matrix or upgrade-walkthrough surface can render the
+    per-config per-rung "which axis of this bundle is denied here?"
+    walk for EVERY column off ONE round-trip instead of N calls to
+    ``/missing-all-bundle-at-path``.
+
+    Request body is byte-identical to ``/has-all-bundle-batch-at-path``.
+
+    Each per-bundle cell mirrors ``/has-all-bundle-batch-at-path``
+    axis echoes byte-for-byte with the per-rung fold slot swapped
+    from ``has_all_at`` (boolean) to ``missing`` (per-axis dict) and
+    the cell rollups swapped from ``allowed_count`` / ``all_allowed``
+    / ``any_allowed`` to ``denied_count`` / ``all_denied`` /
+    ``any_denied``::
+
+        {
+          "bundle_index":   <int>,
+          "features":       [...],
+          "runtimes":       [...],
+          "channels":       ... | null,
+          "retention_days": ... | null,
+          "nodes":          ... | null,
+          "path": [
+              {tier, tier_label, tier_rank,
+               features, runtimes, channels, retention_days, nodes,
+               missing: {features, runtimes, channels,
+                         retention_days, nodes}},
+              ...
+          ],
+          "path_length":    <int>,
+          "denied_count":   <int>,   # rungs with any missing populated
+          "all_denied":     <bool>,
+          "any_denied":     <bool>,
+        }
+
+    Complement invariant with ``/has-all-bundle-batch-at-path``: per
+    cell per rung, ``any(row["missing"].values())`` byte-equals
+    ``not paired_row["has_all_at"]`` on the paired boolean-fold call
+    for every fully-parseable bundle.
+
+    Rung walk / direction detection / grace-independence / never-4xx
+    on endpoint validity / never-5xx posture all inherit
+    ``/has-all-bundle-batch-at-path`` byte-for-byte.
+
+    - **400** when ``bundles`` is missing / non-list-non-dict / empty.
+    - **Never 4xxs on endpoint validity**: missing / blank / unknown
+      ``from`` / ``to`` returns 200 with ``bundles=[]``.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope
+      (:func:`_missing_all_bundle_batch_at_path_fallback`).
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        cells = _ent.missing_all_bundle_batch_at_path(
+            from_tier, to_tier, bundles
+        )
+        env = _resolver_envelope(_ent)
+        if cells is None:
+            direction = "unknown"
+            out_cells: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+        else:
+            out_cells = [
+                _bundle_batch_path_row_out(
+                    cell, _missing_all_bundle_row_at_to_body, "missing"
+                )
+                for cell in cells
+            ]
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "bundles": out_cells,
+                "count": len(out_cells),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_bundle_batch_at_path: error: %s", exc
+        )
+        return jsonify(
+            _missing_all_bundle_batch_at_path_fallback(from_tier, to_tier)
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/has-all-bundle-batch",
     methods=["POST"],
