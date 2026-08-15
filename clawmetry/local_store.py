@@ -2405,6 +2405,90 @@ class LocalStore:
                 continue
         return out
 
+    def query_quality_sessions(
+        self,
+        *,
+        runtime: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 400,
+    ) -> list[dict[str, Any]]:
+        """Session rows for the Quality tab, scoped by REAL runtime.
+
+        Deliberately NOT ``query_outcomes``. That method filters on
+        ``sessions.agent_type``, which is a legacy column hardcoded to
+        ``"openclaw"`` for every row by ``upsert_sessions`` — so filtering by
+        it buckets every runtime together, and the caller then had no runtime
+        to report but the one it happened to be looping on (the 2026-08-15
+        audit: 61/61 claude_code sessions stored as ``agent_type=openclaw``).
+
+        Runtime here means the session-id prefix, via the canonical
+        ``_runtime_session_id_clause`` used by ``query_aggregates``, so
+        Quality reconciles with every other per-runtime number by
+        construction. ``metadata`` is returned because it already carries the
+        true ``runtime`` label plus the per-session tool health the ingest
+        path computes (``toolResults`` / ``toolErrors``), which the screening
+        pass reads instead of rescanning events.
+
+        Does NOT run the inline classifier — grading is the caller's job and
+        must be evidence-backed.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since:
+            clauses.append("COALESCE(last_active_at, started_at, '') >= ?")
+            params.append(since)
+        if until:
+            clauses.append("COALESCE(last_active_at, started_at, '') <= ?")
+            params.append(until)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, title, started_at, last_active_at, ended_at,
+                   status, cost_usd, total_tokens, message_count, metadata
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "title", "started_at", "last_active_at",
+                "ended_at", "status", "cost_usd", "total_tokens",
+                "message_count", "metadata"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            meta = d.get("metadata")
+            if isinstance(meta, (bytes, bytearray)):
+                try:
+                    meta = json.loads(meta.decode("utf-8", "replace"))
+                except Exception:
+                    meta = {}
+            elif isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            d["metadata"] = meta
+            # The runtime the adapter actually recorded, with the session-id
+            # prefix as the fallback. Never a caller-supplied loop variable.
+            d["runtime"] = (
+                str(meta.get("runtime") or "").strip()
+                or (d["session_id"].split(":", 1)[0]
+                    if ":" in d["session_id"] else "openclaw")
+            )
+            for k in ("toolResults", "toolErrors", "toolErrorPct",
+                      "maxIdleGapSec"):
+                if k in meta:
+                    d[k] = meta[k]
+            out.append(d)
+        return out
+
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
 

@@ -205,12 +205,21 @@ def _tool_calls_of(data: dict[str, Any]) -> list[tuple[str, dict]]:
         return out
 
     # family: {"tool_calls": [{"name": "Bash", "input": {...}}], ...}
+    #
+    # The argument key is NOT uniform: Claude Code / Copilot / Antigravity use
+    # ``input``, while goose / opencode / qwen_code / n8n use ``arguments``.
+    # Reading only one of them recovers the tool NAME but silently drops every
+    # argument, which leaves thrash and forward-progress detection permanently
+    # dead for those runtimes while the capability probe still looks healthy.
+    # Caught by tests/test_quality_runtime_conformance.py; keep both keys.
     tcs = data.get("tool_calls")
     if isinstance(tcs, list):
         for tc in tcs:
             if isinstance(tc, dict):
                 name = str(tc.get("name") or "").strip()
                 ipt = tc.get("input")
+                if not isinstance(ipt, dict):
+                    ipt = tc.get("arguments")
                 out.append((name, ipt if isinstance(ipt, dict) else {}))
     if out:
         return out
@@ -219,6 +228,8 @@ def _tool_calls_of(data: dict[str, Any]) -> list[tuple[str, dict]]:
     name = data.get("name")
     if isinstance(name, str) and name:
         ipt = data.get("input")
+        if not isinstance(ipt, dict):
+            ipt = data.get("arguments")
         return [(name.strip(), ipt if isinstance(ipt, dict) else {})]
 
     # family scalar fallback
@@ -289,7 +300,19 @@ def normalize_events(rows: Iterable[dict[str, Any]] | None) -> list[NormalizedEv
         raw_type = str(r.get("event_type") or "").strip()
         kind = _KIND_BY_TYPE.get(raw_type.lower(), "other")
         is_err, benign = _error_of(data)
-        calls = _tool_calls_of(data) if kind == "tool_call" else []
+
+        # Tool use is not always carried by a tool-typed event. OpenClaw and
+        # any Anthropic-style transcript put ``tool_use`` blocks INSIDE an
+        # assistant message, so a message event can be a tool call. Parse
+        # first, classify second — keying off the event type alone is exactly
+        # the assumption that made the previous detector blind, and skipping
+        # this promotion would rebuild the same blind spot facing the other
+        # dialect.
+        calls: list[tuple[str, dict]] = []
+        if kind in ("tool_call", "message"):
+            calls = _tool_calls_of(data)
+            if calls and calls[0][0] and kind == "message":
+                kind = "tool_call"
         name, ipt = calls[0] if calls else ("", {})
         if kind == "tool_result" and not name:
             name = str(data.get("tool_name") or "").strip()
