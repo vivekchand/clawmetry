@@ -31,9 +31,22 @@
   // Stripe actually charges. These numbers are display-only; if they ever
   // disagree, Stripe wins and the user sees the real amount on the checkout
   // page. Keep them in this one place so a repricing is a single edit.
+  // ``was`` is the previous ladder's annual price, shown struck through on the
+  // annual tab exactly as /pricing does. It is the real prior price, not an
+  // invented anchor.
   var PLAN_PRICES = {
-    starter: { month: 9,  year: 90  },
-    pro:     { month: 19, year: 190 },
+    starter: { month: 9,  year: 90,  was: 190 },
+    pro:     { month: 19, year: 190, was: 390 },
+  };
+  // Kept deliberately close to /pricing so the overlay and the public page
+  // make the same promise in the same words.
+  var PLAN_BLURB = {
+    starter: 'Every agent, every session, and every dollar in one dashboard.',
+    pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+  };
+  var PLAN_FEATURES = {
+    starter: ['Unlimited channels + cloud sync', 'Approval queue'],
+    pro: ['Everything in Starter', 'Tool policy + evals + cost optimizer'],
   };
   var _selTier = 'starter';
   var _selInterval = 'year';   // annual preselected: better retention + the device perk
@@ -41,10 +54,19 @@
   // Never hardcode a runtime count -- it has drifted every time it was.
   var _paidRuntimeCount = 0;
 
-  function planPriceLabel() {
+  function planPriceHtml() {
     var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
-    var amt = _selInterval === 'year' ? p.year : p.month;
-    return '$' + amt + ' / node / ' + (_selInterval === 'year' ? 'year' : 'month');
+    var yearly = _selInterval === 'year';
+    var amt = yearly ? p.year : p.month;
+    var was = (yearly && p.was)
+      ? '<span class="cm-hbo-was">$' + p.was + '</span> ' : '';
+    return was + '$' + amt
+      + '<span class="cm-hbo-per"> / node / ' + (yearly ? 'year' : 'month') + '</span>';
+  }
+
+  function featsHtml() {
+    var rows = [runtimesLine()].concat(PLAN_FEATURES[_selTier] || PLAN_FEATURES.starter);
+    return rows.map(function (r) { return '<li>' + escapeHtml(r) + '</li>'; }).join('');
   }
 
   function runtimesLine() {
@@ -159,6 +181,13 @@
       + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-was {'
+      + '  color: #6b7078; text-decoration: line-through;'
+      + '  font-size: 17px; font-weight: 600; margin-right: 4px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-per {'
+      + '  font-size: 13px; font-weight: 500; color: #9aa0a8;'
+      + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
       + '  display: block; margin-top: 4px; font-size: 12px;'
       + '  font-weight: 500; color: #22c55e;'
@@ -240,12 +269,14 @@
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
       : ['openclaw', 'nemoclaw'];
+    // nemoclaw is NVIDIA NemoClaw and it is FREE. nanoclaw is a different
+    // runtime entirely, and it is PAID (entitlements.PAID_RUNTIMES). This
+    // mapping said 'NanoClaw', so the one screen that tells a blocked user
+    // what they still get named a runtime they do NOT get and never named
+    // the one they do. Labels come from entitlements.RUNTIME_LABELS.
+    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw' };
     var freeRuntimesLabel = freeRuntimes
-      .map(function (r) {
-        if (r === 'openclaw') return 'OpenClaw';
-        if (r === 'nemoclaw') return 'NanoClaw';
-        return r;
-      })
+      .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
     el.innerHTML = ''
       + '<div class="cm-hbo-card">'
@@ -254,31 +285,27 @@
       + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
       + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
       + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
-      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">save 2 months</span></button>'
+      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">2 months free</span></button>'
       + '  </div>'
       + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
       + '    <span class="cm-hbo-radio"></span>'
       + '    <span><span class="cm-hbo-tier-name">Starter</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(runtimesLine()) + '</span></span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.starter) + '</span></span>'
       + '  </button>'
       + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
       + '    <span class="cm-hbo-radio"></span>'
       + '    <span><span class="cm-hbo-tier-name">Pro</span>'
-      + '      <span class="cm-hbo-tier-sub">Adds enforcement + audit layer</span></span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.pro) + '</span></span>'
       + '  </button>'
-      + '  <ul class="cm-hbo-feats">'
-      + '    <li>' + escapeHtml(runtimesLine()) + '</li>'
-      + '    <li>Unlimited channels + cloud sync</li>'
-      + '    <li>Approval queue</li>'
-      + '  </ul>'
+      + '  <ul class="cm-hbo-feats" id="cm-hbo-feats">' + featsHtml() + '</ul>'
       // Annual-only perk. The cloud already collects a shipping address on
       // annual checkouts for this (_annual_device_checkout_extras), and it
       // ships on the first PAID invoice, so this is not a promise we invent
       // here. Hidden on monthly.
       + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
-      + '    Includes the $149 desk device, <strong>free</strong> with any annual plan.'
+      + '    Includes a free <strong>$149 desk device</strong>.'
       + '  </div>'
-      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + escapeHtml(planPriceLabel()) + '</div>'
+      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + planPriceHtml() + '</div>'
       + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
       + '    Continue to Stripe  →'
       + '  </a>'
@@ -330,7 +357,9 @@
         el.querySelectorAll('.cm-hbo-tier'), function (b) {
           b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
         });
-      if (priceEl) priceEl.textContent = planPriceLabel();
+      if (priceEl) priceEl.innerHTML = planPriceHtml();
+      var featsEl = el.querySelector('#cm-hbo-feats');
+      if (featsEl) featsEl.innerHTML = featsHtml();
       var devEl = el.querySelector('#cm-hbo-device');
       if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
     }
@@ -360,11 +389,8 @@
             var all = ent && ent.all_runtimes;
             if (Array.isArray(all) && all.length) {
               _paidRuntimeCount = all.length;
-              Array.prototype.forEach.call(
-                el.querySelectorAll('.cm-hbo-tier[data-tier="starter"] .cm-hbo-tier-sub'),
-                function (n) { n.textContent = runtimesLine(); });
-              var firstFeat = el.querySelector('.cm-hbo-feats li');
-              if (firstFeat) firstFeat.textContent = runtimesLine();
+              var fe = el.querySelector('#cm-hbo-feats');
+              if (fe) fe.innerHTML = featsHtml();
             }
           })
           .catch(function () {});
