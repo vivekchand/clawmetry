@@ -18047,6 +18047,7 @@ async function viewTranscript(sessionId) {
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadAuthorityPanel(sessionId);
+    _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
     // Build replay events array - include compaction markers as special events
     var events = [];
     var compactionIdx = 0;
@@ -18148,6 +18149,35 @@ async function _loadAuthorityPanel(sessionId) {
     body.innerHTML = html;
     panel.style.display = '';
   } catch(e) { /* non-critical — panel stays hidden on error */ }
+}
+
+// Runtime-aware replay tree wire-up (#4814) — called from viewTranscript.
+// Overlays the replay tree atop the flat renderer when replay_events exist.
+// No-op today (row_count always 0) until adapter mappers land in #4815/#4816.
+async function _loadReplayTree(sessionId) {
+  if (!window._cmReplayTree) return;
+  var viewer = document.getElementById('transcript-viewer');
+  if (!viewer) return;
+  var mount = document.getElementById('replay-tree-container');
+  if (!mount) {
+    mount = document.createElement('div');
+    mount.id = 'replay-tree-container';
+    var anchor = document.getElementById('transcript-messages');
+    if (anchor) viewer.insertBefore(mount, anchor);
+    else viewer.appendChild(mount);
+  } else {
+    mount.innerHTML = '';
+  }
+  try {
+    var tree = await window._cmReplayTree.fetchReplayTree(sessionId);
+    if (window._cmReplayTree.renderTree(tree, mount)) {
+      // Tree has rows — shadow the flat renderer.
+      var msgs = document.getElementById('transcript-messages');
+      var ctrl = document.getElementById('replay-controls');
+      if (msgs) msgs.style.display = 'none';
+      if (ctrl) ctrl.style.display = 'none';
+    }
+  } catch (e) { /* non-critical — flat renderer stays on any error */ }
 }
 
 function toggleMsg(idx) {

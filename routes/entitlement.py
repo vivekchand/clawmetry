@@ -42297,6 +42297,446 @@ def api_entitlement_has_all_bundle_at():
         )
 
 
+def _has_all_bundle_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all-bundle-at-path``.
+
+    Path-shaped bundle sibling of :func:`_has_all_at_path_fallback`
+    (kwargs-shaped path). On any resolver / helper blowup the endpoint
+    still returns 200 with the same envelope shape as the happy path,
+    but ``path=[]`` and every fold rollup fail-closed (``allowed_count=0``
+    / ``all_allowed=False`` / ``any_allowed=False``) so a pricing-page
+    walkthrough that lost the resolver never silently renders a bundle
+    grant it can't verify. ``direction`` collapses to ``"identity"``
+    when ``from == to`` (matches the happy-path branch for that case)
+    and ``"unknown"`` otherwise.
+    """
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "path": [],
+        "path_length": 0,
+        "allowed_count": 0,
+        "all_allowed": False,
+        "any_allowed": False,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-all-bundle-at-path",
+    methods=["POST"],
+)
+def api_entitlement_has_all_bundle_at_path():
+    """``POST /api/entitlement/has-all-bundle-at-path?from=<id>&to=<id>``
+    -- path-shaped bundle sibling of
+    ``/api/entitlement/has-all-bundle-at`` (singular perspective) and
+    bundle-shaped counterpart of ``/api/entitlement/has-all-at-path``
+    (kwargs-shaped path walker).
+
+    Wraps :func:`clawmetry.entitlements.has_all_bundle_at_path` so a
+    pricing-matrix or upgrade-walkthrough tooltip can render "at which
+    rung does this WHOLE 5-axis bundle unlock?" straight from the
+    bundle dict off ONE round-trip instead of first normalising the
+    bundle by hand and calling ``/has-all-at-path``, or first calling
+    ``/tier-path`` and then N calls to ``/has-all-bundle-at``.
+
+    Fills the ``_at_path`` slot on the aggregate bundle boolean-fold
+    family alongside :func:`has_all_bundle_at` (singular perspective),
+    ``/has-all-bundle-batch-at`` (multi-bundle perspective batch), and
+    ``/has-all-at-path`` (kwargs-shaped path walker).
+
+    Request body is byte-identical to ``/has-all-bundle-at``:
+    ``{"bundle": {"features": [...], "runtimes": [...], "channels": N,
+    "retention_days": N, "nodes": N}}`` -- or the bare-dict shorthand.
+    ``from`` and ``to`` are required query args.
+
+    Each row in ``path`` byte-equals the scalar
+    :func:`clawmetry.entitlements.has_all_bundle_at_path` return with
+    the standard ``_at_path`` per-rung header:
+    ``{tier, tier_label, tier_rank, features, runtimes, channels,
+    retention_days, nodes, has_all_at}``. Each rung's ``has_all_at``
+    byte-equals ``/has-all-bundle-at?tier=<rung>`` for the same
+    (rung, bundle) pair.
+
+    Rung walk is byte-stable against ``/tier-path``,
+    ``/has-features-at-path``, ``/has-runtimes-at-path``,
+    ``/missing-features-at-path``, ``/missing-runtimes-at-path``,
+    ``/has-all-at-path``, and ``/missing-all-at-path`` (same
+    :data:`_PURCHASABLE_TIERS` filter + same sort + same destination-
+    sibling exclusion). ``direction`` values: ``upgrade`` | ``downgrade``
+    | ``lateral`` | ``identity`` | ``unknown``.
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (read the static per-tier tables via
+    :func:`_has_all_bundle_row_at`, not the resolver's ``grace`` bit).
+
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 4xxs on endpoint validity**: missing / blank / unknown
+      ``from`` / ``to`` returns 200 with ``path=[]`` (``direction``
+      reads ``"unknown"``); same posture as ``/has-all-at-path``.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope
+      (:func:`_has_all_bundle_at_path_fallback`) with ``path=[]``.
+    """
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.has_all_bundle_at_path(from_tier, to_tier, bundle)
+        env = _resolver_envelope(_ent)
+        if path is None:
+            direction = "unknown"
+            path_out: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+            features_echo: list = []
+            runtimes_echo: list = []
+            channels_echo = None
+            retention_echo = None
+            nodes_echo = None
+        else:
+            path_out = []
+            for row in path:
+                try:
+                    tid = row.get("tier")
+                except AttributeError:
+                    continue
+                path_out.append(
+                    {
+                        "tier": tid,
+                        "tier_label": row.get(
+                            "tier_label", _ent.tier_label(tid)
+                        ),
+                        "tier_rank": row.get(
+                            "tier_rank", _ent.tier_rank(tid)
+                        ),
+                        **_has_all_bundle_row_at_to_body(row),
+                    }
+                )
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+            # Bundle-shape axis echo at the envelope level: mirror the
+            # normalised bundle so a caller sees exactly what the scalar
+            # folded, independent of the per-rung echo. Read from the
+            # first row (bundle normalisation is per-scalar not per-rung,
+            # so every row's echo is byte-identical) and fall back to an
+            # empty echo on an empty path.
+            if path_out:
+                head = path_out[0]
+                features_echo = list(head.get("features") or [])
+                runtimes_echo = list(head.get("runtimes") or [])
+                channels_echo = head.get("channels")
+                retention_echo = head.get("retention_days")
+                nodes_echo = head.get("nodes")
+            else:
+                # Identity / cross-rung-empty branch: normalise the bundle
+                # directly so the envelope-level axis echo still reflects
+                # the caller-supplied bundle even when no rungs were walked.
+                (
+                    features_echo,
+                    runtimes_echo,
+                    channels_echo,
+                    retention_echo,
+                    nodes_echo,
+                ) = _ent._normalise_all_bundle(bundle)
+
+        allowed_count = sum(1 for r in path_out if r.get("has_all_at"))
+        all_allowed = bool(path_out) and all(
+            r.get("has_all_at") for r in path_out
+        )
+        any_allowed = any(r.get("has_all_at") for r in path_out)
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "features": features_echo,
+                "runtimes": runtimes_echo,
+                "channels": channels_echo,
+                "retention_days": retention_echo,
+                "nodes": nodes_echo,
+                "path": path_out,
+                "path_length": len(path_out),
+                "allowed_count": allowed_count,
+                "all_allowed": all_allowed,
+                "any_allowed": any_allowed,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_all_bundle_at_path: error: %s", exc
+        )
+        return jsonify(
+            _has_all_bundle_at_path_fallback(from_tier, to_tier)
+        )
+
+
+def _missing_all_bundle_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-bundle-at-path``.
+
+    Row-detail path-shaped bundle sibling of
+    :func:`_missing_all_at_path_fallback` (kwargs-shaped path) and
+    row-detail complement of :func:`_has_all_bundle_at_path_fallback`.
+    On any resolver / helper blowup the endpoint still returns 200 with
+    the same envelope shape as the happy path, but ``path=[]`` and
+    every row-detail rollup fail-open (``denied_count=0`` /
+    ``all_denied=False`` / ``any_denied=False``) so a pricing-page
+    walkthrough that lost the resolver never silently renders a denial
+    banner it can no longer justify. ``direction`` collapses to
+    ``"identity"`` when ``from == to`` (matches the happy-path branch
+    for that case) and ``"unknown"`` otherwise.
+    """
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "path": [],
+        "path_length": 0,
+        "denied_count": 0,
+        "all_denied": False,
+        "any_denied": False,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle-at-path",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle_at_path():
+    """``POST /api/entitlement/missing-all-bundle-at-path?from=<id>&to=<id>``
+    -- row-detail path-shaped bundle sibling of the boolean-fold
+    ``/api/entitlement/has-all-bundle-at-path`` and bundle-shaped
+    counterpart of ``/api/entitlement/missing-all-at-path``
+    (kwargs-shaped path walker).
+
+    Wraps :func:`clawmetry.entitlements.missing_all_bundle_at_path` so a
+    pricing-matrix or upgrade-walkthrough tooltip can render "at which
+    rung does each per-axis slot in this 5-axis bundle clear?" straight
+    from the bundle dict off ONE round-trip instead of first
+    normalising the bundle by hand and calling ``/missing-all-at-path``,
+    or first calling ``/tier-path`` and then N calls to the singular
+    row-detail per-perspective seat.
+
+    Request body is byte-identical to ``/has-all-bundle-at-path``:
+    ``{"bundle": {"features": [...], "runtimes": [...], "channels": N,
+    "retention_days": N, "nodes": N}}`` -- or the bare-dict shorthand.
+    ``from`` and ``to`` are required query args.
+
+    Each row in ``path`` byte-equals the scalar
+    :func:`clawmetry.entitlements.missing_all_bundle_at_path` return
+    with the standard ``_at_path`` per-rung header:
+    ``{tier, tier_label, tier_rank, features, runtimes, channels,
+    retention_days, nodes, missing: {features, runtimes, channels,
+    retention_days, nodes}}``.
+
+    Rung walk is byte-stable against ``/tier-path``,
+    ``/has-features-at-path``, ``/has-runtimes-at-path``,
+    ``/missing-features-at-path``, ``/missing-runtimes-at-path``,
+    ``/has-all-at-path``, ``/missing-all-at-path`` and
+    ``/has-all-bundle-at-path`` (same :data:`_PURCHASABLE_TIERS`
+    filter + same sort + same destination-sibling exclusion).
+    ``direction`` values: ``upgrade`` | ``downgrade`` | ``lateral`` |
+    ``identity`` | ``unknown``.
+
+    Perspective-shaped answers are **intentionally identical in grace
+    and enforce** (read the static per-tier tables via
+    :func:`_missing_all_bundle_row_at`, not the resolver's ``grace``
+    bit).
+
+    Complement invariant with ``/has-all-bundle-at-path``: per rung,
+    ``any(row["missing"].values())`` byte-equals ``not row["has_all_at"]``
+    on the paired boolean-fold row for every fully-parseable bundle.
+
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 4xxs on endpoint validity**: missing / blank / unknown
+      ``from`` / ``to`` returns 200 with ``path=[]`` (``direction``
+      reads ``"unknown"``); same posture as ``/missing-all-at-path``.
+    - **Never 5xxs**: a resolver / scalar / body-builder blowup yields
+      the fallback envelope
+      (:func:`_missing_all_bundle_at_path_fallback`) with ``path=[]``.
+    """
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        path = _ent.missing_all_bundle_at_path(from_tier, to_tier, bundle)
+        env = _resolver_envelope(_ent)
+        if path is None:
+            direction = "unknown"
+            path_out: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+            features_echo: list = []
+            runtimes_echo: list = []
+            channels_echo = None
+            retention_echo = None
+            nodes_echo = None
+        else:
+            path_out = []
+            for row in path:
+                try:
+                    tid = row.get("tier")
+                except AttributeError:
+                    continue
+                path_out.append(
+                    {
+                        "tier": tid,
+                        "tier_label": row.get(
+                            "tier_label", _ent.tier_label(tid)
+                        ),
+                        "tier_rank": row.get(
+                            "tier_rank", _ent.tier_rank(tid)
+                        ),
+                        **_missing_all_bundle_row_at_to_body(row),
+                    }
+                )
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+            if path_out:
+                head = path_out[0]
+                features_echo = list(head.get("features") or [])
+                runtimes_echo = list(head.get("runtimes") or [])
+                channels_echo = head.get("channels")
+                retention_echo = head.get("retention_days")
+                nodes_echo = head.get("nodes")
+            else:
+                (
+                    features_echo,
+                    runtimes_echo,
+                    channels_echo,
+                    retention_echo,
+                    nodes_echo,
+                ) = _ent._normalise_all_bundle(bundle)
+
+        def _row_any_denied(row) -> bool:
+            m = row.get("missing") or {}
+            for k, v in m.items():
+                if isinstance(v, list):
+                    if v:
+                        return True
+                elif v is not None:
+                    return True
+            return False
+
+        denied_count = sum(1 for r in path_out if _row_any_denied(r))
+        all_denied = bool(path_out) and all(
+            _row_any_denied(r) for r in path_out
+        )
+        any_denied = any(_row_any_denied(r) for r in path_out)
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "features": features_echo,
+                "runtimes": runtimes_echo,
+                "channels": channels_echo,
+                "retention_days": retention_echo,
+                "nodes": nodes_echo,
+                "path": path_out,
+                "path_length": len(path_out),
+                "denied_count": denied_count,
+                "all_denied": all_denied,
+                "any_denied": any_denied,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_bundle_at_path: error: %s", exc
+        )
+        return jsonify(
+            _missing_all_bundle_at_path_fallback(from_tier, to_tier)
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/has-all-bundle-batch",
     methods=["POST"],

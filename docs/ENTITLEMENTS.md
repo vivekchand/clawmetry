@@ -387,6 +387,104 @@ Ships in GRACE mode.
 
 The scalar is `clawmetry.entitlements.missing_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
 
+### Bundle path-walk boolean-fold endpoint: `has-all-bundle-at-path`
+
+`POST /api/entitlement/has-all-bundle-at-path?from=<id>&to=<id>`
+
+Path-shaped bundle sibling of `has-all-bundle-at` (singular perspective)
+and bundle-shaped counterpart of `has-all-at-path` (kwargs-shaped path
+walker). Fixes ONE 5-axis bundle and sweeps across every purchasable
+rung between `from` and `to`, returning per-rung aggregate boolean-fold
+in one round-trip. Answers "at which rung does this WHOLE 5-axis bundle
+unlock?" straight from the bundle dict without first normalising it by
+hand and calling `/has-all-at-path`, or first calling `/tier-path` and
+then N calls to `/has-all-bundle-at`.
+
+**Grace-independent by construction**: reads static per-tier grant
+tables via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on
+the capacity axes — so the answer is byte-identical under grace vs
+enforce for the same inputs.
+
+**Request body** (byte-identical to `has-all-bundle-at` — wrapped or
+bare-dict shorthand):
+
+```json
+{"bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+            "channels": 5, "retention_days": 30, "nodes": 2}}
+```
+
+**Per-rung row:**
+
+```json
+{
+  "tier":           "cloud_pro",
+  "tier_label":     "Cloud Pro",
+  "tier_rank":      3,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       5,
+  "retention_days": 30,
+  "nodes":          2,
+  "has_all_at":     true
+}
+```
+
+400 on missing / non-object `bundle`. Unknown or missing endpoints
+return 200 with `path=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_at_path(from_tier, to_tier, bundle)`.
+
+### Bundle path-walk row-detail endpoint: `missing-all-bundle-at-path`
+
+`POST /api/entitlement/missing-all-bundle-at-path?from=<id>&to=<id>`
+
+Row-detail path-shaped bundle sibling of the boolean-fold
+`has-all-bundle-at-path` and bundle-shaped counterpart of
+`missing-all-at-path`. Fixes ONE 5-axis bundle and sweeps across every
+purchasable rung between `from` and `to`, returning per-axis denial
+detail at each rung in one round-trip. Answers "at which rung does
+each per-axis slot in this 5-axis bundle clear?" straight from the
+bundle dict without first normalising it by hand and calling
+`/missing-all-at-path`, or first calling `/tier-path` and then N calls
+to the singular row-detail per-perspective seat.
+
+**Grace-independent by construction** — same static-table read pattern
+as the paired boolean-fold endpoint.
+
+**Request body**: byte-identical to `has-all-bundle-at-path` above.
+
+**Per-rung row:**
+
+```json
+{
+  "tier":           "cloud_starter",
+  "tier_label":     "Starter",
+  "tier_rank":      2,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       5,
+  "retention_days": 30,
+  "nodes":          2,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-bundle-at-path`: per rung,
+`any(row["missing"].values())` byte-equals `not row["has_all_at"]` on
+the paired boolean-fold row for every fully-parseable bundle.
+
+400 on missing / non-object `bundle`. Unknown or missing endpoints
+return 200 with `path=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_at_path(from_tier, to_tier, bundle)`.
+
 ### Batch path-walk endpoint: `has-all-at-path-batch`
 
 `GET /api/entitlement/has-all-at-path-batch?from=<id>&to=a,b,c&features=x,y&runtimes=p,q&channels=N&retention_days=N&nodes=N`
