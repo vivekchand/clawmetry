@@ -3862,8 +3862,20 @@ function _cmLiveRowsHtml(live) {
   if (!rows.length) return '';
   var SHOWN = 6;
   var html = '<div style="margin:16px 0 4px;border-top:1px solid var(--border-primary);padding-top:14px;">';
-  rows.slice(0, SHOWN).forEach(function (s) {
+  var shown = rows.slice(0, SHOWN);
+  var sawWaiting = false;
+  shown.forEach(function (s) {
     var working = s.state === 'working';
+    // A colour alone does not teach a first-timer what amber means, and the
+    // headline only ever names one of the two states. Label the boundary once,
+    // in words, the moment the quiet ones start (rows are sorted by age, so
+    // this fires exactly once).
+    if (!working && !sawWaiting) {
+      sawWaiting = true;
+      if (shown[0] && shown[0].state === 'working') {
+        html += '<div class="cm-live-group">Waiting on you</div>';
+      }
+    }
     var col = working ? '#22c55e' : '#f59e0b';
     var title = (s.title || '').trim() || 'Untitled session';
     var rtLabel = (typeof _cmRuntimeLabel === 'function' && _cmRuntimeLabel(s.runtime)) || s.runtime || '';
@@ -3878,7 +3890,7 @@ function _cmLiveRowsHtml(live) {
   });
   if (rows.length > SHOWN) {
     html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 10px 2px;">'
-      + (rows.length - SHOWN) + ' more running. Open Sessions to see them all.</div>';
+      + (rows.length - SHOWN) + ' more. Open Sessions to see them all.</div>';
   }
   html += '</div>';
   return html;

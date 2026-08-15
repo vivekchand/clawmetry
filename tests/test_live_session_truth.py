@@ -227,6 +227,17 @@ def test_js_hero_reads_named_live_sessions():
     assert "_cmLiveWait" in js and "_CM_LIVE_TTL_MS" in js
 
 
+def test_js_names_the_waiting_group():
+    """A dot colour alone does not teach a first-timer what amber means."""
+    js = open(APP_JS).read()
+    assert "cm-live-group" in js and "Waiting on you</div>" in js, (
+        "the working/waiting boundary lost its written label"
+    )
+    css = open(os.path.join(REPO, "clawmetry", "static", "css",
+                            "dashboard.css")).read()
+    assert ".cm-live-group" in css
+
+
 def test_js_live_rows_are_keyboard_reachable():
     js = open(APP_JS).read()
     assert re.search(r"<button type=\"button\" class=\"cm-live-row\"", js), (
