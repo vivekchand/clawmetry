@@ -8463,6 +8463,44 @@ MEMORY_PUSH_MIN_INTERVAL_SEC = MEMORY_CACHE_TTL_SEC // 2
 _memory_push_state: dict = {"fingerprint": None, "ts": 0.0}
 
 
+def _memory_rows_by_runtime(store) -> list:
+    """Memory rows pulled PER RUNTIME, not as one global most-recent-N.
+
+    A single ``query_memory_blobs(limit=N)`` sorts by updated_at across every
+    runtime, so the noisiest one takes the whole budget: this laptop has 429
+    Claude Code memory files and 406 Hermes skill files, which is already past
+    a 600-row cap before OpenClaw gets a single row. The Memory tab for the
+    crowded-out runtime then renders empty — the exact failure this branch is
+    fixing, reintroduced one layer down.
+
+    Locked paid runtimes are skipped here as well as at ingest: rows written
+    while entitled must stop shipping when the entitlement lapses, otherwise a
+    downgrade keeps serving them to cloud.
+    """
+    rows: list = []
+    seen_runtimes: set = set()
+    try:
+        from clawmetry import runtime_memory
+    except Exception:
+        return store.query_memory_blobs(limit=MEMORY_CACHE_LIMIT)
+
+    try:
+        catalog = [e.get("id") for e in runtime_memory.list_runtimes()]
+    except Exception:
+        catalog = []
+    for rt_id in ["openclaw"] + [c for c in catalog if c]:
+        if (not rt_id or rt_id in seen_runtimes
+                or runtime_memory.runtime_is_locked(rt_id)):
+            continue
+        seen_runtimes.add(rt_id)
+        try:
+            rows.extend(store.query_memory_blobs(agent_type=rt_id,
+                                                 limit=MEMORY_CACHE_LIMIT))
+        except Exception:
+            continue
+    return rows
+
+
 def _build_memory_cache_pushes(config: dict) -> list:
     """Heartbeat cache_push entry holding the encrypted memory-file snapshot.
 
@@ -8494,17 +8532,21 @@ def _build_memory_cache_pushes(config: dict) -> list:
         return []
     try:
         store = local_store.get_store(read_only=True)
-        rows = store.query_memory_blobs(limit=MEMORY_CACHE_LIMIT)
+        rows = _memory_rows_by_runtime(store)
     except Exception:
         return []
     if not rows:
         return []
     # Change-gate before the expensive part (JSON encode + AES of several MB).
     # The sha256 column is exactly the per-file content hash we need.
+    # Keyed by (runtime, path): the same file can be registered by several
+    # runtimes, and a path-only key would collapse them into one fingerprint
+    # entry that misses a change on all but the first.
     try:
         import hashlib as _hl
         fp = _hl.sha256("|".join(sorted(
-            f"{r.get('path')}:{r.get('sha256')}" for r in rows
+            f"{r.get('agent_type')}:{r.get('path')}:{r.get('sha256')}"
+            for r in rows
         )).encode()).hexdigest()
     except Exception:
         fp = None
@@ -8538,9 +8580,14 @@ def _build_memory_cache_pushes(config: dict) -> list:
     dropped = 0
     for r in rows:
         path = r.get("path") or ""
-        if not path or path in seen:
+        # Dedup on (runtime, path), never path alone. Several runtimes read
+        # the SAME file on disk — AGENTS.md is Codex, opencode and Copilot;
+        # a path-only key kept it for whichever runtime sorted first and left
+        # the file invisible under every other one.
+        dedup_key = (r.get("agent_type") or "openclaw", path)
+        if not path or dedup_key in seen:
             continue
-        seen.add(path)
+        seen.add(dedup_key)
         blob_raw = r.get("blob")
         if isinstance(blob_raw, (bytes, bytearray)):
             try:
@@ -8582,7 +8629,11 @@ def _build_memory_cache_pushes(config: dict) -> list:
             dropped += 1
         else:
             spent += len(body)
-        contents.append({"path": path, "content": body})
+        # Tagged with the runtime for the same reason the dedup key is: two
+        # runtimes can carry the same path, so a viewer that matches on path
+        # alone would show one runtime's copy under the other's tree.
+        contents.append({"path": path, "content": body,
+                         "runtime": r.get("agent_type") or "openclaw"})
     if not files:
         return []
     if dropped:
@@ -11650,21 +11701,10 @@ def sync_runtime_memory_files(config: dict, state: dict, paths: dict) -> int:
         return 0
 
     # Never ingest a paid runtime the user isn't entitled to — that would
-    # push its file contents to cloud behind the paywall's back.
-    try:
-        from clawmetry.entitlements import FREE_RUNTIMES, get_entitlement
-        ent = get_entitlement()
-
-        def _allowed(rt_id: str) -> bool:
-            if rt_id in FREE_RUNTIMES:
-                return True
-            try:
-                return bool(ent.allows_runtime(rt_id))
-            except Exception:
-                return False
-    except Exception:
-        def _allowed(rt_id: str) -> bool:
-            return True
+    # push its file contents to cloud behind the paywall's back. Shared with
+    # the /files route and the cache-push build so the three cannot drift.
+    def _allowed(rt_id: str) -> bool:
+        return not runtime_memory.runtime_is_locked(rt_id)
 
     try:
         store = local_store.get_store()
