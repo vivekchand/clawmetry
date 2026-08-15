@@ -711,6 +711,16 @@ def _budget_init_db():
         db.commit()
     except Exception:
         pass
+    try:
+        # Pre-0.12.711 DBs drop the cloud-vocabulary ``alert_type`` the
+        # Alerts tab POSTed, keeping only the mapped local ``type``. That
+        # made a rule un-round-trippable: on update we could no longer tell
+        # WHICH cloud type an ``anomaly`` row came from, so the DuckDB mirror
+        # could not be rebuilt and the daemon evaluator stayed blind to it.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN alert_type TEXT DEFAULT ''")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -2207,6 +2217,89 @@ def _budget_monitor_loop():
                                     f"(threshold: {int(threshold):,}/min){sid_hint}"
                                 )
                                 fired = True
+                elif rtype == "agent_down":
+                    # "Agent offline > N min" (UI alert_type ``node_offline``).
+                    # Founder 2026-08-15: this rtype has been accepted by the
+                    # POST validator since the self-hosted bridge landed but
+                    # never had a branch here, so every rule created from the
+                    # tab's "Agent offline" row was a silent no-op.
+                    #
+                    # Signal is the most recent REAL agent event in DuckDB —
+                    # not OTLP (the hardcoded ``agent_down`` monitor above
+                    # keys off ``_otel_last_received``, which stays 0 on the
+                    # many installs without ``[otel]``, so it never fires
+                    # there either). ``exclude_daemon`` keeps ClawMetry's own
+                    # diagnostics from masking a dead agent as "alive".
+                    try:
+                        from datetime import datetime as _dt2, timezone as _tz2
+                        from routes.local_query import local_store_via_daemon
+                        _rows = local_store_via_daemon(
+                            "query_events", limit=1, exclude_daemon=True,
+                            **({"runtime": rt_scope} if rt_scope != "all" else {}),
+                        ) or []
+                        _last_iso = (_rows[0].get("ts") or "") if _rows else ""
+                        if _last_iso:
+                            _last = _dt2.fromisoformat(
+                                str(_last_iso).replace("Z", "+00:00")
+                            )
+                            if _last.tzinfo is None:
+                                _last = _last.replace(tzinfo=_tz2.utc)
+                            _idle_min = (
+                                _dt2.now(_tz2.utc) - _last
+                            ).total_seconds() / 60.0
+                            if _idle_min >= threshold:
+                                _scope_lbl = (
+                                    "" if rt_scope == "all" else f" [{rt_scope}]"
+                                )
+                                msg = (
+                                    f"Agent offline{_scope_lbl}: no activity for "
+                                    f"{int(_idle_min)} min "
+                                    f"(threshold: {int(threshold)} min)"
+                                )
+                                fired = True
+                    except Exception:
+                        pass
+                elif rtype == "session_cost":
+                    # "Session cost > $N" (UI alert_type ``session_cost``).
+                    # Previously mapped onto ``threshold``, which evaluates
+                    # DAILY spend — so a $5 per-session rule actually fired on
+                    # the whole day's total. This checks the costliest single
+                    # session in the last 24h, which is what the row promises.
+                    #
+                    # Cost is API-equivalent (token split x API rates), never
+                    # the user's invoice — say so, per the cost-copy honesty
+                    # pass (a Max-plan subscriber pays $0 incremental).
+                    try:
+                        from datetime import datetime as _dt3, timedelta as _td3, timezone as _tz3
+                        from routes.local_query import local_store_via_daemon
+                        _since = (_dt3.now(_tz3.utc) - _td3(hours=24)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        _sessions = local_store_via_daemon(
+                            "query_sessions", since=_since, limit=500,
+                        ) or []
+                        _worst = None
+                        for _s in _sessions:
+                            _sid = _s.get("session_id") or ""
+                            if rt_scope != "all" and _session_runtime_of(_sid) != rt_scope:
+                                continue
+                            try:
+                                _c = float(_s.get("cost_usd") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if _c >= threshold and (_worst is None or _c > _worst[1]):
+                                _worst = (_sid, _c)
+                        if _worst:
+                            _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                            msg = (
+                                f"Session cost{_scope_lbl}: session "
+                                f"{_worst[0][:12]} reached ${_worst[1]:.2f} "
+                                f"(threshold: ${threshold:.2f}) - API-equivalent, "
+                                f"not a billed amount"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta
@@ -9613,6 +9706,16 @@ def _budget_init_db():
         db.commit()
     except Exception:
         pass
+    try:
+        # Pre-0.12.711 DBs drop the cloud-vocabulary ``alert_type`` the
+        # Alerts tab POSTed, keeping only the mapped local ``type``. That
+        # made a rule un-round-trippable: on update we could no longer tell
+        # WHICH cloud type an ``anomaly`` row came from, so the DuckDB mirror
+        # could not be rebuilt and the daemon evaluator stayed blind to it.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN alert_type TEXT DEFAULT ''")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -10679,6 +10782,89 @@ def _budget_monitor_loop():
                                     f"(threshold: {int(threshold):,}/min){sid_hint}"
                                 )
                                 fired = True
+                elif rtype == "agent_down":
+                    # "Agent offline > N min" (UI alert_type ``node_offline``).
+                    # Founder 2026-08-15: this rtype has been accepted by the
+                    # POST validator since the self-hosted bridge landed but
+                    # never had a branch here, so every rule created from the
+                    # tab's "Agent offline" row was a silent no-op.
+                    #
+                    # Signal is the most recent REAL agent event in DuckDB —
+                    # not OTLP (the hardcoded ``agent_down`` monitor above
+                    # keys off ``_otel_last_received``, which stays 0 on the
+                    # many installs without ``[otel]``, so it never fires
+                    # there either). ``exclude_daemon`` keeps ClawMetry's own
+                    # diagnostics from masking a dead agent as "alive".
+                    try:
+                        from datetime import datetime as _dt2, timezone as _tz2
+                        from routes.local_query import local_store_via_daemon
+                        _rows = local_store_via_daemon(
+                            "query_events", limit=1, exclude_daemon=True,
+                            **({"runtime": rt_scope} if rt_scope != "all" else {}),
+                        ) or []
+                        _last_iso = (_rows[0].get("ts") or "") if _rows else ""
+                        if _last_iso:
+                            _last = _dt2.fromisoformat(
+                                str(_last_iso).replace("Z", "+00:00")
+                            )
+                            if _last.tzinfo is None:
+                                _last = _last.replace(tzinfo=_tz2.utc)
+                            _idle_min = (
+                                _dt2.now(_tz2.utc) - _last
+                            ).total_seconds() / 60.0
+                            if _idle_min >= threshold:
+                                _scope_lbl = (
+                                    "" if rt_scope == "all" else f" [{rt_scope}]"
+                                )
+                                msg = (
+                                    f"Agent offline{_scope_lbl}: no activity for "
+                                    f"{int(_idle_min)} min "
+                                    f"(threshold: {int(threshold)} min)"
+                                )
+                                fired = True
+                    except Exception:
+                        pass
+                elif rtype == "session_cost":
+                    # "Session cost > $N" (UI alert_type ``session_cost``).
+                    # Previously mapped onto ``threshold``, which evaluates
+                    # DAILY spend — so a $5 per-session rule actually fired on
+                    # the whole day's total. This checks the costliest single
+                    # session in the last 24h, which is what the row promises.
+                    #
+                    # Cost is API-equivalent (token split x API rates), never
+                    # the user's invoice — say so, per the cost-copy honesty
+                    # pass (a Max-plan subscriber pays $0 incremental).
+                    try:
+                        from datetime import datetime as _dt3, timedelta as _td3, timezone as _tz3
+                        from routes.local_query import local_store_via_daemon
+                        _since = (_dt3.now(_tz3.utc) - _td3(hours=24)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        _sessions = local_store_via_daemon(
+                            "query_sessions", since=_since, limit=500,
+                        ) or []
+                        _worst = None
+                        for _s in _sessions:
+                            _sid = _s.get("session_id") or ""
+                            if rt_scope != "all" and _session_runtime_of(_sid) != rt_scope:
+                                continue
+                            try:
+                                _c = float(_s.get("cost_usd") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if _c >= threshold and (_worst is None or _c > _worst[1]):
+                                _worst = (_sid, _c)
+                        if _worst:
+                            _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                            msg = (
+                                f"Session cost{_scope_lbl}: session "
+                                f"{_worst[0][:12]} reached ${_worst[1]:.2f} "
+                                f"(threshold: ${threshold:.2f}) - API-equivalent, "
+                                f"not a billed amount"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta

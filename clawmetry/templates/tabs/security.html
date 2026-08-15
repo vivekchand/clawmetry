@@ -194,6 +194,26 @@
         <div style="color:var(--text-muted);padding:20px" data-i18n="security.scanning">Scanning...</div>
       </div>
     </div>
+    <!-- Recorded findings (durable log).
+         The panel above is a LIVE scan: it re-reads recent agent events through
+         the built-in signatures every time you open the tab. It cannot show a
+         finding raised by a connected scanner (numbat), because those never
+         touch the signature path — they are ingested straight into DuckDB's
+         security_events table.
+         Founder-reported 2026-08-15: a HIGH numbat finding paged the operator
+         via the top banner, and there was nowhere in the product to go and read
+         it. This panel is that destination, and the banner's "Investigate"
+         button links here. -->
+    <div id="security-findings-panel" style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">🗂️ <span data-i18n="security.findings_title">Recorded findings</span></span>
+        <span id="security-findings-count" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;" data-i18n="security.findings_sub">Kept on disk, so findings stay here after the scan above moves on. Includes anything a connected security tool reported. Open a row to read the session it came from.</div>
+      <div id="security-findings-list">
+        <div style="color:var(--text-muted);padding:12px;font-size:12px;" data-i18n="security.findings_loading">Loading findings...</div>
+      </div>
+    </div>
     <!-- Policy Events (PII / Injection / Credential-Leak) -->
     <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;" id="policy-events-panel">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">

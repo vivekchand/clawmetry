@@ -606,6 +606,14 @@ _DAEMON_METHODS = frozenset({
     # gateway RPC (down), surfacing as the same 6 s timeout the PR was
     # supposed to fix. Adding both here closes the loop.
     "query_alert_rules",
+    # Founder 2026-08-15: locally-created alert rules live in the fleet
+    # SQLite DB, but ``sync._evaluate_alerts_local`` only ever reads DuckDB.
+    # Nothing bridged the two (``ingest_alert_rule`` was cloud-relay-only),
+    # so a rule created from the Alerts tab on a no-cloud node was evaluated
+    # by nobody and sat on "never triggered" forever. routes/alerts.py now
+    # mirrors on write/update/delete through these two.
+    "ingest_alert_rule",
+    "delete_alert_rule",
     "query_channel_config_status",
     "query_crons",
     # Issue #605 DuckDB follow-up: per-job cron-run timeline. Read by
