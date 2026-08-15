@@ -110,10 +110,31 @@ def quality_report_card():
     since = _iso_cutoff(window_hours)
     prior_since = _iso_cutoff(window_hours * 2)
 
-    rows = _store_via_daemon_or_direct(
+    raw_rows = _store_via_daemon_or_direct(
         "query_quality_sessions",
         runtime=runtime, since=since, limit=400,
-    ) or []
+    )
+    # None means the store could not be reached at all (the hosted dashboard
+    # has no local DuckDB); [] means it answered and there is nothing there.
+    # Collapsing the two would tell a cloud user "nothing to grade yet" about
+    # a machine that is in fact working fine — a wrong answer dressed as an
+    # empty state. FLYWHEEL cloud-parity gate: be honestly unavailable.
+    if raw_rows is None:
+        payload = _q.compute_report_card([], {})
+        payload.update({
+            "window_hours": window_hours,
+            "runtime": runtime or "all",
+            "store_available": False,
+            "headline": "Quality is graded on your own machine.",
+            "subline": (
+                "This view reads the run history stored locally by the "
+                "collector, which isn't reachable from here right now. "
+                "Open ClawMetry on the machine your agents run on, or start "
+                "the collector there, and the grade appears."
+            ),
+        })
+        return jsonify(payload)
+    rows = raw_rows
     prior_rows = _store_via_daemon_or_direct(
         "query_quality_sessions",
         runtime=runtime, since=prior_since, until=since, limit=400,
@@ -158,6 +179,7 @@ def quality_report_card():
         ),
     }
     payload["benign_filter"] = _benign_filter_state()
+    payload["store_available"] = True
     return jsonify(payload)
 
 

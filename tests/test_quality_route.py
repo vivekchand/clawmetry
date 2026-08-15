@@ -236,3 +236,33 @@ def test_story_never_blank():
     from clawmetry.quality import story_for
     assert story_for({}).strip()
     assert story_for({"outcome": "unknown"}).strip()
+
+
+def test_store_unreachable_says_so_instead_of_nothing_to_grade(monkeypatch):
+    """A store that cannot be reached must NOT read as "nothing to grade".
+
+    FLYWHEEL cloud-parity gate: the hosted dashboard has no local DuckDB, so
+    this path is what a trial user sees. Reporting an empty week for a machine
+    that is working fine is a wrong answer dressed as an empty state.
+    """
+    from routes import quality as quality_module
+    monkeypatch.setattr(quality_module, "_store_via_daemon_or_direct",
+                        lambda *a, **k: None)
+    app = _make_app()
+    with app.test_client() as c:
+        body = c.get("/api/quality/report-card").get_json()
+    assert body["store_available"] is False
+    assert "nothing to grade" not in body["headline"].lower()
+    assert "your own machine" in body["headline"].lower()
+    assert body["rough_runs"] == []
+
+
+def test_empty_store_still_reads_as_nothing_to_grade(monkeypatch):
+    """The other half of the distinction: a store that answers with no rows
+    genuinely has nothing to grade, and must say that."""
+    _stub_store(monkeypatch, {})
+    app = _make_app()
+    with app.test_client() as c:
+        body = c.get("/api/quality/report-card").get_json()
+    assert body["store_available"] is True
+    assert "nothing to grade" in body["headline"].lower()

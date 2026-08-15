@@ -4533,6 +4533,21 @@ async function loadQualityTab() {
     };
   }
   _qRenderCard(data);
+  if (data.store_available === false) {
+    // The collector isn't reachable from here (e.g. the hosted dashboard has
+    // no local store). Say that plainly instead of rendering "every run
+    // finished cleanly", which would be a wrong answer dressed as good news.
+    var pe = document.getElementById('q-patterns');
+    var re = document.getElementById('q-runs');
+    var msg = t('quality.store_unavailable', null,
+                'Nothing to show from here — this view reads your local run history.');
+    if (pe) pe.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' + escHtml(msg) + '</li>';
+    if (re) re.innerHTML = '<li class="q-empty">' + escHtml(msg) + '</li>';
+    var st = document.getElementById('q-status-line');
+    if (st) st.textContent = t('quality.status_local_only', null, 'Graded on your machine');
+    _qRenderFooter(data);
+    return;
+  }
   _qRenderPatterns(data);
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);

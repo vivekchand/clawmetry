@@ -1146,5 +1146,7 @@
   "quality.sig_no_progress": "Edited without ever checking",
   "quality.sig_hard_failure": "Ended on an error",
   "quality.unit_repeats": "identical calls",
-  "quality.unit_edits": "edits"
+  "quality.unit_edits": "edits",
+  "quality.store_unavailable": "Nothing to show from here — this view reads your local run history.",
+  "quality.status_local_only": "Graded on your machine"
 }
