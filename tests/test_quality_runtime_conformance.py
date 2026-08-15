@@ -244,3 +244,56 @@ def test_runtime_quality_conformance(runtime, tmp_path, monkeypatch):
 def test_at_least_one_runtime_fixture_exists():
     """Guards against the parametrised suite silently becoming a no-op."""
     assert _fixture_runtimes(), "no runtime fixtures found — the gate is inert"
+
+
+def test_quality_is_graded_at_ingest_and_persisted(tmp_path, monkeypatch):
+    """The daemon must grade a session while it has the events in hand.
+
+    This is what keeps the Quality tab a pure DuckDB read. If grading silently
+    stops happening at ingest, the endpoint falls back to replaying events per
+    request — correct, but a request storm on every tab load. Gate it.
+    """
+    fixture = os.path.join(_FIX_ROOT, "claude_code")
+    if not os.path.isdir(fixture):
+        pytest.skip("claude_code fixture missing")
+
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "q.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", fixture)
+
+    import clawmetry.local_store as ls
+    import clawmetry.sync as sync
+    importlib.reload(ls)
+    importlib.reload(sync)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
+
+    try:
+        with patch.object(sync, "_sync_allowed", return_value=True), \
+             patch.object(sync, "_post", return_value={}):
+            sync.sync_family_runtimes({"node_id": "n", "api_key": "k"}, {}, {})
+        store = ls.get_store()
+        _wait_for_flush(store)
+        rows = store._fetch(
+            "SELECT metadata FROM sessions WHERE session_id LIKE 'claude_code:%'",
+            (),
+        )
+        if not rows:
+            pytest.skip("claude_code fixture ingested no sessions")
+        meta = json.loads(rows[0][0]) if rows[0][0] else {}
+        assert meta.get("runtime") == "claude_code"
+        q = meta.get("quality")
+        assert isinstance(q, dict), "quality assessment was not persisted at ingest"
+        # Shape contract the endpoint reads back.
+        assert "measurable" in q and "verdicts" in q
+        assert q.get("runtime") == "claude_code"
+        # And the invariant survives the round trip: no verdict without evidence.
+        for v in q["verdicts"]:
+            assert v["evidence"]["exhibits"], "persisted a verdict with no evidence"
+    finally:
+        try:
+            ls.get_store().stop(flush=True)
+        except Exception:
+            pass
