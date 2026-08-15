@@ -58,18 +58,64 @@ APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
 POLL_INTERVAL_SECS = 0.15
 SHUTDOWN_WAIT_SECS = 5.0
-# Blueprint "Desktop Application Distribution" contract: poll PyPI for
-# a newer clawmetry release every 6 hours. `_should_upgrade()` is the
-# gate on the actual pip call; the watcher's own tick is faster because
-# its other job (drift-detect + crash respawn) benefits from a shorter
-# interval — see WATCHER_TICK_SECS.
-UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
+# Blueprint "Desktop Application Distribution" contract: poll PyPI for a
+# newer clawmetry release. `_should_upgrade()` is the gate on the actual
+# update call; the watcher's own tick is separate — see WATCHER_TICK_SECS.
+#
+# Was 6h. Lowered to 60s (founder call 2026-08-15) so a desktop user picks
+# up a release within about a minute of it landing, matching the daemon's
+# own update worker (routes/update_check.py, CLAWMETRY_UPDATE_CHECK_SECS,
+# default 60s) instead of lagging it by up to a quarter of a day.
+#
+# What forced it: 0.12.707 armed the post-trial paywall, so the upgrade
+# overlay became the ONLY surface a lapsed user can reach — and a layout
+# bug there is a lockout, not a cosmetic defect. Shipping the fix in
+# 0.12.708 and then making trapped users wait up to six hours plus a
+# relaunch, with no in-app way to trigger it, is not a recovery path.
+#
+# Two guards landed with this, and it is worth being precise about why,
+# because the obvious story is wrong. They are NOT "safe at 6h, unsafe at
+# 60s" -- they were already broken at 6h.
+#
+# This interval is enforced ONLY through the stamp file, and the failure
+# paths never wrote one. So `_should_upgrade()` stayed True after any failed
+# update and the watcher retried on the very next tick: a failing update
+# re-ran every WATCHER_TICK_SECS (60s) forever, whatever this constant said.
+# The 6h number only ever throttled the SUCCESS path. Verified against the
+# pre-change code, three consecutive failures, stamp never written.
+#
+# So: stamp every attempt (making the interval mean something on the failure
+# path for the first time), and give the watcher's update its own shorter
+# timeout so a hung PyPI cannot sit inside pip while crash-respawn waits.
+# See WATCHER_UPDATE_TIMEOUT_SECS. Lowering the cadence did not create these;
+# it just removed the last reason to keep tolerating them.
+UPGRADE_CHECK_INTERVAL_SECS = 60
 # How often the watcher thread checks for drift and crashes while the
 # app is running. Short enough that clicking "Update now" in the
 # dashboard translates into a visible restart within ~a minute. The
-# 6h pip-upgrade cadence is enforced by _should_upgrade(), NOT by
-# this constant — do not read this as an upgrade frequency.
+# pip-upgrade cadence is enforced by _should_upgrade(), NOT by this
+# constant — do not read this as an upgrade frequency.
 WATCHER_TICK_SECS = 60
+
+# Timeout for the watcher's periodic `clawmetry update`, as distinct from
+# the 300s first-install timeout in bootstrap().
+#
+# These two are NOT the same job. A first install has no runtime yet, must
+# succeed, and may pull ~100MB on a slow link — 300s is right. A periodic
+# refresh already has a working, launchable ClawMetry, so waiting five
+# minutes on an unreachable PyPI buys nothing.
+#
+# It buys LESS than nothing here: watch() calls this synchronously, and the
+# same loop is what respawns a crashed daemon. Every second spent blocked in
+# pip is a second the app cannot notice its daemon died.
+#
+# This was never bounded by the 6h cadence, contrary to how it reads. A
+# timed-out update wrote no stamp, so the next tick retried immediately --
+# an unreachable PyPI meant 300s blocked, 60s tick, 300s blocked, forever,
+# silently disabling crash-respawn the whole time. The 6h setting throttled
+# only successful updates. 90s bounds the starvation window to ~1-2 missed
+# crash checks instead of five minutes of them.
+WATCHER_UPDATE_TIMEOUT_SECS = 90
 
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
@@ -694,17 +740,30 @@ class RuntimeSupervisor:
             return None
 
     def _background_pip_upgrade(self) -> None:
-        """Non-blocking upgrade via the venv's `clawmetry update
-        --unattended` subcommand — the flag makes the CLI apply the
-        daemon's own update policy (routes/update_check.py): the
-        CLAWMETRY_AUTO_UPDATE kill switch (incl. implicit CI disable)
-        and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window,
-        pinning to the newest aged-in release. Matches the blueprint
-        contract "the shell defers to the daemon's update policy rather
-        than shipping its own"; the local _auto_update_disabled() check
-        is only a cheap pre-flight with the same semantics. Errors are
-        logged and swallowed — a transient PyPI failure should never
-        take down the running app.
+        """Upgrade via the venv's `clawmetry update --unattended`
+        subcommand — the flag makes the CLI apply the daemon's own update
+        policy (routes/update_check.py): the CLAWMETRY_AUTO_UPDATE kill
+        switch (incl. implicit CI disable) and the
+        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, pinning to the
+        newest aged-in release. Matches the blueprint contract "the shell
+        defers to the daemon's update policy rather than shipping its own";
+        the local _auto_update_disabled() check is only a cheap pre-flight
+        with the same semantics. Errors are logged and swallowed — a
+        transient PyPI failure should never take down the running app.
+
+        "Background" here means off the UI thread, NOT asynchronous: the
+        caller (watch()) blocks for the duration, and that same loop owns
+        crash-respawn. Hence WATCHER_UPDATE_TIMEOUT_SECS rather than the
+        300s first-install budget.
+
+        Stamps the attempt on EVERY outcome, including failure. Stamping only
+        successes meant a persistently failing update (offline, broken venv,
+        PyPI down) re-ran on every single watcher tick forever — and that was
+        already true at the OLD 6h cadence, not something the shorter interval
+        introduced. UPGRADE_CHECK_INTERVAL_SECS is enforced purely through the
+        stamp file, so a path that never stamps is a path with no interval at
+        all; 6h only ever throttled successes. A failed attempt is still an
+        attempt.
         """
         if _auto_update_disabled():
             self._log(
@@ -718,7 +777,8 @@ class RuntimeSupervisor:
         try:
             r = subprocess.run(
                 [str(cli), "update", "--unattended"],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True,
+                timeout=WATCHER_UPDATE_TIMEOUT_SECS,
                 **_win_subprocess_kwargs(),
             )
             if r.returncode != 0 and "--unattended" in (r.stderr or "") \
@@ -733,16 +793,23 @@ class RuntimeSupervisor:
                 )
                 r = subprocess.run(
                     [str(cli), "update"],
-                    capture_output=True, text=True, timeout=300,
+                    capture_output=True, text=True,
+                    timeout=WATCHER_UPDATE_TIMEOUT_SECS,
                     **_win_subprocess_kwargs(),
                 )
             self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
                 self._log(r.stderr[:2000])
-            else:
-                self._mark_upgraded(self._get_installed_version())
+            # Stamp regardless of rc: see the docstring. A failed attempt
+            # still consumed an interval, and not stamping it turns the
+            # 60s cadence into "retry forever, every tick".
+            self._mark_upgraded(self._get_installed_version())
         except subprocess.TimeoutExpired:
             self._log("watcher clawmetry-update timed out")
+            # Same reasoning, and this is the case that matters most: a
+            # hanging PyPI is exactly the failure that would otherwise
+            # re-enter pip on every tick and starve crash-respawn.
+            self._mark_upgraded(self._get_installed_version())
 
     def restart_daemon(self) -> bool:
         """Stop the current daemon and spawn a fresh one on the same
@@ -1048,8 +1115,200 @@ class DesktopAPI:
             return {"ok": False, "error": str(exc)}
 
 
+# ── Post-build self test ──────────────────────────────────────────────
+# A frozen bundle fails in ways a source run never does: a hidden import
+# that wasn't declared, a PyInstaller hook that quietly collected
+# nothing, a native backend whose support files didn't make it in. None
+# of that shows up in `make test` — it shows up on a user's machine as a
+# black window.
+#
+# desktop/smoke_test.py launches the BUILT artifact with
+# CLAWMETRY_DESKTOP_SELFTEST=1 and this mode does the smallest thing
+# that still exercises those paths: check the backend's support modules,
+# open a real window, load a real page, round-trip through JS, quit.
+# Nothing here touches the network or the runtime venv.
+SELFTEST_ENV = "CLAWMETRY_DESKTOP_SELFTEST"
+SELFTEST_OK = "CLAWMETRY_SELFTEST_OK"
+SELFTEST_FAIL = "CLAWMETRY_SELFTEST_FAIL"
+SELFTEST_LOAD_TIMEOUT_SECS = 45.0
+
+
+def _selftest_backend_checks() -> list:
+    """Verify the native webview backend's support files survived
+    freezing. Returns a list of problem strings; empty means healthy.
+
+    Call this only AFTER pywebview has started, never before. `gi`
+    resolves a namespace version on first import and then locks it, so
+    importing `gi.repository.Gtk` ahead of pywebview pins Gtk 4.0 and
+    its own `gi.require_version('Gtk', '3.0')` dies with "Namespace Gtk
+    is already loaded with version 4.0". Running afterwards also means
+    we inspect the modules the app actually loaded rather than a set we
+    imported ourselves."""
+    problems = []
+
+    if sys.platform.startswith("linux"):
+        # PyGObject's Python override layer (gi/overrides/*.py) is
+        # invisible to PyInstaller's analyser, and gi's own
+        # load_overrides() swallows its absence — it hands back the raw
+        # introspected API instead of raising. pywebview then calls the
+        # override-only signature `glib.idle_add(callable, user_data)`
+        # from on_load_finish and dies with "TypeError: Must be number,
+        # not method" on every page load, leaving a black window. That
+        # shipped in the 2026-08-15 AppImage; see build_linux.spec for
+        # why the hooks silently collected nothing.
+        try:
+            from gi.overrides import OverridesProxyModule
+            from gi.repository import Gdk, Gio, GLib, Gtk
+        except Exception as exc:
+            return [f"GTK backend imports failed: {exc!r}"]
+        for name, mod in (("GLib", GLib), ("Gtk", Gtk),
+                          ("Gdk", Gdk), ("Gio", Gio)):
+            if not isinstance(mod, OverridesProxyModule):
+                problems.append(
+                    f"gi.repository.{name} has no PyGObject overrides — "
+                    f"gi.overrides.{name} is missing from the bundle"
+                )
+        # Exercise the exact call pywebview makes, so a regression fails
+        # here by name instead of as a stray traceback during page load.
+        # The callback is dropped after one no-op tick.
+        try:
+            GLib.idle_add(lambda _unused: False, 1.0)
+        except TypeError as exc:
+            problems.append(
+                f"GLib.idle_add(callable, user_data) rejected: {exc} — "
+                "that is the raw girepository signature, not the override"
+            )
+
+    elif sys.platform == "darwin":
+        # The Cocoa backend is pure pyobjc: no overrides to lose, but
+        # the framework bridges are separate wheels and PyInstaller only
+        # bundles the ones it saw imported.
+        try:
+            import AppKit  # noqa: F401
+            import WebKit
+            import Foundation  # noqa: F401
+        except Exception as exc:
+            return [f"Cocoa backend imports failed: {exc!r}"]
+        if not hasattr(WebKit, "WKWebView"):
+            problems.append("WebKit bridge has no WKWebView class")
+
+    elif os.name == "nt":
+        # The EdgeChromium backend drives WebView2 through pythonnet,
+        # loading interop DLLs that ship as bundle *data* under
+        # webview/lib. Data files are collected by a hook, so they can
+        # go missing without any import error to notice.
+        try:
+            import clr  # noqa: F401
+            import webview as _wv
+        except Exception as exc:
+            return [f"WebView2 backend imports failed: {exc!r}"]
+        lib = Path(_wv.__file__).resolve().parent / "lib"
+        for dll in ("Microsoft.Web.WebView2.Core.dll",
+                    "Microsoft.Web.WebView2.WinForms.dll"):
+            if not (lib / dll).exists():
+                problems.append(f"WebView2 interop DLL missing: {lib / dll}")
+
+    return problems
+
+
+def _run_self_test() -> int:
+    """Open a real window against real onboarding HTML, prove JS runs in
+    it, then quit. Prints SELFTEST_FAIL lines for anything wrong and
+    SELFTEST_OK when clean."""
+    import webview
+
+    problems = []
+
+    def fail(problem: str) -> None:
+        """Report as we go, not at the end. A backend broken enough to
+        wedge the GTK main loop never reaches the summary print, and a
+        smoke test that dies with no reason attached is only marginally
+        better than no smoke test."""
+        problems.append(problem)
+        print(f"{SELFTEST_FAIL}: {problem}", file=sys.stderr, flush=True)
+
+    # Same objects the real launch path builds — constructing them is
+    # inert, and building them here means a broken import or a missing
+    # asset fails the smoke test rather than a user's first launch.
+    sup = RuntimeSupervisor(_find_free_port(), lambda _msg: None)
+    api = DesktopAPI(sup)
+    window = webview.create_window(
+        APP_TITLE,
+        html=onboarding.render_bootstrap_carousel(
+            assets_dir=_assets_dir(), status="Self test",
+        ),
+        js_api=api,
+        width=1024,
+        height=700,
+        background_color=BRAND_BG_DARK,
+    )
+
+    finished = threading.Event()   # set once the probe has its verdict
+    _exited = threading.Event()    # set once webview.start() returns
+
+    def _probe() -> None:
+        try:
+            loaded = window.events.loaded.wait(SELFTEST_LOAD_TIMEOUT_SECS)
+            # Only now is the backend guaranteed to have imported — and
+            # to have pinned its namespace versions. Running the checks
+            # earlier would race pywebview's own `gi.require_version`
+            # calls. Runs on the timeout path too, because that's the
+            # path where they explain what went wrong.
+            for problem in _selftest_backend_checks():
+                fail(problem)
+            if not loaded:
+                # The GTK override bug lands here as well: on_load_finish
+                # throws before it can mark the window loaded, so this
+                # times out even if nothing else looks wrong.
+                fail(f"window never fired `loaded` within "
+                     f"{SELFTEST_LOAD_TIMEOUT_SECS:.0f}s")
+            else:
+                value = window.evaluate_js(
+                    "document.querySelectorAll('*').length"
+                )
+                if not isinstance(value, int) or value < 2:
+                    fail(f"page has no DOM — evaluate_js returned {value!r}")
+        except Exception as exc:
+            fail(f"probe raised {exc!r}")
+        finally:
+            finished.set()
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def _watchdog() -> None:
+        """Quit hard if the toolkit won't. A backend sick enough to fail
+        the probe is often too sick to unwind its main loop on
+        `destroy()`, and CI should get an exit code and a reason rather
+        than sit on a hung process until the job's own timeout."""
+        finished.wait()
+        if _exited.wait(SHUTDOWN_WAIT_SECS):
+            return
+        print(f"{SELFTEST_FAIL}: the UI event loop did not exit within "
+              f"{SHUTDOWN_WAIT_SECS:.0f}s of the window being destroyed",
+              file=sys.stderr, flush=True)
+        sys.stderr.flush()
+        os._exit(1)
+
+    threading.Thread(target=_probe, daemon=True).start()
+    threading.Thread(target=_watchdog, daemon=True).start()
+    webview.start(private_mode=False)
+    _exited.set()
+
+    if not finished.wait(SHUTDOWN_WAIT_SECS):
+        fail("event loop exited before the probe finished")
+    if problems:
+        return 1
+    print(SELFTEST_OK, flush=True)
+    return 0
+
+
 def main() -> int:
     import webview
+
+    if os.environ.get(SELFTEST_ENV) == "1":
+        return _run_self_test()
 
     runtime = _runtime_dir()
     existing = _check_existing_instance(runtime)
