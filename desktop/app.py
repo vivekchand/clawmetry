@@ -1048,8 +1048,200 @@ class DesktopAPI:
             return {"ok": False, "error": str(exc)}
 
 
+# ── Post-build self test ──────────────────────────────────────────────
+# A frozen bundle fails in ways a source run never does: a hidden import
+# that wasn't declared, a PyInstaller hook that quietly collected
+# nothing, a native backend whose support files didn't make it in. None
+# of that shows up in `make test` — it shows up on a user's machine as a
+# black window.
+#
+# desktop/smoke_test.py launches the BUILT artifact with
+# CLAWMETRY_DESKTOP_SELFTEST=1 and this mode does the smallest thing
+# that still exercises those paths: check the backend's support modules,
+# open a real window, load a real page, round-trip through JS, quit.
+# Nothing here touches the network or the runtime venv.
+SELFTEST_ENV = "CLAWMETRY_DESKTOP_SELFTEST"
+SELFTEST_OK = "CLAWMETRY_SELFTEST_OK"
+SELFTEST_FAIL = "CLAWMETRY_SELFTEST_FAIL"
+SELFTEST_LOAD_TIMEOUT_SECS = 45.0
+
+
+def _selftest_backend_checks() -> list:
+    """Verify the native webview backend's support files survived
+    freezing. Returns a list of problem strings; empty means healthy.
+
+    Call this only AFTER pywebview has started, never before. `gi`
+    resolves a namespace version on first import and then locks it, so
+    importing `gi.repository.Gtk` ahead of pywebview pins Gtk 4.0 and
+    its own `gi.require_version('Gtk', '3.0')` dies with "Namespace Gtk
+    is already loaded with version 4.0". Running afterwards also means
+    we inspect the modules the app actually loaded rather than a set we
+    imported ourselves."""
+    problems = []
+
+    if sys.platform.startswith("linux"):
+        # PyGObject's Python override layer (gi/overrides/*.py) is
+        # invisible to PyInstaller's analyser, and gi's own
+        # load_overrides() swallows its absence — it hands back the raw
+        # introspected API instead of raising. pywebview then calls the
+        # override-only signature `glib.idle_add(callable, user_data)`
+        # from on_load_finish and dies with "TypeError: Must be number,
+        # not method" on every page load, leaving a black window. That
+        # shipped in the 2026-08-15 AppImage; see build_linux.spec for
+        # why the hooks silently collected nothing.
+        try:
+            from gi.overrides import OverridesProxyModule
+            from gi.repository import Gdk, Gio, GLib, Gtk
+        except Exception as exc:
+            return [f"GTK backend imports failed: {exc!r}"]
+        for name, mod in (("GLib", GLib), ("Gtk", Gtk),
+                          ("Gdk", Gdk), ("Gio", Gio)):
+            if not isinstance(mod, OverridesProxyModule):
+                problems.append(
+                    f"gi.repository.{name} has no PyGObject overrides — "
+                    f"gi.overrides.{name} is missing from the bundle"
+                )
+        # Exercise the exact call pywebview makes, so a regression fails
+        # here by name instead of as a stray traceback during page load.
+        # The callback is dropped after one no-op tick.
+        try:
+            GLib.idle_add(lambda _unused: False, 1.0)
+        except TypeError as exc:
+            problems.append(
+                f"GLib.idle_add(callable, user_data) rejected: {exc} — "
+                "that is the raw girepository signature, not the override"
+            )
+
+    elif sys.platform == "darwin":
+        # The Cocoa backend is pure pyobjc: no overrides to lose, but
+        # the framework bridges are separate wheels and PyInstaller only
+        # bundles the ones it saw imported.
+        try:
+            import AppKit  # noqa: F401
+            import WebKit
+            import Foundation  # noqa: F401
+        except Exception as exc:
+            return [f"Cocoa backend imports failed: {exc!r}"]
+        if not hasattr(WebKit, "WKWebView"):
+            problems.append("WebKit bridge has no WKWebView class")
+
+    elif os.name == "nt":
+        # The EdgeChromium backend drives WebView2 through pythonnet,
+        # loading interop DLLs that ship as bundle *data* under
+        # webview/lib. Data files are collected by a hook, so they can
+        # go missing without any import error to notice.
+        try:
+            import clr  # noqa: F401
+            import webview as _wv
+        except Exception as exc:
+            return [f"WebView2 backend imports failed: {exc!r}"]
+        lib = Path(_wv.__file__).resolve().parent / "lib"
+        for dll in ("Microsoft.Web.WebView2.Core.dll",
+                    "Microsoft.Web.WebView2.WinForms.dll"):
+            if not (lib / dll).exists():
+                problems.append(f"WebView2 interop DLL missing: {lib / dll}")
+
+    return problems
+
+
+def _run_self_test() -> int:
+    """Open a real window against real onboarding HTML, prove JS runs in
+    it, then quit. Prints SELFTEST_FAIL lines for anything wrong and
+    SELFTEST_OK when clean."""
+    import webview
+
+    problems = []
+
+    def fail(problem: str) -> None:
+        """Report as we go, not at the end. A backend broken enough to
+        wedge the GTK main loop never reaches the summary print, and a
+        smoke test that dies with no reason attached is only marginally
+        better than no smoke test."""
+        problems.append(problem)
+        print(f"{SELFTEST_FAIL}: {problem}", file=sys.stderr, flush=True)
+
+    # Same objects the real launch path builds — constructing them is
+    # inert, and building them here means a broken import or a missing
+    # asset fails the smoke test rather than a user's first launch.
+    sup = RuntimeSupervisor(_find_free_port(), lambda _msg: None)
+    api = DesktopAPI(sup)
+    window = webview.create_window(
+        APP_TITLE,
+        html=onboarding.render_bootstrap_carousel(
+            assets_dir=_assets_dir(), status="Self test",
+        ),
+        js_api=api,
+        width=1024,
+        height=700,
+        background_color=BRAND_BG_DARK,
+    )
+
+    finished = threading.Event()   # set once the probe has its verdict
+    _exited = threading.Event()    # set once webview.start() returns
+
+    def _probe() -> None:
+        try:
+            loaded = window.events.loaded.wait(SELFTEST_LOAD_TIMEOUT_SECS)
+            # Only now is the backend guaranteed to have imported — and
+            # to have pinned its namespace versions. Running the checks
+            # earlier would race pywebview's own `gi.require_version`
+            # calls. Runs on the timeout path too, because that's the
+            # path where they explain what went wrong.
+            for problem in _selftest_backend_checks():
+                fail(problem)
+            if not loaded:
+                # The GTK override bug lands here as well: on_load_finish
+                # throws before it can mark the window loaded, so this
+                # times out even if nothing else looks wrong.
+                fail(f"window never fired `loaded` within "
+                     f"{SELFTEST_LOAD_TIMEOUT_SECS:.0f}s")
+            else:
+                value = window.evaluate_js(
+                    "document.querySelectorAll('*').length"
+                )
+                if not isinstance(value, int) or value < 2:
+                    fail(f"page has no DOM — evaluate_js returned {value!r}")
+        except Exception as exc:
+            fail(f"probe raised {exc!r}")
+        finally:
+            finished.set()
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def _watchdog() -> None:
+        """Quit hard if the toolkit won't. A backend sick enough to fail
+        the probe is often too sick to unwind its main loop on
+        `destroy()`, and CI should get an exit code and a reason rather
+        than sit on a hung process until the job's own timeout."""
+        finished.wait()
+        if _exited.wait(SHUTDOWN_WAIT_SECS):
+            return
+        print(f"{SELFTEST_FAIL}: the UI event loop did not exit within "
+              f"{SHUTDOWN_WAIT_SECS:.0f}s of the window being destroyed",
+              file=sys.stderr, flush=True)
+        sys.stderr.flush()
+        os._exit(1)
+
+    threading.Thread(target=_probe, daemon=True).start()
+    threading.Thread(target=_watchdog, daemon=True).start()
+    webview.start(private_mode=False)
+    _exited.set()
+
+    if not finished.wait(SHUTDOWN_WAIT_SECS):
+        fail("event loop exited before the probe finished")
+    if problems:
+        return 1
+    print(SELFTEST_OK, flush=True)
+    return 0
+
+
 def main() -> int:
     import webview
+
+    if os.environ.get(SELFTEST_ENV) == "1":
+        return _run_self_test()
 
     runtime = _runtime_dir()
     existing = _check_existing_instance(runtime)

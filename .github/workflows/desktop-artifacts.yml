@@ -51,6 +51,13 @@ jobs:
       - name: Build .app
         run: pyinstaller --clean --noconfirm desktop/build_mac.spec
 
+      # Gate: launch what we just built (see desktop/smoke_test.py).
+      # Runs before signing so a broken bundle fails in seconds instead
+      # of after a notarization round trip. macOS runners have a window
+      # server, so no Xvfb equivalent is needed.
+      - name: Smoke test the built .app
+        run: python3 desktop/smoke_test.py dist/ClawMetry.app
+
       # --- Code-signing + notarization ---
       # These steps NO-OP when the secrets aren't configured, so PRs
       # from forks and unsigned dev builds still succeed. Add these
@@ -209,6 +216,13 @@ jobs:
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
 
+      # Gate: launch what we just built (see desktop/smoke_test.py).
+      # Runs before signing and before the installer is packed, so a
+      # broken exe can't reach either. windows-latest ships the Edge
+      # WebView2 runtime the backend needs.
+      - name: Smoke test the built .exe
+        run: python desktop/smoke_test.py dist\ClawMetry\ClawMetry.exe
+
       # --- Authenticode signing setup ---
       # Decodes the cert and writes a sign.cmd wrapper that both this
       # workflow AND makensis (via /DSIGN_CMD + !finalize/!uninstfinalize
@@ -357,11 +371,15 @@ jobs:
           # (still needed for webkit2gtk-4.1 headers on older subdeps)
           # and -2.0 (what PyGObject 3.52+ compiles against). ubuntu-24.04
           # (current ubuntu-latest) has both in the default archive.
+          #
+          # xvfb gives the smoke-test step a display: GTK/WebKit refuse
+          # to open a window without one, and the whole point of that
+          # step is to open a window.
           sudo apt-get install -y \
             libgtk-3-0 libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 \
             libayatana-appindicator3-1 libnotify4 \
             libgirepository1.0-dev libgirepository-2.0-dev \
-            libcairo2-dev pkg-config
+            libcairo2-dev pkg-config xvfb
 
       - name: Install build deps
         run: |
@@ -375,6 +393,13 @@ jobs:
 
       - name: Build tray binary
         run: pyinstaller --clean --noconfirm desktop/build_linux.spec
+
+      # Gate: launch what we just built (see desktop/smoke_test.py).
+      # `pyinstaller` exiting 0 says nothing about whether the binary
+      # opens a window — the 2026-08-15 AppImage built clean and showed
+      # users a black rectangle with a traceback per page load.
+      - name: Smoke test the built binary
+        run: python3 desktop/smoke_test.py dist/clawmetry/clawmetry
 
       - name: Resolve version
         id: ver
@@ -444,6 +469,15 @@ jobs:
           # Fixed-name copy — same stable-URL convention as the tarball above.
           cp "ClawMetry-${VERSION}-x86_64.AppImage" "clawmetry-linux.AppImage"
           rm -rf "$APPDIR" appimagetool
+
+      # The AppImage is a second artifact, not a rename of the first: it
+      # adds AppRun, the squashfs layout and a different working
+      # directory. This is the file clawmetry.com/download/linux hands
+      # out, so it gets its own launch, not just the folder build's.
+      # (APPIMAGE_EXTRACT_AND_RUN is set by smoke_test.py — the runner
+      # has no FUSE.)
+      - name: Smoke test the AppImage
+        run: python3 desktop/smoke_test.py dist/clawmetry-linux.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
