@@ -234,13 +234,19 @@ def _escape_hatch_active() -> bool:
 
 
 def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
-    """True only when the resolved entitlement WAS on a paid/trial tier and
-    has now passed its ``expiry`` timestamp -- never for an install that was
-    simply never entitled in the first place (plain OSS / cloud_free is the
-    permanent free tier documented in docs/ENTITLEMENTS.md, not a lapsed
-    trial). Fail-closed only on a genuinely unreadable entitlement: we would
-    rather leak into the paywall on an internal error than silently keep
-    serving an install we can't positively classify."""
+    """True only when this install WAS entitled (paid tier, or a trial it has
+    since consumed) and has now passed its ``expiry`` timestamp -- never for
+    an install that was simply never entitled in the first place (plain OSS /
+    cloud_free is the permanent free tier documented in docs/ENTITLEMENTS.md,
+    not a lapsed trial).
+
+    Fail-closed only on a genuinely unreadable entitlement (``ent is None`` or
+    an exception): we would rather leak into the paywall on an internal error
+    than silently keep serving an install we can't positively classify. Note
+    the asymmetry inside the ``trial_used`` branch -- an unparseable expiry
+    there returns False, because a burnt trial with a corrupt date is far more
+    likely to be our bug than a freeloader, and blocking a paying-adjacent
+    user is the costlier mistake."""
     if ent is None:
         return True
     try:
@@ -263,11 +269,33 @@ def _resolver_says_unpaid_or_expired(ent: "Entitlement | None") -> bool:
                 return time.time() > float(expiry)
             except (TypeError, ValueError):
                 return True
-        # Plain OSS / cloud_free: no license, no cloud plan, never paid or
-        # trialed. That's the permanent free tier, not an expired one -- do
-        # NOT block it. (Regression fixed 2026-08-06: this used to fall
-        # through to `return True` here, hard-blocking every fresh
-        # `pip install clawmetry` with no license/trial at all.)
+        # Unpaid tier. Two very different populations land here and only one
+        # of them may be paywalled:
+        #
+        #   (a) never trialed -- a fresh `pip install clawmetry` on the
+        #       permanent free tier (docs/ENTITLEMENTS.md). NEVER block.
+        #       (Regression fixed 2026-08-06: this used to fall through to
+        #       `return True`, hard-blocking every fresh install.)
+        #   (b) trial consumed and its end date passed -- the account saw the
+        #       paid runtimes for 7 days and the window closed. Block, so the
+        #       only ways forward are "upgrade" or "continue on free runtimes".
+        #
+        # ``trial_used`` is what tells them apart; it reaches us from the
+        # cloud heartbeat via ``cloud_plan.json`` (see
+        # ``sync._persist_cloud_plan_to_disk``). Absent that signal the value
+        # is False and we fall through to (a) -- an older daemon, an offline
+        # install, or a cloud that hasn't shipped the field yet all keep
+        # working exactly as before rather than getting a surprise paywall.
+        if getattr(ent, "trial_used", False):
+            expiry = getattr(ent, "expiry", None)
+            if expiry is None:
+                # Trial consumed but no end date known: cannot prove it lapsed,
+                # so do not block on a guess.
+                return False
+            try:
+                return time.time() > float(expiry)
+            except (TypeError, ValueError):
+                return False
         return False
     except Exception as exc:
         logger.warning("trial_enforcement: resolver check failed, defaulting "

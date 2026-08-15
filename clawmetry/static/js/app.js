@@ -24,6 +24,36 @@
   var OVERLAY_ID     = 'cm-hard-block-overlay';
   var STYLE_ID       = 'cm-hard-block-overlay-style';
 
+  // Plan picker state + copy.
+  //
+  // PRICES MIRROR THE CLOUD'S _SUB_PRICING TABLE (clawmetry-cloud
+  // routes/api.py) -- that table is the billing source of truth and what
+  // Stripe actually charges. These numbers are display-only; if they ever
+  // disagree, Stripe wins and the user sees the real amount on the checkout
+  // page. Keep them in this one place so a repricing is a single edit.
+  var PLAN_PRICES = {
+    starter: { month: 9,  year: 90  },
+    pro:     { month: 19, year: 190 },
+  };
+  var _selTier = 'starter';
+  var _selInterval = 'year';   // annual preselected: better retention + the device perk
+  // Filled from /api/entitlement (allowlisted, so it answers while blocked).
+  // Never hardcode a runtime count -- it has drifted every time it was.
+  var _paidRuntimeCount = 0;
+
+  function planPriceLabel() {
+    var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
+    var amt = _selInterval === 'year' ? p.year : p.month;
+    return '$' + amt + ' / node / ' + (_selInterval === 'year' ? 'year' : 'month');
+  }
+
+  function runtimesLine() {
+    return _paidRuntimeCount
+      ? ('All ' + _paidRuntimeCount + ' runtimes (Claude Code, Codex, Cursor +'
+         + Math.max(0, _paidRuntimeCount - 3) + ')')
+      : 'Every supported runtime (Claude Code, Codex, Cursor, …)';
+  }
+
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
     var st = document.createElement('style');
@@ -64,6 +94,66 @@
       + '  transition: background 120ms ease;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
+      // ── plan picker ──────────────────────────────────────────────────
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg {'
+      + '  display: flex; gap: 4px; padding: 4px; margin: 0 0 14px 0;'
+      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg button {'
+      + '  flex: 1; padding: 9px 10px; border: 0; border-radius: 7px;'
+      + '  background: transparent; color: #b5b8be; font-size: 13px;'
+      + '  font-weight: 600; cursor: pointer; font-family: inherit;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg button[aria-pressed="true"] {'
+      + '  background: #ff9500; color: #1a1d22;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg .cm-hbo-save {'
+      + '  font-weight: 400; opacity: 0.85; margin-left: 4px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier {'
+      + '  display: flex; align-items: center; gap: 11px; width: 100%;'
+      + '  padding: 13px 14px; margin: 0 0 8px 0; text-align: left;'
+      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
+      + '  color: #e8eaed; cursor: pointer; font-family: inherit;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] {'
+      + '  border-color: #ff9500; background: #211a12;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-radio {'
+      + '  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;'
+      + '  border: 2px solid #4a4f57;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] .cm-hbo-radio {'
+      + '  border-color: #ff9500; box-shadow: inset 0 0 0 3px #ff9500;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier-name {'
+      + '  font-size: 15px; font-weight: 700; color: #fff; display: block;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier-sub {'
+      + '  font-size: 12px; color: #9aa0a8; display: block; margin-top: 2px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats {'
+      + '  margin: 12px 0 14px 0; padding: 0; list-style: none;'
+      + '  font-size: 13px; color: #b5b8be;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 6px 0; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats li::before {'
+      + '  content: "+"; color: #22c55e; font-weight: 700; margin-right: 8px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-price {'
+      + '  text-align: center; margin: 0 0 14px 0;'
+      + '  font-size: 26px; font-weight: 700; color: #fff;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-device {'
+      + '  margin: 0 0 14px 0; padding: 11px 13px; border-radius: 9px;'
+      + '  border: 1px solid #33406b; background: #151a2b;'
+      + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
+      + '  display: block; margin-top: 4px; font-size: 12px;'
+      + '  font-weight: 500; color: #22c55e;'
+      + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
       + '  display: flex; align-items: center; gap: 10px;'
       + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
@@ -153,8 +243,35 @@
       + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
       + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
       + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
+      + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
+      + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
+      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">save 2 months</span></button>'
+      + '  </div>'
+      + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
+      + '    <span class="cm-hbo-radio"></span>'
+      + '    <span><span class="cm-hbo-tier-name">Starter</span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(runtimesLine()) + '</span></span>'
+      + '  </button>'
+      + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
+      + '    <span class="cm-hbo-radio"></span>'
+      + '    <span><span class="cm-hbo-tier-name">Pro</span>'
+      + '      <span class="cm-hbo-tier-sub">Adds enforcement + audit layer</span></span>'
+      + '  </button>'
+      + '  <ul class="cm-hbo-feats">'
+      + '    <li>' + escapeHtml(runtimesLine()) + '</li>'
+      + '    <li>Unlimited channels + cloud sync</li>'
+      + '    <li>Approval queue</li>'
+      + '  </ul>'
+      // Annual-only perk. The cloud already collects a shipping address on
+      // annual checkouts for this (_annual_device_checkout_extras), and it
+      // ships on the first PAID invoice, so this is not a promise we invent
+      // here. Hidden on monthly.
+      + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
+      + '    Includes the $149 desk device, <strong>free</strong> with any annual plan.'
+      + '  </div>'
+      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + escapeHtml(planPriceLabel()) + '</div>'
       + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
-      + '    Continue to payment  →'
+      + '    Continue to Stripe  →'
       + '  </a>'
       + '  <div class="cm-hbo-divider">or</div>'
       + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
@@ -191,6 +308,60 @@
     // upgrade page. The tab MUST be opened synchronously in the click
     // handler (popup blockers kill window.open from inside a fetch
     // callback) and is redirected once the URL arrives.
+    // Plan picker. Selection lives in module state (not the DOM) so a
+    // re-render from the background poll never silently resets the user's
+    // choice back to the default mid-checkout.
+    var priceEl = el.querySelector('#cm-hbo-price');
+    function repaintPicker() {
+      Array.prototype.forEach.call(
+        el.querySelectorAll('.cm-hbo-seg button'), function (b) {
+          b.setAttribute('aria-pressed', String(b.getAttribute('data-interval') === _selInterval));
+        });
+      Array.prototype.forEach.call(
+        el.querySelectorAll('.cm-hbo-tier'), function (b) {
+          b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
+        });
+      if (priceEl) priceEl.textContent = planPriceLabel();
+      var devEl = el.querySelector('#cm-hbo-device');
+      if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
+    }
+    Array.prototype.forEach.call(
+      el.querySelectorAll('.cm-hbo-seg button'), function (b) {
+        b.addEventListener('click', function () {
+          _selInterval = b.getAttribute('data-interval') === 'year' ? 'year' : 'month';
+          repaintPicker();
+        });
+      });
+    Array.prototype.forEach.call(
+      el.querySelectorAll('.cm-hbo-tier'), function (b) {
+        b.addEventListener('click', function () {
+          _selTier = b.getAttribute('data-tier') === 'pro' ? 'pro' : 'starter';
+          repaintPicker();
+        });
+      });
+
+    // Runtime count for the copy. /api/entitlement is allowlisted so it
+    // answers even while blocked; on failure we keep the countless wording
+    // rather than printing a number we cannot stand behind.
+    if (!_paidRuntimeCount) {
+      try {
+        fetch('/api/entitlement')
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (ent) {
+            var all = ent && ent.all_runtimes;
+            if (Array.isArray(all) && all.length) {
+              _paidRuntimeCount = all.length;
+              Array.prototype.forEach.call(
+                el.querySelectorAll('.cm-hbo-tier[data-tier="starter"] .cm-hbo-tier-sub'),
+                function (n) { n.textContent = runtimesLine(); });
+              var firstFeat = el.querySelector('.cm-hbo-feats li');
+              if (firstFeat) firstFeat.textContent = runtimesLine();
+            }
+          })
+          .catch(function () {});
+      } catch (e) { /* noop */ }
+    }
+
     var ctaEl = el.querySelector('.cm-hbo-cta');
     var statusElForCta = el.querySelector('.cm-hbo-status');
     ctaEl.addEventListener('click', function (ev) {
@@ -204,7 +375,14 @@
       }
       statusElForCta.className = 'cm-hbo-status';
       statusElForCta.textContent = 'Opening secure checkout…';
-      fetch('/api/trial/checkout', { method: 'POST' })
+      fetch('/api/trial/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tier: _selTier,
+          plan: _selInterval === 'year' ? 'yearly' : 'monthly',
+        }),
+      })
         .then(function (r) { return r.json().catch(function () { return {}; }); })
         .then(function (resp) {
           go(resp && resp.url ? resp.url : ctaEl.href);
@@ -218,7 +396,11 @@
         fetch('/api/paywall/event', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: 'hard_block_checkout_click' }),
+          body: JSON.stringify({
+            event: 'hard_block_checkout_click',
+            tier: _selTier,
+            interval: _selInterval,
+          }),
         }).catch(function () {});
       } catch (e) { /* noop */ }
     });
