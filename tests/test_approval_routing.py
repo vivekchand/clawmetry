@@ -460,6 +460,27 @@ def test_mirror_install_is_idempotent(gate, notify):
     assert _settings(g) == first
 
 
+def test_mirror_installs_with_zero_protection_rules(gate, notify, monkeypatch):
+    """The whole point: mirroring is about the runtime's OWN prompts, so it
+    must arm through the normal watcher seam even when the operator has
+    written no policies at all."""
+    g = gate
+    import clawmetry.approvals as ap
+    monkeypatch.setattr(ap, "GATE_HANDLERS", {}, raising=True)
+    monkeypatch.setattr(ap, "GATE_WANT_PREDICATES", {}, raising=True)
+    monkeypatch.setattr(ap, "_default_gates_registered", True)
+    ap.register_gate_handler("claude_code", g.gate_handler)
+
+    _mirror_on(notify)
+    ap.sync_runtime_gates([])            # no policies at all
+
+    entries = _settings(g)["hooks"]["PermissionRequest"]
+    assert len(entries) == 1
+    assert "claude-code-permission" in entries[0]["hooks"][0]["command"]
+    # …and the PreToolUse gate stays absent — no rules, nothing to gate.
+    assert "PreToolUse" not in _settings(g).get("hooks", {})
+
+
 def test_pretooluse_ownership_excludes_the_mirror_entry(gate):
     """MIRROR_CMD_MARKER contains HOOK_CMD_MARKER as a substring — the
     PreToolUse uninstaller must not treat a mirror entry as its own."""
