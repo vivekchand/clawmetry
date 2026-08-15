@@ -502,7 +502,7 @@ def _sig_tool_error_rate(events, *, runtime, thresholds, session_id) -> Verdict 
         return None
     exhibits = [{
         "ts":    e.ts,
-        "tool":  e.tool_name or "(unnamed tool)",
+        "tool":  e.tool_name,   # may be "" — some runtimes don't name results
         "error": (e.text or "")[:240],
     } for e in errors[:12]]
     if not exhibits:

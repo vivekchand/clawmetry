@@ -175,7 +175,23 @@ def compute_report_card(
             ),
         }
 
-    avg_score = sum(s for _, _, s in scored) / graded
+    # Cost-weighted, not session-counted. A plain mean lets thirty cheap
+    # one-shot chats outvote the $82 run that spun on one file for twelve
+    # edits, which is exactly backwards from what the operator cares about —
+    # and it is how a window with $171 of rough runs was scoring an A.
+    # The floor keeps zero-cost sessions counting for something so a free
+    # runtime is not silently ungraded.
+    _FLOOR = 0.05
+    weighted, weights = 0.0, 0.0
+    for r, _a, s in scored:
+        try:
+            w = max(_FLOOR, float(r.get("cost_usd") or 0))
+        except (TypeError, ValueError):
+            w = _FLOOR
+        weighted += s * w
+        weights += w
+    avg_score = (weighted / weights) if weights else (
+        sum(s for _, _, s in scored) / graded)
     grade = grade_for(avg_score)
 
     clean = [(r, a) for (r, a, s) in scored if not (a.get("verdicts") or [])]
@@ -236,10 +252,23 @@ def compute_report_card(
         vs_prior = "up" if delta > 0.03 else ("down" if delta < -0.03 else "same")
 
     n_clean, n_rough = len(clean), len(rough)
+    total_cost = 0.0
+    for r, _a, _s in scored:
+        try:
+            total_cost += float(r.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            pass
+    rough_share = (rough_total_cost / total_cost) if total_cost > 0 else 0.0
+
+    # The headline reads the money, not just the letter. "Did good work" over
+    # a window where a fifth of the spend went into rough runs is the kind of
+    # reassurance that makes a user stop believing the whole tab.
     if n_rough == 0:
         headline = "Your agents did clean work this window."
     elif grade in ("D", "F"):
         headline = "Your agents struggled this window."
+    elif rough_share >= 0.15:
+        headline = "Good work overall, with some expensive exceptions."
     else:
         headline = "Your agents did good work this window."
 

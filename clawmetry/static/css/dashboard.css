@@ -2301,6 +2301,64 @@ body.has-profile-menu #logout-btn { display: none !important; }
   font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums;
 }
 
+/* ── Evidence panel ────────────────────────────────────────────────────────
+   Every flagged run must be inspectable: what fired, what it measured, what
+   it compared against, and the real moments behind it. Styled quieter than
+   the verdict itself — this is the receipt, not the headline. */
+.q-runs .q-evidence-toggle {
+  font-size: 12px; color: var(--text-secondary); background: none;
+  border: 0; border-bottom: 1px dotted rgba(255,255,255,0.15);
+  padding: 0 0 1px; cursor: pointer; font-family: inherit;
+}
+.q-runs .q-evidence-toggle:hover {
+  color: var(--text-primary); border-bottom-color: var(--text-secondary);
+}
+.q-evidence { display: none; margin-top: 12px; }
+.q-evidence.open { display: block; }
+.q-ev-block {
+  background: var(--bg-primary); border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--text-muted); border-radius: 4px;
+  padding: 12px 14px; margin-bottom: 8px;
+}
+.q-ev-head {
+  display: flex; align-items: baseline; gap: 10px;
+  justify-content: space-between; margin-bottom: 8px;
+}
+.q-ev-sig {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; letter-spacing: 0.06em; color: var(--text-secondary);
+}
+.q-ev-conf {
+  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; cursor: help;
+}
+.q-ev-obs, .q-ev-th {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.7;
+}
+.q-ev-obs .k { color: var(--text-muted); }
+.q-ev-obs b, .q-ev-th b {
+  color: var(--text-primary); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.q-ev-obs i { color: var(--text-muted); font-style: normal; margin: 0 7px; }
+.q-ev-th .src { color: var(--text-muted); font-size: 11px; }
+.q-ev-list {
+  list-style: none; margin: 9px 0 0; padding: 9px 0 0;
+  border-top: 1px solid var(--border-primary);
+}
+.q-ev-list li {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; color: var(--text-secondary); line-height: 1.75;
+  display: flex; gap: 10px; align-items: baseline;
+  overflow-wrap: anywhere;
+}
+.q-ev-list .ts { color: var(--text-muted); white-space: nowrap; flex: 0 0 auto; }
+.q-ev-list .tl { white-space: nowrap; flex: 0 0 auto; color: var(--text-primary); }
+.q-ev-obs.long { overflow-wrap: anywhere; }
+.q-ev-list .f { color: var(--text-muted); }
+.q-ev-list .e { color: #d33528; }
+.q-ev-more { font-size: 11px; color: var(--text-muted); margin-top: 7px; }
+
 /* The inline eval builder — appears when "Prevent this →" is clicked */
 .q-builder {
   background: var(--bg-primary); border: 1px solid var(--border-primary);
