@@ -58,18 +58,64 @@ APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
 POLL_INTERVAL_SECS = 0.15
 SHUTDOWN_WAIT_SECS = 5.0
-# Blueprint "Desktop Application Distribution" contract: poll PyPI for
-# a newer clawmetry release every 6 hours. `_should_upgrade()` is the
-# gate on the actual pip call; the watcher's own tick is faster because
-# its other job (drift-detect + crash respawn) benefits from a shorter
-# interval — see WATCHER_TICK_SECS.
-UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
+# Blueprint "Desktop Application Distribution" contract: poll PyPI for a
+# newer clawmetry release. `_should_upgrade()` is the gate on the actual
+# update call; the watcher's own tick is separate — see WATCHER_TICK_SECS.
+#
+# Was 6h. Lowered to 60s (founder call 2026-08-15) so a desktop user picks
+# up a release within about a minute of it landing, matching the daemon's
+# own update worker (routes/update_check.py, CLAWMETRY_UPDATE_CHECK_SECS,
+# default 60s) instead of lagging it by up to a quarter of a day.
+#
+# What forced it: 0.12.707 armed the post-trial paywall, so the upgrade
+# overlay became the ONLY surface a lapsed user can reach — and a layout
+# bug there is a lockout, not a cosmetic defect. Shipping the fix in
+# 0.12.708 and then making trapped users wait up to six hours plus a
+# relaunch, with no in-app way to trigger it, is not a recovery path.
+#
+# Two guards landed with this, and it is worth being precise about why,
+# because the obvious story is wrong. They are NOT "safe at 6h, unsafe at
+# 60s" -- they were already broken at 6h.
+#
+# This interval is enforced ONLY through the stamp file, and the failure
+# paths never wrote one. So `_should_upgrade()` stayed True after any failed
+# update and the watcher retried on the very next tick: a failing update
+# re-ran every WATCHER_TICK_SECS (60s) forever, whatever this constant said.
+# The 6h number only ever throttled the SUCCESS path. Verified against the
+# pre-change code, three consecutive failures, stamp never written.
+#
+# So: stamp every attempt (making the interval mean something on the failure
+# path for the first time), and give the watcher's update its own shorter
+# timeout so a hung PyPI cannot sit inside pip while crash-respawn waits.
+# See WATCHER_UPDATE_TIMEOUT_SECS. Lowering the cadence did not create these;
+# it just removed the last reason to keep tolerating them.
+UPGRADE_CHECK_INTERVAL_SECS = 60
 # How often the watcher thread checks for drift and crashes while the
 # app is running. Short enough that clicking "Update now" in the
 # dashboard translates into a visible restart within ~a minute. The
-# 6h pip-upgrade cadence is enforced by _should_upgrade(), NOT by
-# this constant — do not read this as an upgrade frequency.
+# pip-upgrade cadence is enforced by _should_upgrade(), NOT by this
+# constant — do not read this as an upgrade frequency.
 WATCHER_TICK_SECS = 60
+
+# Timeout for the watcher's periodic `clawmetry update`, as distinct from
+# the 300s first-install timeout in bootstrap().
+#
+# These two are NOT the same job. A first install has no runtime yet, must
+# succeed, and may pull ~100MB on a slow link — 300s is right. A periodic
+# refresh already has a working, launchable ClawMetry, so waiting five
+# minutes on an unreachable PyPI buys nothing.
+#
+# It buys LESS than nothing here: watch() calls this synchronously, and the
+# same loop is what respawns a crashed daemon. Every second spent blocked in
+# pip is a second the app cannot notice its daemon died.
+#
+# This was never bounded by the 6h cadence, contrary to how it reads. A
+# timed-out update wrote no stamp, so the next tick retried immediately --
+# an unreachable PyPI meant 300s blocked, 60s tick, 300s blocked, forever,
+# silently disabling crash-respawn the whole time. The 6h setting throttled
+# only successful updates. 90s bounds the starvation window to ~1-2 missed
+# crash checks instead of five minutes of them.
+WATCHER_UPDATE_TIMEOUT_SECS = 90
 
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
@@ -694,17 +740,30 @@ class RuntimeSupervisor:
             return None
 
     def _background_pip_upgrade(self) -> None:
-        """Non-blocking upgrade via the venv's `clawmetry update
-        --unattended` subcommand — the flag makes the CLI apply the
-        daemon's own update policy (routes/update_check.py): the
-        CLAWMETRY_AUTO_UPDATE kill switch (incl. implicit CI disable)
-        and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window,
-        pinning to the newest aged-in release. Matches the blueprint
-        contract "the shell defers to the daemon's update policy rather
-        than shipping its own"; the local _auto_update_disabled() check
-        is only a cheap pre-flight with the same semantics. Errors are
-        logged and swallowed — a transient PyPI failure should never
-        take down the running app.
+        """Upgrade via the venv's `clawmetry update --unattended`
+        subcommand — the flag makes the CLI apply the daemon's own update
+        policy (routes/update_check.py): the CLAWMETRY_AUTO_UPDATE kill
+        switch (incl. implicit CI disable) and the
+        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, pinning to the
+        newest aged-in release. Matches the blueprint contract "the shell
+        defers to the daemon's update policy rather than shipping its own";
+        the local _auto_update_disabled() check is only a cheap pre-flight
+        with the same semantics. Errors are logged and swallowed — a
+        transient PyPI failure should never take down the running app.
+
+        "Background" here means off the UI thread, NOT asynchronous: the
+        caller (watch()) blocks for the duration, and that same loop owns
+        crash-respawn. Hence WATCHER_UPDATE_TIMEOUT_SECS rather than the
+        300s first-install budget.
+
+        Stamps the attempt on EVERY outcome, including failure. Stamping only
+        successes meant a persistently failing update (offline, broken venv,
+        PyPI down) re-ran on every single watcher tick forever — and that was
+        already true at the OLD 6h cadence, not something the shorter interval
+        introduced. UPGRADE_CHECK_INTERVAL_SECS is enforced purely through the
+        stamp file, so a path that never stamps is a path with no interval at
+        all; 6h only ever throttled successes. A failed attempt is still an
+        attempt.
         """
         if _auto_update_disabled():
             self._log(
@@ -718,7 +777,8 @@ class RuntimeSupervisor:
         try:
             r = subprocess.run(
                 [str(cli), "update", "--unattended"],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True,
+                timeout=WATCHER_UPDATE_TIMEOUT_SECS,
                 **_win_subprocess_kwargs(),
             )
             if r.returncode != 0 and "--unattended" in (r.stderr or "") \
@@ -733,16 +793,23 @@ class RuntimeSupervisor:
                 )
                 r = subprocess.run(
                     [str(cli), "update"],
-                    capture_output=True, text=True, timeout=300,
+                    capture_output=True, text=True,
+                    timeout=WATCHER_UPDATE_TIMEOUT_SECS,
                     **_win_subprocess_kwargs(),
                 )
             self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
                 self._log(r.stderr[:2000])
-            else:
-                self._mark_upgraded(self._get_installed_version())
+            # Stamp regardless of rc: see the docstring. A failed attempt
+            # still consumed an interval, and not stamping it turns the
+            # 60s cadence into "retry forever, every tick".
+            self._mark_upgraded(self._get_installed_version())
         except subprocess.TimeoutExpired:
             self._log("watcher clawmetry-update timed out")
+            # Same reasoning, and this is the case that matters most: a
+            # hanging PyPI is exactly the failure that would otherwise
+            # re-enter pip on every tick and starve crash-respawn.
+            self._mark_upgraded(self._get_installed_version())
 
     def restart_daemon(self) -> bool:
         """Stop the current daemon and spawn a fresh one on the same
