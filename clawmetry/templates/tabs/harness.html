@@ -66,6 +66,11 @@
     </div>
   </div>
 
+  <!-- Claude surface coverage. Only rendered for the Claude Code runtime,
+       filled by loadClaudeCoverage(). Two honest halves: the surfaces this
+       machine traces in full, and the ones that never touch this disk. -->
+  <div id="claude-coverage" style="display:none;margin-bottom:14px;"></div>
+
   <div style="font-size:13px;color:var(--muted,#888);margin:0 0 6px 2px;" id="harness-extras-label">
     What this runtime uniquely exposes, beyond the generic tabs:
   </div>
