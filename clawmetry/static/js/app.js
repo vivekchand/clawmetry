@@ -10159,13 +10159,17 @@ function _cmClientFilterRt(rt) {
 // aggregates — do the per-runtime slicing instead.
 var _CM_RT_AGGREGATE = {};
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
-// memory/skills are workspace-level, security is machine posture, self-evolve is
-// node findings. The runtime selector simply does not apply to these.
+// security is machine posture, self-evolve is node findings. The runtime
+// selector simply does not apply to these.
 var _CM_RT_NODEWIDE = {
   // approvals + alerts left this map 2026-08-03: approvals rows filter by
   // the requesting session's runtime prefix, and alert rules carry their own
   // per-rule scope (runtime column, node-wide chip when 'all').
-  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1,
+  // memory + skills left it 2026-08-14: every runtime keeps its memory and
+  // skills in its OWN place on disk (clawmetry/runtime_memory.py), so these
+  // tabs scope for real off the global switcher. Calling them node-wide was
+  // what pushed a redundant per-tab runtime picker into the page.
+  crons: 1, security: 1, selfevolve: 1,
   policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
   clusters: 1, actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
@@ -25827,17 +25831,35 @@ setTimeout(checkLicenseExpiry, 1200);
 //
 // Each supported runtime stores its long-lived memory and its skills in
 // different places on disk (see clawmetry/runtime_memory.py). This module
-// renders two things across the Memory + Skills tabs:
-//   1. A chip bar of runtimes (dimmed if not present on this machine)
-//   2. A file-browser view (left tree, right preview) for the picked runtime
+// renders a file-browser view (left tree, right preview) for whichever
+// runtime the GLOBAL runtime switcher is on.
 //
-// OpenClaw remains the default; picking it hides the browser and shows the
-// existing rich Memory / Skills UI. All other runtimes route through the
-// browser. Backwards compatible — the old view is untouched.
+// There is deliberately no per-tab runtime picker. An earlier cut shipped a
+// chip bar inside each tab, which meant three runtime selectors on screen at
+// once (header dropdown, nav dropdown, chip bar) that could disagree with
+// each other. The global switcher is the only runtime control; these tabs
+// read it via _cmRuntimeFilter() and re-render from switchTab() when it
+// changes.
+//
+// Scope rules:
+//   'openclaw'  → the rich native Memory/Skills UI (edit + history), because
+//                 OpenClaw is the one runtime we can write back to.
+//   'all'       → every entitled runtime's files, grouped by runtime.
+//   <other>     → that runtime's files only.
 // ─────────────────────────────────────────────────────────────────────────
 
 var _cmRuntimeCatalog = null;
-var _cmRuntimeSelected = { memory: 'openclaw', skills: 'openclaw' };
+
+// Which runtime each tab is currently RENDERING. Mirrors the global filter;
+// kept per-tab only so a re-entrant switchTab() can skip a redundant fetch.
+var _cmRuntimeSelected = { memory: 'all', skills: 'all' };
+
+// The global runtime switcher's value, normalised for these two tabs.
+function _cmRuntimeScopeForTab() {
+  var rt = 'all';
+  try { if (typeof _cmRuntimeFilter === 'function') rt = _cmRuntimeFilter() || 'all'; } catch (e) {}
+  return rt || 'all';
+}
 
 function _cmRuntimeIsCloud() {
   try {
@@ -25869,109 +25891,101 @@ function _cmRuntimeIcon(id) {
   return map[id] || '•';
 }
 
-function _cmRuntimeChip(runtime, selected, tab, category) {
-  var count = 0;
-  if (category && runtime.counts) count = runtime.counts[category] || 0;
-  else if (runtime.counts) {
-    Object.keys(runtime.counts).forEach(function(k) { count += runtime.counts[k] || 0; });
-  }
-  var isSel = runtime.id === selected;
-  var isPresent = !!runtime.present;
-  var isLocked = !!runtime.locked;
-  var bg = isSel ? '#6366f1' : (isPresent ? 'var(--bg-secondary)' : 'transparent');
-  var color = isSel ? '#fff' : (isPresent ? 'var(--text-primary)' : 'var(--text-muted)');
-  var border = isSel ? '#6366f1' : 'var(--border-primary)';
-  var op = (isPresent || isSel) ? 1 : 0.55;
-  var badge = '';
-  if (isLocked) {
-    badge = '<span title="Paid runtime — upgrade to browse its files" style="margin-left:6px;font-size:10px;opacity:0.85;">🔒</span>';
-  } else if (count > 0) {
-    badge = '<span style="background:rgba(255,255,255,0.16);padding:1px 6px;border-radius:8px;font-size:10px;margin-left:6px;">' + count + '</span>';
-  }
-  var titleTip = isLocked
-    ? escHtml(runtime.label) + ' — paid runtime, upgrade to browse'
-    : escHtml(runtime.label) + (isPresent ? '' : ' (not detected on this machine)');
-  return '<div class="cm-runtime-chip" data-runtime="' + runtime.id + '" '
-    + 'onclick="cmRuntimeSelect(\'' + tab + '\',\'' + runtime.id + '\')" '
-    + 'style="padding:4px 10px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;'
-    + 'background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';opacity:' + op + ';'
-    + 'display:inline-flex;align-items:center;gap:4px;" title="' + titleTip + '">'
-    + escHtml(runtime.label) + badge + '</div>';
-}
+// Native (OpenClaw-only) view containers per tab. Shown when the global
+// runtime switcher is on 'openclaw'; hidden otherwise so the file browser
+// owns the surface.
+var _CM_RT_NATIVE_VIEWS = {
+  memory: ['memory-summary-view', 'memory-access-view', 'memory-all-view'],
+  skills: ['skills-summary-row', 'skills-list', 'skills-browser'],
+};
+// Which of those come back on when we return to OpenClaw. memorySwitchView /
+// the Skills grid toggle own the rest.
+var _CM_RT_NATIVE_DEFAULT = {
+  memory: { 'memory-summary-view': 1 },
+  skills: { 'skills-summary-row': 1, 'skills-list': 1 },
+};
 
-async function cmRuntimeMountChips(chipsEl) {
-  if (!chipsEl) return;
-  var tab = chipsEl.getAttribute('data-tab') || 'memory';
-  var category = chipsEl.getAttribute('data-category') || null;
-  chipsEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">Loading runtimes…</span>';
-  var cat = await _cmRuntimeFetchCatalog();
-  var runtimes = (cat.runtimes || []).slice();
-  // Sort: present first, then by label
-  runtimes.sort(function(a, b) {
-    if (!!a.present !== !!b.present) return a.present ? -1 : 1;
-    return (a.label || '').localeCompare(b.label || '');
-  });
-  var sel = _cmRuntimeSelected[tab] || 'openclaw';
-  var chips = runtimes.map(function(rt) {
-    return _cmRuntimeChip(rt, sel, tab, category);
-  });
-  chipsEl.innerHTML = chips.join('');
-}
-
+// Render one tab for the runtime the global switcher is on. Called from
+// switchTab(), which _cmOnGlobalRuntimeChange() re-invokes on every switcher
+// change — so this is the single place the two tabs react to runtime scope.
 function cmRuntimeSelect(tab, runtimeId) {
+  if (!runtimeId) runtimeId = _cmRuntimeScopeForTab();
   _cmRuntimeSelected[tab] = runtimeId;
-  // Re-render both chip bars if present (keeps them in sync visually)
-  var chips = document.querySelectorAll('[id$="-runtime-chips"][data-tab="' + tab + '"]');
-  chips.forEach(function(el) { cmRuntimeMountChips(el); });
-  // Toggle native OpenClaw view vs runtime file browser
   var browser = document.getElementById(tab + '-runtime-browser');
-  if (tab === 'memory') {
-    var nativeIds = ['memory-summary-view', 'memory-access-view', 'memory-all-view'];
-    if (runtimeId === 'openclaw') {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        // Only restore the summary view by default; the other two are toggled
-        // by memorySwitchView independently.
-        if (id === 'memory-summary-view') el.style.display = '';
-      });
-      if (browser) browser.style.display = 'none';
-    } else {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-      });
-      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'memory'); }
-    }
-  } else if (tab === 'skills') {
-    var nativeIds = ['skills-summary-row', 'skills-list', 'skills-browser'];
-    if (runtimeId === 'openclaw') {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        if (id === 'skills-summary-row' || id === 'skills-list') el.style.display = '';
-      });
-      if (browser) browser.style.display = 'none';
-    } else {
-      nativeIds.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-      });
-      if (browser) { browser.style.display = ''; cmRuntimeMountBrowser(browser, runtimeId, 'skills'); }
-    }
+  var native = _CM_RT_NATIVE_VIEWS[tab] || [];
+  var defaults = _CM_RT_NATIVE_DEFAULT[tab] || {};
+  // Controls that only drive the OpenClaw-native view (Memory's
+  // Summary / All files / Access log switch, the Skills Grid button). They
+  // do nothing to the file browser, so showing them over it is a dead control.
+  var nativeCtl = (tab === 'memory')
+    ? document.querySelectorAll('#page-memory .mem-view-tab')
+    : document.querySelectorAll('#page-skills .refresh-btn[onclick*="skills-browser"]');
+  if (runtimeId === 'openclaw') {
+    native.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && defaults[id]) el.style.display = '';
+    });
+    nativeCtl.forEach(function(el) { el.style.display = ''; });
+    if (browser) browser.style.display = 'none';
+    return;
   }
+  native.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  nativeCtl.forEach(function(el) { el.style.display = 'none'; });
+  if (browser) {
+    browser.style.display = '';
+    cmRuntimeMountBrowser(browser, runtimeId, tab);
+  }
+}
+
+// Row label for one file in the runtime tree.
+//
+// Naming a row by its basename is fine for `no-em-dashes.md` and useless for
+// the container filenames every runtime reuses — a Skills tree rendered as
+// thirty identical "SKILL.md" rows tells you nothing. For those, name the row
+// after the directory that actually identifies it (the skill folder, the
+// project folder), dropping the structural segments in between.
+var _CM_RT_GENERIC_FILE = {
+  'SKILL.md': 1, 'MEMORY.md': 1, 'CLAUDE.md': 1, 'AGENTS.md': 1,
+  'GEMINI.md': 1, 'README.md': 1, 'index.md': 1, 'settings.json': 1,
+};
+var _CM_RT_GENERIC_DIR = {
+  skills: 1, memory: 1, plugins: 1, external_plugins: 1, marketplaces: 1,
+  commands: 1, agents: 1, hooks: 1, '.claude': 1, '.agents': 1,
+};
+function _cmRtDisplayName(rel, fallback) {
+  var segs = String(rel || '').split('/').filter(Boolean);
+  if (!segs.length) return fallback || '(file)';
+  var base = segs[segs.length - 1];
+  if (!_CM_RT_GENERIC_FILE[base]) return base;
+  var parts = segs.slice(0, -1).filter(function(s) { return !_CM_RT_GENERIC_DIR[s]; });
+  if (!parts.length) return base;
+  return parts.slice(-2).join('/');
 }
 
 async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   if (!container) return;
+  var scopeLabel = (runtimeId === 'all')
+    ? 'all runtimes'
+    : ((typeof _cmRuntimeLabel === 'function' ? _cmRuntimeLabel(runtimeId) : runtimeId) || runtimeId);
   container.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;">Loading '
-    + escHtml(runtimeId) + '…</div>';
+    + escHtml(scopeLabel) + '…</div>';
   var payload;
+  // Memory owns the `memory` bucket; Skills owns the other four — skills,
+  // slash commands, sub-agent definitions and hooks are all "things the agent
+  // can invoke or is configured by". Without this split the two tabs rendered
+  // byte-identical trees (every category), which is what made Skills look
+  // like a copy of Memory; splitting Skills down to `skills` alone would
+  // instead leave commands/agents/hooks collected but displayed nowhere.
+  var category = (tab === 'skills') ? 'skills,commands,agents,hooks' : 'memory';
+  // What to CALL that set in copy. The tab name, not the raw filter — a
+  // header reading "skills,commands,agents,hooks" is an implementation detail.
+  var catWord = (tab === 'skills') ? 'skills' : 'memory';
   try {
-    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files';
-    if (tab === 'memory' || tab === 'skills') {
-      // No category filter — show everything the runtime exposes.
-    }
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files'
+      + '?category=' + encodeURIComponent(category);
     var r = await fetch(url);
     if (r.status === 402) {
       // Paid runtime the caller isn't entitled to. Show upsell CTA
@@ -26001,18 +26015,22 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
 
   if (!groups.length) {
+    var emptyHead = (runtimeId === 'all')
+      ? 'No ' + catWord + ' files found for any runtime'
+      : 'No ' + catWord + ' files found for ' + escHtml(payload.label || scopeLabel);
+    var pathList = absent.map(function(g) {
+      return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.label || g.category)
+        + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
+    }).join('');
     container.innerHTML =
       '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
-      + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">Nothing found on disk for ' + escHtml(payload.label || runtimeId) + '</div>'
-      + 'ClawMetry looks for this runtime\'s memory and skills at these paths:'
-      + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
-      + absent.map(function(g) {
-          return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.category)
-            + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
-        }).join('')
-      + '</div>'
-      + '<div style="margin-top:14px;font-size:11px;">Install ' + escHtml(payload.label || runtimeId)
-      + ' or drop files at one of these paths to make them appear here.</div>'
+      + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">' + emptyHead + '</div>'
+      + (pathList
+          ? ('ClawMetry looked here:'
+             + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
+             + pathList + '</div>'
+             + '<div style="margin-top:14px;font-size:11px;">Drop files at one of these paths to make them appear here.</div>')
+          : '<div style="margin-top:8px;font-size:12px;">Pick a specific runtime in the runtime switcher to see the exact paths ClawMetry checks for it.</div>')
       + '</div>';
     return;
   }
@@ -26021,15 +26039,21 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   var treeHtml = groups.map(function(g, gi) {
     var scopePill = '<span style="font-size:9px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:0 5px;margin-left:6px;color:var(--text-muted);">'
       + escHtml(g.scope) + '</span>';
-    var catPill = '<span style="font-size:9px;background:rgba(99,102,241,0.15);color:#a5b4fc;border-radius:8px;padding:0 5px;margin-left:4px;">'
-      + escHtml(g.category) + '</span>';
+    // The tab already names the category, so the only pill worth the room is
+    // which runtime a group came from — and only when we're showing several.
+    var rtPill = (runtimeId === 'all' && g.runtime_label)
+      ? ('<span style="font-size:9px;background:rgba(99,102,241,0.15);color:#a5b4fc;border-radius:8px;padding:0 5px;margin-left:4px;">'
+         + escHtml(g.runtime_label) + '</span>')
+      : '';
     var files = (g.files || []).map(function(f, fi) {
       var name = f.path || g.label || '(file)';
-      var basename = name.split('/').pop();
-      var indent = (name.split('/').length - 1) * 12;
+      var basename = _cmRtDisplayName(f.path, g.label);
+      // Cap the depth indent — plugin skills nest 5+ deep and an uncapped
+      // indent pushed the name clean out of a 320px column.
+      var indent = Math.min((name.split('/').length - 1) * 12, 24);
       var kb = f.size >= 1024 ? (f.size / 1024).toFixed(1) + 'K' : f.size + 'B';
       return '<div class="cm-rt-file" data-gi="' + gi + '" data-fi="' + fi
-        + '" onclick="cmRuntimeOpenFile(this,\'' + runtimeId + '\','
+        + '" onclick="cmRuntimeOpenFile(this,'
         + gi + ',' + fi + ')" style="padding:3px 10px 3px ' + (18 + indent) + 'px;font-size:11.5px;cursor:pointer;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center;gap:8px;" '
         + 'title="' + escHtml(name) + '">'
         + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(basename) + '</span>'
@@ -26038,7 +26062,7 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     }).join('');
     return '<div class="cm-rt-group" style="margin-bottom:8px;">'
       + '<div style="padding:6px 10px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);display:flex;align-items:center;flex-wrap:wrap;">'
-      + escHtml(g.label) + catPill + scopePill + '</div>'
+      + escHtml(g.label) + rtPill + scopePill + '</div>'
       + '<div style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:10px;color:var(--text-muted);padding:0 10px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(g.root) + '">' + escHtml(g.root) + '</div>'
       + files + '</div>';
   }).join('');
@@ -26047,7 +26071,7 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
     + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
     + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
-    + escHtml(payload.label) + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
+    + escHtml(payload.label || scopeLabel) + ' · ' + catWord + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
     + '</div>' + treeHtml + '</div>'
     + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
     + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
@@ -26057,10 +26081,21 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
 
   // Stash the payload on the container so cmRuntimeOpenFile can look up
   // (root, path) by (gi, fi) without another fetch.
-  container._cmRuntimePayload = payload;
+  //
+  // `groups` — the EXISTS-ONLY list — is what the tree was indexed over, so
+  // that is what has to be stashed. Stashing payload.groups (which also holds
+  // the roots we looked at and didn't find) shifted every gi: on a runtime
+  // whose first roots are absent, clicking file 0 resolved to an absent group,
+  // found no files, and returned silently. That was the "clicking a file does
+  // nothing" bug — it only ever worked when every root happened to exist.
+  container._cmRuntimePayload = {
+    runtime: payload.runtime,
+    label: payload.label,
+    groups: groups,
+  };
 }
 
-async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
+async function cmRuntimeOpenFile(clickEl, gi, fi) {
   var container = clickEl.closest('.runtime-file-browser');
   if (!container || !container._cmRuntimePayload) return;
   var tab = container.getAttribute('data-tab') || 'memory';
@@ -26069,6 +26104,10 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   if (!group) return;
   var file = (group.files || [])[fi];
   if (!file) return;
+  // Read against the group's OWN runtime, not the tab's scope: under the
+  // "All runtimes" scope the tab's runtime is the literal 'all', which is a
+  // list-only sentinel and 404s on the single-file read endpoint.
+  var runtimeId = group.runtime || container._cmRuntimePayload.runtime || 'openclaw';
 
   // Highlight selection
   container.querySelectorAll('.cm-rt-file').forEach(function(el) {
@@ -26117,17 +26156,17 @@ async function cmRuntimeOpenFile(clickEl, runtimeId, gi, fi) {
   }
 }
 
-// Hook into tab switches so the chip bars mount on first paint.
+// Hook into tab switches so the browser renders on first paint AND whenever
+// the global runtime switcher changes — _cmOnGlobalRuntimeChange() re-invokes
+// switchTab() for the current tab, so this one hook covers both.
 (function _cmRuntimeInstallHooks() {
   var origSwitchTab = (typeof switchTab === 'function') ? switchTab : null;
   if (!origSwitchTab || origSwitchTab._cmRuntimeWrapped) return;
   var wrapped = function(name) {
     var out = origSwitchTab.apply(this, arguments);
     try {
-      if (name === 'memory') {
-        cmRuntimeMountChips(document.getElementById('memory-runtime-chips'));
-      } else if (name === 'skills') {
-        cmRuntimeMountChips(document.getElementById('skills-runtime-chips'));
+      if (name === 'memory' || name === 'skills') {
+        cmRuntimeSelect(name, _cmRuntimeScopeForTab());
       }
     } catch (e) {}
     return out;
