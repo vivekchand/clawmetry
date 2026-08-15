@@ -1,4 +1,4 @@
-"""The desktop shell's 6h auto-upgrade must honor the daemon's update policy.
+"""The desktop shell's auto-upgrade must honor the daemon's update policy.
 
 Bug pinned here: desktop/app.py's watcher shelled a plain `clawmetry update`
 (a bare pip upgrade that ignores CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS and
@@ -113,7 +113,7 @@ def test_pre_unattended_venv_falls_back_to_plain_update_once(monkeypatch, tmp_pa
     """Bootstrap: a venv still running a clawmetry from before the flag
     existed rejects --unattended (argparse rc=2). The shell must retry a
     plain update once so the venv can reach a version that understands the
-    policy flag, instead of failing every 6h cycle forever."""
+    policy flag, instead of failing on every cycle forever."""
     monkeypatch.setenv("CLAWMETRY_AUTO_UPDATE", "1")
     stub, cli = _stub_shell(tmp_path)
     calls = []
@@ -150,4 +150,12 @@ def test_real_update_failure_does_not_trigger_plain_fallback(monkeypatch, tmp_pa
     monkeypatch.setattr(dapp.subprocess, "run", _fake_run)
     dapp.RuntimeSupervisor._background_pip_upgrade(stub)
     assert calls == [[str(cli), "update", "--unattended"]]
-    assert stub.upgraded == []
+    # The stamp IS written on a genuine failure now (changed 2026-08-15 with
+    # the 60s cadence). This assertion used to require the opposite, which
+    # pinned the retry-storm bug in place: the upgrade interval is enforced
+    # only via the stamp, so never stamping a failure meant a broken update
+    # re-ran on every watcher tick forever. See
+    # tests/test_desktop_upgrade_cadence.py. What this test is actually about
+    # -- that a real failure must NOT demote to a plain, policy-bypassing
+    # `clawmetry update` -- is the `calls` assertion above, and is unchanged.
+    assert stub.upgraded == ["0.12.999"]

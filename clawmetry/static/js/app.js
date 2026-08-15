@@ -481,7 +481,10 @@
     });
 
     // Free-mode escape: expired-trial users can drop back to
-    // OpenClaw/NanoClaw-only mode instead of paying. Posts to the
+    // OpenClaw/NemoClaw-only mode instead of paying (entitlements.py's
+    // FREE_RUNTIMES = {openclaw, nemoclaw} — NOT nanoclaw, which is paid;
+    // this comment said NanoClaw and that is how the label above got it
+    // wrong too). Posts to the
     // continue-free endpoint (allowlisted), then reloads to a
     // free-runtime-scoped URL so the gate short-circuits and the overlay
     // stays down. Paid-runtime tabs on the free scope render a locked
