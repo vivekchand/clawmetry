@@ -104,6 +104,15 @@ PAID_RUNTIMES = frozenset(
 
 ALL_RUNTIMES = FREE_RUNTIMES | PAID_RUNTIMES
 
+# The number quoted in user-facing copy ("observability for N agent
+# runtimes"). Derived here so there is exactly one place to change when a
+# runtime lands. ``setup.py`` parses this file for it (so the PyPI summary
+# cannot drift), ``scripts/sync_runtime_count.py`` rewrites every other
+# surface from it, and ``tests/test_runtime_count_copy_sync.py`` fails CI
+# if any surface disagrees. Burned 2026-08-15: README said 14, PyPI said
+# 12, FLYWHEEL said 12, the catalogue said 20.
+RUNTIME_COUNT = len(ALL_RUNTIMES)
+
 # Display labels for every known runtime.
 RUNTIME_LABELS = {
     "openclaw": "OpenClaw",
