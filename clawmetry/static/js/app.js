@@ -2705,7 +2705,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
   }
 
-  _selfconfigMode = 'preview';
+  _selfconfigMode = 'code';
   _selfconfigUpdateModeButtons();
   if (bodyEl) bodyEl.style.display = 'block';
   if (editorBody) editorBody.style.display = 'none';
@@ -2733,12 +2733,11 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.this_file_is_empty", null, "This file is empty.") + '</div>';
       } else {
-        // Show raw markdown source, not rendered HTML — these files ARE the
-        // agent's source-of-truth and editing them has agent-behaviour
-        // consequences, so rendering bullets/headers obscures the actual
-        // bytes the agent reads. Same monospace style as the Edit textarea
-        // so Preview ↔ Edit looks consistent.
-        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
+        // Raw source by default, now with a line-number gutter — these files
+        // ARE the agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual bytes
+        // the agent reads. Rendered markdown is one click away (Preview).
+        bodyEl.innerHTML = _cmFvCodeHtml(d.content, true);
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
@@ -2754,7 +2753,8 @@ function _selfconfigUpdateStatusBar(filename, ts, d) {
   var updatedEl = document.getElementById('selfconfig-status-updated');
   if (fileEl) fileEl.textContent = filename || '—';
   if (modeEl) modeEl.textContent = (_selfconfigSelectedTs == null)
-    ? (_selfconfigMode === 'edit' ? 'Editing' : 'Preview')
+    ? (_selfconfigMode === 'edit' ? 'Editing'
+       : (_selfconfigMode === 'preview' ? 'Preview' : 'Source'))
     : 'History';
   if (sizeEl) {
     var src = d && typeof d.content === 'string' ? d.content : (_selfconfigOriginal || '');
@@ -2787,6 +2787,18 @@ function selfconfigSetMode(mode) {
   var bodyEl = document.getElementById('selfconfig-reader-body');
   var editorBody = document.getElementById('selfconfig-editor-body');
   var textarea = document.getElementById('selfconfig-editor-textarea');
+  // 'code' = raw source with line numbers (default), 'preview' = rendered
+  // markdown, 'edit' = the textarea. Re-render the read-only pane in place.
+  if (bodyEl && mode !== 'edit') {
+    var src = _selfconfigOriginal || '';
+    if (mode === 'preview') {
+      var split = _cmFvSplitFrontmatter(src);
+      bodyEl.innerHTML = '<div class="cm-fv-preview mem-prose" style="padding:0;">'
+        + _cmFvFrontmatterHtml(split.fm) + cmSafeMarkdown(split.body) + '</div>';
+    } else {
+      bodyEl.innerHTML = _cmFvCodeHtml(src, true);
+    }
+  }
   if (mode === 'edit') {
     if (bodyEl) bodyEl.style.display = 'none';
     if (editorBody) editorBody.style.display = 'flex';
@@ -3075,36 +3087,26 @@ async function openSkillBrowser(skillName) {
 async function loadSkillFile(skillName, filePath) {
   var contentEl = document.getElementById('skills-browser-content');
   if (!contentEl) return;
-  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">' + t("app.loading", null, "Loading...") + '</div>';
+  cmFileViewerPlaceholder('skills-browser-content', t("app.loading", null, "Loading..."));
 
   try {
     var data = await fetch('/api/skills/' + encodeURIComponent(skillName) + '/file?path=' + encodeURIComponent(filePath)).then(function(r) { return r.json(); });
-    if (data.error) { contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">' + escHtml(data.error) + '</div>'; return; }
+    if (data.error) { cmFileViewerPlaceholder('skills-browser-content', data.error, true); return; }
 
-    var header = '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;">';
-    header += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(filePath) + '</div>';
-    header += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(skillName) + ' &middot; ' + (data.language || 'text') + ' &middot; ' + data.size + ' bytes</div>';
-    header += '</div>';
-
-    var content = data.content || '';
-    if (data.language === 'markdown') {
-      // Simple markdown rendering
-      content = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      content = content.replace(/^### (.+)$/gm, '<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text-primary);">$1</h3>');
-      content = content.replace(/^## (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px;color:var(--text-primary);">$1</h2>');
-      content = content.replace(/^# (.+)$/gm, '<h1 style="margin:20px 0 8px;font-size:18px;color:var(--text-primary);">$1</h1>');
-      content = content.replace(/`([^`]+)`/g, '<code style="background:var(--bg-secondary);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
-      content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      content = content.replace(/^- (.+)$/gm, '<div style="padding-left:16px;">&bull; $1</div>');
-      content = content.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
-      content = '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);">' + content + '</div>';
-    } else {
-      content = '<pre style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px 16px;font-size:12px;line-height:1.6;overflow-x:auto;color:var(--text-primary);white-space:pre-wrap;">' + escHtml(content) + '</pre>';
-    }
-
-    contentEl.innerHTML = header + content;
+    // Same viewer the runtime browser uses: raw source first, Preview toggle
+    // for markdown, copy + full screen. The old hand-rolled regex renderer
+    // mangled anything it didn't have a rule for.
+    var size = data.size || 0;
+    cmFileViewerOpen('skills-browser-content', {
+      name: filePath,
+      path: filePath,
+      content: data.content || '',
+      language: data.language || 'text',
+      meta: [skillName, (size >= 1024 ? (size / 1024).toFixed(1) + 'K' : size + 'B'), data.language || 'text']
+    });
+    _cmRtFitHeight();
   } catch(e) {
-    contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">Error: ' + escHtml(String(e)) + '</div>';
+    cmFileViewerPlaceholder('skills-browser-content', 'Error: ' + String(e), true);
   }
 }
 
@@ -26077,6 +26079,280 @@ async function checkLicenseExpiry() {
 }
 setTimeout(checkLicenseExpiry, 1200);
 // ─────────────────────────────────────────────────────────────────────────
+// cm-fileview — GitHub-style file viewer (Skills + Memory file browsers).
+//
+// Shows the file the way an editor would: raw source, monospace, line-number
+// gutter, nothing reflowed. Markdown files get a Preview toggle instead of
+// being rendered by default (auto-rendering turned YAML frontmatter into a
+// giant heading and hid the real file). Also: soft-wrap toggle, copy-whole-file
+// button, and a full-screen mode for long reads. All text is selectable; the
+// gutter is user-select:none so copying a range yields clean source.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmFileViews = {};   // hostId -> {name, path, content, language, meta[], mode, wrap, fs}
+
+function _cmFvIsMarkdown(lang, name) {
+  if (lang && /^(markdown|md|mdx)$/i.test(lang)) return true;
+  return /\.(md|markdown|mdx)$/i.test(name || '');
+}
+
+// Split a leading YAML frontmatter block off a markdown file so Preview can
+// show it as metadata instead of letting `---` become an <hr> and the keys
+// become body prose.
+function _cmFvSplitFrontmatter(text) {
+  var m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(text || '');
+  if (!m) return { fm: '', body: text || '' };
+  return { fm: m[1], body: (text || '').slice(m[0].length) };
+}
+
+function _cmFvFrontmatterHtml(fm) {
+  if (!fm) return '';
+  var rows = fm.split(/\r?\n/).map(function(line) {
+    var kv = /^([A-Za-z0-9_.\-]+):[ \t]*(.*)$/.exec(line);
+    return kv ? '<b>' + escHtml(kv[1]) + ':</b> ' + escHtml(kv[2]) : escHtml(line);
+  });
+  return '<div class="cm-fv-fm">' + rows.join('<br>') + '</div>';
+}
+
+// One row per source line keeps numbers aligned even with soft-wrap on, and
+// makes a multi-line selection copy back with real newlines.
+function _cmFvCodeHtml(text, wrap) {
+  var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  var lines = src.split('\n');
+  if (lines.length > 8000) {
+    // Very large file — skip the per-line DOM and fall back to one <pre>.
+    return '<pre class="cm-fv-plain">' + escHtml(src) + '</pre>';
+  }
+  var gutter = String(lines.length).length;
+  var rows = lines.map(function(line, i) {
+    return '<div class="cm-fv-row"><span class="cm-fv-ln">' + (i + 1) + '</span>'
+      + '<span class="cm-fv-lc">' + escHtml(line) + '</span></div>';
+  }).join('');
+  return '<div class="cm-fv-code' + (wrap ? ' cm-fv-wrap' : '')
+    + '" style="--cm-ln-w:' + gutter + 'ch;">' + rows + '</div>';
+}
+
+// Placeholder / loading / error states share the host so the panel never
+// collapses between files.
+function cmFileViewerPlaceholder(hostId, msg, isError) {
+  var host = document.getElementById(hostId);
+  if (!host) return;
+  host.classList.add('cm-fileview');
+  host.innerHTML = '<div class="cm-fv-empty"' + (isError ? ' style="color:#ef4444;"' : '') + '>'
+    + escHtml(msg) + '</div>';
+}
+
+// file: {name, path, content, language, meta:[strings]}
+function cmFileViewerOpen(hostId, file) {
+  var prev = _cmFileViews[hostId] || {};
+  var isMd = _cmFvIsMarkdown(file.language, file.name || file.path);
+  _cmFileViews[hostId] = {
+    name: file.name || file.path || '(file)',
+    path: file.path || file.name || '',
+    content: file.content == null ? '' : String(file.content),
+    language: file.language || 'text',
+    meta: file.meta || [],
+    // Remember the user's Code/Preview choice across files when it applies.
+    mode: (prev.mode === 'preview' && isMd) ? 'preview' : 'code',
+    wrap: !!prev.wrap,
+    fs: !!prev.fs
+  };
+  cmFileViewerRender(hostId);
+}
+
+function cmFileViewerRender(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  host.classList.add('cm-fileview');
+  if (s.fs) host.classList.add('cm-fileview-fs');
+  else host.classList.remove('cm-fileview-fs');
+
+  var isMd = _cmFvIsMarkdown(s.language, s.name);
+  if (!isMd && s.mode === 'preview') s.mode = 'code';
+  var hid = String(hostId).replace(/'/g, "\\'");
+
+  var meta = '<span class="cm-fv-name" title="' + escHtml(s.path) + '">' + escHtml(s.name) + '</span>';
+  (s.meta || []).forEach(function(bit) {
+    if (!bit) return;
+    meta += '<span style="opacity:0.45;">·</span><span>' + escHtml(bit) + '</span>';
+  });
+
+  var tools = '';
+  if (isMd) {
+    tools += '<span class="cm-fv-seg">'
+      + '<button class="cm-fv-btn' + (s.mode === 'code' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'code\')" title="Raw file source">Code</button>'
+      + '<button class="cm-fv-btn' + (s.mode === 'preview' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'preview\')" title="Rendered markdown">Preview</button>'
+      + '</span>';
+  }
+  if (s.mode === 'code') {
+    tools += '<button class="cm-fv-btn' + (s.wrap ? ' active' : '') + '" '
+      + 'onclick="cmFvToggleWrap(\'' + hid + '\')" title="Soft-wrap long lines">Wrap</button>';
+  }
+  tools += '<button class="cm-fv-btn" onclick="cmFvCopy(\'' + hid + '\',this)" '
+    + 'title="Copy the whole file">⧉ Copy</button>';
+  tools += '<button class="cm-fv-btn" onclick="cmFvToggleFullscreen(\'' + hid + '\')" title="'
+    + (s.fs ? 'Exit full screen (Esc)' : 'Full screen') + '">'
+    + (s.fs ? '✕ Exit full screen' : '⤡ Full screen') + '</button>';
+
+  var body;
+  if (s.mode === 'preview') {
+    var split = _cmFvSplitFrontmatter(s.content);
+    body = '<div class="cm-fv-preview mem-prose">' + _cmFvFrontmatterHtml(split.fm)
+      + cmSafeMarkdown(split.body) + '</div>';
+  } else {
+    body = _cmFvCodeHtml(s.content, s.wrap);
+  }
+
+  host.innerHTML =
+    '<div class="cm-fv-head"><div class="cm-fv-meta">' + meta + '</div>'
+    + '<div class="cm-fv-tools">' + tools + '</div></div>'
+    + '<div class="cm-fv-body">' + body + '</div>';
+}
+
+function cmFvSetMode(hostId, mode) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.mode = mode;
+  cmFileViewerRender(hostId);
+}
+
+function cmFvToggleWrap(hostId) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.wrap = !s.wrap;
+  cmFileViewerRender(hostId);
+}
+
+function _cmFvLegacyCopy(text) {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
+function cmFvCopy(hostId, btn) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(s.content).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(s.content)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(s.content));
+}
+
+// Full screen moves the host to <body> rather than relying on position:fixed
+// inside the panel — an ancestor with a transform would otherwise trap it.
+function cmFvToggleFullscreen(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  s.fs = !s.fs;
+  if (s.fs) {
+    host._cmFvHome = host.parentNode;
+    host._cmFvNext = host.nextSibling;
+    document.body.appendChild(host);
+    document.body.style.overflow = 'hidden';
+  } else {
+    if (host._cmFvHome) {
+      host._cmFvHome.insertBefore(host, host._cmFvNext || null);
+      host._cmFvHome = null;
+      host._cmFvNext = null;
+    }
+    document.body.style.overflow = '';
+  }
+  cmFileViewerRender(hostId);
+  try { _cmRtFitHeight(); } catch (e) {}
+}
+
+// Same full-screen trick for panels that aren't cm-fileview hosts (the
+// OpenClaw Memory IDE surface, which keeps its own edit toolbar).
+var _cmFsPanels = [];
+
+function cmPanelToggleFullscreen(panel, btn) {
+  if (!panel) return;
+  var on = !panel.classList.contains('cm-panel-fs');
+  if (on) {
+    panel._cmFsHome = panel.parentNode;
+    panel._cmFsNext = panel.nextSibling;
+    panel._cmFsHeight = panel.style.height;
+    document.body.appendChild(panel);
+    panel.classList.add('cm-panel-fs');
+    document.body.style.overflow = 'hidden';
+    if (_cmFsPanels.indexOf(panel) === -1) _cmFsPanels.push(panel);
+  } else {
+    panel.classList.remove('cm-panel-fs');
+    if (panel._cmFsHome) {
+      panel._cmFsHome.insertBefore(panel, panel._cmFsNext || null);
+      panel._cmFsHome = null;
+      panel._cmFsNext = null;
+    }
+    panel.style.height = panel._cmFsHeight || '';
+    document.body.style.overflow = '';
+    _cmFsPanels = _cmFsPanels.filter(function(p) { return p !== panel; });
+  }
+  if (btn) {
+    var label = btn.querySelector('span');
+    if (label) label.textContent = on ? 'Exit full screen' : 'Full screen';
+  }
+}
+
+function memIdeToggleFullscreen(btn) {
+  cmPanelToggleFullscreen(document.querySelector('#memory-summary-view .mem-ide'), btn);
+}
+
+function memIdeCopy(btn) {
+  var text = _selfconfigOriginal || '';
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(text)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(text));
+}
+
+// Esc leaves full screen from anywhere.
+(function _cmFvInstallEsc() {
+  if (window._cmFvEscInstalled) return;
+  window._cmFvEscInstalled = true;
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Escape') return;
+    Object.keys(_cmFileViews).forEach(function(hostId) {
+      if (_cmFileViews[hostId] && _cmFileViews[hostId].fs) cmFvToggleFullscreen(hostId);
+    });
+    _cmFsPanels.slice().forEach(function(panel) { cmPanelToggleFullscreen(panel, null); });
+  });
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
 // Runtime Memory & Skills browser (multi-runtime file explorer).
 //
 // Each supported runtime stores its long-lived memory and its skills in
@@ -26365,16 +26641,14 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   }).join('');
 
   container.innerHTML =
-    '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
+    '<div class="cm-rt-panel" style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
     + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
     + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
     + escHtml(payload.label || scopeLabel) + ' · ' + catWord + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
     + '</div>' + treeHtml + '</div>'
-    + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
-    + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
-    + '<div id="cm-rt-file-body-' + tab + '" style="flex:1;overflow:auto;padding:16px 22px;background:var(--bg-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12.5px;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;">'
-    + '<div style="color:var(--text-muted);font-family:inherit;">Pick a file on the left to view its contents.</div>'
-    + '</div></div></div>';
+    + '<div id="cm-rt-view-' + tab + '" class="cm-fileview">'
+    + '<div class="cm-fv-empty">Pick a file on the left to view its contents.</div>'
+    + '</div></div>';
 
   // Stash the payload on the container so cmRuntimeOpenFile can look up
   // (root, path) by (gi, fi) without another fetch.
@@ -26390,7 +26664,33 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     label: payload.label,
     groups: groups,
   };
+  _cmRtFitHeight();
 }
+
+// Grow the browser panels into whatever vertical room is actually left below
+// them. The fixed `calc(100vh - 260px)` guessed wrong the moment a banner
+// appeared (dead space under the panel, or a panel running off-screen), so
+// measure the panel's real top instead. Re-measured on resize.
+function _cmRtFitHeight() {
+  try {
+    document.querySelectorAll('.cm-rt-panel').forEach(function(panel) {
+      if (!panel.offsetParent) return;              // hidden tab — skip
+      var top = panel.getBoundingClientRect().top;
+      if (top <= 0) return;
+      panel.style.height = Math.max(380, Math.round(window.innerHeight - top - 18)) + 'px';
+    });
+  } catch (e) {}
+}
+
+(function _cmRtInstallResizeFit() {
+  if (window._cmRtFitInstalled) return;
+  window._cmRtFitInstalled = true;
+  var timer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(timer);
+    timer = setTimeout(_cmRtFitHeight, 80);
+  });
+})();
 
 async function cmRuntimeOpenFile(clickEl, gi, fi) {
   var container = clickEl.closest('.runtime-file-browser');
@@ -26413,10 +26713,8 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   clickEl.style.background = 'rgba(99,102,241,0.15)';
   clickEl.style.color = '#a5b4fc';
 
-  var header = document.getElementById('cm-rt-file-header-' + tab);
-  var body = document.getElementById('cm-rt-file-body-' + tab);
-  if (header) header.innerHTML = escHtml(group.root + '/' + (file.path || ''));
-  if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
+  var hostId = 'cm-rt-view-' + tab;
+  cmFileViewerPlaceholder(hostId, 'Loading ' + (file.path || group.label || 'file') + '…');
 
   try {
     var d;
@@ -26436,28 +26734,19 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
     var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
-    if (header) header.innerHTML =
-      '<span style="color:var(--text-primary);font-weight:600;">' + escHtml((file.path || group.label || '')) + '</span>'
-      + '<span style="opacity:0.6;">·</span><span>' + escHtml(sizeStr) + '</span>'
-      + (mstr ? '<span style="opacity:0.6;">·</span><span>' + escHtml(mstr) + '</span>' : '')
-      + '<span style="opacity:0.6;">·</span><span>' + escHtml(d.language || 'text') + '</span>';
-    if (body) {
-      // Render markdown as preview when we have it (matches Memory tab UX),
-      // otherwise show raw content. cmSafeMarkdown is defined earlier in
-      // app.js and sanitizes output.
-      if ((d.language || '') === 'markdown' && typeof cmSafeMarkdown === 'function') {
-        body.style.whiteSpace = 'normal';
-        body.style.fontFamily = '';
-        body.innerHTML = cmSafeMarkdown(content);
-      } else {
-        body.style.whiteSpace = 'pre-wrap';
-        body.style.fontFamily = "'JetBrains Mono','SF Mono',monospace";
-        body.textContent = content;
-      }
-    }
+    // Raw source by default — auto-rendering markdown reflowed the file into
+    // prose (YAML frontmatter became a giant heading) and there was no way
+    // back to what the file actually says. Preview is one click away.
+    cmFileViewerOpen(hostId, {
+      name: file.path || group.label || '',
+      path: group.root + '/' + (file.path || ''),
+      content: content,
+      language: d.language || 'text',
+      meta: [sizeStr, mstr, d.language || 'text']
+    });
   } catch (e) {
-    if (body) body.innerHTML = '<div style="color:#ef4444;">Failed to load: '
-      + escHtml(String(e && e.message || e)) + '</div>';
+    cmFileViewerPlaceholder(hostId, 'Failed to load: '
+      + String(e && e.message || e), true);
   }
 }
 
