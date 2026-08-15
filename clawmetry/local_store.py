@@ -2387,6 +2387,17 @@ class LocalStore:
             d = dict(zip(cols, r))
             if d.get("outcome") is None:
                 unlabeled.append(d["session_id"])
+            elif _is_stale_classification(d):
+                # Written by the pre-2026-08-15 classifier, whose failure
+                # branch fired on text similarity alone and was measurably
+                # uncorrelated with reality. Re-run it so the Overview tile
+                # and every other reader of sessions.outcome stop showing
+                # fabricated failures — correcting only new sessions would
+                # leave the bogus history on screen.
+                #
+                # Self-limiting: reclassify_session_outcome stamps
+                # outcome_classified_at, so each row qualifies exactly once.
+                unlabeled.append(d["session_id"])
             out.append(d)
         # Inline-classify any unlabeled rows (bounded — limit kwarg above
         # caps the work). Cheap: each session reads ≤200 events.
@@ -12295,6 +12306,30 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness",
 )
+
+# Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
+# stamped before this came from the version whose cognitive-loop branch fired
+# on text similarity alone; those rows are re-classified once on first read.
+# Success rows are left alone: the old success branch was a conservative
+# fallthrough, so re-running it cannot turn a success into a fabricated
+# failure, and re-reading events for every healthy session would be a large
+# read for no correction.
+_CLASSIFIER_FIX_EPOCH_MS = 1_786_838_400_000  # 2026-08-15T00:00:00Z
+_STALE_OUTCOMES = ("cognitive_loop", "tool_call_stuck", "stuck", "looping")
+
+
+def _is_stale_classification(row: dict[str, Any]) -> bool:
+    """True for a failure label written by the pre-fix classifier."""
+    if (row.get("outcome") or "") not in _STALE_OUTCOMES:
+        return False
+    ts = row.get("outcome_classified_at")
+    if ts is None:
+        return True
+    try:
+        return int(ts) < _CLASSIFIER_FIX_EPOCH_MS
+    except (TypeError, ValueError):
+        return True
+
 
 def _runtime_session_id_clause(runtime: str | None) -> tuple[str | None, list[str]]:
     """Build a WHERE-clause fragment + params filtering ``events.session_id``

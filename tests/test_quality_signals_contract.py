@@ -376,3 +376,74 @@ def test_assess_never_raises_on_garbage():
                  [{"data": "not json"}], [{"data": b"\xff\xfe"}]):
         a = assess_session(junk, runtime="claude_code", session_id="junk")
         assert a.verdicts == []
+
+
+# ── the fabricated label must stop reaching OTHER surfaces too ─────────────
+
+def test_cognitive_loop_requires_corroborating_evidence():
+    """Text repetition alone can no longer produce a failure label.
+
+    ``sessions.outcome`` is read by /api/outcomes (the Overview tile), evals,
+    and the cloud snapshot — not just the Quality tab. Fixing only the tab
+    would have left the same fabricated failures on other screens.
+    """
+    from clawmetry.outcome_classifier import classify_session
+
+    # Repetitive narration, but steady varied successful tool use underneath:
+    # the audit's headline false positive.
+    events, t = [], 1_780_000_000
+    lines = ["Relaying to the owner. Standing by for their signal.",
+             "Relaying to the owner. Waiting on that merge.",
+             "Relaying to the owner. Waiting for their fix + merge.",
+             "Relaying to the owner. Standing by for the green light."]
+    for i in range(20):
+        events.append(_family_tool_call(t, ["Bash", "Read", "Edit", "Grep"][i % 4],
+                                        {"file_path": "/repo/f%d.py" % i}))
+        events.append(_family_tool_result(t + 1, "ok"))
+        events.append(_msg(t + 2, lines[i % len(lines)]))
+        t += 20
+    outcome, _conf = classify_session(events, {"status": "ended"})
+    assert outcome != "cognitive_loop", (
+        "repetitive narration over real, varied tool use must not be a loop"
+    )
+
+
+def test_cognitive_loop_still_fires_with_corroboration():
+    """The guard must not defang the label into uselessness."""
+    from clawmetry.outcome_classifier import classify_session
+
+    events, t = [], 1_780_000_000
+    for _ in range(9):
+        events.append(_family_tool_call(t, "Edit", {"file_path": "/a.py",
+                                                    "old": "x", "new": "y"}))
+        events.append(_family_tool_result(t + 1, "failed to apply", is_error=True))
+        events.append(_msg(t + 2, "Retrying the same edit on the same file now."))
+        t += 15
+    outcome, conf = classify_session(events, {"status": "ended"})
+    assert outcome == "cognitive_loop", (
+        "a genuine stuck session must still be labelled; got %r" % outcome
+    )
+    assert conf > 0
+
+
+def test_stale_classification_detection():
+    """Only pre-fix FAILURE labels are re-classified.
+
+    Re-running successes would be a large read for no correction (the old
+    success branch was a conservative fallthrough and cannot have invented a
+    failure), and re-running post-fix rows on every read would be a request
+    storm.
+    """
+    from clawmetry.local_store import (
+        _CLASSIFIER_FIX_EPOCH_MS, _is_stale_classification,
+    )
+    old, new = _CLASSIFIER_FIX_EPOCH_MS - 1, _CLASSIFIER_FIX_EPOCH_MS + 1
+    assert _is_stale_classification({"outcome": "cognitive_loop",
+                                     "outcome_classified_at": old})
+    assert not _is_stale_classification({"outcome": "cognitive_loop",
+                                         "outcome_classified_at": new})
+    assert not _is_stale_classification({"outcome": "success",
+                                         "outcome_classified_at": old})
+    assert _is_stale_classification({"outcome": "tool_call_stuck",
+                                     "outcome_classified_at": None})
+    assert not _is_stale_classification({"outcome": None})
