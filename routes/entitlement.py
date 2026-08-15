@@ -10671,6 +10671,788 @@ def api_entitlement_has_all_at_path():
         )
 
 
+def _has_all_at_path_batch_fallback(
+    from_tier: str,
+    to_tokens: list,
+    feature_tokens: list,
+    runtime_tokens: list,
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all-at-path-batch``.
+
+    Aggregate mixed-axis batch-path sibling of :func:`_has_all_at_path_fallback`
+    (single-destination path). On any resolver / helper blowup the endpoint
+    still returns 200 with the same envelope shape as the happy path but
+    with ``tiers=[]`` and every fold-rollup fail-closed on the boolean-fold
+    side so a pricing-comparison matrix that lost the resolver never
+    silently renders a bundle grant it can't verify. Caller-supplied
+    destination / feature / runtime tokens echo into ``unknown_tiers`` /
+    ``unknown_features`` / ``unknown_runtimes`` for debugging.
+    """
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": list(feature_tokens),
+        "unknown_runtimes": list(runtime_tokens),
+        "unknown_tiers": list(to_tokens),
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "tiers": [],
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _has_all_at_path_batch_body() -> dict:
+    """Happy-path body builder for ``/api/entitlement/has-all-at-path-batch``.
+
+    Aggregate mixed-axis batch-path sibling of :func:`_has_all_at_path_body`
+    (single destination) and boolean-fold complement of
+    :func:`_missing_all_at_path_batch_body` (row-detail path-batch). Fixes
+    ONE 5-axis mixed bundle and sweeps across every rung between ``from=``
+    and each of the N candidate destinations in ``to=`` in ONE round-trip,
+    returning per-destination path lists of aggregate ``has_all_at`` fold
+    rows.
+
+    Envelope shape (byte-stable across every input branch)::
+
+        {
+          "from":               "<tier id>",
+          "from_label":         "...",
+          "from_rank":          <int>,
+          "features":           [<known ids>],
+          "runtimes":           [<known ids>],
+          "channels":           <int|null>,
+          "retention_days":     <int|null>,
+          "nodes":              <int|null>,
+          "unknown_features":   [...],
+          "unknown_runtimes":   [...],
+          "unknown_tiers":      [...],
+          "supplied_axes":      [...],
+          "supplied_count":     <int>,
+          "tiers": [
+            {
+              "to":            "<id>",
+              "to_label":      "...",
+              "to_rank":       <int>,
+              "direction":     "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":          [<has_all_at_path row>, ...],
+              "path_length":   <int>,
+              "allowed_count": <int>,
+              "all_allowed":   <bool>,
+              "any_allowed":   <bool>,
+            },
+            ...
+          ],
+          "required_tier":       "<id>" | null,
+          "required_tier_label": "<label>" | null,
+          "required_tier_rank":  <int>,
+          "current_tier":        "<live tier id>",
+          "current_tier_rank":   <int>,
+          "grace":               <bool>,
+          "enforced":            <bool>,
+        }
+
+    Each ``tiers[].path`` row is byte-identical to a row from
+    ``/has-all-at-path?from=<from>&to=<to>&<bundle>``'s ``.path`` for the
+    same triple -- pinned by the parity tests so the scalar and batch
+    path what-if boolean-fold helpers cannot drift. Per-destination
+    path lengths can legitimately differ (the rungs walked depend on
+    the destination), matching :func:`_missing_bundle_at_path_batch_body`
+    posture.
+
+    Runtime-alias canonicalisation (``claude-code`` -> ``claude_code``)
+    is applied per-token upstream of the strict scalar. Alias-and-
+    canonical pair dedups to ONE entry in ``runtimes`` and therefore
+    ONE fold input on every rung of every destination.
+
+    Endpoint-level fold semantics: an unknown feature or runtime token
+    OR a non-int capacity value collapses the endpoint-level fold to
+    ``False`` on EVERY rung of EVERY destination (matches the singular
+    ``/has-all-at-path`` typo-``False`` posture applied per destination).
+    No axes supplied collapses every row to ``False`` (matches the
+    ``/has-all-at`` empty-``False`` posture).
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-
+    only subset (matches the singular ``/has-all-at`` /
+    ``/has-all-at-path`` envelopes' rollup contract), independent of
+    any per-destination endpoint.
+
+    Never 4xxs (missing / blank / unknown ``from``, or empty / all-
+    unknown destination CSV -> 200 with ``tiers=[]``, matching the
+    sibling ``/has-features-at-path-batch`` posture -- a pricing-
+    comparison matrix binds ``tiers`` directly without a pre-
+    validation round-trip). Never 5xxs: any helper blowup collapses
+    to :func:`_has_all_at_path_batch_fallback`.
+    """
+    from clawmetry import entitlements as _ent
+
+    raw_from = request.args.get("from")
+    from_tier = (raw_from or "").strip().lower()
+    to_tokens = _parse_csv_arg("to")
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        _channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        _retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        _nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    batch = _ent.has_all_at_path_batch(
+        from_tier,
+        to_tokens,
+        features=known_features if features_supplied else None,
+        runtimes=known_runtimes if runtimes_supplied else None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+    required_label = _ent.tier_label(required) if required else None
+    req_rank = _ent.tier_rank(required) if required else -1
+
+    # Endpoint-level typo collapse: an unknown token OR a non-int
+    # capacity (i.e. supplied-and-not-ok) OR no-axes-supplied collapses
+    # EVERY rung of EVERY destination's ``has_all_at`` to ``False``
+    # (matches the singular ``/has-all-at-path`` empty-/typo-``False``
+    # posture applied per destination).
+    endpoint_ok = (
+        bool(supplied_axes)
+        and not unknown_features
+        and not unknown_runtimes
+        and not (features_supplied and not known_features)
+        and not (runtimes_supplied and not known_runtimes)
+        and not (channels_present and not channels_ok)
+        and not (retention_present and not retention_ok)
+        and not (nodes_present and not nodes_ok)
+    )
+
+    if batch is None:
+        return {
+            "from": from_tier,
+            "from_label": None,
+            "from_rank": -1,
+            "features": known_features,
+            "runtimes": known_runtimes,
+            "channels": channels_n if channels_present and channels_ok else None,
+            "retention_days": (
+                retention_n if retention_present and retention_ok else None
+            ),
+            "nodes": nodes_n if nodes_present and nodes_ok else None,
+            "unknown_features": unknown_features,
+            "unknown_runtimes": unknown_runtimes,
+            "unknown_tiers": list(to_tokens),
+            "supplied_axes": supplied_axes,
+            "supplied_count": len(supplied_axes),
+            "tiers": [],
+            "required_tier": required,
+            "required_tier_label": required_label,
+            "required_tier_rank": req_rank,
+            "current_tier": env["current_tier"],
+            "current_tier_rank": env["current_tier_rank"],
+            "grace": env["grace"],
+            "enforced": env["enforced"],
+        }
+
+    tiers_out: list[dict] = []
+    for row in batch.get("tiers", []) or []:
+        try:
+            path = list(row.get("path", []) or [])
+        except AttributeError:
+            continue
+        path_out: list[dict] = []
+        for prow in path:
+            try:
+                tid = prow.get("tier")
+                row_allowed = bool(prow.get("has_all_at", False))
+            except AttributeError:
+                continue
+            path_out.append(
+                {
+                    "tier": tid,
+                    "tier_label": prow.get(
+                        "tier_label", _ent.tier_label(tid)
+                    ),
+                    "tier_rank": prow.get(
+                        "tier_rank", _ent.tier_rank(tid)
+                    ),
+                    "has_all_at": row_allowed and endpoint_ok,
+                }
+            )
+        allowed_count = sum(1 for r in path_out if r.get("has_all_at"))
+        all_allowed = bool(path_out) and all(
+            r.get("has_all_at") for r in path_out
+        )
+        any_allowed = any(r.get("has_all_at") for r in path_out)
+        tiers_out.append(
+            {
+                "to": row.get("to"),
+                "to_label": row.get("to_label"),
+                "to_rank": row.get("to_rank", -1),
+                "direction": row.get("direction"),
+                "path": path_out,
+                "path_length": len(path_out),
+                "allowed_count": allowed_count,
+                "all_allowed": all_allowed,
+                "any_allowed": any_allowed,
+            }
+        )
+
+    return {
+        "from": from_tier,
+        "from_label": _ent.tier_label(from_tier),
+        "from_rank": _ent.tier_rank(from_tier),
+        "features": known_features,
+        "runtimes": known_runtimes,
+        "channels": channels_n if channels_present and channels_ok else None,
+        "retention_days": (
+            retention_n if retention_present and retention_ok else None
+        ),
+        "nodes": nodes_n if nodes_present and nodes_ok else None,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "unknown_tiers": list(batch.get("unknown", []) or []),
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "tiers": tiers_out,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/has-all-at-path-batch")
+def api_entitlement_has_all_at_path_batch():
+    """``GET /api/entitlement/has-all-at-path-batch?from=<id>&to=a,b,c
+    &features=x,y&runtimes=p,q&channels=5&retention_days=30&nodes=2`` --
+    aggregate mixed-axis batch-path boolean-fold sibling of
+    ``/api/entitlement/has-all-at-path`` (single destination) and 5-axis
+    extension of ``/api/entitlement/has-features-at-path-batch`` /
+    ``/api/entitlement/has-runtimes-at-path-batch`` (per-axis batch path).
+
+    Fixes ONE 5-axis mixed bundle and sweeps across every rung between
+    ``from`` and each of the N candidate ``to`` tiers, returning per-
+    destination path lists of aggregate ``has_all_at`` fold rows -- the
+    "from my current rung, here are 3 tiers I'm considering: for the
+    WHOLE 5-axis bundle show me at which rung this bundle unlocks along
+    every candidate path" matrix an upgrade-comparison surface needs,
+    off ONE URL instead of N calls to ``/has-all-at-path``, or 5 * N
+    calls fanned out across the per-axis path-batch endpoints plus a
+    client-side AND-chain per rung per destination.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/has-all-at-path?from=<from>&to=<to>&<bundle>``'s ``.path`` for
+    the same triple. Per-destination path lengths can legitimately
+    differ (the rungs walked depend on the destination), matching
+    ``/has-features-at-path-batch`` / ``/has-runtimes-at-path-batch``
+    posture. ``trial`` IS accepted as a destination (excluded from the
+    walked intermediate rungs the way ``/has-all-at-path`` already
+    excludes it, but is a valid endpoint via the lateral / identity
+    branches).
+
+    Envelope shape is fully documented on :func:`_has_all_at_path_batch_body`.
+
+    Never 4xxs (missing / blank / unknown ``from``, or empty / all-
+    unknown destination CSV -> 200 with ``tiers=[]``, matching the
+    sibling ``/has-features-at-path-batch`` posture). Never 5xxs: any
+    helper blowup collapses to :func:`_has_all_at_path_batch_fallback`.
+    """
+    try:
+        return jsonify(_has_all_at_path_batch_body())
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_all_at_path_batch: error: %s", exc
+        )
+        from_tier = (request.args.get("from") or "").strip().lower()
+        return jsonify(
+            _has_all_at_path_batch_fallback(
+                from_tier,
+                _parse_csv_arg("to"),
+                _parse_csv_arg("features"),
+                _parse_csv_arg("runtimes"),
+            )
+        )
+
+
+def _missing_all_at_path_batch_fallback(
+    from_tier: str,
+    to_tokens: list,
+    feature_tokens: list,
+    runtime_tokens: list,
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-at-path-batch``.
+
+    Row-detail sibling of :func:`_has_all_at_path_batch_fallback` on the
+    aggregate what-if batch-path seat. On any resolver / helper blowup
+    the endpoint still returns 200 with the same envelope shape as the
+    happy path but with ``tiers=[]`` and every fold-rollup fail-open on
+    the row-detail side (``denied_count=0`` / ``all_denied=False`` /
+    ``any_denied=False`` when materialised per destination) so a
+    pricing-comparison matrix that lost the resolver never silently
+    renders a bundle denial it can't justify. Mirrors
+    :func:`_has_all_at_path_batch_fallback` byte-for-byte on the axis-
+    echo slots so a UI wiring both boolean-fold and row-detail matrices
+    off the same body-builder gets byte-stable envelopes across every
+    input branch on both endpoints.
+    """
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "features": [],
+        "runtimes": [],
+        "channels": None,
+        "retention_days": None,
+        "nodes": None,
+        "unknown_features": list(feature_tokens),
+        "unknown_runtimes": list(runtime_tokens),
+        "unknown_tiers": list(to_tokens),
+        "supplied_axes": [],
+        "supplied_count": 0,
+        "tiers": [],
+        "required_tier": None,
+        "required_tier_label": None,
+        "required_tier_rank": -1,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_all_at_path_batch_body() -> dict:
+    """Happy-path body builder for
+    ``/api/entitlement/missing-all-at-path-batch``.
+
+    Aggregate mixed-axis batch-path sibling of
+    :func:`_missing_all_at_path_body` (single destination) and row-detail
+    complement of :func:`_has_all_at_path_batch_body` (paired boolean-
+    fold batch-path). Fixes ONE 5-axis mixed bundle and sweeps across
+    every rung between ``from=`` and each of the N candidate destinations
+    in ``to=`` in ONE round-trip, returning per-destination path lists of
+    aggregate ``missing`` row-detail rows.
+
+    Envelope shape (byte-stable across every input branch)::
+
+        {
+          "from":               "<tier id>",
+          "from_label":         "...",
+          "from_rank":          <int>,
+          "features":           [<known ids>],
+          "runtimes":           [<known ids>],
+          "channels":           <int|null>,
+          "retention_days":     <int|null>,
+          "nodes":              <int|null>,
+          "unknown_features":   [...],
+          "unknown_runtimes":   [...],
+          "unknown_tiers":      [...],
+          "supplied_axes":      [...],
+          "supplied_count":     <int>,
+          "tiers": [
+            {
+              "to":           "<id>",
+              "to_label":     "...",
+              "to_rank":      <int>,
+              "direction":    "upgrade" | "downgrade" | "lateral" | "identity",
+              "path":         [<missing_all_at_path row>, ...],
+              "path_length":  <int>,
+              "denied_count": <int>,
+              "all_denied":   <bool>,
+              "any_denied":   <bool>,
+            },
+            ...
+          ],
+          "required_tier":       "<id>" | null,
+          "required_tier_label": "<label>" | null,
+          "required_tier_rank":  <int>,
+          "current_tier":        "<live tier id>",
+          "current_tier_rank":   <int>,
+          "grace":               <bool>,
+          "enforced":            <bool>,
+        }
+
+    Each ``tiers[].path`` row is byte-identical to a row from
+    ``/missing-all-at-path?from=<from>&to=<to>&<bundle>``'s ``.path`` for
+    the same triple -- pinned by the parity tests. Per-destination path
+    lengths can legitimately differ, matching
+    ``/missing-features-at-path-batch`` /
+    ``/missing-runtimes-at-path-batch`` posture.
+
+    Runtime-alias canonicalisation is applied per-token upstream of the
+    strict scalar. Endpoint-level typo posture: unknown feature / runtime
+    tokens are SURFACED inside each rung's per-axis
+    ``missing["features"]`` / ``missing["runtimes"]`` list AND echoed in
+    ``unknown_features`` / ``unknown_runtimes`` for a diagnostics tooltip
+    (matches :func:`_missing_all_at_path_body` per destination). A
+    supplied-but-unparseable capacity axis surfaces the raw string in
+    that rung's per-axis capacity slot on every rung of every
+    destination.
+
+    Per-destination ``denied_count`` sums the count of rungs that carry
+    ANY per-axis denial across that destination's path; ``all_denied``
+    folds AND-wise (empty path -> ``False``); ``any_denied`` folds OR-
+    wise (empty path -> ``False``).
+
+    ``required_tier`` folds through
+    :func:`clawmetry.entitlements.min_tier_for_all` against the KNOWN-
+    only subset (matches the singular ``/missing-all-at-path`` envelope's
+    rollup contract), independent of any per-destination endpoint.
+
+    Never 4xxs (missing / blank / unknown ``from``, or empty / all-
+    unknown destination CSV -> 200 with ``tiers=[]``, matching the
+    sibling ``/missing-features-at-path-batch`` posture). Never 5xxs:
+    any helper blowup collapses to
+    :func:`_missing_all_at_path_batch_fallback`.
+    """
+    from clawmetry import entitlements as _ent
+
+    raw_from = request.args.get("from")
+    from_tier = (raw_from or "").strip().lower()
+    to_tokens = _parse_csv_arg("to")
+
+    features_raw = request.args.get("features")
+    runtimes_raw = request.args.get("runtimes")
+
+    known_features: list[str] = []
+    unknown_features: list[str] = []
+    features_supplied = features_raw is not None
+    if features_supplied:
+        for fid in _parse_csv_arg("features"):
+            if fid in _ent.ALL_FEATURES:
+                if fid not in known_features:
+                    known_features.append(fid)
+            elif fid not in unknown_features:
+                unknown_features.append(fid)
+
+    known_runtimes: list[str] = []
+    unknown_runtimes: list[str] = []
+    runtimes_supplied = runtimes_raw is not None
+    if runtimes_supplied:
+        for rid_raw in _parse_csv_arg("runtimes"):
+            rid = _ent.canonical_runtime(rid_raw) or rid_raw
+            if rid in _ent.ALL_RUNTIMES:
+                if rid not in known_runtimes:
+                    known_runtimes.append(rid)
+            elif rid_raw not in unknown_runtimes:
+                unknown_runtimes.append(rid_raw)
+
+    (
+        channels_present,
+        channels_ok,
+        channels_n,
+        channels_raw,
+    ) = _parse_capacity_arg("channels")
+    (
+        retention_present,
+        retention_ok,
+        retention_n,
+        retention_raw,
+    ) = _parse_capacity_arg("retention_days")
+    (
+        nodes_present,
+        nodes_ok,
+        nodes_n,
+        nodes_raw,
+    ) = _parse_capacity_arg("nodes")
+
+    supplied_axes: list[str] = []
+    if features_supplied:
+        supplied_axes.append("features")
+    if runtimes_supplied:
+        supplied_axes.append("runtimes")
+    if channels_present:
+        supplied_axes.append("channels")
+    if retention_present:
+        supplied_axes.append("retention_days")
+    if nodes_present:
+        supplied_axes.append("nodes")
+
+    batch = _ent.missing_all_at_path_batch(
+        from_tier,
+        to_tokens,
+        features=known_features if features_supplied else None,
+        runtimes=known_runtimes if runtimes_supplied else None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+
+    env = _resolver_envelope(_ent)
+    required = _ent.min_tier_for_all(
+        features=known_features or None,
+        runtimes=known_runtimes or None,
+        channels=channels_n if channels_present and channels_ok else None,
+        retention_days=(
+            retention_n if retention_present and retention_ok else None
+        ),
+        nodes=nodes_n if nodes_present and nodes_ok else None,
+    )
+    required_label = _ent.tier_label(required) if required else None
+    req_rank = _ent.tier_rank(required) if required else -1
+
+    if batch is None:
+        return {
+            "from": from_tier,
+            "from_label": None,
+            "from_rank": -1,
+            "features": known_features,
+            "runtimes": known_runtimes,
+            "channels": channels_n if channels_present and channels_ok else None,
+            "retention_days": (
+                retention_n if retention_present and retention_ok else None
+            ),
+            "nodes": nodes_n if nodes_present and nodes_ok else None,
+            "unknown_features": unknown_features,
+            "unknown_runtimes": unknown_runtimes,
+            "unknown_tiers": list(to_tokens),
+            "supplied_axes": supplied_axes,
+            "supplied_count": len(supplied_axes),
+            "tiers": [],
+            "required_tier": required,
+            "required_tier_label": required_label,
+            "required_tier_rank": req_rank,
+            "current_tier": env["current_tier"],
+            "current_tier_rank": env["current_tier_rank"],
+            "grace": env["grace"],
+            "enforced": env["enforced"],
+        }
+
+    def _row_any_denied(row) -> bool:
+        m = row.get("missing") or {}
+        for k, v in m.items():
+            if isinstance(v, list):
+                if v:
+                    return True
+            elif v is not None:
+                return True
+        return False
+
+    tiers_out: list[dict] = []
+    for row in batch.get("tiers", []) or []:
+        try:
+            path = list(row.get("path", []) or [])
+        except AttributeError:
+            continue
+        path_out: list[dict] = []
+        for prow in path:
+            try:
+                tid = prow.get("tier")
+                base_missing = prow.get("missing") or {}
+            except AttributeError:
+                continue
+            feat_missing: list = list(base_missing.get("features") or [])
+            for token in unknown_features:
+                if token not in feat_missing:
+                    feat_missing.append(token)
+            rt_missing: list = list(base_missing.get("runtimes") or [])
+            for token in unknown_runtimes:
+                if token not in rt_missing:
+                    rt_missing.append(token)
+            if channels_present and not channels_ok:
+                channels_slot = channels_raw
+            else:
+                channels_slot = base_missing.get("channels")
+            if retention_present and not retention_ok:
+                retention_slot = retention_raw
+            else:
+                retention_slot = base_missing.get("retention_days")
+            if nodes_present and not nodes_ok:
+                nodes_slot = nodes_raw
+            else:
+                nodes_slot = base_missing.get("nodes")
+            missing_dict = {
+                "features": feat_missing,
+                "runtimes": rt_missing,
+                "channels": channels_slot,
+                "retention_days": retention_slot,
+                "nodes": nodes_slot,
+            }
+            path_out.append(
+                {
+                    "tier": tid,
+                    "tier_label": prow.get(
+                        "tier_label", _ent.tier_label(tid)
+                    ),
+                    "tier_rank": prow.get(
+                        "tier_rank", _ent.tier_rank(tid)
+                    ),
+                    "missing": missing_dict,
+                }
+            )
+        denied_count = sum(1 for r in path_out if _row_any_denied(r))
+        all_denied = bool(path_out) and all(
+            _row_any_denied(r) for r in path_out
+        )
+        any_denied = any(_row_any_denied(r) for r in path_out)
+        tiers_out.append(
+            {
+                "to": row.get("to"),
+                "to_label": row.get("to_label"),
+                "to_rank": row.get("to_rank", -1),
+                "direction": row.get("direction"),
+                "path": path_out,
+                "path_length": len(path_out),
+                "denied_count": denied_count,
+                "all_denied": all_denied,
+                "any_denied": any_denied,
+            }
+        )
+
+    return {
+        "from": from_tier,
+        "from_label": _ent.tier_label(from_tier),
+        "from_rank": _ent.tier_rank(from_tier),
+        "features": known_features,
+        "runtimes": known_runtimes,
+        "channels": channels_n if channels_present and channels_ok else None,
+        "retention_days": (
+            retention_n if retention_present and retention_ok else None
+        ),
+        "nodes": nodes_n if nodes_present and nodes_ok else None,
+        "unknown_features": unknown_features,
+        "unknown_runtimes": unknown_runtimes,
+        "unknown_tiers": list(batch.get("unknown", []) or []),
+        "supplied_axes": supplied_axes,
+        "supplied_count": len(supplied_axes),
+        "tiers": tiers_out,
+        "required_tier": required,
+        "required_tier_label": required_label,
+        "required_tier_rank": req_rank,
+        "current_tier": env["current_tier"],
+        "current_tier_rank": env["current_tier_rank"],
+        "grace": env["grace"],
+        "enforced": env["enforced"],
+    }
+
+
+@bp_entitlement.route("/api/entitlement/missing-all-at-path-batch")
+def api_entitlement_missing_all_at_path_batch():
+    """``GET /api/entitlement/missing-all-at-path-batch?from=<id>&to=a,b,c
+    &features=x,y&runtimes=p,q&channels=5&retention_days=30&nodes=2`` --
+    aggregate mixed-axis batch-path row-detail sibling of
+    ``/api/entitlement/missing-all-at-path`` (single destination),
+    row-detail complement of ``/api/entitlement/has-all-at-path-batch``
+    (paired boolean-fold batch-path), and 5-axis extension of
+    ``/api/entitlement/missing-features-at-path-batch`` /
+    ``/api/entitlement/missing-runtimes-at-path-batch``.
+
+    Fixes ONE 5-axis mixed bundle and sweeps across every rung between
+    ``from`` and each of the N candidate ``to`` tiers, returning per-
+    destination path lists of aggregate per-axis ``missing`` row-detail
+    rows -- the "from my current rung, here are 3 tiers I'm considering:
+    for the WHOLE 5-axis bundle show me which per-axis slots are still
+    locked at every rung climbed to reach each" matrix an upgrade-
+    comparison surface needs, off ONE URL instead of N calls to
+    ``/missing-all-at-path``.
+
+    Each row in ``tiers[].path`` is byte-identical to a row from
+    ``/missing-all-at-path?from=<from>&to=<to>&<bundle>``'s ``.path``
+    for the same triple. Per-destination path lengths can legitimately
+    differ. ``trial`` IS accepted as a destination.
+
+    Envelope shape is fully documented on
+    :func:`_missing_all_at_path_batch_body`.
+
+    Never 4xxs (missing / blank / unknown ``from``, or empty / all-
+    unknown destination CSV -> 200 with ``tiers=[]``). Never 5xxs: any
+    helper blowup collapses to
+    :func:`_missing_all_at_path_batch_fallback`.
+    """
+    try:
+        return jsonify(_missing_all_at_path_batch_body())
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_at_path_batch: error: %s", exc
+        )
+        from_tier = (request.args.get("from") or "").strip().lower()
+        return jsonify(
+            _missing_all_at_path_batch_fallback(
+                from_tier,
+                _parse_csv_arg("to"),
+                _parse_csv_arg("features"),
+                _parse_csv_arg("runtimes"),
+            )
+        )
+
 
 def _missing_all_at_batch_fallback(
     tier_tokens: list,
