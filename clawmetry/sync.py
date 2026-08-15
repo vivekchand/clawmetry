@@ -19363,6 +19363,32 @@ def run_daemon() -> None:
                 try:
                     _ak = (load_config() or {}).get("api_key", "")
                     if _ak:
+                        # Trial demonstrably lapsed -> REMOVE the pro package
+                        # rather than merely gating it. The entitlement layer
+                        # stops us using the paid adapters, but leaving the
+                        # closed wheel on disk means anyone can import
+                        # clawmetry_pro directly and keep the capability
+                        # without paying. should_deprovision_pro fails OPEN on
+                        # any uncertainty (unresolvable entitlement, offline,
+                        # signed local license, never-trialed, paid) so we
+                        # only ever remove on a positive lapse. Paying
+                        # re-provisions automatically on the next entitled
+                        # heartbeat; DuckDB history is untouched, so the user
+                        # gets their data back rather than a hole.
+                        from clawmetry.license import (
+                            should_deprovision_pro as _sdp,
+                            deprovision_pro as _dpp,
+                        )
+                        if _sdp():
+                            if _pv():
+                                _rm, _rmsg = _dpp("trial lapsed")
+                                log.info(
+                                    "clawmetry-pro removal: %s", _rmsg
+                                ) if _rm else log.warning(
+                                    "clawmetry-pro removal did not complete: %s",
+                                    _rmsg)
+                            _pro_stop.wait(timeout=1800)
+                            continue  # never re-provision on the same tick
                         _was = bool(_pv())
                         _ok, _msg = _wp(_ak, config.get("node_id"))
                         if _ok and not _was:
