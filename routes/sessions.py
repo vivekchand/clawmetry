@@ -333,6 +333,130 @@ def api_sessions():
     return jsonify({"sessions": sessions, "capped_at_24h": capped})
 
 
+# Liveness windows for /api/live-sessions. Mirrors sync.py's
+# ``_SESSION_ACTIVE_SECS`` / ``_SESSION_IDLE_SECS`` so the endpoint and the
+# ingest that feeds it can never disagree about what "right now" means.
+_LIVE_WORKING_SECS = 120
+_LIVE_WAITING_SECS = 600
+
+
+def _live_state(last_active_iso: str, status: str) -> tuple:
+    """Classify one session row into ``(state, age_seconds)``.
+
+    ``state`` is one of:
+      ``working`` — the transcript grew within the last two minutes.
+      ``waiting`` — quiet for under ten minutes; the session is open but the
+                    agent is not producing (usually parked at the prompt).
+      ``ended``   — quiet for longer, or explicitly ended by the runtime.
+
+    An explicit terminal status from the runtime always wins: OpenClaw and
+    Codex can actually assert "this session is over", and a real end signal
+    must never be overridden by a recency guess. Everything else is inferred
+    from silence, which is why the UI labels it as inference rather than fact.
+    """
+    st = str(status or "").strip().lower()
+    # Note the absence of "ended" from this list. Until every daemon in the
+    # fleet has the ``_session_liveness`` ingest fix, rows already in DuckDB
+    # carry the old hardcoded ``status="ended"`` — honouring that literal here
+    # would keep the panel empty on exactly the machines that need it most.
+    # Recency still classifies those rows correctly (a genuinely finished
+    # session is also a quiet one), and once the fix lands they arrive with a
+    # real status anyway. The words below are only ever written when a runtime
+    # ASSERTS an end (OpenClaw's endReason, a failed/aborted run).
+    if st in ("completed", "stopped", "failed", "aborted"):
+        return ("ended", None)
+    if not last_active_iso:
+        return ("ended", None)
+    try:
+        seen = datetime.fromisoformat(str(last_active_iso).replace("Z", "+00:00"))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return ("ended", None)
+    if age < 0:
+        age = 0.0
+    if age < _LIVE_WORKING_SECS:
+        return ("working", age)
+    if age < _LIVE_WAITING_SECS:
+        return ("waiting", age)
+    return ("ended", age)
+
+
+@bp_sessions.route("/api/live-sessions")
+def api_live_sessions():
+    """Which sessions are alive right now, by name, across every runtime.
+
+    The Overview used to answer this with a single node-wide boolean ("It's
+    idle right now") derived from the sub-agent registry — which lists spawned
+    children only, so a person driving five terminals saw "idle" while all
+    five were mid-task (founder report 2026-08-15).
+
+    Response::
+
+        {"sessions": [{session_id, runtime, title, state, age_seconds,
+                       model, cost_usd, message_count, last_active_at}],
+         "counts": {"working": N, "waiting": N},
+         "runtime": "<filter or 'all'>", "_source": "local_store"}
+
+    Ordered most-recently-active first and capped at 20 rows: this feeds a
+    glanceable panel, not a browsing surface (the Sessions tab is that).
+    ``?runtime=<id>`` scopes to one runtime per FLYWHEEL §1c; omitted or
+    ``all`` returns every runtime.
+    """
+    rt_filter = (request.args.get("runtime") or "").strip().lower()
+    if rt_filter in ("all", "undefined", "null"):
+        rt_filter = ""
+
+    rows = _fetch_sessions_table_rows(limit=200)
+    if rows is None:
+        # Honest degradation: the daemon is unreachable and we cannot open
+        # DuckDB. Say "unknown", never an empty list that reads as "nothing
+        # is running".
+        return jsonify({"sessions": [], "counts": {"working": 0, "waiting": 0},
+                        "runtime": rt_filter or "all", "available": False,
+                        "_source": "unavailable"})
+
+    live = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        sid = r.get("session_id") or ""
+        if hide_clawmetry_session(sid):
+            continue
+        low = sid.lower()
+        if "subagent" in low or "sub-agent" in low:
+            continue  # sub-agents are shown under their parent, not as peers
+        meta = r.get("metadata") or {}
+        runtime = (meta.get("runtime") or "").strip() or "openclaw"
+        if rt_filter and runtime.lower() != rt_filter:
+            continue
+        last_active = r.get("last_active_at") or r.get("started_at") or ""
+        state, age = _live_state(last_active, r.get("status"))
+        if state == "ended":
+            continue
+        live.append({
+            "session_id":    sid,
+            "runtime":       runtime,
+            "title":         (r.get("title") or "").strip(),
+            "state":         state,
+            "age_seconds":   int(age) if age is not None else None,
+            "model":         meta.get("recent_model") or meta.get("model") or "",
+            "cost_usd":      round(float(r.get("cost_usd") or 0.0), 4),
+            "message_count": int(r.get("message_count") or 0),
+            "last_active_at": last_active,
+        })
+
+    live.sort(key=lambda s: s.get("age_seconds") if s.get("age_seconds") is not None else 1e9)
+    counts = {
+        "working": sum(1 for s in live if s["state"] == "working"),
+        "waiting": sum(1 for s in live if s["state"] == "waiting"),
+    }
+    return jsonify({"sessions": live[:20], "counts": counts,
+                    "runtime": rt_filter or "all", "available": True,
+                    "_source": "local_store"})
+
+
 def _filter_internal_sessions(rows: list) -> list:
     """Drop ClawMetry's own helper sessions (clawmetry-fix / -selfevolve /
     -mem-probe …) from a session-row list so our plumbing doesn't mix with the
@@ -2082,7 +2206,10 @@ def _try_local_store_subagents(_rows=None):
             "runId":            extra.get("runId") or "",
         })
 
-    _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
+    # "running" is the daemon's own word for "active"; without it the
+    # in-progress sub-agents sank to the bottom on rank 9 (the default).
+    _status_rank = {"active": 0, "running": 0, "idle": 1, "stale": 2,
+                    "failed": 3}
     subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
     return {
         "subagents": subagents,
@@ -2328,7 +2455,8 @@ def api_subagents():
         for _sa in subagents:
             if (_sa.get("key") or _sa.get("sessionId") or "") in _paused_agents:
                 _sa["status"] = "paused"
-    _status_rank = {"active": 0, "idle": 1, "stale": 2, "paused": 3, "failed": 4}
+    _status_rank = {"active": 0, "running": 0, "idle": 1, "stale": 2,
+                    "paused": 3, "failed": 4}
     subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
     payload = {"subagents": subagents, "counts": counts}
     if not full_scan:

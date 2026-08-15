@@ -11732,6 +11732,17 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 _sk = _sid_to_key.get(sid, "")
                 _sm = _sid_to_meta.get(sid, {})
                 _dn = label or _sm.get("subject") or _sk or sid[:8]
+                # OpenClaw is the one runtime that emits a REAL end signal:
+                # the transcript's ``type=="session"`` frame carries
+                # endReason/end_reason (parsed just above). Honour it — an
+                # explicit end always beats a recency guess. Without one, fall
+                # back to the same recency buckets the family runtimes use, so
+                # a live OpenClaw session stops reporting itself "completed"
+                # from its first turn.
+                if end_reason:
+                    _oc_status, _oc_ended = "completed", updated_at
+                else:
+                    _oc_status, _oc_ended = _session_liveness(updated_at)
                 batch.append(
                     {
                         "session_id": sid,
@@ -11739,7 +11750,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "session_key": _sk,
                         "channel": _sm.get("provider", ""),
                         "chat_type": _sm.get("chatType", ""),
-                        "status": "completed",
+                        "status": _oc_status,
+                        "ended_at": _oc_ended,
                         "end_reason": end_reason,
                         "model": model,
                         "recent_model": last_seen_model or model,
@@ -12426,6 +12438,9 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
     try:
         store.ingest_many(rows)
         for ns_sess, meta in sessions.items():
+            # One call: evaluating liveness twice could straddle the 120s
+            # boundary and write a status that contradicts its own ended_at.
+            _vm_status, _vm_ended = _session_liveness(meta["last"])
             srow = {
                 "agent_type": "openclaw",
                 "session_id": ns_sess,
@@ -12434,8 +12449,9 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
                 "title": "Model usage (%s)" % runtime,
                 "started_at": meta["first"],
                 "last_active_at": meta["last"],
-                "ended_at": meta["last"],
-                "status": "ended",
+                # Liveness derived from the newest usage-log line, not assumed.
+                "ended_at": _vm_ended,
+                "status": _vm_status,
                 "total_tokens": int(meta["tokens"]),
                 "cost_usd": None,
                 "message_count": int(meta["n"]),
@@ -12574,6 +12590,61 @@ def _epoch_to_iso(epoch) -> str | None:
         return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
     except (ValueError, OSError, OverflowError, TypeError):
         return None
+
+
+# Session liveness buckets. Deliberately the SAME thresholds the subagent
+# reader already derives (routes/sessions.py ``_try_local_store_subagents``:
+# <120s active, <600s idle, else stale) so the two surfaces cannot disagree
+# about what "right now" means.
+_SESSION_ACTIVE_SECS = 120
+_SESSION_IDLE_SECS = 600
+
+
+def _session_liveness(last_activity_iso: str | None) -> tuple[str, str | None]:
+    """Return ``(status, ended_at)`` for a session whose newest event is at
+    ``last_activity_iso``.
+
+    Family runtimes (Claude Code, Codex, Cursor, Antigravity, ...) emit no
+    explicit "session ended" record — the only truth on disk is how long ago
+    the transcript last grew. Every family row used to be stamped
+    ``status="ended"`` with a non-null ``ended_at`` from its very first turn,
+    which made a live session indistinguishable from a dead one and broke
+    every downstream consumer that asks "what is running?":
+
+      * ``routes/overview.py`` ``activeSessions`` counts ``status == "active"``
+        and so reported 0 on a node with six terminals mid-task.
+      * The stuck-session and n-gram loop detectors skip any row carrying
+        ``ended_at``, so they have never fired for a paid runtime despite
+        the comment claiming they cover all of them.
+      * The Overview hero read "It's idle right now" while the agent worked.
+
+    A LIVE session has no end time, so ``ended_at`` comes back ``None`` — that
+    is what puts the row back in front of those consumers (the upsert assigns
+    ``ended_at = excluded.ended_at`` with no COALESCE, so existing poisoned
+    rows heal on the next ingest pass).
+
+    Unparseable or missing timestamps fall back to the historical
+    ``("ended", last_activity_iso)``: a bad clock must never be able to
+    resurrect a dead session.
+    """
+    if not last_activity_iso:
+        return ("ended", last_activity_iso)
+    try:
+        seen = datetime.fromisoformat(str(last_activity_iso).replace("Z", "+00:00"))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return ("ended", last_activity_iso)
+    # A future timestamp means a skewed clock, not a live session. Treat the
+    # skew as "just now" rather than trusting it or discarding the session.
+    if age < 0:
+        age = 0.0
+    if age < _SESSION_ACTIVE_SECS:
+        return ("active", None)
+    if age < _SESSION_IDLE_SECS:
+        return ("idle", None)
+    return ("ended", last_activity_iso)
 
 
 def _session_cost_intel(s) -> dict:
@@ -13042,6 +13113,10 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 )
                 if _compactions:
                     metadata["compactionCount"] = _compactions
+                # Liveness: derived from how long ago the transcript last grew,
+                # never hardcoded. Computed once so the local row and the cloud
+                # row below cannot disagree about whether this session is live.
+                _fstatus, _fended = _session_liveness(ended or started)
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -13052,8 +13127,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "title": _row_title,
                         "started_at": started,
                         "last_active_at": ended or started,
-                        "ended_at": ended,
-                        "status": "ended",
+                        "ended_at": _fended,
+                        "status": _fstatus,
                         "total_tokens": int(s.total_tokens or 0),
                         "cost_usd": s.cost_usd,
                         "message_count": int(s.message_count or 0),
@@ -13157,8 +13232,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "title": _ftitle,
                     "started_at": started,
                     "last_active_at": ended or started,
-                    "ended_at": ended,
-                    "status": "ended",
+                    "ended_at": _fended,
+                    "status": _fstatus,
                     "total_tokens": int(s.total_tokens or 0),
                     "cost_usd": s.cost_usd,
                     "message_count": int(s.message_count or 0),
