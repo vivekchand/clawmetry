@@ -12280,6 +12280,11 @@ _RENDERABLE_EVENT_TYPES = (
     "tool.completed",
     # Compactions render as a special bubble in the replay scrubber.
     "compaction",
+    # Cloud workspace conflict (#3928) — rendered as a system-role notification
+    # in the transcript; must be counted here so message_count in the session
+    # list matches what the detail modal renders. Keep in sync with
+    # ``_RENDERABLE_TRANSCRIPT_EVENT_TYPES`` in ``routes/sessions.py``.
+    "workspace.conflict",
     # Subagent fan-out — child turns surface in the parent's transcript
     # via ``query_events_with_subagents`` (#1597); count them so the
     # list-vs-detail check stays accurate for parents that delegated.
