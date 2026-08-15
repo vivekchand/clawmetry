@@ -12588,9 +12588,6 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
           <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="gateway" onclick="switchTab('gateway')" title="Only needed if you run an OpenClaw gateway — every other runtime is auto-detected">
-          <span class="left-nav-label" data-i18n="nav.gateway">Gateway</span>
-        </div>
       </div>
     </div>
 
@@ -12714,10 +12711,6 @@ DASHBOARD_HTML = r"""
 
 <!-- LOGS (live stream + historical viewer; #3761) -->
 {% include 'tabs/logs.html' %}
-
-<!-- GATEWAY (opt-in manual OpenClaw gateway config; replaces the old
-     auto-popping setup wizard) -->
-{% include 'tabs/gateway.html' %}
 
 <!-- SWIMLANE COMPARE — N parallel live lanes (sessions / runtimes) -->
 {% include 'tabs/swimlane.html' %}
