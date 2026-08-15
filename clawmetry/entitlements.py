@@ -13924,6 +13924,85 @@ def _missing_all_bundle_row(bundle) -> dict:
     }
 
 
+def missing_all_bundle(bundle) -> dict:
+    """Row-detail scalar sibling of :func:`missing_all_bundle_batch` for
+    ONE aggregate 5-axis bundle.
+
+    Row-detail complement of :func:`has_all_bundle` on the LIVE aggregate
+    seat -- same relationship :func:`missing_all_bundle_batch` has to
+    :func:`has_all_bundle_batch` on the batch seat. Where the paired
+    boolean-fold sibling collapses ONE bundle to a single ``has_all``
+    bool, this returns WHAT is missing on each supplied axis of the same
+    bundle so a paywall walkthrough tile rendering one hypothetical cell
+    at a time ("would this whole 5-axis subscription state land granted
+    on the LIVE install, and if not, which axes still block?") reads the
+    per-axis denial detail without wrapping in a length-one list and
+    unwrapping ``[0]`` from :func:`missing_all_bundle_batch`.
+
+    Delegates row construction to :func:`_missing_all_bundle_row` so the
+    scalar cannot drift from the batch row helper -- same discipline
+    :func:`has_all_bundle` uses against :func:`_has_all_bundle_row`. Row
+    shape mirrors :func:`_has_all_bundle_row` on the axis-echo slots
+    (byte-parity so a UI wiring the LIVE boolean-fold scalar and the
+    LIVE row-detail scalar off the same input sees a consistent per-
+    bundle shape) with the fold slot swapped from a single ``has_all``
+    bool to a per-axis ``missing`` dict matching :func:`missing_all`'s
+    return shape::
+
+        {
+          "features":       ["fleet", "sso"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | None,
+          "retention_days": 30 | None,
+          "nodes":          2 | None,
+          "missing": {
+              "features":       ["fleet", "sso"],
+              "runtimes":       ["claude_code"],
+              "channels":       5 | None,
+              "retention_days": 30 | None,
+              "nodes":          2 | None,
+          },
+        }
+
+    Distinct from :func:`missing_all` (whose keyword-argument signature
+    takes the five axes as loose parameters and returns just the per-
+    axis ``missing`` dict without the axis-echo wrapper): this takes a
+    single bundle dict in the same shape :func:`has_all_bundle` /
+    :func:`missing_all_bundle_batch` accept and returns the wrapped row
+    shape so a caller carrying a bundle around (from a paywall matrix
+    cell, an upstream ``/has-all-bundle`` echo, or an upgrade-walkthrough
+    tile) can re-fold it without unpacking to kwargs.
+
+    Grace posture mirrors :func:`missing_all` byte-for-byte: while
+    ``ent.grace`` is ``True`` every fully-known bundle reports the empty
+    ``missing`` shape. Post-enforcement each slot reflects the underlying
+    denial.
+
+    Never raises: a delegate failure returns the empty row shape (all
+    axes echoed as ``[]`` / ``None`` and every ``missing`` slot empty)
+    so a caller wiring the scalar into a gate cannot 500 on a malformed
+    bundle.
+    """
+    try:
+        return _missing_all_bundle_row(bundle)
+    except Exception as exc:
+        logger.warning("entitlements: missing_all_bundle fold failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "missing": {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            },
+        }
+
+
 def missing_all_bundle_batch(bundles) -> list[dict]:
     """Per-bundle aggregate row-detail complement for N caller-supplied
     5-axis bundles in ONE round-trip.
