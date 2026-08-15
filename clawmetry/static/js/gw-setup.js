@@ -1,12 +1,13 @@
-// Gateway status — real OpenClaw-gateway users only. The mandatory,
-// auto-popping "ClawMetry Setup" wizard was removed (v0.1-era UX built when
-// ClawMetry only watched the OpenClaw gateway; the product now detects 17+
-// runtimes and gates first-run onboarding through onboarding.js instead).
-// What's left here keeps an already-configured (or URL/localStorage
-// -remembered) gateway connection alive and reflects its status; configuring
-// one now happens through the opt-in "OpenClaw gateway" form in the
-// Developer tab (see clawmetry/templates/tabs/developer.html), which calls
-// gwSetupConnect() below.
+// Gateway connection — headless only. Every manual gateway-token UI is gone:
+// the auto-popping "ClawMetry Setup" wizard (v0.1-era UX from when ClawMetry
+// only watched the OpenClaw gateway) and the opt-in Developer > Gateway form
+// that replaced it. The product detects 20+ runtimes automatically and the
+// gateway token itself is auto-detected server-side from
+// ~/.openclaw/openclaw.json, so there is nothing left for a user to fill in.
+// What remains keeps an already-configured connection alive: a ?token=XXX URL
+// (used by remote/Docker links) and a localStorage-remembered token are still
+// posted to /api/gw/config on load. First-run onboarding lives in
+// onboarding.js; remote sign-in with a raw token lives in the login overlay.
 async function checkGwConfig() {
   // Support ?token=XXX in URL — auto-configure and strip from address bar
   try {
@@ -22,7 +23,6 @@ async function checkGwConfig() {
         body: JSON.stringify({token: urlToken})
       });
       var td = await tr.json();
-      if (td.ok) { updateGwStatus(true, td.url); }
       // Strip token from URL (keep it out of browser history)
       urlParams.delete('token');
       var clean = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
@@ -34,78 +34,17 @@ async function checkGwConfig() {
     const r = await fetch('/api/gw/config');
     const d = await r.json();
     if (!d.configured) {
-      // Check localStorage first
+      // Not configured server-side — try a token this browser remembers.
       const saved = localStorage.getItem('clawmetry-gw-token');
       if (saved) {
-        // Try auto-connecting with saved token
-        const r2 = await fetch('/api/gw/config', {
+        await fetch('/api/gw/config', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({token: saved})
         });
-        const d2 = await r2.json();
-        if (d2.ok) { updateGwStatus(true, d2.url); return; }
       }
-      updateGwStatus(false);
-    } else {
-      updateGwStatus(true, d.url);
     }
   } catch(e) {}
-}
-
-function updateGwStatus(connected, url) {
-  const dot = document.getElementById('gw-status-dot');
-  if (!dot) return;
-  dot.style.color = connected ? '#4ade80' : '#f87171';
-  dot.title = connected ? 'Gateway: connected' + (url ? ' (' + url + ')' : '') : 'Gateway: disconnected';
-}
-
-async function gwSetupConnect() {
-  const btn = document.getElementById('gw-connect-btn');
-  const errEl = document.getElementById('gw-setup-error');
-  const statusEl = document.getElementById('gw-setup-status');
-  const tokenEl = document.getElementById('gw-token-input');
-  const urlEl = document.getElementById('gw-url-input');
-  if (!btn || !errEl || !statusEl || !tokenEl || !urlEl) return;
-  const token = tokenEl.value.trim();
-  const url = urlEl.value.trim();
-
-  errEl.style.display = 'none';
-  if (!token) { errEl.textContent = 'Please enter a token'; errEl.style.display = 'block'; return; }
-
-  btn.textContent = 'Scanning for gateway...';
-  btn.disabled = true;
-  statusEl.textContent = 'Scanning ports to find your OpenClaw gateway...';
-  statusEl.style.display = 'block';
-
-  try {
-    const r = await fetch('/api/gw/config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({token, url})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      statusEl.textContent = 'Connected to ' + d.url;
-      btn.textContent = 'Connected!';
-      localStorage.setItem('clawmetry-gw-token', token);
-      localStorage.setItem('clawmetry-token', token);
-      updateGwStatus(true, d.url);
-      setTimeout(() => { btn.textContent = 'Connect'; btn.disabled = false; }, 1500);
-    } else {
-      errEl.textContent = d.error || 'Connection failed';
-      errEl.style.display = 'block';
-      btn.textContent = 'Connect';
-      btn.disabled = false;
-      statusEl.style.display = 'none';
-    }
-  } catch(e) {
-    errEl.textContent = 'Network error: ' + e.message;
-    errEl.style.display = 'block';
-    btn.textContent = 'Connect';
-    btn.disabled = false;
-    statusEl.style.display = 'none';
-  }
 }
 
 // Check on load

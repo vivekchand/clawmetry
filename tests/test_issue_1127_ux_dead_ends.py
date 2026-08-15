@@ -45,22 +45,24 @@ def test_bug2_notifications_count_only_enabled_rows() -> None:
 
 
 # ── Bug 3 ────────────────────────────────────────────────────────────────────
-def test_bug3_gw_setup_modal_has_non_docker_path() -> None:
-    """The gateway-config form must show a local-install path before Docker.
+def test_bug3_no_manual_gateway_token_form() -> None:
+    """There is no manual gateway-token form left to get wrong.
 
     Historical note: this originally pinned copy inside the auto-popping
     "ClawMetry Setup" modal (dashboard.py). That modal was retired
     (2026-08-06: it kept reappearing regardless of onboarding state, and
-    the product now detects 17+ runtimes instead of assuming OpenClaw).
-    The same instructions now live in the opt-in Gateway tab instead.
+    the product now detects 20+ runtimes instead of assuming OpenClaw), and
+    the opt-in Gateway tab that inherited its copy was removed too — the
+    gateway token is auto-detected server-side from ~/.openclaw/openclaw.json
+    (`_detect_gateway_token`), so asking the user to paste one was a dead end
+    dressed up as configuration. Pin that neither surface comes back.
     """
-    html = _read("clawmetry/templates/tabs/gateway.html")
-    assert "Local install (pip / brew / install.sh)" in html, (
-        "Gateway config form must include a local-install instruction so "
-        "non-Docker users have a working command."
+    tab = os.path.join(ROOT, "clawmetry", "templates", "tabs", "gateway.html")
+    assert not os.path.exists(tab), (
+        "The manual gateway-token tab is gone; the token is auto-detected."
     )
-    # Docker block must still be present for Docker users.
-    assert "Docker install" in html
+    nav = _read("dashboard.py")
+    assert 'data-tab="gateway"' not in nav, "Gateway nav item must stay removed."
 
 
 # ── Bug 4 ────────────────────────────────────────────────────────────────────
