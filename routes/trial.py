@@ -380,12 +380,29 @@ def api_trial_checkout():
     """
     from clawmetry import trial_enforcement as _te
 
+    # Plan choice from the overlay's picker. Both default conservatively so an
+    # older overlay (or a direct curl) still gets a working monthly Starter
+    # session rather than an error.
+    try:
+        _sel = request.get_json(silent=True) or {}
+    except Exception:
+        _sel = {}
+    _tier = str(_sel.get("tier") or "starter").strip().lower()
+    if _tier not in ("starter", "pro"):
+        _tier = "starter"
+    _plan = "yearly" if str(_sel.get("plan") or "").strip().lower() in (
+        "yearly", "year", "annual", "annually") else "monthly"
+
     api_key = _local_api_key()
     if api_key:
         try:
             from clawmetry import license as _lic
             base = _lic._cloud_base().rstrip("/")
-            body = json.dumps({"context": "trial_hard_block"}).encode("utf-8")
+            body = json.dumps({
+                "context": "trial_hard_block",
+                "tier": _tier,
+                "plan": _plan,
+            }).encode("utf-8")
             req = urllib.request.Request(
                 base + _CHECKOUT_SESSION_PATH,
                 data=body,
