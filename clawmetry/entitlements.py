@@ -14369,6 +14369,167 @@ def has_all_bundle_at_path(
         return None
 
 
+def has_all_bundle_at_path_batch(
+    from_tier: str, to_tiers, bundle
+) -> dict | None:
+    """Batch sibling of :func:`has_all_bundle_at_path`: per-rung
+    aggregate boolean-fold path lists for a caller-supplied subset of
+    destination tiers all walked from a single ``from_tier`` under ONE
+    aggregate 5-axis bundle dict in ONE round-trip.
+
+    Bundle-shaped counterpart of :func:`has_all_at_path_batch` (kwargs-
+    shaped batch-path walker) in the same relationship
+    :func:`has_all_bundle_at_path` has to :func:`has_all_at_path` on the
+    singular-destination seat and :func:`has_all_bundle_batch_at` has to
+    :func:`has_all_at_batch` on the perspective-batch seat. Fills the
+    ``_at_path_batch`` slot on the aggregate bundle boolean-fold family
+    alongside :func:`has_all_bundle_at_path` (singular destination),
+    :func:`has_all_bundle_batch_at` (multi-bundle perspective-batch),
+    and :func:`has_all_at_path_batch` (kwargs-shaped batch-path).
+
+    Lets an upgrade-comparison surface render "from my current rung,
+    here are the 3 tiers I'm considering -- for this WHOLE 5-axis
+    bundle dict {features: [fleet], runtimes: [claude_code], channels:
+    5} show me at which rung this bundle unlocks along every candidate
+    path" straight from the bundle dict off ONE call instead of
+    normalising the bundle by hand and calling
+    :func:`has_all_at_path_batch`, or N calls to
+    :func:`has_all_bundle_at_path`.
+
+    Per-destination row shape mirrors :func:`has_all_at_path_batch`
+    exactly with the axis-shared ``path`` slot bound to the per-rung
+    aggregate bundle-shaped boolean-fold list::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<has_all_bundle_at_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`has_all_bundle_at_path` for the same ``(from_tier, to,
+    bundle)`` triple -- a parity test pins this so the scalar and batch
+    bundle-shaped what-if boolean-fold path helpers cannot drift. The
+    walked rungs are destination-specific (the path's rung set depends
+    on ``to``), so per-destination ``path`` lengths can legitimately
+    differ -- matches :func:`has_all_at_path_batch` /
+    :func:`missing_all_at_path_batch` /
+    :func:`has_features_at_path_batch` /
+    :func:`has_runtimes_at_path_batch` posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`has_all_at_path_batch`'s posture. ``trial`` IS
+    accepted as a destination (excluded from the walked intermediate
+    rungs the way :func:`has_all_bundle_at_path` already excludes it,
+    but is a valid endpoint via the lateral / identity branches).
+
+    Bundle-fold semantics per rung per destination inherit
+    :func:`has_all_bundle_at_path` byte-for-byte (i.e.
+    :func:`_normalise_all_bundle` normalisation then
+    :func:`_has_all_bundle_row_at` per rung, so:
+
+    * ``bundle`` non-dict / ``None`` -- normalises to the empty axis
+      echo and every rung of every destination reports
+      ``has_all_at=False`` (matches :func:`has_all_bundle_at_path`
+      empty-``False`` posture: no axis supplied, singular
+      :func:`has_all_at` collapses to ``False``).
+    * Empty feature / runtime CSVs collapse to *unset* per axis
+      (matches the bundle-batch posture) so an empty CSV does NOT drag
+      the rung's ``has_all_at`` to ``False`` on its own.
+    * Non-int capacity value on ``channels`` / ``nodes`` /
+      ``retention_days`` collapses to ``None`` on the echo slot AND
+      drops from the fold (matches :func:`_normalise_all_bundle`
+      convention -- distinct from :func:`has_all_at_path_batch` where a
+      non-int capacity passed as a kwarg collapses the fold to
+      ``False`` via the singular scalar's strict typo posture).
+    * Unknown / typo'd runtime id is dropped by
+      :func:`_normalise_all_bundle` (runtime alias canonicalisation
+      only keeps ids that resolve to :data:`ALL_RUNTIMES` on the echo
+      slot). Unknown / typo'd feature id survives normalisation and is
+      folded through :func:`has_all_at`, collapsing every rung of
+      every destination's ``has_all_at`` to ``False`` via the singular
+      scalar's typo posture.
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404). Delegates per-destination to
+    :func:`has_all_bundle_at_path`, so a per-destination blowup logs a
+    warning and short-circuits that id into ``unknown[]`` while the
+    rest of the batch keeps building.
+
+    Grace-independent by construction: delegates per-rung per
+    destination to :func:`_has_all_bundle_row_at` (via
+    :func:`has_all_bundle_at_path`), which reads the static per-tier
+    grant tables (via :func:`_hypothetical_entitlement` on the feature
+    / runtime axes and by the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the
+    capacity axes), so the answer is byte-identical under grace vs
+    enforce for the same (from, to, bundle) triple -- same property
+    the rest of the ``_at_path_batch`` family guarantees.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = has_all_bundle_at_path(f, tid, bundle)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_all_bundle_at_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
 def _missing_all_bundle_row(bundle) -> dict:
     """Per-bundle row shape for :func:`missing_all_bundle_batch`.
 
@@ -15205,6 +15366,177 @@ def missing_all_bundle_at_path(
             exc,
         )
         return None
+
+
+def missing_all_bundle_at_path_batch(
+    from_tier: str, to_tiers, bundle
+) -> dict | None:
+    """Batch sibling of :func:`missing_all_bundle_at_path`: per-rung
+    per-axis denial rollups for a caller-supplied subset of destination
+    tiers all walked from a single ``from_tier`` under ONE aggregate
+    5-axis bundle dict in ONE round-trip.
+
+    Bundle-shaped counterpart of :func:`missing_all_at_path_batch`
+    (kwargs-shaped batch-path walker) in the same relationship
+    :func:`missing_all_bundle_at_path` has to
+    :func:`missing_all_at_path` on the singular-destination seat and
+    :func:`missing_all_bundle_batch_at` has to
+    :func:`missing_all_at_batch` on the perspective-batch seat. Row-
+    detail complement of :func:`has_all_bundle_at_path_batch` at the
+    bundle-shaped batch-path layer, in the same relationship
+    :func:`missing_all_bundle_at_path` has to
+    :func:`has_all_bundle_at_path`. Fills the ``_at_path_batch`` slot
+    on the aggregate bundle row-detail family alongside
+    :func:`missing_all_bundle_at_path` (singular destination),
+    :func:`missing_all_bundle_batch_at` (multi-bundle perspective-
+    batch), and :func:`missing_all_at_path_batch` (kwargs-shaped batch-
+    path).
+
+    Lets an upgrade-comparison surface render "from my current rung,
+    here are the 3 tiers I'm considering -- for this WHOLE 5-axis
+    bundle dict {features: [fleet], runtimes: [claude_code], channels:
+    5} show me which per-axis slots are still locked at every rung
+    climbed to reach each" straight from the bundle dict off ONE call
+    instead of normalising the bundle by hand and calling
+    :func:`missing_all_at_path_batch`, or N calls to
+    :func:`missing_all_bundle_at_path`.
+
+    Per-destination row shape mirrors :func:`missing_all_at_path_batch`
+    exactly with the axis-shared ``path`` slot bound to the per-rung
+    aggregate bundle-shaped row-detail list::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<missing_all_bundle_at_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`missing_all_bundle_at_path` for the same ``(from_tier, to,
+    bundle)`` triple -- a parity test pins this so the scalar and
+    batch bundle-shaped what-if row-detail path helpers cannot drift.
+    Per-destination ``path`` lengths can legitimately differ -- matches
+    :func:`missing_all_at_path_batch` /
+    :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch` posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`.
+    Unknown ids are echoed in ``unknown[]`` instead of short-
+    circuiting -- a partially-bad caller still gets paths back for the
+    valid ids alongside a list of what was dropped, matching
+    :func:`missing_all_at_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (excluded from the walked intermediate rungs the
+    way :func:`missing_all_bundle_at_path` already excludes it, but is
+    a valid endpoint via the lateral / identity branches).
+
+    Bundle-fold semantics per rung per destination inherit
+    :func:`missing_all_bundle_at_path` byte-for-byte (i.e.
+    :func:`_normalise_all_bundle` normalisation then
+    :func:`_missing_all_bundle_row_at` per rung), so:
+
+    * ``bundle`` non-dict / ``None`` -- normalises to the empty axis
+      echo and every rung of every destination reports the empty
+      ``missing`` dict (nothing supplied -> nothing missing on any
+      axis; matches the per-perspective row-detail seat).
+    * Empty feature / runtime CSVs collapse to *unset* per axis, so
+      per-rung ``missing["features"]`` / ``missing["runtimes"]`` stay
+      empty.
+    * Non-int capacity value on ``channels`` / ``nodes`` /
+      ``retention_days`` collapses to ``None`` on the echo slot AND
+      swallows to ``None`` on the per-rung capacity slot (matches the
+      per-perspective row-detail seat).
+    * Unknown / typo'd runtime id is dropped by
+      :func:`_normalise_all_bundle` (canonicalisation only keeps ids
+      that resolve to :data:`ALL_RUNTIMES`). Unknown / typo'd feature
+      id survives normalisation and is INCLUDED in every rung's per-
+      axis missing list in canonicalised form.
+
+    Complement invariant with :func:`has_all_bundle_at_path_batch`: for
+    every fully-parseable bundle, per destination per rung
+    ``any(row["path"][i]["missing"].values())`` byte-equals ``not
+    row["path"][i]["has_all_at"]`` on the paired
+    :func:`has_all_bundle_at_path_batch` call for the same
+    ``(from_tier, to_tiers, bundle)`` inputs. (Non-int capacity is the
+    same deliberate divergence :func:`missing_all_bundle_at_path`
+    carries against :func:`has_all_bundle_at_path`: both bundle seats
+    collapse coherently to ``None`` / ``False`` respectively on the
+    supplied-but-typo capacity axis, mirroring the row-detail vs
+    boolean-fold posture split on the paired non-bundle seat.)
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404). Delegates per-destination to
+    :func:`missing_all_bundle_at_path`, so a per-destination blowup
+    logs a warning and short-circuits that id into ``unknown[]`` while
+    the rest of the batch keeps building.
+
+    Grace-independent by construction: delegates per-rung per
+    destination to :func:`_missing_all_bundle_row_at` (via
+    :func:`missing_all_bundle_at_path`), which reads the static per-
+    tier grant tables (via :func:`_hypothetical_entitlement` on the
+    feature / runtime axes and by the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the
+    capacity axes), so the answer is byte-identical under grace vs
+    enforce for the same (from, to, bundle) triple -- same property
+    the rest of the ``_at_path_batch`` family guarantees.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = missing_all_bundle_at_path(f, tid, bundle)
+        except Exception as exc:
+            logger.warning(
+                "entitlements: missing_all_bundle_at_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
 
 
 def _min_tier_for_all_bundle_row(bundle) -> dict:
