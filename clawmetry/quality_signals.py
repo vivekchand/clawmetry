@@ -628,14 +628,18 @@ def _sig_no_forward_progress(events, *, runtime, thresholds, session_id) -> Verd
     if len(group) < limit:
         return None
 
-    # Was anything verified between the first and last edit of this file?
+    # Was anything verified from the first edit onward — INCLUDING after the
+    # last one? "Edit a dozen times, then run the tests once" is a completely
+    # normal way to work. Only looking between the first and last edit would
+    # flag it, which is precisely the false-positive class this rebuild
+    # exists to remove; the pathological case is editing and never checking
+    # AT ALL.
     lo = min((e.ts for e in group if e.ts is not None), default=None)
-    hi = max((e.ts for e in group if e.ts is not None), default=None)
     verified = 0
-    if lo is not None and hi is not None:
+    if lo is not None:
         for e in events:
             if (e.kind == "tool_call" and e.ts is not None
-                    and lo <= e.ts <= hi
+                    and e.ts >= lo
                     and any(w in e.tool_name.lower() for w in verify_words)):
                 verified += 1
     if verified > 0:
@@ -650,7 +654,7 @@ def _sig_no_forward_progress(events, *, runtime, thresholds, session_id) -> Verd
                                min_sample=limit),
         signal="no_forward_progress",
         observed={"file": target, "edits": len(group),
-                  "verifications_between": verified},
+                  "checks_after_first_edit": verified},
         threshold={"edits": limit,
                    "source": thresholds.get("_source", "cold-start default")},
         window={"events_examined": len(events)},

@@ -474,3 +474,37 @@ def test_thrash_counts_failures_over_all_repeats_not_just_exhibits():
         "12 exhibited: %r" % obs
     )
     assert len(thrash[0].exhibits) == 12, "exhibits stay capped"
+
+
+def test_edit_many_then_verify_at_the_end_is_not_flagged():
+    """"Edit a dozen times, then run the tests once" is normal work.
+
+    Only looking for verification BETWEEN the first and last edit flagged this
+    healthy pattern — the same false-positive class the whole rebuild exists
+    to remove. On real data this alone accounted for 2 of 10 flags.
+    """
+    events, t = [], 1_780_000_000
+    for _ in range(12):
+        events.append(_family_tool_call(t, "Edit", {"file_path": "/a.py"}))
+        events.append(_family_tool_result(t + 1, "ok"))
+        t += 20
+    # ...then verify, once, at the very end.
+    events.append(_family_tool_call(t, "Bash", {"command": "pytest -q"}))
+    events.append(_family_tool_result(t + 1, "12 passed"))
+    a = assess_session(events, runtime="claude_code", session_id="endverify",
+                       thresholds={"edit_repeats": 5, "tool_error_pct": 8.0})
+    assert "no_forward_progress" not in {v.name for v in a.verdicts}, (
+        "editing then verifying at the end is a normal cycle, not a stall"
+    )
+
+
+def test_edit_and_never_verify_is_still_flagged():
+    """The pathological case must survive the widened window."""
+    events, t = [], 1_780_000_000
+    for _ in range(12):
+        events.append(_family_tool_call(t, "Edit", {"file_path": "/a.py"}))
+        events.append(_family_tool_result(t + 1, "ok"))
+        t += 20
+    a = assess_session(events, runtime="claude_code", session_id="neververify",
+                       thresholds={"edit_repeats": 5, "tool_error_pct": 8.0})
+    assert "no_forward_progress" in {v.name for v in a.verdicts}
