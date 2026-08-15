@@ -600,6 +600,12 @@ class Entitlement:
     features: frozenset = field(default_factory=lambda: FREE_FEATURES)
     runtimes: frozenset = field(default_factory=lambda: FREE_RUNTIMES)
     grace: bool = True
+    # True once this account has consumed its free trial (cloud
+    # ``users.trial_used``). This is the ONLY thing that distinguishes a
+    # lapsed trial from a never-trialed install: both resolve to the
+    # ``cloud_free`` tier, and only the former may be paywalled. Defaults to
+    # False so any install we cannot positively classify keeps working.
+    trial_used: bool = False
 
     @property
     def is_paid(self) -> bool:
@@ -2381,7 +2387,13 @@ class Entitlement:
         }
 
 
-def _build(tier: str, source: str, node_limit: int = 1, expiry: float | None = None) -> Entitlement:
+def _build(
+    tier: str,
+    source: str,
+    node_limit: int = 1,
+    expiry: float | None = None,
+    trial_used: bool = False,
+) -> Entitlement:
     paid_feats = _TIER_FEATURES.get(tier, frozenset())
     runtimes = FREE_RUNTIMES | PAID_RUNTIMES if tier in _TIER_PAID_RUNTIMES else FREE_RUNTIMES
     return Entitlement(
@@ -2392,6 +2404,7 @@ def _build(tier: str, source: str, node_limit: int = 1, expiry: float | None = N
         features=FREE_FEATURES | paid_feats,
         runtimes=runtimes,
         grace=not is_enforced(),
+        trial_used=bool(trial_used),
     )
 
 
@@ -2425,6 +2438,7 @@ def _read_cloud_plan() -> Entitlement | None:
             "cloud",
             node_limit=int(data.get("node_limit", 1) or 1),
             expiry=data.get("expiry"),
+            trial_used=bool(data.get("trial_used") or False),
         )
     except Exception as exc:
         logger.warning("entitlements: cloud-plan read failed: %s", exc)
@@ -13137,6 +13151,388 @@ def has_all_at_path(
         return None
 
 
+def has_all_at_path_batch(
+    from_tier: str,
+    to_tiers,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Batch sibling of :func:`has_all_at_path`: per-rung boolean-fold
+    columns for a caller-supplied subset of destination tiers all
+    walked from a single ``from_tier`` under ONE 5-axis mixed bundle in
+    ONE round-trip.
+
+    Aggregate mixed-axis extension of :func:`has_features_at_path_batch`
+    / :func:`has_runtimes_at_path_batch` (per-axis batch path walkers)
+    and multi-destination twin of :func:`has_all_at_path` (single-
+    destination) in the same relationship :func:`has_all_at_batch` has
+    to :func:`has_all_at`. Lets an upgrade-comparison surface render
+    "from my current rung, here are the 3 tiers I'm considering -- for
+    the WHOLE 5-axis bundle {fleet, claude_code, channels=5} show me
+    at which rung this bundle unlocks along every candidate path" off
+    ONE call instead of N calls to :func:`has_all_at_path`, or 5 * N
+    calls fanned out across the per-axis path-batch walkers plus a
+    client-side AND-chain per rung per destination.
+
+    Per-destination row shape mirrors :func:`has_features_at_path_batch`
+    exactly with the axis-shared ``path`` slot bound to the per-rung
+    aggregate boolean-fold list::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<has_all_at_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`has_all_at_path` for the same ``(from_tier, to, **bundle)``
+    triple -- a parity test pins this so the scalar and batch path
+    what-if boolean-fold helpers cannot drift. The walked rungs are
+    destination-specific (the path's rung set depends on ``to``), so
+    per-destination ``path`` lengths can legitimately differ -- this
+    matches :func:`has_features_at_path_batch` /
+    :func:`has_runtimes_at_path_batch` /
+    :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch` posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`has_features_at_path_batch` /
+    :func:`has_runtimes_at_path_batch`'s posture. ``trial`` IS accepted
+    as a destination (excluded from the walked intermediate rungs the
+    way :func:`has_all_at_path` already excludes it, but is a valid
+    endpoint via the lateral / identity branches).
+
+    Bundle-fold semantics per rung per destination inherit
+    :func:`has_all_at_path` byte-for-byte (which itself inherits
+    :func:`has_all_at` fail-closed posture -- typo on any axis never
+    silently renders "granted" on any rung of any destination):
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, skipped
+      entirely (contributes ``True`` to each row's fold).
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty:
+      collapses every rung of every destination to ``has_all_at=False``.
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, skipped. Critically ``retention_days=None`` here
+      means *unset*, NOT *unlimited* -- matches :func:`has_all_at_path`.
+    * Non-int capacity value on ``channels`` / ``nodes`` /
+      ``retention_days`` -- collapses every rung of every destination
+      to ``has_all_at=False``.
+    * No axes supplied at all -- every rung of every destination
+      reports ``has_all_at=False`` (matches :func:`has_all_at`
+      empty-``False`` posture; a caller who forgot to pass any kwarg
+      sees the typo at the callsite instead of a silent grant across
+      the whole matrix).
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- collapses every rung to ``has_all_at=False``.
+
+    The bundle is canonicalised ONCE at the top of the fold via
+    :func:`list` so a generator / one-shot iterable is materialised
+    and reused across per-destination delegates (matches
+    :func:`has_features_at_path_batch` /
+    :func:`has_runtimes_at_path_batch` posture).
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404). Delegates per-destination to
+    :func:`has_all_at_path`, so a per-destination blowup logs a
+    warning and short-circuits that id into ``unknown[]`` while the
+    rest of the batch keeps building.
+
+    Grace-independent by construction: delegates per-rung per
+    destination to :func:`has_all_at`, which reads the static per-tier
+    grant tables (via :func:`_hypothetical_entitlement` on the feature
+    / runtime axes and by the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the
+    capacity axes), so the answer is byte-identical under grace vs
+    enforce for the same (from, to, bundle) triple -- same property the
+    rest of the ``_at_path_batch`` family guarantees.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+
+    def _snap(items):
+        if items is None:
+            return None
+        try:
+            return list(items)
+        except TypeError:
+            return []
+
+    feat_items = _snap(features)
+    rt_items = _snap(runtimes)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = has_all_at_path(
+                f,
+                tid,
+                features=feat_items,
+                runtimes=rt_items,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: has_all_at_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
+
+def missing_all_at_path_batch(
+    from_tier: str,
+    to_tiers,
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Batch sibling of :func:`missing_all_at_path`: per-rung per-axis
+    denial rollups for a caller-supplied subset of destination tiers
+    all walked from a single ``from_tier`` under ONE 5-axis mixed
+    bundle in ONE round-trip.
+
+    Aggregate mixed-axis extension of
+    :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch` (per-axis batch path
+    walkers) and multi-destination twin of :func:`missing_all_at_path`
+    (single-destination) in the same relationship
+    :func:`missing_all_at_batch` has to :func:`missing_all_at`. Row-
+    detail complement of :func:`has_all_at_path_batch` at the batch-
+    path layer, in the same relationship :func:`missing_all_at_path`
+    has to :func:`has_all_at_path`. Lets an upgrade-comparison surface
+    render "from my current rung, here are the 3 tiers I'm considering
+    -- for the WHOLE 5-axis bundle {fleet, claude_code, channels=5}
+    show me which per-axis slots are still locked at every rung
+    climbed to reach each" off ONE call instead of N calls to
+    :func:`missing_all_at_path`, or 5 * N calls fanned out across the
+    per-axis path-batch walkers plus a client-side per-axis stitch per
+    rung per destination.
+
+    Per-destination row shape mirrors
+    :func:`missing_features_at_path_batch` exactly with the axis-shared
+    ``path`` slot bound to the per-rung aggregate row-detail list::
+
+        {
+          "to":         "<tier id>",
+          "to_label":   "...",
+          "to_rank":    <int>,
+          "direction":  "upgrade" | "downgrade" | "lateral" | "identity",
+          "path":       [<missing_all_at_path row>, ...],
+        }
+
+    Each ``path`` row is byte-identical to a row from
+    :func:`missing_all_at_path` for the same ``(from_tier, to,
+    **bundle)`` triple -- a parity test pins this so the scalar and
+    batch path what-if row-detail helpers cannot drift. The walked
+    rungs are destination-specific (the path's rung set depends on
+    ``to``), so per-destination ``path`` lengths can legitimately
+    differ -- matches :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch` /
+    :func:`has_features_at_path_batch` /
+    :func:`has_runtimes_at_path_batch` posture.
+
+    Shape::
+
+        {
+          "tiers": [
+            {"to": "<id>", "to_label": ..., "to_rank": ..., "direction": ..., "path": [...]},
+            ...
+          ],
+          "unknown": ["bogus_id", ...],
+        }
+
+    Supplied destination ids are normalised via :func:`_normalise_csv`
+    (whitespace stripped, lowercased, duplicates dropped, first-seen
+    order preserved). Unknown ids are echoed in ``unknown[]`` instead
+    of short-circuiting -- a partially-bad caller still gets paths
+    back for the valid ids alongside a list of what was dropped,
+    matching :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch`'s posture. ``trial`` IS
+    accepted as a destination (excluded from the walked intermediate
+    rungs the way :func:`missing_all_at_path` already excludes it, but
+    is a valid endpoint via the lateral / identity branches).
+
+    Bundle-fold semantics per rung per destination inherit
+    :func:`missing_all_at_path` byte-for-byte:
+
+    * ``features=None`` / ``runtimes=None`` -- axis unsupplied, per-
+      rung ``missing["features"]`` / ``missing["runtimes"]`` empty on
+      every rung of every destination.
+    * ``features=[]`` / ``runtimes=[]`` -- axis supplied but empty:
+      per-rung ``missing["features"]`` / ``missing["runtimes"]`` empty
+      (nothing to check, nothing missing).
+    * ``channels=None`` / ``retention_days=None`` / ``nodes=None`` --
+      axis unsupplied, per-rung capacity slot ``None`` on every rung.
+      Critically ``retention_days=None`` here means *unset*, NOT
+      *unlimited* -- matches :func:`missing_all_at_path`.
+    * Non-int capacity value on ``channels`` / ``nodes`` /
+      ``retention_days`` -- swallows to ``None`` on every rung's per-
+      axis capacity slot (matches :func:`missing_all_at_path` row-
+      detail typo posture). The paired :func:`has_all_at_path_batch`
+      reports ``has_all_at=False`` via the strict singular scalar so
+      the denial is coherently surfaced through the paired call.
+    * Unknown / typo'd feature or runtime id in an otherwise-known
+      bundle -- INCLUDED in every rung's per-axis missing list in
+      canonicalised form (matches :func:`missing_features_at` /
+      :func:`missing_runtimes_at` typo posture inherited through
+      :func:`missing_all_at_path`).
+
+    The bundle is canonicalised ONCE at the top of the fold via
+    :func:`list` so a generator / one-shot iterable is materialised
+    and reused across per-destination delegates (matches
+    :func:`missing_features_at_path_batch` /
+    :func:`missing_runtimes_at_path_batch` posture).
+
+    Complement invariant with :func:`has_all_at_path_batch`: for every
+    fully-parseable bundle, per destination per rung
+    ``any(row["path"][i]["missing"].values())`` is the strict negation
+    of the corresponding rung's ``path[i]["has_all_at"]`` on the paired
+    :func:`has_all_at_path_batch` call for the same ``(from_tier,
+    to_tiers, **bundle)`` inputs. (Non-int capacity is the same
+    deliberate divergence :func:`missing_all_at_path` carries: the row-
+    detail slot swallows to ``None`` while the boolean-fold slot
+    collapses to ``False`` via the strict singular scalar; a UI wanting
+    a coherent "supplied but denied" story on that branch should call
+    the paired :func:`has_all_at_path_batch`.)
+
+    Returns ``None`` for empty / unknown ``from_tier`` (caller renders
+    "unknown tier" / 404). Delegates per-destination to
+    :func:`missing_all_at_path`, so a per-destination blowup logs a
+    warning and short-circuits that id into ``unknown[]`` while the
+    rest of the batch keeps building.
+
+    Grace-independent by construction: delegates per-rung per
+    destination to :func:`missing_all_at`, which reads the static per-
+    tier grant tables (via :func:`_hypothetical_entitlement` on the
+    feature / runtime axes and by the static ``_TIER_CHANNEL_LIMIT`` /
+    ``_TIER_RETENTION_DAYS`` / ``_TIER_NODE_LIMIT`` tables on the
+    capacity axes), so the answer is byte-identical under grace vs
+    enforce for the same (from, to, bundle) triple -- same property
+    the rest of the ``_at_path_batch`` family guarantees.
+    """
+    try:
+        f = (from_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if f not in _TIER_FEATURES:
+        return None
+    candidates = _normalise_csv(to_tiers)
+
+    def _snap(items):
+        if items is None:
+            return None
+        try:
+            return list(items)
+        except TypeError:
+            return []
+
+    feat_items = _snap(features)
+    rt_items = _snap(runtimes)
+    rows: list[dict] = []
+    unknown: list[str] = []
+    from_rank = _TIER_RANK.get(f, -1)
+    for tid in candidates:
+        if tid not in _TIER_FEATURES:
+            unknown.append(tid)
+            continue
+        try:
+            path = missing_all_at_path(
+                f,
+                tid,
+                features=feat_items,
+                runtimes=rt_items,
+                channels=channels,
+                retention_days=retention_days,
+                nodes=nodes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "entitlements: missing_all_at_path_batch row %r failed: %s",
+                tid,
+                exc,
+            )
+            unknown.append(tid)
+            continue
+        if path is None:
+            unknown.append(tid)
+            continue
+        to_rank = _TIER_RANK.get(tid, -1)
+        if f == tid:
+            direction = "identity"
+        elif from_rank == to_rank:
+            direction = "lateral"
+        elif to_rank > from_rank:
+            direction = "upgrade"
+        else:
+            direction = "downgrade"
+        rows.append(
+            {
+                "to": tid,
+                "to_label": tier_label(tid),
+                "to_rank": to_rank,
+                "direction": direction,
+                "path": path,
+            }
+        )
+    return {"tiers": rows, "unknown": unknown}
+
 
 def missing_all_at_batch(
     perspective_tiers,
@@ -13908,6 +14304,85 @@ def _missing_all_bundle_row(bundle) -> dict:
             "nodes": missing.get("nodes"),
         },
     }
+
+
+def missing_all_bundle(bundle) -> dict:
+    """Row-detail scalar sibling of :func:`missing_all_bundle_batch` for
+    ONE aggregate 5-axis bundle.
+
+    Row-detail complement of :func:`has_all_bundle` on the LIVE aggregate
+    seat -- same relationship :func:`missing_all_bundle_batch` has to
+    :func:`has_all_bundle_batch` on the batch seat. Where the paired
+    boolean-fold sibling collapses ONE bundle to a single ``has_all``
+    bool, this returns WHAT is missing on each supplied axis of the same
+    bundle so a paywall walkthrough tile rendering one hypothetical cell
+    at a time ("would this whole 5-axis subscription state land granted
+    on the LIVE install, and if not, which axes still block?") reads the
+    per-axis denial detail without wrapping in a length-one list and
+    unwrapping ``[0]`` from :func:`missing_all_bundle_batch`.
+
+    Delegates row construction to :func:`_missing_all_bundle_row` so the
+    scalar cannot drift from the batch row helper -- same discipline
+    :func:`has_all_bundle` uses against :func:`_has_all_bundle_row`. Row
+    shape mirrors :func:`_has_all_bundle_row` on the axis-echo slots
+    (byte-parity so a UI wiring the LIVE boolean-fold scalar and the
+    LIVE row-detail scalar off the same input sees a consistent per-
+    bundle shape) with the fold slot swapped from a single ``has_all``
+    bool to a per-axis ``missing`` dict matching :func:`missing_all`'s
+    return shape::
+
+        {
+          "features":       ["fleet", "sso"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | None,
+          "retention_days": 30 | None,
+          "nodes":          2 | None,
+          "missing": {
+              "features":       ["fleet", "sso"],
+              "runtimes":       ["claude_code"],
+              "channels":       5 | None,
+              "retention_days": 30 | None,
+              "nodes":          2 | None,
+          },
+        }
+
+    Distinct from :func:`missing_all` (whose keyword-argument signature
+    takes the five axes as loose parameters and returns just the per-
+    axis ``missing`` dict without the axis-echo wrapper): this takes a
+    single bundle dict in the same shape :func:`has_all_bundle` /
+    :func:`missing_all_bundle_batch` accept and returns the wrapped row
+    shape so a caller carrying a bundle around (from a paywall matrix
+    cell, an upstream ``/has-all-bundle`` echo, or an upgrade-walkthrough
+    tile) can re-fold it without unpacking to kwargs.
+
+    Grace posture mirrors :func:`missing_all` byte-for-byte: while
+    ``ent.grace`` is ``True`` every fully-known bundle reports the empty
+    ``missing`` shape. Post-enforcement each slot reflects the underlying
+    denial.
+
+    Never raises: a delegate failure returns the empty row shape (all
+    axes echoed as ``[]`` / ``None`` and every ``missing`` slot empty)
+    so a caller wiring the scalar into a gate cannot 500 on a malformed
+    bundle.
+    """
+    try:
+        return _missing_all_bundle_row(bundle)
+    except Exception as exc:
+        logger.warning("entitlements: missing_all_bundle fold failed: %s", exc)
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "missing": {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            },
+        }
 
 
 def missing_all_bundle_batch(bundles) -> list[dict]:

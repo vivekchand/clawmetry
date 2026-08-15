@@ -3649,6 +3649,9 @@ _RENDERABLE_JSONL_OPENCLAW_TYPES = frozenset({
     "prompt.submitted", "trace.artifacts", "model.completed",
     "tool.call", "tool.invoked", "tool.result", "tool.completed",
     "compaction",
+    # Cloud workspace conflict (#3928/#4865) — rendered as a system-role
+    # notification; must be counted so JSONL fallback matches DuckDB path.
+    "workspace.conflict",
 })
 _RENDERABLE_JSONL_ANTHROPIC_ROLES = frozenset({
     "user", "assistant", "system", "tool", "tool_result",

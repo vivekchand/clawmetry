@@ -78,7 +78,7 @@ def test_persist_maps_known_plan_codes(sync, heartbeat_plan, expected_tier):
     assert payload["plan"] == expected_tier
 
 
-@pytest.mark.parametrize("dead_plan", ["trial_expired", "", None, "unknown_plan"])
+@pytest.mark.parametrize("dead_plan", ["", None, "unknown_plan"])
 def test_persist_removes_cache_for_inactive_plans(sync, dead_plan):
     # Seed an existing cache so the removal path is exercised.
     os.makedirs(os.path.dirname(sync._CLOUD_PLAN_CACHE_PATH), exist_ok=True)
@@ -86,6 +86,34 @@ def test_persist_removes_cache_for_inactive_plans(sync, dead_plan):
         json.dump({"plan": "cloud_pro"}, fh)
     sync._persist_cloud_plan_to_disk(dead_plan)
     assert not os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
+
+
+def test_persist_keeps_cache_for_trial_expired(sync):
+    """'trial_expired' used to live in the list above, deleting the cache so the
+    resolver fell back to OSS-free. That threw away the one fact the paywall
+    needs -- that a trial was consumed and has ended -- and left 2,378 prod
+    accounts indistinguishable from a fresh `pip install`, which the resolver
+    (correctly) refuses to block.
+
+    It now maps to cloud_free and the cache is KEPT with the verdict attached.
+    The original safety property is unchanged: cloud_free grants no paid
+    runtimes, so nothing is "mistakenly granted an expired Pro plan" -- the
+    cache carries a denial, not a grant. Asserted below rather than assumed."""
+    os.makedirs(os.path.dirname(sync._CLOUD_PLAN_CACHE_PATH), exist_ok=True)
+    with open(sync._CLOUD_PLAN_CACHE_PATH, "w") as fh:
+        json.dump({"plan": "cloud_pro"}, fh)
+    sync._persist_cloud_plan_to_disk(
+        "trial_expired", None, trial_end="2026-08-13T08:44:45Z", trial_used=True)
+    assert os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
+    payload = json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())
+    assert payload["plan"] == "cloud_free"
+    assert payload["trial_used"] is True
+
+    import clawmetry.entitlements as e
+    e.invalidate()
+    en = e.get_entitlement(force=True)
+    assert en.allows_runtime("claude_code") is False, "no paid grant survives"
+    assert en.allows_runtime("openclaw") is True, "free runtimes always survive"
 
 
 def test_persist_trial_writes_expiry_from_days_left(sync):
@@ -128,11 +156,20 @@ def test_update_trial_state_persists_pro(sync):
     assert payload["plan"] == "cloud_pro"
 
 
-def test_update_trial_state_clears_cache_on_expiry(sync):
+def test_update_trial_state_downgrades_on_expiry(sync):
+    """A trial_expired heartbeat must DOWNGRADE the cached plan to cloud_free,
+    not delete the cache. Deleting it loses the trial verdict and the paywall
+    can never fire (see test_persist_keeps_cache_for_trial_expired)."""
     sync._update_trial_state({"sync_allowed": True, "plan": "pro"})
     assert os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
-    sync._update_trial_state({"sync_allowed": False, "plan": "trial_expired"})
-    assert not os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
+    sync._update_trial_state({
+        "sync_allowed": False, "plan": "trial_expired",
+        "trial_end": "2026-08-13T08:44:45Z", "trial_used": True,
+    })
+    assert os.path.isfile(sync._CLOUD_PLAN_CACHE_PATH)
+    payload = json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())
+    assert payload["plan"] == "cloud_free", "the Pro grant must be revoked"
+    assert payload["trial_used"] is True
 
 
 def test_update_trial_state_reconciles_persist_each_heartbeat(sync, monkeypatch):
@@ -142,7 +179,7 @@ def test_update_trial_state_reconciles_persist_each_heartbeat(sync, monkeypatch)
     test_persist_is_idempotent_when_tier_unchanged), NOT by skipping the call."""
     calls = {"n": 0}
 
-    def _spy(plan, trial_days_left=None):
+    def _spy(plan, trial_days_left=None, trial_end=None, trial_used=None):
         calls["n"] += 1
 
     monkeypatch.setattr(sync, "_persist_cloud_plan_to_disk", _spy)
@@ -167,7 +204,12 @@ def test_entitlements_sees_cloud_pro_after_heartbeat(sync, monkeypatch):
     assert en.allows_runtime("claude_code") is True
 
 
-def test_entitlements_falls_back_to_oss_after_trial_expiry(sync, monkeypatch):
+def test_entitlements_revokes_paid_runtimes_after_trial_expiry(sync, monkeypatch):
+    """The substantive property is unchanged: after a trial expires, the paid
+    runtimes are gone. What changed is the tier we land on -- cloud_free rather
+    than oss, so the trial verdict survives and the paywall can fire. Both are
+    equally unpaid; only cloud_free can also be told apart from a fresh
+    install."""
     import clawmetry.entitlements as e
 
     monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
@@ -176,10 +218,15 @@ def test_entitlements_falls_back_to_oss_after_trial_expiry(sync, monkeypatch):
     sync._update_trial_state({"sync_allowed": True, "plan": "pro"})
     assert e.get_entitlement(force=True).tier == e.TIER_CLOUD_PRO
 
-    sync._update_trial_state({"sync_allowed": False, "plan": "trial_expired"})
+    sync._update_trial_state({
+        "sync_allowed": False, "plan": "trial_expired",
+        "trial_end": "2026-08-13T08:44:45Z", "trial_used": True,
+    })
     en = e.get_entitlement(force=True)
-    assert en.tier == e.TIER_OSS
+    assert en.tier == e.TIER_CLOUD_FREE
+    assert en.is_paid is False
     assert en.allows_runtime("claude_code") is False
+    assert en.allows_runtime("openclaw") is True
 
 
 # ── reconcile-every-heartbeat + idempotency (founder ask 2026-06-30) ─────────
