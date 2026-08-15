@@ -31,9 +31,22 @@
   // Stripe actually charges. These numbers are display-only; if they ever
   // disagree, Stripe wins and the user sees the real amount on the checkout
   // page. Keep them in this one place so a repricing is a single edit.
+  // ``was`` is the previous ladder's annual price, shown struck through on the
+  // annual tab exactly as /pricing does. It is the real prior price, not an
+  // invented anchor.
   var PLAN_PRICES = {
-    starter: { month: 9,  year: 90  },
-    pro:     { month: 19, year: 190 },
+    starter: { month: 9,  year: 90,  was: 190 },
+    pro:     { month: 19, year: 190, was: 390 },
+  };
+  // Kept deliberately close to /pricing so the overlay and the public page
+  // make the same promise in the same words.
+  var PLAN_BLURB = {
+    starter: 'Every agent, every session, and every dollar in one dashboard.',
+    pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+  };
+  var PLAN_FEATURES = {
+    starter: ['Unlimited channels + cloud sync', 'Approval queue'],
+    pro: ['Everything in Starter', 'Tool policy + evals + cost optimizer'],
   };
   var _selTier = 'starter';
   var _selInterval = 'year';   // annual preselected: better retention + the device perk
@@ -41,10 +54,19 @@
   // Never hardcode a runtime count -- it has drifted every time it was.
   var _paidRuntimeCount = 0;
 
-  function planPriceLabel() {
+  function planPriceHtml() {
     var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
-    var amt = _selInterval === 'year' ? p.year : p.month;
-    return '$' + amt + ' / node / ' + (_selInterval === 'year' ? 'year' : 'month');
+    var yearly = _selInterval === 'year';
+    var amt = yearly ? p.year : p.month;
+    var was = (yearly && p.was)
+      ? '<span class="cm-hbo-was">$' + p.was + '</span> ' : '';
+    return was + '$' + amt
+      + '<span class="cm-hbo-per"> / node / ' + (yearly ? 'year' : 'month') + '</span>';
+  }
+
+  function featsHtml() {
+    var rows = [runtimesLine()].concat(PLAN_FEATURES[_selTier] || PLAN_FEATURES.starter);
+    return rows.map(function (r) { return '<li>' + escapeHtml(r) + '</li>'; }).join('');
   }
 
   function runtimesLine() {
@@ -63,44 +85,53 @@
       + '  position: fixed; inset: 0; z-index: 2147483647;'
       + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
       + '  -webkit-backdrop-filter: blur(6px);'
-      + '  display: flex; align-items: center; justify-content: center;'
-      + '  padding: 24px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
+      // align-items:center clips BOTH ends once the card is taller than the
+      // window, and a fixed inset:0 box does not scroll, so the overflow is
+      // unreachable rather than merely hidden. That took out the headline at
+      // the top and the "continue on free runtimes" escape at the bottom on a
+      // laptop-height desktop window. flex-start + overflow-y:auto lets a tall
+      // card scroll; the auto margins on the card keep it optically centred
+      // whenever it does fit.
+      + '  display: flex; align-items: flex-start; justify-content: center;'
+      + '  overflow-y: auto; overscroll-behavior: contain;'
+      + '  padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-card {'
-      + '  max-width: 480px; width: 100%; background: #1a1d22;'
+      + '  max-width: 460px; width: 100%; background: #1a1d22;'
       + '  border: 1px solid #2a2f36; border-radius: 14px;'
       + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
-      + '  padding: 32px; color: #e8eaed;'
+      + '  padding: 22px 26px; color: #e8eaed;'
+      + '  margin: auto;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
-      + '  color: #ffb020; font-size: 12px; font-weight: 700;'
-      + '  text-transform: uppercase; letter-spacing: 1.4px;'
-      + '  margin: 0 0 10px 0;'
+      + '  color: #ffb020; font-size: 11px; font-weight: 700;'
+      + '  text-transform: uppercase; letter-spacing: 1.3px;'
+      + '  margin: 0 0 6px 0;'
       + '}'
       + '#' + OVERLAY_ID + ' h2 {'
-      + '  margin: 0 0 12px 0; font-size: 22px; line-height: 1.25;'
+      + '  margin: 0 0 8px 0; font-size: 19px; line-height: 1.25;'
       + '  color: #ffffff; font-weight: 700;'
       + '}'
       + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
-      + '  margin: 0 0 22px 0; font-size: 14px; line-height: 1.55;'
+      + '  margin: 0 0 14px 0; font-size: 13px; line-height: 1.5;'
       + '  color: #b5b8be;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
-      + '  display: block; width: 100%; padding: 13px 18px;'
+      + '  display: block; width: 100%; padding: 11px 18px;'
       + '  border-radius: 10px; border: 0; background: #ff9500;'
       + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
       + '  cursor: pointer; text-align: center; text-decoration: none;'
-      + '  box-sizing: border-box; margin: 0 0 14px 0;'
+      + '  box-sizing: border-box; margin: 0 0 10px 0;'
       + '  transition: background 120ms ease;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
       // ── plan picker ──────────────────────────────────────────────────
       + '#' + OVERLAY_ID + ' .cm-hbo-seg {'
-      + '  display: flex; gap: 4px; padding: 4px; margin: 0 0 14px 0;'
+      + '  display: flex; gap: 4px; padding: 3px; margin: 0 0 10px 0;'
       + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-seg button {'
-      + '  flex: 1; padding: 9px 10px; border: 0; border-radius: 7px;'
+      + '  flex: 1; padding: 7px 10px; border: 0; border-radius: 7px;'
       + '  background: transparent; color: #b5b8be; font-size: 13px;'
       + '  font-weight: 600; cursor: pointer; font-family: inherit;'
       + '}'
@@ -112,7 +143,7 @@
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-tier {'
       + '  display: flex; align-items: center; gap: 11px; width: 100%;'
-      + '  padding: 13px 14px; margin: 0 0 8px 0; text-align: left;'
+      + '  padding: 10px 13px; margin: 0 0 6px 0; text-align: left;'
       + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
       + '  color: #e8eaed; cursor: pointer; font-family: inherit;'
       + '}'
@@ -127,29 +158,36 @@
       + '  border-color: #ff9500; box-shadow: inset 0 0 0 3px #ff9500;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-tier-name {'
-      + '  font-size: 15px; font-weight: 700; color: #fff; display: block;'
+      + '  font-size: 14px; font-weight: 700; color: #fff; display: block;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-tier-sub {'
       + '  font-size: 12px; color: #9aa0a8; display: block; margin-top: 2px;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-feats {'
-      + '  margin: 12px 0 14px 0; padding: 0; list-style: none;'
-      + '  font-size: 13px; color: #b5b8be;'
+      + '  margin: 9px 0 10px 0; padding: 0; list-style: none;'
+      + '  font-size: 12.5px; color: #b5b8be;'
       + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 6px 0; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 4px 0; }'
       + '#' + OVERLAY_ID + ' .cm-hbo-feats li::before {'
       + '  content: "+"; color: #22c55e; font-weight: 700; margin-right: 8px;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-price {'
-      + '  text-align: center; margin: 0 0 14px 0;'
-      + '  font-size: 26px; font-weight: 700; color: #fff;'
+      + '  text-align: center; margin: 0 0 10px 0;'
+      + '  font-size: 23px; font-weight: 700; color: #fff;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-device {'
-      + '  margin: 0 0 14px 0; padding: 11px 13px; border-radius: 9px;'
+      + '  margin: 0 0 10px 0; padding: 9px 12px; border-radius: 9px;'
       + '  border: 1px solid #33406b; background: #151a2b;'
       + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-was {'
+      + '  color: #6b7078; text-decoration: line-through;'
+      + '  font-size: 17px; font-weight: 600; margin-right: 4px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-per {'
+      + '  font-size: 13px; font-weight: 500; color: #9aa0a8;'
+      + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
       + '  display: block; margin-top: 4px; font-size: 12px;'
       + '  font-weight: 500; color: #22c55e;'
@@ -157,7 +195,7 @@
       + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
       + '  display: flex; align-items: center; gap: 10px;'
       + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
-      + '  letter-spacing: 1.2px; margin: 18px 0;'
+      + '  letter-spacing: 1.2px; margin: 12px 0;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
       + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
@@ -165,24 +203,24 @@
       + '}'
       + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
       + '  display: block; font-size: 12px; color: #b5b8be;'
-      + '  margin: 0 0 8px 0;'
+      + '  margin: 0 0 6px 0;'
       + '}'
       + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
-      + '  width: 100%; min-height: 96px; padding: 10px 12px;'
+      + '  width: 100%; min-height: 52px; padding: 8px 11px;'
       + '  border-radius: 8px; border: 1px solid #2a2f36;'
       + '  background: #12141a; color: #e8eaed;'
       + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
       + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
       + '}'
       + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
-      + '  margin-top: 10px; width: 100%; padding: 11px 14px;'
+      + '  margin-top: 8px; width: 100%; padding: 9px 14px;'
       + '  border-radius: 10px; border: 1px solid #2a2f36;'
       + '  background: transparent; color: #e8eaed;'
       + '  font-size: 14px; font-weight: 600; cursor: pointer;'
       + '}'
       + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
       + '#' + OVERLAY_ID + ' .cm-hbo-status {'
-      + '  min-height: 20px; margin-top: 12px; font-size: 12px;'
+      + '  min-height: 16px; margin-top: 9px; font-size: 11.5px;'
       + '  color: #b5b8be; text-align: center;'
       + '}'
       + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
@@ -231,12 +269,14 @@
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
       : ['openclaw', 'nemoclaw'];
+    // nemoclaw is NVIDIA NemoClaw and it is FREE. nanoclaw is a different
+    // runtime entirely, and it is PAID (entitlements.PAID_RUNTIMES). This
+    // mapping said 'NanoClaw', so the one screen that tells a blocked user
+    // what they still get named a runtime they do NOT get and never named
+    // the one they do. Labels come from entitlements.RUNTIME_LABELS.
+    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw' };
     var freeRuntimesLabel = freeRuntimes
-      .map(function (r) {
-        if (r === 'openclaw') return 'OpenClaw';
-        if (r === 'nemoclaw') return 'NanoClaw';
-        return r;
-      })
+      .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
     el.innerHTML = ''
       + '<div class="cm-hbo-card">'
@@ -245,31 +285,27 @@
       + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
       + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
       + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
-      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">save 2 months</span></button>'
+      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">2 months free</span></button>'
       + '  </div>'
       + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
       + '    <span class="cm-hbo-radio"></span>'
       + '    <span><span class="cm-hbo-tier-name">Starter</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(runtimesLine()) + '</span></span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.starter) + '</span></span>'
       + '  </button>'
       + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
       + '    <span class="cm-hbo-radio"></span>'
       + '    <span><span class="cm-hbo-tier-name">Pro</span>'
-      + '      <span class="cm-hbo-tier-sub">Adds enforcement + audit layer</span></span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.pro) + '</span></span>'
       + '  </button>'
-      + '  <ul class="cm-hbo-feats">'
-      + '    <li>' + escapeHtml(runtimesLine()) + '</li>'
-      + '    <li>Unlimited channels + cloud sync</li>'
-      + '    <li>Approval queue</li>'
-      + '  </ul>'
+      + '  <ul class="cm-hbo-feats" id="cm-hbo-feats">' + featsHtml() + '</ul>'
       // Annual-only perk. The cloud already collects a shipping address on
       // annual checkouts for this (_annual_device_checkout_extras), and it
       // ships on the first PAID invoice, so this is not a promise we invent
       // here. Hidden on monthly.
       + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
-      + '    Includes the $149 desk device, <strong>free</strong> with any annual plan.'
+      + '    Includes a free <strong>$149 desk device</strong>.'
       + '  </div>'
-      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + escapeHtml(planPriceLabel()) + '</div>'
+      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + planPriceHtml() + '</div>'
       + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
       + '    Continue to Stripe  →'
       + '  </a>'
@@ -321,7 +357,9 @@
         el.querySelectorAll('.cm-hbo-tier'), function (b) {
           b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
         });
-      if (priceEl) priceEl.textContent = planPriceLabel();
+      if (priceEl) priceEl.innerHTML = planPriceHtml();
+      var featsEl = el.querySelector('#cm-hbo-feats');
+      if (featsEl) featsEl.innerHTML = featsHtml();
       var devEl = el.querySelector('#cm-hbo-device');
       if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
     }
@@ -351,11 +389,8 @@
             var all = ent && ent.all_runtimes;
             if (Array.isArray(all) && all.length) {
               _paidRuntimeCount = all.length;
-              Array.prototype.forEach.call(
-                el.querySelectorAll('.cm-hbo-tier[data-tier="starter"] .cm-hbo-tier-sub'),
-                function (n) { n.textContent = runtimesLine(); });
-              var firstFeat = el.querySelector('.cm-hbo-feats li');
-              if (firstFeat) firstFeat.textContent = runtimesLine();
+              var fe = el.querySelector('#cm-hbo-feats');
+              if (fe) fe.innerHTML = featsHtml();
             }
           })
           .catch(function () {});
