@@ -42157,6 +42157,120 @@ def _missing_all_bundle_row_to_body(row: dict) -> dict:
 
 
 @bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle():
+    """``POST /api/entitlement/missing-all-bundle`` -- singular row-detail
+    scalar sibling of ``/api/entitlement/missing-all-bundle-batch`` on
+    the LIVE aggregate seat.
+
+    Row-detail complement of ``/api/entitlement/has-all-bundle`` on the
+    same input shape: same POST body, same axis echoes, same never-crash
+    posture. The only per-row divergence is the fold slot -- this returns
+    a per-axis ``missing`` dict where the boolean-fold sibling returns a
+    single ``has_all`` bool.
+
+    Folds ONE caller-supplied aggregate 5-axis bundle to the canonical
+    batch-row shape at the LIVE resolver so a paywall walkthrough tile
+    rendering one hypothetical cell at a time ("would this whole config
+    land granted on my install, and if not, which axes still block?")
+    reads the per-axis denial detail without wrapping in a length-one
+    list and unwrapping ``[0]`` from ``/missing-all-bundle-batch``.
+
+    Distinct from the singular ``/api/entitlement/missing-all`` GET
+    endpoint (whose response is just the per-axis ``missing`` dict
+    without the axis-echo wrapper): this returns the wrapped six-key
+    batch-row shape so a UI wiring the singular and the batch off the
+    same helper sees byte-identical rows.
+
+    POST rather than GET so the request body is byte-identical to the
+    batch endpoint's per-row shape -- a caller with a single bundle in
+    hand can POST it as-is without stitching a CSV query string, and can
+    reuse the exact body they would send to ``/has-all-bundle``.
+
+    Request body::
+
+        {"bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+                    "channels": 5, "retention_days": 30, "nodes": 2}}
+
+    A shorthand where the top-level body IS the bundle
+    (``{"features": ["fleet"]}``) is also accepted so the same body the
+    ``/missing-all`` GET endpoint takes as query args maps 1:1 to a POST
+    body. Missing / non-object ``bundle`` value is a 400.
+
+    Response layers the resolver envelope on top of the batch-row shape
+    (byte-identical to the batch's per-row body plus the envelope so a
+    caller can render "on <tier>, what still blocks?" without a second
+    call)::
+
+        {
+          "features":          ["fleet"],
+          "runtimes":          ["claude_code"],
+          "channels":          5 | null,
+          "retention_days":    30 | null,
+          "nodes":             2 | null,
+          "missing": {
+              "features":       [<subset not granted on LIVE>],
+              "runtimes":       [<subset not granted on LIVE>],
+              "channels":       <requested int if denied, else null>,
+              "retention_days": <requested int if denied, else null>,
+              "nodes":          <requested int if denied, else null>,
+          },
+          "current_tier":      "...",
+          "current_tier_rank": <int>,
+          "grace":             <bool>,
+          "enforced":          <bool>,
+        }
+
+    Grace posture mirrors the LIVE ``/missing-all`` byte-for-byte: while
+    ``grace`` is ``true`` every fully-known bundle reports the empty
+    ``missing`` shape; post-enforcement each slot reflects the underlying
+    denial.
+
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      (empty row shape with empty ``missing``) so the paywall tile keeps
+      rendering.
+    """
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        row = _ent.missing_all_bundle(bundle)
+        out = _missing_all_bundle_row_to_body(row)
+        env = _resolver_envelope(_ent)
+        return jsonify({**out, **env})
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_all_bundle: error: %s", exc)
+        return jsonify(
+            {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "missing": {
+                    "features": [],
+                    "runtimes": [],
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
     "/api/entitlement/missing-all-bundle-batch",
     methods=["POST"],
 )

@@ -70,6 +70,51 @@ class TrialHardBlockGateTest(unittest.TestCase):
         from clawmetry import entitlements
         entitlements.invalidate()
 
+    @staticmethod
+    def _plan_path():
+        """The path the RESOLVER actually reads.
+
+        ``entitlements._CLOUD_PLAN_CACHE`` is expanded at import time, so if
+        any earlier test in the session imported the module under a different
+        HOME it is pinned to that old directory. Deriving the path from
+        ``$HOME`` here instead would write somewhere the resolver never looks
+        — the test then passes alone and fails in the full suite, which is
+        exactly how it behaved before this was fixed."""
+        from clawmetry import entitlements
+        return entitlements._CLOUD_PLAN_CACHE
+
+    def _write_cloud_plan(self, **fields):
+        """Stamp the cloud-plan cache (what the daemon writes from the
+        heartbeat) and drop the resolver cache so the next request sees it."""
+        import json
+        p = self._plan_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            json.dump(fields, fh)
+        self._invalidate()
+
+    def _clear_cloud_plan(self):
+        try:
+            os.remove(self._plan_path())
+        except OSError:
+            pass
+        self._invalidate()
+
+    def test_never_trialed_install_is_never_blocked(self):
+        """A fresh ``pip install clawmetry`` with no license and no trial is
+        the permanent free tier, NOT a lapsed one. Blocking it would brick
+        every new install on day one (the 2026-08-06 regression)."""
+        os.environ["CLAWMETRY_HARD_BLOCK"] = "1"
+        self._clear_cloud_plan()
+        try:
+            resp = self._client.get("/api/sessions")
+            self.assertNotEqual(
+                resp.status_code, 402,
+                "a never-trialed install must NEVER be hard-blocked")
+        finally:
+            os.environ["CLAWMETRY_HARD_BLOCK"] = "0"
+            self._clear_cloud_plan()
+
     def test_default_is_enabled(self):
         """Founder policy: block is default-ON. Only an explicit opt-out
         env value disables it."""
@@ -109,9 +154,22 @@ class TrialHardBlockGateTest(unittest.TestCase):
 
     def test_non_allowlisted_returns_402_with_correct_body(self):
         """A blocked install must 402 non-allowlisted paths with the shape
-        the overlay JS keys off."""
+        the overlay JS keys off.
+
+        "Blocked" means a CONSUMED trial whose end date has passed —
+        ``trial_used`` + a past ``expiry``, exactly what the daemon writes
+        into cloud_plan.json from the heartbeat's users.trial_used /
+        users.trial_end. An empty HOME is a never-trialed install and is
+        deliberately NOT blocked (see
+        test_never_trialed_install_is_never_blocked)."""
+        import time as _t
         os.environ["CLAWMETRY_HARD_BLOCK"] = "1"
-        self._invalidate()
+        self._write_cloud_plan(
+            plan="cloud_free", node_limit=1,
+            expiry=_t.time() - 2 * 86400.0,
+            trial_end=_t.time() - 2 * 86400.0,
+            trial_used=True,
+        )
         try:
             resp = self._client.get("/api/sessions")
             self.assertEqual(
@@ -132,7 +190,9 @@ class TrialHardBlockGateTest(unittest.TestCase):
                           "body.refresh_endpoint must be present")
         finally:
             os.environ["CLAWMETRY_HARD_BLOCK"] = "0"
-            self._invalidate()
+            # Clear the lapsed-trial cache too, or it leaks into every test
+            # that runs after this one in the shared temp HOME.
+            self._clear_cloud_plan()
 
     def test_optout_lets_traffic_through(self):
         """The support opt-out (CLAWMETRY_HARD_BLOCK=0) must bypass the
