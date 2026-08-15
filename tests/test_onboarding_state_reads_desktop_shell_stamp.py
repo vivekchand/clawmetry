@@ -7,7 +7,8 @@ when it completes onboarding), the founder reopened the .dmg they
 already had installed and STILL saw the "Welcome to ClawMetry / Where
 should ClawMetry keep an eye on your agents?" gate — because the .dmg
 they had was pre-#4758, so the shell never wrote the browser gate's
-file. The pip wheel auto-updates every 6h; the .app bundle only
+file. The pip wheel auto-updates on the shell's upgrade cadence
+(UPGRADE_CHECK_INTERVAL_SECS, 60s since 2026-08-15); the .app bundle only
 updates when the user redownloads. Any fix that lives only in
 ``desktop/`` reaches users days late.
 

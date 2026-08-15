@@ -14,9 +14,19 @@ pywebview>=6.2.1
 # isolated 3.11 can't import a cp312 `_gi.so` at all, so the frozen
 # binary crashed on launch with "cannot import name '_gi'" - the Linux
 # tray build has never actually been verified to open a window (2026-08-08
-# discovery, desktop#... AppImage work). Pinned to 3.48.2: pip's latest
-# (3.56.3) triggers a separate `TypeError: Must be number, not method`
-# in pywebview's gtk.py on_load_finish against this webkit2gtk build.
+# discovery, desktop#... AppImage work).
+#
+# This pin previously carried a note blaming 3.56.3 for the
+# `TypeError: Must be number, not method` crash in pywebview's
+# on_load_finish, and said it was pinned to 3.48.2 while actually
+# pinning 3.56.3. Both halves were wrong. The version is not the
+# problem: PyInstaller was dropping PyGObject's gi/overrides/*.py from
+# the bundle, so the frozen app got the raw girepository API. 3.56.3
+# with the overrides collected is verified working on Ubuntu 24.04 —
+# see the long comment in build_linux.spec. Do not downgrade to chase
+# that TypeError; desktop/smoke_test.py now fails the build if the
+# overrides ever go missing again.
+#
 # Needs libgirepository1.0-dev + libcairo2-dev + pkg-config at build time
 # (see the Linux job's "Install system deps" step in desktop-artifacts.yml).
 PyGObject==3.56.3; sys_platform == "linux"
