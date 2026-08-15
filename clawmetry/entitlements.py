@@ -14125,6 +14125,104 @@ def _missing_all_bundle_row_at(perspective_tier: str, bundle) -> dict:
     }
 
 
+def missing_all_bundle_at(perspective_tier: str, bundle) -> dict | None:
+    """Perspective-shaped row-detail scalar sibling of
+    :func:`missing_all_bundle_batch_at` for ONE aggregate 5-axis bundle.
+
+    Folds ONE ``{features, runtimes, channels, retention_days, nodes}``
+    bundle to the canonical batch-row shape against the STATIC per-tier
+    grant tables for ``perspective_tier`` (the ``_at`` slot). Grace-
+    independent by construction: the delegate
+    :func:`_missing_all_bundle_row_at` reads from
+    :func:`_hypothetical_entitlement` on the feature / runtime axes and
+    :data:`_TIER_CHANNEL_LIMIT` / :data:`_TIER_RETENTION_DAYS` /
+    :data:`_TIER_NODE_LIMIT` on the capacity axes, so the row body is
+    byte-identical under grace vs enforce for the same
+    ``(perspective, bundle)`` pair.
+
+    Same relationship to :func:`missing_all_bundle_batch_at` that
+    :func:`has_all_bundle_at` has to :func:`has_all_bundle_batch_at` on
+    the boolean-fold seat, and that :func:`missing_all_bundle` has to
+    :func:`missing_all_bundle_batch` on the LIVE seat: fills the scalar
+    row-detail slot alongside :func:`has_all_bundle_at` (boolean-fold
+    scalar), :func:`missing_all_bundle_batch_at` (row-detail batch), and
+    :func:`missing_all_bundle` (LIVE row-detail scalar) so a paywall
+    walkthrough tile rendering one hypothetical cell at a time ("from
+    OSS today, which axes of this whole bundle would still be blocked?")
+    reads the perspective answer without wrapping in a length-one list
+    and unwrapping ``[0]`` from :func:`missing_all_bundle_batch_at`.
+
+    Row shape mirrors :func:`has_all_bundle_at` byte-for-byte on the
+    axis-echo slots with the fold slot swapped from a single
+    ``has_all_at`` bool to a per-axis ``missing`` dict matching
+    :func:`missing_all_at`'s return shape::
+
+        {
+          "features":       ["fleet"],
+          "runtimes":       ["claude_code"],
+          "channels":       5 | None,
+          "retention_days": 30 | None,
+          "nodes":          2 | None,
+          "missing": {
+              "features":       [<subset denied at perspective>],
+              "runtimes":       [<subset denied at perspective>],
+              "channels":       <requested int if denied, else None>,
+              "retention_days": <requested int if denied, else None>,
+              "nodes":          <requested int if denied, else None>,
+          },
+        }
+
+    Returns ``None`` for an empty / blank / non-string / unknown
+    ``perspective_tier`` -- matches the ``None``-on-unknown posture of
+    :func:`missing_all_bundle_batch_at`, :func:`has_all_bundle_at`,
+    :func:`missing_all_at`, and the paired
+    ``/api/entitlement/missing-all-bundle-at?tier=`` endpoint (which
+    400s on missing / blank and 404s on unknown).
+
+    Complement invariant with :func:`has_all_bundle_at`: for every
+    fully-parseable non-empty bundle on a valid perspective,
+    ``any(row["missing"].values())`` byte-equals
+    ``not row_has["has_all_at"]`` -- pins the row-detail seat as the
+    exact perspective-shaped negation of the boolean-fold seat on the
+    same ``(perspective, bundle)`` pair. (The empty ``{}`` case is a
+    deliberate divergence -- the boolean-fold sibling collapses to
+    ``has_all_at=False`` under its typo posture while the row-detail
+    seat reports nothing missing.)
+
+    Never raises on the bundle side: a delegate failure on a valid
+    perspective returns the empty row shape (empty ``missing`` dict) so
+    a caller wiring the scalar into a gate cannot 500 on a malformed
+    bundle.
+    """
+    if not isinstance(perspective_tier, str):
+        return None
+    tier_key = perspective_tier.strip().lower()
+    if not tier_key or tier_key not in _TIER_ORDER:
+        return None
+    try:
+        return _missing_all_bundle_row_at(tier_key, bundle)
+    except Exception as exc:
+        logger.warning(
+            "entitlements: missing_all_bundle_at(%r) fold failed: %s",
+            perspective_tier,
+            exc,
+        )
+        return {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "missing": {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            },
+        }
+
+
 def missing_all_bundle_batch_at(
     perspective_tier: str, bundles
 ) -> list[dict] | None:
