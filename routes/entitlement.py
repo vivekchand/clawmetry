@@ -41822,6 +41822,166 @@ def _missing_all_bundle_row_at_to_body(row: dict) -> dict:
 
 
 @bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle-at",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle_at():
+    """``POST /api/entitlement/missing-all-bundle-at?tier=<perspective>``
+    -- hypothetical-perspective row-detail singular sibling of
+    ``/api/entitlement/missing-all-bundle-batch-at`` (perspective-shaped
+    batch) and ``/api/entitlement/has-all-bundle-at`` (boolean fold on
+    the same singular seat).
+
+    Wraps :func:`clawmetry.entitlements.missing_all_bundle_at` so a
+    paywall walkthrough tile rendering ONE bundle cell at a time can
+    read the perspective-scoped denial detail without wrapping in a
+    length-one list and unwrapping ``[0]`` from
+    ``/missing-all-bundle-batch-at``. Fills the singular-row slot for
+    the aggregate-bundle row-detail ``_at`` family alongside the batch
+    ``/missing-all-bundle-batch-at``, the paired boolean-fold
+    ``/has-all-bundle-at``, and the LIVE row-detail
+    ``/missing-all-bundle`` so a caller can call the perspective-scoped
+    singular row detail uniformly across every ``_at`` family.
+
+    **Perspective-shaped** (grace-independent by design):
+    :func:`missing_all_bundle_at` delegates to
+    :func:`_missing_all_bundle_row_at`, which reads from the static
+    per-tier grant tables via :func:`_hypothetical_entitlement` on the
+    feature / runtime axes and :data:`_TIER_CHANNEL_LIMIT` /
+    :data:`_TIER_RETENTION_DAYS` / :data:`_TIER_NODE_LIMIT` on the
+    capacity axes, so the row body is byte-identical under grace vs
+    enforce for the same ``(perspective, bundle)`` pair. Whole point of
+    the ``_at`` slot: at ``tier=oss`` a paid-feature bundle reports
+    ``missing.features=["fleet"]`` even in grace, whereas the LIVE
+    ``/missing-all-bundle`` reports ``missing.features=[]`` for the
+    same bundle via grace pass-through.
+
+    Complement invariant with ``/has-all-bundle-at`` on the same
+    ``(tier, bundle)`` inputs: for every fully-parseable non-empty
+    bundle, ``any(row["missing"].values())`` is the strict negation of
+    the paired ``has_all_at`` row -- a UI can render "which axes are
+    still blocked at <perspective>?" from this endpoint and cross-check
+    against the paired boolean fold.
+
+    Request body is byte-identical to ``/has-all-bundle-at`` and
+    ``/missing-all-bundle``. The extra ``tier=<perspective>`` query arg
+    is required::
+
+        {"bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+                    "channels": 5, "retention_days": 30, "nodes": 2}}
+
+    A shorthand where the top-level body IS the bundle
+    (``{"features": ["fleet"]}``) is also accepted so the same body the
+    ``/missing-all-at`` GET endpoint takes as query args maps 1:1 to a
+    POST body. Missing / non-object ``bundle`` value is a 400.
+
+    Response layers ``perspective_tier`` /
+    ``perspective_tier_label`` / ``perspective_tier_rank`` on top of
+    the singular row body with the fold slot as a per-axis ``missing``
+    dict matching :func:`missing_all_at`'s return shape::
+
+        {
+          "perspective_tier":       "cloud_pro",
+          "perspective_tier_label": "Cloud Pro",
+          "perspective_tier_rank":  <int>,
+          "features":               ["fleet"],
+          "runtimes":               ["claude_code"],
+          "channels":               5 | null,
+          "retention_days":         30 | null,
+          "nodes":                  2 | null,
+          "missing": {
+              "features":       [<subset denied at perspective>],
+              "runtimes":       [<subset denied at perspective>],
+              "channels":       <requested int if denied, else null>,
+              "retention_days": <requested int if denied, else null>,
+              "nodes":          <requested int if denied, else null>,
+          },
+          "current_tier":           "...",
+          "current_tier_rank":      <int>,
+          "grace":                  <bool>,
+          "enforced":               <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank.
+    - **404** when ``tier`` is unknown (body carries ``which=tier`` so
+      a caller can render the right "unknown tier" message).
+    - **400** when ``bundle`` is missing / non-object.
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      so the paywall walkthrough keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    body = request.get_json(silent=True) or {}
+    bundle, err = _parse_single_bundle_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundle"}), 400
+    if err == "bundle_must_be_object":
+        return jsonify({"error": "bundle must be an object"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        row = _ent.missing_all_bundle_at(tier_in, bundle) or {
+            "features": [],
+            "runtimes": [],
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+            "missing": {
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+            },
+        }
+        out = _missing_all_bundle_row_at_to_body(row)
+        env = _resolver_envelope(_ent)
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": _ent.tier_label(tier_in),
+                "perspective_tier_rank": _ent.tier_rank(tier_in),
+                **out,
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_missing_all_bundle_at: error: %s", exc)
+        return jsonify(
+            {
+                "perspective_tier": tier_in,
+                "perspective_tier_label": None,
+                "perspective_tier_rank": -1,
+                "features": [],
+                "runtimes": [],
+                "channels": None,
+                "retention_days": None,
+                "nodes": None,
+                "missing": {
+                    "features": [],
+                    "runtimes": [],
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+            }
+        )
+
+
+@bp_entitlement.route(
     "/api/entitlement/missing-all-bundle-batch-at",
     methods=["POST"],
 )
