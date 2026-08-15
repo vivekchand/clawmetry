@@ -600,6 +600,12 @@ class Entitlement:
     features: frozenset = field(default_factory=lambda: FREE_FEATURES)
     runtimes: frozenset = field(default_factory=lambda: FREE_RUNTIMES)
     grace: bool = True
+    # True once this account has consumed its free trial (cloud
+    # ``users.trial_used``). This is the ONLY thing that distinguishes a
+    # lapsed trial from a never-trialed install: both resolve to the
+    # ``cloud_free`` tier, and only the former may be paywalled. Defaults to
+    # False so any install we cannot positively classify keeps working.
+    trial_used: bool = False
 
     @property
     def is_paid(self) -> bool:
@@ -2381,7 +2387,13 @@ class Entitlement:
         }
 
 
-def _build(tier: str, source: str, node_limit: int = 1, expiry: float | None = None) -> Entitlement:
+def _build(
+    tier: str,
+    source: str,
+    node_limit: int = 1,
+    expiry: float | None = None,
+    trial_used: bool = False,
+) -> Entitlement:
     paid_feats = _TIER_FEATURES.get(tier, frozenset())
     runtimes = FREE_RUNTIMES | PAID_RUNTIMES if tier in _TIER_PAID_RUNTIMES else FREE_RUNTIMES
     return Entitlement(
@@ -2392,6 +2404,7 @@ def _build(tier: str, source: str, node_limit: int = 1, expiry: float | None = N
         features=FREE_FEATURES | paid_feats,
         runtimes=runtimes,
         grace=not is_enforced(),
+        trial_used=bool(trial_used),
     )
 
 
@@ -2425,6 +2438,7 @@ def _read_cloud_plan() -> Entitlement | None:
             "cloud",
             node_limit=int(data.get("node_limit", 1) or 1),
             expiry=data.get("expiry"),
+            trial_used=bool(data.get("trial_used") or False),
         )
     except Exception as exc:
         logger.warning("entitlements: cloud-plan read failed: %s", exc)
