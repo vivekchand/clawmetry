@@ -324,7 +324,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.703"
+__version__ = "0.12.704"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can

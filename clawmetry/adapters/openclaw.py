@@ -1062,6 +1062,26 @@ def _sandbox_inference_configs() -> list:
                         _te["dcodeSupervisionFailReason"] = "openshell absent"
                     else:
                         _te["dcodeSupervisionFailReason"] = None
+                    # dcode proxy-env activation (#4810): the dcode login
+                    # profile sources /tmp/nemoclaw-proxy-env.sh before any
+                    # managed exec command, routing sandbox traffic through
+                    # the managed proxy.  A missing or empty file means the
+                    # sandbox may run unrouted/unguarded even when supervision
+                    # is otherwise feasible.
+                    _proxy_env = "/tmp/nemoclaw-proxy-env.sh"
+                    _proxy_env_present = os.path.isfile(_proxy_env)
+                    _proxy_env_nonempty = (
+                        _proxy_env_present
+                        and os.path.getsize(_proxy_env) > 0
+                    )
+                    _te["dcodeProxyEnvPresent"] = _proxy_env_present
+                    _te["dcodeProxyEnvNonEmpty"] = _proxy_env_nonempty
+                    if not _proxy_env_present:
+                        _te["dcodeProxyEnvFailReason"] = "env file absent"
+                    elif not _proxy_env_nonempty:
+                        _te["dcodeProxyEnvFailReason"] = "env file empty"
+                    else:
+                        _te["dcodeProxyEnvFailReason"] = None
                 out.append(_te)
     except Exception:
         pass
