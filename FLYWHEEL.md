@@ -26,10 +26,10 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
 > - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
 
-> ## Multi-runtime: ClawMetry observes 12 agent runtimes, not just OpenClaw (non-negotiable)
-> **ClawMetry is runtime-neutral. It observes 12 AI agent runtimes, not OpenClaw alone.** Free on every plan: **OpenClaw, NVIDIA NemoClaw**. Also supported: **Aider, Claude Code, Codex, Cursor, Goose, Hermes, NanoClaw, opencode, PicoClaw, Qwen Code**. The enabled set is live at `GET /api/runtimes` (authed); read it, never hardcode a stale copy.
+> ## Multi-runtime: ClawMetry observes 20 agent runtimes, not just OpenClaw (non-negotiable)
+> **ClawMetry is runtime-neutral. It observes 20 AI agent runtimes, not OpenClaw alone.** Free on every plan: **OpenClaw, NVIDIA NemoClaw**. Also supported: **Aider, Antigravity, Claude Code, Codex, Cursor, Deep Agents, DeepSeek Harness, GitHub Copilot, Goose, Grok, Hermes, n8n, NanoClaw, opencode, Pi, PicoClaw, QM, Qwen Code**. The enabled set is live at `GET /api/runtimes` (authed); read it, never hardcode a stale copy. The *count* in prose is derived from `FREE_RUNTIMES | PAID_RUNTIMES` and enforced by `scripts/sync_runtime_count.py` (see section 2a).
 > - **User-facing copy and UI must never imply OpenClaw-only.** Framing like "designed for OpenClaw agents", "your OpenClaw machine", "No OpenClaw detected", or "Looking for OpenClaw activity" is a bug. Use runtime-neutral language ("your AI agent", "the machine your agent runs on") or name the runtimes ("OpenClaw, NVIDIA NemoClaw + 10 more runtimes", matching the homepage install card). Naming runtimes is public; pricing and tier internals stay private.
-> - **Verify across all 12 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
+> - **Verify across all 20 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
 > Burned 2026-06-01: the docs FAQ said "ClawMetry is designed for OpenClaw agents" and the cloud empty-states plus the radar assumed OpenClaw-only. Many surfaces still need this sweep; when you touch a screen, fix its runtime framing.
 
 ---
@@ -155,6 +155,32 @@ Separately, **check [Pending Work Orders](https://factory.8090.ai) regularly**, 
 - Match surrounding style: `snake_case` funcs, minimal deps (Flask + waitress + cryptography), never crash on bad input (graceful fallbacks + a logged warning).
 - **No em-dashes (`—`, U+2014), no double-dashes (`--`), no `X, Y, and Z [emdash] coda` pattern in user-facing copy.** That pattern is an AI-tell, and the user has explicitly banned it. Applies to: landing HTML, dashboard banners, marketing copy, blog posts, CHANGELOG release entries, bounty and job posts (incl. external platforms like rentahuman.ai), public docs, email templates, modal copy, and any PR description users see. Allowed in: code comments, internal notes in `docs/`, commit messages, and internal-only PR bodies. Use a comma, parenthetical, colon, or full stop instead. **Belt-and-braces:** before sending any user-facing text (a PR via someone else's API, a CHANGELOG entry, landing copy, modal text), grep the payload for `—` or `--` and refuse to send if matched. Burned twice: 2026-05-26 on landing PR #211 (em-dashes in marketing copy), 2026-05-28 on the rentahuman.ai bounty redraft (em-dashes everywhere despite the rule being in memory, so the user had to re-flag it).
 - **Keep business internals out of this public repo.** This repo is public — investors, competitors, and prospective hires browse it. Any doc with live revenue/MRR/funnel/conversion numbers or monetization/pricing strategy (conversion roadmaps, conversion PRDs, pricing analysis) goes in **`clawmetry-cloud/docs/` (private), NEVER `clawmetry/docs/`**. Same rule as `[intel/*]` issues. Before creating any doc, ask: would this leak positioning, lead pipeline, or revenue if a competitor read it? If yes → private repo. (Burned 2026-05-26: a conversion roadmap + PRDs with the real paying-customer/MRR funnel were written into public `docs/` and had to be relocated.)
+
+## 2a. Adding a runtime: the count is derived, never hand-edited
+
+`FREE_RUNTIMES | PAID_RUNTIMES` in `clawmetry/entitlements.py` is the **only**
+place the supported-runtime set is declared. Everything that quotes a number
+hangs off it:
+
+| Surface | How it stays true |
+|---|---|
+| PyPI summary (`setup.py`) | **Derived.** `setup.py` parses `entitlements.py` at build time, so it cannot drift. |
+| README, translations, FLYWHEEL, ARCHITECTURE, AUDIT, CLI, desktop onboarding, device page | **Rewritten** by `python3 scripts/sync_runtime_count.py`. |
+| All of the above | **Enforced** by `tests/test_runtime_count_copy_sync.py`, which fails CI on drift. Also runs via `make lint`. |
+| Landing pages, GitHub repo description | **Not covered by this repo's CI.** Update `clawmetry-landing` and `gh repo edit --description` by hand in the same sprint. |
+
+So the loop when a runtime lands is: add it to `PAID_RUNTIMES` (or `FREE_RUNTIMES`),
+add its label to `RUNTIME_LABELS`, add it to the README grid, then run
+`python3 scripts/sync_runtime_count.py` and commit what it rewrites.
+
+If a number in prose legitimately is *not* the supported-runtime count (a free-tier
+count, a dated research note, a capacity estimate), add it to `EXEMPT` in the script
+with the reason. Do not reword the prose to dodge the regex.
+
+Burned 2026-08-15: the catalogue said 20 while the README said 14, PyPI said 12, and
+FLYWHEEL said 12, across 27 stale mentions in 16 files. Maintainers of external lists
+click through, and a PyPI page contradicting the homepage is the kind of thing that
+gets a submission closed.
 
 ## 3. Verify locally BEFORE the PR (the loop that actually catches bugs)
 
