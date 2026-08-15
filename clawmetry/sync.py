@@ -1186,6 +1186,8 @@ _TRIAL_STATE = {
     "sync_allowed": True,    # default: assume allowed until cloud says otherwise
     "plan": None,
     "trial_days_left": None,
+    "trial_end": None,       # users.trial_end (ISO-8601 UTC) once the cloud sends it
+    "trial_used": None,      # users.trial_used — True once a trial was consumed
     "upgrade_url": "https://app.clawmetry.com/cloud",
     "checkout_url": None,    # signed per-account Stripe checkout URL, if any
     "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
@@ -1235,11 +1237,26 @@ _CLOUD_PLAN_CACHE_PATH = os.path.expanduser("~/.clawmetry/cloud_plan.json")
 # Heartbeat ``plan`` strings → entitlement tier codes. Anything not in this map
 # (incl. ``trial_expired`` / None / "") clears the cache so the resolver falls
 # back to OSS-free instead of mistakenly granting an expired Pro plan.
+# Tiers that carry a real subscription. A trial_end must never be stamped onto
+# these as an expiry (see _persist_cloud_plan_to_disk): trial-by-default signup
+# means a paying customer's trial_end is always in the past.
+_PAID_PLAN_TIERS = frozenset({
+    "trial", "cloud_starter", "cloud_pro", "pro", "enterprise",
+})
+
 _HEARTBEAT_PLAN_TO_TIER = {
     "free": "cloud_free",
     "cloud_free": "cloud_free",
     "trial": "trial",
     "cloud_trial": "trial",
+    # A LAPSED trial is cloud_free with a burnt trial, not "unknown". Mapping it
+    # here (instead of falling through to tier=None, which DELETES the cache and
+    # loses the verdict) is what actually arms the paywall for the population
+    # that matters: 2,378 prod accounts sit at plan='trial' with a past
+    # trial_end, vs 40 that have already been flipped to plan='free'. It grants
+    # nothing -- cloud_free has no paid runtimes -- it only carries the
+    # trial_used/trial_end verdict through to the resolver.
+    "trial_expired": "cloud_free",
     "starter": "cloud_starter",
     "cloud_starter": "cloud_starter",
     "pro": "cloud_pro",
@@ -1306,10 +1323,59 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
         log.debug("immediate pro provision on upgrade skipped: %s", _ppe)
 
 
-def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
+def _parse_trial_end(raw) -> float | None:
+    """Coerce the heartbeat's ``trial_end`` into an epoch float.
+
+    The cloud sends an ISO-8601 UTC string (``users.trial_end``, e.g.
+    ``"2026-08-13T08:44:45.286492Z"``); older builds may send an epoch number.
+    Returns None for anything unparseable so a malformed value degrades to
+    "no expiry known" rather than a bogus timestamp that would either brick a
+    live trial or resurrect a dead one. Never raises."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return float(raw) or None
+        except (TypeError, ValueError):
+            return None
+    try:
+        s = str(raw).strip()
+        if not s:
+            return None
+        # Python 3.9's fromisoformat rejects "Z" and >6-digit fractions.
+        s = s.replace("Z", "+00:00")
+        if "." in s:
+            head, _, tail = s.partition(".")
+            frac, plus, off = tail.partition("+")
+            if plus:
+                s = f"{head}.{frac[:6]}+{off}"
+            else:
+                s = f"{head}.{frac[:6]}"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:
+        log.debug("cloud_plan: unparseable trial_end %r: %s", raw, exc)
+        return None
+
+
+def _persist_cloud_plan_to_disk(
+    plan: str | None,
+    trial_days_left=None,
+    trial_end=None,
+    trial_used=None,
+) -> None:
     """Mirror the heartbeat plan into ``~/.clawmetry/cloud_plan.json`` so the
     dashboard process (which runs ``clawmetry.entitlements.get_entitlement``)
     can resolve a cloud entitlement.
+
+    ``trial_end`` / ``trial_used`` mirror ``users.trial_end`` /
+    ``users.trial_used`` from the cloud. They are what lets the resolver tell a
+    LAPSED trial apart from an install that simply never trialed — without
+    them a burnt trial and a fresh ``pip install`` are both plain
+    ``cloud_free`` and the paywall (correctly) refuses to fire on either. See
+    ``trial_enforcement._resolver_says_unpaid_or_expired``.
 
     Best-effort: any IO error logs at debug and is swallowed — the cache is an
     optimisation, the daemon still works without it. When ``plan`` is unknown
@@ -1325,16 +1391,26 @@ def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
     # the trial ``expiry`` countdown doesn't churn a write + entitlement
     # invalidation every cycle. Only an actual tier transition re-writes + flips
     # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    _trial_end_epoch = _parse_trial_end(trial_end)
+    _trial_used = bool(trial_used) if trial_used is not None else None
     try:
         _existing_plan = None
+        _existing_trial = None
         if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
             with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
-                _existing_plan = (json.load(_fh) or {}).get("plan")
+                _cached = json.load(_fh) or {}
+            _existing_plan = _cached.get("plan")
+            _existing_trial = (_cached.get("trial_used"), _cached.get("trial_end"))
         if tier is None:
             if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
                 return  # already absent; nothing to reconcile
-        elif _existing_plan == tier:
-            return  # cache already matches the live tier; no write, no invalidate
+        elif _existing_plan == tier and _existing_trial == (_trial_used, _trial_end_epoch):
+            # Cache already matches the live tier AND the trial verdict; no
+            # write, no invalidate. The trial pair is part of the comparison
+            # because a lapsing trial does NOT change ``plan`` (it stays
+            # cloud_free) — comparing plan alone would silently skip the write
+            # that arms the paywall.
+            return
     except Exception:
         pass  # any read trouble -> fall through and (re)write below
     try:
@@ -1351,7 +1427,25 @@ def _persist_cloud_plan_to_disk(plan: str | None, trial_days_left=None) -> None:
                     expiry = time.time() + float(trial_days_left) * 86400.0
             except Exception:
                 expiry = None
+            # An authoritative trial_end from the cloud wins over the derived
+            # days-left countdown for UNPAID tiers: it is the same value
+            # Stripe/billing reconcile against, and it keeps working after the
+            # trial lapses (days_left goes to 0/None but trial_end stays
+            # meaningful).
+            #
+            # NEVER for a paid tier. Signup is trial-by-default, so essentially
+            # every paying customer carries trial_used=True and a trial_end
+            # that is long past -- stamping that onto their entitlement makes
+            # Entitlement.expired True and hard-blocks a subscriber who is
+            # paying us right now. Their subscription expiry comes from the
+            # plan, not from the trial they took before they bought.
+            if _trial_end_epoch is not None and tier not in _PAID_PLAN_TIERS:
+                expiry = _trial_end_epoch
             payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
+            if _trial_used is not None:
+                payload["trial_used"] = _trial_used
+            if _trial_end_epoch is not None:
+                payload["trial_end"] = _trial_end_epoch
             os.makedirs(os.path.dirname(_CLOUD_PLAN_CACHE_PATH), exist_ok=True)
             tmp = _CLOUD_PLAN_CACHE_PATH + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
@@ -1378,6 +1472,12 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["plan"] = resp.get("plan")
     if "trial_days_left" in resp:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
+    # users.trial_end / users.trial_used, mirrored so the resolver can tell a
+    # burnt trial from a never-trialed install (see _persist_cloud_plan_to_disk).
+    if "trial_end" in resp:
+        _TRIAL_STATE["trial_end"] = resp.get("trial_end")
+    if "trial_used" in resp:
+        _TRIAL_STATE["trial_used"] = resp.get("trial_used")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
     if resp.get("checkout_url"):
@@ -1391,9 +1491,17 @@ def _update_trial_state(resp: dict) -> None:
     # so this is cheap, but it self-heals a cache that drifted for any reason
     # (deleted file, a daemon that started while free then the plan upgraded,
     # etc.) and flips paid runtimes on the moment the plan becomes entitled.
-    if "plan" in resp or "trial_days_left" in resp:
+    if (
+        "plan" in resp
+        or "trial_days_left" in resp
+        or "trial_end" in resp
+        or "trial_used" in resp
+    ):
         _persist_cloud_plan_to_disk(
-            _TRIAL_STATE.get("plan"), _TRIAL_STATE.get("trial_days_left")
+            _TRIAL_STATE.get("plan"),
+            _TRIAL_STATE.get("trial_days_left"),
+            trial_end=_TRIAL_STATE.get("trial_end"),
+            trial_used=_TRIAL_STATE.get("trial_used"),
         )
     reason = (resp.get("reason") or "").strip()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -19255,6 +19363,32 @@ def run_daemon() -> None:
                 try:
                     _ak = (load_config() or {}).get("api_key", "")
                     if _ak:
+                        # Trial demonstrably lapsed -> REMOVE the pro package
+                        # rather than merely gating it. The entitlement layer
+                        # stops us using the paid adapters, but leaving the
+                        # closed wheel on disk means anyone can import
+                        # clawmetry_pro directly and keep the capability
+                        # without paying. should_deprovision_pro fails OPEN on
+                        # any uncertainty (unresolvable entitlement, offline,
+                        # signed local license, never-trialed, paid) so we
+                        # only ever remove on a positive lapse. Paying
+                        # re-provisions automatically on the next entitled
+                        # heartbeat; DuckDB history is untouched, so the user
+                        # gets their data back rather than a hole.
+                        from clawmetry.license import (
+                            should_deprovision_pro as _sdp,
+                            deprovision_pro as _dpp,
+                        )
+                        if _sdp():
+                            if _pv():
+                                _rm, _rmsg = _dpp("trial lapsed")
+                                log.info(
+                                    "clawmetry-pro removal: %s", _rmsg
+                                ) if _rm else log.warning(
+                                    "clawmetry-pro removal did not complete: %s",
+                                    _rmsg)
+                            _pro_stop.wait(timeout=1800)
+                            continue  # never re-provision on the same tick
                         _was = bool(_pv())
                         _ok, _msg = _wp(_ak, config.get("node_id"))
                         if _ok and not _was:

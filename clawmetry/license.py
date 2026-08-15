@@ -330,6 +330,159 @@ def _pro_installed_version() -> str | None:
         return None
 
 
+def _pro_install_locations() -> list:
+    """Every directory a clawmetry-pro install could live in.
+
+    The provisioner writes to the interpreter's site-packages when it is
+    writable and to the HOME-owned fallback otherwise, and either can be the
+    live one on a given box, so removal must sweep both or a "removed" install
+    stays importable from the other."""
+    out = []
+    try:
+        target, _writable = _site_packages_target()
+        if target:
+            out.append(target)
+    except Exception:
+        pass
+    out.append(_PRO_FALLBACK_DIR)
+    seen = set()
+    return [d for d in out if d and not (d in seen or seen.add(d))]
+
+
+def _purge_pro_from_memory() -> None:
+    """Drop already-imported clawmetry_pro modules so the RUNNING process stops
+    serving paid adapters immediately.
+
+    Deleting files is not enough: the daemon has the adapter classes imported,
+    and Python happily keeps using a module whose file is gone. Without this the
+    paid runtimes would keep ingesting until the next daemon restart, which is
+    exactly the window the removal exists to close. Never raises."""
+    try:
+        import sys
+        for name in [m for m in list(sys.modules) if m == "clawmetry_pro"
+                     or m.startswith("clawmetry_pro.")]:
+            sys.modules.pop(name, None)
+        try:
+            import importlib
+            importlib.invalidate_caches()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def deprovision_pro(reason: str = "") -> tuple[bool, str]:
+    """Remove the clawmetry-pro package from this machine.
+
+    Called when an account's trial has demonstrably lapsed. Gating the paid
+    runtimes at the entitlement layer stops ClawMetry from USING them, but the
+    closed-source wheel stays on disk where a curious user can import the
+    adapters directly and keep the paid capability without paying. Removing the
+    code is the only version of that boundary which actually holds.
+
+    Deliberately NOT destructive beyond the package: already-ingested rows stay
+    in DuckDB, so a user who pays later gets their history back rather than a
+    hole. Re-provisioning is automatic (``auto_provision_pro`` on the next
+    entitled heartbeat, or ``activate``), so this is reversible by paying.
+
+    Never raises. Returns (removed_something, status_message)."""
+    import shutil
+
+    removed = []
+    errors = []
+
+    # pip first when it exists: it removes the dist-info + RECORD cleanly so
+    # importlib.metadata stops reporting a version. Daemon venvs are often
+    # built WITHOUT pip, so a failure here is expected and non-fatal.
+    try:
+        ok, out = _pip_run(["uninstall", "-y", "clawmetry-pro"])
+        if ok:
+            removed.append("pip uninstall")
+        else:
+            errors.append(f"pip: {str(out)[:120]}")
+    except Exception as exc:
+        errors.append(f"pip: {exc}")
+
+    # Then sweep both install locations by hand. This is what actually catches
+    # the unzip-installed copies (pip-less venv / read-only site-packages).
+    for d in _pro_install_locations():
+        try:
+            if not os.path.isdir(d):
+                continue
+            pkg = os.path.join(d, "clawmetry_pro")
+            if os.path.isdir(pkg):
+                shutil.rmtree(pkg, ignore_errors=True)
+                if not os.path.isdir(pkg):
+                    removed.append(pkg)
+                else:
+                    errors.append(f"could not remove {pkg}")
+            for entry in os.listdir(d):
+                if entry.startswith("clawmetry_pro-") and (
+                        entry.endswith(".dist-info") or entry.endswith(".egg-info")):
+                    p = os.path.join(d, entry)
+                    shutil.rmtree(p, ignore_errors=True)
+                    if not os.path.isdir(p):
+                        removed.append(p)
+        except Exception as exc:
+            errors.append(f"{d}: {exc}")
+
+    _purge_pro_from_memory()
+
+    # Clear the provisioned marker last, so a crash mid-removal leaves the
+    # marker present and the next tick retries rather than believing the
+    # package is gone while files remain.
+    try:
+        if os.path.isfile(_PRO_MARKER_PATH):
+            os.remove(_PRO_MARKER_PATH)
+    except Exception as exc:
+        errors.append(f"marker: {exc}")
+
+    still_there = _pro_installed_version()
+    if still_there:
+        return False, (
+            f"clawmetry-pro {still_there} still importable after removal "
+            f"({'; '.join(errors) if errors else 'no error reported'})")
+    if removed:
+        return True, (f"clawmetry-pro removed ({reason or 'entitlement lapsed'})"
+                      + (f"; issues: {'; '.join(errors)}" if errors else ""))
+    return False, "clawmetry-pro was not installed"
+
+
+def should_deprovision_pro(ent=None) -> bool:
+    """True only when we can POSITIVELY prove this install's trial has lapsed.
+
+    Fails OPEN on every uncertainty, which is the opposite of the request-time
+    gate's fail-closed stance, and deliberately so: a wrongly-blocked request
+    self-heals on the next heartbeat, whereas a wrongly-REMOVED package needs a
+    re-download the machine may not be able to make (offline, air-gapped, cloud
+    outage). Asymmetric costs, asymmetric defaults.
+
+    Requires all of: a resolvable entitlement, an unpaid tier, a consumed
+    trial, and an expiry that has actually passed. A never-trialed free install
+    has nothing to remove and is never touched; a paying customer -- whose
+    trial_used is also True, since signup is trial-by-default -- is excluded by
+    the is_paid check. Never raises."""
+    import time as _t_dp
+    try:
+        if ent is None:
+            from clawmetry import entitlements as _ent
+            ent = _ent.get_entitlement(force=True)
+        if ent is None:
+            return False
+        if getattr(ent, "is_paid", False):
+            return False
+        if getattr(ent, "source", "") == "license":
+            return False  # a signed local license governs, not the cloud plan
+        if not getattr(ent, "trial_used", False):
+            return False
+        expiry = getattr(ent, "expiry", None)
+        if expiry is None:
+            return False
+        return _t_dp.time() > float(expiry)
+    except Exception:
+        return False
+
+
 def _read_pro_marker() -> dict:
     try:
         with open(_PRO_MARKER_PATH, "r", encoding="utf-8") as fh:
