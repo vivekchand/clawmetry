@@ -1,4 +1,7 @@
-<!-- i18n-src:7cfb63716507 -->
+<!-- i18n-src:c422fb7dd0da -->
+> العربية translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
+
+<!-- i18n-src:c422fb7dd0da -->
 > العربية translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -11,7 +14,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**شاهد وكيلك وهو يفكّر.** مراقبة فورية لـ **14 بيئة تشغيل لوكلاء الذكاء الاصطناعي**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و10 أخرى. لوحة تحكم واحدة لأسطول وكلائك بالكامل.
+**شاهد وكيلك وهو يفكّر.** مراقبة فورية لـ **20 بيئة تشغيل لوكلاء الذكاء الاصطناعي**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و16 أخرى. لوحة تحكم واحدة لأسطول وكلائك بالكامل.
 
 > 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [المزيد ←](docs/i18n/)
 
@@ -25,11 +28,11 @@ pip install clawmetry && clawmetry
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## يعمل مع 14 بيئة تشغيل للوكلاء
+## يعمل مع 20 بيئة تشغيل للوكلاء
 
 بدأت ClawMetry كأداة مراقبة لـ OpenClaw، والآن تقيس **أسطول وكلائك بالكامل** في لوحة تحكم واحدة، وتكتشف كل بيئة تشغيل على جهازك تلقائياً:
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok** · **QM**
+🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents** · 🔗 **n8n** · 🪐 **Antigravity** · 🐙 **GitHub Copilot** · **Grok** · **QM** · 🐋 **DeepSeek Harness**
 
 بيئتا OpenClaw وNemoClaw مجانيتان في التطبيق مفتوح المصدر؛ بينما تُفعَّل بقية بيئات التشغيل مع ClawMetry Cloud أو ترخيص Pro ذاتي الاستضافة. بدّل بين بيئات التشغيل من الترويسة، وكل تبويب - التكلفة والرموز والأدوات والتتبعات - يعاد تحديد نطاقه لتلك البيئة. راجع **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** للاطلاع على التقسيم الدقيق بين المجاني والمدفوع، ومصفوفة المستويات، وشكل `/api/entitlement`، وأداة سطر الأوامر `clawmetry license`.
 
@@ -208,7 +211,13 @@ CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
 CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 ```
 
-**الاستيعاب** - يقبل مستقبل OTLP المدمج التتبعات والمقاييس من أي مصدر آخر على `/v1/traces` و`/v1/metrics` (ثبّت `pip install clawmetry[otel]` لاستيعاب protobuf).
+**الاستيعاب** - يقبل مستقبل OTLP المدمج التتبعات والسجلات والمقاييس من أي مصدر آخر على `/v1/traces` و`/v1/logs` و`/v1/metrics`. وجّه أي تطبيق مزوَّد بأدوات OpenTelemetry إليه:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8900 OTEL_EXPORTER_OTLP_PROTOCOL=http/json your-app
+```
+
+تعمل تتبعات وسجلات OTLP/JSON على `pip install clawmetry` عادي، بلا إضافات. أما استيعاب protobuf (ومقاييس OTLP/JSON) فيحتاج إلى `pip install clawmetry[otel]`. التطبيق الذي يحدد `service.name` الخاص به يظهر كوكيله المستقل في محدّد بيئة التشغيل، مع تكلفته ورموزه.
 
 تحصل على لوحة تحكم ClawMetry بلا إعداد ومحلية أولاً **و** بياناتك في أي خادم خلفي يستخدمه فريقك بالفعل - بلا احتكار، وبلا وكيل ثانٍ للتثبيت.
 
