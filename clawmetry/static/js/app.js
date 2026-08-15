@@ -25955,6 +25955,11 @@ var _CM_RT_GENERIC_DIR = {
   skills: 1, memory: 1, plugins: 1, external_plugins: 1, marketplaces: 1,
   commands: 1, agents: 1, hooks: 1, '.claude': 1, '.agents': 1,
 };
+// The disambiguator is a PREFIX, never a replacement: dropping the filename
+// left rows in the live Memory tab reading "-Users-vivek--openclaw-workspace"
+// with no MEMORY.md anywhere on them, next to sibling rows that did show a
+// filename. Keep the base and lead with the folder that identifies it, so
+// every row still names a file.
 function _cmRtDisplayName(rel, fallback) {
   var segs = String(rel || '').split('/').filter(Boolean);
   if (!segs.length) return fallback || '(file)';
@@ -25962,7 +25967,7 @@ function _cmRtDisplayName(rel, fallback) {
   if (!_CM_RT_GENERIC_FILE[base]) return base;
   var parts = segs.slice(0, -1).filter(function(s) { return !_CM_RT_GENERIC_DIR[s]; });
   if (!parts.length) return base;
-  return parts.slice(-2).join('/');
+  return parts.slice(-1)[0] + '/' + base;
 }
 
 async function cmRuntimeMountBrowser(container, runtimeId, tab) {
