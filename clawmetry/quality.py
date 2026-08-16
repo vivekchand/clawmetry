@@ -1,69 +1,61 @@
 """
-clawmetry/quality.py — pure helpers for the Quality tab.
+clawmetry/quality.py — the Quality tab's plain-English layer.
 
-The Quality tab (formerly "Evals") answers ONE question in three seconds:
-"Is my agent doing good work?". This module holds the plain-Python logic
-that converts the numeric signals ClawMetry already computes (outcome,
-reliability_score, eval_score, cost, duration) into the human-facing
-grade + narrated patterns + plain-English "story" per rough run.
+Turns evidence-bearing verdicts (``clawmetry.quality_signals``) into the
+report card the tab renders: a grade, a headline, ranked failure patterns, and
+per-session stories.
 
-Design rules:
-  * Zero jargon in the strings we return — this text lands in the UI.
-  * Deterministic first. LLM-judge scores enrich the grade when a key is
-    set, but the grade never blanks without one (see Elon-mode note in the
-    2026-08-14 redesign: the deterministic signals are the product).
-  * Never raise; return a well-shaped empty on any bad input so the
-    endpoint stays quiet on a fresh install.
+Rewritten 2026-08-15. The previous version scored sessions from a single
+``outcome`` enum whose failure branch was a text-similarity heuristic blind to
+most runtimes' tool calls, and whose success branch was a fallthrough default
+("when uncertain we say success"). That produced a confident letter grade over
+what was effectively one unreliable bit.
 
-Public surface:
-    grade_for(score: float) -> str        # 0.0..1.0 -> "A" | "B" | ... | "F"
-    compute_report_card(rows) -> dict     # sessions rows -> full tab payload
-    story_for(session_row) -> str         # plain-English one-liner
+Three rules now hold, and each one is load-bearing:
+
+  1. **Only measurable sessions are graded.** A session with too little signal
+     is excluded and COUNTED OUT LOUD, never silently passed. In the audit
+     window 18 of 62 sessions were pure research chats with no tool calls;
+     every one had been collecting a free "success".
+  2. **Rough means evidence exists.** A session is rough because a verdict
+     carrying exhibits says so — not because nothing matched a success test.
+  3. **No jargon reaches the user.** Verdict names are internal; the strings
+     here are what a person reads.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# Outcome enum → the per-session score contribution.
-# success  = full credit; escalated (human took over) = partial;
-# every failure mode is zero — the operator's job is to fix the top-N.
-# Unknown / NULL outcomes are excluded from the average (bootstrapping
-# empty tabs return a grade based on scored rows only).
-_OUTCOME_SCORE: dict[str, float] = {
-    "success":         1.0,
-    "escalated":       0.6,
-    "failed":          0.0,
-    "tool_call_stuck": 0.0,
-    "cognitive_loop":  0.0,
-    "stuck":           0.0,
-    "looping":         0.0,
-    "budget_exceeded": 0.0,
+# Verdict → the "what went wrong" pattern label, and the per-session story.
+# Plain English, present tense, no ML vocabulary.
+_VERDICT_COPY: dict[str, dict[str, str]] = {
+    "tool_failures": {
+        "label": "Tools kept failing",
+        "story": "Its tools failed far more than usual for this runtime.",
+    },
+    "tool_thrash": {
+        "label": "Ran the same command over and over",
+        "story": "Retried the identical call again and again, and it kept failing.",
+    },
+    "no_forward_progress": {
+        "label": "Edited the same file without ever checking it",
+        "story": "Kept editing one file and never ran anything to see if it worked.",
+    },
+    "hard_failure": {
+        "label": "Ended on an error",
+        "story": "Stopped on an error it never recovered from.",
+    },
 }
 
-# Outcome enum → the pattern label users see in "What went wrong".
-# Plain English, present-tense verb, no ML jargon.
-_PATTERN_LABEL: dict[str, str] = {
-    "tool_call_stuck": "Agent got stuck retrying the same tool",
-    "stuck":           "Agent got stuck retrying the same tool",
-    "cognitive_loop":  "Looped in place, editing the same file over and over",
-    "looping":         "Looped in place, editing the same file over and over",
-    "failed":          "Gave up mid-task",
-    "budget_exceeded": "Ran past the token budget and truncated",
-    "escalated":       "Handed the task back for a human to finish",
-}
-
-# What we say per-session in the "rough runs" list. Deliberately narrative,
-# with a "then <thing that happened>" clause so the row reads as a mini
-# incident report rather than a status pill.
-_STORY_BY_OUTCOME: dict[str, str] = {
-    "tool_call_stuck": "Stuck retrying the same tool, then gave up.",
-    "stuck":           "Stuck retrying the same tool, then gave up.",
-    "cognitive_loop":  "Looped in place — kept editing the same file with no forward progress.",
-    "looping":         "Looped in place — kept editing the same file with no forward progress.",
-    "failed":          "Gave up mid-task.",
-    "budget_exceeded": "Ran past the token budget and truncated the answer.",
-    "escalated":       "Couldn't finish and asked a human to take over.",
+# How much each verdict costs a session's score. A session lands at
+# 1.0 minus the worst verdict's weight, scaled by that verdict's confidence —
+# so a low-confidence finding dents the grade instead of tanking it.
+_VERDICT_WEIGHT: dict[str, float] = {
+    "hard_failure":        1.0,
+    "tool_thrash":         0.8,
+    "tool_failures":       0.7,
+    "no_forward_progress": 0.6,
 }
 
 
@@ -86,261 +78,254 @@ def grade_for(score: float | None) -> str:
     return "F"
 
 
-def _session_score(row: dict[str, Any]) -> float | None:
-    """Blend outcome (deterministic, always present after classification)
-    with judge score (0..5, only when the user set a key).
+def session_score(assessment: dict[str, Any] | None) -> float | None:
+    """One session's 0..1 score, or None when it is not gradeable.
 
-    The blend is intentional: on a fresh install with no judge key the
-    grade still reflects real work (from outcome alone). Adding a judge
-    key later shifts the grade smoothly without a blank-then-populate flash.
+    None is a real answer, not a failure. It means "we could not measure this
+    one" and the caller must exclude it from the average rather than treat it
+    as a pass — the exact substitution that made the old grade meaningless.
     """
-    outcome = (row.get("outcome") or "").strip()
-    o_score = _OUTCOME_SCORE.get(outcome)
-    judge = row.get("eval_score")
-    j_score = None
-    if judge is not None:
-        try:
-            j_score = max(0.0, min(1.0, float(judge) / 5.0))
-        except (TypeError, ValueError):
-            j_score = None
-    if o_score is None and j_score is None:
+    if not assessment or not assessment.get("measurable"):
         return None
-    if o_score is None:
-        return j_score
-    if j_score is None:
-        return o_score
-    # 60/40 in favor of outcome. The outcome signal is more objective
-    # ("did the task finish?"); the judge is a subjective quality read
-    # that shouldn't dominate the operational answer.
-    return 0.6 * o_score + 0.4 * j_score
+    verdicts = assessment.get("verdicts") or []
+    if not verdicts:
+        return 1.0
+    worst = 0.0
+    for v in verdicts:
+        w = _VERDICT_WEIGHT.get(v.get("verdict") or "", 0.5)
+        conf = float(v.get("confidence") or 0.5)
+        worst = max(worst, w * conf)
+    return max(0.0, min(1.0, 1.0 - worst))
 
 
-def story_for(row: dict[str, Any]) -> str:
-    """Plain-English one-liner for a rough run. Never blank — falls back
-    to the judge's reason, then a generic 'ended without a clean answer'."""
-    outcome = (row.get("outcome") or "").strip()
-    if outcome in _STORY_BY_OUTCOME:
-        return _STORY_BY_OUTCOME[outcome]
-    reason = (row.get("eval_reason") or "").strip()
-    if reason:
-        # Truncate to a sentence-length preview so the row stays scannable.
-        r = reason.split(". ")[0].rstrip(".") + "."
-        return r if len(r) <= 140 else r[:137] + "…"
-    return "Ended without a clean answer."
+def story_for(assessment: dict[str, Any] | None) -> str:
+    """Plain-English one-liner for a rough run, taken from its top verdict."""
+    verdicts = (assessment or {}).get("verdicts") or []
+    if not verdicts:
+        return "Nothing went obviously wrong."
+    name = verdicts[0].get("verdict") or ""
+    return _VERDICT_COPY.get(name, {}).get(
+        "story", "Ended without a clean result.")
 
 
 def _title_or_id(row: dict[str, Any]) -> str:
-    """The user-facing name of a session: the title if we have one, else a
-    truncated session_id. Never a bare hash — that was the vaporbox smell."""
+    """The user-facing name of a session. Never a bare hash."""
     title = (row.get("title") or "").strip()
     if title:
         return title if len(title) <= 60 else title[:57] + "…"
     sid = str(row.get("session_id") or "")
+    if ":" in sid:
+        sid = sid.split(":", 1)[1]
     return sid if len(sid) <= 24 else sid[:21] + "…"
 
 
 def _fmt_cost(cost: float | None) -> str:
     if cost is None:
         return "$0.00"
-    c = float(cost)
+    try:
+        c = float(cost)
+    except (TypeError, ValueError):
+        return "$0.00"
     if c >= 0.01:
         return f"${c:.2f}"
-    if c > 0:
-        return "<$0.01"
-    return "$0.00"
-
-
-def _fmt_minutes(seconds: float | None) -> str:
-    if seconds is None or seconds <= 0:
-        return "—"
-    s = int(seconds)
-    if s < 60:
-        return f"{s} sec"
-    m = s // 60
-    if m < 60:
-        return f"{m} min"
-    h = m // 60
-    return f"{h}h {m % 60}m"
+    return "<$0.01" if c > 0 else "$0.00"
 
 
 def compute_report_card(
     rows: list[dict[str, Any]] | None,
+    assessments: dict[str, dict[str, Any]] | None,
     *,
+    prior_rows: list[dict[str, Any]] | None = None,
+    prior_assessments: dict[str, dict[str, Any]] | None = None,
     max_patterns: int = 6,
     max_rough_runs: int = 5,
-    prior_grade_score: float | None = None,
 ) -> dict[str, Any]:
-    """Turn a window of session rows into the wire payload the Quality tab
-    renders. Never raises. Empty rows → an honest "nothing to grade yet"
-    empty payload the UI knows how to display.
+    """Session rows + their assessments → the wire payload the tab renders.
 
-    ``prior_grade_score`` (0..1) is optional; when passed the payload
-    includes a ``vs_prior`` field (``"up"|"down"|"same"``) so the UI can
-    render "Down from a C+ last week."
+    Never raises. Empty input yields an honest "nothing to grade yet".
     """
     rows = rows or []
+    assessments = assessments or {}
 
-    scored = [(r, _session_score(r)) for r in rows]
-    scored = [(r, s) for (r, s) in scored if s is not None]
+    scored: list[tuple[dict, dict, float]] = []
+    unmeasured: list[tuple[dict, dict]] = []
+    for r in rows:
+        a = assessments.get(str(r.get("session_id") or "")) or {}
+        s = session_score(a)
+        if s is None:
+            unmeasured.append((r, a))
+        else:
+            scored.append((r, a, s))
 
     total = len(rows)
     graded = len(scored)
 
     if graded == 0:
         return {
-            "grade":           "—",
-            "grade_score":     None,
-            "total_runs":      total,
-            "graded_runs":     0,
-            "success_runs":    0,
-            "rough_runs_n":    0,
-            "rough_cost":      "$0.00",
-            "rough_seconds":   0,
-            "patterns":        [],
-            "rough_runs":      [],
-            "week":            [],
-            "vs_prior":        None,
-            "headline":        "Nothing to grade yet.",
-            "subline":         (
-                "Your agents haven't finished a task in this window. "
-                "Send Claude Code or OpenClaw a task and come back — "
-                "the first grade lands the moment a session ends."
+            "grade": "—", "grade_score": None,
+            "total_runs": total, "graded_runs": 0, "success_runs": 0,
+            "unmeasured_runs": len(unmeasured),
+            "rough_runs_n": 0, "rough_cost": "$0.00",
+            "patterns": [], "rough_runs": [], "week": [], "vs_prior": None,
+            "headline": "Nothing to grade yet.",
+            "subline": (
+                "No session in this window produced enough signal to judge. "
+                "Run a task that uses tools and come back — the first grade "
+                "lands when one finishes."
             ),
         }
 
-    avg_score = sum(s for _, s in scored) / graded
+    # Cost-weighted, not session-counted. A plain mean lets thirty cheap
+    # one-shot chats outvote the $82 run that spun on one file for twelve
+    # edits, which is exactly backwards from what the operator cares about —
+    # and it is how a window with $171 of rough runs was scoring an A.
+    # The floor keeps zero-cost sessions counting for something so a free
+    # runtime is not silently ungraded.
+    _FLOOR = 0.05
+    weighted, weights = 0.0, 0.0
+    for r, _a, s in scored:
+        try:
+            w = max(_FLOOR, float(r.get("cost_usd") or 0))
+        except (TypeError, ValueError):
+            w = _FLOOR
+        weighted += s * w
+        weights += w
+    avg_score = (weighted / weights) if weights else (
+        sum(s for _, _, s in scored) / graded)
     grade = grade_for(avg_score)
 
-    good = [r for (r, s) in scored if s >= 0.75]
-    rough = [r for (r, s) in scored if s < 0.60]
+    clean = [(r, a) for (r, a, s) in scored if not (a.get("verdicts") or [])]
+    rough = [(r, a, s) for (r, a, s) in scored if (a.get("verdicts") or [])]
 
-    # Sort rough runs by (lowest score, highest cost) so the most-expensive
-    # failures surface first — cost is the second sort key so a "cheap"
-    # failure doesn't beat an "expensive" one at the same score.
+    # Rank rough runs by cost — the operator's real priority is what the
+    # failure cost them, not how confident we are about it.
     rough_sorted = sorted(
-        [(r, s) for (r, s) in scored if s < 0.60],
-        key=lambda pair: (pair[1], -float(pair[0].get("cost_usd") or 0)),
-    )
+        rough, key=lambda t: -float(t[0].get("cost_usd") or 0))
 
-    # Patterns: group rough runs by outcome, sum cost + avg duration.
-    # Only shows named patterns (unknown outcomes drop into a rollup).
     by_pattern: dict[str, dict[str, Any]] = {}
-    for r in rough:
-        outcome = (r.get("outcome") or "").strip()
-        label = _PATTERN_LABEL.get(outcome, "Ended without a clean answer")
+    for r, a, _s in rough:
+        top = (a.get("verdicts") or [{}])[0]
+        name = top.get("verdict") or ""
+        label = _VERDICT_COPY.get(name, {}).get(
+            "label", "Ended without a clean result")
         p = by_pattern.setdefault(label, {
-            "label":   label,
-            "count":   0,
-            "cost":    0.0,
-            "seconds": 0.0,
+            "label": label, "verdict": name, "count": 0, "cost": 0.0,
         })
         p["count"] += 1
-        p["cost"] += float(r.get("cost_usd") or 0)
-        # Session duration heuristic: (ended_at - started_at) if both, else 0.
-        dur = 0.0
         try:
-            from datetime import datetime
-            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
-                try:
-                    s = datetime.fromisoformat((r.get("started_at") or "").replace("Z", "+00:00"))
-                    e = datetime.fromisoformat((r.get("ended_at") or r.get("last_active_at") or "").replace("Z", "+00:00"))
-                    dur = max(0.0, (e - s).total_seconds())
-                    break
-                except (ValueError, TypeError, AttributeError):
-                    pass
-        except Exception:
-            dur = 0.0
-        p["seconds"] += dur
+            p["cost"] += float(r.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            pass
 
     patterns = sorted(by_pattern.values(), key=lambda p: -p["cost"])[:max_patterns]
     for p in patterns:
-        n = max(1, p["count"])
-        p["avg_minutes"] = _fmt_minutes(p["seconds"] / n)
         p["cost_display"] = _fmt_cost(p["cost"])
-        # Drop internal accumulators the UI doesn't need.
-        p.pop("seconds", None)
-        p.pop("cost",    None)
+        p.pop("cost", None)
 
-    rough_total_cost = sum(float(r.get("cost_usd") or 0) for r in rough)
-    rough_total_seconds = sum(p_seconds for p_seconds in
-                              (by_pattern[k].get("_raw_seconds", 0) for k in by_pattern)) or 0
-
-    # Recompute rough_total_seconds cleanly from the rough list (the loop
-    # above popped the accumulator into avg_minutes already).
-    rough_total_seconds = 0.0
-    try:
-        from datetime import datetime
-        for r in rough:
-            try:
-                s = datetime.fromisoformat((r.get("started_at") or "").replace("Z", "+00:00"))
-                e = datetime.fromisoformat((r.get("ended_at") or r.get("last_active_at") or "").replace("Z", "+00:00"))
-                rough_total_seconds += max(0.0, (e - s).total_seconds())
-            except (ValueError, TypeError, AttributeError):
-                pass
-    except Exception:
-        pass
+    rough_total_cost = 0.0
+    for r, _a, _s in rough:
+        try:
+            rough_total_cost += float(r.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            pass
 
     rough_runs_out: list[dict[str, Any]] = []
-    for r, s in rough_sorted[:max_rough_runs]:
+    for r, a, s in rough_sorted[:max_rough_runs]:
+        verdicts = a.get("verdicts") or []
         rough_runs_out.append({
-            "session_id":     r.get("session_id"),
-            "agent_type":     r.get("agent_type") or "",
-            "title":          _title_or_id(r),
-            "when":           r.get("last_active_at") or r.get("ended_at") or r.get("started_at"),
-            "story":          story_for(r),
-            "cost_display":   _fmt_cost(r.get("cost_usd")),
-            "score":          round(s, 2),
+            "session_id":   r.get("session_id"),
+            "runtime":      a.get("runtime") or r.get("runtime") or "",
+            "title":        _title_or_id(r),
+            "when":         (r.get("last_active_at") or r.get("ended_at")
+                             or r.get("started_at")),
+            "story":        story_for(a),
+            "cost_display": _fmt_cost(r.get("cost_usd")),
+            "score":        round(s, 2),
+            # The whole point: the claim ships with its evidence attached.
+            "verdicts":     verdicts,
         })
 
     vs_prior = None
-    if prior_grade_score is not None:
-        try:
-            p = float(prior_grade_score)
-            delta = avg_score - p
-            if delta > 0.03:
-                vs_prior = "up"
-            elif delta < -0.03:
-                vs_prior = "down"
-            else:
-                vs_prior = "same"
-        except (TypeError, ValueError):
-            vs_prior = None
+    prior_avg = _avg_score(prior_rows, prior_assessments)
+    if prior_avg is not None:
+        delta = avg_score - prior_avg
+        vs_prior = "up" if delta > 0.03 else ("down" if delta < -0.03 else "same")
 
-    # Headline / subline: one plain sentence + a supporting one.
-    if len(good) == total:
+    n_clean, n_rough = len(clean), len(rough)
+    total_cost = 0.0
+    for r, _a, _s in scored:
+        try:
+            total_cost += float(r.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            pass
+    rough_share = (rough_total_cost / total_cost) if total_cost > 0 else 0.0
+
+    # The headline reads the money, not just the letter. "Did good work" over
+    # a window where a fifth of the spend went into rough runs is the kind of
+    # reassurance that makes a user stop believing the whole tab.
+    if n_rough == 0:
         headline = "Your agents did clean work this window."
-    elif len(rough) == 0:
-        headline = "Your agents did solid work this window."
-    elif grade == "F":
+    elif grade in ("D", "F"):
         headline = "Your agents struggled this window."
+    elif rough_share >= 0.15:
+        headline = "Good work overall, with some expensive exceptions."
     else:
         headline = "Your agents did good work this window."
-    n_good = len(good)
-    n_rough = len(rough)
+
     cost_str = _fmt_cost(rough_total_cost)
-    time_str = _fmt_minutes(rough_total_seconds)
     if n_rough == 0:
-        subline = f"{n_good} tasks done well. No rough ones."
+        subline = f"{n_clean} tasks came back clean. Nothing rough."
     else:
         subline = (
-            f"{n_good} tasks done well. {n_rough} rough "
-            f"{'one' if n_rough == 1 else 'ones'} cost you {cost_str}"
-            + (f" and about {time_str}." if time_str != "—" else ".")
+            f"{n_clean} tasks came back clean. {n_rough} rough "
+            f"{'one' if n_rough == 1 else 'ones'} cost you {cost_str}."
+        )
+    # Two different reasons a session is excluded, and they are not
+    # interchangeable. "Too little activity to judge" is a fact about the
+    # session; "not graded yet" is a fact about us. Reporting the second as
+    # the first tells the user their work was too thin when the truth is the
+    # collector hasn't caught up — the same species of wrong-but-reassuring
+    # copy this rebuild exists to remove.
+    thin = [1 for (_r, a) in unmeasured
+            if "too little activity" in str(a.get("reason") or "").lower()]
+    pending = len(unmeasured) - len(thin)
+    if thin:
+        subline += (
+            f" {len(thin)} more had too little activity to judge, "
+            "so they are left out of the grade."
+        )
+    if pending:
+        subline += (
+            f" {pending} {'is' if pending == 1 else 'are'} still being "
+            "graded and will appear shortly."
         )
 
     return {
-        "grade":         grade,
-        "grade_score":   round(avg_score, 4),
-        "total_runs":    total,
-        "graded_runs":   graded,
-        "success_runs":  n_good,
-        "rough_runs_n":  n_rough,
-        "rough_cost":    cost_str,
-        "rough_seconds": int(rough_total_seconds),
-        "patterns":      patterns,
-        "rough_runs":    rough_runs_out,
-        "week":           [],  # populated by the endpoint (per-day buckets)
-        "vs_prior":       vs_prior,
-        "headline":       headline,
-        "subline":        subline,
+        "grade":            grade,
+        "grade_score":      round(avg_score, 4),
+        "total_runs":       total,
+        "graded_runs":      graded,
+        "success_runs":     n_clean,
+        "unmeasured_runs":  len(unmeasured),
+        "rough_runs_n":     n_rough,
+        "rough_cost":       cost_str,
+        "patterns":         patterns,
+        "rough_runs":       rough_runs_out,
+        "week":             [],
+        "vs_prior":         vs_prior,
+        "headline":         headline,
+        "subline":          subline,
     }
+
+
+def _avg_score(rows, assessments) -> float | None:
+    """Mean score over gradeable sessions only. None when none are."""
+    if not rows:
+        return None
+    assessments = assessments or {}
+    vals = []
+    for r in rows:
+        s = session_score(assessments.get(str(r.get("session_id") or "")) or {})
+        if s is not None:
+            vals.append(s)
+    return sum(vals) / len(vals) if vals else None

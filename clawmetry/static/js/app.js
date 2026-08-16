@@ -4533,6 +4533,21 @@ async function loadQualityTab() {
     };
   }
   _qRenderCard(data);
+  if (data.store_available === false) {
+    // The collector isn't reachable from here (e.g. the hosted dashboard has
+    // no local store). Say that plainly instead of rendering "every run
+    // finished cleanly", which would be a wrong answer dressed as good news.
+    var pe = document.getElementById('q-patterns');
+    var re = document.getElementById('q-runs');
+    var msg = t('quality.store_unavailable', null,
+                'Nothing to show from here — this view reads your local run history.');
+    if (pe) pe.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' + escHtml(msg) + '</li>';
+    if (re) re.innerHTML = '<li class="q-empty">' + escHtml(msg) + '</li>';
+    var st = document.getElementById('q-status-line');
+    if (st) st.textContent = t('quality.status_local_only', null, 'Graded on your machine');
+    _qRenderFooter(data);
+    return;
+  }
   _qRenderPatterns(data);
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);
@@ -4594,8 +4609,7 @@ function _qRenderPatterns(data) {
     html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
     html += '<div class="what">' + escHtml(p.label || '') + '</div>';
     html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
-            escHtml(p.cost_display || '$0.00') +
-            '<small>' + escHtml(p.avg_minutes || '—') + '</small></div>';
+            escHtml(p.cost_display || '$0.00') + '</div>';
     html += '</li>';
   });
   el.innerHTML = html;
@@ -4625,19 +4639,146 @@ function _qRenderRoughRuns(data) {
     var sid = String(r.session_id || '');
     var when = _qFmtWhen(r.when);
     var bid = 'q-b-' + i;
+    var eid = 'q-e-' + i;
+    // r.runtime comes from the session's own recorded runtime. The old field
+    // (agent_type) was stamped from a loop variable and read "openclaw" for
+    // every runtime — see the 2026-08-15 audit.
+    var rt = String(r.runtime || '');
     html += '<li>';
-    html += '<div class="when">' + escHtml(when) + (r.agent_type ? ' · ' + escHtml(r.agent_type) : '') + '</div>';
+    html += '<div class="when">' + escHtml(when) + (rt ? ' · ' + escHtml(_qRuntimeLabel(rt)) : '') + '</div>';
     html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
     html += '<div class="story">' + escHtml(r.story || '') + '</div>';
     html += '<div class="row-actions">';
     html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
             t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    if ((r.verdicts || []).length) {
+      html += '<button class="q-evidence-toggle" onclick="qToggleEvidence(\'' + eid + '\')">' +
+              t('quality.show_evidence', null, 'Why we flagged it') + '</button>';
+    }
     html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
     html += '</div>';
+    html += '<div id="' + eid + '" class="q-evidence">' + _qEvidenceHtml(r) + '</div>';
     html += '<div id="' + bid + '" class="q-builder"></div>';
     html += '</li>';
   });
   el.innerHTML = html;
+}
+
+// Human-readable runtime name. Falls back to the raw id so a runtime we
+// haven't named still reads as itself rather than as something else.
+var _Q_RUNTIME_NAMES = {
+  claude_code: 'Claude Code', openclaw: 'OpenClaw', codex: 'Codex',
+  cursor: 'Cursor', aider: 'Aider', goose: 'Goose', opencode: 'opencode',
+  qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
+  n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
+  nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
+  qm: 'QM', deepseek_harness: 'DeepSeek Harness'
+};
+function _qRuntimeLabel(id) {
+  return _Q_RUNTIME_NAMES[id] || id;
+}
+
+// The evidence panel. This is the product: a verdict the user cannot inspect
+// is a verdict they cannot trust, so every flagged run shows what fired, what
+// it measured, what it compared against, and the actual moments behind it.
+function _qEvidenceHtml(r) {
+  var vs = (r.verdicts || []);
+  if (!vs.length) return '';
+  var h = '';
+  vs.forEach(function(v) {
+    var ev = v.evidence || {};
+    var obs = ev.observed || {};
+    var th = ev.threshold || {};
+    var conf = Math.round((Number(v.confidence) || 0) * 100);
+    h += '<div class="q-ev-block">';
+    // Plain English, never the internal signal id. A person opening this has
+    // never heard of "no_forward_progress" and shouldn't have to.
+    h += '<div class="q-ev-head"><span class="q-ev-sig">' + escHtml(_qSignalLabel(ev.signal || v.verdict || '')) + '</span>' +
+         '<span class="q-ev-conf" title="' +
+         escHtml(t('quality.conf_help', null, 'Derived from how much evidence there is and how far past normal it sits.')) +
+         '">' + conf + '% ' + t('quality.confidence', null, 'confidence') + '</span></div>';
+
+    // What we measured vs what counts as normal HERE. Long values (file
+    // paths) get their own line so the counts stay scannable.
+    var obsBits = [], longBits = [];
+    Object.keys(obs).forEach(function(k) {
+      if (k === 'digest') return;
+      // Percentages must read as percentages. "failure rate 6" is a different
+      // claim from "failure rate 6%".
+      var val = String(obs[k]) + (k === 'pct' ? '%' : '');
+      var frag = '<span class="k">' + escHtml(_qPrettyKey(k)) + '</span> <b>' + escHtml(val) + '</b>';
+      (val.length > 34 ? longBits : obsBits).push(frag);
+    });
+    if (obsBits.length) h += '<div class="q-ev-obs">' + obsBits.join('<i>·</i>') + '</div>';
+    longBits.forEach(function(f) { h += '<div class="q-ev-obs long">' + f + '</div>'; });
+    if (th && (th.pct !== undefined || th.repeats !== undefined || th.edits !== undefined)) {
+      var lim, unit;
+      if (th.pct !== undefined) { lim = th.pct + '%'; unit = ''; }
+      else if (th.repeats !== undefined) { lim = th.repeats; unit = ' ' + t('quality.unit_repeats', null, 'identical calls'); }
+      else { lim = th.edits; unit = ' ' + t('quality.unit_edits', null, 'edits'); }
+      h += '<div class="q-ev-th">' +
+           t('quality.threshold_prefix', null, 'Flagged above') + ' <b>' + escHtml(String(lim) + unit) + '</b>' +
+           (th.source ? ' <span class="src">(' + escHtml(String(th.source)) + ')</span>' : '') +
+           '</div>';
+    }
+
+    // The actual moments. Without these the claim does not render at all.
+    var ex = (ev.exhibits || []);
+    if (ex.length) {
+      h += '<ul class="q-ev-list">';
+      ex.slice(0, 6).forEach(function(x) {
+        var when = x.ts ? _qFmtWhen(new Date(Number(x.ts) * 1000).toISOString()) : '';
+        // Some runtimes don't name the tool on a result event. Showing
+        // "(unnamed tool)" is noise where the error text is the real evidence,
+        // so only render a name when there is one.
+        var bits = [];
+        if (x.tool) bits.push('<span class="tl">' + escHtml(String(x.tool)) + '</span>');
+        if (x.file) bits.push('<span class="f">' + escHtml(String(x.file)) + '</span>');
+        if (x.error) bits.push('<span class="e">' + escHtml(String(x.error).replace(/\s+/g, ' ').slice(0, 120)) + '</span>');
+        else if (x.errored) bits.push('<span class="e">' + t('quality.failed', null, 'failed') + '</span>');
+        h += '<li><span class="ts">' + escHtml(when) + '</span>' + bits.join(' ') + '</li>';
+      });
+      h += '</ul>';
+      if (ev.exhibit_count > ex.slice(0, 6).length) {
+        h += '<div class="q-ev-more">' +
+             t('quality.and_more', null, 'and') + ' ' +
+             escHtml(String(ev.exhibit_count - Math.min(6, ex.length))) + ' ' +
+             t('quality.more_like_this', null, 'more like this') + '</div>';
+      }
+    }
+    h += '</div>';
+  });
+  return h;
+}
+
+// Internal signal id → the sentence a person reads. Kept beside _qPrettyKey
+// so any new signal has an obvious place to get its plain-English name.
+function _qSignalLabel(sig) {
+  var m = {
+    tool_error_rate:     t('quality.sig_tool_error_rate', null, 'Its tools kept failing'),
+    tool_thrash:         t('quality.sig_tool_thrash', null, 'Same call, over and over'),
+    no_forward_progress: t('quality.sig_no_progress', null, 'Edited without ever checking'),
+    hard_failure:        t('quality.sig_hard_failure', null, 'Ended on an error'),
+    tool_failures:       t('quality.sig_tool_error_rate', null, 'Its tools kept failing')
+  };
+  return m[sig] || String(sig || '').replace(/_/g, ' ');
+}
+
+function _qPrettyKey(k) {
+  var m = {
+    tool_results: 'tool calls', tool_errors: 'failed', pct: 'failure rate',
+    identical_calls: 'identical calls', failed: 'of them failed',
+    edits: 'edits', verifications_between: 'checks in between',
+    error_events: 'errors', failed_at_end: 'failed at the end',
+    tool: 'tool', file: 'file'
+  };
+  return m[k] || k.replace(/_/g, ' ');
+}
+
+function qToggleEvidence(eid) {
+  var el = document.getElementById(eid);
+  if (!el) return;
+  el.classList.toggle('open');
 }
 
 function _qFmtWhen(iso) {
@@ -4661,15 +4802,24 @@ function _qRenderStatusLine(data) {
   if (!el) return;
   var n = Number(data.graded_runs || 0);
   var total = Number(data.total_runs || 0);
+  var un = Number(data.unmeasured_runs || 0);
   if (n === 0 && total === 0) {
     el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
     return;
   }
-  el.textContent = data.judge_key_set
-    ? (t('quality.status_prefix_on', null, 'Grading on · ') + n + ' ' +
-       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')))
-    : (t('quality.status_prefix_off', null, 'Grading from signals · ') + n + ' ' +
-       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')));
+  // Say what was graded AND what was left out. A grade that quietly covers
+  // half the window reads as a grade over all of it.
+  var parts = [n + ' ' + (n === 1
+    ? t('quality.run_singular', null, 'run graded')
+    : t('quality.run_plural', null, 'runs graded'))];
+  if (un > 0) {
+    parts.push(un + ' ' + t('quality.too_thin', null, 'with too little activity to judge'));
+  }
+  if (data.benign_filter && data.benign_filter.label) {
+    parts.push(String(data.benign_filter.label));
+  }
+  el.textContent = t('quality.status_prefix_off', null, 'Grading from signals · ') +
+                   parts.join(' · ');
 }
 
 function _qRenderFooter(data) {
