@@ -495,6 +495,34 @@ def _session_has_cognitive_loop(
     return False
 
 
+def _has_corroborating_stall_evidence(sess_events: list[dict[str, Any]]) -> bool:
+    """True when an evidence-bearing signal independently says this session
+    was stuck — repeated identical tool calls that failed, or repeated edits
+    to one file with nothing ever run to check them.
+
+    This is the corroboration requirement that demotes text similarity from a
+    verdict to a hint. It delegates to ``clawmetry.quality_signals`` rather
+    than re-deriving the checks, so there is exactly ONE reader of event
+    payload shapes; a second, drifting interpretation is how the original
+    blindness happened.
+
+    Returns False (i.e. do NOT flag) whenever the signals module is
+    unavailable or errors. Failing open here would restore the very
+    false-positive behaviour this guard exists to remove.
+    """
+    try:
+        from clawmetry.quality_signals import assess_session
+    except Exception:
+        return False
+    try:
+        a = assess_session(sess_events, runtime="", session_id="")
+    except Exception:
+        return False
+    return any(
+        v.name in ("tool_thrash", "no_forward_progress") for v in a.verdicts
+    )
+
+
 def find_cognitive_loops(
     events: list[dict[str, Any]] | None,
     *,
@@ -608,15 +636,28 @@ def classify_session(
         if stuck:
             return OUTCOME_TOOL_CALL_STUCK, 0.8
 
-    # ── 3. Cognitive loop — recursive self-validation (issue #1706) ─
-    # Runs BEFORE ongoing because a still-chattering session whose
-    # assistant keeps emitting the same text is no longer healthy ongoing.
+    # ── 3. Cognitive loop — now requires corroborating evidence ──────
+    #
+    # Audit 2026-08-15. This branch used to fire on text similarity ALONE.
+    # Its only false-positive guard read tool use from the Anthropic
+    # block-list shape, so on every family runtime it parsed nothing, never
+    # fired, and the branch flagged sessions that had made 39-63 real tool
+    # calls inside the window it examined. Measured over a real week the
+    # resulting label was uncorrelated with the only ground truth available
+    # (flagged sessions: 3.59% real tool-error rate; "successes": 2.96%).
+    #
+    # Text repetition survives as a SUPPORTING signal only. The label now
+    # requires an independent, evidence-bearing verdict from
+    # ``clawmetry.quality_signals`` — which reads both event dialects and
+    # cannot emit a verdict without exhibits. That keeps every consumer of
+    # ``sessions.outcome`` (the Overview tile via /api/outcomes, evals,
+    # the cloud snapshot) off the fabricated label, not just the Quality tab.
     if _session_has_cognitive_loop(
         evs,
         window_seconds=COGNITIVE_LOOP_WINDOW_SECONDS,
         similarity_threshold=COGNITIVE_LOOP_SIMILARITY_THRESHOLD,
         min_repeats=COGNITIVE_LOOP_MIN_REPEATS,
-    ):
+    ) and _has_corroborating_stall_evidence(evs):
         return OUTCOME_COGNITIVE_LOOP, 0.8
 
     # ── 4. Ongoing — no terminal marker AND recent activity ─────────

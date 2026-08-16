@@ -990,9 +990,18 @@ def _try_local_store_overview():
     user_sessions = [s for s in sessions if _is_user_main(s)]
     main = user_sessions[0] if user_sessions else sessions[0]
 
-    # Active = status=='active' (DuckDB persists status as a free-form string;
-    # 'active' is what sync.py writes for in-progress sessions).
-    active_count = sum(1 for s in sessions if s["status"] == "active")
+    # Active = a session whose transcript grew inside the active window
+    # (sync.py ``_session_liveness``). ``status`` is a free-form string in
+    # DuckDB and different producers spell "in progress" differently
+    # ('active' from the recency buckets, 'running' from the gateway
+    # registry), so match the whole live vocabulary rather than one literal —
+    # counting only 'active' is how this silently read 0 while six terminals
+    # were mid-task. Counted over user_sessions so sub-agents and ClawMetry's
+    # own plumbing sessions can't inflate it.
+    active_count = sum(
+        1 for s in user_sessions
+        if str(s.get("status") or "").strip().lower() in ("active", "running")
+    )
 
     # Model: prefer metadata.model on the main session; fall back to the most
     # recently observed model across events.
@@ -1081,6 +1090,29 @@ def _try_local_store_overview():
     # cloud snapshot's `sessionCount` (clawmetry/sync.py builds the same way).
     user_session_count = len(user_sessions) if user_sessions else len(sessions)
 
+    # `sessionCount` is an ALL-TIME count over the most-recent rows — it has no
+    # date predicate anywhere in its query. The hero rendered it as "N sessions
+    # today", which read 89 on a day that had 16 (founder report 2026-08-15).
+    # Ship the real number rather than dropping the word: "today" next to
+    # today's cost is the comparison a person actually wants. Local calendar
+    # day, because "today" means the user's day, not UTC's.
+    _today = datetime.now().astimezone().date()
+    sessions_today = 0
+    for _s in (user_sessions or sessions):
+        _st = _s.get("started_at") or ""
+        if not _st:
+            continue
+        try:
+            # NB: not `_d` — that name is the `import dashboard as _d` alias in
+            # this module and shadowing it 500s the whole endpoint.
+            _started = datetime.fromisoformat(str(_st).replace("Z", "+00:00"))
+            if _started.tzinfo is None:
+                _started = _started.replace(tzinfo=timezone.utc)
+            if _started.astimezone().date() == _today:
+                sessions_today += 1
+        except (ValueError, TypeError, OSError, OverflowError):
+            continue
+
     # `currentContextTokens` is the right "Context Window Usage" gauge —
     # the most recent assistant turn's live prompt size (input + cache),
     # filtered to exclude clawmetry-* plumbing sessions. `contextWindow`
@@ -1103,6 +1135,7 @@ def _try_local_store_overview():
         "model": model_name,
         "provider": _d._infer_provider_from_model(model_name),
         "sessionCount": user_session_count,
+        "sessionsToday": sessions_today,
         "sessions": user_session_count,  # alias for E2E compatibility
         "activeSessions": active_count,
         "mainSessionUpdated": main.get("last_active_at") or main.get("started_at"),
