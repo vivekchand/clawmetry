@@ -3975,7 +3975,41 @@ def _try_local_store_transcripts():
             "started": started_ms,
         })
     _fill_family_titles(transcripts)
+    _fill_attention(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
+
+
+def _fill_attention(transcripts):
+    """Attach the "needs you" state to each transcript row.
+
+    ``query_sessions`` aggregates the EVENTS table, so it never carries the
+    attention columns the daemon stamps onto the typed ``sessions`` table --
+    same gap ``_fill_family_titles`` exists to close for titles. One extra
+    read, mapped by session id.
+
+    Best-effort by design: a row without attention simply renders no badge,
+    which is the correct quiet default. Never fails the request.
+    """
+    try:
+        rows = _ls_call("query_sessions_table", limit=300) or []
+    except Exception:
+        return
+    state = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if sid and r.get("attention_state"):
+            state[sid] = r
+    if not state:
+        return
+    for t in transcripts:
+        r = state.get(t.get("id") or "")
+        if not r:
+            continue
+        t["attention"] = r.get("attention_state") or ""
+        # "hook" = the runtime told us. "inferred" = we deduced it. The UI
+        # words these differently, so the provenance has to survive the hop.
+        t["attention_signal"] = r.get("attention_signal") or "inferred"
+        t["attention_tool"] = r.get("attention_tool") or ""
 
 
 def _fill_family_titles(transcripts):

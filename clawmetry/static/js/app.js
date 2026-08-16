@@ -2129,7 +2129,10 @@ function cmNeedsAge(sec) {
 // approval" for someone who has never opened an observability tool.
 function cmNeedsPhrase(item) {
   var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
-  var runtime = esc(cmRuntimeLabel ? cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
+  // Reuse the switcher's label map — one definition of "what this runtime is
+  // called", so the strip can never disagree with the header.
+  var runtime = esc((typeof _cmRuntimeLabel === 'function')
+    ? _cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
   var tool = item.tool ? esc(item.tool) : '';
   if (item.signal === 'hook') {
     return tool
@@ -2139,18 +2142,6 @@ function cmNeedsPhrase(item) {
   return tool
     ? '<b>' + runtime + '</b> has been on ' + tool + ' with no reply'
     : '<b>' + runtime + '</b> has been silent mid-task';
-}
-
-function cmRuntimeLabel(rt) {
-  var map = {
-    claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
-    openclaw: 'OpenClaw', nemoclaw: 'NemoClaw', qwen_code: 'Qwen Code',
-    opencode: 'opencode', aider: 'Aider', goose: 'Goose', hermes: 'Hermes',
-    picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw', antigravity: 'Antigravity',
-    copilot: 'GitHub Copilot', grok: 'Grok', deepagents: 'Deep Agents',
-    n8n: 'n8n', pi: 'Pi', qm: 'QM', deepseek_harness: 'DeepSeek Harness'
-  };
-  return map[rt] || (rt || 'Agent');
 }
 
 function cmRenderNeedsYou(d) {
@@ -2250,6 +2241,27 @@ function cmOpenNeedsSession(sid) {
     if (typeof showTranscript === 'function') { showTranscript(sid); return; }
     if (typeof switchPage === 'function') { switchPage('transcripts'); return; }
   } catch (e) { console.warn('needs-you open failed', e); }
+}
+
+// Session-row badge. Same two confidences as the strip, same wording, so a
+// user only has to learn the distinction once. Returns '' when nothing is
+// waiting — an absent badge is the quiet default, not a "no" badge.
+function _cmAttentionBadge(state, signal, tool) {
+  if (!state) return '';
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  var hook = signal === 'hook';
+  var label = hook
+    ? t('needs.badge_waiting', null, 'Waiting for you')
+    : t('needs.badge_maybe', null, 'Maybe waiting');
+  var why = hook
+    ? (tool ? 'This agent is asking to run ' + tool + '.'
+            : 'This agent is asking for permission.')
+    : (tool ? 'Best guess: ' + tool + ' was started and never came back.'
+            : 'Best guess: this agent went quiet mid-task.');
+  return '<span class="cm-attn-badge" title="' + esc(why) + '">' +
+           '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') +
+             '" aria-hidden="true"></span>' + esc(label) +
+         '</span>';
 }
 
 async function loadNeedsYou() {
@@ -18091,6 +18103,11 @@ async function loadTranscripts() {
         html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
         html += '</span>';
       }
+      // "Needs you" badge — same vocabulary as the Overview strip, so the two
+      // surfaces teach each other. Renders nothing when nothing is waiting;
+      // an absent badge is the quiet default, not a "no" badge.
+      html += _cmAttentionBadge(
+        tx.attention, tx.attention_signal, tx.attention_tool);
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
