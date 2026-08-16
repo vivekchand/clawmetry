@@ -211,6 +211,21 @@ def _audit(result: str, tool_name: str, meta: dict) -> None:
         pass
 
 
+def _page_human(approval: dict) -> None:
+    """Fan the parked approval out to this runtime's channels.
+
+    Non-blocking (approval_notify spawns the senders on a thread) and
+    never raises: the human notification is an enhancement on top of a row
+    that is already parked, so a broken webhook must not turn into a
+    stalled agent.
+    """
+    try:
+        from clawmetry import approval_notify as _an
+        _an.notify_pending(approval)
+    except Exception:
+        pass
+
+
 def _map_on_timeout(on_timeout: str) -> str:
     ot = (on_timeout or "deny").strip().lower()
     if ot in ("deny", "kill", "denied", "block"):
@@ -371,6 +386,11 @@ def api_hook_claude_code_pretooluse():
                                   "policy": policy.get("name"),
                                   "session_id": session_id,
                                   "command": cmd_preview})
+    _page_human({"id": approval_id, "runtime": "claude_code",
+                 "kind": "policy", "tool_name": tool_name,
+                 "command": cmd_preview, "cwd": cwd,
+                 "policy": policy.get("name"),
+                 "requestor_session_id": session_id})
     row = _find_approval(approval_id) or {"status": "pending", "args": {
         "on_timeout": policy.get("on_timeout") or "deny",
         "deadline_ms": now_ms + timeout_s * 1000,
@@ -487,6 +507,190 @@ def _wait_on_row(approval_id: str, row: dict, tool_name: str):
         "ask",
         f"ClawMetry approval timed out (policy '{policy_name}') — falling "
         "back to Claude Code's own permission prompt.", approval_id)
+
+
+# ── mirror receiver: Claude Code's OWN permission prompts ──────────────────
+# PreToolUse gates the tools YOUR rules name. This one fires when Claude
+# Code itself decides it needs the user — the case that actually stalls a
+# session, because unblocking it means walking to the terminal (or ticking
+# a box in /permissions). We park it like any other approval, page the
+# phone, and answer with the human's tap.
+#
+# Answering "ask" is the safety valve, used whenever we can't do better
+# (mirroring off, no answer in time, store unavailable): Claude Code then
+# shows its normal prompt, i.e. exactly today's behaviour. Nothing this
+# endpoint does can make a session MORE stuck than it already was.
+#
+# No double-parking with the PreToolUse gate: if that hook answered
+# "allow"/"deny", Claude Code never reaches the permission stage, so this
+# event doesn't fire. If it answered "ask" (or wasn't installed), this is
+# the only gate in play.
+
+def _hso_mirror(decision: str) -> dict:
+    return {"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                   "decision": decision}}
+
+
+def _mirror_answer(decision: str, approval_id: "str | None" = None,
+                   note: str = ""):
+    body = _hso_mirror(decision)
+    body["status"] = "decided"
+    if approval_id:
+        body["approval_id"] = approval_id
+    if note:
+        body["note"] = note
+    return jsonify(body)
+
+
+@bp_hooks.route("/api/hooks/claude-code/permissionrequest", methods=["POST"])
+def api_hook_claude_code_permissionrequest():
+    if request.remote_addr not in ("127.0.0.1", "::1", None):
+        return jsonify({"error": "loopback only"}), 403
+
+    body = request.get_json(silent=True) or {}
+    tool_name = str(body.get("tool_name") or "").strip()
+    tool_input = body.get("tool_input")
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    session_id = str(body.get("session_id") or "").strip()
+    cwd = str(body.get("cwd") or "")[:300]
+    tool_use_id = str(body.get("tool_use_id") or "").strip()
+    resume_id = str(body.get("approval_id") or "").strip()
+
+    try:
+        from clawmetry import entitlements as _ent
+        entitled = _ent.get_entitlement().allows_feature("approval_queue")
+    except Exception:
+        entitled = True
+    if not entitled:
+        return _mirror_answer("ask", note="approval queue not entitled")
+
+    try:
+        from clawmetry import approval_notify as _an
+        from clawmetry import claude_code_gate as _gate
+        if not _an.mirror_enabled("claude_code"):
+            return _mirror_answer("ask", note="mirroring is off")
+        window_s = _gate.mirror_timeout_s()
+    except Exception:
+        return _mirror_answer("ask", note="routing config unavailable")
+
+    if resume_id:
+        row = _find_approval(resume_id)
+        if row is None:
+            return _mirror_answer("ask", resume_id, "approval row vanished")
+        return _wait_mirror(resume_id, row, tool_name)
+
+    if not tool_name:
+        return _mirror_answer("ask", note="no tool_name in hook payload")
+
+    if tool_use_id:
+        for r in _rows(_ls_read("query_approvals", status="pending",
+                                limit=100)):
+            if _args_meta(r).get("tool_use_id") == tool_use_id:
+                return _wait_mirror(str(r.get("id")), r, tool_name)
+
+    approval_id = uuid.uuid4().hex
+    now_ms = int(time.time() * 1000)
+    try:
+        from clawmetry import approvals as ap
+        cmd_preview = ap._extract_command(tool_name, tool_input)[:140]
+    except Exception:
+        cmd_preview = ""
+    ok = _ls_write("ingest_approval", approval={
+        "id": approval_id,
+        "requestor_session_id": f"claude_code:{session_id}" if session_id
+                                else None,
+        "action": f"{tool_name}: {cmd_preview}",
+        "args": {
+            "source": "permissionrequest-hook",
+            "runtime": "claude_code",
+            "kind": "permission_prompt",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "cwd": cwd,
+            "tool_use_id": tool_use_id or None,
+            "policy": "Claude Code permission prompt",
+            "timeout": window_s,
+            "on_timeout": "ask",
+            "deadline_ms": now_ms + window_s * 1000,
+        },
+        "status": "pending",
+        "created_at": _utcnow(),
+    })
+    if not ok:
+        return _mirror_answer("ask", note="approval store unavailable")
+    _audit("pending", tool_name, {"approval_id": approval_id,
+                                  "kind": "permission_prompt",
+                                  "session_id": session_id,
+                                  "command": cmd_preview})
+    _page_human({"id": approval_id, "runtime": "claude_code",
+                 "kind": "permission_prompt", "tool_name": tool_name,
+                 "command": cmd_preview, "cwd": cwd,
+                 "policy": "Claude Code permission prompt",
+                 "requestor_session_id": session_id})
+    row = _find_approval(approval_id) or {"status": "pending", "args": {
+        "on_timeout": "ask", "deadline_ms": now_ms + window_s * 1000}}
+    return _wait_mirror(approval_id, row, tool_name)
+
+
+def _wait_mirror(approval_id: str, row: dict, tool_name: str):
+    """One wait slice on a mirrored permission prompt.
+
+    Same sliced-wait shape as _wait_on_row (one HTTP request never holds
+    longer than _WAIT_SLICE_S), but the verdicts are PermissionRequest's:
+    approve → allow, deny → deny, no answer in the window → ask, which
+    hands the decision back to Claude Code's own prompt.
+    """
+    meta = _args_meta(row)
+    try:
+        deadline_ms = int(meta.get("deadline_ms") or 0)
+    except (TypeError, ValueError):
+        deadline_ms = 0
+    if deadline_ms <= 0:
+        deadline_ms = int(time.time() * 1000) + int(_WAIT_SLICE_S * 1000)
+
+    slice_end = time.time() + _WAIT_SLICE_S
+    status = str(row.get("status") or "pending").strip()
+    while True:
+        if status in ("approved", "auto_approved"):
+            _audit("approved", tool_name, {"approval_id": approval_id,
+                                           "kind": "permission_prompt"})
+            return _mirror_answer("allow", approval_id)
+        if status in ("denied", "expired"):
+            _audit("denied", tool_name, {"approval_id": approval_id,
+                                         "kind": "permission_prompt"})
+            return _mirror_answer("deny", approval_id)
+        if status == "timeout":
+            break
+
+        if int(time.time() * 1000) >= deadline_ms:
+            _ls_write("update_approval_decision", approval_id=approval_id,
+                      decision="timeout", resolver="timeout",
+                      reason="mirror window elapsed — handed back to Claude "
+                             "Code's own permission prompt")
+            break
+
+        if time.time() >= slice_end:
+            return jsonify({"status": "pending", "approval_id": approval_id,
+                            "retry_after_ms": 2000,
+                            "deadline_ms": deadline_ms})
+
+        time.sleep(min(_POLL_INTERVAL_S, max(0.05, slice_end - time.time())))
+        fresh = _find_approval(approval_id)
+        if fresh is not None:
+            row = fresh
+            status = str(row.get("status") or "pending").strip()
+
+    fresh = _find_approval(approval_id)
+    final = str((fresh or {}).get("status") or "timeout").strip()
+    if final in ("approved", "auto_approved") \
+            and (fresh or {}).get("resolver") != "timeout":
+        return _mirror_answer("allow", approval_id)
+    if final == "denied" and (fresh or {}).get("resolver") != "timeout":
+        return _mirror_answer("deny", approval_id)
+    _audit("timeout:ask", tool_name, {"approval_id": approval_id,
+                                      "kind": "permission_prompt"})
+    return _mirror_answer("ask", approval_id,
+                          "no answer in the mirror window")
 
 
 def _utcnow() -> str:

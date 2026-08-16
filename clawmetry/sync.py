@@ -19370,6 +19370,19 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
+    # ── Telegram approval decisions (inbound) ─────────────────────────
+    # The only channel that can answer an approval on a self-hosted node
+    # with no public endpoint: the daemon long-polls getUpdates, so the
+    # Approve/Deny buttons in the message resolve the DuckDB row directly.
+    # Idle (30 s config re-check) until Telegram is configured AND some
+    # runtime routes approvals to it — see clawmetry/approval_inbound.py.
+    try:
+        from clawmetry import approval_inbound as _ap_in
+        _ap_in.start(threading.Event())
+        log.info("approval inbound (telegram) poller started")
+    except Exception as _e:
+        log.warning(f"approval inbound poller failed to start: {_e}")
+
     # ── Decision-sampling cron (issue #1615) ──────────────────────────
     # Daily-at-midnight thread that picks N random sessions from yesterday
     # per agent_id and inserts them into the review_queue. Idempotent —

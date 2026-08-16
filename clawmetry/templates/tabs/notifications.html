@@ -68,12 +68,23 @@
   var CHANNELS = [
     { key: 'email',     name: 'Email',      icon: '✉️',
       desc: 'Notifications to your account email',  color: '#3b82f6',
-      fields: [{ key: 'email_address', label: 'Email address', placeholder: 'you@example.com' }],
-      howTo: 'Alerts and approvals will be sent to this address. Defaults to your signup email.' },
+      fields: [
+        { key: 'email_address', label: 'Email address', placeholder: 'you@example.com' },
+        { key: 'smtp_host',     label: 'SMTP host (self-hosted only)', placeholder: 'smtp.gmail.com', optional: true },
+        { key: 'smtp_port',     label: 'SMTP port',      placeholder: '587', optional: true },
+        { key: 'smtp_user',     label: 'SMTP username',  placeholder: 'you@example.com', optional: true },
+        { key: 'smtp_password', label: 'SMTP password',  placeholder: 'app password', optional: true }
+      ],
+      howTo: 'Alerts and approvals go to this address. On ClawMetry Cloud that is all you need. Self-hosted, add your SMTP details so this node can send mail itself.' },
     { key: 'phone',     name: 'Phone Call', icon: '📞',
-      desc: 'Get a call, press 1 to approve',       color: '#10b981',
-      fields: [{ key: 'phone_number', label: 'Phone number', placeholder: '+1 (555) 123-4567' }],
-      howTo: 'When something fires, you get a phone call: <b data-i18n="app.press_1_to_approve_press_2_to_deny">"Press 1 to approve. Press 2 to deny."</b> Works on any phone, no app required.' },
+      desc: 'Get a call when something needs you',   color: '#10b981',
+      fields: [
+        { key: 'phone_number', label: 'Phone number', placeholder: '+1 (555) 123-4567' },
+        { key: 'twilio_account_sid', label: 'Twilio account SID (self-hosted only)', placeholder: 'AC…', optional: true },
+        { key: 'twilio_auth_token',  label: 'Twilio auth token (self-hosted only)',  placeholder: '…',   optional: true },
+        { key: 'twilio_from',        label: 'Twilio from-number (self-hosted only)', placeholder: '+15550001111', optional: true }
+      ],
+      howTo: 'On ClawMetry Cloud you get <b data-i18n="app.press_1_to_approve_press_2_to_deny">"Press 1 to approve. Press 2 to deny."</b><br>Self-hosted, add your own Twilio credentials: the call <b>announces</b> the approval and you decide from the link or the dashboard — pressing 1 needs a public callback URL, which a laptop behind NAT does not have.' },
     { key: 'slack',     name: 'Slack',      icon: '💬',
       desc: 'Post to a Slack channel',              color: '#4A154B',
       fields: [{ key: 'webhook_url', label: 'Incoming webhook URL', placeholder: 'https://hooks.slack.com/services/T.../B.../xxx' }],
@@ -88,7 +99,23 @@
         { key: 'bot_token', label: 'Bot token',  placeholder: '123456:ABC-DEF...' },
         { key: 'chat_id',   label: 'Chat ID',    placeholder: '-1001234567890' }
       ],
-      howTo: '1. In Telegram, message <b data-i18n="app.botfather">@BotFather</b> → <b data-i18n="app.newbot">/newbot</b>.<br>2. Copy the bot token.<br>3. Add the bot to your group/chat.<br>4. Get the chat ID from <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>.' }
+      howTo: '1. In Telegram, message <b data-i18n="app.botfather">@BotFather</b> → <b data-i18n="app.newbot">/newbot</b>.<br>2. Copy the bot token.<br>3. Add the bot to your group/chat.<br>4. Get the chat ID from <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>.<br><b>Approvals get Approve/Deny buttons right in the chat</b> — this is the only channel that decides without a public URL. Use a bot that nothing else polls.' },
+    { key: 'whatsapp',  name: 'WhatsApp',   icon: '🟢',
+      desc: 'Message your WhatsApp number',     color: '#25D366',
+      fields: [
+        { key: 'whatsapp_to',       label: 'Your WhatsApp number', placeholder: '+15551234567' },
+        { key: 'whatsapp_token',    label: 'Meta access token (or leave blank for Twilio)', placeholder: 'EAAG...' },
+        { key: 'whatsapp_phone_id', label: 'Meta phone number ID', placeholder: '1234567890' }
+      ],
+      howTo: '1. Meta → <b>WhatsApp Cloud API</b> → copy the access token + phone number ID.<br>2. Or configure Twilio below and leave the Meta fields blank.<br>Meta only allows free-form messages inside a 24-hour window after you last messaged the bot; outside it, a template is required. The message carries a decision link either way.' },
+    { key: 'discord',   name: 'Discord',    icon: '🎮',
+      desc: 'Post to a Discord channel',        color: '#5865F2',
+      fields: [{ key: 'discord_webhook_url', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...' }],
+      howTo: 'Server Settings → Integrations → Webhooks → New Webhook → copy the URL.' },
+    { key: 'webhook',   name: 'Webhook',    icon: '🔗',
+      desc: 'POST JSON to your own endpoint',   color: '#64748b',
+      fields: [{ key: 'webhook_url', label: 'Endpoint URL', placeholder: 'https://example.com/hooks/clawmetry' }],
+      howTo: 'Approvals arrive as <code>{"type":"approval.pending", ...}</code> with the runtime, command and decision links.' }
   ];
 
   /* In-memory state — refreshed on every loadNotificationsPage() */
@@ -101,15 +128,34 @@
   // Local (self-hosted) channel adapter: maps the row-based cloud channel
   // model onto the flat LOCAL /api/alert-channels config. Locally
   // deliverable: slack, telegram, pagerduty.
+  // ``optional: true`` mappings are saved and shown but don't decide
+  // whether the card counts as connected (WhatsApp is Meta OR Twilio;
+  // phone/email are cloud-delivered unless the local creds are filled in).
   var LOCAL_KEYS = {
     slack:     [{ flat: 'slack_webhook_url',     field: 'webhook_url' }],
     pagerduty: [{ flat: 'pagerduty_routing_key', field: 'routing_key' }],
     telegram:  [{ flat: 'telegram_bot_token',    field: 'bot_token' },
-                { flat: 'telegram_chat_id',      field: 'chat_id' }]
+                { flat: 'telegram_chat_id',      field: 'chat_id' }],
+    discord:   [{ flat: 'discord_webhook_url',   field: 'discord_webhook_url' }],
+    webhook:   [{ flat: 'webhook_url',           field: 'webhook_url' }],
+    whatsapp:  [{ flat: 'whatsapp_to',           field: 'whatsapp_to' },
+                { flat: 'whatsapp_token',        field: 'whatsapp_token',    optional: true },
+                { flat: 'whatsapp_phone_id',     field: 'whatsapp_phone_id', optional: true }],
+    phone:     [{ flat: 'phone_number',          field: 'phone_number' },
+                { flat: 'twilio_account_sid',    field: 'twilio_account_sid', optional: true },
+                { flat: 'twilio_auth_token',     field: 'twilio_auth_token',  optional: true },
+                { flat: 'twilio_from',           field: 'twilio_from',        optional: true }],
+    email:     [{ flat: 'email_address',         field: 'email_address' },
+                { flat: 'smtp_host',             field: 'smtp_host',     optional: true },
+                { flat: 'smtp_port',             field: 'smtp_port',     optional: true },
+                { flat: 'smtp_user',             field: 'smtp_user',     optional: true },
+                { flat: 'smtp_password',         field: 'smtp_password', optional: true }]
   };
   function _localRows(cfg) {
     return Object.keys(LOCAL_KEYS).filter(function(k) {
-      return LOCAL_KEYS[k].every(function(m) { return String(cfg[m.flat] || '').trim(); });
+      return LOCAL_KEYS[k].every(function(m) {
+        return m.optional || String(cfg[m.flat] || '').trim();
+      });
     }).map(function(k) {
       var config = {};
       LOCAL_KEYS[k].forEach(function(m) { config[m.field] = cfg[m.flat]; });
@@ -248,7 +294,7 @@
       var el = document.getElementById('notify-fld-' + f.key);
       if (el) config[f.key] = (el.value || '').trim();
     });
-    var missing = ch.fields.find(function(f){return !config[f.key];});
+    var missing = ch.fields.find(function(f){return !f.optional && !config[f.key];});
     if (missing) { alert('Please fill in: ' + missing.label); return; }
 
     var url = channelId
@@ -260,7 +306,7 @@
       : { channel_type: ch.key, name: ch.name, enabled: true, config: config };
     if (state.localMode) {
       var maps = LOCAL_KEYS[ch.key];
-      if (!maps) { alert(ch.name + ' delivery needs ClawMetry Cloud (email/phone use its providers). Slack, Telegram, and PagerDuty work locally.'); return; }
+      if (!maps) { alert(ch.name + ' delivery needs ClawMetry Cloud.'); return; }
       url = '/api/alert-channels';
       method = 'POST';
       body = {};
