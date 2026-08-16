@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from itertools import islice
+from typing import Any
 
 # Leaf module (typing-only deps) — safe to import at package load, no cycle.
 from clawmetry import error_signal as _error_signal
@@ -15736,7 +15737,7 @@ def _build_tool_stats():
                                     if isinstance(args, str):
                                         try:
                                             args = json.loads(args)
-                                        except:
+                                        except (json.JSONDecodeError, TypeError):
                                             args = {}
 
                                     # Track recent entries for specific tools
