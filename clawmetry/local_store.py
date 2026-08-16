@@ -308,6 +308,14 @@ _DDL = [
         faithfulness_score      DOUBLE,
         faithfulness_detail     VARCHAR,
         faithfulness_scored_at  BIGINT,
+        -- Where the session actually ran. Every runtime that writes a
+        -- transcript records these per line (Claude Code: `cwd` / `gitBranch`
+        -- on 153 of 182 lines in a typical session); we discarded them until
+        -- now, which is why the sessions list reads as a wall of UUIDs.
+        -- Last-write-wins on purpose: an agent that `cd`s or switches branch
+        -- mid-session should show where it IS, not where it started.
+        cwd                     VARCHAR,
+        git_branch              VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -1251,6 +1259,11 @@ _MIGRATIONS_V2 = [
     ("sessions", "faithfulness_score",     "DOUBLE"),
     ("sessions", "faithfulness_detail",    "VARCHAR"),
     ("sessions", "faithfulness_scored_at", "BIGINT"),
+    # Working directory + git branch per session. Present in every runtime's
+    # transcript and previously dropped on the floor; NULL on existing rows
+    # until the next ingest pass re-reads the session. See the DDL above.
+    ("sessions", "cwd",        "VARCHAR"),
+    ("sessions", "git_branch", "VARCHAR"),
     # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
@@ -1418,6 +1431,29 @@ def _run_dedup_migration_v7(conn) -> int:
         return int(cur.fetchone()[0]) if cur.description else 0
     except Exception:
         return 0
+
+
+#: Longest cwd / branch we will store. Real paths and branch names are far
+#: under this; the cap exists so a corrupt transcript line can't push a
+#: multi-megabyte string into every session row.
+_MAX_PATH_LEN = 512
+
+
+def _clean_str(value: Any, limit: int = _MAX_PATH_LEN) -> str | None:
+    """Coerce a transcript-sourced scalar to a bounded, stripped string.
+
+    Returns ``None`` for None, non-scalars, and the empty/whitespace string,
+    so the callers' ``COALESCE(excluded.x, sessions.x)`` treats "runtime
+    didn't report it" and "runtime reported blank" identically — neither
+    should clobber a value we already learned.
+    """
+    if value is None or isinstance(value, (dict, list, tuple, set, bytes)):
+        return None
+    try:
+        s = str(value).strip()
+    except Exception:
+        return None
+    return s[:limit] if s else None
 
 
 def _to_blob(value: Any) -> bytes | None:
@@ -2237,6 +2273,8 @@ class LocalStore:
                     int(session.get("message_count") or 0),
                     _to_blob(session.get("metadata")),
                     now_ms,
+                    _clean_str(session.get("cwd")),
+                    _clean_str(session.get("git_branch")),
                 ]
                 for atype, sid, session in prepared
             ]
@@ -2246,8 +2284,9 @@ class LocalStore:
                     INSERT INTO sessions (
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
-                        total_tokens, cost_usd, message_count, metadata, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        total_tokens, cost_usd, message_count, metadata, updated_at,
+                        cwd, git_branch
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -2261,7 +2300,12 @@ class LocalStore:
                         cost_usd       = excluded.cost_usd,
                         message_count  = excluded.message_count,
                         metadata       = COALESCE(excluded.metadata, sessions.metadata),
-                        updated_at     = excluded.updated_at
+                        updated_at     = excluded.updated_at,
+                        -- Latest non-NULL wins: a re-ingest that didn't parse
+                        -- the field keeps what we already knew, but an agent
+                        -- that cd'd or switched branch moves the row.
+                        cwd            = COALESCE(excluded.cwd, sessions.cwd),
+                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch)
                 """, upsert_params)
                 try:
                     self._mirror_session_rollups_locked(prepared, prev_map)
@@ -2270,6 +2314,58 @@ class LocalStore:
                         "local store: session rollup upsert failed (non-fatal)"
                     )
         return len(prepared)
+
+    def update_session_location(
+        self,
+        session_id: str,
+        *,
+        agent_type: str = "openclaw",
+        cwd: str | None = None,
+        git_branch: str | None = None,
+    ) -> bool:
+        """Set just the ``cwd`` / ``git_branch`` of an existing session row.
+
+        Deliberately NOT ``ingest_session({session_id, cwd})``: that upsert
+        assigns ``status``, ``ended_at``, ``total_tokens``, ``cost_usd`` and
+        ``message_count`` straight from ``excluded.*``, so a sparse row would
+        blank a live session's status and zero its cost. This touches two
+        columns and nothing else.
+
+        Returns True when a row was updated. A no-op (both values None, or
+        no such session yet) returns False rather than raising — the caller
+        is an ingest loop and must never die on a missing row.
+        """
+        cwd = _clean_str(cwd)
+        git_branch = _clean_str(git_branch)
+        if not session_id or (cwd is None and git_branch is None):
+            return False
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: update_session_location() called on read-only store"
+            )
+        sets, params = [], []
+        # COALESCE(?, col) so passing only one of the pair leaves the other
+        # alone, matching the ingest path's latest-non-NULL-wins semantics.
+        if cwd is not None:
+            sets.append("cwd = ?")
+            params.append(cwd)
+        if git_branch is not None:
+            sets.append("git_branch = ?")
+            params.append(git_branch)
+        params.extend([str(agent_type or "openclaw"), str(session_id)])
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        f"UPDATE sessions SET {', '.join(sets)} "
+                        "WHERE agent_type = ? AND session_id = ?",
+                        params,
+                    )
+            return True
+        except Exception:
+            log.debug("local store: update_session_location failed for %s",
+                      session_id, exc_info=True)
+            return False
 
     def reclassify_session_outcome(
         self,
@@ -9658,7 +9754,7 @@ class LocalStore:
                             AND e.agent_type = s.agent_type
                             AND e.event_type IN {renderable_in})
                    ) AS message_count,
-                   s.metadata
+                   s.metadata, s.cwd, s.git_branch
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -9670,7 +9766,7 @@ class LocalStore:
         rows = self._fetch(sql, params)
         cols = ["agent_type", "session_id", "agent_id", "title", "started_at",
                 "last_active_at", "ended_at", "status", "total_tokens",
-                "cost_usd", "message_count", "metadata"]
+                "cost_usd", "message_count", "metadata", "cwd", "git_branch"]
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))

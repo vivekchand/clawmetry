@@ -594,6 +594,23 @@ def _fetch_sessions_table_rows(limit: int = 200):
         return None
 
 
+def _project_name(cwd: str) -> str:
+    """Human-facing project label for a working directory.
+
+    The sessions list is read by people who have never opened an
+    observability tool, so a row should say ``clawmetry``, not
+    ``/Users/someone/projects/clawmetry`` and certainly not a UUID. Returns
+    the last path segment, ignoring trailing slashes; empty string when we
+    have no directory, so callers can fall back without a None check.
+    """
+    if not cwd or not isinstance(cwd, str):
+        return ""
+    trimmed = cwd.replace("\\", "/").rstrip("/")
+    if not trimmed:
+        return ""
+    return trimmed.rsplit("/", 1)[-1]
+
+
 def _try_local_store_sessions():
     """Read sessions directly from the local DuckDB. Returns the same
     response shape as the legacy gateway-backed endpoint (`{"sessions":
@@ -636,6 +653,13 @@ def _try_local_store_sessions():
             # spoken for by other adapters, which fill it with cwd paths and
             # provider names (ollama, openai, …) that are not surfaces.
             "surface":        meta.get("surface", ""),
+            # Where the session ran. Falls back to metadata for adapters that
+            # tuck it in the blob rather than the typed column, so a row
+            # ingested before the columns existed still shows a project name
+            # instead of a bare UUID.
+            "cwd":            r.get("cwd") or meta.get("cwd", ""),
+            "git_branch":     r.get("git_branch") or meta.get("gitBranch", ""),
+            "project":        _project_name(r.get("cwd") or meta.get("cwd", "")),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.

@@ -3792,9 +3792,20 @@ def _local_ingest_session_batch(
     # session_file is like '<uuid>.jsonl' — use the uuid as the canonical
     # session_id so the dashboard's per-session views can correlate.
     session_id = subagent_id or session_file.split(".jsonl", 1)[0]
+    # Harvest the session's working directory / git branch as we walk the
+    # batch. Every runtime that writes a transcript stamps these per line
+    # (Claude Code carries `cwd` + `gitBranch` on nearly all of them), but no
+    # session row ever carried them, which is why the sessions list reads as a
+    # wall of UUIDs. Last non-empty wins so an agent that cd's or switches
+    # branch mid-session ends up showing where it IS. One targeted UPDATE
+    # after the loop, not a sparse upsert — see update_session_location().
+    seen_cwd: str | None = None
+    seen_branch: str | None = None
     for obj in batch:
         if not isinstance(obj, dict):
             continue
+        seen_cwd = _session_cwd(obj) or seen_cwd
+        seen_branch = _session_git_branch(obj) or seen_branch
         # Issue #1088 Phase 4: opportunistically project inbound channel
         # messages into the channel_messages table. Best-effort — never
         # blocks the events ingest below on a per-row failure. The channel
@@ -3872,6 +3883,18 @@ def _local_ingest_session_batch(
         })
     if rows:
         store.ingest_many(rows)
+    # Stamp where this session is running. Runs after ingest_many so a session
+    # row created by this same batch is already there to update. Non-fatal and
+    # non-blocking: a session with no location is a cosmetic gap, never a
+    # reason to lose the batch's events.
+    if seen_cwd or seen_branch:
+        try:
+            store.update_session_location(
+                session_id, agent_type=agent_type,
+                cwd=seen_cwd, git_branch=seen_branch,
+            )
+        except Exception as _e:
+            log.debug("session location update skipped (non-fatal): %s", _e)
     # Reconstruct OTel-compatible spans from this batch (issue #1010 / Trace 4).
     # ``agent_type`` rides through so a non-OpenClaw batch on this transcript
     # shape (NemoClaw sandbox sessions, agent_type='nemoclaw') stamps its REAL
@@ -3886,6 +3909,58 @@ def _local_ingest_session_batch(
             store.ingest_spans_batch(_spans)
     except Exception as _e:
         log.debug("span reconstruction skipped (non-fatal): %s", _e)
+
+
+# Where each runtime records the working directory and git branch of a
+# session. Every runtime that writes a transcript records the directory
+# somewhere; the spelling is all that differs, so one alias list covers the
+# OSS adapters AND the gated ones in clawmetry-pro without each having to
+# learn a new contract. Claude Code writes ``cwd`` / ``gitBranch`` on nearly
+# every line; Codex records ``cwd`` in its rollout header; the IDE runtimes
+# tend toward ``workspace``/``project``. Order is priority: the first
+# non-empty alias wins.
+_CWD_ALIASES = (
+    "cwd", "workingDirectory", "working_directory", "working_dir",
+    "workspace", "workspace_path", "workspaceRoot", "project_path",
+    "project_dir", "projectRoot", "directory", "folder",
+)
+_GIT_BRANCH_ALIASES = (
+    "git_branch", "gitBranch", "branch", "vcs_branch", "scm_branch",
+)
+
+
+def _first_alias(row: dict, aliases: tuple) -> str | None:
+    """First non-empty value among ``aliases`` in ``row``, else None.
+
+    Also looks one level into a ``metadata`` / ``extra`` sub-dict, because
+    several adapters tuck environment details there rather than at the top
+    level. Never raises — a malformed row yields None, per the
+    never-crash-on-bad-input rule.
+    """
+    if not isinstance(row, dict):
+        return None
+    nests = [row]
+    for key in ("metadata", "extra", "data", "env"):
+        sub = row.get(key)
+        if isinstance(sub, dict):
+            nests.append(sub)
+    for src in nests:
+        for alias in aliases:
+            val = src.get(alias)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return None
+
+
+def _session_cwd(row: dict) -> str | None:
+    """Working directory a session ran in, or None if the runtime hid it."""
+    return _first_alias(row, _CWD_ALIASES)
+
+
+def _session_git_branch(row: dict) -> str | None:
+    """Git branch a session ran on, or None. A detached HEAD legitimately
+    reports no branch, so None here is not necessarily a parse failure."""
+    return _first_alias(row, _GIT_BRANCH_ALIASES)
 
 
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
@@ -3932,6 +4007,8 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             "cost_usd": cost,
             "message_count": s.get("message_count") or 0,
             "metadata": meta_extras or None,
+            "cwd":        _session_cwd(s),
+            "git_branch": _session_git_branch(s),
         })
     if session_rows:
         store.ingest_sessions_batch(session_rows)
