@@ -2916,6 +2916,15 @@ class OpenClawAdapter(AgentAdapter):
                                 _wc_sr = obj.get("stagedRef") or obj.get("staged_ref")
                                 if _wc_sr is not None:
                                     extra["stagedRef"] = _wc_sr
+                                _wc_kept = (
+                                    obj.get("keptLocalPaths")
+                                    or obj.get("kept_local_paths")
+                                    or obj.get("cloudWorkerKeptLocal")
+                                    or obj.get("cloud_worker_kept_local")
+                                    or []
+                                )
+                                if isinstance(_wc_kept, list) and _wc_kept:
+                                    extra["keptLocalPaths"] = _wc_kept
                                 _wc_path_str = (
                                     ", ".join(_wc_paths)
                                     if isinstance(_wc_paths, list) and _wc_paths
@@ -3478,6 +3487,16 @@ class OpenClawAdapter(AgentAdapter):
                 _wc_sr = obj.get("stagedRef") or obj.get("staged_ref")
                 if _wc_sr is not None:
                     wc_attrs["conflict.staged_ref"] = _wc_sr
+                _wc_kept = (
+                    obj.get("keptLocalPaths")
+                    or obj.get("kept_local_paths")
+                    or obj.get("cloudWorkerKeptLocal")
+                    or obj.get("cloud_worker_kept_local")
+                    or []
+                )
+                if isinstance(_wc_kept, list) and _wc_kept:
+                    wc_attrs["conflict.kept_local"] = _wc_kept
+                    wc_attrs["conflict.kept_local_count"] = len(_wc_kept)
                 spans.append({
                     "span_id": _sid("workspace.conflict", session_id, str(raw_ts)),
                     "trace_id": trace_id,
