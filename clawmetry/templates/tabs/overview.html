@@ -1,4 +1,13 @@
 <div class="page active" id="page-overview">
+  <!-- Needs-you strip. The first thing on the page because it answers the
+       question people actually open the dashboard with: "is anything waiting
+       on me?" Most of the time it is one calm line, and that reassurance IS
+       the feature. JS: app.js loadNeedsYou() -> /api/attention (cloud:
+       cm-cloud-attention serves it from the snapshot's sessions slice, which
+       already carries the attention_* fields). Hidden until the first load
+       resolves so it never flashes a wrong answer. -->
+  <div id="needs-you" class="cm-needs" style="display:none;" aria-live="polite"></div>
+
   <!-- Human-first hero (FLYWHEEL vision): a newcomer should grasp "is my agent
        alive, what did it do, is it healthy, what did it cost" in ~5s, no jargon.
        Populated by _renderOverviewHero(); the power tools (autonomy / compare /

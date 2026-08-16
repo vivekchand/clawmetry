@@ -65,7 +65,7 @@ Founder call 2026-08-08: the desktop app (`desktop/`) is one of the highest-ROI 
 
 ## 1. The data-flow rule (this is the one that bites)
 
-ClawMetry is **read-only** and **DuckDB-first**:
+ClawMetry is **DuckDB-first** (and a control plane that defaults to observation — it is *not* read-only; see CLAUDE.md Conventions):
 
 - Every feature persists to and reads from the local **DuckDB** store. Reading raw JSONL, log files, `sessions.json`, or process stats *inside a request handler* is a violation — it works locally and silently returns empty in cloud (the cloud container has no `~/.openclaw` filesystem). Most "works locally, broken in cloud" bugs are exactly this.
 - The blessed path for anything the cloud needs to display:

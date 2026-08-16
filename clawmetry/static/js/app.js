@@ -973,6 +973,80 @@ function _cmAgentDownBannerCopy(orig) {
   return t('alerts.feed_stopped_unknown', null, 'One of our data feeds from your agent stopped. You’re still seeing live activity, but some charts may lag.');
 }
 
+// Where an alert sends you. Returns {label, go} or null when the alert
+// genuinely has no better destination than the banner itself.
+//
+// Labels are active-voice and name the destination in the operator's own
+// words ("Investigate", "Open session"), never the system's ("View
+// security_events"). Each one is a promise about what the next screen shows.
+function _cmBannerDestination(alert) {
+  if (!alert) return null;
+  var type = String(alert.type || '');
+  var ruleId = typeof alert.rule_id === 'string' ? alert.rule_id : '';
+
+  function goTab(tab, after) {
+    return function () {
+      if (typeof switchTab === 'function') switchTab(tab);
+      if (typeof after === 'function') { try { after(); } catch (e) {} }
+    };
+  }
+  function goSession(sid) {
+    return function () {
+      // Deep-link via hash so the Session-replay tab can pick it up either on
+      // first paint (window.location.hash) or via the hashchange listener if
+      // the tab is already mounted.
+      try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch (e) {}
+      if (typeof switchTab === 'function') switchTab('transcripts');
+    };
+  }
+
+  // Session-scoped alarms: dashboard.py encodes the session in the rule_id.
+  if (type === 'stuck_session' && ruleId.indexOf('stuck_session_') === 0) {
+    var sid = ruleId.slice('stuck_session_'.length);
+    if (sid) return { label: t('app.open_session', null, 'Open session →'), go: goSession(sid) };
+  }
+
+  // Security alarms. The rule_id here is the DETECTION rule (numbat's
+  // rule_id, or a built-in signature id) — not a session — so we cannot jump
+  // straight to a transcript. The findings log can: it lists this finding
+  // with the session attached, one click further on.
+  if (type === 'numbat_finding' || type === 'security_threat') {
+    return {
+      label: t('app.investigate', null, 'Investigate →'),
+      go: goTab('security', function () {
+        if (typeof loadSecurityFindings === 'function') loadSecurityFindings();
+        var el = document.getElementById('security-findings-panel');
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      })
+    };
+  }
+
+  // Liveness alarms — "is my agent alive" is answered on the Overview.
+  if (type === 'heartbeat_silent' || type === 'agent_down') {
+    return { label: t('app.check_agent', null, 'Check agent →'), go: goTab('overview') };
+  }
+
+  // Money alarms. Note the two vocabularies: user rules store 'threshold' /
+  // 'spike', while the always-on cost monitor fires 'anomaly'. Both mean
+  // "your spend moved" and both belong on Usage.
+  if (type === 'threshold' || type === 'session_cost' || type === 'spike'
+      || type === 'anomaly' || type === 'daily_threshold_breached'
+      || type === 'budget_blocked') {
+    return { label: t('app.see_spending', null, 'See spending →'), go: goTab('usage') };
+  }
+
+  // Burn alarms — token velocity and unproductive spinning both need the
+  // session that is doing it, which the Sessions list ranks for you.
+  // 'token_spike' is the rule vocabulary; 'token_velocity' is what the
+  // always-on monitor fires.
+  if (type === 'token_spike' || type === 'token_velocity'
+      || type === 'unproductive_burn') {
+    return { label: t('app.see_sessions', null, 'See sessions →'), go: goTab('transcripts') };
+  }
+
+  return null;
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
@@ -1001,32 +1075,31 @@ async function checkActiveAlerts() {
     var latest = bannerAlerts[0];
     var msgEl = document.getElementById('alert-banner-msg');
     msgEl.textContent = latest.type === 'agent_down' ? _cmAgentDownBannerCopy(latest.message) : latest.message;
-    // Stuck-session deep-link: dashboard.py:_check_stuck_sessions emits
-    // rule_id = `stuck_session_<full-session-id>`. Surface an "Open session →"
-    // button on the banner so users go from "what's wrong" to "look at it"
-    // in one click. Idempotent across polls — remove any prior button first.
+    // Every alarm needs somewhere to go.
+    //
+    // This used to special-case exactly one type: stuck_session got an
+    // "Open session →" button, and every other alert — including a HIGH
+    // security finding — offered only Dismiss. Founder, 2026-08-15, on a
+    // numbat secret-exfiltration banner: "unable to understand what action I
+    // need to take... for the first one I just see dismiss button, so what??"
+    // Dismiss is not a response to a security alert; it is the absence of one.
+    //
+    // _cmBannerDestination maps an alert to the screen that answers the
+    // question it raises. Adding an alert type without a destination is a
+    // regression — tests/test_alert_banner_destinations.py enforces it.
     var existingOpen = document.getElementById('alert-banner-open-session');
     if (existingOpen && existingOpen.parentNode) existingOpen.parentNode.removeChild(existingOpen);
-    if (latest && latest.type === 'stuck_session' && typeof latest.rule_id === 'string') {
-      var sid = latest.rule_id.indexOf('stuck_session_') === 0
-        ? latest.rule_id.slice('stuck_session_'.length) : '';
-      if (sid) {
-        var openBtn = document.createElement('button');
-        openBtn.id = 'alert-banner-open-session';
-        openBtn.textContent = t("app.open_session", null, "Open session →");
-        openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
-        openBtn.onclick = function () {
-          // Deep-link via hash so the Session-replay tab can pick it up
-          // either on first paint (window.location.hash) or via the
-          // hashchange listener if the tab is already mounted.
-          try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch(e) {}
-          if (typeof switchTab === 'function') switchTab('transcripts');
-        };
-        // Insert before the Dismiss / ack button so it reads left-to-right.
-        var ackBtn = document.getElementById('alert-resume-btn');
-        if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
-        else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
-      }
+    var dest = _cmBannerDestination(latest);
+    if (dest) {
+      var openBtn = document.createElement('button');
+      openBtn.id = 'alert-banner-open-session';
+      openBtn.textContent = dest.label;
+      openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
+      openBtn.onclick = dest.go;
+      // Insert before the Dismiss / ack button so it reads left-to-right.
+      var ackBtn = document.getElementById('alert-resume-btn');
+      if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
+      else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
     }
     banner.style.display = 'flex';
     // Show resume button if gateway is paused
@@ -1842,6 +1915,12 @@ function switchTab(name) {
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
+  // Needs-you strip. loadAll() only runs on tab switch, so without this the
+  // strip would go stale while you sit on Overview — and an agent that starts
+  // waiting while you are looking at the page is exactly the case this
+  // feature exists for. One cheap scoped read, on the same 30s cadence and
+  // the same tab + visibility gates as the velocity poller above.
+  if (name === 'overview') { if (typeof _needsYouTimer !== 'undefined' && _needsYouTimer) clearInterval(_needsYouTimer); if (typeof loadNeedsYou === 'function') _needsYouTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadNeedsYou(); }, 30000); }
   if (name === 'usage') loadUsage();
   // Agent Graph (#3315): the original wiring landed in the DEAD first
   // DASHBOARD_HTML's inline switchTab in dashboard.py, so the loader never
@@ -2032,6 +2111,226 @@ function _friendlyBytes(n) {
 // UI-coverage audit: today's activity counters strip. Reads /api/activity-today
 // (local: cached DuckDB rollup; cloud: cm-cloud-activity serves it from the
 // snapshot's activityToday slice). Hidden until there is any activity today.
+// ── Needs-you strip ────────────────────────────────────────────────────────
+// "Is anything waiting on me right now?" -- the question people actually open
+// the dashboard with, answered above every chart.
+//
+// THREE states, and telling them apart is the whole point:
+//   waiting  -> one row per blocked agent, with its confidence
+//   quiet    -> "Nothing needs you right now" + how many are working
+//   unknown  -> "Can't tell right now" when the daemon has gone silent
+//
+// The third is why this is not a one-liner. An empty list from a wedged
+// detector must never render as all-clear: a calm reassurance that turns out
+// to be wrong is how you teach someone to stop trusting the whole dashboard.
+
+// Is this signal a CONFIRMED one? 'hook' means the runtime told us directly;
+// 'queue' means a real approval is sitting unanswered in our own queue. Both
+// are things we know rather than deduce, so both read as confirmed. Only
+// 'inferred' is a guess. Kept in one place so a new source cannot end up
+// rendering as certain on one surface and hedged on another.
+function _cmAttnConfirmed(signal) {
+  return signal === 'hook' || signal === 'queue';
+}
+
+function cmNeedsAge(sec) {
+  sec = Math.max(0, parseInt(sec, 10) || 0);
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm';
+  return Math.floor(sec / 3600) + 'h';
+}
+
+// Plain-language line per row. "Wants to run Bash" beats "pending tool_use
+// approval" for someone who has never opened an observability tool.
+function cmNeedsPhrase(item) {
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  // Reuse the switcher's label map — one definition of "what this runtime is
+  // called", so the strip can never disagree with the header.
+  var runtime = esc((typeof _cmRuntimeLabel === 'function')
+    ? _cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
+  var tool = item.tool ? esc(item.tool) : '';
+  if (_cmAttnConfirmed(item.signal)) {
+    return tool
+      ? '<b>' + runtime + '</b> is asking to run ' + tool
+      : '<b>' + runtime + '</b> is asking for permission';
+  }
+  return tool
+    ? '<b>' + runtime + '</b> has been on ' + tool + ' with no reply'
+    : '<b>' + runtime + '</b> has been silent mid-task';
+}
+
+// Last rendered signature. The strip is an aria-live region, so rewriting it
+// with identical content would make a screen reader re-announce "nothing
+// needs you" every poll. Only paint when something actually changed.
+var _cmNeedsSig = null;
+//: Handle for the Overview poller, cleared and re-armed on each tab switch so
+//: two visits cannot leave two intervals running.
+var _needsYouTimer = null;
+
+function cmRenderNeedsYou(d) {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var sig = JSON.stringify([
+    d && d.fresh, (d && d.working) || 0,
+    ((d && d.items) || []).map(function (i) {
+      // Wait time is excluded on purpose: a ticking counter would make every
+      // poll a change and defeat the guard. The row's identity is what it is
+      // waiting on, not how long it has waited.
+      return [i.session_id, i.signal, i.tool].join('|');
+    }),
+    (d && d.runtimes_without_approval) || [],
+  ]);
+  if (sig === _cmNeedsSig) return;
+  _cmNeedsSig = sig;
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  box.classList.remove('is-waiting', 'is-unknown');
+
+  // 1. We could not check. Say that -- do not imply all-clear.
+  if (!d || d.fresh === false) {
+    box.classList.add('is-unknown');
+    // On the hosted dashboard the reason is different and the user can do
+    // nothing about it: the cloud has no DuckDB, so this is computed on the
+    // machine the agent runs on and reaches here through the snapshot.
+    // Blaming their machine for our missing plumbing would be a lie.
+    var sub = window.CLOUD_MODE
+      ? t('needs.cloud_sub', null,
+          'This is worked out on the machine your agent runs on, and is not in the hosted view yet.')
+      : t('needs.unknown_sub', null,
+          'ClawMetry has not heard from your machine recently, so it cannot say what needs you.');
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.unknown_title', null, "Can't tell right now") + '</span>' +
+        '<span class="cm-needs-sub">' + sub + '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  var items = d.items || [];
+
+  // 2. Nothing waiting. The reassuring case, and the one people see most.
+  if (!items.length) {
+    var working = parseInt(d.working, 10) || 0;
+    var sub = working === 1
+      ? t('needs.one_working', null, '1 agent working')
+      : (working > 0
+          ? t('needs.n_working', { n: working }, working + ' agents working')
+          : t('needs.none_running', null, 'No agents running'));
+    // Some runtimes have no permission prompt at all (Pi's trust machinery
+    // guards loading config, not running tools). Filtered to one of those,
+    // "nothing needs you" would imply we looked and found nothing — so say
+    // what is actually true instead.
+    var noAsk = d.runtimes_without_approval || [];
+    var rtNow = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (noAsk.length && rtNow && rtNow !== 'all' && noAsk.indexOf(rtNow) !== -1) {
+      var rtName = (typeof _cmRuntimeLabel === 'function')
+        ? _cmRuntimeLabel(rtNow) : rtNow;
+      sub = t('needs.never_asks', { runtime: rtName },
+              rtName + " never asks for permission, so nothing here waits on you.");
+    }
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.clear_title', null, 'Nothing needs you right now') + '</span>' +
+        '<span class="cm-needs-sub">' + esc(sub) + '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  // 3. Something is waiting.
+  box.classList.add('is-waiting');
+  var title = items.length === 1
+    ? t('needs.one_waiting', null, '1 agent needs you')
+    : t('needs.n_waiting', { n: items.length }, items.length + ' agents need you');
+
+  var rows = items.slice(0, 6).map(function (it) {
+    var hook = _cmAttnConfirmed(it.signal);
+    var where = [it.project, it.git_branch].filter(Boolean).join(' · ');
+    var confidence = hook
+      ? t('needs.confident', null, 'Waiting for you')
+      : t('needs.inferred', null, "Looks like it's waiting");
+    return '' +
+      '<button type="button" class="cm-needs-row" ' +
+        'onclick="cmOpenNeedsSession(' + JSON.stringify(it.session_id || '').replace(/"/g, '&quot;') + ')" ' +
+        'title="' + esc(confidence) + '">' +
+        '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') + '" aria-hidden="true"></span>' +
+        '<span class="cm-needs-what">' + cmNeedsPhrase(it) + '</span>' +
+        '<span class="cm-needs-where">' + esc(where) + '</span>' +
+        '<span class="cm-needs-age">' + cmNeedsAge(it.waiting_seconds) + '</span>' +
+      '</button>';
+  }).join('');
+
+  // Only claim certainty where we have it. If every row is a guess, say so
+  // once at the bottom rather than hedging on each line.
+  var allInferred = items.every(function (i) { return !_cmAttnConfirmed(i.signal); });
+  var note = allInferred
+    ? '<div class="cm-needs-note">' +
+        t('needs.inferred_note', null,
+          "Worked out from what each agent last did, so this is a best guess.") +
+      '</div>'
+    : '';
+
+  var extra = items.length > 6
+    ? '<div class="cm-needs-note">' +
+        t('needs.more', { n: items.length - 6 }, '+' + (items.length - 6) + ' more') +
+      '</div>'
+    : '';
+
+  box.innerHTML =
+    '<div class="cm-needs-head">' +
+      '<span class="cm-needs-title">' + esc(title) + '</span>' +
+    '</div>' +
+    '<div class="cm-needs-list">' + rows + '</div>' + extra + note;
+  box.style.display = '';
+}
+
+// Jump to the blocked session's transcript. Falls back to the Sessions page
+// when the deep link is unavailable, so the row is never a dead end.
+function cmOpenNeedsSession(sid) {
+  if (!sid) return;
+  try {
+    if (typeof showTranscript === 'function') { showTranscript(sid); return; }
+    if (typeof switchPage === 'function') { switchPage('transcripts'); return; }
+  } catch (e) { console.warn('needs-you open failed', e); }
+}
+
+// Session-row badge. Same two confidences as the strip, same wording, so a
+// user only has to learn the distinction once. Returns '' when nothing is
+// waiting — an absent badge is the quiet default, not a "no" badge.
+function _cmAttentionBadge(state, signal, tool) {
+  if (!state) return '';
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  var hook = _cmAttnConfirmed(signal);
+  var label = hook
+    ? t('needs.badge_waiting', null, 'Waiting for you')
+    : t('needs.badge_maybe', null, 'Maybe waiting');
+  var why = hook
+    ? (tool ? 'This agent is asking to run ' + tool + '.'
+            : 'This agent is asking for permission.')
+    : (tool ? 'Best guess: ' + tool + ' was started and never came back.'
+            : 'Best guess: this agent went quiet mid-task.');
+  return '<span class="cm-attn-badge" title="' + esc(why) + '">' +
+           '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') +
+             '" aria-hidden="true"></span>' + esc(label) +
+         '</span>';
+}
+
+async function loadNeedsYou() {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = (rt && rt !== 'all') ? ('?runtime=' + encodeURIComponent(rt)) : '';
+  var d = null;
+  try {
+    d = await fetchJsonWithTimeout('/api/attention' + q, 4000);
+  } catch (e) {
+    d = null;   // renders "can't tell", which is the truth here
+  }
+  cmRenderNeedsYou(d);
+}
+
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
@@ -4129,6 +4428,9 @@ async function loadAll() {
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     // UI-coverage audit — today's activity counters strip.
     if (typeof loadActivityToday === 'function') setTimeout(function(){ loadActivityToday().catch(function(e){console.warn('activity today failed',e)}); }, 900);
+    // Needs-you strip. First on the page, so it loads first — this is the
+    // question people open the dashboard with.
+    if (typeof loadNeedsYou === 'function') loadNeedsYou().catch(function(e){console.warn('needs-you failed',e)});
     document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -10195,6 +10497,7 @@ async function loadSecurityPage(silent) {
     // than a silent blank (and become live once the interceptor lands).
     loadSecurityIntegrity();
     loadSecurityAudit();
+    loadSecurityFindings();
     return;
   }
   try {
@@ -10279,6 +10582,7 @@ async function loadSecurityPage(silent) {
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
   loadSecurityIntegrity();
   loadSecurityAudit();
+  loadSecurityFindings();
   try {
     var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
     var badgeEl = document.getElementById('credential-scan-badge');
@@ -10324,6 +10628,116 @@ async function loadSecurityPage(silent) {
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
   }
+}
+
+// Recorded findings — the DURABLE security log (DuckDB security_events),
+// as opposed to #security-threat-list above, which is a live re-scan of
+// recent events through the built-in signature catalog.
+//
+// Founder-reported 2026-08-15: a HIGH numbat finding ("Secret-manager access
+// followed by data-bearing egress") fired the top banner, the banner offered
+// only Dismiss, and the Security tab could not show the finding either — it
+// only ever called /api/security/threats (the live scan), while ingested
+// findings land in security_events and are served by /api/security-threats.
+// The alarm had no destination anywhere in the product.
+//
+// Rows carry the session that triggered them, so this is also where the
+// banner's "Investigate" button lands.
+var _CM_SEV_STYLE = {
+  critical: { color: '#f87171', bg: 'rgba(220,38,38,0.14)', label: 'Critical' },
+  high:     { color: '#fbbf24', bg: 'rgba(245,158,11,0.14)', label: 'High' },
+  medium:   { color: '#60a5fa', bg: 'rgba(59,130,246,0.14)', label: 'Medium' },
+  low:      { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Low' },
+  info:     { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Info' }
+};
+
+async function loadSecurityFindings() {
+  var listEl = document.getElementById('security-findings-list');
+  var countEl = document.getElementById('security-findings-count');
+  if (!listEl) return;
+  // Cloud parity (FLYWHEEL gate 1): security_events is not in the snapshot,
+  // so the hosted dashboard has nothing to read. Say that plainly instead of
+  // leaving "Loading findings..." spinning forever, which is how a trial user
+  // learns to distrust the product.
+  if (window.CLOUD_MODE) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
+      + t('security.findings_local_only', null, 'Findings are recorded on the machine your agent runs on. Open the dashboard there to read them.')
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  var rows = [];
+  try {
+    var d = await fetchJsonWithTimeout('/api/security-threats?limit=100', 10000);
+    rows = (d && d.threats) || [];
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
+      + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  // Per-runtime honesty: findings are keyed by session id, which carries the
+  // runtime prefix, so a runtime filter must actually narrow this list rather
+  // than silently showing node-wide rows.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (rt && rt !== 'all') {
+    rows = rows.filter(function (r) {
+      var sid = String(r.session_id || '');
+      var prefix = sid.indexOf(':') > 0 ? sid.split(':')[0] : 'openclaw';
+      return prefix === rt;
+    });
+  }
+  if (!rows.length) {
+    listEl.innerHTML = '<div style="color:#86efac;padding:12px;font-size:12px;">✓ '
+      + t('security.findings_empty', null, 'Nothing recorded yet. Findings from ClawMetry’s own scan and from any connected security tool will appear here.')
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  if (countEl) {
+    countEl.textContent = rows.length + ' '
+      + (rows.length === 1
+          ? t('security.finding_word', null, 'finding')
+          : t('security.findings_word', null, 'findings'));
+  }
+  var html = '';
+  rows.slice(0, 100).forEach(function (r) {
+    var sev = String(r.severity || 'info').toLowerCase();
+    var st = _CM_SEV_STYLE[sev] || _CM_SEV_STYLE.info;
+    var sid = String(r.session_id || '');
+    var when = String(r.ts || '').slice(0, 19).replace('T', ' ');
+    html += '<div class="cm-finding-row" data-finding-id="' + escHtml(String(r.id || '')) + '">';
+    html += '<span class="cm-finding-sev" style="color:' + st.color + ';background:' + st.bg + ';">'
+         + escHtml(st.label) + '</span>';
+    html += '<div class="cm-finding-body">';
+    html += '<div class="cm-finding-desc">' + escHtml(String(r.description || r.rule_id || 'Security finding')) + '</div>';
+    if (r.snippet) {
+      html += '<code class="cm-finding-snippet">' + escHtml(String(r.snippet)) + '</code>';
+    }
+    html += '<div class="cm-finding-meta">' + escHtml(when);
+    if (r.rule_id) html += ' · ' + escHtml(String(r.rule_id));
+    html += '</div></div>';
+    if (sid) {
+      html += '<button class="cm-finding-open" onclick="cmOpenFindingSession(\''
+           + escHtml(sid).replace(/'/g, "\\'") + '\')">'
+           + t('security.open_session', null, 'Open session') + ' →</button>';
+    } else {
+      html += '<span class="cm-finding-nosession" title="'
+           + t('security.no_session_hint', null, 'The tool that reported this finding did not attach a session id.')
+           + '">' + t('security.no_session', null, 'No session') + '</span>';
+    }
+    html += '</div>';
+  });
+  listEl.innerHTML = html;
+}
+
+// Jump from a finding to the transcript that produced it. Same hash-based
+// deep-link the stuck-session banner uses, so both entry points behave alike.
+function cmOpenFindingSession(sessionId) {
+  if (!sessionId) return;
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
 }
 
 // Tamper-evident hash-chain status. Plain-language labels per the FLYWHEEL
@@ -11203,16 +11617,71 @@ function _invOwnerLabel(a) {
   var o = (a && a.owner != null) ? String(a.owner).trim() : '';
   return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
 }
-function _invDoingNow(a) {
-  if (a && a.running) return { txt: 'Working', cls: 'inv-doing-on' };
-  if (a && a.detected) return { txt: 'Idle', cls: 'inv-doing-idle' };
-  return { txt: 'Quiet', cls: 'inv-doing-quiet' };
+// "45s ago" / "6m ago" / "3h ago" / "2d ago". Mirrors _cmLiveAge's voice for
+// the first minute and keeps going for the quiet agents this tab also lists.
+function _invAgeWords(secs) {
+  if (secs == null) return '';
+  var s = Number(secs);
+  if (!isFinite(s) || s < 0) return '';
+  if (s < 15) return 'just now';
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
 }
-function _invAliveDot(a) {
-  // green = running, amber = detected-not-running, grey = neither.
-  if (a && a.running) return { color: '#22c55e', label: 'Checked in' };
-  if (a && a.detected) return { color: '#f59e0b', label: 'Resting' };
-  return { color: '#6b7280', label: 'Not seen' };
+
+// The one liveness read every part of this tab uses. `running` is a PROCESS
+// heartbeat that only OpenClaw/NemoClaw emit, so it was False for Claude Code
+// while four of its sessions were mid-task and the tab said "Idle / Resting /
+// 0 of 11 alive" next to a Home tab reading "4 sessions are working right now"
+// (founder report 2026-08-16). Recency from the session table is the signal
+// that is true for every runtime; the heartbeat only ever ADDS certainty.
+function _invLive(a) {
+  // Strict TRUE, not "not false": a snapshot from a daemon older than this
+  // change carries no liveness fields at all, and treating that absence as
+  // "known, zero working" would print a confident "nothing is running" over a
+  // busy node on the hosted dashboard. Absent means unknown.
+  var known = !!(a && a.liveKnown === true);
+  var working = Number((a && a.liveWorking) || 0);
+  var waiting = Number((a && a.liveWaiting) || 0);
+  var secs = (a && a.lastSeenSecs != null) ? Number(a.lastSeenSecs) : null;
+  // The session read is a bounded window (200 most-recent rows node-wide), so a
+  // quiet runtime's newest session can fall outside it. Its daily rollup still
+  // knows when it last moved — use that rather than printing "never" about an
+  // agent we demonstrably have activity for.
+  if (secs == null && a && a.lastActivityMs) {
+    var _ms = Number(a.lastActivityMs);
+    if (isFinite(_ms) && _ms > 0) secs = Math.max(0, (Date.now() - _ms) / 1000);
+  }
+  if (!known) {
+    return { key: 'unknown', word: 'Unknown', cls: 'inv-doing-quiet', color: '#6b7280',
+             sessions: 0, secs: secs,
+             tip: 'The session table could not be read, so ClawMetry cannot tell whether this agent is running.' };
+  }
+  if (working > 0) {
+    return { key: 'working', word: 'Working', cls: 'inv-doing-on', color: '#22c55e',
+             sessions: working, secs: secs,
+             tip: working + (working === 1 ? ' session' : ' sessions')
+                  + ' produced output in the last 2 minutes.' };
+  }
+  if (waiting > 0) {
+    return { key: 'waiting', word: 'Waiting on you', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: waiting, secs: secs,
+             tip: waiting + (waiting === 1 ? ' session is' : ' sessions are')
+                  + ' open but quiet, usually parked at the prompt.' };
+  }
+  // Nothing live. `running` still means something for the two runtimes that
+  // emit a real heartbeat: the process is up, it just is not producing.
+  if (a && a.running) {
+    return { key: 'idle', word: 'Up, not working', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: 0, secs: secs,
+             tip: 'The process is running (real heartbeat) but no session has produced output recently.' };
+  }
+  return { key: 'quiet', word: 'Quiet', cls: 'inv-doing-quiet', color: '#6b7280',
+           sessions: 0, secs: secs,
+           tip: secs != null
+             ? 'No session has produced output recently. Last activity ' + _invAgeWords(secs) + '.'
+             : 'No recorded activity for this agent.' };
 }
 
 async function _invFetchData() {
@@ -11247,6 +11716,8 @@ async function _invFetchData() {
 // HIGHLIGHTED, never promoted or hidden.
 function _invIsRecentlyActive(a) {
   return !!(a.running
+    || Number(a.liveWorking || 0) > 0
+    || Number(a.liveWaiting || 0) > 0
     || (Number(a.cost24hUsd || 0) > 0)
     || (Number(a.tokens24h || 0) > 0));
 }
@@ -11263,8 +11734,7 @@ function _invFmtTok(n) {
 function _invRosterRow(a, rtFilter) {
   var rt = a.agentKey;
   var label = a.displayName || rt;
-  var doing = _invDoingNow(a);
-  var dot = _invAliveDot(a);
+  var live = _invLive(a);
   var owner = _invOwnerLabel(a);
   var hasCost = _invHasCost(rt);
   // LAST 24h (rolling, event-windowed) vs LIFETIME (all the runtime's sessions).
@@ -11293,15 +11763,30 @@ function _invRosterRow(a, rtFilter) {
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + covChip + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + live.color + '"></span>' + escHtml(label) + covChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
-    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + live.cls + '" title="' + escHtml(live.tip) + '">' + escHtml(live.word) + '</span>'
+    // The session count is the check against the Home tab: "Working · 4
+    // sessions" here must be the same four sessions the hero names there.
+    +     (live.sessions > 0
+        ? ' <span class="inv-doing-tok">' + live.sessions
+          + (live.sessions === 1 ? ' session' : ' sessions') + '</span>'
+        : '')
     +     (Number(a.tokens24h || 0) > 0
         ? ' <span class="inv-doing-tok" title="Tokens in the last 24 hours">' + _invFmtTok(a.tokens24h) + ' tok</span>'
         : '')
     +   '</td>'
-    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
-    +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+    // "Last seen" says a checkable fact (when the transcript last grew) where
+    // the column used to print "Resting" off a heartbeat that runtime never
+    // sends. The heartbeat, where it exists, is additional detail in the tip.
+    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + live.color + '"></span>'
+    +     '<span class="inv-alive-lbl" title="'
+    +       (a.running
+            ? 'This runtime sends a real process heartbeat, and it is up now.'
+            : 'Measured from the last event in this agent&#39;s sessions. Only OpenClaw and NemoClaw send a process heartbeat; every other runtime is read from transcript activity.')
+    +     '">'
+    +     escHtml(live.secs != null ? _invAgeWords(live.secs) : 'never')
+    +     '</span></td>'
     +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
     +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
     +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
@@ -11310,6 +11795,120 @@ function _invRosterRow(a, rtFilter) {
     + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="8">'
     +   _invExpandHtml(a)
     + '</td></tr>';
+}
+
+// Node health, computed instead of asserted. The tile used to read
+//   agents.every(function (a) { return !a.detected || a.running || true; })
+// which is `true` for any input — "All good" was printed, never measured
+// (founder report 2026-08-16). The outcome rollup each agent already carries
+// (success / failed / cognitive_loop / tool_call_stuck, 1d window) is the real
+// answer; with no finished runs the honest word is "No runs yet", not "good".
+function _invHealth(agents) {
+  var total = 0, failed = 0, stuck = 0, loops = 0, escalated = 0, seen = 0;
+  (agents || []).forEach(function (a) {
+    var o = a && a.outcome;
+    if (!o || typeof o !== 'object') return;
+    seen++;
+    total += Number(o.total || 0);
+    failed += Number(o.failed || 0);
+    stuck += Number(o.tool_call_stuck || 0);
+    loops += Number(o.cognitive_loop || 0);
+    escalated += Number(o.escalated || 0);
+  });
+  if (!seen || !total) {
+    return { txt: 'No runs yet', sub: 'Nothing finished in the last 24h.', cls: 'inv-health-unknown' };
+  }
+  var bad = failed + stuck + loops;
+  if (!bad) {
+    return { txt: 'All good', cls: 'inv-health-ok',
+             sub: total + (total === 1 ? ' run' : ' runs') + ' in 24h, none failed'
+                  + (escalated ? ' · ' + escalated + ' asked for you' : '') };
+  }
+  var parts = [];
+  if (failed) parts.push(failed + ' failed');
+  if (stuck) parts.push(stuck + ' stuck on a tool');
+  if (loops) parts.push(loops + ' looping');
+  return { txt: bad + ' of ' + total + ' bad', cls: 'inv-health-bad',
+           sub: parts.join(' · ') + ' (24h)' };
+}
+
+// The hero, in the same voice as the Home tab: a dot, an eyebrow, one sentence
+// that says what is true right now, and a sub-line that can be checked against
+// the sessions the Home hero names. Both read the same 120s/600s windows off
+// the same session rows, so they cannot disagree.
+function _invRenderHero(inv) {
+  var agents = (inv && inv.agents) || [];
+  // Strict TRUE (see _invLive): an older daemon's snapshot has no liveness
+  // fields, and that is "unknown", not "nothing is running".
+  var known = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  // Sum the rows rather than trusting a node-level rollup: every roster shape
+  // (node-wide, per-runtime slice, an older daemon's snapshot) carries the
+  // per-agent fields, so the headline is derived from the same numbers the
+  // table below prints and cannot disagree with them.
+  var working = 0, waiting = 0;
+  (agents || []).forEach(function (a) {
+    working += Number(a.liveWorking || 0);
+    waiting += Number(a.liveWaiting || 0);
+  });
+  var wAgents = (agents || []).filter(function (a) { return Number(a.liveWorking || 0) > 0; });
+  var qAgents = (agents || []).filter(function (a) { return Number(a.liveWaiting || 0) > 0
+                                                            && !Number(a.liveWorking || 0); });
+  var headline, sub, dot;
+  if (!known) {
+    dot = '#6b7280';
+    headline = 'Can’t tell what’s running.';
+    sub = 'The sync daemon did not answer, so liveness is unknown. The numbers below are the '
+        + 'last thing it recorded, not live.';
+  } else if (wAgents.length === 1) {
+    dot = '#22c55e';
+    headline = escHtml(wAgents[0].displayName || wAgents[0].agentKey) + ' is working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' produced output in the last '
+        + 'two minutes' + (waiting ? ', ' + waiting + ' more waiting on you' : '') + '. '
+        + (agents.length - 1) + ' other ' + (agents.length - 1 === 1 ? 'agent is' : 'agents are')
+        + ' quiet.';
+  } else if (wAgents.length > 1) {
+    dot = '#22c55e';
+    headline = wAgents.length + ' agents are working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' across '
+        + wAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + (waiting ? ' · ' + waiting + ' more waiting on you' : '') + '.';
+  } else if (qAgents.length) {
+    dot = '#f59e0b';
+    headline = waiting === 1 ? 'One session is waiting on you.'
+                             : waiting + ' sessions are waiting on you.';
+    sub = 'Open but quiet on '
+        + qAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + '. Nothing has produced output in the last two minutes.';
+  } else {
+    dot = '#3b82f6';
+    headline = 'Nothing is working right now.';
+    // Name the most recently active agent so "nothing" is checkable rather
+    // than a shrug.
+    var freshest = null;
+    agents.forEach(function (a) {
+      if (a.lastSeenSecs == null) return;
+      if (!freshest || Number(a.lastSeenSecs) < Number(freshest.lastSeenSecs)) freshest = a;
+    });
+    sub = freshest
+      ? escHtml(freshest.displayName || freshest.agentKey) + ' moved last, '
+        + _invAgeWords(freshest.lastSeenSecs) + '. ' + agents.length
+        + (agents.length === 1 ? ' agent lives' : ' agents live') + ' on this machine.'
+      : agents.length + (agents.length === 1 ? ' agent lives' : ' agents live')
+        + ' on this machine. None has recorded activity yet.';
+  }
+  return ''
+    + '<div style="display:flex;align-items:center;gap:11px;">'
+    +   '<span style="position:relative;display:inline-flex;width:14px;height:14px;flex-shrink:0;">'
+    +     '<span style="position:absolute;inset:0;border-radius:50%;background:' + dot + ';opacity:.35;'
+    +       (known && working ? 'animation:cmHeroPulse 2s ease-out infinite;' : '') + '"></span>'
+    +     '<span style="position:relative;margin:auto;width:10px;height:10px;border-radius:50%;background:' + dot + ';"></span>'
+    +   '</span>'
+    +   '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">'
+    +     t('inventory.hero_eyebrow', null, 'Your agents') + '</span>'
+    + '</div>'
+    + '<div class="inv-hero-headline">' + headline + '</div>'
+    + '<div class="inv-hero-sub">' + sub + '</div>';
 }
 
 function _invRenderRoster(inv) {
@@ -11349,7 +11948,7 @@ function _invRenderRoster(inv) {
     +     '<th data-i18n="inventory.col_agent">Agent</th>'
     +     '<th data-i18n="inventory.col_owner">Owner</th>'
     +     '<th data-i18n="inventory.col_doing">Doing now</th>'
-    +     '<th data-i18n="inventory.col_alive">Alive</th>'
+    +     '<th data-i18n="inventory.col_last_seen">Last seen</th>'
     +     '<th data-i18n="inventory.col_cost_24h">Cost (24h)</th>'
     +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
     +     '<th data-i18n="inventory.col_work">Work done</th>'
@@ -11542,18 +12141,60 @@ async function renderInventory() {
   if (window._invEmptyRetryTimer) { clearTimeout(window._invEmptyRetryTimer); window._invEmptyRetryTimer = null; }
   if (emptyEl) emptyEl.style.display = 'none';
 
+  // Hero first: the tab leads with what is true right now, like Home does.
+  var heroEl = document.getElementById('inv-hero');
+  if (heroEl) {
+    heroEl.innerHTML = _invRenderHero(inv);
+    heroEl.style.display = '';
+  }
+  // Repaint on a live cadence while this tab is the visible one — a headline
+  // that says "working right now" has to stop saying it when the work stops.
+  if (window._invLiveTimer) { clearTimeout(window._invLiveTimer); window._invLiveTimer = null; }
+  window._invLiveTimer = setTimeout(function () {
+    window._invLiveTimer = null;
+    if (_cmCurrentTab === 'inventory' && !document.hidden) renderInventory();
+  }, 15000);
+
   // 4-tile strip.
-  var aliveCount = agents.filter(function (a) { return a.running; }).length;
+  var liveKnown = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  var workingSessions = 0, waitingSessions = 0;
+  agents.forEach(function (a) {
+    workingSessions += Number(a.liveWorking || 0);
+    waitingSessions += Number(a.liveWaiting || 0);
+  });
+  var workingAgents = agents.filter(function (a) { return Number(a.liveWorking || 0) > 0; }).length;
   // "Today" = the rolling-24h spend (cost24hUsd). It used to sum costUsd,
   // which is LIFETIME - the tile showed the all-time total under a "Today"
   // label (founder screenshot 2026-07-30: Today $812.65 == lifetime).
   var totalCost24h = agents.reduce(function (s, a) {
     return s + (_invHasCost(a.agentKey) ? Number(a.cost24hUsd || 0) : 0);
   }, 0);
-  var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
   var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
+  var setSub = function (id, v) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = v || '';
+    el.style.display = v ? '' : 'none';
+  };
+  // "Working now" counts SESSIONS producing output, the same unit the Home
+  // hero leads with. The old tile counted the process-heartbeat flag and so
+  // read "0 of 11" on a machine with four live Claude Code sessions.
+  if (!liveKnown) {
+    setTxt('inv-tile-alive', 'Unknown');
+    setSub('inv-tile-alive-sub', 'Daemon did not answer');
+  } else {
+    setTxt('inv-tile-alive', workingSessions
+      ? (workingSessions + (workingSessions === 1 ? ' session' : ' sessions'))
+      : 'None');
+    setSub('inv-tile-alive-sub', workingSessions
+      ? ('on ' + workingAgents + ' of ' + agents.length + ' agents')
+      : (waitingSessions
+          ? (waitingSessions + ' waiting on you')
+          : 'nothing in the last 2 min'));
+  }
   setTxt('inv-tile-agents', String(agents.length));
+  setSub('inv-tile-agents-sub', agents.filter(_invIsRecentlyActive).length + ' active in 24h');
   // Subscription honesty (device parity): when the account plan is a
   // subscription, today's marginal spend is the METERED agents' cost only -
   // the plan is a flat fee already paid. Mirror the desk device's hero:
@@ -11572,7 +12213,11 @@ async function renderInventory() {
     setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
     if (todaySub) { todaySub.textContent = ''; todaySub.style.display = 'none'; }
   }
-  setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
+  var health = _invHealth(agents);
+  setTxt('inv-tile-health', health.txt);
+  setSub('inv-tile-health-sub', health.sub);
+  var healthEl = document.getElementById('inv-tile-health');
+  if (healthEl) healthEl.className = 'stats-footer-value ' + (health.cls || '');
   if (statsEl) statsEl.style.display = '';
 
   // Node-wide strip (tools / eval), labeled honestly.
@@ -17511,6 +18156,11 @@ async function loadTranscripts() {
         html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
         html += '</span>';
       }
+      // "Needs you" badge — same vocabulary as the Overview strip, so the two
+      // surfaces teach each other. Renders nothing when nothing is waiting;
+      // an absent badge is the quiet default, not a "no" badge.
+      html += _cmAttentionBadge(
+        tx.attention, tx.attention_signal, tx.attention_tool);
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });

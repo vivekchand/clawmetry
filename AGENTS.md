@@ -3,7 +3,7 @@
 > **Read [`FLYWHEEL.md`](./FLYWHEEL.md) first.** It is how you ship a change end to end in this repo (code → PR → green CI → `[RELEASE]` → PyPI → cloud → verified live) and the non-negotiable "done" bar. Then [`CLAUDE.md`](./CLAUDE.md) for the architecture deep-dive. This file is the short "what to do"; those two carry the detail.
 
 ## Quick context
-ClawMetry is an open-source, real-time observability dashboard for OpenClaw (and other) AI agents. `pip install clawmetry && clawmetry` — zero config, read-only by default. It's a Flask app with an embedded, no-build vanilla-JS frontend; a sync daemon ingests filesystem/gateway/OTLP data into a local **DuckDB** store, and the app reads from DuckDB to serve the UI.
+ClawMetry is an open-source, real-time observability dashboard for OpenClaw (and other) AI agents. `pip install clawmetry && clawmetry` — zero config, observation by default. It's a Flask app with an embedded, no-build vanilla-JS frontend; a sync daemon ingests filesystem/gateway/OTLP data into a local **DuckDB** store, and the app reads from DuckDB to serve the UI.
 
 ## Where new code goes (open-core split)
 
@@ -25,7 +25,7 @@ Quick chooser:
 - **Per-feature route modules.** New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. The old "single file" rule is dead — it broke down at ~33K lines and caused constant PR conflicts. Shared helpers still in `dashboard.py` are reached via late `import dashboard as _d`.
 - **No build step, no npm.** The live frontend is `clawmetry/static/css|js/*` + `clawmetry/templates/tabs/*.html`, vanilla JS only. (`dashboard.py` defines `DASHBOARD_HTML` twice; the second wins and loads the static/template files — the inline `<style>`/HTML earlier is dead code.) No React/Vue/webpack/vite.
 - **Minimal dependencies.** Flask + waitress + cryptography + duckdb. Don't add heavy libraries.
-- **Read-only by default.** ClawMetry observes; it doesn't modify agent behavior (the exceptions are cron management and enforcement, which go through the gateway RPC or OpenClaw's own credentials, never a new write path).
+- **Control plane that defaults to observation.** ClawMetry is NOT read-only: it already kills sessions on approval denial (`clawmetry/approvals.py`), signals whole descendant process trees (`clawmetry/process_control.py`), pauses via HITL → proxy `503` (`routes/hitl.py`), blocks and reroutes at the enforcement proxy (`clawmetry/proxy.py`), and does cron CRUD. Never reject a feature as "we're read-only". The live rule is **no surprise writes** — user-initiated or policy-declared, session-scoped, reversible, audited — plus **fail open on entitlement, closed on policy**: a licence error must never stop a customer's agent. (CLAUDE.md Conventions.)
 - **Auto-detect everything.** Users should never have to configure anything manually.
 - **Never crash on bad input.** Graceful fallbacks plus a logged warning, always.
 - **Performance is a cost.** At $9/node/mo, every poller and fetch is money: cache + dedup shared fetches, scope pollers to the active tab. (FLYWHEEL.md ⚡.)

@@ -577,6 +577,12 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # "Needs you" state. The hook receiver (routes/hooks.py) runs in the
+    # DASHBOARD process while the daemon owns the writer lock, so these must
+    # be proxied — an unlisted method is a silent no-op and the badge would
+    # simply never appear.
+    "set_session_attention",
+    "clear_session_attention",
     # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
     # in the DASHBOARD process when /api/inventory composes locally; without
     # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
@@ -606,6 +612,14 @@ _DAEMON_METHODS = frozenset({
     # gateway RPC (down), surfacing as the same 6 s timeout the PR was
     # supposed to fix. Adding both here closes the loop.
     "query_alert_rules",
+    # Founder 2026-08-15: locally-created alert rules live in the fleet
+    # SQLite DB, but ``sync._evaluate_alerts_local`` only ever reads DuckDB.
+    # Nothing bridged the two (``ingest_alert_rule`` was cloud-relay-only),
+    # so a rule created from the Alerts tab on a no-cloud node was evaluated
+    # by nobody and sat on "never triggered" forever. routes/alerts.py now
+    # mirrors on write/update/delete through these two.
+    "ingest_alert_rule",
+    "delete_alert_rule",
     "query_channel_config_status",
     "query_crons",
     # Issue #605 DuckDB follow-up: per-job cron-run timeline. Read by

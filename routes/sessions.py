@@ -594,6 +594,23 @@ def _fetch_sessions_table_rows(limit: int = 200):
         return None
 
 
+def _project_name(cwd: str) -> str:
+    """Human-facing project label for a working directory.
+
+    The sessions list is read by people who have never opened an
+    observability tool, so a row should say ``clawmetry``, not
+    ``/Users/someone/projects/clawmetry`` and certainly not a UUID. Returns
+    the last path segment, ignoring trailing slashes; empty string when we
+    have no directory, so callers can fall back without a None check.
+    """
+    if not cwd or not isinstance(cwd, str):
+        return ""
+    trimmed = cwd.replace("\\", "/").rstrip("/")
+    if not trimmed:
+        return ""
+    return trimmed.rsplit("/", 1)[-1]
+
+
 def _try_local_store_sessions():
     """Read sessions directly from the local DuckDB. Returns the same
     response shape as the legacy gateway-backed endpoint (`{"sessions":
@@ -636,6 +653,20 @@ def _try_local_store_sessions():
             # spoken for by other adapters, which fill it with cwd paths and
             # provider names (ollama, openai, …) that are not surfaces.
             "surface":        meta.get("surface", ""),
+            # Where the session ran. Falls back to metadata for adapters that
+            # tuck it in the blob rather than the typed column, so a row
+            # ingested before the columns existed still shows a project name
+            # instead of a bare UUID.
+            "cwd":            r.get("cwd") or meta.get("cwd", ""),
+            "git_branch":     r.get("git_branch") or meta.get("gitBranch", ""),
+            "project":        _project_name(r.get("cwd") or meta.get("cwd", "")),
+            # "Needs you" badge. Empty string means nobody is waiting.
+            # attention_signal is deliberately exposed so the UI can say
+            # "looks like it's waiting" for an inference versus "waiting"
+            # for a hook-confirmed one, rather than overclaiming.
+            "attention":        r.get("attention_state") or "",
+            "attention_signal": r.get("attention_signal") or "",
+            "attention_tool":   r.get("attention_tool") or "",
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
@@ -3944,7 +3975,41 @@ def _try_local_store_transcripts():
             "started": started_ms,
         })
     _fill_family_titles(transcripts)
+    _fill_attention(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
+
+
+def _fill_attention(transcripts):
+    """Attach the "needs you" state to each transcript row.
+
+    ``query_sessions`` aggregates the EVENTS table, so it never carries the
+    attention columns the daemon stamps onto the typed ``sessions`` table --
+    same gap ``_fill_family_titles`` exists to close for titles. One extra
+    read, mapped by session id.
+
+    Best-effort by design: a row without attention simply renders no badge,
+    which is the correct quiet default. Never fails the request.
+    """
+    try:
+        rows = _ls_call("query_sessions_table", limit=300) or []
+    except Exception:
+        return
+    state = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if sid and r.get("attention_state"):
+            state[sid] = r
+    if not state:
+        return
+    for t in transcripts:
+        r = state.get(t.get("id") or "")
+        if not r:
+            continue
+        t["attention"] = r.get("attention_state") or ""
+        # "hook" = the runtime told us. "inferred" = we deduced it. The UI
+        # words these differently, so the provenance has to survive the hop.
+        t["attention_signal"] = r.get("attention_signal") or "inferred"
+        t["attention_tool"] = r.get("attention_tool") or ""
 
 
 def _fill_family_titles(transcripts):

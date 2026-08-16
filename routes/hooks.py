@@ -214,14 +214,15 @@ def _audit(result: str, tool_name: str, meta: dict) -> None:
 def _page_human(approval: dict) -> None:
     """Fan the parked approval out to this runtime's channels.
 
-    Non-blocking (approval_notify spawns the senders on a thread) and
+    Non-blocking (the delivering handler fans out on its own thread) and
     never raises: the human notification is an enhancement on top of a row
     that is already parked, so a broken webhook must not turn into a
-    stalled agent.
+    stalled agent. Nothing registered (no paid package) is not an error —
+    the row is still in the queue and the Approvals tab still renders it.
     """
     try:
-        from clawmetry import approval_notify as _an
-        _an.notify_pending(approval)
+        from clawmetry import approval_events as _ae
+        _ae.notify_pending(approval)
     except Exception:
         pass
 
@@ -531,6 +532,71 @@ def _hso_mirror(decision: str) -> dict:
                                    "decision": decision}}
 
 
+def _attention_write_async(**kwargs) -> None:
+    """Write attention state on a daemon thread, off the request path.
+
+    NOT merely defensive. ``_ls_write`` goes through the daemon proxy, whose
+    per-attempt timeouts are 5s then 9s — so a contended DuckDB could add up
+    to fourteen seconds before this handler even reaches its first gate. On a
+    permission hook that is fourteen seconds of an agent sitting still,
+    waiting on a cosmetic badge. Nothing about showing a badge justifies
+    delaying the decision the badge is describing.
+
+    Fire and forget: the caller never waits, and a failure is invisible to
+    the runtime by design.
+    """
+    import threading
+
+    def _run():
+        try:
+            _ls_write(**kwargs)
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True,
+                         name="clawmetry-attention-write").start()
+    except Exception:
+        pass
+
+
+def _mark_waiting(session_id: str, tool_name: str) -> None:
+    """Flag a session as waiting on a human, with ``signal='hook'``.
+
+    Ground truth: the runtime fired its permission hook, so we are not
+    inferring. That matters downstream — the daemon's inference pass cannot
+    see a permission dialog (it leaves no transcript event), and deliberately
+    refuses to clear hook rows for that reason.
+
+    Off-thread and silent on failure. This sits on the agent's critical path;
+    a badge is never worth stalling a turn over.
+    """
+    if not session_id:
+        return
+    _attention_write_async(
+        method_name="set_session_attention",
+        session_id=f"claude_code:{session_id}",
+        agent_type="claude_code",
+        state="waiting_approval", signal="hook",
+        tool=(tool_name or "")[:80])
+
+
+def _clear_waiting(full_session_id: str) -> None:
+    """The human answered — drop the badge. ``full_session_id`` is the
+    already-prefixed id as stored (``claude_code:<uuid>``).
+
+    Whatever sets a hook row owns clearing it; the daemon's inference pass
+    deliberately will not. NOT called when we answer ``ask``: that hands the
+    decision back to Claude Code's own prompt, so the human is still being
+    asked and the badge is still true.
+    """
+    if not full_session_id:
+        return
+    _attention_write_async(method_name="clear_session_attention",
+                           session_id=str(full_session_id),
+                           agent_type="claude_code")
+
+
 def _mirror_answer(decision: str, approval_id: "str | None" = None,
                    note: str = ""):
     body = _hso_mirror(decision)
@@ -556,20 +622,40 @@ def api_hook_claude_code_permissionrequest():
     tool_use_id = str(body.get("tool_use_id") or "").strip()
     resume_id = str(body.get("approval_id") or "").strip()
 
+    # Stamp the "needs you" badge FIRST, before every gate below.
+    #
+    # The fact that this hook fired IS the ground truth that Claude Code has a
+    # prompt open — true whether or not the operator turned mirroring on, and
+    # whether or not this node is entitled to ANSWER the prompt. Being TOLD an
+    # approval is waiting is the free half; answering it remotely is the paid
+    # half (see the entitlement note below). Gating the badge on the paid
+    # feature would hide the problem from exactly the users most likely to be
+    # surprised by it.
+    #
+    # Deliberately best-effort and never in the request's failure path: an
+    # agent must never stall because a badge could not be written.
+    _mark_waiting(session_id, tool_name)
+
+    # Answering a runtime's own permission prompt remotely is the Pro half
+    # of approvals (Starter is TOLD an approval is waiting; Pro answers it
+    # without walking back to the terminal). Unentitled → "ask", which is
+    # that terminal prompt: the downgrade path is the pre-mirror behaviour,
+    # never a call left hanging.
     try:
         from clawmetry import entitlements as _ent
-        entitled = _ent.get_entitlement().allows_feature("approval_queue")
+        entitled = _ent.get_entitlement().allows_feature("approval_mirror")
     except Exception:
         entitled = True
     if not entitled:
-        return _mirror_answer("ask", note="approval queue not entitled")
+        return _mirror_answer("ask", note="phone approvals not entitled")
 
     try:
-        from clawmetry import approval_notify as _an
-        from clawmetry import claude_code_gate as _gate
-        if not _an.mirror_enabled("claude_code"):
+        from clawmetry import approval_events as _ae
+        if not _ae.mirror_wanted("claude_code"):
+            # Also the answer with no paid package installed: nothing
+            # registered → False → the runtime's own prompt, unchanged.
             return _mirror_answer("ask", note="mirroring is off")
-        window_s = _gate.mirror_timeout_s()
+        window_s = _ae.mirror_window_s("claude_code")
     except Exception:
         return _mirror_answer("ask", note="routing config unavailable")
 
@@ -654,10 +740,13 @@ def _wait_mirror(approval_id: str, row: dict, tool_name: str):
         if status in ("approved", "auto_approved"):
             _audit("approved", tool_name, {"approval_id": approval_id,
                                            "kind": "permission_prompt"})
+            # Decided — the prompt is closed, so the badge is no longer true.
+            _clear_waiting(row.get("requestor_session_id") or "")
             return _mirror_answer("allow", approval_id)
         if status in ("denied", "expired"):
             _audit("denied", tool_name, {"approval_id": approval_id,
                                          "kind": "permission_prompt"})
+            _clear_waiting(row.get("requestor_session_id") or "")
             return _mirror_answer("deny", approval_id)
         if status == "timeout":
             break

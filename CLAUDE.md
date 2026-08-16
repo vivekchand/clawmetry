@@ -3,7 +3,7 @@
 > **Read [`FLYWHEEL.md`](./FLYWHEEL.md) first.** It is how you ship a change end to end here (code → PR → green CI → `[RELEASE]` → PyPI → cloud → verified live) and the non-negotiable "done" bar. This file is the architecture reference; FLYWHEEL.md is the shipping loop.
 
 ## What is this?
-ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. `pip install clawmetry && clawmetry` — that's it. Zero config, read-only by default.
+ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. `pip install clawmetry && clawmetry` — that's it. Zero config, observation by default.
 
 ## Architecture
 See `ARCHITECTURE.md` for the full deep dive. TL;DR:
@@ -11,7 +11,7 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 - **Per-feature route modules** under `routes/` — `routes/sessions.py`, `routes/usage.py`, etc. — each owns one Blueprint and the endpoints registered on it. New endpoints land in their feature's module so parallel PRs don't stomp on each other.
 - **Shared helpers** stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d`. (Helpers will migrate to `helpers/` over time.)
 - **Zero config** — auto-detects OpenClaw workspace, gateway, sessions, logs
-- **Read-only** — observes OpenClaw, never modifies it (except cron management via gateway RPC)
+- **Observation by default, control when asked** — see "Control plane" below. Reads never require permission; writes are always user-initiated or policy-declared
 - **DuckDB-first** — the sync daemon ingests filesystem/gateway/OTLP into a local **DuckDB** store (`clawmetry/local_store.py`; the daemon owns the writer lock). Request handlers read from DuckDB via `routes/local_query.py`, **not** raw files — reading raw JSONL/logs inside a handler works locally but returns empty in cloud (the container has no `~/.openclaw`). Optional `history.py` adds a separate SQLite time-series.
 - **Three ingest sources** (all land in DuckDB): filesystem (JSONL/logs), gateway WebSocket (JSON-RPC), optional OTLP receiver
 
@@ -176,7 +176,9 @@ DEBUG=1                                # Enable debug logging
 - **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
 - **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`clawmetry/static/css/dashboard.css`, `clawmetry/static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
-- **Read-only by default** — ClawMetry observes, it doesn't modify agent behavior (except cron management via gateway RPC).
+- **Control plane that defaults to observation** — ClawMetry is NOT read-only, and hasn't been for a long time. It already kills, pauses, blocks and reroutes running agents through five surfaces: approval denial → session kill (`clawmetry/approvals.py`), POSIX signals across the agent's descendant tree (`clawmetry/process_control.py`), HITL pause → proxy `503` (`routes/hitl.py`), the enforcement proxy's budget block / loop detection / model routing (`clawmetry/proxy.py`), and cron CRUD via gateway RPC (`routes/crons.py`). Do NOT reject a feature because "we're read-only" — that rule is retired.
+  The rule that replaces it is **no surprise writes**: every write is (a) user-initiated or declared in a policy the user wrote, (b) scoped to a single session, (c) reversible where physics allows, and (d) attributed in the approvals audit table. Reads need no permission; writes need all four.
+  **Fail open on entitlement, closed on policy.** If a licence/entitlement lookup errors or is ambiguous, the agent KEEPS RUNNING — only a policy the user actually declared may block or kill. A billing bug must never stop a customer's agent. (`clawmetry/entitlements.py` already defaults to GRACE, where every `allows_*` returns `True`; new control features inherit that posture and assert it in a test.)
 - **Auto-detect everything** — users should never need to configure anything manually.
 - **Never crash on bad input** — graceful fallbacks for missing data, log warnings but continue.
 - **Never starve the heartbeat** — the cloud relay drains and answers `pending_queries` (Brain time-window fetches, transcript reads, approvals) only when the daemon heart-beats, and the heartbeat fires at the end of a main-loop iteration. Any ingest pass that can run long (deep `runtime_backfill`, first-run ingest of hundreds of sessions) must call `_ingest_keepalive_heartbeat(config)` between items, or every hosted relay read sits on `relay_pending` until the browser gives up (2026-07-30 Brain-window RCA: a 465-session backfill blocked heartbeats for ~2m40s).
