@@ -374,8 +374,18 @@ def _assistant_msg(ts_iso, text, *, session_id="loop-sess", tool_uses=()):
     }
 
 
-def test_classify_cognitive_loop_when_assistant_repeats_self():
-    """5 near-identical 'validate the results' messages 60s apart -> loop."""
+def test_classify_cognitive_loop_needs_more_than_repeated_text():
+    """Repeated assistant text ALONE is no longer a loop verdict.
+
+    Rewritten 2026-08-15. This test used to assert that five near-identical
+    messages were sufficient. That rule is exactly what made the classifier
+    flag real, productive sessions: its only false-positive guard read tool
+    use from the Anthropic block-list shape, so on every family runtime it
+    parsed nothing and never fired. Measured over a real week the resulting
+    label was uncorrelated with the only ground truth available. Text
+    repetition is now a supporting hint that needs corroboration from an
+    evidence-bearing signal.
+    """
     from clawmetry.outcome_classifier import (
         classify_session,
         OUTCOME_COGNITIVE_LOOP,
@@ -389,8 +399,43 @@ def test_classify_cognitive_loop_when_assistant_repeats_self():
         events.append(_assistant_msg(
             ts, "I should validate the results again to be sure."
         ))
-    outcome, conf = classify_session(events, {}, now=now)
-    assert outcome == OUTCOME_COGNITIVE_LOOP
+    outcome, _conf = classify_session(events, {}, now=now)
+    assert outcome != OUTCOME_COGNITIVE_LOOP, (
+        "repeated prose with no corroborating evidence must not be a loop"
+    )
+
+
+def test_classify_cognitive_loop_with_corroborating_evidence():
+    """Repeated text PLUS repeated failing identical tool calls -> loop.
+
+    The other half of the contract: the label must still fire on a session
+    that is genuinely stuck, or the guard has just deleted the signal.
+    """
+    from clawmetry.outcome_classifier import (
+        classify_session,
+        OUTCOME_COGNITIVE_LOOP,
+    )
+    from datetime import datetime, timezone
+
+    now = time.time()
+    events = []
+    for i in range(9):
+        ts = datetime.fromtimestamp(now - (300 - 20 * i), tz=timezone.utc).isoformat()
+        events.append({
+            "event_type": "tool_call", "ts": ts,
+            "data": {"role": "assistant", "content": "",
+                     "tool_calls": [{"name": "Edit",
+                                     "input": {"file_path": "/a.py", "old": "x"}}],
+                     "tool_name": "Edit"},
+        })
+        events.append({
+            "event_type": "tool_result", "ts": ts,
+            "data": {"role": "user", "content": "failed to apply",
+                     "extra": {"isError": True}},
+        })
+        events.append(_assistant_msg(ts, "Retrying the same edit to be sure."))
+    outcome, conf = classify_session(events, {"status": "ended"}, now=now)
+    assert outcome == OUTCOME_COGNITIVE_LOOP, outcome
     assert 0.5 < conf <= 1.0
 
 

@@ -12708,6 +12708,98 @@ def _session_cost_intel(s) -> dict:
     return out
 
 
+def _adapter_events_to_rows(events, runtime: str) -> list:
+    """Adapter event objects → the dict shape ``quality_signals`` reads.
+
+    Mirrors the conversion further down this file that builds the DuckDB event
+    rows, so the assessment sees EXACTLY what gets persisted — not a
+    parallel, subtly-different view of the session. (A second, drifting
+    interpretation of the same events is how the previous Quality surface
+    ended up blind to family-runtime tool calls in the first place.)
+    """
+    out = []
+    for e in events or []:
+        data = {
+            "role":     getattr(e, "role", "") or "",
+            "content":  getattr(e, "content", "") or "",
+            "_runtime": runtime,
+        }
+        tcs = getattr(e, "tool_calls", None)
+        if tcs:
+            data["tool_calls"] = tcs
+        tn = getattr(e, "tool_name", "") or ""
+        if tn:
+            data["tool_name"] = tn
+        extra = getattr(e, "extra", None)
+        if isinstance(extra, dict) and extra:
+            data["extra"] = extra
+        out.append({
+            "event_type": getattr(e, "type", "") or "message",
+            "ts":         _epoch_to_iso(getattr(e, "ts", None)),
+            "data":       data,
+            "session_id": getattr(e, "session_id", "") or "",
+        })
+    return out
+
+
+# Per-runtime thresholds are calibrated from that runtime's own recent history
+# and change slowly, so we cache them for the life of an ingest pass rather
+# than re-reading 30 days of sessions once per graded session.
+_QUALITY_THRESHOLD_CACHE: dict = {}
+_QUALITY_THRESHOLD_CACHE_TS: dict = {}
+_QUALITY_THRESHOLD_TTL_SEC = 900
+
+
+def _quality_thresholds_for(runtime: str, store) -> dict:
+    """Thresholds for one runtime, calibrated off its own 30d history here.
+
+    Falls back to documented cold-start defaults on any read failure — a
+    calibration miss must never turn into a missing or invented verdict.
+    """
+    from clawmetry import quality_thresholds as _qt
+    now = time.time()
+    ts = _QUALITY_THRESHOLD_CACHE_TS.get(runtime, 0)
+    if runtime in _QUALITY_THRESHOLD_CACHE and (now - ts) < _QUALITY_THRESHOLD_TTL_SEC:
+        return _QUALITY_THRESHOLD_CACHE[runtime]
+    try:
+        since = _iso_utc_days_ago(30)
+        rows = store.query_quality_sessions(
+            runtime=runtime, since=since, limit=1500) or []
+        th = _qt.calibrate(rows, runtime=runtime)
+    except Exception:
+        th = dict(_qt.COLD_START)
+    _QUALITY_THRESHOLD_CACHE[runtime] = th
+    _QUALITY_THRESHOLD_CACHE_TS[runtime] = now
+    return th
+
+
+def _iso_utc_days_ago(days: int) -> str:
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    return (_dt.now(_tz.utc) - _td(days=days)).isoformat()
+
+
+def _session_quality(events, *, runtime: str, session_id: str,
+                     thresholds: dict) -> dict:
+    """Assess one session and return the compact block stored in metadata.
+
+    Stores the verdicts WITH their exhibits — the evidence is the product, and
+    a verdict that reaches the UI without it is exactly the defect this
+    rebuild exists to remove. Exhibit lists are already capped inside
+    ``Verdict.as_dict`` so the metadata blob stays small.
+    """
+    from clawmetry.quality_signals import assess_session
+    rows = _adapter_events_to_rows(events, runtime)
+    a = assess_session(rows, runtime=runtime, session_id=session_id,
+                       thresholds=thresholds)
+    d = a.as_dict()
+    # Drop the capability probe's raw event-kind list from the stored blob;
+    # the live /api/quality/capabilities endpoint reports that, and it would
+    # otherwise repeat on every session row in the snapshot.
+    d.pop("capabilities", None)
+    d["assessed_at"] = int(time.time())
+    return d
+
+
 def _session_tool_health(events) -> dict:
     """Per-session tool failure-rate from the adapter events: how many tool
     results came back as a REAL (non-benign) error. A tool that keeps failing
@@ -13078,6 +13170,19 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
                 metadata.update(_idle)
+                # Quality verdicts (2026-08-15 rebuild). Graded HERE, off the
+                # same events already in hand, and persisted into metadata so
+                # the Quality tab stays a pure DuckDB read — replaying events
+                # per request would be tens of thousands of rows per tab load.
+                # Best-effort: grading must never block ingest.
+                try:
+                    metadata["quality"] = _session_quality(
+                        _events, runtime=runtime, session_id=ns_id,
+                        thresholds=_quality_thresholds_for(runtime, store),
+                    )
+                except Exception:
+                    log.debug("quality assessment failed (%s)", ns_id,
+                              exc_info=True)
                 # Compression-potential meter (#2838): how much tool-output
                 # context is recoverable without changing answers. Aggregates
                 # only; raw content never leaves the daemon.
