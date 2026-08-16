@@ -37,7 +37,6 @@ from not being registered. A handler that means "no" returns ``False``.
 from __future__ import annotations
 
 import logging
-import threading
 
 from clawmetry import extensions
 
@@ -147,61 +146,15 @@ def mirror_window_s(runtime: str = "claude_code") -> int:
         return DEFAULT_MIRROR_WINDOW_S
 
 
-# ── transitional: the impl is still in this package ────────────────────────
-# TODO(open-core): delete this block in the PR that moves
-# clawmetry/approval_notify.py into clawmetry-pro. Until then the OSS
-# implementation registers itself as the handler so this seam is a pure
-# indirection with no behaviour change — the point of landing it first.
+# ── no local implementation ────────────────────────────────────────────────
+# The delivery impl lives in clawmetry-pro and attaches by registering
+# handlers at plugin-load time. Nothing to do here: with no handler
+# registered every function above returns its safe default, which is the
+# correct behaviour for an install without the paid package.
 #
-# Registration is LAZY (first call) rather than at import, so a paid
-# handler registered at plugin-load time is always earlier in the handler
-# list and therefore wins the first-non-None race.
-
-_local_lock = threading.Lock()
-_local_registered = False
-
+# Kept as a no-op (rather than deleting the call sites) so this module is
+# the ONLY place that would ever need to know about a local implementation
+# again — e.g. if a future OSS-side default delivery is added.
 
 def _ensure_local_handlers() -> None:
-    global _local_registered
-    if _local_registered:
-        return
-    with _local_lock:
-        if _local_registered:
-            return
-        _local_registered = True
-        try:
-            from clawmetry import approval_notify as _an
-        except Exception:
-            return  # impl already moved out — paid handlers own this now
-        try:
-            extensions.register(
-                APPROVAL_PENDING,
-                lambda p: _an.notify_pending(p) and None)
-            extensions.register(
-                APPROVAL_RESOLVED,
-                lambda p: _an.notify_resolved(p.get("id", ""),
-                                              p.get("decision", ""),
-                                              p.get("resolver", "")))
-            extensions.register(
-                MIRROR_WANTED,
-                lambda p: bool(_an.mirror_enabled(p.get("runtime")
-                                                  or "claude_code")))
-            extensions.register(
-                MIRROR_WINDOW,
-                lambda p: int((_an.route_for(p.get("runtime")
-                                             or "claude_code")
-                               or {}).get("mirror_timeout_s")
-                              or DEFAULT_MIRROR_WINDOW_S))
-            extensions.register(DAEMON_READY, _start_local_inbound)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("local approval handlers not registered: %s", exc)
-
-
-def _start_local_inbound(_payload: dict) -> None:
-    """Transitional: start the still-OSS inbound poller on daemon ready."""
-    try:
-        from clawmetry import approval_inbound as _ai
-        _ai.start(threading.Event())
-        logger.info("approval inbound poller started")
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("local inbound poller not started: %s", exc)
+    return None
