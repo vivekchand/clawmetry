@@ -27596,7 +27596,7 @@ function _cmRuntimeIcon(id) {
     antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
-    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋',
+    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠',
   };
   return map[id] || '•';
 }
