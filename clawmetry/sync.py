@@ -3713,17 +3713,28 @@ def _parse_v3_event(
         )
         resolution = obj.get("resolution") or obj.get("resolutionAction") or obj.get("resolution_action")
         staged_ref = obj.get("stagedRef") or obj.get("staged_ref")
+        # Cloud worker results that kept local versions (#4907): OpenClaw surfaces
+        # which paths the cloud worker preserved locally rather than overriding.
+        kept_local = (
+            obj.get("keptLocalPaths")
+            or obj.get("kept_local_paths")
+            or obj.get("cloudWorkerKeptLocal")
+            or obj.get("cloud_worker_kept_local")
+            or []
+        )
         data.update({
             "type": "workspace.conflict",
             "conflictedPaths": paths,
             "resolution": resolution,
             "stagedRef": staged_ref,
+            "keptLocalPaths": kept_local,
             "timestamp": ts,
         })
         inner.update({
             "conflictedPaths": paths,
             "resolution": resolution,
             "stagedRef": staged_ref,
+            "keptLocalPaths": kept_local,
         })
 
     else:

@@ -11,3 +11,4 @@ requests>=2.34.2
 # Install with: pip install clawmetry[otel]
 # opentelemetry-proto>=1.20.0
 # protobuf>=4.21.0
+# ci-retrigger (auto-mergeability sweep 2026-08-16)

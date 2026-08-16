@@ -51,6 +51,7 @@ from __future__ import annotations
 import glob as _glob
 import json
 import os
+import re as _re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -88,11 +89,17 @@ class RootSpec:
 
 @dataclass
 class RuntimeCatalogEntry:
-    """One supported runtime's memory + skills roots."""
+    """One supported runtime's memory + skills roots.
+
+    ``note`` explains a deliberately empty (or unusual) catalog so the UI
+    can render an honest empty state instead of a bare "nothing found"
+    (QM keeps everything in Postgres — there is nothing on disk to list).
+    """
 
     id: str
     label: str
     roots: tuple = field(default_factory=tuple)
+    note: str = ""
 
 
 def _env_root(env: str, fallback: str, subpath: str = "") -> str:
@@ -125,6 +132,221 @@ def _workspace_root() -> str:
 
 def _openclaw_home() -> str:
     return _env_root("OPENCLAW_HOME", os.path.expanduser("~/.openclaw"))
+
+
+# ── Real-project resolution ─────────────────────────────────────────────
+#
+# ``_workspace_root()`` returns the *OpenClaw* workspace, which is the right
+# project base for OpenClaw and nothing else. Every other runtime's
+# ``scope="project"`` roots used to resolve against it, so the Cursor tab
+# showed ``~/.openclaw/workspace/.cursor/rules`` (never exists) while the
+# user's real repos went unscanned — the "why is it looking in the openclaw
+# folder" report. The helpers below recover the repos the user actually
+# works in from the runtimes' own registries, and _expand_project_roots()
+# re-bases every project-scoped root over them.
+
+def _encode_seg(name: str) -> str:
+    return _re.sub(r"[^A-Za-z0-9-]", "-", name)
+
+
+def _decode_project_slug(slug: str, max_nodes: int = 400) -> Optional[str]:
+    """Resolve one Claude-style encoded-cwd slug back to a real directory.
+
+    ``/Users/x/my.repo`` is recorded as ``-Users-x-my-repo`` — every
+    non-alphanumeric character becomes ``-`` — so the encoding is LOSSY and
+    the only safe decode is to walk the filesystem, matching encoded child
+    names level by level. First full match wins (DFS over sorted children).
+    Bounded by ``max_nodes`` directory listings. Never raises.
+    """
+    if not slug or not slug.startswith("-"):
+        return None
+    budget = [max_nodes]
+
+    def walk(cur: str, rest: str) -> Optional[str]:
+        if not rest:
+            return cur
+        if budget[0] <= 0:
+            return None
+        budget[0] -= 1
+        try:
+            children = sorted(os.listdir(cur))
+        except OSError:
+            return None
+        for child in children:
+            full = os.path.join(cur, child)
+            if not os.path.isdir(full):
+                continue
+            # Accept both observed encodings: everything-non-alnum → "-"
+            # (Claude Code) and the variant that preserves underscores.
+            encs = {_encode_seg(child),
+                    _re.sub(r"[^A-Za-z0-9_-]", "-", child)}
+            for enc in encs:
+                if rest == enc:
+                    return full
+                if rest.startswith(enc + "-"):
+                    hit = walk(full, rest[len(enc) + 1:])
+                    if hit:
+                        return hit
+        return None
+
+    try:
+        return walk(os.path.abspath(os.sep), slug[1:])
+    except Exception:
+        return None
+
+
+def _slug_project_dirs(projects_root: str, limit: int = 4) -> list:
+    """Most-recently-used real project dirs from a slug registry
+    (``~/.claude/projects`` / ``~/.qwen/projects``). Never raises."""
+    out: list = []
+    try:
+        slugs = sorted(
+            ((os.path.getmtime(os.path.join(projects_root, s)), s)
+             for s in os.listdir(projects_root)
+             if os.path.isdir(os.path.join(projects_root, s))),
+            reverse=True)
+    except OSError:
+        return out
+    for _, slug in slugs:
+        real = _decode_project_slug(slug)
+        if real and real not in out:
+            out.append(real)
+            if len(out) >= limit:
+                break
+    return out
+
+
+# (path, mtime) -> parsed project list, so a request doesn't re-parse the
+# ~100KB ~/.claude.json on every catalog build.
+_REGISTRY_CACHE: dict = {}
+
+
+def _claude_registry_projects(limit: int = 8) -> list:
+    """Absolute project paths from Claude Code's ``~/.claude.json`` registry.
+
+    The registry's ``projects`` map is keyed by the real cwd (no lossy
+    encoding), which makes it the best available answer to "which repos does
+    this user actually work in" — good enough to *look in* for any runtime,
+    because a candidate repo only ever surfaces when the runtime's own file
+    (``.cursor/rules``, ``AGENTS.md``, …) actually exists there.
+    """
+    reg = os.path.expanduser("~/.claude.json")
+    try:
+        mtime = os.path.getmtime(reg)
+    except OSError:
+        return []
+    key = (reg, mtime)
+    cached = _REGISTRY_CACHE.get(key)
+    if cached is None:
+        try:
+            with open(reg, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            cached = [p for p in (data.get("projects") or {})
+                      if isinstance(p, str) and os.path.isabs(p)]
+        except Exception:
+            cached = []
+        _REGISTRY_CACHE.clear()
+        _REGISTRY_CACHE[key] = cached
+    return [p for p in cached if os.path.isdir(p)][:limit]
+
+
+def _candidate_project_dirs(ws: str, limit: int = 10) -> list:
+    """Real project dirs to re-base project-scoped roots over.
+
+    Sources: Claude Code's path registry, Qwen Code's slug registry, and the
+    process cwd. ``ws`` (the OpenClaw workspace, already covered by the
+    primary RootSpecs) is excluded. Never raises.
+    """
+    out: list = []
+    seen = {os.path.abspath(ws)}
+
+    def add(p):
+        ap = os.path.abspath(p)
+        if ap not in seen and os.path.isdir(ap):
+            seen.add(ap)
+            out.append(ap)
+
+    try:
+        add(os.getcwd())
+    except OSError:
+        pass
+    # AIDER_HISTORY_DIRS is ClawMetry's own documented aider override
+    # (colon-separated project dirs) — the session ingest honours it, so
+    # the file browser must look in the same repos.
+    for p in (os.environ.get("AIDER_HISTORY_DIRS") or "").split(os.pathsep):
+        if p.strip():
+            add(os.path.expanduser(p.strip()))
+    for p in _claude_registry_projects():
+        add(p)
+    for p in _slug_project_dirs(os.path.expanduser("~/.qwen/projects")):
+        add(p)
+    return out[:limit]
+
+
+def _expand_project_roots(catalog: list, ws: str) -> list:
+    """Clone each project-scoped root over every real project dir where the
+    cloned path exists.
+
+    The ws-based primary spec is kept (it still shows "we looked here" for
+    the workspace), and a clone is only added when the target actually
+    exists — so runtimes the user never touched in a repo stay exactly as
+    quiet as before, while real per-repo files finally surface.
+    """
+    candidates = _candidate_project_dirs(ws)
+    if not candidates:
+        return catalog
+    ws_abs = os.path.abspath(ws)
+    for entry in catalog:
+        extra: list = []
+        for spec in entry.roots:
+            if spec.scope != "project":
+                continue
+            root = os.path.abspath(spec.expanded_root())
+            if root != ws_abs and not root.startswith(ws_abs + os.sep):
+                continue
+            rel = os.path.relpath(root, ws_abs)
+            for cand in candidates:
+                clone = os.path.normpath(os.path.join(cand, rel))
+                if not os.path.exists(clone):
+                    continue
+                base = spec.label or os.path.basename(root)
+                extra.append(RootSpec(
+                    spec.category, clone, spec.include_globs,
+                    "%s — %s" % (base, os.path.basename(cand)),
+                    "project", spec.max_depth,
+                ))
+        if extra:
+            entry.roots = tuple(entry.roots) + tuple(extra)
+    return catalog
+
+
+def _nanoclaw_checkout() -> str:
+    """NanoClaw keeps everything CHECKOUT-relative (no ~/.nanoclaw, no env
+    in the vendor tree — see docs/PRD_NANOCLAW.md: data dir is
+    cwd-relative). Mirror the pro adapter's discovery: explicit
+    CLAWMETRY_NANOCLAW_DIR, then cwd, then common checkout globs. Returns
+    the first candidate that looks like a NanoClaw checkout, else the env /
+    first-glob fallback so the tab can still render the paths it tried.
+    """
+    def looks_like(d: str) -> bool:
+        return (os.path.isdir(os.path.join(d, "groups"))
+                or os.path.isdir(os.path.join(d, ".claude", "skills")))
+
+    env = os.environ.get("CLAWMETRY_NANOCLAW_DIR")
+    if env:
+        return os.path.expanduser(env)
+    try:
+        cwd = os.getcwd()
+        if looks_like(cwd):
+            return cwd
+    except OSError:
+        pass
+    for pat in ("~/nanoclaw*", "~/projects/nanoclaw*", "~/src/nanoclaw*",
+                "~/code/nanoclaw*", "~/dev/nanoclaw*"):
+        for hit in sorted(_glob.glob(os.path.expanduser(pat))):
+            if looks_like(hit):
+                return hit
+    return os.path.expanduser("~/nanoclaw")
 
 
 def _claude_plugin_skill_roots(claude_home: str) -> list:
@@ -206,8 +428,11 @@ def _catalog() -> list:
                      label="Plugin skills", scope="global"),
             RootSpec("skills", os.path.join(ws, "skills"),
                      label="Workspace skills", scope="project"),
+            # Globs matter here: agents/<id>/sessions/*.jsonl lives at depth
+            # 2, so an unfiltered walk lists every session transcript as a
+            # "sub-agent" and re-lists agents/main/memory/*.md.
             RootSpec("agents", os.path.join(oc_home, "agents"),
-                     label="Sub-agents", scope="global", max_depth=2),
+                     ("*.md", "*.json"), "Sub-agents", "global", max_depth=2),
             RootSpec("hooks", os.path.join(oc_home, "openclaw.json"),
                      label="Config", scope="global"),
         ),
@@ -226,9 +451,12 @@ def _catalog() -> list:
                      label="Project CLAUDE.local.md", scope="project"),
             RootSpec("memory", os.path.join(ws, ".claude", "CLAUDE.md"),
                      label="Project .claude/CLAUDE.md", scope="project"),
+            # max_depth=2: the memory files sit at <slug>/memory/*.md and
+            # <slug>/MEMORY.md; anything deeper is session-transcript UUID
+            # dirs the walk has no business descending.
             RootSpec("memory", os.path.join(claude_home, "projects"),
                      ("**/memory/*.md", "**/MEMORY.md"),
-                     "Per-project auto-memory", "global"),
+                     "Per-project auto-memory", "global", max_depth=2),
             RootSpec("skills", os.path.join(claude_home, "skills"),
                      label="Global skills", scope="global"),
             RootSpec("skills", os.path.join(ws, ".claude", "skills"),
@@ -248,6 +476,8 @@ def _catalog() -> list:
                      label="Global hooks dir", scope="global"),
             RootSpec("hooks", os.path.join(claude_home, "settings.json"),
                      label="Global settings.json", scope="global"),
+            RootSpec("hooks", os.path.join(claude_home, "settings.local.json"),
+                     label="Global settings.local.json", scope="global"),
             RootSpec("hooks", os.path.join(ws, ".claude", "settings.json"),
                      label="Project settings.json", scope="project"),
             RootSpec("hooks", os.path.join(ws, ".claude", "settings.local.json"),
@@ -270,16 +500,28 @@ def _catalog() -> list:
                      label=".agents.md", scope="project"),
             RootSpec("memory", os.path.join(ws, "TEAM_GUIDE.md"),
                      label="TEAM_GUIDE.md", scope="project"),
+            RootSpec("memory", os.path.join(codex_home, "memories"),
+                     ("*.md",), "Auto-memories", "global"),
+            RootSpec("skills", os.path.join(codex_home, "skills"),
+                     label="User skills", scope="global"),
+            # ``.system`` is dot-prefixed, so the walk of skills/ above never
+            # descends into it — the 5 built-ins (imagegen, skill-creator, …)
+            # need their own root.
+            RootSpec("skills", os.path.join(codex_home, "skills", ".system"),
+                     label="Built-in skills", scope="global"),
             RootSpec("commands", os.path.join(codex_home, "prompts"),
                      ("*.md",), "Custom prompts", "global"),
             RootSpec("hooks", os.path.join(codex_home, "config.toml"),
                      label="Global config.toml", scope="global"),
+            RootSpec("hooks", os.path.join(codex_home, "hooks.json"),
+                     label="hooks.json", scope="global"),
             RootSpec("hooks", os.path.join(ws, ".codex", "config.toml"),
                      label="Project .codex/config.toml", scope="project"),
         ),
     ))
 
     # ── Cursor ──────────────────────────────────────────────────────
+    cursor_home = os.path.join(home, ".cursor")
     catalog.append(RuntimeCatalogEntry(
         id="cursor", label="Cursor",
         roots=(
@@ -287,9 +529,27 @@ def _catalog() -> list:
                      ("*.mdc", "*.md"), "Project rules", "project"),
             RootSpec("memory", os.path.join(ws, ".cursorrules"),
                      label=".cursorrules (legacy)", scope="project"),
-            RootSpec("memory", os.path.join(home, ".cursor", "rules"),
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(cursor_home, "rules"),
                      ("*.mdc", "*.md"), "Global rules", "global"),
-            RootSpec("hooks", os.path.join(home, ".cursor", "mcp.json"),
+            RootSpec("skills", os.path.join(cursor_home, "skills"),
+                     label="Global skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".cursor", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("agents", os.path.join(cursor_home, "agents"),
+                     ("*.md",), "Global sub-agents", "global"),
+            RootSpec("agents", os.path.join(ws, ".cursor", "agents"),
+                     ("*.md",), "Project sub-agents", "project"),
+            RootSpec("commands", os.path.join(cursor_home, "commands"),
+                     ("*.md",), "Global commands", "global"),
+            RootSpec("commands", os.path.join(ws, ".cursor", "commands"),
+                     ("*.md",), "Project commands", "project"),
+            RootSpec("hooks", os.path.join(cursor_home, "hooks.json"),
+                     label="Global hooks.json", scope="global"),
+            RootSpec("hooks", os.path.join(ws, ".cursor", "hooks.json"),
+                     label="Project hooks.json", scope="project"),
+            RootSpec("hooks", os.path.join(cursor_home, "mcp.json"),
                      label="Global mcp.json", scope="global"),
             RootSpec("hooks", os.path.join(ws, ".cursor", "mcp.json"),
                      label="Project mcp.json", scope="project"),
@@ -306,12 +566,26 @@ def _catalog() -> list:
                      label="Global GEMINI.md", scope="global"),
             RootSpec("memory", os.path.join(ws, "GEMINI.md"),
                      label="Project GEMINI.md", scope="project"),
-            RootSpec("memory", os.path.join(ws, ".agents", "GEMINI.md"),
-                     label="Project .agents/GEMINI.md", scope="project"),
             RootSpec("memory", os.path.join(ws, "AGENTS.md"),
                      label="Project AGENTS.md", scope="project"),
-            RootSpec("memory", os.path.join(gemini_home, "AGENTS.md"),
-                     label="Global AGENTS.md", scope="global"),
+            # Workspace rules: current default is .agents/rules, with
+            # .agent/rules (singular) kept for backward support.
+            RootSpec("memory", os.path.join(ws, ".agents", "rules"),
+                     ("*.md",), "Workspace rules", "project"),
+            RootSpec("memory", os.path.join(ws, ".agent", "rules"),
+                     ("*.md",), "Workspace rules (legacy)", "project"),
+            RootSpec("memory", os.path.join(gemini_home, "antigravity-cli", "knowledge"),
+                     label="Knowledge base (CLI)", scope="global"),
+            # Skills ship per product surface: the CLI's builtins
+            # (antigravity-cli/builtin/skills is where real installs hold
+            # e.g. agy-customizations), the CLI + IDE user dirs, and the
+            # cross-product config/skills path from Google's skills codelab.
+            RootSpec("skills", os.path.join(gemini_home, "antigravity-cli", "builtin", "skills"),
+                     label="Builtin skills (CLI)", scope="global"),
+            RootSpec("skills", os.path.join(gemini_home, "antigravity-cli", "skills"),
+                     label="Global skills (CLI)", scope="global"),
+            RootSpec("skills", os.path.join(gemini_home, "antigravity", "skills"),
+                     label="Global skills (IDE)", scope="global"),
             RootSpec("skills", os.path.join(gemini_home, "config", "skills"),
                      label="Global skills", scope="global"),
             RootSpec("skills", os.path.join(ws, ".agents", "skills"),
@@ -320,8 +594,12 @@ def _catalog() -> list:
                      label="Extensions", scope="global"),
             RootSpec("commands", os.path.join(gemini_home, "commands"),
                      ("*.toml", "*.md"), "Custom commands", "global"),
+            RootSpec("commands", os.path.join(ws, ".agents", "workflows"),
+                     ("*.md",), "Workflows", "project"),
             RootSpec("hooks", os.path.join(gemini_home, "settings.json"),
                      label="settings.json", scope="global"),
+            RootSpec("hooks", os.path.join(gemini_home, "config", "hooks.json"),
+                     label="Hooks config", scope="global"),
         ),
     ))
 
@@ -331,16 +609,25 @@ def _catalog() -> list:
         roots=(
             RootSpec("memory", os.path.join(ws, "CONVENTIONS.md"),
                      label="CONVENTIONS.md", scope="project"),
-            RootSpec("memory", os.path.join(home, ".aider.chat.history.md"),
-                     label="Chat history", scope="global"),
+            # Aider writes its history files into each project's working
+            # directory (git repo root) — there is no central ~/.aider
+            # sessions dir, so the history roots are project-scoped.
+            RootSpec("memory", os.path.join(ws, ".aider.chat.history.md"),
+                     label="Chat history", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".aider.input.history"),
+                     label="Input history", scope="project"),
             RootSpec("hooks", os.path.join(home, ".aider.conf.yml"),
                      label="Global .aider.conf.yml", scope="global"),
             RootSpec("hooks", os.path.join(ws, ".aider.conf.yml"),
                      label="Project .aider.conf.yml", scope="project"),
+            RootSpec("hooks", os.path.join(home, ".aider.model.settings.yml"),
+                     label="Global .aider.model.settings.yml", scope="global"),
             RootSpec("hooks", os.path.join(ws, ".aider.model.settings.yml"),
                      label=".aider.model.settings.yml", scope="project"),
             RootSpec("hooks", os.path.join(home, ".aider.model.metadata.json"),
                      label=".aider.model.metadata.json", scope="global"),
+            RootSpec("hooks", os.path.join(ws, ".aider.model.metadata.json"),
+                     label="Project .aider.model.metadata.json", scope="project"),
         ),
     ))
 
@@ -357,6 +644,20 @@ def _catalog() -> list:
                      label="Global skills", scope="global"),
             RootSpec("skills", os.path.join(ws, ".opencode", "skills"),
                      label="Project skills", scope="project"),
+            # opencode also discovers the cross-runtime ~/.agents/skills
+            # alias and the Claude-compat .claude/skills paths.
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
+            RootSpec("skills", os.path.join(home, ".claude", "skills"),
+                     label="Claude-compat skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".claude", "skills"),
+                     label="Project Claude-compat skills", scope="project"),
+            RootSpec("hooks", os.path.join(opencode_home, "plugins"),
+                     ("*.ts", "*.js"), "Global plugins", "global"),
+            RootSpec("hooks", os.path.join(ws, ".opencode", "plugins"),
+                     ("*.ts", "*.js"), "Project plugins", "project"),
             RootSpec("agents", os.path.join(opencode_home, "agents"),
                      ("*.md",), "Custom agents", "global"),
             RootSpec("agents", os.path.join(ws, ".opencode", "agents"),
@@ -383,10 +684,21 @@ def _catalog() -> list:
                      label="Global QWEN.md", scope="global"),
             RootSpec("memory", os.path.join(ws, "QWEN.md"),
                      label="Project QWEN.md", scope="project"),
+            # Bare-name globs match at any depth, so this single root also
+            # covers memories/pinned/*.md.
             RootSpec("memory", os.path.join(qwen_home, "memories"),
                      ("*.md",), "Auto-memories", "global"),
-            RootSpec("memory", os.path.join(qwen_home, "memories", "pinned"),
-                     ("*.md",), "Pinned memories", "global"),
+            RootSpec("memory", os.path.join(qwen_home, "projects"),
+                     ("**/memory/*.md", "**/MEMORY.md"),
+                     "Per-project memory", "global", max_depth=2),
+            RootSpec("skills", os.path.join(qwen_home, "skills"),
+                     label="Personal skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".qwen", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
             RootSpec("commands", os.path.join(qwen_home, "commands"),
                      ("*.toml", "*.md"), "Custom commands", "global"),
             RootSpec("hooks", os.path.join(qwen_home, "settings.json"),
@@ -394,10 +706,25 @@ def _catalog() -> list:
         ),
     ))
 
-    # ── GitHub Copilot (VSCode) ─────────────────────────────────────
+    # ── GitHub Copilot (VSCode + CLI) ───────────────────────────────
+    copilot_home = _env_root("CLAWMETRY_COPILOT_HOME",
+                             os.path.join(home, ".copilot"))
     catalog.append(RuntimeCatalogEntry(
         id="copilot", label="GitHub Copilot",
         roots=(
+            # The CLI's global home (~/.copilot) — before these landed the
+            # entry was 100% project-scoped, so the tab could only ever show
+            # OpenClaw-workspace paths.
+            RootSpec("skills", os.path.join(copilot_home, "skills"),
+                     label="Copilot CLI skills", scope="global"),
+            RootSpec("skills", os.path.join(copilot_home, "installed-plugins"),
+                     ("**/SKILL.md",), "Installed plugins", "global"),
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
+            RootSpec("hooks", os.path.join(copilot_home, "hooks"),
+                     ("*.json",), "Copilot hooks", "global"),
             RootSpec("memory", os.path.join(ws, ".github", "copilot-instructions.md"),
                      label="copilot-instructions.md", scope="project"),
             RootSpec("memory", os.path.join(ws, ".github", "instructions"),
@@ -428,8 +755,23 @@ def _catalog() -> list:
                      ("*.md",), "Project memory dir", "project"),
             RootSpec("hooks", os.path.join(goose_home, "config.yaml"),
                      label="config.yaml", scope="global"),
-            RootSpec("skills", os.path.join(goose_home, "extensions"),
-                     label="Extensions", scope="global"),
+            # Goose "extensions" are MCP servers declared inside config.yaml,
+            # not a directory — the old skills root at
+            # ~/.config/goose/extensions could never populate. Real skills:
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(home, ".agents", "plugins"),
+                     ("**/SKILL.md",), "Plugin skills", "global"),
+            RootSpec("skills", os.path.join(goose_home, "skills"),
+                     label="Goose skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
+            RootSpec("skills", os.path.join(ws, ".goose", "skills"),
+                     label="Project skills (legacy)", scope="project"),
+            RootSpec("commands", os.path.join(goose_home, "recipes"),
+                     ("*.yaml", "*.json"), "Recipe library", "global"),
+            RootSpec("commands", os.path.join(ws, ".goose", "recipes"),
+                     ("*.yaml", "*.json"), "Project recipes", "project"),
         ),
     ))
 
@@ -438,20 +780,24 @@ def _catalog() -> list:
     catalog.append(RuntimeCatalogEntry(
         id="nemoclaw", label="NVIDIA NemoClaw",
         roots=(
-            RootSpec("memory", os.path.join(nemo_home, "memory"),
-                     ("*.md",), "Agent memory", "global"),
-            RootSpec("memory", os.path.join(nemo_home, "agents.yaml"),
-                     label="agents.yaml", scope="global"),
+            # Only roots the nemo adapter / governance code actually read —
+            # the old memory/ + config.yaml roots existed nowhere.
+            RootSpec("agents", os.path.join(nemo_home, "agents.yaml"),
+                     label="agents.yaml (agent manifest)", scope="global"),
             RootSpec("skills", os.path.join(nemo_home, "skills"),
                      label="Installed skills", scope="global"),
             RootSpec("skills", os.path.join(nemo_home, "source", "nemoclaw-blueprint", "skills"),
                      label="Blueprint skills", scope="global"),
-            RootSpec("hooks", os.path.join(nemo_home, "config.yaml"),
-                     label="config.yaml", scope="global"),
-            RootSpec("hooks", os.path.join(nemo_home, "model-router-config.yaml"),
+            RootSpec("hooks",
+                     _env_root("NEMOCLAW_MODEL_ROUTER_CONFIG",
+                               os.path.join(nemo_home, "model-router-config.yaml")),
                      label="model-router-config.yaml", scope="global"),
+            RootSpec("hooks", os.path.join(nemo_home, "proxy-config.yaml"),
+                     label="proxy-config.yaml", scope="global"),
             RootSpec("hooks", os.path.join(nemo_home, "sandboxes.json"),
                      label="sandboxes.json", scope="global"),
+            RootSpec("hooks", os.path.join(nemo_home, "source", "nemoclaw-blueprint", "policies"),
+                     ("*.yaml", "*.yml"), "Governance policies", "global"),
         ),
     ))
 
@@ -460,85 +806,211 @@ def _catalog() -> list:
     catalog.append(RuntimeCatalogEntry(
         id="hermes", label="Hermes",
         roots=(
-            RootSpec("memory", os.path.join(hermes_home, "memory"),
+            # Hermes writes ~/.hermes/memories (plural) — the singular
+            # memory/ never exists, which is why the tab rendered empty.
+            RootSpec("memory", os.path.join(hermes_home, "memories"),
                      ("*.md",), "Agent memory", "global"),
+            RootSpec("memory", os.path.join(hermes_home, "SOUL.md"),
+                     label="SOUL.md", scope="global"),
             RootSpec("skills", os.path.join(hermes_home, "skills"),
                      label="Installed skills", scope="global"),
+            RootSpec("hooks", os.path.join(hermes_home, "hooks"),
+                     label="Hooks", scope="global"),
             RootSpec("hooks", os.path.join(hermes_home, "state.db"),
                      label="state.db", scope="global"),
         ),
     ))
 
-    # ── PicoClaw / NanoClaw (edge harnesses) ───────────────────────
-    for rid, label, root in (
-        ("picoclaw", "PicoClaw", os.path.expanduser("~/.picoclaw/workspace")),
-        ("nanoclaw", "NanoClaw", os.path.expanduser("~/.nanoclaw")),
-    ):
-        catalog.append(RuntimeCatalogEntry(
-            id=rid, label=label,
-            roots=(
-                RootSpec("memory", os.path.join(root, "memory"),
-                         ("*.md",), "Agent memory", "global"),
-                RootSpec("memory", os.path.join(root, "MEMORY.md"),
-                         label="MEMORY.md", scope="global"),
-                RootSpec("skills", os.path.join(root, "skills"),
-                         label="Installed skills", scope="global"),
-            ),
-        ))
-
-    # ── Pi (Inflection) ─────────────────────────────────────────────
-    pi_home = os.path.expanduser("~/.pi")
+    # ── PicoClaw (edge harness) ─────────────────────────────────────
+    # Vendor layout: <home>/workspace holds the persona files + memory/
+    # (MEMORY.md lives INSIDE memory/, plus daily notes memory/YYYYMM/*.md);
+    # skills resolve workspace > global (<home>/skills) > builtin.
+    pico_home = _env_root("PICOCLAW_HOME", os.path.expanduser("~/.picoclaw"))
+    pico_ws = os.path.join(pico_home, "workspace")
     catalog.append(RuntimeCatalogEntry(
-        id="pi", label="Pi",
+        id="picoclaw", label="PicoClaw",
         roots=(
-            RootSpec("memory", os.path.join(pi_home, "agent", "memory"),
+            RootSpec("memory", os.path.join(pico_ws, "memory"),
                      ("*.md",), "Agent memory", "global"),
+            RootSpec("memory", os.path.join(pico_ws, "AGENT.md"),
+                     label="AGENT.md", scope="global"),
+            RootSpec("memory", os.path.join(pico_ws, "SOUL.md"),
+                     label="SOUL.md", scope="global"),
+            RootSpec("memory", os.path.join(pico_ws, "USER.md"),
+                     label="USER.md", scope="global"),
+            RootSpec("memory", os.path.join(pico_ws, "IDENTITY.md"),
+                     label="IDENTITY.md", scope="global"),
+            RootSpec("skills", os.path.join(pico_ws, "skills"),
+                     label="Workspace skills", scope="global"),
+            RootSpec("skills", os.path.join(pico_home, "skills"),
+                     label="Global skills", scope="global"),
         ),
     ))
 
-    # ── DeepAgents (LangChain) ──────────────────────────────────────
+    # ── NanoClaw (edge harness) ─────────────────────────────────────
+    # NanoClaw keeps everything CHECKOUT-relative — there is NO ~/.nanoclaw.
+    # Memory is groups/CLAUDE.md (global) + groups/<channel>_<group>/CLAUDE.md
+    # (per-group); skills live at <checkout>/.claude/skills.
+    nano_dir = _nanoclaw_checkout()
+    catalog.append(RuntimeCatalogEntry(
+        id="nanoclaw", label="NanoClaw",
+        roots=(
+            RootSpec("memory", os.path.join(nano_dir, "groups"),
+                     ("CLAUDE.md",), "Group memory (CLAUDE.md)", "global",
+                     max_depth=2),
+            RootSpec("skills", os.path.join(nano_dir, ".claude", "skills"),
+                     label="Skills", scope="global"),
+        ),
+    ))
+
+    # ── Pi (pi coding agent) ────────────────────────────────────────
+    # Pi's "memory" is its context files (AGENTS.md / CLAUDE.md and the
+    # system-prompt overrides), not a memory/ dir — that root never existed.
+    pi_agent = _env_root("PI_CODING_AGENT_DIR",
+                         os.path.expanduser("~/.pi/agent"))
+    catalog.append(RuntimeCatalogEntry(
+        id="pi", label="Pi",
+        roots=(
+            RootSpec("memory", os.path.join(pi_agent, "AGENTS.md"),
+                     label="Global AGENTS.md", scope="global"),
+            RootSpec("memory", os.path.join(pi_agent, "CLAUDE.md"),
+                     label="Global CLAUDE.md", scope="global"),
+            RootSpec("memory", os.path.join(pi_agent, "SYSTEM.md"),
+                     label="SYSTEM.md", scope="global"),
+            RootSpec("memory", os.path.join(pi_agent, "APPEND_SYSTEM.md"),
+                     label="APPEND_SYSTEM.md", scope="global"),
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("skills", os.path.join(pi_agent, "skills"),
+                     label="Installed skills", scope="global"),
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".pi", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
+            RootSpec("commands", os.path.join(pi_agent, "prompts"),
+                     ("*.md",), "Prompt templates", "global"),
+            RootSpec("commands", os.path.join(ws, ".pi", "prompts"),
+                     ("*.md",), "Project prompt templates", "project"),
+            RootSpec("hooks", os.path.join(pi_agent, "extensions"),
+                     ("*.ts", "*.js"), "Extensions", "global"),
+            RootSpec("hooks", os.path.join(ws, ".pi", "extensions"),
+                     ("*.ts", "*.js"), "Project extensions", "project"),
+        ),
+    ))
+
+    # ── DeepAgents (LangChain dcode) ────────────────────────────────
+    # The layout is PER-AGENT: ~/.deepagents/<agent_name>/{AGENTS.md,
+    # memories/, skills/} (default agent name is literally "agent"). Glob
+    # roots on the home cover every agent name; the old flat memory/ +
+    # AGENTS.md + skills/ roots never existed. The dot-prefixed .state/
+    # (sessions.db checkpoint store) is skipped by the walker — sessions
+    # are not memory.
     deep_home = os.path.expanduser("~/.deepagents")
     catalog.append(RuntimeCatalogEntry(
         id="deepagents", label="DeepAgents",
         roots=(
-            RootSpec("memory", os.path.join(deep_home, "memory"),
-                     ("*.md",), "Agent memory", "global"),
-            RootSpec("memory", os.path.join(deep_home, "AGENTS.md"),
-                     label="Global AGENTS.md", scope="global"),
+            RootSpec("memory", deep_home,
+                     ("*/AGENTS.md", "*/memories/*.md"),
+                     "Per-agent memory", "global", max_depth=3),
+            RootSpec("skills", deep_home,
+                     ("*/skills/*",), "Per-agent skills", "global"),
+            RootSpec("skills", os.path.join(home, ".agents", "skills"),
+                     label="Shared agent skills", scope="global"),
             RootSpec("memory", os.path.join(ws, ".deepagents", "AGENTS.md"),
                      label="Project AGENTS.md", scope="project"),
-            RootSpec("skills", os.path.join(deep_home, "skills"),
-                     label="Installed skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".deepagents", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project shared skills", scope="project"),
         ),
     ))
 
     # ── n8n ─────────────────────────────────────────────────────────
-    n8n_home = _env_root("N8N_USER_FOLDER", os.path.expanduser("~/.n8n"))
+    # N8N_USER_FOLDER is the PARENT that contains .n8n (n8n's own
+    # semantics, matched by the ingest adapter) — hence the subpath.
+    n8n_home = _env_root("N8N_USER_FOLDER", os.path.expanduser("~/.n8n"),
+                         ".n8n")
     catalog.append(RuntimeCatalogEntry(
         id="n8n", label="n8n",
         roots=(
+            # SECURITY: never add ~/.n8n/config here — it is the JSON file
+            # holding n8n's credential encryptionKey. Surfacing it would
+            # expose the key in the tab AND ship it through cloud sync.
+            # database.sqlite is likewise excluded: a binary blob owned by
+            # the ingest adapter, not browsable memory.
             RootSpec("skills", os.path.join(n8n_home, "custom"),
                      label="Custom nodes", scope="global"),
-            RootSpec("hooks", os.path.join(n8n_home, "config"),
-                     label="config", scope="global"),
-            RootSpec("hooks", os.path.join(n8n_home, "database.sqlite"),
-                     label="database.sqlite", scope="global"),
+            RootSpec("skills", os.path.join(n8n_home, "nodes"),
+                     ("package.json",), "Installed community nodes",
+                     "global", max_depth=1),
         ),
     ))
 
     # ── Grok Build (xAI) ────────────────────────────────────────────
-    grok_home = os.path.expanduser("~/.grok")
+    grok_home = _env_root("CLAWMETRY_GROK_HOME", os.path.expanduser("~/.grok"))
     catalog.append(RuntimeCatalogEntry(
         id="grok", label="Grok",
         roots=(
             RootSpec("memory", os.path.join(ws, "AGENTS.md"),
                      label="Project AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, "CLAUDE.md"),
+                     label="Project CLAUDE.md", scope="project"),
+            # max_depth=1 so this config-dir root doesn't re-list the
+            # hooks/*.json surfaced by the dedicated hooks root below.
             RootSpec("memory", grok_home, ("*.md", "*.json", "*.toml"),
-                     "Grok config dir", "global", max_depth=2),
+                     "Grok config dir", "global", max_depth=1),
+            RootSpec("skills", os.path.join(grok_home, "skills"),
+                     label="Grok skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".grok", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("hooks", os.path.join(grok_home, "hooks"),
+                     label="Grok hooks", scope="global"),
+            RootSpec("hooks", os.path.join(ws, ".grok", "hooks"),
+                     label="Project hooks", scope="project"),
         ),
     ))
 
-    return catalog
+    # ── DeepSeek Harness (dsh) ──────────────────────────────────────
+    dsh_home = _env_root("DSH_HOME", os.path.expanduser("~/.dsh"))
+    dsh_agents = _env_root("DSH_AGENTS_HOME",
+                           os.path.expanduser("~/.agents"))
+    catalog.append(RuntimeCatalogEntry(
+        id="deepseek_harness", label="DeepSeek Harness",
+        roots=(
+            RootSpec("memory", os.path.join(dsh_home, "AGENTS.md"),
+                     label="Global AGENTS.md", scope="global"),
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("skills", os.path.join(dsh_home, "skills"),
+                     label="Installed skills", scope="global"),
+            RootSpec("skills", os.path.join(dsh_home, "plugins"),
+                     ("**/SKILL.md",), "Installed plugins", "global"),
+            RootSpec("skills", os.path.join(dsh_agents, "skills"),
+                     label="Shared agent skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("hooks", os.path.join(dsh_home, "settings.yaml"),
+                     label="settings.yaml", scope="global"),
+        ),
+    ))
+
+    # ── QM (yc-software/qm) ─────────────────────────────────────────
+    # QM persists everything to Postgres — there is nothing on disk to
+    # browse. An explicit empty entry keeps /api/runtimes/qm/files from
+    # 404ing and lets the UI render an honest empty state; the memory /
+    # skills a QM user actually has live in the delegated child runtimes
+    # (Pi, opencode, Codex, Claude Code), which have their own entries.
+    catalog.append(RuntimeCatalogEntry(
+        id="qm", label="QM",
+        roots=(),
+        note=("QM stores sessions and memory in Postgres — no on-disk "
+              "memory or skills files. Instruction files live in the "
+              "delegated child runtimes (Pi, opencode, Codex, Claude Code)."),
+    ))
+
+    return _expand_project_roots(catalog, ws)
 
 
 _ALLOWED_DOTFILES = frozenset({".cursorrules", ".goosehints", ".agents.md",
@@ -660,7 +1132,19 @@ def list_runtimes() -> list:
             if exists:
                 present = True
                 if os.path.isdir(root):
-                    n = len(_walk_dir(root, spec.include_globs, spec.max_depth))
+                    files = _walk_dir(root, spec.include_globs, spec.max_depth)
+                    n = len(files)
+                    if spec.category == "skills":
+                        # A skill is a SKILL.md-bearing directory, and one
+                        # skill ships many files (references/, scripts/…).
+                        # Counting raw files reported Hermes as "406
+                        # skills" when it has 83 — count skills, not files,
+                        # whenever the root follows the SKILL.md convention.
+                        skill_md = sum(
+                            1 for f in files
+                            if os.path.basename(f["path"]) == "SKILL.md")
+                        if skill_md:
+                            n = skill_md
                 else:
                     n = 1
                 counts[spec.category] = counts.get(spec.category, 0) + n
@@ -672,13 +1156,16 @@ def list_runtimes() -> list:
                 "label": spec.label or os.path.basename(root),
                 "count": n,
             })
-        out.append({
+        item = {
             "id": entry.id,
             "label": entry.label,
             "present": present,
             "counts": counts,
             "roots": roots_info,
-        })
+        }
+        if entry.note:
+            item["note"] = entry.note
+        out.append(item)
     return out
 
 
@@ -763,7 +1250,13 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
     entry = _entry_by_id(runtime_id)
     if entry is None:
         return {"runtime": runtime_id, "label": "", "groups": [], "error": "unknown_runtime"}
+    return _files_for_entry(entry, category)
 
+
+def _files_for_entry(entry: RuntimeCatalogEntry,
+                     category: Optional[str] = None) -> dict:
+    """:func:`list_files` body, taking an already-resolved catalog entry so
+    :func:`list_all_files` can sweep one catalog build instead of twenty."""
     wanted = parse_categories(category)
     groups: list = []
     for spec in entry.roots:
@@ -797,7 +1290,10 @@ def list_files(runtime_id: str, category: Optional[str] = None) -> dict:
     for g in groups:
         g["runtime"] = entry.id
         g["runtime_label"] = entry.label
-    return {"runtime": entry.id, "label": entry.label, "groups": groups}
+    payload = {"runtime": entry.id, "label": entry.label, "groups": groups}
+    if entry.note:
+        payload["note"] = entry.note
+    return payload
 
 
 def list_all_files(category: Optional[str] = None,
@@ -819,7 +1315,7 @@ def list_all_files(category: Optional[str] = None,
     for entry in _catalog():
         if allowed_set is not None and entry.id not in allowed_set:
             continue
-        payload = list_files(entry.id, category=category)
+        payload = _files_for_entry(entry, category=category)
         for g in payload.get("groups") or ():
             if g.get("exists") and (g.get("files") or []):
                 groups.append(g)

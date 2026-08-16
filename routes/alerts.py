@@ -1181,6 +1181,15 @@ def api_alert_rule(rule_id):
         return jsonify({"ok": True})
     # PUT
     data = request.get_json(silent=True) or {}
+    # The Alerts tab speaks the cloud vocabulary (threshold_value /
+    # channel_ids) — the same bridge the POST path applies above. Without
+    # this map an editor save PUT carried only unknown field names, so the
+    # new threshold and channels were silently dropped (the request still
+    # returned ok because ``enabled`` was present).
+    if "threshold" not in data and data.get("threshold_value") is not None:
+        data["threshold"] = data.get("threshold_value")
+    if "channels" not in data and data.get("channel_ids") is not None:
+        data["channels"] = list(data.get("channel_ids") or []) or ["banner"]
     sets = []
     vals = []
     for field in ["threshold", "cooldown_min", "enabled"]:

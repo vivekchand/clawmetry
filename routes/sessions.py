@@ -4397,6 +4397,13 @@ def _expand_openclaw_event(obj: dict, ts_ms):
         paths = obj.get("conflictedPaths") or data.get("conflictedPaths") or []
         resolution = obj.get("resolution") or data.get("resolution") or ""
         staged_ref = obj.get("stagedRef") or data.get("stagedRef") or ""
+        kept_local = (
+            obj.get("keptLocalPaths")
+            or data.get("keptLocalPaths")
+            or obj.get("kept_local_paths")
+            or data.get("kept_local_paths")
+            or []
+        )
         n = len(paths) if isinstance(paths, list) else 0
         parts = [f"⚠ Cloud workspace conflict ({n} conflicted path{'s' if n != 1 else ''})"]
         if resolution:
@@ -4405,6 +4412,12 @@ def _expand_openclaw_event(obj: dict, ts_ms):
             parts.append(f"Staged ref: {staged_ref}")
         if isinstance(paths, list) and paths:
             parts.append("Paths:\n" + "\n".join(f"  • {p}" for p in paths[:20]))
+        if isinstance(kept_local, list) and kept_local:
+            n_kept = len(kept_local)
+            parts.append(
+                f"Kept local ({n_kept} path{'s' if n_kept != 1 else ''}):\n"
+                + "\n".join(f"  • {p}" for p in kept_local[:20])
+            )
         turns.append({"role": "system", "content": "\n".join(parts), "timestamp": ts_ms})
         return turns
 

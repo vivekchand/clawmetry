@@ -4269,9 +4269,13 @@ function _renderOverviewHero() {
       ? 'It’s working right now.'
       : _working + ' sessions are working right now.';
   } else if (_liveKnown && _waiting > 0) {
+    // Age-based only (last output 2-10 min ago), so it cannot claim "waiting
+    // on you" — that is the needs-you strip's claim, and it has evidence.
+    // Both render on Overview, so a mismatch here is two components
+    // contradicting each other on one screen.
     headline = _waiting === 1
-      ? 'One session is waiting on you.'
-      : _waiting + ' sessions are waiting on you.';
+      ? 'One session has gone quiet.'
+      : _waiting + ' sessions have gone quiet.';
   } else if (!_liveKnown && busy) {
     headline = 'It’s working right now.';
   } else if (!_liveKnown) {
@@ -11864,7 +11868,7 @@ function _invRenderHero(inv) {
     dot = '#22c55e';
     headline = escHtml(wAgents[0].displayName || wAgents[0].agentKey) + ' is working right now.';
     sub = working + (working === 1 ? ' session' : ' sessions') + ' produced output in the last '
-        + 'two minutes' + (waiting ? ', ' + waiting + ' more waiting on you' : '') + '. '
+        + 'two minutes' + (waiting ? ', ' + waiting + ' more gone quiet' : '') + '. '
         + (agents.length - 1) + ' other ' + (agents.length - 1 === 1 ? 'agent is' : 'agents are')
         + ' quiet.';
   } else if (wAgents.length > 1) {
@@ -11872,11 +11876,21 @@ function _invRenderHero(inv) {
     headline = wAgents.length + ' agents are working right now.';
     sub = working + (working === 1 ? ' session' : ' sessions') + ' across '
         + wAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
-        + (waiting ? ' · ' + waiting + ' more waiting on you' : '') + '.';
+        + (waiting ? ' · ' + waiting + ' more quiet' : '') + '.';
   } else if (qAgents.length) {
     dot = '#f59e0b';
-    headline = waiting === 1 ? 'One session is waiting on you.'
-                             : waiting + ' sessions are waiting on you.';
+    // "Quiet", not "waiting on you". This bucket is purely age-based — last
+    // output 2-10 minutes ago — which is equally consistent with thinking, a
+    // long-running tool, or a dead process. The sub-line below already said
+    // so ("Nothing has produced output in the last two minutes"); the
+    // headline used to contradict it.
+    //
+    // "Waiting on you" is a claim only the needs-you strip can make, because
+    // only it has evidence: a runtime that reported a prompt, an unanswered
+    // approval, or a tool call that hung. Two components on one page must not
+    // answer the same question differently.
+    headline = waiting === 1 ? 'One session has gone quiet.'
+                             : waiting + ' sessions have gone quiet.';
     sub = 'Open but quiet on '
         + qAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
         + '. Nothing has produced output in the last two minutes.';
@@ -12190,7 +12204,7 @@ async function renderInventory() {
     setSub('inv-tile-alive-sub', workingSessions
       ? ('on ' + workingAgents + ' of ' + agents.length + ' agents')
       : (waitingSessions
-          ? (waitingSessions + ' waiting on you')
+          ? (waitingSessions + ' gone quiet')
           : 'nothing in the last 2 min'));
   }
   setTxt('inv-tile-agents', String(agents.length));
@@ -27582,7 +27596,7 @@ function _cmRuntimeIcon(id) {
     antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
-    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋',
+    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠',
   };
   return map[id] || '•';
 }
@@ -27765,9 +27779,16 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
       return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.label || g.category)
         + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
     }).join('');
+    // A catalog `note` explains a deliberately empty entry (QM keeps
+    // everything in Postgres — there are no on-disk files to list).
+    var noteHtml = payload.note
+      ? '<div style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);max-width:460px;margin-left:auto;margin-right:auto;">'
+        + escHtml(payload.note) + '</div>'
+      : '';
     container.innerHTML =
       '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
       + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">' + emptyHead + '</div>'
+      + noteHtml
       + (pathList
           ? ('ClawMetry looked here:'
              + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
