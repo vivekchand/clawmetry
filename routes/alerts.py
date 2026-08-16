@@ -140,32 +140,69 @@ def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
             "cooldown_min":    cooldown_min,
         },
     }
+    if not _write_via_store("ingest_alert_rule", rule=payload):
+        return False
+    # Read back before claiming success. ``ingest_alert_rule`` returns None,
+    # and ``local_store_via_daemon`` also returns None when the proxy call
+    # FAILED — the two are indistinguishable at the call site, so a bare
+    # "no exception" check reports a mirror that never happened. That matters
+    # most on exactly the install this bridges: a daemon running an older
+    # wheel does not allowlist the method, the call 400s, and the operator
+    # would be told their rule is armed on an evaluator that cannot see it.
+    return _rule_in_duckdb(rule_id)
+
+
+def _rule_in_duckdb(rule_id):
+    """True when ``rule_id`` is present in the DuckDB alert_rules table."""
     try:
         from routes.local_query import local_store_via_daemon
-        if local_store_via_daemon("ingest_alert_rule", rule=payload) is not None:
-            return True
-        # Daemon hosts the store in-process (single-process dev boot) or is
-        # unreachable — try the direct handle. Never fatal: the writer lock
-        # belongs to the daemon and a miss just means "no mirror this time".
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            from clawmetry import local_server as _ls_srv
+            if not _ls_srv.is_running():
+                return False
+            from clawmetry import local_store as _ls_mod
+            rows = _ls_mod.get_store().query_alert_rules(limit=500)
+        return any(str(r.get("id")) == str(rule_id) for r in (rows or []))
+    except Exception:
+        return False
+
+
+def _write_via_store(method, **kwargs):
+    """Run a LocalStore write, through the daemon proxy where one exists.
+
+    Returns False rather than raising. Only touches the store directly when
+    ``local_server`` is hosted in THIS process — i.e. we are the daemon and
+    already hold the writer lock. Opening a writer from the dashboard process
+    while the daemon holds the lock is the documented brick-lock hazard, and
+    where DuckDB allows it the write lands somewhere the daemon never reads,
+    which is worse than not writing at all.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon(method, **kwargs)
+        return True
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_server as _ls_srv
+        if not _ls_srv.is_running():
+            return False
         from clawmetry import local_store as _ls_mod
-        _ls_mod.get_store().ingest_alert_rule(payload)
+        getattr(_ls_mod.get_store(), method)(**kwargs)
         return True
     except Exception:
         return False
 
 
 def _unmirror_rule_from_duckdb(rule_id):
-    """Drop a mirrored rule from DuckDB. Best-effort, never raises."""
-    try:
-        from routes.local_query import local_store_via_daemon
-        if local_store_via_daemon("delete_alert_rule",
-                                  rule_id=str(rule_id)) is not None:
-            return True
-        from clawmetry import local_store as _ls_mod
-        _ls_mod.get_store().delete_alert_rule(str(rule_id))
-        return True
-    except Exception:
-        return False
+    """Drop a mirrored rule from DuckDB. Best-effort, never raises.
+
+    Unlike the create path this does not verify: a rule that was never
+    mirrored (older daemon, or a type the local loop owns) is simply absent,
+    and reporting that as a failed delete would be noise.
+    """
+    return _write_via_store("delete_alert_rule", rule_id=str(rule_id))
 
 
 # ── Cloud alert_type -> local evaluator routing ────────────────────────────

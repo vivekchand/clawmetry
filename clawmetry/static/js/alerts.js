@@ -758,15 +758,16 @@
   // Inline, per-row explanation. Used when the server refuses a rule type
   // (422) — a toggle that springs back with no reason is its own small bug.
   function showRuleNotice(ruleId, message) {
-    const row = document.querySelector('[data-rule-id="' + ruleId + '"]');
+    // Re-render first so the toggle returns to its true (off) position, then
+    // attach the reason to that row.
     renderRules();
-    const target = row ? document.querySelector('[data-rule-id="' + ruleId + '"]') : null;
-    if (!target) return;
-    let note = document.createElement('div');
+    const row = document.querySelector('[data-rule-id="' + ruleId + '"]');
+    const main = row && row.querySelector('.alerts-rule-main');
+    if (!main) return;
+    const note = document.createElement('div');
     note.className = 'alerts-rule-notice';
     note.textContent = message;
-    const main = target.querySelector('.alerts-rule-main');
-    if (main) main.appendChild(note);
+    main.appendChild(note);
   }
 
   // ── Paywall modal ─────────────────────────────────────────────────────────
