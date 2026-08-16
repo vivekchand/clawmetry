@@ -163,6 +163,34 @@ def test_openclaw_v3_model_completed_hosting_tool(store):
     assert rows[0]["tool"] == "shell"
 
 
+def test_real_claude_code_tool_result_clears_the_wait(store):
+    """The REAL resolution shape, and it is not a `tool_result` event.
+
+    Verified against a live transcript: Claude Code returns a tool result as
+    a `user` line whose message.content holds a tool_result block. The
+    synthetic `tool_result` event type elsewhere in this file is a shape our
+    own adapters emit — it is NOT what Claude Code writes. If only that were
+    covered, a regression in the user-role branch would leave every answered
+    prompt showing "waiting" forever, and the tests would stay green.
+    """
+    _session(store, "s-real-res", seconds_idle=300)
+    _event(store, "s-real-res", "assistant", 400, {
+        "role": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+        ]},
+    }, eid="a")
+    assert len(_detect(store)) == 1, "the pending call should flag first"
+
+    _event(store, "s-real-res", "user", 300, {
+        "role": "user",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+        ]},
+    }, eid="b")
+    assert _detect(store) == [], "a real tool result must clear the wait"
+
+
 def test_mixed_text_and_tool_turn_counts_as_reply(store):
     """An assistant turn that both explains and calls a tool has already
     communicated, so it does not read as blocked-and-silent."""

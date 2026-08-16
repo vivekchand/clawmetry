@@ -6839,6 +6839,14 @@ def main() -> None:
     # JSON. ALWAYS exits 0 — any failure means "no opinion" (fail-open),
     # never a blocked agent. Stdlib-only imports.
     if len(sys.argv) > 1 and sys.argv[1] == "hook":
+        # `clawmetry hook attention --runtime <id>` — the runtime-agnostic
+        # needs-you reporter. Split out from the claude-code gate because it
+        # is a different job: it OBSERVES that a prompt is open and returns,
+        # where the gate DECIDES. Same fail-open, stdlib-only, always-exit-0
+        # contract. See clawmetry/attention_hook.py and docs/NEEDS_YOU.md.
+        if len(sys.argv) > 2 and sys.argv[2] == "attention":
+            from clawmetry.attention_hook import attention_main
+            raise SystemExit(attention_main(sys.argv[3:]))
         from clawmetry.claude_code_gate import hook_main as _hook_cli
         raise SystemExit(_hook_cli(sys.argv[2:]))
     # FAST PATH — agent-facing read CLI (`clawmetry sessions|activity|waste|

@@ -23,9 +23,13 @@ list from a wedged detector must NEVER read as "nothing needs you" -- a badge
 that cries wolf, or a calm all-clear that is wrong, teaches people to stop
 trusting the list, and an ignored list is worth less than no list at all.
 
-Freshness is derived from the daemon's own heartbeat rather than a separate
-attention timestamp, because the honest question is "is the thing that
-computes this alive?" -- and if the daemon is down, we genuinely cannot tell.
+Freshness asks the honest question -- "is the thing that computes this
+alive?" -- and answers it DIRECTLY, by checking the daemon's registered pid.
+An earlier version inferred it from heartbeat age, which a real machine
+disproved: a daemon serving queries normally with a ten-hour-old heartbeat
+row made the page say "can't tell right now" about a node it could have
+answered for. Wrong in the safe direction, but permanently wrong on any node
+whose heartbeat writer has stalled.
 
 Cloud parity: every field here rides the session rows that are already in the
 snapshot, so the cloud interceptor reads the same slice. No new ingest.
@@ -41,9 +45,6 @@ from flask import Blueprint, jsonify, request
 log = logging.getLogger("clawmetry-attention")
 
 bp_attention = Blueprint("attention", __name__)
-
-#: A daemon quieter than this is treated as "no signal", never "all clear".
-_DAEMON_FRESH_SECONDS = 300
 
 #: Signals we KNOW rather than deduce. One definition, so a new source cannot
 #: end up rendering as certain on one surface and hedged on another.
@@ -104,8 +105,39 @@ def _sessions():
         return None
 
 
+def _daemon_is_live() -> bool:
+    """Is the process that computes attention state actually running?
+
+    Checked DIRECTLY — the daemon registers a query server and we confirm its
+    pid is alive — rather than inferred from heartbeat age.
+
+    Heartbeat age was the first implementation and it is a PROXY, which a real
+    machine disproved: a daemon here was serving queries normally while its
+    newest heartbeat row was ten hours old, so the strip reported "can't tell
+    right now" on a node it could perfectly well have answered for. Erring
+    toward "can't tell" is the right direction to be wrong in, but a node with
+    a stalled heartbeat writer would have shown that state permanently, which
+    makes the feature useless exactly where nothing else is obviously broken.
+
+    The attention pass runs on the daemon's own loop, in this process, so
+    "the daemon is alive" is the direct answer to "is this list current".
+    """
+    try:
+        from routes.local_query import _read_discovery
+        # _read_discovery already verifies the recorded pid is alive and
+        # returns None otherwise, which is exactly the question here.
+        return _read_discovery() is not None
+    except Exception:
+        return False
+
+
 def _daemon_age_seconds() -> int:
-    """Seconds since the daemon last checked in; -1 when unknown."""
+    """Seconds since the daemon last wrote a heartbeat; -1 when unknown.
+
+    Retained for the ``daemon_age_seconds`` field (operators asked for the
+    number, and a large value is a genuine signal that the heartbeat writer
+    has stalled) but NO LONGER decides freshness — see :func:`_daemon_is_live`.
+    """
     try:
         from routes.local_query import local_store_via_daemon
         beats = local_store_via_daemon("query_heartbeats", limit=1)
@@ -193,14 +225,17 @@ def build_attention(runtime: str = "") -> dict:
     items.sort(key=lambda i: (i["signal"] not in CONFIRMED_SIGNALS,
                               -i["waiting_seconds"]))
 
+    # Freshness = "is the process that computes this alive", answered
+    # directly. Heartbeat age is reported alongside because a big number is a
+    # real signal, but it does NOT gate the answer — see _daemon_is_live.
+    fresh = _daemon_is_live()
     age = _daemon_age_seconds()
-    fresh = age >= 0 and age <= _DAEMON_FRESH_SECONDS
     return {
         "items":   items if fresh else [],
         "waiting": len(items) if fresh else 0,
         "working": working,
         "fresh":   fresh,
-        "reason":  "" if fresh else ("stale" if age >= 0 else "no_heartbeat"),
+        "reason":  "" if fresh else "daemon_not_running",
         "daemon_age_seconds": age,
         # Surfaced so the UI can say "Pi doesn't ask" rather than implying
         # we checked it and found nothing.

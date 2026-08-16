@@ -3940,7 +3940,12 @@ def _first_alias(row: dict, aliases: tuple) -> str | None:
     if not isinstance(row, dict):
         return None
     nests = [row]
-    for key in ("metadata", "extra", "data", "env"):
+    # ``payload`` is not optional politeness: Codex records its working
+    # directory ONLY as ``payload.cwd`` (on its `session_meta` and
+    # `turn_context` lines), so leaving it out silently dropped the location
+    # for an entire runtime. Found by probing the real captured fixtures
+    # rather than trusting the top-level shape.
+    for key in ("payload", "metadata", "extra", "data", "env"):
         sub = row.get(key)
         if isinstance(sub, dict):
             nests.append(sub)

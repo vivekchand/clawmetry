@@ -25,20 +25,32 @@ Two more states exist and are deliberately distinct from "nothing waiting":
 
 ## Wiring a runtime for confirmed signals
 
-Every runtime posts the same way. Send its own hook payload, unmodified, to:
+Every runtime is wired the same way. Point its permission hook at:
 
 ```
-POST http://127.0.0.1:8900/api/hooks/attention?runtime=<runtime>
+clawmetry hook attention --runtime <runtime>
 ```
 
-The receiver reads the session id and tool name from whatever the runtime
-calls them (`session_id`, `sessionId`, `tool_name`, `toolName`, …), so no
-per-runtime translation is needed. Add `&event=resolved` to clear.
+It reads the runtime's own hook payload from stdin and forwards it. The
+receiver reads the session id and tool name from whatever the runtime calls
+them (`session_id`, `sessionId`, `tool_name`, `toolName`, …), so no
+per-runtime translation is needed. Add `--event resolved` to clear.
+
+The command always exits 0 and prints nothing, so it cannot change what your
+runtime does next. If ClawMetry is not running the report is simply dropped
+and inference still covers the session.
+
+Prefer raw HTTP, or wiring a runtime that cannot run a command? The same
+thing over the wire:
+
+```
+POST http://127.0.0.1:8900/api/hooks/attention?runtime=<runtime>&event=waiting
+```
 
 It **observes only**: it records and returns immediately, never answers the
 prompt, never blocks your agent, and cannot return an error that would make a
-runtime hesitate. The response includes `"stored": true|false` so you can
-tell a wired hook from a silent one.
+runtime hesitate. The HTTP response includes `"stored": true|false` so you
+can tell a wired hook from a silent one.
 
 ### Claude Code — already automatic
 
@@ -53,7 +65,7 @@ the only runtime confirmed end to end today.
 
 ```json
 { "hooks": { "PermissionRequest": [ { "hooks": [ { "type": "command",
-  "command": "curl -s -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:8900/api/hooks/attention?runtime=qwen_code'"
+  "command": "clawmetry hook attention --runtime qwen_code"
 } ] } ] } }
 ```
 
@@ -64,7 +76,7 @@ the agent requires user attention:
 
 ```json
 { "hooks": { "Notification": [ { "hooks": [ { "type": "command",
-  "command": "curl -s -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:8900/api/hooks/attention?runtime=gemini_cli'"
+  "command": "clawmetry hook attention --runtime gemini_cli"
 } ] } ] } }
 ```
 
@@ -93,7 +105,8 @@ No hooks, but `--notifications-command` runs when the LLM finishes and is
 waiting for you — which is exactly this signal:
 
 ```
-aider --notifications --notifications-command "curl -s -X POST -H 'Content-Type: application/json' -d '{\"session_id\":\"$AIDER_SESSION\",\"tool_name\":\"\"}' 'http://127.0.0.1:8900/api/hooks/attention?runtime=aider'"
+aider --notifications --notifications-command \
+  "echo '{\"session_id\":\"'$AIDER_SESSION'\"}' | clawmetry hook attention --runtime aider"
 ```
 
 ### n8n
@@ -117,7 +130,17 @@ inference — you lose precision, not the feature. Reports welcome.
 
 ## Troubleshooting
 
-**`"stored": false` in the response.** The write did not persist. The usual
+**Checking whether a hook is wired.** `clawmetry hook attention` is silent by
+design, so it tells you nothing either way. To see the answer, send the same
+thing over HTTP once by hand and read `stored`:
+
+```
+echo '{"session_id":"test-1","tool_name":"Bash"}' \
+  | curl -s -X POST -H 'Content-Type: application/json' --data-binary @- \
+    'http://127.0.0.1:8900/api/hooks/attention?runtime=qwen_code'
+```
+
+**`"stored": false` in that response.** The write did not persist. The usual
 cause is a ClawMetry daemon older than this feature: the dashboard cannot
 write to DuckDB while a daemon owns the writer lock, so it proxies, and an
 older daemon's allowlist has no `set_session_attention`. Upgrade and restart

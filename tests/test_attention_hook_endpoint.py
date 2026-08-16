@@ -158,9 +158,9 @@ def test_empty_post_never_500s(client):
 def test_get_attention_reports_the_hooked_session(client, monkeypatch):
     client.post("/api/hooks/attention?runtime=qwen_code",
                 json={"session_id": "abc", "tool_name": "Bash"})
-    # Freshness keys off the daemon heartbeat; force it fresh for the read.
+    # Freshness = the daemon process is alive; force it live for the read.
     import routes.attention as ra
-    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 5)
+    monkeypatch.setattr(ra, "_daemon_is_live", lambda: True)
     d = client.get("/api/attention").get_json()
     assert d["fresh"] is True
     assert d["waiting"] == 1
@@ -168,16 +168,16 @@ def test_get_attention_reports_the_hooked_session(client, monkeypatch):
     assert item["signal"] == "hook" and item["tool"] == "Bash"
 
 
-def test_stale_daemon_reports_cant_tell_not_all_clear(client, monkeypatch):
+def test_dead_daemon_reports_cant_tell_not_all_clear(client, monkeypatch):
     """The failure that would destroy trust: a wedged detector rendering as
     a confident 'nothing needs you'."""
     client.post("/api/hooks/attention?runtime=qwen_code",
                 json={"session_id": "abc", "tool_name": "Bash"})
     import routes.attention as ra
-    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 99999)
+    monkeypatch.setattr(ra, "_daemon_is_live", lambda: False)
     d = client.get("/api/attention").get_json()
     assert d["fresh"] is False
-    assert d["reason"] == "stale"
+    assert d["reason"] == "daemon_not_running"
     assert d["items"] == []          # withheld, not asserted as empty
 
 
@@ -193,7 +193,7 @@ def test_hook_confirmed_rows_sort_above_guesses(client, monkeypatch):
     client.post("/api/hooks/attention?runtime=qwen_code",
                 json={"session_id": "abc", "tool_name": "Bash"})
     import routes.attention as ra
-    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 5)
+    monkeypatch.setattr(ra, "_daemon_is_live", lambda: True)
     items = client.get("/api/attention").get_json()["items"]
     assert [i["signal"] for i in items][0] == "hook"
 
@@ -210,7 +210,7 @@ def test_working_count_excludes_long_idle_sessions(client, monkeypatch):
     """
     import datetime
     import routes.attention as ra
-    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 5)
+    monkeypatch.setattr(ra, "_daemon_is_live", lambda: True)
 
     def ago(minutes):
         return (datetime.datetime.now()
@@ -234,7 +234,7 @@ def test_runtime_filter_scopes_the_list(client, monkeypatch):
     client.post("/api/hooks/attention?runtime=gemini_cli",
                 json={"sessionId": "gem-9", "toolName": "sh"})
     import routes.attention as ra
-    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 5)
+    monkeypatch.setattr(ra, "_daemon_is_live", lambda: True)
     d = client.get("/api/attention?runtime=qwen_code").get_json()
     assert d["waiting"] == 1
     assert d["items"][0]["runtime"] == "qwen_code"
