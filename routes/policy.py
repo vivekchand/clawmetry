@@ -169,6 +169,13 @@ def _filter_rows_by_runtime(rows, runtime):
             if _session_runtime(r.get("requestor_session_id")) == rt]
 
 
+def _approval_kind(row) -> str:
+    args = row.get("args")
+    if isinstance(args, dict):
+        return str(args.get("kind") or "policy")
+    return "policy"
+
+
 @bp_policy.route("/api/approvals")
 @gate("approval_queue")
 def api_approvals_queue():
@@ -195,6 +202,10 @@ def api_approvals_queue():
             "created_at":           r.get("created_at"),
             "requestor_session_id": r.get("requestor_session_id"),
             "args_preview":         _arg_preview(r.get("args")),
+            # "policy" (a protection rule fired) vs "permission_prompt"
+            # (the runtime itself stopped to ask) — the UI says which,
+            # because they mean different things to the person deciding.
+            "kind":                 _approval_kind(r),
         }
         for r in rows
     ]
@@ -595,6 +606,15 @@ def api_approval_decide(approval_id: str):
         except Exception as e:
             return jsonify({"ok": False,
                             "error": f"decision write failed: {e}"}), 500
+
+    # Close the loop on channels that can be edited: if this approval was
+    # also pushed to a phone, swap its live Approve/Deny buttons for the
+    # verdict so two people can't race the same call from two surfaces.
+    try:
+        from clawmetry import approval_notify as _an
+        _an.notify_resolved(aid, decision, "dashboard")
+    except Exception:
+        pass
 
     new_status = "approved" if decision == "approve" else "denied"
     return jsonify({"ok": True, "status": new_status})

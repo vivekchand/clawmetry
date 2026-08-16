@@ -995,6 +995,26 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     except Exception as _ae:
         log.debug("approval DuckDB persist failed: %s", _ae)
 
+    # Page the human on the channels configured for THIS runtime. Runtime is
+    # derived from the session prefix (the same _session_runtime the scoped
+    # alert evaluator uses), so a Claude Code call and an OpenClaw exec can
+    # land in different places. Non-blocking + never raises: the row is
+    # already parked, notification is best-effort on top.
+    try:
+        from clawmetry import approval_notify as _an
+        _an.notify_pending({
+            "id": approval_id,
+            "runtime": _session_runtime(session_id or ""),
+            "kind": "policy",
+            "tool_name": tool_name,
+            "command": cmd_preview,
+            "cwd": _session_cwd_hint(session_id or ""),
+            "policy": policy["name"],
+            "requestor_session_id": session_id,
+        })
+    except Exception as _ne:
+        log.debug("approval notify failed: %s", _ne)
+
     # ── Local-only blocking branch ──────────────────────────────────────────
     # A licensed self-hosted node (no cm_ token) has no cloud to POST to and
     # no cloud Approvals inbox to poll. Enforce the policy locally: poll the

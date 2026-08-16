@@ -284,6 +284,7 @@ FEATURE_LABELS = {
     "air_gapped_license": "Air-gapped license",
     "custom_data_residency": "Custom data residency",
     "compliance_pack": "Compliance pack",
+    "org_analytics": "Org analytics",
 }
 
 _ALIAS_FEATURES = frozenset(
@@ -351,6 +352,12 @@ ENTERPRISE_FEATURES = frozenset(
         "rbac",
         "air_gapped_license",
         "custom_data_residency",
+        # Org-wide Claude coverage: the day-level rollup for Claude surfaces
+        # that never touch local disk (claude.ai chat, Cowork's cloud
+        # workspaces, Claude in Chrome). Enterprise-tiered because the
+        # upstream Analytics API it reads is itself Enterprise-only — gating
+        # it any lower would sell a key the customer's plan cannot mint.
+        "org_analytics",
     }
 )
 

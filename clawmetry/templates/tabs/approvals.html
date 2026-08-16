@@ -124,20 +124,19 @@
     </div>
   </div>
 
-  <!-- ═══ SECTION 3: Notification Channels ═══
-       Channels are managed in the dedicated Notifications tab now —
-       duplicating the cards here just made the same decision live in two
-       places. One short link keeps the affordance discoverable. -->
+  <!-- ═══ SECTION 3: Where approvals go (per-runtime routing) ═══
+       Credentials still live in the Notifications tab (one place to set a
+       channel up); this decides which runtime's approvals reach which of
+       those channels, and whether Claude Code's own permission prompts get
+       mirrored to your phone. -->
   <div style="margin-bottom:16px;">
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;" data-i18n="approvals.get_notified">Get Notified</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:12px 14px;">
-      <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);" data-i18n="approvals.delivered_via">
-        Approvals are delivered via your Notifications channels (Email, Slack, Phone, PagerDuty, Telegram).
-      </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;" data-i18n="approvals.where_they_go">Where approvals go</div>
       <button onclick="if(typeof switchTab==='function')switchTab('notifications')"
-        style="flex-shrink:0;padding:7px 14px;border:1px solid #3b82f6;background:transparent;color:#60a5fa;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;" data-i18n="approvals.configure_notifications">
-        Configure notifications →
-      </button>
+        style="background:transparent;color:#60a5fa;border:1px solid #3b82f6;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" data-i18n="approvals.configure_channels">Set up channels →</button>
+    </div>
+    <div id="approvals-routing-panel">
+      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.loading">Loading...</div>
     </div>
   </div>
 
@@ -459,6 +458,10 @@
     }
     html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;" data-i18n="app.eschtml_r_tool_name">' + escHtml(r.tool_name || '?') + '</span>';
     html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;" data-i18n="app.eschtml_r_status">' + escHtml(r.status) + '</span>';
+    if (r.kind === 'permission_prompt') {
+      // Not one of the user's rules: the runtime itself stopped to ask.
+      html += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">asked by the agent</span>';
+    }
     if (r.policy_name) {
       html += '<span style="color:var(--text-muted);font-size:11px;" data-i18n="app.rule_eschtml_r_policy_name">rule: ' + escHtml(r.policy_name) + '</span>';
     }
@@ -511,7 +514,8 @@
       status: r.status || 'pending',
       requested_at: r.created_at,
       session_id: r.requestor_session_id,
-      args_preview: r.args_preview
+      args_preview: r.args_preview,
+      kind: r.kind
     };
   }
   function _mapLocalDecision(r) {
@@ -570,7 +574,7 @@
         pe.innerHTML = ossMode
           ? '<div style="padding:16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.6;">'
             + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;" data-i18n="approvals.oss_empty_title">No pending approvals.</div>'
-            + '<span data-i18n="approvals.oss_empty_how">How this works: the local daemon watches every agent\'s tool calls against your Protection Rules and parks matches here for a decision. For runtimes with a native pre-execution gate (Claude Code via a PreToolUse hook, OpenClaw via its exec-policy preset — installed automatically when a rule needs them), the call is paused <b>before</b> it runs until you approve or deny it here. Other runtimes are detected reactively: a denied call stops the offending session. Enable a rule on the right to start.</span>'
+            + '<span data-i18n="approvals.oss_empty_how">How this works: the local daemon watches every agent\'s tool calls against your Protection Rules and parks matches here for a decision. For runtimes with a native pre-execution gate (Claude Code via a PreToolUse hook, OpenClaw via its exec-policy preset — installed automatically when a rule needs them), the call is paused <b>before</b> it runs until you approve or deny it here. Other runtimes are detected reactively: a denied call stops the offending session. Enable a rule on the right to start — and under <b>Where approvals go</b>, pick where each runtime should page you (Telegram answers right in the chat) and whether Claude Code\'s own permission prompts should reach your phone instead of stopping in the terminal.</span>'
             + '</div>'
           : '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
         // Drop selections for IDs that are no longer pending (decided
@@ -602,6 +606,9 @@
       // Integrations
       renderIntegrations(integrations.integrations || []);
 
+      // Where approvals go (per-runtime routing + mirror toggle)
+      loadApprovalRouting();
+
       // History
       var he = document.getElementById('approvals-history-list');
       he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.no_decisions_yet_enable_a_protection_rule_above_to">No decisions yet. Enable a protection rule above to get started.</div>';
@@ -617,6 +624,225 @@
     } catch(e) {
       document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;" data-i18n="app.failed_to_load_eschtml_string_e">Failed to load: ' + escHtml(String(e)) + '</div>';
     }
+  };
+
+  /* ── Where approvals go: per-runtime channel routing ──
+   * Credentials live in the Notifications tab; this decides which
+   * runtime's approvals reach which of those channels. A runtime with no
+   * row of its own follows "Default". An empty channel list means "every
+   * channel that's set up" — so nobody has to configure twice to get
+   * paged at all.
+   *
+   * The Claude Code row carries the mirror switch: intercept Claude
+   * Code's OWN permission prompts (its PermissionRequest hook) and answer
+   * them from the phone. If nobody answers inside the window, the prompt
+   * appears in the terminal exactly as it does today. */
+  var _routing = null, _routingMeta = null;
+
+  var _CH_ICON = {telegram:'✈️', slack:'💬', discord:'🎮', webhook:'🔗',
+                  pagerduty:'📟', whatsapp:'🟢', email:'✉️', phone:'📞'};
+
+  window.loadApprovalRouting = async function() {
+    var el = document.getElementById('approvals-routing-panel');
+    if (!el) return;
+    // Cloud parity: routing is a per-NODE setting (the channels live in the
+    // node's own config and the mirror hook is installed into the runtime
+    // on that machine), so the hosted dashboard says so instead of
+    // rendering a control that would write nowhere.
+    if (!_isOssMode()) {
+      el.innerHTML = '<div style="background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:14px;font-size:12px;color:var(--text-muted);line-height:1.7;">'
+        + 'ClawMetry Cloud delivers these approvals to the channels on your <b>Notifications</b> tab, with one-tap approve or deny.<br>'
+        + 'Per-runtime routing and answering a runtime\'s own permission prompts from your phone are configured on each node, in that node\'s local dashboard.'
+        + '</div>';
+      return;
+    }
+    try {
+      var d = await fetchJsonWithTimeout('/api/approvals/routing', 6000);
+      if (!d || !d.ok) throw new Error((d && d.error) || 'unavailable');
+      _routing = d.routing; _routingMeta = d;
+      el.innerHTML = _renderRouting(d);
+    } catch (e) {
+      el.innerHTML = '<div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;font-size:12px;color:var(--text-muted);">'
+        + 'Routing unavailable: ' + escHtml(String(e)) + '</div>';
+    }
+  };
+
+  function _rowFor(runtimeId) {
+    if (runtimeId === 'default') return _routing.default || {channels:[]};
+    return (_routing.runtimes || {})[runtimeId] || null;
+  }
+
+  function _renderRouting(d) {
+    var chans = d.channels || [];
+    var anyConfigured = chans.some(function(c){return c.configured;});
+    var html = '<div style="background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:14px;">';
+
+    if (!anyConfigured) {
+      html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:12px;">'
+        + 'No channel is set up yet, so approvals only appear here in the dashboard. '
+        + 'Add Telegram, Slack, WhatsApp, email or a phone number in <b>Notifications</b> and they show up below.'
+        + '</div>';
+    }
+
+    // Default row + any runtime-specific rows.
+    html += _renderRoutingRow('default', 'Default (all runtimes)', d);
+    Object.keys(_routing.runtimes || {}).sort().forEach(function(rt) {
+      var label = (d.runtimes.filter(function(r){return r.id===rt;})[0]||{}).label || rt;
+      html += _renderRoutingRow(rt, label, d);
+    });
+
+    // Add-a-runtime picker.
+    var missing = (d.runtimes || []).filter(function(r){
+      return !(_routing.runtimes || {})[r.id];
+    });
+    if (missing.length) {
+      html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">'
+        + '<select id="routing-add-runtime" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">'
+        + '<option value="">Send a specific runtime somewhere else…</option>'
+        + missing.map(function(r){
+            return '<option value="' + escHtml(r.id) + '">' + escHtml(r.label) + '</option>';
+          }).join('')
+        + '</select>'
+        + '<button onclick="addRoutingRuntime()" style="padding:6px 12px;border:1px solid var(--border-secondary);background:transparent;color:var(--text-secondary);border-radius:6px;font-size:12px;cursor:pointer;">Add</button>'
+        + '</div>';
+    }
+
+    // Link base — the decision link that Slack/WhatsApp/email carry.
+    html += '<div style="margin-top:12px;font-size:11px;color:var(--text-faint);line-height:1.6;">'
+      + 'Decision links point at <code>' + escHtml(d.link_base || '') + '</code> — reachable from your phone on the same network. '
+      + 'Set <code>CLAWMETRY_PUBLIC_BASE</code> for a Tailscale or public hostname.'
+      + '</div>';
+
+    var tg = d.telegram_poller || {};
+    if (tg.last_error) {
+      html += '<div style="margin-top:8px;font-size:11px;color:#f59e0b;">Telegram buttons: ' + escHtml(tg.last_error) + '</div>';
+    } else if (tg.running) {
+      html += '<div style="margin-top:8px;font-size:11px;color:#22c55e;">Telegram buttons live'
+        + (tg.decisions ? ' · ' + tg.decisions + ' decided from chat' : '') + '</div>';
+    }
+    return html + '</div>';
+  }
+
+  function _renderRoutingRow(id, label, d) {
+    var row = _rowFor(id) || {channels: []};
+    var chosen = row.channels || [];
+    var resolved = ((d.runtimes || []).filter(function(r){return r.id===id;})[0] || {}).resolved;
+    var html = '<div style="padding:10px 0;border-top:1px solid var(--border,#1e293b);">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+      + '<span style="display:flex;gap:6px;">'
+      + '<button onclick="testRouting(\'' + escHtml(id) + '\')" style="background:transparent;border:1px solid var(--border-secondary);color:var(--text-muted);padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Test</button>'
+      + (id === 'default' ? ''
+         : '<button onclick="removeRoutingRuntime(\'' + escHtml(id) + '\')" style="background:transparent;border:1px solid var(--border-secondary);color:var(--text-faint);padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Remove</button>')
+      + '</span></div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+
+    (d.channels || []).forEach(function(c) {
+      var on = chosen.indexOf(c.key) >= 0;
+      var usable = c.configured;
+      var bg = on ? 'rgba(59,130,246,0.18)' : 'transparent';
+      var bd = on ? '#3b82f6' : 'var(--border-secondary,#1e293b)';
+      var fg = usable ? (on ? '#93c5fd' : 'var(--text-muted)') : 'var(--text-faint)';
+      var title = usable ? (c.note || '') : 'Not set up yet — add it in Notifications';
+      html += '<button title="' + escHtml(title) + '" onclick="toggleRoutingChannel(\'' + escHtml(id) + '\',\'' + escHtml(c.key) + '\')"'
+        + ' style="background:' + bg + ';border:1px solid ' + bd + ';color:' + fg + ';padding:4px 10px;border-radius:999px;font-size:11px;cursor:pointer;'
+        + (usable ? '' : 'opacity:0.55;') + '">'
+        + (_CH_ICON[c.key] || '•') + ' ' + escHtml(c.key)
+        + (c.decide ? ' <span style="color:#22c55e;">·2-way</span>' : '')
+        + '</button>';
+    });
+    html += '</div>';
+
+    if (!chosen.length) {
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--text-faint);">'
+        + (resolved && resolved.length
+            ? 'Everything set up: ' + resolved.map(escHtml).join(', ')
+            : 'Nothing selected — every configured channel gets it')
+        + '</div>';
+    }
+
+    // Mirror switch — Claude Code is the only runtime with a native
+    // permission-prompt hook today, so it's the only row that shows it.
+    if (id === 'claude_code' || (id === 'default' && !(_routing.runtimes||{}).claude_code)) {
+      var on = !!row.mirror_permission_prompts;
+      var secs = row.mirror_timeout_s || 180;
+      html += '<div style="margin-top:10px;padding:10px;background:var(--bg-primary,#0B0F1A);border:1px solid ' + (on ? 'rgba(34,197,94,0.35)' : 'var(--border,#1e293b)') + ';border-radius:8px;">'
+        + '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">'
+        + '<input type="checkbox" ' + (on ? 'checked' : '') + ' onchange="toggleMirror(\'' + escHtml(id) + '\', this.checked)" style="margin-top:2px;cursor:pointer;">'
+        + '<span><span style="font-size:12px;font-weight:700;color:var(--text-primary);">Answer Claude Code\'s own permission prompts from your phone</span>'
+        + '<span style="display:block;font-size:11px;color:var(--text-muted);line-height:1.5;margin-top:3px;">'
+        + 'When Claude Code would stop and ask you in the terminal, it pauses here instead and pages you. '
+        + 'No answer within <select onchange="setMirrorWindow(\'' + escHtml(id) + '\', this.value)" onclick="event.preventDefault();event.stopPropagation();" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border-secondary);border-radius:4px;font-size:11px;padding:1px 4px;">'
+        + [60,180,300,900,3600].map(function(s){
+            return '<option value="' + s + '"' + (s===secs?' selected':'') + '>' + (s>=3600? '1 hour' : (s>=60 ? (s/60)+' min' : s+'s')) + '</option>';
+          }).join('')
+        + '</select> and the terminal prompt takes over, exactly as it does today.'
+        + '</span></span></label></div>';
+    }
+    return html + '</div>';
+  }
+
+  async function _saveRouting() {
+    var r = await fetch('/api/approvals/routing', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(_routing)
+    });
+    var d = await r.json().catch(function(){return {};});
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    _routing = d.routing;
+    await loadApprovalRouting();
+  }
+
+  window.toggleRoutingChannel = async function(id, channel) {
+    var row = _rowFor(id);
+    if (!row) { row = {channels: []}; _routing.runtimes[id] = row; }
+    var chosen = row.channels || [];
+    var i = chosen.indexOf(channel);
+    if (i >= 0) chosen.splice(i, 1); else chosen.push(channel);
+    row.channels = chosen;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.toggleMirror = async function(id, on) {
+    var row = _rowFor(id);
+    if (!row) { row = {channels: []}; _routing.runtimes[id] = row; }
+    row.mirror_permission_prompts = !!on;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.setMirrorWindow = async function(id, secs) {
+    var row = _rowFor(id);
+    if (!row) return;
+    row.mirror_timeout_s = parseInt(secs, 10) || 180;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.addRoutingRuntime = async function() {
+    var sel = document.getElementById('routing-add-runtime');
+    if (!sel || !sel.value) return;
+    _routing.runtimes = _routing.runtimes || {};
+    _routing.runtimes[sel.value] = {channels: (_routing.default||{}).channels || []};
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.removeRoutingRuntime = async function(id) {
+    if (!(_routing.runtimes || {})[id]) return;
+    delete _routing.runtimes[id];
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.testRouting = async function(id) {
+    var runtime = id === 'default' ? 'openclaw' : id;
+    try {
+      var r = await fetch('/api/approvals/routing/test', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({runtime: runtime})
+      });
+      var d = await r.json();
+      alert(d.sent && d.sent.length
+        ? 'Sent a test approval to: ' + d.sent.join(', ')
+        : (d.hint || 'Nothing was delivered — check the channel credentials in Notifications.'));
+    } catch (e) { alert('Test failed: ' + e); }
   };
 
   /* ── OSS-local rules state + writer ──
