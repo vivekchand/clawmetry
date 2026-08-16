@@ -19087,6 +19087,41 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         payload.setdefault("sandbox", {})
         payload["sandbox"]["runtime"] = "nemoclaw"
 
+    # "Needs you" list, for the cloud dashboard's Overview strip.
+    #
+    # Rides the E2E-ENCRYPTED snapshot, never the plaintext heartbeat that
+    # `stuck` uses: these rows carry project paths, branch names and tool
+    # names. That is user data, and it does not leave the machine in the
+    # clear. The cloud stores an opaque blob and decrypts it in the browser.
+    #
+    # `fresh` rides along so the cloud can distinguish "nobody is waiting"
+    # from "this node has gone quiet" — the same three-state contract the
+    # local strip renders. Best-effort: the snapshot must still ship if the
+    # attention pass has never run.
+    try:
+        _att = attention_snapshot()
+        payload["attention"] = {
+            "fresh": bool(_att.get("fresh")),
+            "items": [
+                {
+                    "session_id": it.get("session_id") or "",
+                    "runtime":    it.get("runtime") or "",
+                    "state":      it.get("state") or "",
+                    "signal":     it.get("signal") or "inferred",
+                    "tool":       it.get("tool") or "",
+                    "waiting_seconds": int(it.get("waiting_seconds") or 0),
+                    "title":      (it.get("title") or "")[:120],
+                    "cwd":        it.get("cwd") or "",
+                    "git_branch": it.get("git_branch") or "",
+                }
+                # Capped: the strip only ever renders a handful, and the
+                # snapshot is already a multi-hundred-KB blob.
+                for it in (_att.get("items") or [])[:20]
+            ],
+        }
+    except Exception as _att_e:  # noqa: BLE001
+        log.debug("attention snapshot slice failed (continuing): %s", _att_e)
+
     log.info(
         f"System snapshot: {len(subagents_list)} subagents ({active_count} active)"
     )

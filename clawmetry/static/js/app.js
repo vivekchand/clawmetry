@@ -2153,14 +2153,20 @@ function cmRenderNeedsYou(d) {
   // 1. We could not check. Say that -- do not imply all-clear.
   if (!d || d.fresh === false) {
     box.classList.add('is-unknown');
+    // On the hosted dashboard the reason is different and the user can do
+    // nothing about it: the cloud has no DuckDB, so this is computed on the
+    // machine the agent runs on and reaches here through the snapshot.
+    // Blaming their machine for our missing plumbing would be a lie.
+    var sub = window.CLOUD_MODE
+      ? t('needs.cloud_sub', null,
+          'This is worked out on the machine your agent runs on, and is not in the hosted view yet.')
+      : t('needs.unknown_sub', null,
+          'ClawMetry has not heard from your machine recently, so it cannot say what needs you.');
     box.innerHTML =
       '<div class="cm-needs-head">' +
         '<span class="cm-needs-title">' +
           t('needs.unknown_title', null, "Can't tell right now") + '</span>' +
-        '<span class="cm-needs-sub">' +
-          t('needs.unknown_sub', null,
-            'ClawMetry has not heard from your machine recently, so it cannot say what needs you.') +
-        '</span>' +
+        '<span class="cm-needs-sub">' + sub + '</span>' +
       '</div>';
     box.style.display = '';
     return;

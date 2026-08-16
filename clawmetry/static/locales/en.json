@@ -868,6 +868,7 @@
   "needs.badge_maybe": "Maybe waiting",
   "needs.badge_waiting": "Waiting for you",
   "needs.clear_title": "Nothing needs you right now",
+  "needs.cloud_sub": "This is worked out on the machine your agent runs on, and is not in the hosted view yet.",
   "needs.confident": "Waiting for you",
   "needs.inferred": "Looks like it's waiting",
   "needs.inferred_note": "Worked out from what each agent last did, so this is a best guess.",

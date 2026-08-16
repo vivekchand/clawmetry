@@ -256,6 +256,7 @@ FEATURE_LABELS = {
     "channels": "Channels",
     "nemo_governance": "NeMo Governance",
     "overview": "Overview",
+    "session_attention": "Needs-you alerts",
     "multi_runtime": "Multi-runtime",
     "fleet": "Multi-node fleet",
     "cloud_sync": "Cloud sync",
@@ -308,6 +309,13 @@ FREE_FEATURES = frozenset(
         "channels",
         "nemo_governance",
         "overview",
+        # Seeing that an agent is blocked on YOU is free, on every plan and
+        # every runtime. It is the daily reason to open ClawMetry at all, and
+        # the tier above sells itself from inside that view: once you are
+        # looking at a stuck agent, acting on it is the obvious next click.
+        # Gating this would hide the problem from exactly the people most
+        # likely to be bitten by it, and sell nothing to nobody.
+        "session_attention",
     }
 )
 
