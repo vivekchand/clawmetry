@@ -11960,9 +11960,20 @@ def detect_config(args=None):
     from routes.hooks import bp_hooks
     app.register_blueprint(bp_hooks)
     # Per-runtime approval routing (/api/approvals/routing) + the phone
-    # decision page (/a/<id>) the notification links point at.
-    from routes.approval_routing import bp_approval_routing
-    app.register_blueprint(bp_approval_routing)
+    # decision page (/a/<id>) the notification links point at. Paid
+    # delivery layer: when clawmetry-pro is installed its blueprint was
+    # already registered by ``_ext_load(app)`` above and won these URLs, so
+    # skip the OSS registration to avoid a blueprint-name collision. The
+    # OSS module is the impl today and becomes a 402 stub once the impl
+    # moves — the switch is identical either way.
+    try:
+        import clawmetry_pro as _pro_ar
+        _pro_ar_loaded = bool(getattr(_pro_ar, "is_loaded", lambda: False)())
+    except Exception:
+        _pro_ar_loaded = False
+    if not _pro_ar_loaded:
+        from routes.approval_routing import bp_approval_routing
+        app.register_blueprint(bp_approval_routing)
     app.register_blueprint(bp_turn_anatomy)
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)

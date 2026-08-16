@@ -111,7 +111,7 @@ CHANNEL_CAPABILITY = {
 
 
 @bp_approval_routing.route("/api/approvals/routing", methods=["GET"])
-@gate("approval_queue")
+@gate("approval_routing")
 def api_approvals_routing_get():
     from clawmetry import approval_notify as an
     from clawmetry import approval_inbound as ai
@@ -136,7 +136,7 @@ def api_approvals_routing_get():
 
 
 @bp_approval_routing.route("/api/approvals/routing", methods=["PUT"])
-@gate("approval_queue")
+@gate("approval_routing")
 def api_approvals_routing_put():
     from clawmetry import approval_notify as an
     body = request.get_json(silent=True) or {}
@@ -161,7 +161,7 @@ def api_approvals_routing_put():
 
 
 @bp_approval_routing.route("/api/approvals/routing/test", methods=["POST"])
-@gate("approval_queue")
+@gate("approval_routing")
 def api_approvals_routing_test():
     """Deliver a sample approval page to a runtime's channels.
 

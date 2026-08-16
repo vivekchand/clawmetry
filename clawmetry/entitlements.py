@@ -261,6 +261,8 @@ FEATURE_LABELS = {
     "cloud_sync": "Cloud sync",
     "all_channels": "All channels",
     "approval_queue": "Approval queue",
+    "approval_routing": "Approval notifications",
+    "approval_mirror": "Approve from your phone",
     "budget_limits": "Budget limits",
     "per_runtime_health_timeline": "Per-runtime health timeline",
     "per_run_waste_flags": "Per-run waste flags",
@@ -317,6 +319,12 @@ STARTER_FEATURES = frozenset(
         "cloud_sync",
         "all_channels",
         "approval_queue",
+        # Delivering an approval to a channel is Starter, alongside the
+        # queue itself: an approval nobody is told about is the silent-pause
+        # problem the queue exists to solve, and gating the telling behind
+        # Pro would reintroduce it as a pricing tier. The Pro upsell is
+        # ``approval_mirror`` below — the hands-free answer, not the alert.
+        "approval_routing",
         "budget_limits",
         "per_runtime_health_timeline",
     }
@@ -324,6 +332,11 @@ STARTER_FEATURES = frozenset(
 
 PRO_ONLY_FEATURES = frozenset(
     {
+        # Intercepting a runtime's OWN permission prompt and answering it
+        # remotely — the hands-free half. Starter is told an approval is
+        # waiting (``approval_routing``); Pro answers it without going back
+        # to the terminal.
+        "approval_mirror",
         "per_run_waste_flags",
         "per_run_compare",
         "error_triage",
