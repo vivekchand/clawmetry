@@ -20,24 +20,41 @@ def _make_app():
     return app
 
 
-def _stub_store(monkeypatch, rows_by_agent_type):
-    """Replace _store_via_daemon_or_direct with a fake that serves the
-    given rows per agent_type. Rows are session dicts; missing agents
-    return an empty list. query_recent_evals returns []."""
+def _stub_store(monkeypatch, rows_by_agent_type, events_by_session=None):
+    """Replace _store_via_daemon_or_direct with a fake store.
+
+    The endpoint no longer sweeps agent_type (that column is hardcoded to
+    "openclaw" for every row, which is what made the old surface report the
+    wrong runtime for everyone). It reads query_quality_sessions, scoped by
+    the real runtime, so the stub is keyed by runtime and each row carries a
+    metadata blob the way the daemon writes it.
+    """
     from routes import quality as quality_module
 
+    events_by_session = events_by_session or {}
+
     def _fake(method_name, **kwargs):
-        if method_name == "query_outcomes":
-            at = kwargs.get("agent_type")
-            return list(rows_by_agent_type.get(at, []))
+        if method_name == "query_quality_sessions":
+            want = kwargs.get("runtime")
+            out = []
+            for rt, rows in rows_by_agent_type.items():
+                if want and want != rt:
+                    continue
+                for r in rows:
+                    r = dict(r)
+                    r.setdefault("runtime", rt)
+                    r.setdefault("metadata", {})
+                    out.append(r)
+            # until= marks the "prior window" read; keep it empty so vs_prior
+            # stays None rather than comparing a window against itself.
+            return [] if kwargs.get("until") else out
+        if method_name == "query_events":
+            return list(events_by_session.get(kwargs.get("session_id"), []))
         if method_name == "query_recent_evals":
-            # Not exercising judge-blend here; keep it empty so the score
-            # comes purely from outcome (the deterministic path).
             return []
         return None
 
     monkeypatch.setattr(quality_module, "_store_via_daemon_or_direct", _fake)
-
 
 def test_empty_envelope_on_no_rows(monkeypatch):
     _stub_store(monkeypatch, {})
@@ -58,58 +75,94 @@ def test_empty_envelope_on_no_rows(monkeypatch):
         assert "nothing to grade" in body["headline"].lower()
 
 
-def test_grade_reflects_outcome_mix(monkeypatch):
-    """A mix of successes + one failure yields a grade below A but not F,
-    and the rough run surfaces with a plain-English story."""
+def _tool_call(ts, tool, inp):
+    return {"event_type": "tool_call", "ts": ts,
+            "data": {"role": "assistant", "content": "", "_runtime": "claude_code",
+                     "tool_calls": [{"name": tool, "input": inp}], "tool_name": tool}}
+
+
+def _tool_result(ts, err=False, text="ok"):
+    return {"event_type": "tool_result", "ts": ts,
+            "data": {"role": "user", "content": text, "_runtime": "claude_code",
+                     "extra": {"isError": bool(err)}}}
+
+
+def _clean_events(n=14):
+    """A session doing varied, successful work."""
+    out, t = [], 1_780_000_000
+    for i in range(n):
+        out.append(_tool_call(t, ["Bash", "Read", "Edit", "Grep"][i % 4],
+                              {"file_path": "/repo/f%d.py" % i}))
+        out.append(_tool_result(t + 1))
+        t += 20
+    return out
+
+
+def _failing_events(n=14):
+    """A session whose tools keep really failing."""
+    out, t = [], 1_780_000_000
+    for _ in range(n):
+        out.append(_tool_call(t, "Bash", {"command": "flaky"}))
+        out.append(_tool_result(t + 1, err=True, text="boom"))
+        t += 20
+    return out
+
+
+def test_grade_reflects_evidence_mix(monkeypatch):
+    """Two clean sessions plus one that really failed lands below A, and the
+    rough run surfaces with plain-English copy AND inspectable evidence.
+
+    Rewritten 2026-08-15: the old version drove this from a hand-set
+    ``outcome`` enum. Grading is now derived from the session's real events,
+    so the fixture supplies events and the verdict has to earn itself.
+    """
     rows = [
-        {"session_id": "s1", "agent_type": "claude_code",
-         "title": "add unit tests", "outcome": "success",
-         "cost_usd": 0.10, "started_at": "2026-08-14T09:00:00Z",
-         "ended_at":   "2026-08-14T09:01:00Z"},
-        {"session_id": "s2", "agent_type": "claude_code",
-         "title": "refactor middleware", "outcome": "success",
-         "cost_usd": 0.05, "started_at": "2026-08-14T09:02:00Z",
-         "ended_at":   "2026-08-14T09:03:00Z"},
-        {"session_id": "s3", "agent_type": "claude_code",
-         "title": "debug the E2E", "outcome": "tool_call_stuck",
-         "cost_usd": 0.90, "started_at": "2026-08-14T09:10:00Z",
-         "ended_at":   "2026-08-14T09:20:00Z"},
+        {"session_id": "s1", "title": "add unit tests", "cost_usd": 0.10,
+         "started_at": "2026-08-14T09:00:00Z", "ended_at": "2026-08-14T09:01:00Z"},
+        {"session_id": "s2", "title": "refactor middleware", "cost_usd": 0.05,
+         "started_at": "2026-08-14T09:02:00Z", "ended_at": "2026-08-14T09:03:00Z"},
+        {"session_id": "s3", "title": "debug the E2E", "cost_usd": 0.90,
+         "started_at": "2026-08-14T09:10:00Z", "ended_at": "2026-08-14T09:20:00Z"},
     ]
-    _stub_store(monkeypatch, {"claude_code": rows})
+    _stub_store(monkeypatch, {"claude_code": rows}, events_by_session={
+        "s1": _clean_events(), "s2": _clean_events(), "s3": _failing_events(),
+    })
     app = _make_app()
     with app.test_client() as c:
         body = c.get("/api/quality/report-card").get_json()
-    # 2/3 successes → grade should be B or C (score = ~0.67)
-    assert body["grade"] in {"B", "C"}, body["grade"]
-    assert body["success_runs"] == 2
-    assert body["rough_runs_n"] == 1
-    # The rough run row is human-scannable, no bare hash.
-    assert body["rough_runs"], body
+
+    assert body["success_runs"] == 2, body
+    assert body["rough_runs_n"] == 1, body
+    assert body["grade"] in {"B", "C", "D", "F"}, body["grade"]
+
     rr = body["rough_runs"][0]
     assert rr["title"] == "debug the E2E"
-    assert "stuck" in rr["story"].lower()
-    # Patterns aggregate the failure and carry a $ cost.
-    assert body["patterns"]
-    top = body["patterns"][0]
-    assert top["count"] == 1
-    assert "stuck" in top["label"].lower()
-    assert top["cost_display"].startswith("$")
+    assert rr["story"].strip()
+    # The runtime is the session's real runtime, never a loop variable.
+    assert rr["runtime"] == "claude_code", rr
+
+    # THE contract: the claim ships with the evidence for it.
+    assert rr["verdicts"], "a rough run must carry at least one verdict"
+    ev = rr["verdicts"][0]["evidence"]
+    assert ev["exhibits"], "a verdict without exhibits must never render"
+    assert ev["observed"] and ev["threshold"]
+    assert 0.0 < rr["verdicts"][0]["confidence"] <= 1.0
+
+    assert body["patterns"] and body["patterns"][0]["cost_display"].startswith("$")
 
 
 def test_headline_matches_all_clean(monkeypatch):
-    """When every run succeeds, the subline says 'No rough ones.'"""
-    rows = [
-        {"session_id": f"s{i}", "agent_type": "claude_code",
-         "title": f"task {i}", "outcome": "success", "cost_usd": 0.01}
-        for i in range(5)
-    ]
-    _stub_store(monkeypatch, {"claude_code": rows})
+    """When nothing is flagged, the subline says so plainly."""
+    rows = [{"session_id": "s%d" % i, "title": "task %d" % i, "cost_usd": 0.01}
+            for i in range(5)]
+    _stub_store(monkeypatch, {"claude_code": rows},
+                events_by_session={"s%d" % i: _clean_events() for i in range(5)})
     app = _make_app()
     with app.test_client() as c:
         body = c.get("/api/quality/report-card").get_json()
-    assert body["grade"] == "A"
+    assert body["grade"] == "A", body
     assert body["rough_runs_n"] == 0
-    assert "no rough" in body["subline"].lower()
+    assert "nothing rough" in body["subline"].lower(), body["subline"]
 
 
 def test_week_bucket_shape(monkeypatch):
@@ -160,15 +213,20 @@ def test_checks_post_persists_to_jsonl(monkeypatch, tmp_path):
 
 
 def test_pattern_labels_have_no_ml_jargon():
-    """Guard: the plain-English pattern labels never use ML jargon like
-    'eval', 'rubric', 'judge', 'metric'. That was the vaporbox smell the
-    2026-08-14 redesign fixed."""
-    from clawmetry.quality import _PATTERN_LABEL
-    banned = ("eval", "rubric", "judge", "metric", "score")
-    for lbl in _PATTERN_LABEL.values():
-        lo = lbl.lower()
-        for word in banned:
-            assert word not in lo, f"pattern label leaks ML jargon: {lbl!r}"
+    """Guard: user-facing copy never leaks ML jargon or internal signal ids.
+
+    Widened 2026-08-15 to cover the per-session stories too, since the rough
+    run list renders them straight to the user.
+    """
+    from clawmetry.quality import _VERDICT_COPY
+    banned = ("eval", "rubric", "judge", "metric", "score", "_")
+    for name, copy in _VERDICT_COPY.items():
+        for field in ("label", "story"):
+            lo = copy[field].lower()
+            for word in banned:
+                assert word not in lo, (
+                    "%s.%s leaks jargon (%r): %r" % (name, field, word, copy[field])
+                )
 
 
 def test_story_never_blank():
@@ -178,3 +236,70 @@ def test_story_never_blank():
     from clawmetry.quality import story_for
     assert story_for({}).strip()
     assert story_for({"outcome": "unknown"}).strip()
+
+
+def test_store_unreachable_says_so_instead_of_nothing_to_grade(monkeypatch):
+    """A store that cannot be reached must NOT read as "nothing to grade".
+
+    FLYWHEEL cloud-parity gate: the hosted dashboard has no local DuckDB, so
+    this path is what a trial user sees. Reporting an empty week for a machine
+    that is working fine is a wrong answer dressed as an empty state.
+    """
+    from routes import quality as quality_module
+    monkeypatch.setattr(quality_module, "_store_via_daemon_or_direct",
+                        lambda *a, **k: None)
+    app = _make_app()
+    with app.test_client() as c:
+        body = c.get("/api/quality/report-card").get_json()
+    assert body["store_available"] is False
+    assert "nothing to grade" not in body["headline"].lower()
+    assert "your own machine" in body["headline"].lower()
+    assert body["rough_runs"] == []
+
+
+def test_empty_store_still_reads_as_nothing_to_grade(monkeypatch):
+    """The other half of the distinction: a store that answers with no rows
+    genuinely has nothing to grade, and must say that."""
+    _stub_store(monkeypatch, {})
+    app = _make_app()
+    with app.test_client() as c:
+        body = c.get("/api/quality/report-card").get_json()
+    assert body["store_available"] is True
+    assert "nothing to grade" in body["headline"].lower()
+
+
+def test_excluded_sessions_report_the_right_reason(monkeypatch):
+    """"Not graded yet" must not be reported as "too little activity".
+
+    The first is a fact about us, the second a fact about the session.
+    Collapsing them tells the user their work was too thin when the truth is
+    the collector hasn't caught up — wrong, and reassuring in the wrong
+    direction, which is the species of copy this rebuild exists to remove.
+    """
+    from clawmetry.quality import compute_report_card
+
+    rows = [{"session_id": "s%d" % i, "title": "t%d" % i, "cost_usd": 1.0}
+            for i in range(6)]
+
+    def unmeasured(reason):
+        return {"measurable": False, "reason": reason, "verdicts": []}
+
+    assessments = {
+        "s0": {"measurable": True, "verdicts": []},
+        "s1": {"measurable": True, "verdicts": []},
+        "s2": unmeasured("Too little activity to judge — 3 events, 0 tool results."),
+        "s3": unmeasured("Too little activity to judge — 2 events, 0 tool results."),
+        "s4": unmeasured("Not graded yet — the collector will pick this up."),
+        "s5": unmeasured("Not graded yet — the collector will pick this up."),
+    }
+    sub = compute_report_card(rows, assessments)["subline"]
+    assert "2 more had too little activity" in sub, sub
+    assert "2 are still being graded" in sub, sub
+
+    # All-thin must not invent a "still being graded" clause.
+    all_thin = dict(assessments)
+    for k in ("s4", "s5"):
+        all_thin[k] = unmeasured("Too little activity to judge — 1 events, 0 tool results.")
+    sub2 = compute_report_card(rows, all_thin)["subline"]
+    assert "still being graded" not in sub2, sub2
+    assert "4 more had too little activity" in sub2, sub2

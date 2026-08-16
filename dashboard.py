@@ -115,6 +115,7 @@ from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_traces, bp_version, bp_version_impact
 from routes.compliance import bp_compliance
+from routes.org_analytics import bp_org_analytics
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.runtime_memory import bp_runtime_memory
@@ -324,7 +325,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.710"
+__version__ = "0.12.714"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -11922,6 +11923,7 @@ def detect_config(args=None):
     if not _pro_loaded:
         app.register_blueprint(bp_nemoclaw)
         app.register_blueprint(bp_compliance)
+        app.register_blueprint(bp_org_analytics)
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_runtime_memory)
     app.register_blueprint(bp_heartbeat)

@@ -4533,6 +4533,21 @@ async function loadQualityTab() {
     };
   }
   _qRenderCard(data);
+  if (data.store_available === false) {
+    // The collector isn't reachable from here (e.g. the hosted dashboard has
+    // no local store). Say that plainly instead of rendering "every run
+    // finished cleanly", which would be a wrong answer dressed as good news.
+    var pe = document.getElementById('q-patterns');
+    var re = document.getElementById('q-runs');
+    var msg = t('quality.store_unavailable', null,
+                'Nothing to show from here — this view reads your local run history.');
+    if (pe) pe.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' + escHtml(msg) + '</li>';
+    if (re) re.innerHTML = '<li class="q-empty">' + escHtml(msg) + '</li>';
+    var st = document.getElementById('q-status-line');
+    if (st) st.textContent = t('quality.status_local_only', null, 'Graded on your machine');
+    _qRenderFooter(data);
+    return;
+  }
   _qRenderPatterns(data);
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);
@@ -4594,8 +4609,7 @@ function _qRenderPatterns(data) {
     html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
     html += '<div class="what">' + escHtml(p.label || '') + '</div>';
     html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
-            escHtml(p.cost_display || '$0.00') +
-            '<small>' + escHtml(p.avg_minutes || '—') + '</small></div>';
+            escHtml(p.cost_display || '$0.00') + '</div>';
     html += '</li>';
   });
   el.innerHTML = html;
@@ -4625,19 +4639,146 @@ function _qRenderRoughRuns(data) {
     var sid = String(r.session_id || '');
     var when = _qFmtWhen(r.when);
     var bid = 'q-b-' + i;
+    var eid = 'q-e-' + i;
+    // r.runtime comes from the session's own recorded runtime. The old field
+    // (agent_type) was stamped from a loop variable and read "openclaw" for
+    // every runtime — see the 2026-08-15 audit.
+    var rt = String(r.runtime || '');
     html += '<li>';
-    html += '<div class="when">' + escHtml(when) + (r.agent_type ? ' · ' + escHtml(r.agent_type) : '') + '</div>';
+    html += '<div class="when">' + escHtml(when) + (rt ? ' · ' + escHtml(_qRuntimeLabel(rt)) : '') + '</div>';
     html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
     html += '<div class="story">' + escHtml(r.story || '') + '</div>';
     html += '<div class="row-actions">';
     html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
             t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    if ((r.verdicts || []).length) {
+      html += '<button class="q-evidence-toggle" onclick="qToggleEvidence(\'' + eid + '\')">' +
+              t('quality.show_evidence', null, 'Why we flagged it') + '</button>';
+    }
     html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
     html += '</div>';
+    html += '<div id="' + eid + '" class="q-evidence">' + _qEvidenceHtml(r) + '</div>';
     html += '<div id="' + bid + '" class="q-builder"></div>';
     html += '</li>';
   });
   el.innerHTML = html;
+}
+
+// Human-readable runtime name. Falls back to the raw id so a runtime we
+// haven't named still reads as itself rather than as something else.
+var _Q_RUNTIME_NAMES = {
+  claude_code: 'Claude Code', openclaw: 'OpenClaw', codex: 'Codex',
+  cursor: 'Cursor', aider: 'Aider', goose: 'Goose', opencode: 'opencode',
+  qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
+  n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
+  nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
+  qm: 'QM', deepseek_harness: 'DeepSeek Harness'
+};
+function _qRuntimeLabel(id) {
+  return _Q_RUNTIME_NAMES[id] || id;
+}
+
+// The evidence panel. This is the product: a verdict the user cannot inspect
+// is a verdict they cannot trust, so every flagged run shows what fired, what
+// it measured, what it compared against, and the actual moments behind it.
+function _qEvidenceHtml(r) {
+  var vs = (r.verdicts || []);
+  if (!vs.length) return '';
+  var h = '';
+  vs.forEach(function(v) {
+    var ev = v.evidence || {};
+    var obs = ev.observed || {};
+    var th = ev.threshold || {};
+    var conf = Math.round((Number(v.confidence) || 0) * 100);
+    h += '<div class="q-ev-block">';
+    // Plain English, never the internal signal id. A person opening this has
+    // never heard of "no_forward_progress" and shouldn't have to.
+    h += '<div class="q-ev-head"><span class="q-ev-sig">' + escHtml(_qSignalLabel(ev.signal || v.verdict || '')) + '</span>' +
+         '<span class="q-ev-conf" title="' +
+         escHtml(t('quality.conf_help', null, 'Derived from how much evidence there is and how far past normal it sits.')) +
+         '">' + conf + '% ' + t('quality.confidence', null, 'confidence') + '</span></div>';
+
+    // What we measured vs what counts as normal HERE. Long values (file
+    // paths) get their own line so the counts stay scannable.
+    var obsBits = [], longBits = [];
+    Object.keys(obs).forEach(function(k) {
+      if (k === 'digest') return;
+      // Percentages must read as percentages. "failure rate 6" is a different
+      // claim from "failure rate 6%".
+      var val = String(obs[k]) + (k === 'pct' ? '%' : '');
+      var frag = '<span class="k">' + escHtml(_qPrettyKey(k)) + '</span> <b>' + escHtml(val) + '</b>';
+      (val.length > 34 ? longBits : obsBits).push(frag);
+    });
+    if (obsBits.length) h += '<div class="q-ev-obs">' + obsBits.join('<i>·</i>') + '</div>';
+    longBits.forEach(function(f) { h += '<div class="q-ev-obs long">' + f + '</div>'; });
+    if (th && (th.pct !== undefined || th.repeats !== undefined || th.edits !== undefined)) {
+      var lim, unit;
+      if (th.pct !== undefined) { lim = th.pct + '%'; unit = ''; }
+      else if (th.repeats !== undefined) { lim = th.repeats; unit = ' ' + t('quality.unit_repeats', null, 'identical calls'); }
+      else { lim = th.edits; unit = ' ' + t('quality.unit_edits', null, 'edits'); }
+      h += '<div class="q-ev-th">' +
+           t('quality.threshold_prefix', null, 'Flagged above') + ' <b>' + escHtml(String(lim) + unit) + '</b>' +
+           (th.source ? ' <span class="src">(' + escHtml(String(th.source)) + ')</span>' : '') +
+           '</div>';
+    }
+
+    // The actual moments. Without these the claim does not render at all.
+    var ex = (ev.exhibits || []);
+    if (ex.length) {
+      h += '<ul class="q-ev-list">';
+      ex.slice(0, 6).forEach(function(x) {
+        var when = x.ts ? _qFmtWhen(new Date(Number(x.ts) * 1000).toISOString()) : '';
+        // Some runtimes don't name the tool on a result event. Showing
+        // "(unnamed tool)" is noise where the error text is the real evidence,
+        // so only render a name when there is one.
+        var bits = [];
+        if (x.tool) bits.push('<span class="tl">' + escHtml(String(x.tool)) + '</span>');
+        if (x.file) bits.push('<span class="f">' + escHtml(String(x.file)) + '</span>');
+        if (x.error) bits.push('<span class="e">' + escHtml(String(x.error).replace(/\s+/g, ' ').slice(0, 120)) + '</span>');
+        else if (x.errored) bits.push('<span class="e">' + t('quality.failed', null, 'failed') + '</span>');
+        h += '<li><span class="ts">' + escHtml(when) + '</span>' + bits.join(' ') + '</li>';
+      });
+      h += '</ul>';
+      if (ev.exhibit_count > ex.slice(0, 6).length) {
+        h += '<div class="q-ev-more">' +
+             t('quality.and_more', null, 'and') + ' ' +
+             escHtml(String(ev.exhibit_count - Math.min(6, ex.length))) + ' ' +
+             t('quality.more_like_this', null, 'more like this') + '</div>';
+      }
+    }
+    h += '</div>';
+  });
+  return h;
+}
+
+// Internal signal id → the sentence a person reads. Kept beside _qPrettyKey
+// so any new signal has an obvious place to get its plain-English name.
+function _qSignalLabel(sig) {
+  var m = {
+    tool_error_rate:     t('quality.sig_tool_error_rate', null, 'Its tools kept failing'),
+    tool_thrash:         t('quality.sig_tool_thrash', null, 'Same call, over and over'),
+    no_forward_progress: t('quality.sig_no_progress', null, 'Edited without ever checking'),
+    hard_failure:        t('quality.sig_hard_failure', null, 'Ended on an error'),
+    tool_failures:       t('quality.sig_tool_error_rate', null, 'Its tools kept failing')
+  };
+  return m[sig] || String(sig || '').replace(/_/g, ' ');
+}
+
+function _qPrettyKey(k) {
+  var m = {
+    tool_results: 'tool calls', tool_errors: 'failed', pct: 'failure rate',
+    identical_calls: 'identical calls', failed: 'of them failed',
+    edits: 'edits', verifications_between: 'checks in between',
+    error_events: 'errors', failed_at_end: 'failed at the end',
+    tool: 'tool', file: 'file'
+  };
+  return m[k] || k.replace(/_/g, ' ');
+}
+
+function qToggleEvidence(eid) {
+  var el = document.getElementById(eid);
+  if (!el) return;
+  el.classList.toggle('open');
 }
 
 function _qFmtWhen(iso) {
@@ -4661,15 +4802,24 @@ function _qRenderStatusLine(data) {
   if (!el) return;
   var n = Number(data.graded_runs || 0);
   var total = Number(data.total_runs || 0);
+  var un = Number(data.unmeasured_runs || 0);
   if (n === 0 && total === 0) {
     el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
     return;
   }
-  el.textContent = data.judge_key_set
-    ? (t('quality.status_prefix_on', null, 'Grading on · ') + n + ' ' +
-       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')))
-    : (t('quality.status_prefix_off', null, 'Grading from signals · ') + n + ' ' +
-       (n === 1 ? t('quality.run_singular', null, 'run graded') : t('quality.run_plural', null, 'runs graded')));
+  // Say what was graded AND what was left out. A grade that quietly covers
+  // half the window reads as a grade over all of it.
+  var parts = [n + ' ' + (n === 1
+    ? t('quality.run_singular', null, 'run graded')
+    : t('quality.run_plural', null, 'runs graded'))];
+  if (un > 0) {
+    parts.push(un + ' ' + t('quality.too_thin', null, 'with too little activity to judge'));
+  }
+  if (data.benign_filter && data.benign_filter.label) {
+    parts.push(String(data.benign_filter.label));
+  }
+  el.textContent = t('quality.status_prefix_off', null, 'Grading from signals · ') +
+                   parts.join(' · ');
 }
 
 function _qRenderFooter(data) {
@@ -11836,6 +11986,11 @@ async function loadSessions() {
     html += '<div class="session-meta">';
     html += '<span><span class="badge model">' + (s.model||'default') + '</span></span>';
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
+    // Where this session was launched from. Claude Code, the Claude Desktop
+    // app and Agent-SDK runs all write to the same transcript tree, so without
+    // this every desktop session reads as someone typing in a terminal.
+    // Absent for runtimes that only have one surface — no badge, no noise.
+    html += _cmSurfaceBadge(s.surface);
     if (sessCost && sessCost.cost_usd > 0) {
       html += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">💰 $' + Number(sessCost.cost_usd||0).toFixed(4) + ' total</span>';
     }
@@ -19090,11 +19245,206 @@ async function _cmInitHarnessNav() {
   _cmRefreshHarnessNav();
 }
 
+// ── Claude surface attribution ──────────────────────────────────────────────
+// Claude Code, the Claude Desktop app (agent mode / Cowork's local ops) and
+// Agent-SDK runs all write into the same ~/.claude/projects tree. The adapter
+// reads the transcript's `entrypoint` and stamps a surface on the session; this
+// renders it. Deliberately quiet — a dimension, not an alert — so it never
+// competes with the cost and failure chips beside it.
+var _CM_SURFACES = {
+  terminal: { glyph: '&#9656;', label: 'terminal',
+              hint: 'Launched from the terminal.' },
+  desktop:  { glyph: '&#9635;', label: 'desktop',
+              hint: 'Launched from the Claude Desktop app.' },
+  sdk:      { glyph: '&#123;&#125;', label: 'SDK',
+              hint: 'Launched programmatically through the Agent SDK.' }
+};
+
+function _cmSurfaceBadge(surface) {
+  var key = String(surface || '').toLowerCase();
+  if (!key) return '';
+  var s = _CM_SURFACES[key];
+  // An entrypoint we have not mapped yet still gets a badge rather than being
+  // silently folded into "terminal" — an unknown surface is worth seeing.
+  var label = s ? s.label : key;
+  var glyph = s ? s.glyph : '&#9679;';
+  var hint = s ? s.hint : 'Launched from ' + key + '.';
+  return '<span><span class="badge" title="' + escHtml(hint)
+    + '" style="background:var(--bg-secondary);color:var(--text-muted);'
+    + 'border:1px solid var(--border-primary);font-weight:600;">'
+    + glyph + ' ' + escHtml(label) + '</span></span>';
+}
+
+// ── Org-wide Claude coverage ────────────────────────────────────────────────
+// The card answers the one question local ingest structurally cannot: what is
+// the rest of the org running on Claude surfaces that never touch this disk?
+// Its shape IS the argument — the first row is traced in full, every row below
+// it is a day-level headcount and says so.
+var _CM_COVERAGE_ERRORS = {
+  unauthorized: 'That key was rejected. Mint a new one at claude.ai/analytics/api-keys.',
+  not_entitled: 'This organization’s plan has no analytics API. Anthropic offers it on Enterprise only.',
+  rate_limited: 'Anthropic is throttling the analytics API right now. It refreshes every few hours.',
+  bad_request:  'The analytics API rejected that request.',
+  unavailable:  'Could not reach the analytics API.'
+};
+
+function _cmCoverageRow(p, configured) {
+  var traced = !!p.locallyTraced;
+  // The signature: a solid accent rule for the surface we trace in full, a
+  // dashed hairline for every surface we can only count. The asymmetry is the
+  // whole point of the card, so it is drawn, not described.
+  var rule = traced
+    ? 'border-left:3px solid var(--bg-accent,#6cf);'
+    : 'border-left:3px dashed var(--border-primary);';
+  var here = traced
+    ? '<span style="color:var(--text-success,#22c55e);font-weight:600;">Traced in full</span>'
+    : '<span style="color:var(--text-muted);">Not on this disk</span>';
+  var org = configured && p.activeUsers > 0
+    ? escHtml(String(p.activeUsers)) + (p.activeUsers === 1 ? ' person' : ' people')
+    : '<span style="color:var(--text-faint,#666);">not counted</span>';
+  return '<div style="' + rule + 'display:grid;grid-template-columns:1fr auto auto;'
+    + 'gap:14px;align-items:baseline;padding:7px 0 7px 12px;">'
+    + '<span style="color:var(--text-primary);font-size:13px;">' + escHtml(p.label) + '</span>'
+    + '<span style="font-size:12px;">' + here + '</span>'
+    + '<span style="font-size:12px;color:var(--text-primary);min-width:70px;text-align:right;">'
+    + org + '</span></div>';
+}
+
+function _cmCoverageHtml(d) {
+  d = d || {};
+  var configured = !!d.configured && !d.error;
+  var products = d.products && d.products.length ? d.products : [
+    { key: 'claude_code', label: 'Claude Code', locallyTraced: true },
+    { key: 'cowork', label: 'Cowork', locallyTraced: false },
+    { key: 'chat', label: 'Claude chat', locallyTraced: false },
+    { key: 'office_agent', label: 'Claude in Office', locallyTraced: false },
+    { key: 'science', label: 'Claude Science', locallyTraced: false }
+  ];
+
+  var state = configured
+    ? '<span class="badge" style="background:rgba(34,197,94,0.12);color:#22c55e;'
+      + 'border:1px solid rgba(34,197,94,0.35);">Connected</span>'
+    : '<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);'
+      + 'border:1px solid var(--border-primary);">Not connected</span>';
+
+  var h = '<div class="card" style="padding:16px;">';
+  h += '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+    + '<div style="font-size:15px;font-weight:700;">Claude surface coverage</div>'
+    + '<div style="margin-left:auto;">' + state + '</div></div>';
+  h += '<div style="font-size:13px;color:var(--muted,#888);line-height:1.6;max-width:720px;">'
+    + 'ClawMetry traces every Claude Code session on this machine down to the tool call. '
+    + 'The rest of your organization also runs Claude in the browser, in Cowork, and in '
+    + 'Chrome. None of that is written to this disk, so none of it can be traced here.'
+    + '</div>';
+
+  h += '<div style="margin:14px 0 0;">';
+  h += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:14px;'
+    + 'padding:0 0 6px 12px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;'
+    + 'color:var(--text-faint,#666);border-bottom:1px solid var(--border-primary);">'
+    + '<span>Surface</span><span>On this machine</span>'
+    + '<span style="min-width:70px;text-align:right;">Across the org</span></div>';
+  h += products.map(function (p) { return _cmCoverageRow(p, configured); }).join('');
+  h += '</div>';
+
+  if (configured) {
+    var through = d.dataThrough ? String(d.dataThrough).slice(0, 10) : '';
+    h += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">'
+      + 'Org figures are daily headcounts over the last ' + escHtml(String(d.windowDays || 30))
+      + ' days' + (through ? ', through ' + escHtml(through) : '')
+      + '. There are no sessions or transcripts behind them. Anthropic’s analytics '
+      + 'API reports one number per person per day.'
+      + '</div>';
+    if (d.topUsers && d.topUsers.length) {
+      h += '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);">Highest spend: '
+        + d.topUsers.slice(0, 3).map(function (u) {
+            return escHtml(u.email || u.name || 'unknown') + ' $' + Number(u.costUsd || 0).toFixed(2);
+          }).join(' &middot; ')
+        + '</div>';
+    }
+    if (d.costError) {
+      h += '<div style="margin-top:8px;font-size:12px;color:#f59e0b;">'
+        + 'Spend figures are unavailable right now (' + escHtml(d.costError) + ').</div>';
+    }
+  } else {
+    var msg = d.error
+      ? (_CM_COVERAGE_ERRORS[d.error] || _CM_COVERAGE_ERRORS.unavailable)
+      : 'Connect an analytics key to fill the last column. It adds a daily headcount and '
+        + 'spend figure per person for every surface above. Not sessions, not transcripts. '
+        + 'Anthropic offers this key on Enterprise plans only.';
+    h += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;'
+      + 'max-width:720px;">' + msg + '</div>';
+    if (d.locked) {
+      h += '<div style="margin-top:10px;"><a href="/upgrade?source=claude_coverage" '
+        + 'style="color:var(--accent,#6cf);font-size:13px;font-weight:600;">'
+        + 'Available on Enterprise &rarr;</a></div>';
+    } else {
+      h += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+        + '<input id="claude-coverage-key" type="password" autocomplete="off" '
+        + 'placeholder="Analytics key" style="flex:1;min-width:220px;max-width:340px;'
+        + 'background:var(--bg-secondary);border:1px solid var(--border-primary);'
+        + 'border-radius:6px;padding:7px 10px;color:var(--text-primary);font-size:13px;">'
+        + '<button onclick="saveClaudeCoverageKey()" class="btn-ghost" '
+        + 'style="font-size:13px;font-weight:600;">Connect key</button>'
+        + '<span id="claude-coverage-msg" style="font-size:12px;color:var(--text-muted);"></span>'
+        + '</div>';
+    }
+  }
+  h += '</div>';
+  return h;
+}
+
+async function loadClaudeCoverage() {
+  var el = document.getElementById('claude-coverage');
+  if (!el) return;
+  el.style.display = '';
+  try {
+    var r = await fetch('/api/org-analytics', { credentials: 'same-origin' });
+    // 402 is the honest OSS state, not a failure: the card still renders the
+    // full ledger and swaps the key form for the upgrade link. 404 lands here
+    // too — an older paid layer that predates this route is "not available to
+    // you", which is the same answer, not a network error.
+    if (r.status === 402 || r.status === 404) {
+      el.innerHTML = _cmCoverageHtml({ locked: true });
+      return;
+    }
+    el.innerHTML = _cmCoverageHtml(await r.json());
+  } catch (e) {
+    el.innerHTML = _cmCoverageHtml({ configured: true, error: 'unavailable' });
+  }
+}
+
+async function saveClaudeCoverageKey() {
+  var input = document.getElementById('claude-coverage-key');
+  var msg = document.getElementById('claude-coverage-msg');
+  if (!input) return;
+  var key = String(input.value || '').trim();
+  if (!key) { if (msg) msg.textContent = 'Paste a key first.'; return; }
+  if (msg) msg.textContent = 'Connecting…';
+  try {
+    var r = await fetch('/api/org-analytics/key', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key })
+    });
+    if (!r.ok) { if (msg) msg.textContent = 'Could not save that key.'; return; }
+    input.value = '';
+    await loadClaudeCoverage();
+  } catch (e) {
+    if (msg) msg.textContent = 'Could not save that key.';
+  }
+}
+
 async function loadHarness() {
   var el = document.getElementById('harness-container');
   if (!el) return;
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   if (!rt || rt === 'all') rt = 'openclaw';
+  // Surface coverage is a Claude-specific story (the surfaces are Anthropic's),
+  // so the card only appears under the Claude Code runtime. Hidden elsewhere
+  // rather than rendered empty.
+  var _cov = document.getElementById('claude-coverage');
+  if (rt === 'claude_code') { loadClaudeCoverage(); }
+  else if (_cov) { _cov.style.display = 'none'; _cov.innerHTML = ''; }
   try {
     if (!_cmHarnessTemplates) {
       var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });
