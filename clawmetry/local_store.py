@@ -2383,17 +2383,29 @@ class LocalStore:
             return False
 
     def apply_session_attention(self, items: list[dict[str, Any]]) -> int:
-        """Publish the daemon's "needs you" pass onto the session rows.
+        """Publish the daemon's INFERRED "needs you" pass onto session rows.
 
-        ``items`` is the FULL current list, so this is a replace, not a
-        merge: any session previously flagged that is absent from ``items``
-        gets cleared. That clearing is the whole point — a badge that says
-        "needs you" after you have already answered is worse than no badge,
-        because it teaches people to ignore the real ones.
+        ``items`` is the FULL current inferred list, so this is a replace,
+        not a merge: any session previously flagged that is absent from
+        ``items`` gets cleared. That clearing is the whole point — a badge
+        that says "needs you" after you have already answered is worse than
+        no badge, because it teaches people to ignore the real ones.
 
-        Runs as ONE transaction (clear-all then set-flagged) so no reader
-        ever observes a moment where every badge has vanished. Returns the
-        number of sessions flagged. Never raises into the daemon loop.
+        HOOK ROWS ARE NOT TOUCHED. A row stamped ``attention_signal='hook'``
+        was written by the runtime telling us directly that it opened a
+        prompt (``routes/hooks.py``), which outranks anything this pass can
+        infer — and the inference pass frequently CANNOT see it, because a
+        permission dialog is UI state with no transcript event behind it.
+        Without this carve-out the daemon's next tick would silently wipe
+        every ground-truth badge a second after the hook set it.
+
+        Hook rows are cleared by the hook path itself on resolve, or aged out
+        by :meth:`expire_stale_hook_attention` so a crashed hook cannot pin a
+        badge forever.
+
+        Runs as ONE transaction (clear then set) so no reader ever observes a
+        moment where every badge has vanished. Returns the number of sessions
+        flagged. Never raises into the daemon loop.
         """
         if self._read_only:
             raise RuntimeError(
@@ -2428,19 +2440,141 @@ class LocalStore:
                         "UPDATE sessions SET attention_state = NULL, "
                         "attention_since = NULL, attention_signal = NULL, "
                         "attention_tool = NULL "
-                        "WHERE attention_state IS NOT NULL"
+                        "WHERE attention_state IS NOT NULL "
+                        # Only this pass's own rows. Hook rows are ground
+                        # truth from the runtime and are cleared by the hook
+                        # path, never by inference that cannot see them.
+                        "AND COALESCE(attention_signal, 'inferred') <> 'hook'"
                     )
                     if rows:
                         self._conn.executemany(
                             "UPDATE sessions SET attention_state = ?, "
                             "attention_since = ?, attention_signal = ?, "
                             "attention_tool = ? "
-                            "WHERE agent_type = ? AND session_id = ?",
+                            "WHERE agent_type = ? AND session_id = ? "
+                            # Never downgrade a hook row to an inference.
+                            "AND COALESCE(attention_signal, 'inferred') <> 'hook'",
                             rows,
                         )
             return len(rows)
         except Exception:
             log.debug("local store: apply_session_attention failed",
+                      exc_info=True)
+            return 0
+
+    def set_session_attention(
+        self,
+        session_id: str,
+        *,
+        agent_type: str = "openclaw",
+        state: str = "waiting_approval",
+        signal: str = "hook",
+        tool: str | None = None,
+    ) -> bool:
+        """Stamp ONE session as waiting, from a runtime hook.
+
+        This is the ground-truth path: the runtime fired a permission hook,
+        so we are not guessing. Written straight through rather than via the
+        daemon's pass, because a permission dialog leaves no transcript event
+        for inference to find — the hook is the only evidence there is.
+
+        Returns True when the write went through. Never raises: the caller is
+        a hook receiver whose whole contract is to fail open, and an agent
+        must never stall because a badge could not be written.
+        """
+        if not session_id:
+            return False
+        if self._read_only:
+            return False
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        "UPDATE sessions SET attention_state = ?, "
+                        "attention_since = ?, attention_signal = ?, "
+                        "attention_tool = ? "
+                        "WHERE agent_type = ? AND session_id = ?",
+                        [_clean_str(state) or "waiting_approval",
+                         int(time.time() * 1000),
+                         _clean_str(signal) or "hook",
+                         _clean_str(tool),
+                         str(agent_type or "openclaw"), str(session_id)],
+                    )
+            return True
+        except Exception:
+            log.debug("local store: set_session_attention failed for %s",
+                      session_id, exc_info=True)
+            return False
+
+    def clear_session_attention(
+        self,
+        session_id: str,
+        *,
+        agent_type: str = "openclaw",
+    ) -> bool:
+        """Clear one session's waiting state — the human answered.
+
+        Paired with :meth:`set_session_attention`: whatever sets a hook row
+        is responsible for clearing it, since the daemon's inference pass
+        deliberately will not.
+        """
+        if not session_id:
+            return False
+        if self._read_only:
+            return False
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        "UPDATE sessions SET attention_state = NULL, "
+                        "attention_since = NULL, attention_signal = NULL, "
+                        "attention_tool = NULL "
+                        "WHERE agent_type = ? AND session_id = ?",
+                        [str(agent_type or "openclaw"), str(session_id)],
+                    )
+            return True
+        except Exception:
+            log.debug("local store: clear_session_attention failed for %s",
+                      session_id, exc_info=True)
+            return False
+
+    def expire_stale_hook_attention(self, max_age_seconds: int = 7200) -> int:
+        """Age out hook rows nobody ever cleared.
+
+        The safety valve for the carve-out in
+        :meth:`apply_session_attention`: because inference will not clear a
+        hook row, a hook process that dies between "prompt opened" and
+        "prompt answered" would otherwise pin a badge forever, and a badge
+        that is permanently wrong is exactly what teaches people to ignore
+        the list. Also clears any hook row on a session that has since ended.
+
+        Returns rows cleared. Never raises into the daemon loop.
+        """
+        if self._read_only:
+            return 0
+        cutoff_ms = int((time.time() - max(60, int(max_age_seconds))) * 1000)
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    n = self._conn.execute(
+                        "SELECT COUNT(*) FROM sessions "
+                        "WHERE attention_signal = 'hook' AND ("
+                        "  COALESCE(attention_since, 0) < ? "
+                        "  OR ended_at IS NOT NULL"
+                        ")", [cutoff_ms],
+                    ).fetchone()
+                    self._conn.execute(
+                        "UPDATE sessions SET attention_state = NULL, "
+                        "attention_since = NULL, attention_signal = NULL, "
+                        "attention_tool = NULL "
+                        "WHERE attention_signal = 'hook' AND ("
+                        "  COALESCE(attention_since, 0) < ? "
+                        "  OR ended_at IS NOT NULL"
+                        ")", [cutoff_ms],
+                    )
+            return int(n[0]) if n else 0
+        except Exception:
+            log.debug("local store: expire_stale_hook_attention failed",
                       exc_info=True)
             return 0
 

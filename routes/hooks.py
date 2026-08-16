@@ -532,6 +532,48 @@ def _hso_mirror(decision: str) -> dict:
                                    "decision": decision}}
 
 
+def _mark_waiting(session_id: str, tool_name: str) -> None:
+    """Flag a session as waiting on a human, with ``signal='hook'``.
+
+    Ground truth: the runtime fired its permission hook, so we are not
+    inferring. That matters downstream — the daemon's inference pass cannot
+    see a permission dialog (it leaves no transcript event), and deliberately
+    refuses to clear hook rows for that reason.
+
+    Silent on every failure. This runs on the agent's critical path; a badge
+    is never worth stalling a turn over.
+    """
+    if not session_id:
+        return
+    try:
+        _ls_write("set_session_attention",
+                  session_id=f"claude_code:{session_id}",
+                  agent_type="claude_code",
+                  state="waiting_approval", signal="hook",
+                  tool=(tool_name or "")[:80])
+    except Exception:
+        pass
+
+
+def _clear_waiting(full_session_id: str) -> None:
+    """The human answered — drop the badge. ``full_session_id`` is the
+    already-prefixed id as stored (``claude_code:<uuid>``).
+
+    Whatever sets a hook row owns clearing it; the daemon's inference pass
+    deliberately will not. NOT called when we answer ``ask``: that hands the
+    decision back to Claude Code's own prompt, so the human is still being
+    asked and the badge is still true.
+    """
+    if not full_session_id:
+        return
+    try:
+        _ls_write("clear_session_attention",
+                  session_id=str(full_session_id),
+                  agent_type="claude_code")
+    except Exception:
+        pass
+
+
 def _mirror_answer(decision: str, approval_id: "str | None" = None,
                    note: str = ""):
     body = _hso_mirror(decision)
@@ -556,6 +598,20 @@ def api_hook_claude_code_permissionrequest():
     cwd = str(body.get("cwd") or "")[:300]
     tool_use_id = str(body.get("tool_use_id") or "").strip()
     resume_id = str(body.get("approval_id") or "").strip()
+
+    # Stamp the "needs you" badge FIRST, before every gate below.
+    #
+    # The fact that this hook fired IS the ground truth that Claude Code has a
+    # prompt open — true whether or not the operator turned mirroring on, and
+    # whether or not this node is entitled to ANSWER the prompt. Being TOLD an
+    # approval is waiting is the free half; answering it remotely is the paid
+    # half (see the entitlement note below). Gating the badge on the paid
+    # feature would hide the problem from exactly the users most likely to be
+    # surprised by it.
+    #
+    # Deliberately best-effort and never in the request's failure path: an
+    # agent must never stall because a badge could not be written.
+    _mark_waiting(session_id, tool_name)
 
     # Answering a runtime's own permission prompt remotely is the Pro half
     # of approvals (Starter is TOLD an approval is waiting; Pro answers it
@@ -661,10 +717,13 @@ def _wait_mirror(approval_id: str, row: dict, tool_name: str):
         if status in ("approved", "auto_approved"):
             _audit("approved", tool_name, {"approval_id": approval_id,
                                            "kind": "permission_prompt"})
+            # Decided — the prompt is closed, so the badge is no longer true.
+            _clear_waiting(row.get("requestor_session_id") or "")
             return _mirror_answer("allow", approval_id)
         if status in ("denied", "expired"):
             _audit("denied", tool_name, {"approval_id": approval_id,
                                          "kind": "permission_prompt"})
+            _clear_waiting(row.get("requestor_session_id") or "")
             return _mirror_answer("deny", approval_id)
         if status == "timeout":
             break

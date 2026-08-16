@@ -289,6 +289,101 @@ def test_apply_attention_tolerates_junk(store):
         [None, "x", {}, {"session_id": ""}]) == 0
 
 
+# ── hook rows outrank, and survive, the inference pass ──────────────────────
+#
+# A permission dialog leaves NO transcript event, so the inference pass
+# literally cannot see one. If its full-set replace were allowed to touch hook
+# rows it would wipe every ground-truth badge a second after the runtime set
+# it — the feature would look broken precisely when it was most right.
+
+def test_hook_row_survives_the_inference_pass(store):
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "s-hook", seconds_idle=300)
+    store.set_session_attention("s-hook", agent_type="claude_code",
+                                tool="Bash", signal="hook")
+    _refresh_attention_cache(store)          # finds nothing; must not clear
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "s-hook"][0]
+    assert row["attention_state"] == "waiting_approval"
+    assert row["attention_signal"] == "hook"
+    assert row["attention_tool"] == "Bash"
+
+
+def test_inference_never_downgrades_a_hook_row(store):
+    """Same session flagged by both paths: hook must win."""
+    _session(store, "s-both", seconds_idle=300)
+    _event(store, "s-both", "tool_call", 300, {"tool": "Read"})
+    store.set_session_attention("s-both", agent_type="claude_code",
+                                tool="Bash", signal="hook")
+    from clawmetry.sync import _refresh_attention_cache
+    _refresh_attention_cache(store)
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "s-both"][0]
+    assert row["attention_signal"] == "hook"
+    assert row["attention_tool"] == "Bash"
+
+
+def test_inferred_rows_are_still_replaced(store):
+    """The carve-out must not accidentally freeze inferred rows too."""
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "s-inf", seconds_idle=300)
+    _event(store, "s-inf", "tool_call", 300, {"tool": "Bash"}, eid="a")
+    _refresh_attention_cache(store)
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-inf"][0]["attention_state"] is not None
+    _event(store, "s-inf", "tool_result", 1, {"ok": True}, eid="b")
+    _refresh_attention_cache(store)
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-inf"][0]["attention_state"] is None
+
+
+def test_clear_session_attention_drops_a_hook_row(store):
+    _session(store, "s-clr", seconds_idle=300)
+    store.set_session_attention("s-clr", agent_type="claude_code", tool="Bash")
+    assert store.clear_session_attention("s-clr", agent_type="claude_code")
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-clr"][0]["attention_state"] is None
+
+
+def test_stale_hook_row_is_aged_out(store):
+    """A hook process that dies mid-prompt must not pin the badge forever."""
+    import time as _t
+    _session(store, "s-stale", seconds_idle=300)
+    store.set_session_attention("s-stale", agent_type="claude_code", tool="Bash")
+    # A fresh prompt is never expired -- people do leave prompts open.
+    assert store.expire_stale_hook_attention(7200) == 0
+    # Backdate it past the window (the method floors max_age at 60s, so the
+    # row has to move, not the window).
+    with store._write_lock:
+        store._conn.execute(
+            "UPDATE sessions SET attention_since = ? WHERE session_id = ?",
+            [int((_t.time() - 10800) * 1000), "s-stale"])
+    assert store.expire_stale_hook_attention(7200) >= 1
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-stale"][0]["attention_state"] is None
+
+
+def test_hook_row_on_an_ended_session_is_cleared(store):
+    _session(store, "s-done", seconds_idle=300)
+    store.set_session_attention("s-done", agent_type="claude_code", tool="Bash")
+    store.ingest_sessions_batch([{
+        "agent_type": "claude_code", "session_id": "s-done",
+        "status": "completed", "ended_at": _ago(10),
+    }])
+    assert store.expire_stale_hook_attention(7200) >= 1
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-done"][0]["attention_state"] is None
+
+
+def test_hook_write_paths_are_allowlisted_for_the_daemon_proxy():
+    """The hook receiver runs in the dashboard process while the daemon owns
+    the writer lock, so an unlisted method is a SILENT no-op and the badge
+    would simply never appear."""
+    from routes.local_query import _DAEMON_METHODS
+    assert "set_session_attention" in _DAEMON_METHODS
+    assert "clear_session_attention" in _DAEMON_METHODS
+
+
 # ── never take the daemon down ──────────────────────────────────────────────
 
 def test_store_failure_yields_empty_not_exception():

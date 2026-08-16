@@ -16905,6 +16905,12 @@ _ATTENTION_EVENT_WINDOW = 40
 _LATEST_ATTENTION: dict = {"ts": 0.0, "items": []}
 # Readers treat a cache older than this as no-signal rather than all-clear.
 _ATTENTION_FRESH_SECONDS = 300
+# How long a hook-stamped "waiting" row may stand without being cleared.
+# Generous, because a human genuinely can leave a prompt open for hours --
+# but bounded, because a hook process that died mid-prompt must not pin the
+# badge forever. Two hours is well past a lunch break, well short of a day.
+ATTENTION_HOOK_MAX_AGE_SECONDS = int(
+    os.environ.get("CLAWMETRY_ATTENTION_HOOK_MAX_AGE", "7200"))
 # Event types that RESOLVE a pending tool call — seeing one means the tool
 # came back and the agent is not blocked on a human.
 _ATTENTION_TOOL_RESULT_TYPES = frozenset({
@@ -17501,6 +17507,11 @@ def _refresh_attention_cache(store) -> int:
     # write leaves the in-memory cache serving the daemon's own consumers.
     try:
         store.apply_session_attention(items)
+        # Hook rows are deliberately exempt from the replace above, so this
+        # is the only thing that reclaims one whose hook process died between
+        # "prompt opened" and "prompt answered". A permanently-wrong badge is
+        # exactly what teaches people to ignore the list.
+        store.expire_stale_hook_attention(ATTENTION_HOOK_MAX_AGE_SECONDS)
     except Exception as _pe:  # noqa: BLE001
         log.debug("attention-detect: persist failed (continuing): %s", _pe)
     return len(items)

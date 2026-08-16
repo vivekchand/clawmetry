@@ -577,6 +577,12 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # "Needs you" state. The hook receiver (routes/hooks.py) runs in the
+    # DASHBOARD process while the daemon owns the writer lock, so these must
+    # be proxied — an unlisted method is a silent no-op and the badge would
+    # simply never appear.
+    "set_session_attention",
+    "clear_session_attention",
     # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
     # in the DASHBOARD process when /api/inventory composes locally; without
     # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
