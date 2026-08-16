@@ -270,6 +270,12 @@ def _candidate_project_dirs(ws: str, limit: int = 10) -> list:
         add(os.getcwd())
     except OSError:
         pass
+    # AIDER_HISTORY_DIRS is ClawMetry's own documented aider override
+    # (colon-separated project dirs) — the session ingest honours it, so
+    # the file browser must look in the same repos.
+    for p in (os.environ.get("AIDER_HISTORY_DIRS") or "").split(os.pathsep):
+        if p.strip():
+            add(os.path.expanduser(p.strip()))
     for p in _claude_registry_projects():
         add(p)
     for p in _slug_project_dirs(os.path.expanduser("~/.qwen/projects")):
@@ -782,7 +788,9 @@ def _catalog() -> list:
                      label="Installed skills", scope="global"),
             RootSpec("skills", os.path.join(nemo_home, "source", "nemoclaw-blueprint", "skills"),
                      label="Blueprint skills", scope="global"),
-            RootSpec("hooks", os.path.join(nemo_home, "model-router-config.yaml"),
+            RootSpec("hooks",
+                     _env_root("NEMOCLAW_MODEL_ROUTER_CONFIG",
+                               os.path.join(nemo_home, "model-router-config.yaml")),
                      label="model-router-config.yaml", scope="global"),
             RootSpec("hooks", os.path.join(nemo_home, "proxy-config.yaml"),
                      label="proxy-config.yaml", scope="global"),
@@ -920,7 +928,10 @@ def _catalog() -> list:
     ))
 
     # ── n8n ─────────────────────────────────────────────────────────
-    n8n_home = _env_root("N8N_USER_FOLDER", os.path.expanduser("~/.n8n"))
+    # N8N_USER_FOLDER is the PARENT that contains .n8n (n8n's own
+    # semantics, matched by the ingest adapter) — hence the subpath.
+    n8n_home = _env_root("N8N_USER_FOLDER", os.path.expanduser("~/.n8n"),
+                         ".n8n")
     catalog.append(RuntimeCatalogEntry(
         id="n8n", label="n8n",
         roots=(

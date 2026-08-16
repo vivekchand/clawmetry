@@ -43,7 +43,8 @@ def fake_home(tmp_path, monkeypatch):
                 "N8N_USER_FOLDER", "DSH_HOME", "DSH_AGENTS_HOME",
                 "CLAWMETRY_GROK_HOME", "CLAWMETRY_COPILOT_HOME",
                 "PICOCLAW_HOME", "PI_CODING_AGENT_DIR",
-                "CLAWMETRY_NANOCLAW_DIR", "CLAWMETRY_QM_HOME"):
+                "CLAWMETRY_NANOCLAW_DIR", "CLAWMETRY_QM_HOME",
+                "AIDER_HISTORY_DIRS", "NEMOCLAW_MODEL_ROUTER_CONFIG"):
         monkeypatch.delenv(var, raising=False)
     # Patch the workspace resolver directly rather than importing
     # dashboard: importing the full app under a fake HOME leaves poisoned
@@ -340,6 +341,36 @@ def test_decode_project_slug_round_trip(fake_home, tmp_path):
     assert rm._decode_project_slug(slug, max_nodes=5000) == str(deep)
     assert rm._decode_project_slug("-no/such") is None
     assert rm._decode_project_slug("garbage") is None
+
+
+# ── env overrides the verify pass proved broken ────────────────────────
+
+def test_n8n_user_folder_is_the_parent_of_dot_n8n(fake_home, tmp_path,
+                                                  monkeypatch):
+    data = tmp_path / "n8ndata"
+    _write(data, ".n8n/nodes/package.json", "{}")
+    monkeypatch.setenv("N8N_USER_FOLDER", str(data))
+    rm = _import_rm()
+    assert any(p == str(data / ".n8n/nodes/package.json")
+               for p in _files(rm, "n8n", "skills"))
+
+
+def test_nemoclaw_model_router_env_override(fake_home, tmp_path, monkeypatch):
+    alt = tmp_path / "alt-router.yaml"
+    alt.write_text("routes: []\n")
+    monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_CONFIG", str(alt))
+    rm = _import_rm()
+    assert str(alt) in _files(rm, "nemoclaw", "hooks")
+
+
+def test_aider_history_dirs_feed_project_discovery(fake_home, tmp_path,
+                                                   monkeypatch):
+    repo = tmp_path / "aiderrepo"
+    _write(repo, ".aider.chat.history.md", "# chat\n")
+    monkeypatch.setenv("AIDER_HISTORY_DIRS", str(repo))
+    rm = _import_rm()
+    assert any(p == str(repo / ".aider.chat.history.md")
+               for p in _files(rm, "aider", "memory"))
 
 
 # ── count semantics ────────────────────────────────────────────────────
