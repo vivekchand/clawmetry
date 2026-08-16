@@ -345,9 +345,17 @@ def gate_handler(want_gate: bool, policies) -> None:
 # the worst case is today's behaviour, never a call that silently hangs.
 
 def _mirror_wanted() -> bool:
+    """Ask the delivery layer whether to arm the mirror.
+
+    Answered through the ``clawmetry.approval_events`` seam, so this module
+    never imports the paid delivery package directly. Nothing registered
+    (an OSS install with no paid package) answers False, and the mirror
+    hook is simply never installed — the node keeps Claude Code's own
+    terminal prompt, exactly as before the mirror existed.
+    """
     try:
-        from clawmetry import approval_notify as _an
-        return bool(_an.mirror_enabled("claude_code"))
+        from clawmetry import approval_events as _ae
+        return _ae.mirror_wanted("claude_code")
     except Exception:
         return False
 
@@ -360,9 +368,8 @@ def _mirror_command(base: str) -> str:
 def mirror_timeout_s() -> int:
     """How long the phone gets before the terminal prompt takes over."""
     try:
-        from clawmetry import approval_notify as _an
-        row = _an.route_for("claude_code")
-        return max(30, min(int(row.get("mirror_timeout_s") or 180), 3600))
+        from clawmetry import approval_events as _ae
+        return _ae.mirror_window_s("claude_code")
     except Exception:
         return 180
 

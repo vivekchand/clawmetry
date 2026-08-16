@@ -611,8 +611,8 @@ def api_approval_decide(approval_id: str):
     # also pushed to a phone, swap its live Approve/Deny buttons for the
     # verdict so two people can't race the same call from two surfaces.
     try:
-        from clawmetry import approval_notify as _an
-        _an.notify_resolved(aid, decision, "dashboard")
+        from clawmetry import approval_events as _ae
+        _ae.notify_resolved(aid, decision, "dashboard")
     except Exception:
         pass
 

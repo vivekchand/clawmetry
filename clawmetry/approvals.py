@@ -1001,8 +1001,8 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     # land in different places. Non-blocking + never raises: the row is
     # already parked, notification is best-effort on top.
     try:
-        from clawmetry import approval_notify as _an
-        _an.notify_pending({
+        from clawmetry import approval_events as _aev
+        _aev.notify_pending({
             "id": approval_id,
             "runtime": _session_runtime(session_id or ""),
             "kind": "policy",
