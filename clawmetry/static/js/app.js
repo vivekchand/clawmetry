@@ -2105,6 +2105,167 @@ function _friendlyBytes(n) {
 // UI-coverage audit: today's activity counters strip. Reads /api/activity-today
 // (local: cached DuckDB rollup; cloud: cm-cloud-activity serves it from the
 // snapshot's activityToday slice). Hidden until there is any activity today.
+// ── Needs-you strip ────────────────────────────────────────────────────────
+// "Is anything waiting on me right now?" -- the question people actually open
+// the dashboard with, answered above every chart.
+//
+// THREE states, and telling them apart is the whole point:
+//   waiting  -> one row per blocked agent, with its confidence
+//   quiet    -> "Nothing needs you right now" + how many are working
+//   unknown  -> "Can't tell right now" when the daemon has gone silent
+//
+// The third is why this is not a one-liner. An empty list from a wedged
+// detector must never render as all-clear: a calm reassurance that turns out
+// to be wrong is how you teach someone to stop trusting the whole dashboard.
+
+function cmNeedsAge(sec) {
+  sec = Math.max(0, parseInt(sec, 10) || 0);
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm';
+  return Math.floor(sec / 3600) + 'h';
+}
+
+// Plain-language line per row. "Wants to run Bash" beats "pending tool_use
+// approval" for someone who has never opened an observability tool.
+function cmNeedsPhrase(item) {
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  var runtime = esc(cmRuntimeLabel ? cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
+  var tool = item.tool ? esc(item.tool) : '';
+  if (item.signal === 'hook') {
+    return tool
+      ? '<b>' + runtime + '</b> is asking to run ' + tool
+      : '<b>' + runtime + '</b> is asking for permission';
+  }
+  return tool
+    ? '<b>' + runtime + '</b> has been on ' + tool + ' with no reply'
+    : '<b>' + runtime + '</b> has been silent mid-task';
+}
+
+function cmRuntimeLabel(rt) {
+  var map = {
+    claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
+    openclaw: 'OpenClaw', nemoclaw: 'NemoClaw', qwen_code: 'Qwen Code',
+    opencode: 'opencode', aider: 'Aider', goose: 'Goose', hermes: 'Hermes',
+    picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw', antigravity: 'Antigravity',
+    copilot: 'GitHub Copilot', grok: 'Grok', deepagents: 'Deep Agents',
+    n8n: 'n8n', pi: 'Pi', qm: 'QM', deepseek_harness: 'DeepSeek Harness'
+  };
+  return map[rt] || (rt || 'Agent');
+}
+
+function cmRenderNeedsYou(d) {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  box.classList.remove('is-waiting', 'is-unknown');
+
+  // 1. We could not check. Say that -- do not imply all-clear.
+  if (!d || d.fresh === false) {
+    box.classList.add('is-unknown');
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.unknown_title', null, "Can't tell right now") + '</span>' +
+        '<span class="cm-needs-sub">' +
+          t('needs.unknown_sub', null,
+            'ClawMetry has not heard from your machine recently, so it cannot say what needs you.') +
+        '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  var items = d.items || [];
+
+  // 2. Nothing waiting. The reassuring case, and the one people see most.
+  if (!items.length) {
+    var working = parseInt(d.working, 10) || 0;
+    var sub = working === 1
+      ? t('needs.one_working', null, '1 agent working')
+      : (working > 0
+          ? t('needs.n_working', { n: working }, working + ' agents working')
+          : t('needs.none_running', null, 'No agents running'));
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.clear_title', null, 'Nothing needs you right now') + '</span>' +
+        '<span class="cm-needs-sub">' + esc(sub) + '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  // 3. Something is waiting.
+  box.classList.add('is-waiting');
+  var title = items.length === 1
+    ? t('needs.one_waiting', null, '1 agent needs you')
+    : t('needs.n_waiting', { n: items.length }, items.length + ' agents need you');
+
+  var rows = items.slice(0, 6).map(function (it) {
+    var hook = it.signal === 'hook';
+    var where = [it.project, it.git_branch].filter(Boolean).join(' · ');
+    var confidence = hook
+      ? t('needs.confident', null, 'Waiting for you')
+      : t('needs.inferred', null, "Looks like it's waiting");
+    return '' +
+      '<button type="button" class="cm-needs-row" ' +
+        'onclick="cmOpenNeedsSession(' + JSON.stringify(it.session_id || '').replace(/"/g, '&quot;') + ')" ' +
+        'title="' + esc(confidence) + '">' +
+        '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') + '" aria-hidden="true"></span>' +
+        '<span class="cm-needs-what">' + cmNeedsPhrase(it) + '</span>' +
+        '<span class="cm-needs-where">' + esc(where) + '</span>' +
+        '<span class="cm-needs-age">' + cmNeedsAge(it.waiting_seconds) + '</span>' +
+      '</button>';
+  }).join('');
+
+  // Only claim certainty where we have it. If every row is a guess, say so
+  // once at the bottom rather than hedging on each line.
+  var allInferred = items.every(function (i) { return i.signal !== 'hook'; });
+  var note = allInferred
+    ? '<div class="cm-needs-note">' +
+        t('needs.inferred_note', null,
+          "Worked out from what each agent last did, so this is a best guess.") +
+      '</div>'
+    : '';
+
+  var extra = items.length > 6
+    ? '<div class="cm-needs-note">' +
+        t('needs.more', { n: items.length - 6 }, '+' + (items.length - 6) + ' more') +
+      '</div>'
+    : '';
+
+  box.innerHTML =
+    '<div class="cm-needs-head">' +
+      '<span class="cm-needs-title">' + esc(title) + '</span>' +
+    '</div>' +
+    '<div class="cm-needs-list">' + rows + '</div>' + extra + note;
+  box.style.display = '';
+}
+
+// Jump to the blocked session's transcript. Falls back to the Sessions page
+// when the deep link is unavailable, so the row is never a dead end.
+function cmOpenNeedsSession(sid) {
+  if (!sid) return;
+  try {
+    if (typeof showTranscript === 'function') { showTranscript(sid); return; }
+    if (typeof switchPage === 'function') { switchPage('transcripts'); return; }
+  } catch (e) { console.warn('needs-you open failed', e); }
+}
+
+async function loadNeedsYou() {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = (rt && rt !== 'all') ? ('?runtime=' + encodeURIComponent(rt)) : '';
+  var d = null;
+  try {
+    d = await fetchJsonWithTimeout('/api/attention' + q, 4000);
+  } catch (e) {
+    d = null;   // renders "can't tell", which is the truth here
+  }
+  cmRenderNeedsYou(d);
+}
+
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
@@ -4202,6 +4363,9 @@ async function loadAll() {
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     // UI-coverage audit — today's activity counters strip.
     if (typeof loadActivityToday === 'function') setTimeout(function(){ loadActivityToday().catch(function(e){console.warn('activity today failed',e)}); }, 900);
+    // Needs-you strip. First on the page, so it loads first — this is the
+    // question people open the dashboard with.
+    if (typeof loadNeedsYou === 'function') loadNeedsYou().catch(function(e){console.warn('needs-you failed',e)});
     document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
 
     if (overview.infra) {
