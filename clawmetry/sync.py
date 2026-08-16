@@ -19481,18 +19481,18 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
-    # ── Telegram approval decisions (inbound) ─────────────────────────
-    # The only channel that can answer an approval on a self-hosted node
-    # with no public endpoint: the daemon long-polls getUpdates, so the
-    # Approve/Deny buttons in the message resolve the DuckDB row directly.
-    # Idle (30 s config re-check) until Telegram is configured AND some
-    # runtime routes approvals to it — see clawmetry/approval_inbound.py.
+    # ── Inbound approval decisions ────────────────────────────────────
+    # Deliberately NOT started here. Bringing a decision back from a chat
+    # message is part of the paid delivery layer, which attaches itself
+    # through the clawmetry.extensions entry point (loaded above) and owns
+    # its own thread. The daemon does not name that module: on an install
+    # without the paid package there is nothing to start, and an import
+    # here would be the one line that has to be deleted later.
     try:
-        from clawmetry import approval_inbound as _ap_in
-        _ap_in.start(threading.Event())
-        log.info("approval inbound (telegram) poller started")
+        from clawmetry import approval_events as _ae
+        _ae.daemon_ready(config.get("node_id"))
     except Exception as _e:
-        log.warning(f"approval inbound poller failed to start: {_e}")
+        log.warning(f"approval delivery layer not started: {_e}")
 
     # ── Decision-sampling cron (issue #1615) ──────────────────────────
     # Daily-at-midnight thread that picks N random sessions from yesterday

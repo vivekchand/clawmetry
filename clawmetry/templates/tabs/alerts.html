@@ -30,6 +30,15 @@
     <div class="alerts-loading" data-i18n="alerts.loading_alerts">Loading alerts…</div>
   </div>
 
+  <!-- Always-on monitors. Answers the question the tab could not: "how did it
+       alert when all of the alerts are disabled?" (founder, 2026-08-15). These
+       fire from hardcoded checks, not from the rules above. -->
+  <h4 class="alerts-section-h" data-i18n="alerts.builtins_title">Always on</h4>
+  <div class="alerts-builtins-note" data-i18n="alerts.builtins_note">These run whether or not you set up any rules above. They're what raised the red banners at the top of the dashboard.</div>
+  <div id="alerts-builtins-list" class="alerts-list">
+    <div class="alerts-loading" data-i18n="alerts.loading_builtins">Loading monitors…</div>
+  </div>
+
   <h4 class="alerts-section-h" data-i18n="alerts.recent_history">Recent alert history</h4>
   <div id="alerts-history-list" class="alerts-history">
     <div class="alerts-loading" data-i18n="alerts.loading_history">Loading history…</div>
@@ -57,6 +66,28 @@
       <button class="alerts-btn-ghost" onclick="alertsClosePaywall()" data-i18n="alerts.maybe_later">Maybe later</button>
     </div>
     <div class="alerts-modal-footnote" data-i18n="alerts.paywall_footnote">No credit card · free tier available · 7-day Pro trial</div>
+  </div>
+</div>
+
+<!-- ── Delivery prompt ──────────────────────────────────────────────────────
+     Shown when someone turns on an alert before setting up anywhere to send
+     it. Founder-reported 2026-08-15: "if I enable them it says no channels —
+     why not just ask to configure channel first before enable, and take me to
+     the notifications page?" Turning a rule on used to POST channel_ids: []
+     silently, then relabel the row "no channels" — which read as if enabling
+     had DELETED the Slack/Email the row advertised a second earlier (those
+     pills were decorative examples; they are gone now).
+     Two honest exits: set delivery up, or accept in-app only. -->
+<div class="alerts-modal-overlay" id="alerts-delivery-modal" style="display:none;" onclick="alertsCloseDelivery(event)">
+  <div class="alerts-modal-card" onclick="event.stopPropagation()">
+    <div class="alerts-modal-icon">📬</div>
+    <h3 class="alerts-modal-title" data-i18n="alerts.delivery_title">Where should this alert go?</h3>
+    <p class="alerts-modal-body" id="alerts-delivery-body" data-i18n="alerts.delivery_body">You haven't set up anywhere to send alerts yet. ClawMetry can show this one in the app, or deliver it to Slack, Telegram, or PagerDuty.</p>
+    <div class="alerts-modal-actions">
+      <button class="alerts-btn-pro" onclick="alertsDeliverySetUp()" data-i18n="alerts.delivery_setup">Set up a channel</button>
+      <button class="alerts-btn-ghost" onclick="alertsDeliveryInAppOnly()" data-i18n="alerts.delivery_inapp">Show it in the app</button>
+    </div>
+    <div class="alerts-modal-footnote" data-i18n="alerts.delivery_footnote">In-app alerts show in the bell menu and as a banner across the top.</div>
   </div>
 </div>
 

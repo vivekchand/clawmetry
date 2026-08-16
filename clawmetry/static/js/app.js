@@ -973,6 +973,80 @@ function _cmAgentDownBannerCopy(orig) {
   return t('alerts.feed_stopped_unknown', null, 'One of our data feeds from your agent stopped. You’re still seeing live activity, but some charts may lag.');
 }
 
+// Where an alert sends you. Returns {label, go} or null when the alert
+// genuinely has no better destination than the banner itself.
+//
+// Labels are active-voice and name the destination in the operator's own
+// words ("Investigate", "Open session"), never the system's ("View
+// security_events"). Each one is a promise about what the next screen shows.
+function _cmBannerDestination(alert) {
+  if (!alert) return null;
+  var type = String(alert.type || '');
+  var ruleId = typeof alert.rule_id === 'string' ? alert.rule_id : '';
+
+  function goTab(tab, after) {
+    return function () {
+      if (typeof switchTab === 'function') switchTab(tab);
+      if (typeof after === 'function') { try { after(); } catch (e) {} }
+    };
+  }
+  function goSession(sid) {
+    return function () {
+      // Deep-link via hash so the Session-replay tab can pick it up either on
+      // first paint (window.location.hash) or via the hashchange listener if
+      // the tab is already mounted.
+      try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch (e) {}
+      if (typeof switchTab === 'function') switchTab('transcripts');
+    };
+  }
+
+  // Session-scoped alarms: dashboard.py encodes the session in the rule_id.
+  if (type === 'stuck_session' && ruleId.indexOf('stuck_session_') === 0) {
+    var sid = ruleId.slice('stuck_session_'.length);
+    if (sid) return { label: t('app.open_session', null, 'Open session →'), go: goSession(sid) };
+  }
+
+  // Security alarms. The rule_id here is the DETECTION rule (numbat's
+  // rule_id, or a built-in signature id) — not a session — so we cannot jump
+  // straight to a transcript. The findings log can: it lists this finding
+  // with the session attached, one click further on.
+  if (type === 'numbat_finding' || type === 'security_threat') {
+    return {
+      label: t('app.investigate', null, 'Investigate →'),
+      go: goTab('security', function () {
+        if (typeof loadSecurityFindings === 'function') loadSecurityFindings();
+        var el = document.getElementById('security-findings-panel');
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      })
+    };
+  }
+
+  // Liveness alarms — "is my agent alive" is answered on the Overview.
+  if (type === 'heartbeat_silent' || type === 'agent_down') {
+    return { label: t('app.check_agent', null, 'Check agent →'), go: goTab('overview') };
+  }
+
+  // Money alarms. Note the two vocabularies: user rules store 'threshold' /
+  // 'spike', while the always-on cost monitor fires 'anomaly'. Both mean
+  // "your spend moved" and both belong on Usage.
+  if (type === 'threshold' || type === 'session_cost' || type === 'spike'
+      || type === 'anomaly' || type === 'daily_threshold_breached'
+      || type === 'budget_blocked') {
+    return { label: t('app.see_spending', null, 'See spending →'), go: goTab('usage') };
+  }
+
+  // Burn alarms — token velocity and unproductive spinning both need the
+  // session that is doing it, which the Sessions list ranks for you.
+  // 'token_spike' is the rule vocabulary; 'token_velocity' is what the
+  // always-on monitor fires.
+  if (type === 'token_spike' || type === 'token_velocity'
+      || type === 'unproductive_burn') {
+    return { label: t('app.see_sessions', null, 'See sessions →'), go: goTab('transcripts') };
+  }
+
+  return null;
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
@@ -1001,32 +1075,31 @@ async function checkActiveAlerts() {
     var latest = bannerAlerts[0];
     var msgEl = document.getElementById('alert-banner-msg');
     msgEl.textContent = latest.type === 'agent_down' ? _cmAgentDownBannerCopy(latest.message) : latest.message;
-    // Stuck-session deep-link: dashboard.py:_check_stuck_sessions emits
-    // rule_id = `stuck_session_<full-session-id>`. Surface an "Open session →"
-    // button on the banner so users go from "what's wrong" to "look at it"
-    // in one click. Idempotent across polls — remove any prior button first.
+    // Every alarm needs somewhere to go.
+    //
+    // This used to special-case exactly one type: stuck_session got an
+    // "Open session →" button, and every other alert — including a HIGH
+    // security finding — offered only Dismiss. Founder, 2026-08-15, on a
+    // numbat secret-exfiltration banner: "unable to understand what action I
+    // need to take... for the first one I just see dismiss button, so what??"
+    // Dismiss is not a response to a security alert; it is the absence of one.
+    //
+    // _cmBannerDestination maps an alert to the screen that answers the
+    // question it raises. Adding an alert type without a destination is a
+    // regression — tests/test_alert_banner_destinations.py enforces it.
     var existingOpen = document.getElementById('alert-banner-open-session');
     if (existingOpen && existingOpen.parentNode) existingOpen.parentNode.removeChild(existingOpen);
-    if (latest && latest.type === 'stuck_session' && typeof latest.rule_id === 'string') {
-      var sid = latest.rule_id.indexOf('stuck_session_') === 0
-        ? latest.rule_id.slice('stuck_session_'.length) : '';
-      if (sid) {
-        var openBtn = document.createElement('button');
-        openBtn.id = 'alert-banner-open-session';
-        openBtn.textContent = t("app.open_session", null, "Open session →");
-        openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
-        openBtn.onclick = function () {
-          // Deep-link via hash so the Session-replay tab can pick it up
-          // either on first paint (window.location.hash) or via the
-          // hashchange listener if the tab is already mounted.
-          try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch(e) {}
-          if (typeof switchTab === 'function') switchTab('transcripts');
-        };
-        // Insert before the Dismiss / ack button so it reads left-to-right.
-        var ackBtn = document.getElementById('alert-resume-btn');
-        if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
-        else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
-      }
+    var dest = _cmBannerDestination(latest);
+    if (dest) {
+      var openBtn = document.createElement('button');
+      openBtn.id = 'alert-banner-open-session';
+      openBtn.textContent = dest.label;
+      openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
+      openBtn.onclick = dest.go;
+      // Insert before the Dismiss / ack button so it reads left-to-right.
+      var ackBtn = document.getElementById('alert-resume-btn');
+      if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
+      else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
     }
     banner.style.display = 'flex';
     // Show resume button if gateway is paused
@@ -10195,6 +10268,7 @@ async function loadSecurityPage(silent) {
     // than a silent blank (and become live once the interceptor lands).
     loadSecurityIntegrity();
     loadSecurityAudit();
+    loadSecurityFindings();
     return;
   }
   try {
@@ -10279,6 +10353,7 @@ async function loadSecurityPage(silent) {
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
   loadSecurityIntegrity();
   loadSecurityAudit();
+  loadSecurityFindings();
   try {
     var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
     var badgeEl = document.getElementById('credential-scan-badge');
@@ -10324,6 +10399,116 @@ async function loadSecurityPage(silent) {
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
   }
+}
+
+// Recorded findings — the DURABLE security log (DuckDB security_events),
+// as opposed to #security-threat-list above, which is a live re-scan of
+// recent events through the built-in signature catalog.
+//
+// Founder-reported 2026-08-15: a HIGH numbat finding ("Secret-manager access
+// followed by data-bearing egress") fired the top banner, the banner offered
+// only Dismiss, and the Security tab could not show the finding either — it
+// only ever called /api/security/threats (the live scan), while ingested
+// findings land in security_events and are served by /api/security-threats.
+// The alarm had no destination anywhere in the product.
+//
+// Rows carry the session that triggered them, so this is also where the
+// banner's "Investigate" button lands.
+var _CM_SEV_STYLE = {
+  critical: { color: '#f87171', bg: 'rgba(220,38,38,0.14)', label: 'Critical' },
+  high:     { color: '#fbbf24', bg: 'rgba(245,158,11,0.14)', label: 'High' },
+  medium:   { color: '#60a5fa', bg: 'rgba(59,130,246,0.14)', label: 'Medium' },
+  low:      { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Low' },
+  info:     { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Info' }
+};
+
+async function loadSecurityFindings() {
+  var listEl = document.getElementById('security-findings-list');
+  var countEl = document.getElementById('security-findings-count');
+  if (!listEl) return;
+  // Cloud parity (FLYWHEEL gate 1): security_events is not in the snapshot,
+  // so the hosted dashboard has nothing to read. Say that plainly instead of
+  // leaving "Loading findings..." spinning forever, which is how a trial user
+  // learns to distrust the product.
+  if (window.CLOUD_MODE) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
+      + t('security.findings_local_only', null, 'Findings are recorded on the machine your agent runs on. Open the dashboard there to read them.')
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  var rows = [];
+  try {
+    var d = await fetchJsonWithTimeout('/api/security-threats?limit=100', 10000);
+    rows = (d && d.threats) || [];
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
+      + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  // Per-runtime honesty: findings are keyed by session id, which carries the
+  // runtime prefix, so a runtime filter must actually narrow this list rather
+  // than silently showing node-wide rows.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (rt && rt !== 'all') {
+    rows = rows.filter(function (r) {
+      var sid = String(r.session_id || '');
+      var prefix = sid.indexOf(':') > 0 ? sid.split(':')[0] : 'openclaw';
+      return prefix === rt;
+    });
+  }
+  if (!rows.length) {
+    listEl.innerHTML = '<div style="color:#86efac;padding:12px;font-size:12px;">✓ '
+      + t('security.findings_empty', null, 'Nothing recorded yet. Findings from ClawMetry’s own scan and from any connected security tool will appear here.')
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  if (countEl) {
+    countEl.textContent = rows.length + ' '
+      + (rows.length === 1
+          ? t('security.finding_word', null, 'finding')
+          : t('security.findings_word', null, 'findings'));
+  }
+  var html = '';
+  rows.slice(0, 100).forEach(function (r) {
+    var sev = String(r.severity || 'info').toLowerCase();
+    var st = _CM_SEV_STYLE[sev] || _CM_SEV_STYLE.info;
+    var sid = String(r.session_id || '');
+    var when = String(r.ts || '').slice(0, 19).replace('T', ' ');
+    html += '<div class="cm-finding-row" data-finding-id="' + escHtml(String(r.id || '')) + '">';
+    html += '<span class="cm-finding-sev" style="color:' + st.color + ';background:' + st.bg + ';">'
+         + escHtml(st.label) + '</span>';
+    html += '<div class="cm-finding-body">';
+    html += '<div class="cm-finding-desc">' + escHtml(String(r.description || r.rule_id || 'Security finding')) + '</div>';
+    if (r.snippet) {
+      html += '<code class="cm-finding-snippet">' + escHtml(String(r.snippet)) + '</code>';
+    }
+    html += '<div class="cm-finding-meta">' + escHtml(when);
+    if (r.rule_id) html += ' · ' + escHtml(String(r.rule_id));
+    html += '</div></div>';
+    if (sid) {
+      html += '<button class="cm-finding-open" onclick="cmOpenFindingSession(\''
+           + escHtml(sid).replace(/'/g, "\\'") + '\')">'
+           + t('security.open_session', null, 'Open session') + ' →</button>';
+    } else {
+      html += '<span class="cm-finding-nosession" title="'
+           + t('security.no_session_hint', null, 'The tool that reported this finding did not attach a session id.')
+           + '">' + t('security.no_session', null, 'No session') + '</span>';
+    }
+    html += '</div>';
+  });
+  listEl.innerHTML = html;
+}
+
+// Jump from a finding to the transcript that produced it. Same hash-based
+// deep-link the stuck-session banner uses, so both entry points behave alike.
+function cmOpenFindingSession(sessionId) {
+  if (!sessionId) return;
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
 }
 
 // Tamper-evident hash-chain status. Plain-language labels per the FLYWHEEL

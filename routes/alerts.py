@@ -110,6 +110,257 @@ def _try_local_store_alert_rules():
     return {"rules": rows or [], "_source": "local_store"}
 
 
+def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
+                           channels, cooldown_min, enabled, name=""):
+    """Mirror a locally-created alert rule into the DuckDB ``alert_rules``
+    table so the sync daemon's evaluator can actually see it.
+
+    The dashboard's POST writes the fleet SQLite DB; the daemon's
+    ``_evaluate_alerts_local`` reads DuckDB via ``query_alert_rules``. Before
+    this, nothing bridged the two — ``ingest_alert_rule`` was only ever called
+    from the cloud pending-action path — so a rule created from the Alerts tab
+    on a no-cloud node was never evaluated by anything.
+
+    ``condition_json`` keeps the CLOUD vocabulary (alert_type /
+    threshold_value / runtime), which is what ``clawmetry.alert_evaluator``
+    parses via its ``_LEGACY_ALERT_TYPE_MAP``.
+
+    Best-effort: the daemon may be down (dashboard-only boot) and the rule
+    still has to save. Returns True when the mirror landed.
+    """
+    payload = {
+        "id": str(rule_id),
+        "name": name or alert_type,
+        "enabled": bool(enabled),
+        "condition_json": {
+            "alert_type":      alert_type,
+            "threshold_value": threshold,
+            "runtime":         runtime,
+            "channel_ids":     list(channels or []),
+            "cooldown_min":    cooldown_min,
+        },
+    }
+    if not _write_via_store("ingest_alert_rule", rule=payload):
+        return False
+    # Read back before claiming success. ``ingest_alert_rule`` returns None,
+    # and ``local_store_via_daemon`` also returns None when the proxy call
+    # FAILED — the two are indistinguishable at the call site, so a bare
+    # "no exception" check reports a mirror that never happened. That matters
+    # most on exactly the install this bridges: a daemon running an older
+    # wheel does not allowlist the method, the call 400s, and the operator
+    # would be told their rule is armed on an evaluator that cannot see it.
+    return _rule_in_duckdb(rule_id)
+
+
+def _rule_in_duckdb(rule_id):
+    """True when ``rule_id`` is present in the DuckDB alert_rules table."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            from clawmetry import local_server as _ls_srv
+            if not _ls_srv.is_running():
+                return False
+            from clawmetry import local_store as _ls_mod
+            rows = _ls_mod.get_store().query_alert_rules(limit=500)
+        return any(str(r.get("id")) == str(rule_id) for r in (rows or []))
+    except Exception:
+        return False
+
+
+def _write_via_store(method, **kwargs):
+    """Run a LocalStore write, through the daemon proxy where one exists.
+
+    Returns False rather than raising. Only touches the store directly when
+    ``local_server`` is hosted in THIS process — i.e. we are the daemon and
+    already hold the writer lock. Opening a writer from the dashboard process
+    while the daemon holds the lock is the documented brick-lock hazard, and
+    where DuckDB allows it the write lands somewhere the daemon never reads,
+    which is worse than not writing at all.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon(method, **kwargs)
+        return True
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_server as _ls_srv
+        if not _ls_srv.is_running():
+            return False
+        from clawmetry import local_store as _ls_mod
+        getattr(_ls_mod.get_store(), method)(**kwargs)
+        return True
+    except Exception:
+        return False
+
+
+def _unmirror_rule_from_duckdb(rule_id):
+    """Drop a mirrored rule from DuckDB. Best-effort, never raises.
+
+    Unlike the create path this does not verify: a rule that was never
+    mirrored (older daemon, or a type the local loop owns) is simply absent,
+    and reporting that as a failed delete would be noise.
+    """
+    return _write_via_store("delete_alert_rule", rule_id=str(rule_id))
+
+
+# ── Cloud alert_type -> local evaluator routing ────────────────────────────
+#
+# The Alerts tab speaks the cloud vocabulary (``alert_type``); a self-hosted
+# node has two evaluators, and every type must be routed to one of them or
+# rejected. Silently storing an unroutable type is what produced the zombie
+# rules fixed on 2026-08-15 (see the block comment in ``api_alert_rules``).
+#
+# _CLOUD_TO_LOCAL: has a real ``rtype`` branch in dashboard.py's
+# ``_budget_monitor_loop``. Keep this in lockstep with the ``rtype ==``
+# branches there — a key here with no branch there is a zombie rule.
+_CLOUD_TO_LOCAL = {
+    "daily_spend":    "threshold",
+    "cost_daily":     "threshold",      # legacy alias, pre-0.12.711 clients
+    "session_cost":   "session_cost",
+    "token_velocity": "token_spike",
+    "node_offline":   "agent_down",
+    "agent_offline":  "agent_down",     # legacy alias, pre-0.12.711 clients
+}
+
+# _EVALUATOR_ONLY: no in-process branch, but ``clawmetry.alert_evaluator``
+# genuinely implements these over the DuckDB event/quality slices. Rules of
+# these types are mirrored into DuckDB on write so the daemon evaluates them.
+_EVALUATOR_ONLY = frozenset({
+    "error_rate",
+    "eval_score_below",
+    "outcome_failure_rate",
+})
+
+# Local ``type`` values with a real ``rtype ==`` branch in dashboard.py's
+# ``_budget_monitor_loop``. Anything stored outside this set is evaluated by
+# the daemon (if mirrored) or by nobody. Note the deliberate absence of
+# "anomaly": it has no branch and never had one — it was the silent
+# dumping ground for unmapped cloud types.
+_LOCAL_EVALUABLE_TYPES = frozenset({
+    "threshold",
+    "spike",
+    "token_spike",
+    "agent_down",
+    "session_cost",
+    "unproductive_burn",
+})
+
+# Types the UI can offer but nothing can evaluate on a self-hosted node yet.
+# Surfaced (not hidden) so the tab can render an honest "cloud only" state
+# instead of a green toggle that never fires. ``cron_failure`` maps to
+# alert_evaluator's ``count_over_threshold`` TODO stub, which under-fires by
+# design — that is a no-op, not an evaluator.
+UNSUPPORTED_ALERT_TYPES = frozenset({
+    "cron_failure",
+    "session_duration",
+    "subagent_depth",
+})
+
+
+# ── Always-on monitors ─────────────────────────────────────────────────────
+#
+# Founder-reported 2026-08-15, looking at two red banners above an Alerts tab
+# with every rule switched off: "how did it alert when all of the alerts are
+# disabled?? are those default alerts??"
+#
+# Fair question, and the tab gave no answer. These monitors are hardcoded in
+# ``dashboard.py``'s ``_budget_monitor_loop`` and in ingest handlers. They
+# call ``_fire_alert`` directly — no rule lookup, no enabled check — so they
+# fire regardless of what the Alerts tab shows, and the tab listed none of
+# them. An alert the operator cannot find, explain, or silence is not
+# governance; it is noise with a red background.
+#
+# Surfaced via /api/alerts/builtins. ``alert_type`` values must match the
+# ``_fire_alert(alert_type=...)`` call sites — tests/test_builtin_monitors.py
+# greps for drift.
+BUILTIN_MONITORS = [
+    {
+        "alert_type": "heartbeat_silent",
+        "label": "Agent went quiet",
+        "watches": "No heartbeat for 1.5x the expected interval",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "agent_down",
+        "label": "Telemetry feed stopped",
+        "watches": "No OTLP data received for the agent-down window",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "anomaly",
+        "label": "Cost spike",
+        "watches": "Today's spend above 2x the 7-day average",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "token_velocity",
+        "label": "Token burst",
+        "watches": "Sustained tokens/min above the built-in ceiling",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "agent_error_rate",
+        "label": "Errors climbing",
+        "watches": "A runtime's error rate over its recent baseline",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "error_spike",
+        "label": "Error spike",
+        "watches": "A burst of errors in a short window",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "security_threat",
+        "label": "Threat signature matched",
+        "watches": "Built-in signatures matching recent agent activity",
+        "channels": ["banner", "telegram"],
+        "source": "security-scan",
+    },
+    {
+        "alert_type": "numbat_finding",
+        "label": "Security tool finding",
+        "watches": "A critical or high finding from a connected scanner",
+        "channels": ["banner", "telegram"],
+        "source": "numbat-ingest",
+    },
+    {
+        "alert_type": "security",
+        "label": "Security posture changed",
+        "watches": "A drop in the node's security posture score",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "threshold",
+        "label": "Budget threshold",
+        "watches": "Daily spend crossing the budget you configured",
+        "channels": ["banner", "telegram"],
+        "source": "dashboard",
+    },
+]
+
+
+@bp_alerts.route("/api/alerts/builtins")
+def api_alerts_builtins():
+    """The always-on monitors that fire without an alert rule.
+
+    Read by the Alerts tab so the operator can see WHY a banner appeared
+    when every rule on the page is switched off. No ``@gate``: knowing what
+    is watching you is not a paid feature.
+    """
+    return jsonify({"monitors": BUILTIN_MONITORS,
+                    "count": len(BUILTIN_MONITORS)})
+
+
 # ── Default alert-rule seed list (issue #1707) ─────────────────────────────
 #
 # Templates the dashboard offers as one-click seed rules on the Alerts
@@ -259,6 +510,27 @@ def _enrich_rules_with_comms(rules):
         # Don't inject ``last_fired_at: None`` when the rule has never
         # fired — keeps the legacy response shape byte-stable for callers
         # that do strict-equality asserts (see test_alert_rules_local_store).
+        #
+        # Evaluator provenance (founder 2026-08-15): which process, if any,
+        # actually evaluates this rule. The UI renders "never triggered" for
+        # a rule with no evaluator identically to one that is armed and
+        # simply hasn't tripped — indistinguishable, and one of them is a
+        # lie. Only stamp when we can tell; absent key = legacy/unknown, so
+        # the byte-stable-shape guarantee above still holds for old rows.
+        _at = (r.get("alert_type") or "").strip()
+        _lt = (r.get("type") or "").strip()
+        if _at in UNSUPPORTED_ALERT_TYPES:
+            r["evaluator"] = "none"
+        elif _at in _EVALUATOR_ONLY:
+            r["evaluator"] = "daemon"
+        elif _lt in _LOCAL_EVALUABLE_TYPES:
+            r["evaluator"] = "dashboard"
+        elif _lt == "anomaly" and not _at:
+            # Pre-0.12.711 zombie: created before the alert_type column and
+            # before the mapping fix, so nothing can evaluate it and nothing
+            # can reconstruct what it meant. Surfaced, not hidden.
+            r["evaluator"] = "none"
+            r["needs_recreate"] = True
 
     # Comms flags. All three predicates need to be True for the banner:
     # 1+ rules configured, 0 historical fires across all of them, oldest
@@ -705,23 +977,49 @@ def api_alert_rules():
         # self-hosted setup"): the Alerts tab speaks the cloud vocabulary
         # (alert_type / threshold_value / channel_ids). A locally-entitled
         # install (self-hosted Trial/Pro key) saves those rules HERE instead
-        # of at the cloud; map the fields onto the local schema. Cloud-vocab
-        # types without a local evaluator equivalent land on "anomaly" so
-        # the rule persists and renders; evaluator parity is tracked
-        # separately.
+        # of at the cloud; map the fields onto the local schema.
+        #
+        # Founder 2026-08-15: the old map keyed on "cost_daily"/"agent_offline"
+        # while the Alerts tab has always POSTed "daily_spend"/"node_offline"
+        # (static/js/alerts.js EXAMPLE_RULES). Neither key matched, so BOTH
+        # fell through to the ``.get(..., "anomaly")`` default — and the
+        # in-process evaluator has no ``anomaly`` branch, so the rule rendered
+        # green, said "never triggered", and never could. Zombie rules are
+        # worse than no rules: the user believes they are covered.
+        #
+        # The mapping is now explicit and total. Every type the UI can send
+        # lands in exactly one bucket:
+        #   _CLOUD_TO_LOCAL — a real branch in dashboard.py's monitor loop
+        #   _EVALUATOR_ONLY — no local branch, but clawmetry.alert_evaluator
+        #                     implements it; mirrored to DuckDB below so the
+        #                     daemon evaluates it for real
+        #   anything else   — rejected with 422, never silently stored
         _cloud_type = (data.get("alert_type") or "").strip()
+        _mirror_to_duckdb = False
         if _cloud_type and not rtype:
-            _CLOUD_TO_LOCAL = {
-                "cost_daily": "threshold", "session_cost": "threshold",
-                "token_velocity": "token_spike", "agent_offline": "agent_down",
-            }
-            rtype = _CLOUD_TO_LOCAL.get(_cloud_type, "anomaly")
+            rtype = _CLOUD_TO_LOCAL.get(_cloud_type, "")
+            if not rtype:
+                if _cloud_type in _EVALUATOR_ONLY:
+                    # Parked as "anomaly" on purpose: the fleet-loop has no
+                    # such branch, so it skips the row and only the daemon's
+                    # alert_evaluator (DuckDB) fires it. Both write the same
+                    # alert_history table and it already dedupes by rule_id
+                    # inside the cooldown window, so there is no double-fire.
+                    rtype = "anomaly"
+                    _mirror_to_duckdb = True
+                else:
+                    return jsonify({
+                        "error": f"Alert type '{_cloud_type}' has no evaluator "
+                                 f"on a self-hosted node yet",
+                        "alert_type": _cloud_type,
+                        "unsupported": True,
+                    }), 422
             if not threshold:
                 threshold = data.get("threshold_value", 0)
             if data.get("channel_ids") and channels == ["banner"]:
                 channels = list(data.get("channel_ids") or []) or ["banner"]
         if rtype not in ("threshold", "spike", "token_spike", "anomaly",
-                         "agent_down", "unproductive_burn"):
+                         "agent_down", "session_cost", "unproductive_burn"):
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400
@@ -731,29 +1029,50 @@ def api_alert_rules():
         now = time.time()
         with _d._fleet_db_lock:
             db = _d._fleet_db()
+            # ``alert_type`` arrived in 0.12.711 and is added by an ALTER in
+            # _fleet_db init. Don't assume it: this handler also runs against
+            # DBs built by other code paths (and by tests that hand-roll the
+            # schema), and a hard dependency turns a missing column into a
+            # 500 on rule create. Probe, then insert what the table has.
+            _cols = {row[1] for row in
+                     db.execute("PRAGMA table_info(alert_rules)").fetchall()}
+            _fields = ["id", "type", "threshold", "channels", "cooldown_min",
+                       "enabled", "runtime"]
+            _values = [rule_id, rtype, threshold, json.dumps(channels),
+                       cooldown, 1 if enabled else 0, runtime]
+            if "alert_type" in _cols:
+                _fields.append("alert_type")
+                _values.append(_cloud_type)
+            _fields += ["created_at", "updated_at"]
+            _values += [now, now]
             db.execute(
-                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, runtime, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rule_id,
-                    rtype,
-                    threshold,
-                    json.dumps(channels),
-                    cooldown,
-                    1 if enabled else 0,
-                    runtime,
-                    now,
-                    now,
-                ),
+                f"INSERT INTO alert_rules ({', '.join(_fields)}) "
+                f"VALUES ({', '.join('?' * len(_fields))})",
+                tuple(_values),
             )
             db.commit()
             db.close()
+        mirrored = False
+        if _mirror_to_duckdb:
+            mirrored = _mirror_rule_to_duckdb(
+                rule_id, alert_type=_cloud_type, threshold=threshold,
+                runtime=runtime, channels=channels, cooldown_min=cooldown,
+                enabled=enabled, name=data.get("name") or "",
+            )
         _audit("alert_rule.create", actor=_actor(), target=rule_id,
                result="created", source="dashboard",
                metadata={"type": rtype, "threshold": threshold,
                          "channels": channels, "enabled": bool(enabled),
-                         "runtime": runtime})
-        return jsonify({"ok": True, "id": rule_id})
+                         "runtime": runtime, "alert_type": _cloud_type,
+                         "duckdb_mirror": mirrored})
+        return jsonify({
+            "ok": True,
+            "id": rule_id,
+            # Honest evaluator provenance so the tab can say WHERE the rule
+            # runs (and warn when the daemon is down and the mirror missed).
+            "evaluator": ("daemon" if _mirror_to_duckdb else "dashboard"),
+            "mirrored": mirrored if _mirror_to_duckdb else None,
+        })
     # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
     # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
     # _get_alert_rules helper on miss / disabled flag.
@@ -796,6 +1115,9 @@ def api_alert_rule(rule_id):
             db.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
             db.commit()
             db.close()
+        # Drop the DuckDB mirror too, else the daemon keeps evaluating a rule
+        # the user deleted (it reads DuckDB, not the fleet DB).
+        _unmirror_rule_from_duckdb(rule_id)
         _audit("alert_rule.delete", actor=_actor(), target=rule_id,
                result="deleted", source="dashboard")
         return jsonify({"ok": True})
@@ -832,7 +1154,25 @@ def api_alert_rule(rule_id):
         db = _d._fleet_db()
         db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
+        row = db.execute(
+            "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
         db.close()
+    # Keep the DuckDB mirror in step. Without this an operator could flip a
+    # rule off in the UI and the daemon would keep firing it — it evaluates
+    # DuckDB, which the fleet-DB UPDATE above never touches.
+    row = dict(row) if row else {}
+    if (row.get("alert_type") or "") in _EVALUATOR_ONLY:
+        try:
+            _chans = json.loads(row.get("channels") or "[]")
+        except (TypeError, ValueError):
+            _chans = ["banner"]
+        _mirror_rule_to_duckdb(
+            rule_id, alert_type=row.get("alert_type"),
+            threshold=row.get("threshold"), runtime=row.get("runtime") or "all",
+            channels=_chans, cooldown_min=row.get("cooldown_min"),
+            enabled=bool(row.get("enabled")),
+        )
     _audit("alert_rule.update", actor=_actor(), target=rule_id,
            result="updated", source="dashboard",
            metadata={"fields": {k: data[k] for k in data
