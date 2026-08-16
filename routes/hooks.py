@@ -532,6 +532,34 @@ def _hso_mirror(decision: str) -> dict:
                                    "decision": decision}}
 
 
+def _attention_write_async(**kwargs) -> None:
+    """Write attention state on a daemon thread, off the request path.
+
+    NOT merely defensive. ``_ls_write`` goes through the daemon proxy, whose
+    per-attempt timeouts are 5s then 9s — so a contended DuckDB could add up
+    to fourteen seconds before this handler even reaches its first gate. On a
+    permission hook that is fourteen seconds of an agent sitting still,
+    waiting on a cosmetic badge. Nothing about showing a badge justifies
+    delaying the decision the badge is describing.
+
+    Fire and forget: the caller never waits, and a failure is invisible to
+    the runtime by design.
+    """
+    import threading
+
+    def _run():
+        try:
+            _ls_write(**kwargs)
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True,
+                         name="clawmetry-attention-write").start()
+    except Exception:
+        pass
+
+
 def _mark_waiting(session_id: str, tool_name: str) -> None:
     """Flag a session as waiting on a human, with ``signal='hook'``.
 
@@ -540,19 +568,17 @@ def _mark_waiting(session_id: str, tool_name: str) -> None:
     see a permission dialog (it leaves no transcript event), and deliberately
     refuses to clear hook rows for that reason.
 
-    Silent on every failure. This runs on the agent's critical path; a badge
-    is never worth stalling a turn over.
+    Off-thread and silent on failure. This sits on the agent's critical path;
+    a badge is never worth stalling a turn over.
     """
     if not session_id:
         return
-    try:
-        _ls_write("set_session_attention",
-                  session_id=f"claude_code:{session_id}",
-                  agent_type="claude_code",
-                  state="waiting_approval", signal="hook",
-                  tool=(tool_name or "")[:80])
-    except Exception:
-        pass
+    _attention_write_async(
+        method_name="set_session_attention",
+        session_id=f"claude_code:{session_id}",
+        agent_type="claude_code",
+        state="waiting_approval", signal="hook",
+        tool=(tool_name or "")[:80])
 
 
 def _clear_waiting(full_session_id: str) -> None:
@@ -566,12 +592,9 @@ def _clear_waiting(full_session_id: str) -> None:
     """
     if not full_session_id:
         return
-    try:
-        _ls_write("clear_session_attention",
-                  session_id=str(full_session_id),
-                  agent_type="claude_code")
-    except Exception:
-        pass
+    _attention_write_async(method_name="clear_session_attention",
+                           session_id=str(full_session_id),
+                           agent_type="claude_code")
 
 
 def _mirror_answer(decision: str, approval_id: "str | None" = None,
