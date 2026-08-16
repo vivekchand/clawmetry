@@ -19561,6 +19561,28 @@ def run_daemon() -> None:
             while not _pro_stop.is_set():
                 try:
                     _ak = (load_config() or {}).get("api_key", "")
+                    if not _ak:
+                        # SELF-HOSTED (signed license, no cm_ key). The cloud
+                        # branch below never runs for these nodes, and the
+                        # only other pro install path is a manual
+                        # ``clawmetry activate`` — so without this they stay
+                        # frozen on the wheel they activated with, and lose
+                        # any capability that later moves from OSS into pro.
+                        # No-ops unless the served wheel is actually newer.
+                        try:
+                            from clawmetry.license import (
+                                refresh_pro_from_license as _rpl,
+                            )
+                            _up, _rmsg = _rpl(config.get("node_id"))
+                            if _up:
+                                log.info("clawmetry-pro refreshed: %s", _rmsg)
+                                from clawmetry.extensions import (
+                                    load_plugins as _lp3,
+                                )
+                                _lp3()
+                        except Exception as _rpe:
+                            log.debug("self-hosted pro refresh skipped: %s",
+                                      _rpe)
                     if _ak:
                         # Trial demonstrably lapsed -> REMOVE the pro package
                         # rather than merely gating it. The entitlement layer

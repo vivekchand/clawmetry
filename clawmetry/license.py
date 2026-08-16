@@ -827,6 +827,57 @@ def _download_and_install_pro(payload: dict) -> str:
         return f"clawmetry-pro install deferred ({exc})"
 
 
+def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
+    """SELF-HOSTED refresh: keep an activated node's clawmetry-pro current.
+
+    ``_download_and_install_pro`` is reached only from :func:`activate_license`
+    — a one-time action. So a signed-license (self-hosted) node installed the
+    wheel that was current on its activation day and then NEVER upgraded,
+    while cloud-key nodes track releases through the ~30-min entitlement
+    watcher. Any paid capability that later moves out of the OSS package
+    silently disappears on exactly those nodes: OSS drops the code, and their
+    frozen wheel does not have it.
+
+    (Found 2026-08-16 while moving approval delivery to clawmetry-pro. The
+    OSS deletion would have taken approval notifications away from every
+    self-hosted licensee with no automatic recovery — they would have had to
+    re-run ``clawmetry activate``, without being told to.)
+
+    Safe to call on a schedule: ``_provision_pro_wheel`` compares the served
+    wheel's version against the installed one and no-ops unless it is newer,
+    so the steady state is one cheap HTTPS round-trip. Returns
+    ``(upgraded, message)``; never raises.
+    """
+    try:
+        ent = load_license()
+        if ent is None:
+            return False, ""            # no signed license — not this path
+        if _offline_mode():
+            return False, "offline mode: skipping clawmetry-pro refresh"
+        before = _pro_installed_version()
+        if not before:
+            # Nothing installed: activation's own install path handles the
+            # first install, and re-running it here could fight it.
+            return False, ""
+        payload = {}
+        try:
+            with open(LICENSE_PATH, "r", encoding="utf-8") as fh:
+                token = fh.read().strip()
+            payload = verify_token(token) or {}
+        except Exception:
+            payload = {}
+        msg = _download_and_install_pro(payload)
+        after = _pro_installed_version()
+        upgraded = bool(after and after != before)
+        if upgraded:
+            logger.info("clawmetry-pro refreshed %s -> %s (self-hosted "
+                        "license)", before, after)
+        return upgraded, msg
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("license: pro refresh failed: %s", exc)
+        return False, ""
+
+
 def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
     """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
     saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
