@@ -3782,6 +3782,120 @@ function _renderOutLoopSources() {
   }).catch(function(){});
 }
 
+// Status vocabulary. /api/subagents passes the daemon's own classification
+// through VERBATIM, so "in progress" arrives as either 'active' (the
+// age-derived buckets in routes/sessions.py) or 'running' (the daemon's or
+// the gateway registry's explicit label). Matching only the literal 'active'
+// is why 14 genuinely running sub-agents rendered as ✅ complete and the hero
+// said "idle" while five terminals worked (founder report 2026-08-15). Every
+// consumer goes through these helpers — never compare the raw string.
+function _cmIsWorkingStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'active' || s === 'running';
+}
+function _cmIsLiveStatus(s) {
+  return _cmIsWorkingStatus(s) || String(s == null ? '' : s).trim().toLowerCase() === 'idle';
+}
+
+// ── Live sessions ─────────────────────────────────────────────────────────
+// The hero used to answer "is my agent alive?" with one node-wide boolean, so
+// a person driving five terminals read "It's idle right now" while all five
+// were mid-task. /api/live-sessions answers it by NAME instead: which sessions
+// are working, which are parked waiting for you, and how long since each moved.
+//
+// Perf (FLYWHEEL "performance is a feature"): ONE shared cache with a 10s TTL
+// and in-flight dedup, keyed by the runtime filter. The hero repaints far more
+// often than that (two 10s timers plus every subagent poll), and each repaint
+// must reuse the cache rather than issue its own fetch.
+var _CM_LIVE_TTL_MS = 10000;
+function _cmLoadLiveSessions(cb) {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var c = window._cmLive;
+  if (c && c.rt === rt && (Date.now() - c.ts) < _CM_LIVE_TTL_MS) { if (cb) cb(c); return; }
+  if (window._cmLiveWait) return;           // in-flight dedup
+  window._cmLiveWait = true;
+  var url = '/api/live-sessions' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetchJsonWithTimeout(url, 6000).then(function (d) {
+    window._cmLive = {
+      rt: rt, ts: Date.now(),
+      sessions: (d && d.sessions) || [],
+      counts: (d && d.counts) || { working: 0, waiting: 0 },
+      // `available:false` means the daemon could not be reached — that is
+      // "we don't know", not "nothing is running", and the hero says so.
+      available: !(d && d.available === false)
+    };
+  }).catch(function () {
+    var old = window._cmLive || {};
+    window._cmLive = { rt: rt, ts: Date.now(), sessions: old.sessions || [],
+                       counts: old.counts || { working: 0, waiting: 0 }, available: false };
+  }).then(function () {
+    window._cmLiveWait = false;
+    if (cb) cb(window._cmLive);
+  });
+}
+
+// "4m" / "just now" — the age column reads as a live clock, so keep it terse
+// and monospaced at the call site.
+function _cmLiveAge(sec) {
+  if (sec == null) return '';
+  if (sec < 15) return 'just now';
+  if (sec < 60) return Math.round(sec) + 's ago';
+  return Math.round(sec / 60) + 'm ago';
+}
+
+// Jump straight from a live row into that session's transcript.
+function cmOpenLiveSession(sessionId) {
+  if (!sessionId) return;
+  if (typeof switchTab === 'function') switchTab('transcripts');
+  setTimeout(function () {
+    if (typeof viewTranscript === 'function') viewTranscript(sessionId);
+  }, 60);
+}
+
+// The signature element: one row per live session. State dot, the session's
+// own title (its name — the thing you actually recognise), the runtime it runs
+// on, and a right-aligned age column so "how long since each one moved" reads
+// as a single vertical scan. Rows are real buttons: keyboard reachable, with a
+// visible focus ring.
+function _cmLiveRowsHtml(live) {
+  var rows = (live && live.sessions) || [];
+  if (!rows.length) return '';
+  var SHOWN = 6;
+  var html = '<div style="margin:16px 0 4px;border-top:1px solid var(--border-primary);padding-top:14px;">';
+  var shown = rows.slice(0, SHOWN);
+  var sawWaiting = false;
+  shown.forEach(function (s) {
+    var working = s.state === 'working';
+    // A colour alone does not teach a first-timer what amber means, and the
+    // headline only ever names one of the two states. Label the boundary once,
+    // in words, the moment the quiet ones start (rows are sorted by age, so
+    // this fires exactly once).
+    if (!working && !sawWaiting) {
+      sawWaiting = true;
+      if (shown[0] && shown[0].state === 'working') {
+        html += '<div class="cm-live-group">Waiting on you</div>';
+      }
+    }
+    var col = working ? '#22c55e' : '#f59e0b';
+    var title = (s.title || '').trim() || 'Untitled session';
+    var rtLabel = (typeof _cmRuntimeLabel === 'function' && _cmRuntimeLabel(s.runtime)) || s.runtime || '';
+    html += '<button type="button" class="cm-live-row" onclick="cmOpenLiveSession(' + attrJsStr(s.session_id) + ')"'
+      + ' title="Open this session\'s transcript">'
+      + '<span class="cm-live-dot" style="background:' + col + ';' + (working ? '' : 'animation:none;') + '"></span>'
+      + '<span class="cm-live-title">' + escHtml(title) + '</span>'
+      + '<span class="cm-live-rt">' + escHtml(rtLabel) + '</span>'
+      + '<span class="cm-live-age">' + escHtml(_cmLiveAge(s.age_seconds)) + '</span>'
+      + '<span class="cm-live-arrow">→</span>'
+      + '</button>';
+  });
+  if (rows.length > SHOWN) {
+    html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 10px 2px;">'
+      + (rows.length - SHOWN) + ' more. Open Sessions to see them all.</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 // Alive-state truthfulness: /api/subagents only lists SPAWNED children, so a
 // node whose main terminal sessions are hard at work read "It's idle right
 // now" (founder report 2026-08-02). Complement it with per-runtime recency
@@ -3834,8 +3948,42 @@ function _renderOverviewHero() {
       });
     }
   } catch (_e_act) {}
+
+  // Named liveness. This is the primary answer to "is my agent alive?" — the
+  // recency signal above is the fallback for when the session list is not
+  // available (cloud, or the daemon briefly unreachable).
+  var _live = window._cmLive;
+  var _liveRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!_live || _live.rt !== _liveRt || (Date.now() - _live.ts) >= _CM_LIVE_TTL_MS) {
+    _cmLoadLiveSessions(function () { try { _renderOverviewHero(); } catch (e) {} });
+  }
+  var _working = (_live && _live.counts && _live.counts.working) || 0;
+  var _waiting = (_live && _live.counts && _live.counts.waiting) || 0;
+  var _liveKnown = !!(_live && _live.available);
+  if (_working > 0) busy = true;
+
+  // Headline. Say the number and let it carry the news; fall back to the old
+  // single-boolean sentence only when the session list can't be read.
+  var headline;
+  if (_liveKnown && _working > 0) {
+    headline = _working === 1
+      ? 'It’s working right now.'
+      : _working + ' sessions are working right now.';
+  } else if (_liveKnown && _waiting > 0) {
+    headline = _waiting === 1
+      ? 'One session is waiting on you.'
+      : _waiting + ' sessions are waiting on you.';
+  } else if (!_liveKnown && busy) {
+    headline = 'It’s working right now.';
+  } else if (!_liveKnown) {
+    headline = 'Nothing to report yet.';
+  } else {
+    headline = 'It’s idle right now.';
+  }
+
+  var _liveRows = _liveKnown ? _cmLiveRowsHtml(_live) : '';
   var stateWord = busy ? 'working' : 'idle';
-  var dot = busy ? '#22c55e' : '#3b82f6';
+  var dot = busy ? '#22c55e' : (_liveKnown && _waiting > 0 ? '#f59e0b' : '#3b82f6');
   // When a runtime is selected, the hero must mirror the (runtime-scoped) stat
   // cards, not the node-wide overview. _cmRuntimeScope is set by loadMiniWidgets
   // from the v1 API (FLYWHEEL §1c); null = node-wide. Note: prefer the scoped
@@ -3845,8 +3993,14 @@ function _renderOverviewHero() {
   var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
+  // Node-wide, the chip is labelled "today" below, so it must BE today:
+  // ov.sessionCount is an all-time count with no date predicate and read 89
+  // on a day that had 16. Fall back to the all-time number only on a daemon
+  // too old to send sessionsToday, where the label is dropped instead.
+  var _todayKnown = (typeof ov.sessionsToday === 'number');
   var sessions = _scope ? _scope.sessions
-                        : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null);
+                        : (_todayKnown ? ov.sessionsToday
+                           : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
   var free = cost === '$0.00' || cost === '$0' ||
              /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
   var say = window._cmLastAgentSay;
@@ -3862,7 +4016,7 @@ function _renderOverviewHero() {
   // (matches the switcher), so don't append "today" — the runtime may have 0
   // sessions today but N on record, and "N sessions today" would be wrong while
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
-  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
+  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
@@ -3906,9 +4060,15 @@ function _renderOverviewHero() {
       + '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">' + t('overview.hero_eyebrow', null, 'Your agent') + '</span>'
     + '</div>'
     + '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:32px;line-height:1.15;font-weight:600;color:var(--text-primary);margin:10px 0 4px;">'
-      + (busy ? 'It’s working right now.' : 'It’s idle right now.') + '</div>'
-    + '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);">'
+      + headline + '</div>'
+    // When the named rows render they ARE the story; a second "last thing it
+    // did" line underneath just competes with them.
+    + (_liveRows
+        ? ''
+        : '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>')
+    + _liveRows
+    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);'
+      + (_liveRows ? 'margin-top:16px;' : '') + '">'
       + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
   hero.style.display = '';
 
@@ -4080,7 +4240,11 @@ async function loadMiniWidgets(overview, usage) {
   // and it briefly read "0" on a slow/failed fetch. Set synchronously from the
   // value already in hand so the card is never blank and never contradicts the
   // hero. (Card relabeled "Sessions today" in overview.html.)
-  document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
+  // Same honesty fix as the hero chip: the card is LABELLED "Sessions today",
+  // so it must carry today's count, not the all-time sessionCount.
+  document.getElementById('hot-sessions-count').textContent =
+    (typeof overview.sessionsToday === 'number' ? overview.sessionsToday
+                                                : overview.sessionCount) || 0;
 
   // 📈 Runtime scope — when a runtime is selected, the Overview stat cards
   // (sessions / tokens / cost / model) must show ONLY that runtime's data
@@ -4159,7 +4323,10 @@ async function loadMiniWidgets(overview, usage) {
   // switcher) so "today" would be wrong; node-wide stays the live "today".
   try {
     var _slbl = document.getElementById('hot-sessions-label');
-    if (_slbl) _slbl.textContent = window._cmRuntimeScope
+    // A daemon too old to send sessionsToday falls back to the all-time
+    // count, so drop the "today" from the label rather than lie in it.
+    var _ovToday = window._cmOverview && typeof window._cmOverview.sessionsToday === 'number';
+    if (_slbl) _slbl.textContent = (window._cmRuntimeScope || !_ovToday)
       ? t('overview.sessions', null, 'Sessions')
       : t('overview.sessions_today', null, 'Sessions today');
   } catch (e) {}
@@ -5449,10 +5616,10 @@ async function loadSubAgents() {
       previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
     } else {
       // Show active ones first
-      var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
+      var activeFirst = subagents.filter(function(a){return _cmIsWorkingStatus(a.status);}).concat(subagents.filter(function(a){return !_cmIsWorkingStatus(a.status);}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
+        var icon = _cmIsWorkingStatus(agent.status) ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
         var name = cleanTaskName(agent.displayName);
         if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
@@ -5550,7 +5717,7 @@ async function loadActiveTasks() {
     // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
     var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
+    var live = all.filter(function(a) { return _cmIsLiveStatus(a.status); });
     var recentFailed = all.filter(function(a) {
       return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
     });
@@ -5568,7 +5735,7 @@ async function loadActiveTasks() {
     var html = '';
     var badge = document.getElementById('overview-tasks-count-badge');
     if (badge) {
-      var liveCount = agents.filter(function(a) { return a.status === 'active' || a.status === 'idle'; }).length;
+      var liveCount = agents.filter(function(a) { return _cmIsLiveStatus(a.status); }).length;
       badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
     }
 
@@ -5588,7 +5755,7 @@ async function loadActiveTasks() {
       var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
 
       html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (agent.status === 'active' || agent.status === 'idle') {
+      if (_cmIsLiveStatus(agent.status)) {
         html += '<div class="task-card-pulse active"></div>';
       }
       html += '<div class="task-card-header">';
@@ -11730,7 +11897,7 @@ async function loadSessions() {
     if (subagents.length > 0) {
       html += '<div style="margin-top:8px;margin-left:16px;border-left:2px solid var(--border-primary);padding-left:12px;">';
       subagents.forEach(function(sa) {
-        var statusIcon = sa.status === 'active' ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
+        var statusIcon = _cmIsWorkingStatus(sa.status) ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
@@ -11793,7 +11960,7 @@ async function loadSessions() {
       chainHtml += ' &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
       chainHtml += '</div>';
       chain.children.slice(0, 5).forEach(function(child, idx) {
-        var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+        var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
         chainHtml += '<div style="padding:6px 12px 6px 28px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         chainHtml += '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
         if (idx === 0) chainHtml += '<span style="color:var(--text-muted);font-size:10px;margin-right:-4px;">&#x2514;&#x2500;</span>';
@@ -14653,7 +14820,7 @@ async function loadSystemHealth() {
             chtml += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + chain.child_count + ' agents &bull; ' + chainTokStr + ' tok &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
             chtml += '</div>';
             chain.children.slice(0, 4).forEach(function(child) {
-              var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+              var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
               var tokStr = child.total_tokens >= 1000 ? (child.total_tokens/1000).toFixed(0)+'K' : child.total_tokens;
               chtml += '<div style="padding:4px 10px 4px 20px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-secondary);font-size:11px;">';
               chtml += '<span style="width:6px;height:6px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
@@ -18449,6 +18616,9 @@ async function loadSubagents() {
       }
     });
     function statusDot(status) {
+      // 'running' is the daemon's own word for the same state as 'active';
+      // without this normalise it fell through to the grey "stale" dot.
+      if (_cmIsWorkingStatus(status)) status = 'active';
       var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed' };
       var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
                : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);'
@@ -21594,7 +21764,7 @@ function _ovTimeLabel(agent) {
   var sec = Math.floor(ms / 1000);
   var min = Math.floor(sec / 60);
   var hr = Math.floor(min / 60);
-  if (agent.status === 'active') {
+  if (_cmIsWorkingStatus(agent.status)) {
     if (min < 1) return 'Running (' + sec + 's)';
     if (min < 60) return 'Running (' + min + ' min)';
     return 'Running (' + hr + 'h ' + (min % 60) + 'm)';
@@ -21619,7 +21789,7 @@ function _ovTimeLabel(agent) {
 
 function _ovRenderCard(agent, idx) {
   var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-  var sc = agent.status === 'active' ? 'running' : isRealFailure ? 'failed' : 'complete';
+  var sc = _cmIsWorkingStatus(agent.status) ? 'running' : isRealFailure ? 'failed' : 'complete';
   var taskName = cleanTaskName(agent.displayName);
   var badge = detectProjectBadge(agent.displayName);
   var timeLabel = _ovTimeLabel(agent);
@@ -21689,7 +21859,7 @@ async function loadOverviewTasks() {
     var running = [], done = [], failed = [];
     agents.forEach(function(a) {
       var isRealFailure = a.status === 'stale' && a.abortedLastRun && (a.outputTokens || 0) === 0;
-      if (a.status === 'active') running.push(a);
+      if (_cmIsWorkingStatus(a.status)) running.push(a);
       else if (isRealFailure) failed.push(a);
       else done.push(a);
     });
@@ -23544,7 +23714,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     // ─── SESSION MODAL ─────────────────────────────────
     if (toolKey === 'session') {
       var agents = data.subagents || [];
-      var active = agents.filter(function(a){return a.status==='active';}).length;
+      var active = agents.filter(function(a){return _cmIsWorkingStatus(a.status);}).length;
       var idle = agents.filter(function(a){return a.status==='idle';}).length;
       var stale = agents.filter(function(a){return a.status==='stale';}).length;
 
@@ -23559,8 +23729,8 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Sub-Agents</div>';
         html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;">';
         agents.forEach(function(a) {
-          var dotColor = a.status==='active' ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
-          var dotShadow = a.status==='active' ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
+          var dotColor = _cmIsWorkingStatus(a.status) ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
+          var dotShadow = _cmIsWorkingStatus(a.status) ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
           html += '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-secondary);">';
           html += '<div style="width:10px;height:10px;border-radius:50%;background:'+dotColor+';margin-top:4px;flex-shrink:0;'+dotShadow+'"></div>';
           html += '<div style="flex:1;min-width:0;">';

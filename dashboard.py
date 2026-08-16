@@ -9698,6 +9698,28 @@ def _default_alerts_webhook_config():
         # never persisted, so its card stayed on "Connect" forever.
         "telegram_bot_token": "",
         "telegram_chat_id": "",
+        # WhatsApp — Meta Cloud API (token + phone_id) or Twilio's WhatsApp
+        # channel (twilio_* below). ``whatsapp_template`` is the fallback
+        # used when Meta's 24-hour service window has closed.
+        "whatsapp_to": "",
+        "whatsapp_token": "",
+        "whatsapp_phone_id": "",
+        "whatsapp_template": "",
+        "whatsapp_lang": "",
+        # Twilio — voice calls for approvals, and the WhatsApp sender when
+        # Meta isn't configured.
+        "twilio_account_sid": "",
+        "twilio_auth_token": "",
+        "twilio_from": "",
+        "twilio_whatsapp_from": "",
+        "phone_number": "",
+        # Local SMTP so a self-hosted (nocloud) node can still email.
+        "email_address": "",
+        "smtp_host": "",
+        "smtp_port": 587,
+        "smtp_user": "",
+        "smtp_password": "",
+        "smtp_from": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -9728,6 +9750,15 @@ def _save_alerts_webhook_config(updates):
         "webhook_url", "slack_webhook_url", "discord_webhook_url",
         "pagerduty_routing_key", "opsgenie_api_key", "opsgenie_api_url",
         "telegram_bot_token", "telegram_chat_id",
+        # Keep in lockstep with _default_alerts_webhook_config above — a key
+        # in the schema but not here saves as a no-op (the exact bug the
+        # telegram comment there documents).
+        "whatsapp_to", "whatsapp_token", "whatsapp_phone_id",
+        "whatsapp_template", "whatsapp_lang",
+        "twilio_account_sid", "twilio_auth_token", "twilio_from",
+        "twilio_whatsapp_from", "phone_number",
+        "email_address", "smtp_host", "smtp_port", "smtp_user",
+        "smtp_password", "smtp_from",
         "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
         "min_severity",
     }
@@ -11926,6 +11957,10 @@ def detect_config(args=None):
     # installer's base-URL discovery.
     from routes.hooks import bp_hooks
     app.register_blueprint(bp_hooks)
+    # Per-runtime approval routing (/api/approvals/routing) + the phone
+    # decision page (/a/<id>) the notification links point at.
+    from routes.approval_routing import bp_approval_routing
+    app.register_blueprint(bp_approval_routing)
     app.register_blueprint(bp_turn_anatomy)
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)

@@ -2555,3 +2555,79 @@ body.has-profile-menu #logout-btn { display: none !important; }
   height: 100vh !important; width: 100vw; max-height: 100vh;
   border-radius: 0 !important; border: none !important;
 }
+
+/* ── Overview hero: live session rows ──────────────────────────────────────
+   One row per session that is alive right now. The age column is deliberately
+   monospaced and right-aligned so "how long since each one moved" reads as a
+   single vertical scan rather than five separate facts. Rows are <button>s,
+   so they are keyboard reachable and announce as actionable. */
+.cm-live-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto 14px;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  margin: 0 -10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.cm-live-row:hover { background: rgba(255, 255, 255, 0.045); }
+.cm-live-row:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+  background: rgba(255, 255, 255, 0.045);
+}
+.cm-live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  animation: cmLivePulse 2.4s ease-in-out infinite;
+}
+.cm-live-title {
+  font-size: 14.5px; font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cm-live-rt {
+  font-size: 11px; color: var(--text-muted);
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  white-space: nowrap;
+}
+.cm-live-age {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); text-align: right; min-width: 62px;
+  white-space: nowrap;
+}
+.cm-live-arrow {
+  color: var(--text-muted); font-size: 13px;
+  opacity: 0; transform: translateX(-3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.cm-live-row:hover .cm-live-arrow,
+.cm-live-row:focus-visible .cm-live-arrow { opacity: 1; transform: translateX(0); }
+
+@keyframes cmLivePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-live-dot { animation: none; }
+  .cm-live-row, .cm-live-arrow { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .cm-live-row { grid-template-columns: 10px minmax(0, 1fr) auto; }
+  .cm-live-rt, .cm-live-arrow { display: none; }
+}
+
+/* Names the boundary between working and waiting rows. A dot colour alone
+   does not teach a first-timer what amber means. */
+.cm-live-group {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-muted);
+  padding: 12px 0 5px;
+}
