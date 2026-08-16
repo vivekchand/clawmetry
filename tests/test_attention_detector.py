@@ -384,6 +384,79 @@ def test_hook_write_paths_are_allowlisted_for_the_daemon_proxy():
     assert "clear_session_attention" in _DAEMON_METHODS
 
 
+# ── the approvals queue as a source ─────────────────────────────────────────
+#
+# A pending approval is a human who HAS been asked and has not answered — as
+# certain as a hook, and it covers every runtime the approvals engine reaches
+# including ones with no hook of their own. But its PROVENANCE differs, and
+# provenance decides who clears the row.
+
+def _pending_approval(store, sid, action="rm -rf build"):
+    store.ingest_approval({
+        "id": "ap-" + sid,
+        "requestor_session_id": sid,
+        "action": action,
+        "status": "pending",
+        "created_at": _ago(200),
+    })
+
+
+def test_pending_approval_flags_its_session(store):
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "claude_code:ap1", seconds_idle=300)
+    _pending_approval(store, "claude_code:ap1")
+    _refresh_attention_cache(store)
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "claude_code:ap1"][0]
+    assert row["attention_state"] == "waiting_approval"
+    assert row["attention_signal"] == "queue"
+    assert row["attention_tool"] == "rm -rf build"
+
+
+def test_queue_row_clears_when_the_approval_is_answered(store):
+    """The reason queue rows are NOT marked 'hook': they must vanish with the
+    decision, not linger for the hook row's two-hour grace."""
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "claude_code:ap2", seconds_idle=300)
+    _pending_approval(store, "claude_code:ap2")
+    _refresh_attention_cache(store)
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "claude_code:ap2"][0]["attention_state"]
+
+    store.update_approval_decision("ap-claude_code:ap2", decision="approved",
+                                   resolver="tester", reason="fine")
+    _refresh_attention_cache(store)
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "claude_code:ap2"][0]["attention_state"] is None
+
+
+def test_queue_beats_inference_for_the_same_session(store):
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "claude_code:ap3", seconds_idle=300)
+    _event(store, "claude_code:ap3", "tool_call", 300, {"tool": "Read"})
+    _pending_approval(store, "claude_code:ap3", action="Bash")
+    _refresh_attention_cache(store)
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "claude_code:ap3"][0]
+    assert row["attention_signal"] == "queue"
+    assert row["attention_tool"] == "Bash"
+
+
+def test_bare_session_id_reads_as_openclaw(store):
+    """Namespaced ids carry their runtime; a bare one is OpenClaw."""
+    from clawmetry.sync import _pending_approval_attention
+    _pending_approval(store, "plain-session")
+    rows = _pending_approval_attention(store)
+    assert rows and rows[0]["runtime"] == "openclaw"
+
+
+def test_confirmed_signals_are_defined_once(store):
+    """hook and queue are equally certain; only 'inferred' is a guess."""
+    from routes.attention import CONFIRMED_SIGNALS
+    assert CONFIRMED_SIGNALS == {"hook", "queue"}
+    assert "inferred" not in CONFIRMED_SIGNALS
+
+
 # ── never take the daemon down ──────────────────────────────────────────────
 
 def test_store_failure_yields_empty_not_exception():

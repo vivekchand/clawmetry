@@ -2118,6 +2118,15 @@ function _friendlyBytes(n) {
 // detector must never render as all-clear: a calm reassurance that turns out
 // to be wrong is how you teach someone to stop trusting the whole dashboard.
 
+// Is this signal a CONFIRMED one? 'hook' means the runtime told us directly;
+// 'queue' means a real approval is sitting unanswered in our own queue. Both
+// are things we know rather than deduce, so both read as confirmed. Only
+// 'inferred' is a guess. Kept in one place so a new source cannot end up
+// rendering as certain on one surface and hedged on another.
+function _cmAttnConfirmed(signal) {
+  return signal === 'hook' || signal === 'queue';
+}
+
 function cmNeedsAge(sec) {
   sec = Math.max(0, parseInt(sec, 10) || 0);
   if (sec < 60) return sec + 's';
@@ -2134,7 +2143,7 @@ function cmNeedsPhrase(item) {
   var runtime = esc((typeof _cmRuntimeLabel === 'function')
     ? _cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
   var tool = item.tool ? esc(item.tool) : '';
-  if (item.signal === 'hook') {
+  if (_cmAttnConfirmed(item.signal)) {
     return tool
       ? '<b>' + runtime + '</b> is asking to run ' + tool
       : '<b>' + runtime + '</b> is asking for permission';
@@ -2199,7 +2208,7 @@ function cmRenderNeedsYou(d) {
     : t('needs.n_waiting', { n: items.length }, items.length + ' agents need you');
 
   var rows = items.slice(0, 6).map(function (it) {
-    var hook = it.signal === 'hook';
+    var hook = _cmAttnConfirmed(it.signal);
     var where = [it.project, it.git_branch].filter(Boolean).join(' · ');
     var confidence = hook
       ? t('needs.confident', null, 'Waiting for you')
@@ -2217,7 +2226,7 @@ function cmRenderNeedsYou(d) {
 
   // Only claim certainty where we have it. If every row is a guess, say so
   // once at the bottom rather than hedging on each line.
-  var allInferred = items.every(function (i) { return i.signal !== 'hook'; });
+  var allInferred = items.every(function (i) { return !_cmAttnConfirmed(i.signal); });
   var note = allInferred
     ? '<div class="cm-needs-note">' +
         t('needs.inferred_note', null,
@@ -2255,7 +2264,7 @@ function cmOpenNeedsSession(sid) {
 function _cmAttentionBadge(state, signal, tool) {
   if (!state) return '';
   var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
-  var hook = signal === 'hook';
+  var hook = _cmAttnConfirmed(signal);
   var label = hook
     ? t('needs.badge_waiting', null, 'Waiting for you')
     : t('needs.badge_maybe', null, 'Maybe waiting');

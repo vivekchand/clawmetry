@@ -17488,6 +17488,53 @@ def _detect_ngram_loop_sessions(store) -> list[dict]:
     return out
 
 
+def _pending_approval_attention(store) -> list[dict]:
+    """Sessions with a PENDING row in the approvals queue.
+
+    A pending approval is not an inference: a human has been asked and has
+    not answered. It is ground truth for every runtime the approvals engine
+    covers — including ones with no hook of their own — so these are stamped
+    ``signal="hook"`` alongside the runtimes that report directly.
+
+    Read-only and never raises; an unreachable approvals table just means
+    this source contributes nothing that tick.
+    """
+    try:
+        rows = store.query_approvals(status="pending", limit=200) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("attention: pending-approval read failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sid = str(r.get("requestor_session_id") or "").strip()
+        if not sid:
+            continue
+        # Ids are stored namespaced (`claude_code:<uuid>`); the prefix is the
+        # runtime, and a bare id means OpenClaw.
+        runtime = sid.split(":", 1)[0] if ":" in sid else "openclaw"
+        out.append({
+            "session_id": sid,
+            "runtime": runtime,
+            "state": "waiting_approval",
+            # NOT "hook". Confidence is the same (a human really has been
+            # asked), but PROVENANCE differs and provenance decides who
+            # clears the row. A 'hook' row is owned by the hook receiver and
+            # is deliberately immune to the daemon's replace; a 'queue' row
+            # is derived by the daemon each tick and must vanish the moment
+            # the approval leaves pending — otherwise the badge would outlive
+            # the decision by up to two hours. The UI renders both as
+            # confirmed.
+            "signal": "queue",
+            "tool": str(r.get("action") or "")[:80],
+            "waiting_seconds": _seconds_since(r.get("created_at")),
+            "title": "", "cwd": "", "git_branch": "",
+        })
+    return out
+
+
 def _refresh_attention_cache(store) -> int:
     """Recompute the "needs you" list and publish it to ``_LATEST_ATTENTION``.
 
@@ -17499,6 +17546,20 @@ def _refresh_attention_cache(store) -> int:
     number of waiting sessions found.
     """
     items = _detect_attention_sessions(store)
+    # Fold in the approvals queue. A pending approval is a human who HAS been
+    # asked and has not answered — ground truth, and it covers every runtime
+    # the approvals engine reaches, including ones with no hook of their own.
+    # Merged by session id with the approval winning, because "we know" beats
+    # "we guessed" and the same session can legitimately appear in both.
+    try:
+        by_id = {i["session_id"]: i for i in items}
+        for row in _pending_approval_attention(store):
+            by_id[row["session_id"]] = row
+        items = sorted(by_id.values(),
+                       key=lambda r: (r.get("signal") == "inferred",
+                                      -(r.get("waiting_seconds") or 0)))
+    except Exception as _me:  # noqa: BLE001
+        log.debug("attention: approval merge failed (continuing): %s", _me)
     _LATEST_ATTENTION["items"] = items
     _LATEST_ATTENTION["ts"] = time.time()
     # Persist onto the session rows so every reader — the dashboard, the

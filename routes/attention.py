@@ -9,8 +9,14 @@ never runs detection itself.
 THE HONESTY CONTRACT (the reason this module is more than a filter):
 
     signal="hook"      the runtime told us it opened a prompt -> "Waiting for you"
-    signal="inferred"  a tool call has hung with no result   -> "Looks like it's waiting"
+    signal="queue"     a real approval sits unanswered here   -> "Waiting for you"
+    signal="inferred"  a tool call has hung with no result    -> "Looks like it's waiting"
     daemon stale       nobody has computed this recently      -> "Can't tell right now"
+
+``hook`` and ``queue`` are equally CERTAIN and differ only in PROVENANCE,
+which decides who clears the row: a hook row belongs to the hook receiver and
+survives the daemon's replace, a queue row is re-derived every tick and
+vanishes the moment the approval is answered.
 
 Those are three different sentences and the UI renders all three. An empty
 list from a wedged detector must NEVER read as "nothing needs you" -- a badge
@@ -38,6 +44,10 @@ bp_attention = Blueprint("attention", __name__)
 
 #: A daemon quieter than this is treated as "no signal", never "all clear".
 _DAEMON_FRESH_SECONDS = 300
+
+#: Signals we KNOW rather than deduce. One definition, so a new source cannot
+#: end up rendering as certain on one surface and hedged on another.
+CONFIRMED_SIGNALS = frozenset({"hook", "queue"})
 
 #: Runtimes with no per-tool approval gate at all. Saying "none waiting" for
 #: these would imply we looked and found nothing, when in truth there is
@@ -162,7 +172,8 @@ def build_attention(runtime: str = "") -> dict:
 
     # Hook-confirmed first, then longest wait: certainty outranks duration,
     # because a row we are sure about deserves the eye before a guess.
-    items.sort(key=lambda i: (i["signal"] != "hook", -i["waiting_seconds"]))
+    items.sort(key=lambda i: (i["signal"] not in CONFIRMED_SIGNALS,
+                              -i["waiting_seconds"]))
 
     age = _daemon_age_seconds()
     fresh = age >= 0 and age <= _DAEMON_FRESH_SECONDS
