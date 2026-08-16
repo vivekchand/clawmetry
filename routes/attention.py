@@ -180,6 +180,92 @@ def build_attention(runtime: str = "") -> dict:
     }
 
 
+#: Keys each runtime uses for the session id, in priority order. One tolerant
+#: extractor beats a per-runtime parser: the payloads differ only in spelling.
+_SESSION_KEYS = ("session_id", "sessionId", "session", "conversation_id",
+                 "conversationId", "id")
+_TOOL_KEYS = ("tool_name", "toolName", "tool", "name", "command")
+
+#: Runtimes we will accept a hook from. Bounded so a typo cannot silently
+#: create rows under a runtime the rest of the app has never heard of.
+_KNOWN_RUNTIMES = frozenset({
+    "claude_code", "codex", "cursor", "openclaw", "nemoclaw", "qwen_code",
+    "opencode", "aider", "goose", "hermes", "picoclaw", "nanoclaw",
+    "antigravity", "copilot", "grok", "deepagents", "n8n", "pi", "qm",
+    "deepseek_harness", "gemini_cli",
+})
+
+
+def _first(body: dict, keys) -> str:
+    for k in keys:
+        v = body.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+@bp_attention.route("/api/hooks/attention", methods=["POST"])
+def api_hook_attention():
+    """Generic "my agent is waiting on a human" receiver, any runtime.
+
+    OBSERVE ONLY. This endpoint records that a prompt is open and returns
+    immediately; it never answers the prompt, never blocks the agent, and
+    shares no code path with the approvals gate. That separation is
+    deliberate — nothing an observability feature does should be able to
+    delay a decision a human is being asked to make.
+
+    Why generic: Claude Code, Copilot and Qwen Code all fire a
+    ``PermissionRequest``; Gemini CLI fires ``Notification`` when the agent
+    needs attention. The payloads differ only in spelling, so one tolerant
+    extractor covers them all, and wiring a new runtime is a line in its own
+    hook config rather than an installer we have to ship and verify first:
+
+        {"command": "curl -s -X POST -H 'Content-Type: application/json' \\
+            --data-binary @- http://127.0.0.1:8900/api/hooks/attention?runtime=qwen_code"}
+
+    Body: the runtime's own hook JSON, unmodified. ``?runtime=`` names the
+    runtime (or a ``runtime`` key in the body). ``?event=resolved`` clears.
+
+    ALWAYS 200, always fast, never authoritative about anything else. A hook
+    that errors could stall someone's agent, so this one cannot error.
+    """
+    if request.remote_addr not in ("127.0.0.1", "::1", None):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    try:
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        runtime = (request.args.get("runtime")
+                   or str(body.get("runtime") or "")).strip().lower()
+        if runtime not in _KNOWN_RUNTIMES:
+            return jsonify({"ok": False, "error": "unknown runtime"}), 400
+
+        sid = _first(body, _SESSION_KEYS)
+        if not sid:
+            return jsonify({"ok": False, "error": "no session id"}), 400
+        # Family runtimes are stored namespaced (`claude_code:<uuid>`); accept
+        # either form so a hook can send the runtime's own bare id.
+        if runtime != "openclaw" and not sid.startswith(runtime + ":"):
+            sid = f"{runtime}:{sid}"
+
+        event = (request.args.get("event")
+                 or str(body.get("event") or "waiting")).strip().lower()
+        from routes.hooks import _ls_write
+        if event in ("resolved", "answered", "clear", "done"):
+            _ls_write("clear_session_attention",
+                      session_id=sid, agent_type=runtime)
+            return jsonify({"ok": True, "state": "cleared"})
+        _ls_write("set_session_attention", session_id=sid, agent_type=runtime,
+                  state="waiting_approval", signal="hook",
+                  tool=_first(body, _TOOL_KEYS)[:80] or None)
+        return jsonify({"ok": True, "state": "waiting"})
+    except Exception as e:  # noqa: BLE001
+        # Fail open, loudly in the log and quietly on the wire. A hook that
+        # 500s is a hook that might make someone's agent hesitate.
+        log.warning("attention hook failed: %s", e)
+        return jsonify({"ok": False}), 200
+
+
 @bp_attention.route("/api/attention", methods=["GET"])
 def api_attention():
     """Sessions blocked on a human, newest signal first.
