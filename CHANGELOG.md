@@ -1,5 +1,9 @@
 ## Unreleased
 
+- **Release: Exo harness support goes live — `pip install clawmetry` now observes Exo out of the box (with a Pro plan).**
+  - Carries #4942 to PyPI and the fleet. Pairs with clawmetry-pro 0.7.8 (the ExoAdapter wheel) already rolled to the cloud, so upgrading daemons provision a pro build that knows the runtime immediately.
+  - **Verified before release:** real `.exo` store ingested end to end on a live machine (daemon discovered `~/exo` zero-config, DuckDB rows carried runtime metadata + native per-call cost, dashboard runtime switcher/scope banner/fork lane and transcript all rendered; tool-call duplication found in the live transcript and fixed with a regression test before this release).
+
 - **Add Exo harness (`exo`) as the 21st runtime — a paid runtime, adapter in `clawmetry-pro`.**
   - **Why:** founder ask 2026-08-16 after a deep-research feasibility pass on github.com/exoharness/exo (recursive self-improving agent harness, Rust + TypeScript, active since 2026-05). Exo persists an append-only event log with per-LLM-call `UsageRecord` (model, full token splits including cache and reasoning, `cost_usd` computed by Exo at call time) — Sessions, Transcripts, Brain, Usage and Cost all light up with native data, no cost derivation.
   - **What (OSS wiring; the `ExoAdapter` itself ships in clawmetry-pro 0.7.8):** family-adapter spec + lite detection paths in `sync.py` (workspace-relative `<ws>/.exo/exoharness`, `CLAWMETRY_EXO_ROOTS` override), entitlements (paid runtime, label, `exo-harness`/`exoharness` aliases), runtime prefix sets (`local_store`, `routes/usage`, `routes/harness`, `routes/attention`), runtime probe, Memory/Skills catalog entry (`.exo/exo-profile.md`, self-prompts, tool registries), all six `app.js` runtime maps (labels, prefixes, caps `SESSIONS/EVENTS/COST/SUBAGENTS`, flow tile, icon 🦾), README/i18n/docs counts via `scripts/sync_runtime_count.py` (20 → 21).
