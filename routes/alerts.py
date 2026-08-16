@@ -992,21 +992,26 @@ def api_alert_rules():
         now = time.time()
         with _d._fleet_db_lock:
             db = _d._fleet_db()
+            # ``alert_type`` arrived in 0.12.711 and is added by an ALTER in
+            # _fleet_db init. Don't assume it: this handler also runs against
+            # DBs built by other code paths (and by tests that hand-roll the
+            # schema), and a hard dependency turns a missing column into a
+            # 500 on rule create. Probe, then insert what the table has.
+            _cols = {row[1] for row in
+                     db.execute("PRAGMA table_info(alert_rules)").fetchall()}
+            _fields = ["id", "type", "threshold", "channels", "cooldown_min",
+                       "enabled", "runtime"]
+            _values = [rule_id, rtype, threshold, json.dumps(channels),
+                       cooldown, 1 if enabled else 0, runtime]
+            if "alert_type" in _cols:
+                _fields.append("alert_type")
+                _values.append(_cloud_type)
+            _fields += ["created_at", "updated_at"]
+            _values += [now, now]
             db.execute(
-                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, runtime, alert_type, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rule_id,
-                    rtype,
-                    threshold,
-                    json.dumps(channels),
-                    cooldown,
-                    1 if enabled else 0,
-                    runtime,
-                    _cloud_type,
-                    now,
-                    now,
-                ),
+                f"INSERT INTO alert_rules ({', '.join(_fields)}) "
+                f"VALUES ({', '.join('?' * len(_fields))})",
+                tuple(_values),
             )
             db.commit()
             db.close()
