@@ -1356,11 +1356,41 @@ setTimeout(loadAnomalyPanel, 4000);
 visibilitySetInterval(loadAnomalyPanel, 120000);
 
 // === Heartbeat Gap Alerting ===
+// Dismissal is scoped to the current silence EPISODE, not to the tab. The
+// button used to just set display:none inline, which the 30s poller below
+// undid on its next tick, so "Dismiss" bought the user 30 seconds and the
+// banner came back forever. Keyed on last_heartbeat_ts because that value is
+// constant for the whole of one outage and changes the moment the agent
+// checks in again: dismissing silences THIS outage, and a genuinely new one
+// still alerts. Same shape as cm_paused_banner_dismissed.
+var _CM_HB_DISMISS_KEY = 'cm_heartbeat_banner_dismissed_for';
+
+function _cmHeartbeatEpisodeKey(data) {
+  // Falls back when the API can't name a last heartbeat (status "unknown");
+  // anything stable within one episode works.
+  return String((data && data.last_heartbeat_ts) || 'none');
+}
+
+function dismissHeartbeatBanner() {
+  var banner = document.getElementById('heartbeat-banner');
+  if (banner) banner.style.display = 'none';
+  try {
+    localStorage.setItem(_CM_HB_DISMISS_KEY, window._cmHeartbeatEpisode || 'none');
+  } catch(e) { /* private mode: banner just isn't sticky */ }
+}
+
 async function checkHeartbeatStatus() {
   try {
     var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
     var banner = document.getElementById('heartbeat-banner');
     if (!banner) return;
+    window._cmHeartbeatEpisode = _cmHeartbeatEpisodeKey(data);
+    var dismissedFor = null;
+    try { dismissedFor = localStorage.getItem(_CM_HB_DISMISS_KEY); } catch(e) {}
+    if (dismissedFor && dismissedFor === window._cmHeartbeatEpisode) {
+      banner.style.display = 'none';
+      return;
+    }
     if (data.status === 'warning' || data.status === 'silent') {
       var gap = data.gap_seconds;
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
@@ -18961,6 +18991,18 @@ async function viewTranscript(sessionId) {
       window.CLOUD_MODE ? Promise.resolve(null)
         : fetch('/api/evals/metrics?session_id=' + encodeURIComponent(sessionId) + '&limit=8').then(r => r.json()).catch(() => null)
     ]);
+    // /api/transcript 404s when the session has no renderable turns (a
+    // session_id minted off a gateway log line, or a transcript whose file is
+    // gone). Without this guard the meta card below renders "Session
+    // undefined / Messages undefined" off the error payload.
+    if (!data || data.error) {
+      document.getElementById('transcript-meta').innerHTML = '';
+      document.getElementById('transcript-messages').innerHTML =
+        '<div style="color:#555;padding:16px;">' +
+        t("app.no_messages_in_this_transcript", null, "No messages in this transcript") +
+        '</div>';
+      return;
+    }
     var compactions = compactionsData.compactions || [];
     var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
     // Family runtimes store metrics under the canonical prefixed id

@@ -7746,6 +7746,54 @@ def _install_id_for_heartbeat() -> str:
         return ""
 
 
+def record_local_heartbeat(config: dict) -> None:
+    """Persist one liveness row to local DuckDB. Best-effort, never raises.
+
+    ``send_heartbeat`` writes the same row as a side effect of the cloud POST,
+    but it returns early whenever there is no cloud egress (local-only #3281,
+    or self-hosted with no linked account #4329) -- so the write-through that
+    exists "so the dashboard has a per-node liveness history even when
+    offline" never ran for the exact users it was written for. The
+    ``heartbeats`` table then froze at whatever row predated the switch, and
+    ``/api/heartbeat-status`` (which reads the newest row) reported an
+    ever-growing gap: a permanent red "Agent heartbeat SILENT for Nh" banner
+    on a node whose daemon was running fine the whole time.
+
+    Kept deliberately small -- node identity, version, and local-store health.
+    The cloud payload's detection/telemetry fields are irrelevant offline.
+
+    NOTE: this makes the table an honest record of DAEMON liveness. It is
+    still NOT a liveness gate for features -- see the standing rule in
+    ``_daemon_is_live``: ask ``_read_discovery()`` (pid check) instead.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        payload = {
+            "node_id": config.get("node_id"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "platform": platform.system(),
+            "version": _get_version(),
+            "e2e": bool(config.get("encryption_key")),
+            "local_only": True,
+        }
+        try:
+            h = store.health()
+            payload["local_store"] = {
+                "engine":       h.get("engine"),
+                "size_bytes":   h.get("size_bytes", 0),
+                "events_total": h.get("events_total", 0),
+                "ring_depth":   h.get("ring_depth", 0),
+            }
+            payload["local_store_size_mb"] = round(
+                (h.get("size_bytes") or 0) / (1024 * 1024), 3)
+        except Exception:
+            pass  # health is a nice-to-have; the liveness row is the point
+        store.ingest_heartbeat(payload)
+    except Exception as _le:
+        log.debug("local-only heartbeat ingest failed (continuing): %s", _le)
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure.
 
@@ -20759,6 +20807,12 @@ def run_daemon() -> None:
                     # agent events from the Brain feed. No-egress must be silent
                     # (found live on the Windows node minutes after 0.12.606:
                     # the 401 wall was replaced by a CRITICAL wall).
+                    #
+                    # Silent to the CLOUD, not to the local store: still record
+                    # the liveness row, or /api/heartbeat-status reads a row
+                    # frozen at the moment egress stopped and paints a
+                    # permanent "heartbeat SILENT" banner on a healthy node.
+                    record_local_heartbeat(config)
                     consecutive_hb_failures = 0
                     last_heartbeat = now
                     heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
