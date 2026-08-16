@@ -27779,9 +27779,16 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
       return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.label || g.category)
         + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
     }).join('');
+    // A catalog `note` explains a deliberately empty entry (QM keeps
+    // everything in Postgres — there are no on-disk files to list).
+    var noteHtml = payload.note
+      ? '<div style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);max-width:460px;margin-left:auto;margin-right:auto;">'
+        + escHtml(payload.note) + '</div>'
+      : '';
     container.innerHTML =
       '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
       + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">' + emptyHead + '</div>'
+      + noteHtml
       + (pathList
           ? ('ClawMetry looked here:'
              + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
