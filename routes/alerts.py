@@ -985,20 +985,12 @@ def api_alert_channels():
     import dashboard as _d
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        allowed = {
-            "webhook_url",
-            "slack_webhook_url",
-            "discord_webhook_url",
-            "pagerduty_routing_key",
-            "telegram_bot_token",
-            "telegram_chat_id",
-            "opsgenie_api_key",
-            "opsgenie_api_url",
-            "cost_spike_alerts",
-            "agent_error_rate_alerts",
-            "security_posture_changes",
-            "min_severity",
-        }
+        # Derived from the schema, not a third hand-maintained copy: this
+        # route, _default_alerts_webhook_config and _save_alerts_webhook_
+        # config used to list the same keys three times, and a key missing
+        # from any one of them saved as a silent no-op (the Telegram card
+        # that never left "Connect").
+        allowed = set(_d._default_alerts_webhook_config())
         updates = {k: data[k] for k in data if k in allowed}
         cfg = _d._save_alerts_webhook_config(updates)
         return jsonify({"ok": True, "config": cfg})

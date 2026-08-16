@@ -2705,7 +2705,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
   }
 
-  _selfconfigMode = 'preview';
+  _selfconfigMode = 'code';
   _selfconfigUpdateModeButtons();
   if (bodyEl) bodyEl.style.display = 'block';
   if (editorBody) editorBody.style.display = 'none';
@@ -2733,12 +2733,11 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.this_file_is_empty", null, "This file is empty.") + '</div>';
       } else {
-        // Show raw markdown source, not rendered HTML — these files ARE the
-        // agent's source-of-truth and editing them has agent-behaviour
-        // consequences, so rendering bullets/headers obscures the actual
-        // bytes the agent reads. Same monospace style as the Edit textarea
-        // so Preview ↔ Edit looks consistent.
-        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
+        // Raw source by default, now with a line-number gutter — these files
+        // ARE the agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual bytes
+        // the agent reads. Rendered markdown is one click away (Preview).
+        bodyEl.innerHTML = _cmFvCodeHtml(d.content, true);
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
@@ -2754,7 +2753,8 @@ function _selfconfigUpdateStatusBar(filename, ts, d) {
   var updatedEl = document.getElementById('selfconfig-status-updated');
   if (fileEl) fileEl.textContent = filename || '—';
   if (modeEl) modeEl.textContent = (_selfconfigSelectedTs == null)
-    ? (_selfconfigMode === 'edit' ? 'Editing' : 'Preview')
+    ? (_selfconfigMode === 'edit' ? 'Editing'
+       : (_selfconfigMode === 'preview' ? 'Preview' : 'Source'))
     : 'History';
   if (sizeEl) {
     var src = d && typeof d.content === 'string' ? d.content : (_selfconfigOriginal || '');
@@ -2787,6 +2787,18 @@ function selfconfigSetMode(mode) {
   var bodyEl = document.getElementById('selfconfig-reader-body');
   var editorBody = document.getElementById('selfconfig-editor-body');
   var textarea = document.getElementById('selfconfig-editor-textarea');
+  // 'code' = raw source with line numbers (default), 'preview' = rendered
+  // markdown, 'edit' = the textarea. Re-render the read-only pane in place.
+  if (bodyEl && mode !== 'edit') {
+    var src = _selfconfigOriginal || '';
+    if (mode === 'preview') {
+      var split = _cmFvSplitFrontmatter(src);
+      bodyEl.innerHTML = '<div class="cm-fv-preview mem-prose" style="padding:0;">'
+        + _cmFvFrontmatterHtml(split.fm) + cmSafeMarkdown(split.body) + '</div>';
+    } else {
+      bodyEl.innerHTML = _cmFvCodeHtml(src, true);
+    }
+  }
   if (mode === 'edit') {
     if (bodyEl) bodyEl.style.display = 'none';
     if (editorBody) editorBody.style.display = 'flex';
@@ -3075,36 +3087,26 @@ async function openSkillBrowser(skillName) {
 async function loadSkillFile(skillName, filePath) {
   var contentEl = document.getElementById('skills-browser-content');
   if (!contentEl) return;
-  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">' + t("app.loading", null, "Loading...") + '</div>';
+  cmFileViewerPlaceholder('skills-browser-content', t("app.loading", null, "Loading..."));
 
   try {
     var data = await fetch('/api/skills/' + encodeURIComponent(skillName) + '/file?path=' + encodeURIComponent(filePath)).then(function(r) { return r.json(); });
-    if (data.error) { contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">' + escHtml(data.error) + '</div>'; return; }
+    if (data.error) { cmFileViewerPlaceholder('skills-browser-content', data.error, true); return; }
 
-    var header = '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;">';
-    header += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(filePath) + '</div>';
-    header += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(skillName) + ' &middot; ' + (data.language || 'text') + ' &middot; ' + data.size + ' bytes</div>';
-    header += '</div>';
-
-    var content = data.content || '';
-    if (data.language === 'markdown') {
-      // Simple markdown rendering
-      content = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      content = content.replace(/^### (.+)$/gm, '<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text-primary);">$1</h3>');
-      content = content.replace(/^## (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px;color:var(--text-primary);">$1</h2>');
-      content = content.replace(/^# (.+)$/gm, '<h1 style="margin:20px 0 8px;font-size:18px;color:var(--text-primary);">$1</h1>');
-      content = content.replace(/`([^`]+)`/g, '<code style="background:var(--bg-secondary);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
-      content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      content = content.replace(/^- (.+)$/gm, '<div style="padding-left:16px;">&bull; $1</div>');
-      content = content.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
-      content = '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);">' + content + '</div>';
-    } else {
-      content = '<pre style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px 16px;font-size:12px;line-height:1.6;overflow-x:auto;color:var(--text-primary);white-space:pre-wrap;">' + escHtml(content) + '</pre>';
-    }
-
-    contentEl.innerHTML = header + content;
+    // Same viewer the runtime browser uses: raw source first, Preview toggle
+    // for markdown, copy + full screen. The old hand-rolled regex renderer
+    // mangled anything it didn't have a rule for.
+    var size = data.size || 0;
+    cmFileViewerOpen('skills-browser-content', {
+      name: filePath,
+      path: filePath,
+      content: data.content || '',
+      language: data.language || 'text',
+      meta: [skillName, (size >= 1024 ? (size / 1024).toFixed(1) + 'K' : size + 'B'), data.language || 'text']
+    });
+    _cmRtFitHeight();
   } catch(e) {
-    contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">Error: ' + escHtml(String(e)) + '</div>';
+    cmFileViewerPlaceholder('skills-browser-content', 'Error: ' + String(e), true);
   }
 }
 
@@ -3780,6 +3782,120 @@ function _renderOutLoopSources() {
   }).catch(function(){});
 }
 
+// Status vocabulary. /api/subagents passes the daemon's own classification
+// through VERBATIM, so "in progress" arrives as either 'active' (the
+// age-derived buckets in routes/sessions.py) or 'running' (the daemon's or
+// the gateway registry's explicit label). Matching only the literal 'active'
+// is why 14 genuinely running sub-agents rendered as ✅ complete and the hero
+// said "idle" while five terminals worked (founder report 2026-08-15). Every
+// consumer goes through these helpers — never compare the raw string.
+function _cmIsWorkingStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'active' || s === 'running';
+}
+function _cmIsLiveStatus(s) {
+  return _cmIsWorkingStatus(s) || String(s == null ? '' : s).trim().toLowerCase() === 'idle';
+}
+
+// ── Live sessions ─────────────────────────────────────────────────────────
+// The hero used to answer "is my agent alive?" with one node-wide boolean, so
+// a person driving five terminals read "It's idle right now" while all five
+// were mid-task. /api/live-sessions answers it by NAME instead: which sessions
+// are working, which are parked waiting for you, and how long since each moved.
+//
+// Perf (FLYWHEEL "performance is a feature"): ONE shared cache with a 10s TTL
+// and in-flight dedup, keyed by the runtime filter. The hero repaints far more
+// often than that (two 10s timers plus every subagent poll), and each repaint
+// must reuse the cache rather than issue its own fetch.
+var _CM_LIVE_TTL_MS = 10000;
+function _cmLoadLiveSessions(cb) {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var c = window._cmLive;
+  if (c && c.rt === rt && (Date.now() - c.ts) < _CM_LIVE_TTL_MS) { if (cb) cb(c); return; }
+  if (window._cmLiveWait) return;           // in-flight dedup
+  window._cmLiveWait = true;
+  var url = '/api/live-sessions' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetchJsonWithTimeout(url, 6000).then(function (d) {
+    window._cmLive = {
+      rt: rt, ts: Date.now(),
+      sessions: (d && d.sessions) || [],
+      counts: (d && d.counts) || { working: 0, waiting: 0 },
+      // `available:false` means the daemon could not be reached — that is
+      // "we don't know", not "nothing is running", and the hero says so.
+      available: !(d && d.available === false)
+    };
+  }).catch(function () {
+    var old = window._cmLive || {};
+    window._cmLive = { rt: rt, ts: Date.now(), sessions: old.sessions || [],
+                       counts: old.counts || { working: 0, waiting: 0 }, available: false };
+  }).then(function () {
+    window._cmLiveWait = false;
+    if (cb) cb(window._cmLive);
+  });
+}
+
+// "4m" / "just now" — the age column reads as a live clock, so keep it terse
+// and monospaced at the call site.
+function _cmLiveAge(sec) {
+  if (sec == null) return '';
+  if (sec < 15) return 'just now';
+  if (sec < 60) return Math.round(sec) + 's ago';
+  return Math.round(sec / 60) + 'm ago';
+}
+
+// Jump straight from a live row into that session's transcript.
+function cmOpenLiveSession(sessionId) {
+  if (!sessionId) return;
+  if (typeof switchTab === 'function') switchTab('transcripts');
+  setTimeout(function () {
+    if (typeof viewTranscript === 'function') viewTranscript(sessionId);
+  }, 60);
+}
+
+// The signature element: one row per live session. State dot, the session's
+// own title (its name — the thing you actually recognise), the runtime it runs
+// on, and a right-aligned age column so "how long since each one moved" reads
+// as a single vertical scan. Rows are real buttons: keyboard reachable, with a
+// visible focus ring.
+function _cmLiveRowsHtml(live) {
+  var rows = (live && live.sessions) || [];
+  if (!rows.length) return '';
+  var SHOWN = 6;
+  var html = '<div style="margin:16px 0 4px;border-top:1px solid var(--border-primary);padding-top:14px;">';
+  var shown = rows.slice(0, SHOWN);
+  var sawWaiting = false;
+  shown.forEach(function (s) {
+    var working = s.state === 'working';
+    // A colour alone does not teach a first-timer what amber means, and the
+    // headline only ever names one of the two states. Label the boundary once,
+    // in words, the moment the quiet ones start (rows are sorted by age, so
+    // this fires exactly once).
+    if (!working && !sawWaiting) {
+      sawWaiting = true;
+      if (shown[0] && shown[0].state === 'working') {
+        html += '<div class="cm-live-group">Waiting on you</div>';
+      }
+    }
+    var col = working ? '#22c55e' : '#f59e0b';
+    var title = (s.title || '').trim() || 'Untitled session';
+    var rtLabel = (typeof _cmRuntimeLabel === 'function' && _cmRuntimeLabel(s.runtime)) || s.runtime || '';
+    html += '<button type="button" class="cm-live-row" onclick="cmOpenLiveSession(' + attrJsStr(s.session_id) + ')"'
+      + ' title="Open this session\'s transcript">'
+      + '<span class="cm-live-dot" style="background:' + col + ';' + (working ? '' : 'animation:none;') + '"></span>'
+      + '<span class="cm-live-title">' + escHtml(title) + '</span>'
+      + '<span class="cm-live-rt">' + escHtml(rtLabel) + '</span>'
+      + '<span class="cm-live-age">' + escHtml(_cmLiveAge(s.age_seconds)) + '</span>'
+      + '<span class="cm-live-arrow">→</span>'
+      + '</button>';
+  });
+  if (rows.length > SHOWN) {
+    html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 10px 2px;">'
+      + (rows.length - SHOWN) + ' more. Open Sessions to see them all.</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 // Alive-state truthfulness: /api/subagents only lists SPAWNED children, so a
 // node whose main terminal sessions are hard at work read "It's idle right
 // now" (founder report 2026-08-02). Complement it with per-runtime recency
@@ -3832,8 +3948,42 @@ function _renderOverviewHero() {
       });
     }
   } catch (_e_act) {}
+
+  // Named liveness. This is the primary answer to "is my agent alive?" — the
+  // recency signal above is the fallback for when the session list is not
+  // available (cloud, or the daemon briefly unreachable).
+  var _live = window._cmLive;
+  var _liveRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!_live || _live.rt !== _liveRt || (Date.now() - _live.ts) >= _CM_LIVE_TTL_MS) {
+    _cmLoadLiveSessions(function () { try { _renderOverviewHero(); } catch (e) {} });
+  }
+  var _working = (_live && _live.counts && _live.counts.working) || 0;
+  var _waiting = (_live && _live.counts && _live.counts.waiting) || 0;
+  var _liveKnown = !!(_live && _live.available);
+  if (_working > 0) busy = true;
+
+  // Headline. Say the number and let it carry the news; fall back to the old
+  // single-boolean sentence only when the session list can't be read.
+  var headline;
+  if (_liveKnown && _working > 0) {
+    headline = _working === 1
+      ? 'It’s working right now.'
+      : _working + ' sessions are working right now.';
+  } else if (_liveKnown && _waiting > 0) {
+    headline = _waiting === 1
+      ? 'One session is waiting on you.'
+      : _waiting + ' sessions are waiting on you.';
+  } else if (!_liveKnown && busy) {
+    headline = 'It’s working right now.';
+  } else if (!_liveKnown) {
+    headline = 'Nothing to report yet.';
+  } else {
+    headline = 'It’s idle right now.';
+  }
+
+  var _liveRows = _liveKnown ? _cmLiveRowsHtml(_live) : '';
   var stateWord = busy ? 'working' : 'idle';
-  var dot = busy ? '#22c55e' : '#3b82f6';
+  var dot = busy ? '#22c55e' : (_liveKnown && _waiting > 0 ? '#f59e0b' : '#3b82f6');
   // When a runtime is selected, the hero must mirror the (runtime-scoped) stat
   // cards, not the node-wide overview. _cmRuntimeScope is set by loadMiniWidgets
   // from the v1 API (FLYWHEEL §1c); null = node-wide. Note: prefer the scoped
@@ -3843,8 +3993,14 @@ function _renderOverviewHero() {
   var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
+  // Node-wide, the chip is labelled "today" below, so it must BE today:
+  // ov.sessionCount is an all-time count with no date predicate and read 89
+  // on a day that had 16. Fall back to the all-time number only on a daemon
+  // too old to send sessionsToday, where the label is dropped instead.
+  var _todayKnown = (typeof ov.sessionsToday === 'number');
   var sessions = _scope ? _scope.sessions
-                        : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null);
+                        : (_todayKnown ? ov.sessionsToday
+                           : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
   var free = cost === '$0.00' || cost === '$0' ||
              /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
   var say = window._cmLastAgentSay;
@@ -3860,7 +4016,7 @@ function _renderOverviewHero() {
   // (matches the switcher), so don't append "today" — the runtime may have 0
   // sessions today but N on record, and "N sessions today" would be wrong while
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
-  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
+  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
   stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
@@ -3904,9 +4060,15 @@ function _renderOverviewHero() {
       + '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">' + t('overview.hero_eyebrow', null, 'Your agent') + '</span>'
     + '</div>'
     + '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:32px;line-height:1.15;font-weight:600;color:var(--text-primary);margin:10px 0 4px;">'
-      + (busy ? 'It’s working right now.' : 'It’s idle right now.') + '</div>'
-    + '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);">'
+      + headline + '</div>'
+    // When the named rows render they ARE the story; a second "last thing it
+    // did" line underneath just competes with them.
+    + (_liveRows
+        ? ''
+        : '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>')
+    + _liveRows
+    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);'
+      + (_liveRows ? 'margin-top:16px;' : '') + '">'
       + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
   hero.style.display = '';
 
@@ -4078,7 +4240,11 @@ async function loadMiniWidgets(overview, usage) {
   // and it briefly read "0" on a slow/failed fetch. Set synchronously from the
   // value already in hand so the card is never blank and never contradicts the
   // hero. (Card relabeled "Sessions today" in overview.html.)
-  document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
+  // Same honesty fix as the hero chip: the card is LABELLED "Sessions today",
+  // so it must carry today's count, not the all-time sessionCount.
+  document.getElementById('hot-sessions-count').textContent =
+    (typeof overview.sessionsToday === 'number' ? overview.sessionsToday
+                                                : overview.sessionCount) || 0;
 
   // 📈 Runtime scope — when a runtime is selected, the Overview stat cards
   // (sessions / tokens / cost / model) must show ONLY that runtime's data
@@ -4157,7 +4323,10 @@ async function loadMiniWidgets(overview, usage) {
   // switcher) so "today" would be wrong; node-wide stays the live "today".
   try {
     var _slbl = document.getElementById('hot-sessions-label');
-    if (_slbl) _slbl.textContent = window._cmRuntimeScope
+    // A daemon too old to send sessionsToday falls back to the all-time
+    // count, so drop the "today" from the label rather than lie in it.
+    var _ovToday = window._cmOverview && typeof window._cmOverview.sessionsToday === 'number';
+    if (_slbl) _slbl.textContent = (window._cmRuntimeScope || !_ovToday)
       ? t('overview.sessions', null, 'Sessions')
       : t('overview.sessions_today', null, 'Sessions today');
   } catch (e) {}
@@ -5447,10 +5616,10 @@ async function loadSubAgents() {
       previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
     } else {
       // Show active ones first
-      var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
+      var activeFirst = subagents.filter(function(a){return _cmIsWorkingStatus(a.status);}).concat(subagents.filter(function(a){return !_cmIsWorkingStatus(a.status);}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
+        var icon = _cmIsWorkingStatus(agent.status) ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
         var name = cleanTaskName(agent.displayName);
         if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
@@ -5548,7 +5717,7 @@ async function loadActiveTasks() {
     // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
     var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
+    var live = all.filter(function(a) { return _cmIsLiveStatus(a.status); });
     var recentFailed = all.filter(function(a) {
       return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
     });
@@ -5566,7 +5735,7 @@ async function loadActiveTasks() {
     var html = '';
     var badge = document.getElementById('overview-tasks-count-badge');
     if (badge) {
-      var liveCount = agents.filter(function(a) { return a.status === 'active' || a.status === 'idle'; }).length;
+      var liveCount = agents.filter(function(a) { return _cmIsLiveStatus(a.status); }).length;
       badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
     }
 
@@ -5586,7 +5755,7 @@ async function loadActiveTasks() {
       var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
 
       html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (agent.status === 'active' || agent.status === 'idle') {
+      if (_cmIsLiveStatus(agent.status)) {
         html += '<div class="task-card-pulse active"></div>';
       }
       html += '<div class="task-card-header">';
@@ -11728,7 +11897,7 @@ async function loadSessions() {
     if (subagents.length > 0) {
       html += '<div style="margin-top:8px;margin-left:16px;border-left:2px solid var(--border-primary);padding-left:12px;">';
       subagents.forEach(function(sa) {
-        var statusIcon = sa.status === 'active' ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
+        var statusIcon = _cmIsWorkingStatus(sa.status) ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
@@ -11791,7 +11960,7 @@ async function loadSessions() {
       chainHtml += ' &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
       chainHtml += '</div>';
       chain.children.slice(0, 5).forEach(function(child, idx) {
-        var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+        var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
         chainHtml += '<div style="padding:6px 12px 6px 28px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         chainHtml += '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
         if (idx === 0) chainHtml += '<span style="color:var(--text-muted);font-size:10px;margin-right:-4px;">&#x2514;&#x2500;</span>';
@@ -14651,7 +14820,7 @@ async function loadSystemHealth() {
             chtml += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + chain.child_count + ' agents &bull; ' + chainTokStr + ' tok &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
             chtml += '</div>';
             chain.children.slice(0, 4).forEach(function(child) {
-              var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+              var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
               var tokStr = child.total_tokens >= 1000 ? (child.total_tokens/1000).toFixed(0)+'K' : child.total_tokens;
               chtml += '<div style="padding:4px 10px 4px 20px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-secondary);font-size:11px;">';
               chtml += '<span style="width:6px;height:6px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
@@ -18447,6 +18616,9 @@ async function loadSubagents() {
       }
     });
     function statusDot(status) {
+      // 'running' is the daemon's own word for the same state as 'active';
+      // without this normalise it fell through to the grey "stale" dot.
+      if (_cmIsWorkingStatus(status)) status = 'active';
       var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed' };
       var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
                : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);'
@@ -21592,7 +21764,7 @@ function _ovTimeLabel(agent) {
   var sec = Math.floor(ms / 1000);
   var min = Math.floor(sec / 60);
   var hr = Math.floor(min / 60);
-  if (agent.status === 'active') {
+  if (_cmIsWorkingStatus(agent.status)) {
     if (min < 1) return 'Running (' + sec + 's)';
     if (min < 60) return 'Running (' + min + ' min)';
     return 'Running (' + hr + 'h ' + (min % 60) + 'm)';
@@ -21617,7 +21789,7 @@ function _ovTimeLabel(agent) {
 
 function _ovRenderCard(agent, idx) {
   var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-  var sc = agent.status === 'active' ? 'running' : isRealFailure ? 'failed' : 'complete';
+  var sc = _cmIsWorkingStatus(agent.status) ? 'running' : isRealFailure ? 'failed' : 'complete';
   var taskName = cleanTaskName(agent.displayName);
   var badge = detectProjectBadge(agent.displayName);
   var timeLabel = _ovTimeLabel(agent);
@@ -21687,7 +21859,7 @@ async function loadOverviewTasks() {
     var running = [], done = [], failed = [];
     agents.forEach(function(a) {
       var isRealFailure = a.status === 'stale' && a.abortedLastRun && (a.outputTokens || 0) === 0;
-      if (a.status === 'active') running.push(a);
+      if (_cmIsWorkingStatus(a.status)) running.push(a);
       else if (isRealFailure) failed.push(a);
       else done.push(a);
     });
@@ -23542,7 +23714,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     // ─── SESSION MODAL ─────────────────────────────────
     if (toolKey === 'session') {
       var agents = data.subagents || [];
-      var active = agents.filter(function(a){return a.status==='active';}).length;
+      var active = agents.filter(function(a){return _cmIsWorkingStatus(a.status);}).length;
       var idle = agents.filter(function(a){return a.status==='idle';}).length;
       var stale = agents.filter(function(a){return a.status==='stale';}).length;
 
@@ -23557,8 +23729,8 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Sub-Agents</div>';
         html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;">';
         agents.forEach(function(a) {
-          var dotColor = a.status==='active' ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
-          var dotShadow = a.status==='active' ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
+          var dotColor = _cmIsWorkingStatus(a.status) ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
+          var dotShadow = _cmIsWorkingStatus(a.status) ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
           html += '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-secondary);">';
           html += '<div style="width:10px;height:10px;border-radius:50%;background:'+dotColor+';margin-top:4px;flex-shrink:0;'+dotShadow+'"></div>';
           html += '<div style="flex:1;min-width:0;">';
@@ -26077,6 +26249,280 @@ async function checkLicenseExpiry() {
 }
 setTimeout(checkLicenseExpiry, 1200);
 // ─────────────────────────────────────────────────────────────────────────
+// cm-fileview — GitHub-style file viewer (Skills + Memory file browsers).
+//
+// Shows the file the way an editor would: raw source, monospace, line-number
+// gutter, nothing reflowed. Markdown files get a Preview toggle instead of
+// being rendered by default (auto-rendering turned YAML frontmatter into a
+// giant heading and hid the real file). Also: soft-wrap toggle, copy-whole-file
+// button, and a full-screen mode for long reads. All text is selectable; the
+// gutter is user-select:none so copying a range yields clean source.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmFileViews = {};   // hostId -> {name, path, content, language, meta[], mode, wrap, fs}
+
+function _cmFvIsMarkdown(lang, name) {
+  if (lang && /^(markdown|md|mdx)$/i.test(lang)) return true;
+  return /\.(md|markdown|mdx)$/i.test(name || '');
+}
+
+// Split a leading YAML frontmatter block off a markdown file so Preview can
+// show it as metadata instead of letting `---` become an <hr> and the keys
+// become body prose.
+function _cmFvSplitFrontmatter(text) {
+  var m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(text || '');
+  if (!m) return { fm: '', body: text || '' };
+  return { fm: m[1], body: (text || '').slice(m[0].length) };
+}
+
+function _cmFvFrontmatterHtml(fm) {
+  if (!fm) return '';
+  var rows = fm.split(/\r?\n/).map(function(line) {
+    var kv = /^([A-Za-z0-9_.\-]+):[ \t]*(.*)$/.exec(line);
+    return kv ? '<b>' + escHtml(kv[1]) + ':</b> ' + escHtml(kv[2]) : escHtml(line);
+  });
+  return '<div class="cm-fv-fm">' + rows.join('<br>') + '</div>';
+}
+
+// One row per source line keeps numbers aligned even with soft-wrap on, and
+// makes a multi-line selection copy back with real newlines.
+function _cmFvCodeHtml(text, wrap) {
+  var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  var lines = src.split('\n');
+  if (lines.length > 8000) {
+    // Very large file — skip the per-line DOM and fall back to one <pre>.
+    return '<pre class="cm-fv-plain">' + escHtml(src) + '</pre>';
+  }
+  var gutter = String(lines.length).length;
+  var rows = lines.map(function(line, i) {
+    return '<div class="cm-fv-row"><span class="cm-fv-ln">' + (i + 1) + '</span>'
+      + '<span class="cm-fv-lc">' + escHtml(line) + '</span></div>';
+  }).join('');
+  return '<div class="cm-fv-code' + (wrap ? ' cm-fv-wrap' : '')
+    + '" style="--cm-ln-w:' + gutter + 'ch;">' + rows + '</div>';
+}
+
+// Placeholder / loading / error states share the host so the panel never
+// collapses between files.
+function cmFileViewerPlaceholder(hostId, msg, isError) {
+  var host = document.getElementById(hostId);
+  if (!host) return;
+  host.classList.add('cm-fileview');
+  host.innerHTML = '<div class="cm-fv-empty"' + (isError ? ' style="color:#ef4444;"' : '') + '>'
+    + escHtml(msg) + '</div>';
+}
+
+// file: {name, path, content, language, meta:[strings]}
+function cmFileViewerOpen(hostId, file) {
+  var prev = _cmFileViews[hostId] || {};
+  var isMd = _cmFvIsMarkdown(file.language, file.name || file.path);
+  _cmFileViews[hostId] = {
+    name: file.name || file.path || '(file)',
+    path: file.path || file.name || '',
+    content: file.content == null ? '' : String(file.content),
+    language: file.language || 'text',
+    meta: file.meta || [],
+    // Remember the user's Code/Preview choice across files when it applies.
+    mode: (prev.mode === 'preview' && isMd) ? 'preview' : 'code',
+    wrap: !!prev.wrap,
+    fs: !!prev.fs
+  };
+  cmFileViewerRender(hostId);
+}
+
+function cmFileViewerRender(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  host.classList.add('cm-fileview');
+  if (s.fs) host.classList.add('cm-fileview-fs');
+  else host.classList.remove('cm-fileview-fs');
+
+  var isMd = _cmFvIsMarkdown(s.language, s.name);
+  if (!isMd && s.mode === 'preview') s.mode = 'code';
+  var hid = String(hostId).replace(/'/g, "\\'");
+
+  var meta = '<span class="cm-fv-name" title="' + escHtml(s.path) + '">' + escHtml(s.name) + '</span>';
+  (s.meta || []).forEach(function(bit) {
+    if (!bit) return;
+    meta += '<span style="opacity:0.45;">·</span><span>' + escHtml(bit) + '</span>';
+  });
+
+  var tools = '';
+  if (isMd) {
+    tools += '<span class="cm-fv-seg">'
+      + '<button class="cm-fv-btn' + (s.mode === 'code' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'code\')" title="Raw file source">Code</button>'
+      + '<button class="cm-fv-btn' + (s.mode === 'preview' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'preview\')" title="Rendered markdown">Preview</button>'
+      + '</span>';
+  }
+  if (s.mode === 'code') {
+    tools += '<button class="cm-fv-btn' + (s.wrap ? ' active' : '') + '" '
+      + 'onclick="cmFvToggleWrap(\'' + hid + '\')" title="Soft-wrap long lines">Wrap</button>';
+  }
+  tools += '<button class="cm-fv-btn" onclick="cmFvCopy(\'' + hid + '\',this)" '
+    + 'title="Copy the whole file">⧉ Copy</button>';
+  tools += '<button class="cm-fv-btn" onclick="cmFvToggleFullscreen(\'' + hid + '\')" title="'
+    + (s.fs ? 'Exit full screen (Esc)' : 'Full screen') + '">'
+    + (s.fs ? '✕ Exit full screen' : '⤡ Full screen') + '</button>';
+
+  var body;
+  if (s.mode === 'preview') {
+    var split = _cmFvSplitFrontmatter(s.content);
+    body = '<div class="cm-fv-preview mem-prose">' + _cmFvFrontmatterHtml(split.fm)
+      + cmSafeMarkdown(split.body) + '</div>';
+  } else {
+    body = _cmFvCodeHtml(s.content, s.wrap);
+  }
+
+  host.innerHTML =
+    '<div class="cm-fv-head"><div class="cm-fv-meta">' + meta + '</div>'
+    + '<div class="cm-fv-tools">' + tools + '</div></div>'
+    + '<div class="cm-fv-body">' + body + '</div>';
+}
+
+function cmFvSetMode(hostId, mode) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.mode = mode;
+  cmFileViewerRender(hostId);
+}
+
+function cmFvToggleWrap(hostId) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.wrap = !s.wrap;
+  cmFileViewerRender(hostId);
+}
+
+function _cmFvLegacyCopy(text) {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
+function cmFvCopy(hostId, btn) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(s.content).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(s.content)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(s.content));
+}
+
+// Full screen moves the host to <body> rather than relying on position:fixed
+// inside the panel — an ancestor with a transform would otherwise trap it.
+function cmFvToggleFullscreen(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  s.fs = !s.fs;
+  if (s.fs) {
+    host._cmFvHome = host.parentNode;
+    host._cmFvNext = host.nextSibling;
+    document.body.appendChild(host);
+    document.body.style.overflow = 'hidden';
+  } else {
+    if (host._cmFvHome) {
+      host._cmFvHome.insertBefore(host, host._cmFvNext || null);
+      host._cmFvHome = null;
+      host._cmFvNext = null;
+    }
+    document.body.style.overflow = '';
+  }
+  cmFileViewerRender(hostId);
+  try { _cmRtFitHeight(); } catch (e) {}
+}
+
+// Same full-screen trick for panels that aren't cm-fileview hosts (the
+// OpenClaw Memory IDE surface, which keeps its own edit toolbar).
+var _cmFsPanels = [];
+
+function cmPanelToggleFullscreen(panel, btn) {
+  if (!panel) return;
+  var on = !panel.classList.contains('cm-panel-fs');
+  if (on) {
+    panel._cmFsHome = panel.parentNode;
+    panel._cmFsNext = panel.nextSibling;
+    panel._cmFsHeight = panel.style.height;
+    document.body.appendChild(panel);
+    panel.classList.add('cm-panel-fs');
+    document.body.style.overflow = 'hidden';
+    if (_cmFsPanels.indexOf(panel) === -1) _cmFsPanels.push(panel);
+  } else {
+    panel.classList.remove('cm-panel-fs');
+    if (panel._cmFsHome) {
+      panel._cmFsHome.insertBefore(panel, panel._cmFsNext || null);
+      panel._cmFsHome = null;
+      panel._cmFsNext = null;
+    }
+    panel.style.height = panel._cmFsHeight || '';
+    document.body.style.overflow = '';
+    _cmFsPanels = _cmFsPanels.filter(function(p) { return p !== panel; });
+  }
+  if (btn) {
+    var label = btn.querySelector('span');
+    if (label) label.textContent = on ? 'Exit full screen' : 'Full screen';
+  }
+}
+
+function memIdeToggleFullscreen(btn) {
+  cmPanelToggleFullscreen(document.querySelector('#memory-summary-view .mem-ide'), btn);
+}
+
+function memIdeCopy(btn) {
+  var text = _selfconfigOriginal || '';
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(text)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(text));
+}
+
+// Esc leaves full screen from anywhere.
+(function _cmFvInstallEsc() {
+  if (window._cmFvEscInstalled) return;
+  window._cmFvEscInstalled = true;
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Escape') return;
+    Object.keys(_cmFileViews).forEach(function(hostId) {
+      if (_cmFileViews[hostId] && _cmFileViews[hostId].fs) cmFvToggleFullscreen(hostId);
+    });
+    _cmFsPanels.slice().forEach(function(panel) { cmPanelToggleFullscreen(panel, null); });
+  });
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
 // Runtime Memory & Skills browser (multi-runtime file explorer).
 //
 // Each supported runtime stores its long-lived memory and its skills in
@@ -26365,16 +26811,14 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
   }).join('');
 
   container.innerHTML =
-    '<div style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
+    '<div class="cm-rt-panel" style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
     + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
     + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
     + escHtml(payload.label || scopeLabel) + ' · ' + catWord + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
     + '</div>' + treeHtml + '</div>'
-    + '<div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">'
-    + '<div id="cm-rt-file-header-' + tab + '" style="padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;color:var(--text-secondary);min-height:32px;display:flex;align-items:center;gap:10px;">Select a file</div>'
-    + '<div id="cm-rt-file-body-' + tab + '" style="flex:1;overflow:auto;padding:16px 22px;background:var(--bg-primary);font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12.5px;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;">'
-    + '<div style="color:var(--text-muted);font-family:inherit;">Pick a file on the left to view its contents.</div>'
-    + '</div></div></div>';
+    + '<div id="cm-rt-view-' + tab + '" class="cm-fileview">'
+    + '<div class="cm-fv-empty">Pick a file on the left to view its contents.</div>'
+    + '</div></div>';
 
   // Stash the payload on the container so cmRuntimeOpenFile can look up
   // (root, path) by (gi, fi) without another fetch.
@@ -26390,7 +26834,33 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     label: payload.label,
     groups: groups,
   };
+  _cmRtFitHeight();
 }
+
+// Grow the browser panels into whatever vertical room is actually left below
+// them. The fixed `calc(100vh - 260px)` guessed wrong the moment a banner
+// appeared (dead space under the panel, or a panel running off-screen), so
+// measure the panel's real top instead. Re-measured on resize.
+function _cmRtFitHeight() {
+  try {
+    document.querySelectorAll('.cm-rt-panel').forEach(function(panel) {
+      if (!panel.offsetParent) return;              // hidden tab — skip
+      var top = panel.getBoundingClientRect().top;
+      if (top <= 0) return;
+      panel.style.height = Math.max(380, Math.round(window.innerHeight - top - 18)) + 'px';
+    });
+  } catch (e) {}
+}
+
+(function _cmRtInstallResizeFit() {
+  if (window._cmRtFitInstalled) return;
+  window._cmRtFitInstalled = true;
+  var timer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(timer);
+    timer = setTimeout(_cmRtFitHeight, 80);
+  });
+})();
 
 async function cmRuntimeOpenFile(clickEl, gi, fi) {
   var container = clickEl.closest('.runtime-file-browser');
@@ -26413,10 +26883,8 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   clickEl.style.background = 'rgba(99,102,241,0.15)';
   clickEl.style.color = '#a5b4fc';
 
-  var header = document.getElementById('cm-rt-file-header-' + tab);
-  var body = document.getElementById('cm-rt-file-body-' + tab);
-  if (header) header.innerHTML = escHtml(group.root + '/' + (file.path || ''));
-  if (body) body.innerHTML = '<div style="color:var(--text-muted);">Loading…</div>';
+  var hostId = 'cm-rt-view-' + tab;
+  cmFileViewerPlaceholder(hostId, 'Loading ' + (file.path || group.label || 'file') + '…');
 
   try {
     var d;
@@ -26436,28 +26904,19 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
     var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
-    if (header) header.innerHTML =
-      '<span style="color:var(--text-primary);font-weight:600;">' + escHtml((file.path || group.label || '')) + '</span>'
-      + '<span style="opacity:0.6;">·</span><span>' + escHtml(sizeStr) + '</span>'
-      + (mstr ? '<span style="opacity:0.6;">·</span><span>' + escHtml(mstr) + '</span>' : '')
-      + '<span style="opacity:0.6;">·</span><span>' + escHtml(d.language || 'text') + '</span>';
-    if (body) {
-      // Render markdown as preview when we have it (matches Memory tab UX),
-      // otherwise show raw content. cmSafeMarkdown is defined earlier in
-      // app.js and sanitizes output.
-      if ((d.language || '') === 'markdown' && typeof cmSafeMarkdown === 'function') {
-        body.style.whiteSpace = 'normal';
-        body.style.fontFamily = '';
-        body.innerHTML = cmSafeMarkdown(content);
-      } else {
-        body.style.whiteSpace = 'pre-wrap';
-        body.style.fontFamily = "'JetBrains Mono','SF Mono',monospace";
-        body.textContent = content;
-      }
-    }
+    // Raw source by default — auto-rendering markdown reflowed the file into
+    // prose (YAML frontmatter became a giant heading) and there was no way
+    // back to what the file actually says. Preview is one click away.
+    cmFileViewerOpen(hostId, {
+      name: file.path || group.label || '',
+      path: group.root + '/' + (file.path || ''),
+      content: content,
+      language: d.language || 'text',
+      meta: [sizeStr, mstr, d.language || 'text']
+    });
   } catch (e) {
-    if (body) body.innerHTML = '<div style="color:#ef4444;">Failed to load: '
-      + escHtml(String(e && e.message || e)) + '</div>';
+    cmFileViewerPlaceholder(hostId, 'Failed to load: '
+      + String(e && e.message || e), true);
   }
 }
 

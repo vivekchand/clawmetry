@@ -87,10 +87,11 @@ def test_no_tab_lost_in_restructure():
         # still work; tests/test_session_deep_dive.py guards that entry point.
         # "context" (LLM Context) merged into context-economics 2026-08-01;
         # switchTab('context') aliases there so old deep links still land.
-        # "gateway" is the opt-in manual-token tab that replaced the legacy
-        # gateway-setup modal (#4575).
+        # "gateway" (the opt-in manual-token tab from #4575) was removed:
+        # the gateway token is auto-detected server-side, so the form asked
+        # users for something the product already knows.
         "flow", "models", "agents",
-        "tool-catalog", "context-economics", "harness", "dives", "gateway",
+        "tool-catalog", "context-economics", "harness", "dives",
         # Advanced
         "crons", "memory", "security", "policy", "skills",
         "selfevolve", "version-impact", "nemoclaw",
@@ -109,11 +110,13 @@ def test_developer_drawer_membership():
     end = nav.index("left-nav-advanced-toggle", start)
     drawer = nav[start:end]
     got = set(_ordered_tabs(drawer))
-    # "gateway" joined the drawer in #4575 (opt-in replacement for the
-    # retired auto-popping gateway-setup modal).
+    # "gateway" joined the drawer in #4575 and left again when the manual
+    # token form was retired — the token is auto-detected server-side.
+    # "tracing" came back to the drawer after Phase B moved it out; this
+    # expectation had drifted from the shipped nav before this change.
     assert got == {
-        "flow", "models", "agents",
-        "tool-catalog", "context-economics", "harness", "dives", "gateway",
+        "flow", "models", "tracing", "agents",
+        "tool-catalog", "context-economics", "harness", "dives",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 
 
