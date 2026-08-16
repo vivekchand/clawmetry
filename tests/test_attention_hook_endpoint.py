@@ -198,6 +198,35 @@ def test_hook_confirmed_rows_sort_above_guesses(client, monkeypatch):
     assert [i["signal"] for i in items][0] == "hook"
 
 
+def test_working_count_excludes_long_idle_sessions(client, monkeypatch):
+    """"N agents working" must mean N agents that actually moved recently.
+
+    Sessions routinely never receive an ended_at -- killed process, slept
+    machine, crashed runtime -- so a status-only test reports long-dead
+    sessions as busy. Measured on a real install: 6 sessions a status-only
+    test called "working" had last moved 30 minutes to 24 hours earlier.
+    Under a reassuring "nothing needs you", that is confidently wrong in the
+    one place this feature must not be.
+    """
+    import datetime
+    import routes.attention as ra
+    monkeypatch.setattr(ra, "_daemon_age_seconds", lambda: 5)
+
+    def ago(minutes):
+        return (datetime.datetime.now()
+                - datetime.timedelta(minutes=minutes)).isoformat()
+
+    client._store.ingest_sessions_batch([
+        {"agent_type": "codex", "session_id": "codex:fresh",
+         "status": "active", "last_active_at": ago(2)},
+        {"agent_type": "codex", "session_id": "codex:zombie",
+         "status": "active", "last_active_at": ago(600)},   # 10h, never ended
+    ])
+    d = client.get("/api/attention?runtime=codex").get_json()
+    assert d["working"] == 1, (
+        "a session idle for 10 hours with status='active' is not working")
+
+
 def test_runtime_filter_scopes_the_list(client, monkeypatch):
     """A filtered view must never show node-wide numbers."""
     client.post("/api/hooks/attention?runtime=qwen_code",

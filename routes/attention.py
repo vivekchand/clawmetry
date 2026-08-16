@@ -49,6 +49,17 @@ _DAEMON_FRESH_SECONDS = 300
 #: end up rendering as certain on one surface and hedged on another.
 CONFIRMED_SIGNALS = frozenset({"hook", "queue"})
 
+#: How recently a session must have moved to count as "working".
+#:
+#: Not merely "not ended". Sessions routinely never receive an ``ended_at`` --
+#: the process is killed, the machine sleeps, the runtime crashes -- so a
+#: status-only test counts long-dead sessions as busy. Measured on a real
+#: install mid-build: all 6 sessions that a status-only test called "working"
+#: had last moved between 30 minutes and 24 hours earlier. "6 agents working"
+#: under a reassuring "nothing needs you" would have been confidently wrong
+#: in the one place this feature must not be.
+WORKING_RECENT_MINUTES = 15
+
 #: Runtimes with no per-tool approval gate at all. Saying "none waiting" for
 #: these would imply we looked and found nothing, when in truth there is
 #: nothing to look for. The UI says "this runtime doesn't ask" instead.
@@ -141,13 +152,20 @@ def build_attention(runtime: str = "") -> dict:
         seen_runtimes.add(row_rt)
         state = r.get("attention_state") or ""
         if not state:
-            # Anything still live but not blocked counts as quietly working —
-            # the number that makes "nothing needs you" reassuring instead of
-            # ambiguous (nothing waiting because nothing is running at all).
+            # Sessions that are RECENTLY ACTIVE and not blocked are quietly
+            # working — the number that makes "nothing needs you" reassuring
+            # instead of ambiguous (nothing waiting because nothing is
+            # running at all). The recency test is load-bearing: a session
+            # that was killed, slept, or crashed often keeps status='active'
+            # forever, so counting on status alone reports long-dead sessions
+            # as busy.
             if not r.get("ended_at") and str(
                 r.get("status") or "").lower() not in (
                     "ended", "completed", "stopped", "failed"):
-                working += 1
+                idle = _iso_age_seconds(
+                    r.get("last_active_at") or r.get("started_at"))
+                if 0 <= idle <= WORKING_RECENT_MINUTES * 60:
+                    working += 1
             continue
         since_ms = r.get("attention_since")
         waiting_s = 0
