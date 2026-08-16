@@ -1915,6 +1915,12 @@ function switchTab(name) {
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
+  // Needs-you strip. loadAll() only runs on tab switch, so without this the
+  // strip would go stale while you sit on Overview — and an agent that starts
+  // waiting while you are looking at the page is exactly the case this
+  // feature exists for. One cheap scoped read, on the same 30s cadence and
+  // the same tab + visibility gates as the velocity poller above.
+  if (name === 'overview') { if (typeof _needsYouTimer !== 'undefined' && _needsYouTimer) clearInterval(_needsYouTimer); if (typeof loadNeedsYou === 'function') _needsYouTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadNeedsYou(); }, 30000); }
   if (name === 'usage') loadUsage();
   // Agent Graph (#3315): the original wiring landed in the DEAD first
   // DASHBOARD_HTML's inline switchTab in dashboard.py, so the loader never
@@ -2153,9 +2159,29 @@ function cmNeedsPhrase(item) {
     : '<b>' + runtime + '</b> has been silent mid-task';
 }
 
+// Last rendered signature. The strip is an aria-live region, so rewriting it
+// with identical content would make a screen reader re-announce "nothing
+// needs you" every poll. Only paint when something actually changed.
+var _cmNeedsSig = null;
+//: Handle for the Overview poller, cleared and re-armed on each tab switch so
+//: two visits cannot leave two intervals running.
+var _needsYouTimer = null;
+
 function cmRenderNeedsYou(d) {
   var box = document.getElementById('needs-you');
   if (!box) return;
+  var sig = JSON.stringify([
+    d && d.fresh, (d && d.working) || 0,
+    ((d && d.items) || []).map(function (i) {
+      // Wait time is excluded on purpose: a ticking counter would make every
+      // poll a change and defeat the guard. The row's identity is what it is
+      // waiting on, not how long it has waited.
+      return [i.session_id, i.signal, i.tool].join('|');
+    }),
+    (d && d.runtimes_without_approval) || [],
+  ]);
+  if (sig === _cmNeedsSig) return;
+  _cmNeedsSig = sig;
   var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
   box.classList.remove('is-waiting', 'is-unknown');
 
