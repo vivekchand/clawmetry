@@ -2387,6 +2387,17 @@ class LocalStore:
             d = dict(zip(cols, r))
             if d.get("outcome") is None:
                 unlabeled.append(d["session_id"])
+            elif _is_stale_classification(d):
+                # Written by the pre-2026-08-15 classifier, whose failure
+                # branch fired on text similarity alone and was measurably
+                # uncorrelated with reality. Re-run it so the Overview tile
+                # and every other reader of sessions.outcome stop showing
+                # fabricated failures — correcting only new sessions would
+                # leave the bogus history on screen.
+                #
+                # Self-limiting: reclassify_session_outcome stamps
+                # outcome_classified_at, so each row qualifies exactly once.
+                unlabeled.append(d["session_id"])
             out.append(d)
         # Inline-classify any unlabeled rows (bounded — limit kwarg above
         # caps the work). Cheap: each session reads ≤200 events.
@@ -2403,6 +2414,90 @@ class LocalStore:
                             break
             except Exception:
                 continue
+        return out
+
+    def query_quality_sessions(
+        self,
+        *,
+        runtime: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 400,
+    ) -> list[dict[str, Any]]:
+        """Session rows for the Quality tab, scoped by REAL runtime.
+
+        Deliberately NOT ``query_outcomes``. That method filters on
+        ``sessions.agent_type``, which is a legacy column hardcoded to
+        ``"openclaw"`` for every row by ``upsert_sessions`` — so filtering by
+        it buckets every runtime together, and the caller then had no runtime
+        to report but the one it happened to be looping on (the 2026-08-15
+        audit: 61/61 claude_code sessions stored as ``agent_type=openclaw``).
+
+        Runtime here means the session-id prefix, via the canonical
+        ``_runtime_session_id_clause`` used by ``query_aggregates``, so
+        Quality reconciles with every other per-runtime number by
+        construction. ``metadata`` is returned because it already carries the
+        true ``runtime`` label plus the per-session tool health the ingest
+        path computes (``toolResults`` / ``toolErrors``), which the screening
+        pass reads instead of rescanning events.
+
+        Does NOT run the inline classifier — grading is the caller's job and
+        must be evidence-backed.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since:
+            clauses.append("COALESCE(last_active_at, started_at, '') >= ?")
+            params.append(since)
+        if until:
+            clauses.append("COALESCE(last_active_at, started_at, '') <= ?")
+            params.append(until)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, title, started_at, last_active_at, ended_at,
+                   status, cost_usd, total_tokens, message_count, metadata
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "title", "started_at", "last_active_at",
+                "ended_at", "status", "cost_usd", "total_tokens",
+                "message_count", "metadata"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            meta = d.get("metadata")
+            if isinstance(meta, (bytes, bytearray)):
+                try:
+                    meta = json.loads(meta.decode("utf-8", "replace"))
+                except Exception:
+                    meta = {}
+            elif isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            d["metadata"] = meta
+            # The runtime the adapter actually recorded, with the session-id
+            # prefix as the fallback. Never a caller-supplied loop variable.
+            d["runtime"] = (
+                str(meta.get("runtime") or "").strip()
+                or (d["session_id"].split(":", 1)[0]
+                    if ":" in d["session_id"] else "openclaw")
+            )
+            for k in ("toolResults", "toolErrors", "toolErrorPct",
+                      "maxIdleGapSec"):
+                if k in meta:
+                    d[k] = meta[k]
+            out.append(d)
         return out
 
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
@@ -12211,6 +12306,30 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness",
 )
+
+# Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
+# stamped before this came from the version whose cognitive-loop branch fired
+# on text similarity alone; those rows are re-classified once on first read.
+# Success rows are left alone: the old success branch was a conservative
+# fallthrough, so re-running it cannot turn a success into a fabricated
+# failure, and re-reading events for every healthy session would be a large
+# read for no correction.
+_CLASSIFIER_FIX_EPOCH_MS = 1_786_838_400_000  # 2026-08-15T00:00:00Z
+_STALE_OUTCOMES = ("cognitive_loop", "tool_call_stuck", "stuck", "looping")
+
+
+def _is_stale_classification(row: dict[str, Any]) -> bool:
+    """True for a failure label written by the pre-fix classifier."""
+    if (row.get("outcome") or "") not in _STALE_OUTCOMES:
+        return False
+    ts = row.get("outcome_classified_at")
+    if ts is None:
+        return True
+    try:
+        return int(ts) < _CLASSIFIER_FIX_EPOCH_MS
+    except (TypeError, ValueError):
+        return True
+
 
 def _runtime_session_id_clause(runtime: str | None) -> tuple[str | None, list[str]]:
     """Build a WHERE-clause fragment + params filtering ``events.session_id``

@@ -53,6 +53,7 @@ import time
 # ── paths / markers ────────────────────────────────────────────────────────
 
 _STATE_PATH = os.path.expanduser("~/.clawmetry/claude_code_gate.json")
+_MIRROR_STATE_PATH = os.path.expanduser("~/.clawmetry/claude_code_mirror.json")
 _SERVER_INFO_PATH = os.path.expanduser("~/.clawmetry/server.json")
 # Shared with hooks_claude_code.py / approvals._hook_covered_runtimes: a
 # "claude_code" entry whose events include PreToolUse tells the reactive
@@ -62,6 +63,11 @@ _MARKER_PATH = os.path.expanduser("~/.clawmetry/hooks_installed.json")
 
 # Any hook command containing this is OURS (the local-first gate).
 HOOK_CMD_MARKER = "-m clawmetry hook claude-code"
+# …and this one is the MIRROR hook (PermissionRequest). Distinct marker so
+# each installer only ever removes its own entry. NOTE the ordering trap:
+# this string CONTAINS HOOK_CMD_MARKER, so any "is it ours?" test for the
+# PreToolUse gate must exclude mirror commands explicitly (_entry_is_ours).
+MIRROR_CMD_MARKER = "-m clawmetry hook claude-code-permission"
 # Commands containing any of these belong to the CLOUD-path manual install
 # (hooks_claude_code.py). Their presence means claude_code is already
 # pre-tool gated — we must not stack a second gate.
@@ -191,7 +197,17 @@ def _write_json_atomic(path: str, data: dict) -> None:
 
 def _entry_is_ours(entry: dict) -> bool:
     for h in (entry or {}).get("hooks") or []:
-        if HOOK_CMD_MARKER in (h.get("command") or ""):
+        cmd = h.get("command") or ""
+        if MIRROR_CMD_MARKER in cmd:
+            continue  # the mirror hook is owned by _install_mirror
+        if HOOK_CMD_MARKER in cmd:
+            return True
+    return False
+
+
+def _entry_is_mirror(entry: dict) -> bool:
+    for h in (entry or {}).get("hooks") or []:
+        if MIRROR_CMD_MARKER in (h.get("command") or ""):
             return True
     return False
 
@@ -297,7 +313,12 @@ def gate_handler(want_gate: bool, policies) -> None:
     """GATE_HANDLERS['claude_code'] entry — idempotent install/refresh/remove
     of OUR PreToolUse hook entry. Never raises (sync_runtime_gates would
     swallow it anyway, but a gate that half-writes settings.json is worse
-    than one that skips a beat)."""
+    than one that skips a beat).
+
+    Also drives the MIRROR hook (PermissionRequest), which is independent
+    of the policy set: mirroring is on when the operator turned it on for
+    claude_code in the approval routing config, whether or not they wrote
+    a single protection rule."""
     try:
         if want_gate:
             _install(policies)
@@ -305,6 +326,119 @@ def gate_handler(want_gate: bool, policies) -> None:
             _uninstall()
     except Exception:
         pass
+    try:
+        _sync_mirror()
+    except Exception:
+        pass
+
+
+# ── mirror mode: Claude Code's OWN permission prompts ──────────────────────
+# PreToolUse only fires for tools our policies name. The thing that actually
+# stalls a session is Claude Code deciding, on its own, that it needs the
+# user's permission — you find out by looking at the terminal, and unblock
+# it by ticking a box in /permissions.
+#
+# PermissionRequest fires at exactly that moment and accepts a decision, so
+# mirroring turns "walk back to the laptop" into "tap Approve on your
+# phone". The fallback is the important part: our receiver answers "ask"
+# once the mirror window elapses, which is Claude Code's own prompt — so
+# the worst case is today's behaviour, never a call that silently hangs.
+
+def _mirror_wanted() -> bool:
+    try:
+        from clawmetry import approval_notify as _an
+        return bool(_an.mirror_enabled("claude_code"))
+    except Exception:
+        return False
+
+
+def _mirror_command(base: str) -> str:
+    py = _windowless_python(sys.executable or "python3", os.name == "nt")
+    return f"{py} -m clawmetry hook claude-code-permission --base {base}"
+
+
+def mirror_timeout_s() -> int:
+    """How long the phone gets before the terminal prompt takes over."""
+    try:
+        from clawmetry import approval_notify as _an
+        row = _an.route_for("claude_code")
+        return max(30, min(int(row.get("mirror_timeout_s") or 180), 3600))
+    except Exception:
+        return 180
+
+
+def _sync_mirror() -> None:
+    if _mirror_wanted():
+        _install_mirror()
+    else:
+        _uninstall_mirror()
+
+
+def _install_mirror() -> None:
+    path = _settings_path()
+    settings = _read_json(path)
+    hooks = settings.setdefault("hooks", {})
+    entries = hooks.setdefault("PermissionRequest", [])
+    base = dashboard_base()
+    command = _mirror_command(base)
+    # +15 s so OUR receiver's "ask" fallback always lands before Claude
+    # Code's hook timeout would cancel us (a cancelled hook renders no
+    # decision, which is the same outcome — but then the approval row is
+    # left pending with nobody waiting on it).
+    timeout = mirror_timeout_s() + 15
+    desired = {"hooks": [{"type": "command", "command": command,
+                          "timeout": timeout}]}
+    ours = [e for e in entries if isinstance(e, dict) and _entry_is_mirror(e)]
+    if len(ours) == 1 and ours[0] == desired:
+        return
+    kept = [e for e in entries
+            if not (isinstance(e, dict) and _entry_is_mirror(e))]
+    kept.append(desired)
+    hooks["PermissionRequest"] = kept
+    _write_json_atomic(path, settings)
+    try:
+        _write_json_atomic(_MIRROR_STATE_PATH, {
+            "installed": True, "settings_path": path, "command": command,
+            "timeout": timeout, "base": base, "installed_at": _utcnow()})
+    except Exception:
+        pass
+
+
+def _uninstall_mirror() -> None:
+    st = _read_json(_MIRROR_STATE_PATH)
+    if not st.get("installed"):
+        return  # never installed by us — never touch a foreign hook
+    path = st.get("settings_path") or _settings_path()
+    settings = _read_json(path)
+    hooks = settings.get("hooks") or {}
+    entries = hooks.get("PermissionRequest")
+    if isinstance(entries, list):
+        kept = [e for e in entries
+                if not (isinstance(e, dict) and _entry_is_mirror(e))]
+        if len(kept) != len(entries):
+            if kept:
+                hooks["PermissionRequest"] = kept
+            else:
+                hooks.pop("PermissionRequest", None)
+            if not hooks:
+                settings.pop("hooks", None)
+            _write_json_atomic(path, settings)
+    try:
+        os.remove(_MIRROR_STATE_PATH)
+    except Exception:
+        pass
+
+
+def mirror_status() -> dict:
+    """What the Approvals tab shows next to the mirror toggle."""
+    st = _read_json(_MIRROR_STATE_PATH)
+    return {
+        "wanted": _mirror_wanted(),
+        "installed": bool(st.get("installed")),
+        "timeout_s": mirror_timeout_s(),
+        "settings_path": st.get("settings_path") or _settings_path(),
+        "installed_at": st.get("installed_at"),
+    }
 
 
 def _install(policies) -> None:
@@ -413,8 +547,9 @@ def hook_main(argv: "list | None" = None) -> int:
     ``hookSpecificOutput`` envelope to stdout; on ANY failure print nothing
     (no opinion → Claude Code's normal permission flow)."""
     argv = list(argv or [])
-    if not argv or argv[0] != "claude-code":
+    if not argv or argv[0] not in ("claude-code", "claude-code-permission"):
         return 0  # unknown subtarget → no opinion, never break the agent
+    mirror = argv[0] == "claude-code-permission"
     base = ""
     if "--base" in argv:
         try:
@@ -423,7 +558,8 @@ def hook_main(argv: "list | None" = None) -> int:
             base = ""
     if not base:
         base = dashboard_base()
-    url = f"{base}/api/hooks/claude-code/pretooluse"
+    url = (f"{base}/api/hooks/claude-code/permissionrequest" if mirror
+           else f"{base}/api/hooks/claude-code/pretooluse")
 
     try:
         raw = sys.stdin.read()
@@ -438,7 +574,8 @@ def hook_main(argv: "list | None" = None) -> int:
         "tool_input": event.get("tool_input") or {},
         "session_id": event.get("session_id") or "",
         "cwd": event.get("cwd") or "",
-        "hook_event_name": event.get("hook_event_name") or "PreToolUse",
+        "hook_event_name": event.get("hook_event_name")
+                           or ("PermissionRequest" if mirror else "PreToolUse"),
         "permission_mode": event.get("permission_mode") or "",
         "tool_use_id": event.get("tool_use_id") or "",
     }
@@ -470,7 +607,13 @@ def hook_main(argv: "list | None" = None) -> int:
             resp = _post_json(url, payload, _REQUEST_TIMEOUT_S)
             continue
         hso = resp.get("hookSpecificOutput")
-        if isinstance(hso, dict) and hso.get("permissionDecision"):
+        if isinstance(hso, dict) and (hso.get("permissionDecision")
+                                      or hso.get("decision")):
+            # PermissionRequest speaks `decision`, PreToolUse speaks
+            # `permissionDecision`. The receiver already emits the right
+            # shape for its own event; print it verbatim. "ask" from the
+            # mirror hook is the deliberate no-answer fallback — Claude
+            # Code shows its normal prompt, exactly as it would have.
             try:
                 sys.stdout.write(json.dumps({"hookSpecificOutput": hso}))
             except Exception:

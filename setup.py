@@ -71,7 +71,7 @@ setup(
         "cryptography>=3.0",
         # Local store at ~/.clawmetry/clawmetry.duckdb. Holds events,
         # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
-        # wheel; columnar storage gives 10–100× speed vs SQLite for the
+        # wheel; columnar storage gives 10-100x speed vs SQLite for the
         # dashboard's GROUP BY/time-window workloads (epic #964).
         "duckdb>=0.10",
         # Cloud cold-data relay tunnel (epic #964 phase 3b). ~100 KB pure
@@ -80,7 +80,7 @@ setup(
         # `pip install clawmetry && clawmetry connect` "just works".
         "websocket-client>=1.6",
         # OS trust store for TLS (Windows CryptoAPI / macOS Security /
-        # Linux CA dir) — makes corporate TLS-interception root CAs
+        # Linux CA dir) -- makes corporate TLS-interception root CAs
         # (Zscaler/Netskope/Palo Alto) "just work" without certifi hacks.
         # Needs 3.10+; on 3.8/3.9 clawmetry.net falls back to stock trust.
         'truststore>=0.8; python_version >= "3.10"',
