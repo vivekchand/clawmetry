@@ -113,7 +113,7 @@ def test_stub_returns_402_with_the_documented_body(method, url):
     assert r.status_code == 402
     body = r.get_json()
     assert body["error"] == "upgrade_required"
-    assert body["feature"] == "approval_routing"
+    assert body["feature"] == "approval_queue"
     assert body["hint"]
 
 
@@ -121,10 +121,14 @@ def test_entitlement_keys_exist_and_land_on_a_real_tier():
     """A gate naming a key that is in no tier set silently allows
     everything in grace mode and denies everything in enforce mode."""
     from clawmetry import entitlements as ent
-    for key in ("approval_queue", "approval_routing", "approval_mirror"):
+    for key in ("approval_queue", "approval_mirror"):
         assert key in ent.FEATURE_LABELS, f"{key} missing from the catalogue"
         assert key in ent.PAID_FEATURES, f"{key} is in no paid tier"
-    # The split that pays for itself: everyone paying is TOLD an approval is
-    # waiting; answering it hands-free from a phone is the Pro upsell.
-    assert "approval_routing" in ent.STARTER_FEATURES
+    # The split: Starter is TOLD an approval is waiting (delivery rides on
+    # approval_queue — a queue that cannot tell you is not the promised
+    # feature); answering it hands-free from a phone is the Pro upsell.
+    assert "approval_queue" in ent.STARTER_FEATURES
     assert "approval_mirror" in ent.PRO_ONLY_FEATURES
+    # STARTER_FEATURES is locked to the /pricing card's exact keys
+    # elsewhere; a new Starter key is a public pricing change, not a
+    # code change. Do not add one here to route around that lock.

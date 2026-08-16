@@ -261,7 +261,6 @@ FEATURE_LABELS = {
     "cloud_sync": "Cloud sync",
     "all_channels": "All channels",
     "approval_queue": "Approval queue",
-    "approval_routing": "Approval notifications",
     "approval_mirror": "Approve from your phone",
     "budget_limits": "Budget limits",
     "per_runtime_health_timeline": "Per-runtime health timeline",
@@ -318,13 +317,14 @@ STARTER_FEATURES = frozenset(
         "fleet",
         "cloud_sync",
         "all_channels",
+        # Includes DELIVERY — routing an approval to Slack/Telegram/etc.
+        # An approval queue that cannot tell you is not the feature the
+        # Starter card promises, so notification rides on this key rather
+        # than a separate one. The Pro upsell is ``approval_mirror`` below:
+        # answering hands-free, not being told. (This set is locked to the
+        # /pricing card's exact 7 keys by tests/test_entitlements_catalogue
+        # — adding a key here is a public pricing change, not a code one.)
         "approval_queue",
-        # Delivering an approval to a channel is Starter, alongside the
-        # queue itself: an approval nobody is told about is the silent-pause
-        # problem the queue exists to solve, and gating the telling behind
-        # Pro would reintroduce it as a pricing tier. The Pro upsell is
-        # ``approval_mirror`` below — the hands-free answer, not the alert.
-        "approval_routing",
         "budget_limits",
         "per_runtime_health_timeline",
     }
@@ -334,7 +334,7 @@ PRO_ONLY_FEATURES = frozenset(
     {
         # Intercepting a runtime's OWN permission prompt and answering it
         # remotely — the hands-free half. Starter is told an approval is
-        # waiting (``approval_routing``); Pro answers it without going back
+        # waiting (``approval_queue``); Pro answers it without going back
         # to the terminal.
         "approval_mirror",
         "per_run_waste_flags",

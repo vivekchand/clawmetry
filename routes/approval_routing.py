@@ -52,7 +52,7 @@ _HINT_MIRROR = (
 )
 
 
-def _upgrade(feature: str = "approval_routing", hint: str = _HINT):
+def _upgrade(feature: str = "approval_queue", hint: str = _HINT):
     return jsonify(upgrade_required_body(feature, hint=hint)), 402
 
 
