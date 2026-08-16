@@ -152,20 +152,76 @@ def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
     return _rule_in_duckdb(rule_id)
 
 
-def _rule_in_duckdb(rule_id):
-    """True when ``rule_id`` is present in the DuckDB alert_rules table."""
+def _duckdb_rule_ids():
+    """Ids currently in the DuckDB alert_rules table, or None if unreadable."""
     try:
         from routes.local_query import local_store_via_daemon
         rows = local_store_via_daemon("query_alert_rules", limit=500)
         if rows is None:
             from clawmetry import local_server as _ls_srv
             if not _ls_srv.is_running():
-                return False
+                return None
             from clawmetry import local_store as _ls_mod
             rows = _ls_mod.get_store().query_alert_rules(limit=500)
-        return any(str(r.get("id")) == str(rule_id) for r in (rows or []))
+        return {str(r.get("id")) for r in (rows or [])}
     except Exception:
-        return False
+        return None
+
+
+def _rule_in_duckdb(rule_id):
+    """True when ``rule_id`` is present in the DuckDB alert_rules table."""
+    ids = _duckdb_rule_ids()
+    return bool(ids) and str(rule_id) in ids
+
+
+# Rules whose mirror we've already reconciled this process. Bounds the repair
+# below to one attempt per rule per boot — it exists to close an upgrade-skew
+# window, not to run on every page load forever.
+_MIRROR_REPAIRED = set()
+
+
+def _repair_missing_mirrors(rules):
+    """Re-mirror evaluator-owned rules that never reached DuckDB.
+
+    The dashboard and daemon ship in one wheel but restart independently, so
+    there is a window where a NEW dashboard writes a rule that an OLD daemon
+    cannot accept (its method allowlist predates the bridge). Without repair
+    that rule stays stranded after the daemon upgrades: the create path is
+    long over, and nothing else would ever mirror it — the same permanently
+    inert rule this whole change exists to eliminate, just arriving by a
+    different route.
+
+    One DuckDB read, and only when an evaluator-owned rule exists at all.
+    Idempotent upsert, at most one attempt per rule per process.
+    """
+    candidates = [
+        r for r in rules
+        if (r.get("alert_type") or "") in _EVALUATOR_ONLY
+        and str(r.get("id")) not in _MIRROR_REPAIRED
+    ]
+    if not candidates:
+        return
+    present = _duckdb_rule_ids()
+    if present is None:
+        return  # store unreadable; try again next boot rather than guess
+    for r in candidates:
+        rid = str(r.get("id"))
+        _MIRROR_REPAIRED.add(rid)
+        if rid in present:
+            continue
+        try:
+            _chans = json.loads(r.get("channels") or "[]")
+        except (TypeError, ValueError):
+            _chans = []
+        _mirror_rule_to_duckdb(
+            rid, alert_type=r.get("alert_type"),
+            threshold=(r.get("threshold_value")
+                       if r.get("threshold_value") is not None
+                       else r.get("threshold")),
+            runtime=r.get("runtime") or "all", channels=_chans,
+            cooldown_min=r.get("cooldown_min"),
+            enabled=bool(r.get("enabled")), name=r.get("name") or "",
+        )
 
 
 def _write_via_store(method, **kwargs):
@@ -1096,11 +1152,13 @@ def api_alert_rules():
             # Alerts UI can render the PR #1410 "your rules will fire now"
             # banner and per-rule "Last fired" pills.
             enriched, comms = _enrich_rules_with_comms(fast.get("rules") or [])
+            _repair_missing_mirrors(enriched)
             fast = dict(fast)
             fast["rules"] = enriched
             fast["_comms"] = comms
             return jsonify(fast)
     enriched, comms = _enrich_rules_with_comms(_d._get_alert_rules())
+    _repair_missing_mirrors(enriched)
     return jsonify({"rules": enriched, "_comms": comms})
 
 
