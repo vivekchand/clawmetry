@@ -700,6 +700,128 @@ Missing/blank/unknown `to` or an empty / all-unknown source CSV returns
 
 The scalar is `clawmetry.entitlements.missing_all_from_path_batch(from_tiers, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
 
+### Bundle batch path-walk boolean-fold endpoint: `has-all-bundle-at-path-batch`
+
+`POST /api/entitlement/has-all-bundle-at-path-batch?from=<id>&to=a,b,c`
+
+Bundle-shaped destination-batch companion of `has-all-bundle-at-path`
+(singular destination) and bundle-shaped counterpart of
+`has-all-at-path-batch` (kwargs-shaped batch-path). Fixes ONE aggregate
+5-axis bundle dict and sweeps across every purchasable rung between
+`from` and each of the N candidate `to` tiers in ONE round-trip,
+returning per-destination path lists of aggregate `has_all_at` fold
+rows. Answers "from my current rung, here are 3 tiers I'm considering:
+for this WHOLE 5-axis bundle dict show me at which rung this bundle
+unlocks along every candidate path" straight from the bundle dict —
+without first normalising it by hand and calling
+`/has-all-at-path-batch`, or N calls to `/has-all-bundle-at-path`.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Request body**: byte-identical to `has-all-bundle-at-path`
+(`{"bundle": {...}}` wrapped form, or bare-dict shorthand).
+
+**Per-destination row:**
+
+```json
+{
+  "to":            "pro",
+  "to_label":      "Self-hosted Pro",
+  "to_rank":       2,
+  "direction":     "upgrade",
+  "path":          [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"], "channels": 5,
+     "retention_days": null, "nodes": null, "has_all_at": true}
+  ],
+  "path_length":   1,
+  "allowed_count": 1,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+**Envelope keys:** `from`, `from_label`, `from_rank`, `features`,
+`runtimes`, `channels`, `retention_days`, `nodes`, `unknown_tiers`,
+`tiers`, plus the standard resolver envelope (`current_tier`,
+`current_tier_rank`, `grace`, `enforced`).
+
+Per-destination `path` row byte-equals `has-all-bundle-at-path`'s
+`.path` for the same `(from, to, bundle)` triple. Per-destination path
+lengths can legitimately differ (the rungs walked depend on the
+destination). Runtime-alias canonicalisation (`claude-code` →
+`claude_code`) is applied per token by the bundle normaliser. Unknown
+feature id collapses every rung of every destination to
+`has_all_at=false` (matches the singular typo posture). `trial` IS
+accepted as a destination via the lateral / identity branches.
+
+400 on missing / non-object `bundle`. Missing/blank/unknown `from` or
+an empty / all-unknown destination CSV returns 200 with `tiers=[]`
+(never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_at_path_batch(from_tier, to_tiers, bundle)`.
+
+### Bundle batch path-walk row-detail endpoint: `missing-all-bundle-at-path-batch`
+
+`POST /api/entitlement/missing-all-bundle-at-path-batch?from=<id>&to=a,b,c`
+
+Row-detail bundle-shaped destination-batch companion of
+`missing-all-bundle-at-path` (singular destination), bundle-shaped
+counterpart of `missing-all-at-path-batch` (kwargs-shaped batch-path),
+and row-detail complement of `has-all-bundle-at-path-batch` at the
+bundle-shaped batch-path layer. Fixes ONE aggregate 5-axis bundle dict
+and sweeps across every purchasable rung between `from` and each of
+the N candidate `to` tiers in ONE round-trip, returning per-destination
+path lists of aggregate per-axis `missing` row-detail rows. Answers
+"from my current rung, here are 3 tiers I'm considering: for this
+WHOLE 5-axis bundle dict show me which per-axis slots are still locked
+at every rung climbed to reach each" straight from the bundle dict.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Request body**: byte-identical to `has-all-bundle-at-path-batch`
+above.
+
+**Per-destination row:**
+
+```json
+{
+  "to":           "pro",
+  "to_label":     "Self-hosted Pro",
+  "to_rank":      2,
+  "direction":    "upgrade",
+  "path":         [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"], "channels": 5,
+     "retention_days": null, "nodes": null,
+     "missing": {"features": ["fleet"], "runtimes": [], "channels": null,
+                 "retention_days": null, "nodes": null}}
+  ],
+  "path_length":  1,
+  "denied_count": 1,
+  "all_denied":   true,
+  "any_denied":   true
+}
+```
+
+**Envelope keys:** identical to `has-all-bundle-at-path-batch` on the
+axis-echo / resolver slots; per-destination rollup slots use
+`denied_count` / `all_denied` / `any_denied` instead of the boolean-fold
+`allowed_count` / `all_allowed` / `any_allowed`.
+
+Complement invariant with `has-all-bundle-at-path-batch`: per
+destination per rung, `any(row["missing"].values())` byte-equals `not
+row["has_all_at"]` on the paired boolean-fold row for every
+fully-parseable bundle.
+
+400 on missing / non-object `bundle`. Missing/blank/unknown `from` or
+an empty / all-unknown destination CSV returns 200 with `tiers=[]`
+(never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_at_path_batch(from_tier, to_tiers, bundle)`.
+
 ### Bundle-batch perspective row-detail endpoint: `missing-all-bundle-batch-at`
 
 `POST /api/entitlement/missing-all-bundle-batch-at?tier=<perspective>`
