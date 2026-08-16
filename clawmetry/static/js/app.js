@@ -11388,16 +11388,71 @@ function _invOwnerLabel(a) {
   var o = (a && a.owner != null) ? String(a.owner).trim() : '';
   return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
 }
-function _invDoingNow(a) {
-  if (a && a.running) return { txt: 'Working', cls: 'inv-doing-on' };
-  if (a && a.detected) return { txt: 'Idle', cls: 'inv-doing-idle' };
-  return { txt: 'Quiet', cls: 'inv-doing-quiet' };
+// "45s ago" / "6m ago" / "3h ago" / "2d ago". Mirrors _cmLiveAge's voice for
+// the first minute and keeps going for the quiet agents this tab also lists.
+function _invAgeWords(secs) {
+  if (secs == null) return '';
+  var s = Number(secs);
+  if (!isFinite(s) || s < 0) return '';
+  if (s < 15) return 'just now';
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
 }
-function _invAliveDot(a) {
-  // green = running, amber = detected-not-running, grey = neither.
-  if (a && a.running) return { color: '#22c55e', label: 'Checked in' };
-  if (a && a.detected) return { color: '#f59e0b', label: 'Resting' };
-  return { color: '#6b7280', label: 'Not seen' };
+
+// The one liveness read every part of this tab uses. `running` is a PROCESS
+// heartbeat that only OpenClaw/NemoClaw emit, so it was False for Claude Code
+// while four of its sessions were mid-task and the tab said "Idle / Resting /
+// 0 of 11 alive" next to a Home tab reading "4 sessions are working right now"
+// (founder report 2026-08-16). Recency from the session table is the signal
+// that is true for every runtime; the heartbeat only ever ADDS certainty.
+function _invLive(a) {
+  // Strict TRUE, not "not false": a snapshot from a daemon older than this
+  // change carries no liveness fields at all, and treating that absence as
+  // "known, zero working" would print a confident "nothing is running" over a
+  // busy node on the hosted dashboard. Absent means unknown.
+  var known = !!(a && a.liveKnown === true);
+  var working = Number((a && a.liveWorking) || 0);
+  var waiting = Number((a && a.liveWaiting) || 0);
+  var secs = (a && a.lastSeenSecs != null) ? Number(a.lastSeenSecs) : null;
+  // The session read is a bounded window (200 most-recent rows node-wide), so a
+  // quiet runtime's newest session can fall outside it. Its daily rollup still
+  // knows when it last moved — use that rather than printing "never" about an
+  // agent we demonstrably have activity for.
+  if (secs == null && a && a.lastActivityMs) {
+    var _ms = Number(a.lastActivityMs);
+    if (isFinite(_ms) && _ms > 0) secs = Math.max(0, (Date.now() - _ms) / 1000);
+  }
+  if (!known) {
+    return { key: 'unknown', word: 'Unknown', cls: 'inv-doing-quiet', color: '#6b7280',
+             sessions: 0, secs: secs,
+             tip: 'The session table could not be read, so ClawMetry cannot tell whether this agent is running.' };
+  }
+  if (working > 0) {
+    return { key: 'working', word: 'Working', cls: 'inv-doing-on', color: '#22c55e',
+             sessions: working, secs: secs,
+             tip: working + (working === 1 ? ' session' : ' sessions')
+                  + ' produced output in the last 2 minutes.' };
+  }
+  if (waiting > 0) {
+    return { key: 'waiting', word: 'Waiting on you', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: waiting, secs: secs,
+             tip: waiting + (waiting === 1 ? ' session is' : ' sessions are')
+                  + ' open but quiet, usually parked at the prompt.' };
+  }
+  // Nothing live. `running` still means something for the two runtimes that
+  // emit a real heartbeat: the process is up, it just is not producing.
+  if (a && a.running) {
+    return { key: 'idle', word: 'Up, not working', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: 0, secs: secs,
+             tip: 'The process is running (real heartbeat) but no session has produced output recently.' };
+  }
+  return { key: 'quiet', word: 'Quiet', cls: 'inv-doing-quiet', color: '#6b7280',
+           sessions: 0, secs: secs,
+           tip: secs != null
+             ? 'No session has produced output recently. Last activity ' + _invAgeWords(secs) + '.'
+             : 'No recorded activity for this agent.' };
 }
 
 async function _invFetchData() {
@@ -11432,6 +11487,8 @@ async function _invFetchData() {
 // HIGHLIGHTED, never promoted or hidden.
 function _invIsRecentlyActive(a) {
   return !!(a.running
+    || Number(a.liveWorking || 0) > 0
+    || Number(a.liveWaiting || 0) > 0
     || (Number(a.cost24hUsd || 0) > 0)
     || (Number(a.tokens24h || 0) > 0));
 }
@@ -11448,8 +11505,7 @@ function _invFmtTok(n) {
 function _invRosterRow(a, rtFilter) {
   var rt = a.agentKey;
   var label = a.displayName || rt;
-  var doing = _invDoingNow(a);
-  var dot = _invAliveDot(a);
+  var live = _invLive(a);
   var owner = _invOwnerLabel(a);
   var hasCost = _invHasCost(rt);
   // LAST 24h (rolling, event-windowed) vs LIFETIME (all the runtime's sessions).
@@ -11478,15 +11534,30 @@ function _invRosterRow(a, rtFilter) {
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + covChip + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + live.color + '"></span>' + escHtml(label) + covChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
-    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + live.cls + '" title="' + escHtml(live.tip) + '">' + escHtml(live.word) + '</span>'
+    // The session count is the check against the Home tab: "Working · 4
+    // sessions" here must be the same four sessions the hero names there.
+    +     (live.sessions > 0
+        ? ' <span class="inv-doing-tok">' + live.sessions
+          + (live.sessions === 1 ? ' session' : ' sessions') + '</span>'
+        : '')
     +     (Number(a.tokens24h || 0) > 0
         ? ' <span class="inv-doing-tok" title="Tokens in the last 24 hours">' + _invFmtTok(a.tokens24h) + ' tok</span>'
         : '')
     +   '</td>'
-    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
-    +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+    // "Last seen" says a checkable fact (when the transcript last grew) where
+    // the column used to print "Resting" off a heartbeat that runtime never
+    // sends. The heartbeat, where it exists, is additional detail in the tip.
+    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + live.color + '"></span>'
+    +     '<span class="inv-alive-lbl" title="'
+    +       (a.running
+            ? 'This runtime sends a real process heartbeat, and it is up now.'
+            : 'Measured from the last event in this agent&#39;s sessions. Only OpenClaw and NemoClaw send a process heartbeat; every other runtime is read from transcript activity.')
+    +     '">'
+    +     escHtml(live.secs != null ? _invAgeWords(live.secs) : 'never')
+    +     '</span></td>'
     +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
     +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
     +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
@@ -11495,6 +11566,120 @@ function _invRosterRow(a, rtFilter) {
     + '<tr class="inv-expand-row" id="inv-exp-' + escHtml(rt) + '" style="display:none;"><td colspan="8">'
     +   _invExpandHtml(a)
     + '</td></tr>';
+}
+
+// Node health, computed instead of asserted. The tile used to read
+//   agents.every(function (a) { return !a.detected || a.running || true; })
+// which is `true` for any input — "All good" was printed, never measured
+// (founder report 2026-08-16). The outcome rollup each agent already carries
+// (success / failed / cognitive_loop / tool_call_stuck, 1d window) is the real
+// answer; with no finished runs the honest word is "No runs yet", not "good".
+function _invHealth(agents) {
+  var total = 0, failed = 0, stuck = 0, loops = 0, escalated = 0, seen = 0;
+  (agents || []).forEach(function (a) {
+    var o = a && a.outcome;
+    if (!o || typeof o !== 'object') return;
+    seen++;
+    total += Number(o.total || 0);
+    failed += Number(o.failed || 0);
+    stuck += Number(o.tool_call_stuck || 0);
+    loops += Number(o.cognitive_loop || 0);
+    escalated += Number(o.escalated || 0);
+  });
+  if (!seen || !total) {
+    return { txt: 'No runs yet', sub: 'Nothing finished in the last 24h.', cls: 'inv-health-unknown' };
+  }
+  var bad = failed + stuck + loops;
+  if (!bad) {
+    return { txt: 'All good', cls: 'inv-health-ok',
+             sub: total + (total === 1 ? ' run' : ' runs') + ' in 24h, none failed'
+                  + (escalated ? ' · ' + escalated + ' asked for you' : '') };
+  }
+  var parts = [];
+  if (failed) parts.push(failed + ' failed');
+  if (stuck) parts.push(stuck + ' stuck on a tool');
+  if (loops) parts.push(loops + ' looping');
+  return { txt: bad + ' of ' + total + ' bad', cls: 'inv-health-bad',
+           sub: parts.join(' · ') + ' (24h)' };
+}
+
+// The hero, in the same voice as the Home tab: a dot, an eyebrow, one sentence
+// that says what is true right now, and a sub-line that can be checked against
+// the sessions the Home hero names. Both read the same 120s/600s windows off
+// the same session rows, so they cannot disagree.
+function _invRenderHero(inv) {
+  var agents = (inv && inv.agents) || [];
+  // Strict TRUE (see _invLive): an older daemon's snapshot has no liveness
+  // fields, and that is "unknown", not "nothing is running".
+  var known = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  // Sum the rows rather than trusting a node-level rollup: every roster shape
+  // (node-wide, per-runtime slice, an older daemon's snapshot) carries the
+  // per-agent fields, so the headline is derived from the same numbers the
+  // table below prints and cannot disagree with them.
+  var working = 0, waiting = 0;
+  (agents || []).forEach(function (a) {
+    working += Number(a.liveWorking || 0);
+    waiting += Number(a.liveWaiting || 0);
+  });
+  var wAgents = (agents || []).filter(function (a) { return Number(a.liveWorking || 0) > 0; });
+  var qAgents = (agents || []).filter(function (a) { return Number(a.liveWaiting || 0) > 0
+                                                            && !Number(a.liveWorking || 0); });
+  var headline, sub, dot;
+  if (!known) {
+    dot = '#6b7280';
+    headline = 'Can’t tell what’s running.';
+    sub = 'The sync daemon did not answer, so liveness is unknown. The numbers below are the '
+        + 'last thing it recorded, not live.';
+  } else if (wAgents.length === 1) {
+    dot = '#22c55e';
+    headline = escHtml(wAgents[0].displayName || wAgents[0].agentKey) + ' is working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' produced output in the last '
+        + 'two minutes' + (waiting ? ', ' + waiting + ' more waiting on you' : '') + '. '
+        + (agents.length - 1) + ' other ' + (agents.length - 1 === 1 ? 'agent is' : 'agents are')
+        + ' quiet.';
+  } else if (wAgents.length > 1) {
+    dot = '#22c55e';
+    headline = wAgents.length + ' agents are working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' across '
+        + wAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + (waiting ? ' · ' + waiting + ' more waiting on you' : '') + '.';
+  } else if (qAgents.length) {
+    dot = '#f59e0b';
+    headline = waiting === 1 ? 'One session is waiting on you.'
+                             : waiting + ' sessions are waiting on you.';
+    sub = 'Open but quiet on '
+        + qAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + '. Nothing has produced output in the last two minutes.';
+  } else {
+    dot = '#3b82f6';
+    headline = 'Nothing is working right now.';
+    // Name the most recently active agent so "nothing" is checkable rather
+    // than a shrug.
+    var freshest = null;
+    agents.forEach(function (a) {
+      if (a.lastSeenSecs == null) return;
+      if (!freshest || Number(a.lastSeenSecs) < Number(freshest.lastSeenSecs)) freshest = a;
+    });
+    sub = freshest
+      ? escHtml(freshest.displayName || freshest.agentKey) + ' moved last, '
+        + _invAgeWords(freshest.lastSeenSecs) + '. ' + agents.length
+        + (agents.length === 1 ? ' agent lives' : ' agents live') + ' on this machine.'
+      : agents.length + (agents.length === 1 ? ' agent lives' : ' agents live')
+        + ' on this machine. None has recorded activity yet.';
+  }
+  return ''
+    + '<div style="display:flex;align-items:center;gap:11px;">'
+    +   '<span style="position:relative;display:inline-flex;width:14px;height:14px;flex-shrink:0;">'
+    +     '<span style="position:absolute;inset:0;border-radius:50%;background:' + dot + ';opacity:.35;'
+    +       (known && working ? 'animation:cmHeroPulse 2s ease-out infinite;' : '') + '"></span>'
+    +     '<span style="position:relative;margin:auto;width:10px;height:10px;border-radius:50%;background:' + dot + ';"></span>'
+    +   '</span>'
+    +   '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">'
+    +     t('inventory.hero_eyebrow', null, 'Your agents') + '</span>'
+    + '</div>'
+    + '<div class="inv-hero-headline">' + headline + '</div>'
+    + '<div class="inv-hero-sub">' + sub + '</div>';
 }
 
 function _invRenderRoster(inv) {
@@ -11534,7 +11719,7 @@ function _invRenderRoster(inv) {
     +     '<th data-i18n="inventory.col_agent">Agent</th>'
     +     '<th data-i18n="inventory.col_owner">Owner</th>'
     +     '<th data-i18n="inventory.col_doing">Doing now</th>'
-    +     '<th data-i18n="inventory.col_alive">Alive</th>'
+    +     '<th data-i18n="inventory.col_last_seen">Last seen</th>'
     +     '<th data-i18n="inventory.col_cost_24h">Cost (24h)</th>'
     +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
     +     '<th data-i18n="inventory.col_work">Work done</th>'
@@ -11727,18 +11912,60 @@ async function renderInventory() {
   if (window._invEmptyRetryTimer) { clearTimeout(window._invEmptyRetryTimer); window._invEmptyRetryTimer = null; }
   if (emptyEl) emptyEl.style.display = 'none';
 
+  // Hero first: the tab leads with what is true right now, like Home does.
+  var heroEl = document.getElementById('inv-hero');
+  if (heroEl) {
+    heroEl.innerHTML = _invRenderHero(inv);
+    heroEl.style.display = '';
+  }
+  // Repaint on a live cadence while this tab is the visible one — a headline
+  // that says "working right now" has to stop saying it when the work stops.
+  if (window._invLiveTimer) { clearTimeout(window._invLiveTimer); window._invLiveTimer = null; }
+  window._invLiveTimer = setTimeout(function () {
+    window._invLiveTimer = null;
+    if (_cmCurrentTab === 'inventory' && !document.hidden) renderInventory();
+  }, 15000);
+
   // 4-tile strip.
-  var aliveCount = agents.filter(function (a) { return a.running; }).length;
+  var liveKnown = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  var workingSessions = 0, waitingSessions = 0;
+  agents.forEach(function (a) {
+    workingSessions += Number(a.liveWorking || 0);
+    waitingSessions += Number(a.liveWaiting || 0);
+  });
+  var workingAgents = agents.filter(function (a) { return Number(a.liveWorking || 0) > 0; }).length;
   // "Today" = the rolling-24h spend (cost24hUsd). It used to sum costUsd,
   // which is LIFETIME - the tile showed the all-time total under a "Today"
   // label (founder screenshot 2026-07-30: Today $812.65 == lifetime).
   var totalCost24h = agents.reduce(function (s, a) {
     return s + (_invHasCost(a.agentKey) ? Number(a.cost24hUsd || 0) : 0);
   }, 0);
-  var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
   var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
+  var setSub = function (id, v) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = v || '';
+    el.style.display = v ? '' : 'none';
+  };
+  // "Working now" counts SESSIONS producing output, the same unit the Home
+  // hero leads with. The old tile counted the process-heartbeat flag and so
+  // read "0 of 11" on a machine with four live Claude Code sessions.
+  if (!liveKnown) {
+    setTxt('inv-tile-alive', 'Unknown');
+    setSub('inv-tile-alive-sub', 'Daemon did not answer');
+  } else {
+    setTxt('inv-tile-alive', workingSessions
+      ? (workingSessions + (workingSessions === 1 ? ' session' : ' sessions'))
+      : 'None');
+    setSub('inv-tile-alive-sub', workingSessions
+      ? ('on ' + workingAgents + ' of ' + agents.length + ' agents')
+      : (waitingSessions
+          ? (waitingSessions + ' waiting on you')
+          : 'nothing in the last 2 min'));
+  }
   setTxt('inv-tile-agents', String(agents.length));
+  setSub('inv-tile-agents-sub', agents.filter(_invIsRecentlyActive).length + ' active in 24h');
   // Subscription honesty (device parity): when the account plan is a
   // subscription, today's marginal spend is the METERED agents' cost only -
   // the plan is a flat fee already paid. Mirror the desk device's hero:
@@ -11757,7 +11984,11 @@ async function renderInventory() {
     setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
     if (todaySub) { todaySub.textContent = ''; todaySub.style.display = 'none'; }
   }
-  setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
+  var health = _invHealth(agents);
+  setTxt('inv-tile-health', health.txt);
+  setSub('inv-tile-health-sub', health.sub);
+  var healthEl = document.getElementById('inv-tile-health');
+  if (healthEl) healthEl.className = 'stats-footer-value ' + (health.cls || '');
   if (statsEl) statsEl.style.display = '';
 
   // Node-wide strip (tools / eval), labeled honestly.

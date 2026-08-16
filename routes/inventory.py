@@ -139,6 +139,18 @@ def _build_local_inventory():
     except Exception:
         node_id = ""
 
+    # Recency liveness, read from the SAME typed sessions table
+    # ``/api/live-sessions`` uses so the Agents tab and the Home hero can never
+    # disagree about what is working right now. ``None`` (not ``{}``) when the
+    # read fails, so the roster renders "unknown" instead of a confident zero.
+    live_by_rt = None
+    try:
+        rows = _ls_call("query_sessions_table", limit=200)
+        if rows is not None:
+            live_by_rt = _sync._live_counts_by_runtime(rows)
+    except Exception:
+        live_by_rt = None
+
     try:
         node_wide, _by_rt = _sync._build_agent_inventory(
             runtime_summary,
@@ -149,6 +161,7 @@ def _build_local_inventory():
             detected,
             agent_meta,
             node_id,
+            live_by_rt=live_by_rt,
         )
         return node_wide
     except Exception:

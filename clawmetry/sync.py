@@ -13944,6 +13944,75 @@ _INV_RT_LABELS.setdefault("openclaw", "OpenClaw")
 _INV_RT_LABELS.setdefault("nemoclaw", "NVIDIA NemoClaw")
 
 
+def _live_counts_by_runtime(session_rows):
+    """Per-runtime live-session counts from the typed ``sessions`` rows.
+
+    The roster's ``running`` flag is a PROCESS heartbeat, and only OpenClaw and
+    NemoClaw actually emit one — so every family runtime (Claude Code, Codex,
+    Cursor, ...) reported ``running: False`` even mid-task. The Agents tab
+    therefore read "0 of 11 alive / Idle / Resting" on a node whose Home tab
+    said "4 sessions are working right now" in the same breath (founder report
+    2026-08-16). For a family runtime the honest liveness signal is the one
+    ``/api/live-sessions`` and the Overview hero already use: how long ago its
+    transcript last grew.
+
+    Returns ``{runtime: {"working": N, "waiting": N, "lastSeenSecs": int|None}}``
+    using the SAME 120s/600s thresholds as ``_session_liveness`` so no two
+    surfaces can disagree about what "right now" means. ``lastSeenSecs`` is the
+    freshest session of that runtime regardless of state, so a quiet agent can
+    still say when it last moved instead of an unqualified "Resting".
+
+    Best-effort: never raises; an unparseable row is skipped, not guessed at.
+    """
+    out = {}
+    try:
+        from clawmetry.config import hide_clawmetry_session
+    except Exception:  # pragma: no cover — never break the roster on an import
+        def hide_clawmetry_session(_sid):
+            return False
+    now = datetime.now(timezone.utc)
+    for r in session_rows or []:
+        if not isinstance(r, dict):
+            continue
+        sid = r.get("session_id") or ""
+        if hide_clawmetry_session(sid):
+            continue
+        low = str(sid).lower()
+        if "subagent" in low or "sub-agent" in low:
+            continue  # sub-agents are counted under their parent, not as peers
+        meta = r.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        rt = str(meta.get("runtime") or "").strip().lower() or "openclaw"
+        last = r.get("last_active_at") or r.get("started_at") or ""
+        if not last:
+            continue
+        try:
+            seen = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+            age = (now - seen).total_seconds()
+        except (ValueError, TypeError, OSError, OverflowError):
+            continue
+        # A future timestamp is a skewed clock, not a live session.
+        if age < 0:
+            age = 0.0
+        slot = out.setdefault(rt, {"working": 0, "waiting": 0, "lastSeenSecs": None})
+        if slot["lastSeenSecs"] is None or age < slot["lastSeenSecs"]:
+            slot["lastSeenSecs"] = int(age)
+        # An explicit terminal status from the runtime always wins over recency:
+        # OpenClaw and Codex can actually assert "this session is over".
+        if str(r.get("status") or "").strip().lower() in (
+            "completed", "stopped", "failed", "aborted",
+        ):
+            continue
+        if age < _SESSION_ACTIVE_SECS:
+            slot["working"] += 1
+        elif age < _SESSION_IDLE_SECS:
+            slot["waiting"] += 1
+    return out
+
+
 def _build_agent_inventory(
     runtime_summary,
     outcomes_by_rt,
@@ -13953,6 +14022,7 @@ def _build_agent_inventory(
     detected_runtimes,
     agent_meta,
     node_id,
+    live_by_rt=None,
 ):
     """Compose the Agent-Inventory roster from ALREADY-computed rollups.
 
@@ -13972,6 +14042,13 @@ def _build_agent_inventory(
       with ONLY that runtime's row (the per-runtime no-leak contract). An absent
       runtime is simply not a key, so the interceptor returns ZERO for it.
 
+    ``live_by_rt`` is ``_live_counts_by_runtime``'s map (or ``None`` when the
+    session table could not be read). It is what makes a row able to say
+    "Working - 4 sessions" / "last moved 6m ago" instead of the process-heartbeat
+    ``running`` flag, which is False for every runtime that is not OpenClaw or
+    NemoClaw. ``None`` propagates as ``liveKnown: False`` so the UI can say "we
+    don't know" rather than render a confident zero.
+
     Foreign OTLP / OpenLLMetry apps (post #2822) derive ``agent_type`` from the
     resource ``service.name`` with NO session-id prefix. ``_build_runtime_summary``
     now folds them in (one cheap GROUP BY agent_type on the daemon snapshot timer,
@@ -13984,6 +14061,8 @@ def _build_agent_inventory(
     """
     try:
         rs = runtime_summary if isinstance(runtime_summary, dict) else {}
+        live_known = isinstance(live_by_rt, dict)
+        live_map = live_by_rt if live_known else {}
         det = detected_runtimes if isinstance(detected_runtimes, list) else []
         det_by_name = {d.get("name"): d for d in det if isinstance(d, dict) and d.get("name")}
         meta = agent_meta if isinstance(agent_meta, dict) else {}
@@ -14035,10 +14114,19 @@ def _build_agent_inventory(
             if not detected and not substance:
                 continue
             mrow = meta.get(rt) or {}
+            _live = live_map.get(rt) or {}
             agents.append({
                 "agentKey": rt,
                 "displayName": label,
                 "detected": detected,
+                # Recency-derived liveness (the honest signal for the 10+
+                # runtimes that emit no process heartbeat). liveKnown=False
+                # means the session table was unreadable — "unknown", never 0.
+                "liveKnown": live_known,
+                "liveWorking": int(_live.get("working") or 0),
+                "liveWaiting": int(_live.get("waiting") or 0),
+                "lastSeenSecs": _live.get("lastSeenSecs"),
+                "lastActivityMs": summ.get("last_activity_ms"),
                 # Foreign OpenLLMetry/OTLP app (no session-id prefix): the
                 # frontend scopes it by agent_type, not the prefix path, and the
                 # roster labels it as a bring-your-own-agent app.
@@ -14111,6 +14199,20 @@ def _build_agent_inventory(
             # the plan is a subscription (device-parity hero).
             "accountPlan": account_plan,
             "extraCost24hUsd": round(extra_24h, 4),
+            # NODE-WIDE liveness, the number the tab leads with. Sessions AND
+            # agents are both counted: "4 sessions across 1 agent" is the
+            # sentence a person can check against the Home tab, which reads the
+            # same 120s/600s windows off the same session rows.
+            "liveKnown": live_known,
+            "liveCounts": {
+                "working": sum(int(a.get("liveWorking") or 0) for a in agents),
+                "waiting": sum(int(a.get("liveWaiting") or 0) for a in agents),
+                "agentsWorking": sum(1 for a in agents if int(a.get("liveWorking") or 0) > 0),
+                "agentsWaiting": sum(
+                    1 for a in agents
+                    if int(a.get("liveWaiting") or 0) > 0 and not int(a.get("liveWorking") or 0)
+                ),
+            },
             "total": len(agents),
         }
         by_runtime = {}
@@ -14119,6 +14221,17 @@ def _build_agent_inventory(
             by_runtime[rt] = {
                 "nodeId": node_id,
                 "agents": [a],
+                # Scoped to THIS runtime (the per-runtime no-leak contract), so
+                # a slice-served roster still leads with a live headline instead
+                # of falling back to a "nothing is running" default.
+                "liveKnown": live_known,
+                "liveCounts": {
+                    "working": int(a.get("liveWorking") or 0),
+                    "waiting": int(a.get("liveWaiting") or 0),
+                    "agentsWorking": 1 if int(a.get("liveWorking") or 0) > 0 else 0,
+                    "agentsWaiting": 1 if (int(a.get("liveWaiting") or 0) > 0
+                                           and not int(a.get("liveWorking") or 0)) else 0,
+                },
                 "total": 1,
             }
         return node_wide, by_runtime
@@ -18352,6 +18465,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 _inv_node_id = ""
     except Exception as _e_am:
         log.debug("snapshot: agent_meta read failed: %s", _e_am)
+    # Recency liveness for the roster. ONE bounded read of the typed sessions
+    # table (already ordered most-recently-active first) — the hosted roster
+    # must be able to say "working right now" for the family runtimes exactly
+    # like the local one, or the two disagree about the same node.
+    _inv_live_by_rt = None
+    try:
+        from clawmetry import local_store as _ls_live
+        _live_store = _ls_live.get_store()
+        if _live_store is not None:
+            _inv_live_by_rt = _live_counts_by_runtime(
+                _live_store.query_sessions_table(limit=200) or []
+            )
+    except Exception as _e_live:
+        log.debug("snapshot: inventory liveness read failed: %s", _e_live)
     _inv_node_wide, _inv_by_rt = _build_agent_inventory(
         _runtime_summary,
         _outcomes_by_rt,
@@ -18361,6 +18488,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         _detected_runtimes,
         _agent_meta,
         _inv_node_id,
+        live_by_rt=_inv_live_by_rt,
     )
 
     # Efficiency grade + measured savings, computed ONCE per cycle on the

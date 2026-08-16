@@ -1794,6 +1794,27 @@
 .inv-wrap { max-width: 1100px; margin: 0 auto; padding: 4px 0 32px; }
 .inv-heading { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 4px 0 6px; }
 .inv-story { font-size: 14px; color: var(--text-secondary); line-height: 1.6; margin: 0 0 18px; max-width: 640px; }
+/* Live hero — deliberately the same chrome as the Overview hero so moving
+   between Home and Agents reads as one product answering the same question. */
+.inv-hero {
+  margin: 0 0 16px; border-radius: 18px; padding: 26px 30px;
+  background: radial-gradient(120% 140% at 0% 0%, rgba(59,130,246,0.10), transparent 55%),
+              linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
+  border: 1px solid var(--border-primary);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 30px rgba(0,0,0,0.25);
+}
+.inv-hero-headline {
+  font-family: Georgia, 'Times New Roman', serif; font-size: 32px; line-height: 1.15;
+  font-weight: 600; color: var(--text-primary); margin: 10px 0 4px;
+}
+.inv-hero-sub { font-size: 14px; color: var(--text-secondary); line-height: 1.6; max-width: 720px; }
+@media (max-width: 640px) {
+  .inv-hero { padding: 20px 18px; }
+  .inv-hero-headline { font-size: 24px; }
+}
+.inv-health-ok { color: #22c55e; }
+.inv-health-bad { color: #f59e0b; }
+.inv-health-unknown { color: var(--text-muted); }
 .inv-stats { margin: 0 0 16px; }
 .inv-nodewide-strip { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
 .inv-nodewide-pill {
