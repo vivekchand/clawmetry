@@ -13359,6 +13359,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "compression_potential_pct": _compress.get("compressionPotentialPct"),
                     "compressible_tool_tokens": _compress.get("compressibleToolTokens"),
                     "compression_recoverable_usd": _compress.get("compressionRecoverableUsd"),
+                    # Which surface launched the session (terminal / desktop /
+                    # sdk). Carried to cloud so the hosted Sessions list splits
+                    # them too — a local-only badge would render blank there.
+                    # Only the dedicated key: metadata["source"] is already used
+                    # by other adapters for cwd paths and provider names.
+                    "surface": metadata.get("surface") or "",
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 # Re-ingest the full event set for sessions that advanced (the

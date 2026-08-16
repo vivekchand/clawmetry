@@ -628,6 +628,14 @@ def _try_local_store_sessions():
             "session_type":   meta.get("session_type", "main"),
             "runtime":        meta.get("runtime", ""),
             "thinking_level": meta.get("thinking_level", ""),
+            # Which surface launched the session — terminal, desktop app, or an
+            # SDK run. Claude Code, Claude Desktop's agent mode and Agent-SDK
+            # runs all write to the same transcript tree, so without this they
+            # are indistinguishable and every desktop session reads as CLI.
+            # Read ONLY from the dedicated key: metadata["source"] is already
+            # spoken for by other adapters, which fill it with cwd paths and
+            # provider names (ollama, openai, …) that are not surfaces.
+            "surface":        meta.get("surface", ""),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
