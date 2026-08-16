@@ -284,6 +284,7 @@ FEATURE_LABELS = {
     "air_gapped_license": "Air-gapped license",
     "custom_data_residency": "Custom data residency",
     "compliance_pack": "Compliance pack",
+    "org_analytics": "Org analytics",
 }
 
 _ALIAS_FEATURES = frozenset(
