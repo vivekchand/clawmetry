@@ -44067,6 +44067,275 @@ def api_entitlement_missing_all_bundle_at_path_batch():
         )
 
 
+
+def _has_all_bundle_batch_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/has-all-bundle-batch-at-path``."""
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "bundles": [],
+        "count": 0,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _missing_all_bundle_batch_at_path_fallback(
+    from_tier: str, to_tier: str
+) -> dict:
+    """Never-5xx envelope for ``/api/entitlement/missing-all-bundle-batch-at-path``."""
+    direction = "identity" if from_tier and from_tier == to_tier else "unknown"
+    return {
+        "from": from_tier,
+        "from_label": None,
+        "from_rank": -1,
+        "to": to_tier,
+        "to_label": None,
+        "to_rank": -1,
+        "direction": direction,
+        "bundles": [],
+        "count": 0,
+        "current_tier": "oss",
+        "current_tier_rank": 0,
+        "grace": True,
+        "enforced": False,
+    }
+
+
+def _bundle_batch_path_row_out(
+    cell: dict, row_to_body, fold_key: str
+) -> dict:
+    """Coerce one per-bundle cell from has_all_bundle_batch_at_path /
+    missing_all_bundle_batch_at_path to a stable endpoint body.
+    """
+    from clawmetry import entitlements as _ent
+
+    path_in = cell.get("path") or []
+    path_out: list[dict] = []
+    for row in path_in:
+        try:
+            tid = row.get("tier")
+        except AttributeError:
+            continue
+        path_out.append(
+            {
+                "tier": tid,
+                "tier_label": row.get("tier_label", _ent.tier_label(tid)),
+                "tier_rank": row.get("tier_rank", _ent.tier_rank(tid)),
+                **row_to_body(row),
+            }
+        )
+    body = {
+        "bundle_index": int(cell.get("bundle_index") or 0),
+        "features": list(cell.get("features") or []),
+        "runtimes": list(cell.get("runtimes") or []),
+        "channels": cell.get("channels"),
+        "retention_days": cell.get("retention_days"),
+        "nodes": cell.get("nodes"),
+        "path": path_out,
+        "path_length": len(path_out),
+    }
+    if fold_key == "has_all_at":
+        allowed_count = sum(1 for r in path_out if r.get("has_all_at"))
+        body["allowed_count"] = allowed_count
+        body["all_allowed"] = bool(path_out) and all(
+            r.get("has_all_at") for r in path_out
+        )
+        body["any_allowed"] = any(r.get("has_all_at") for r in path_out)
+    else:
+        denied_count = sum(
+            1
+            for r in path_out
+            if any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+        )
+        body["denied_count"] = denied_count
+        body["all_denied"] = bool(path_out) and all(
+            any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+            for r in path_out
+        )
+        body["any_denied"] = any(
+            any(
+                v
+                for v in (r.get("missing") or {}).values()
+                if v not in (None, [])
+            )
+            for r in path_out
+        )
+    return body
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-all-bundle-batch-at-path",
+    methods=["POST"],
+)
+def api_entitlement_has_all_bundle_batch_at_path():
+    """``POST /api/entitlement/has-all-bundle-batch-at-path?from=<id>&to=<id>``
+    -- bundle-axis batch sibling of has-all-bundle-at-path.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        cells = _ent.has_all_bundle_batch_at_path(
+            from_tier, to_tier, bundles
+        )
+        env = _resolver_envelope(_ent)
+        if cells is None:
+            direction = "unknown"
+            out_cells: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+        else:
+            out_cells = [
+                _bundle_batch_path_row_out(
+                    cell, _has_all_bundle_row_at_to_body, "has_all_at"
+                )
+                for cell in cells
+            ]
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "bundles": out_cells,
+                "count": len(out_cells),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_all_bundle_batch_at_path: error: %s", exc
+        )
+        return jsonify(
+            _has_all_bundle_batch_at_path_fallback(from_tier, to_tier)
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/missing-all-bundle-batch-at-path",
+    methods=["POST"],
+)
+def api_entitlement_missing_all_bundle_batch_at_path():
+    """``POST /api/entitlement/missing-all-bundle-batch-at-path?from=<id>&to=<id>``
+    -- row-detail bundle-axis batch sibling of missing-all-bundle-at-path.
+    """
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_aggregate_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    raw_from = request.args.get("from")
+    raw_to = request.args.get("to")
+    from_tier = (raw_from or "").strip().lower()
+    to_tier = (raw_to or "").strip().lower()
+    try:
+        from clawmetry import entitlements as _ent
+
+        cells = _ent.missing_all_bundle_batch_at_path(
+            from_tier, to_tier, bundles
+        )
+        env = _resolver_envelope(_ent)
+        if cells is None:
+            direction = "unknown"
+            out_cells: list = []
+            from_label = None
+            to_label = None
+            from_rank = -1
+            to_rank = -1
+        else:
+            out_cells = [
+                _bundle_batch_path_row_out(
+                    cell, _missing_all_bundle_row_at_to_body, "missing"
+                )
+                for cell in cells
+            ]
+            from_rank = _ent.tier_rank(from_tier)
+            to_rank = _ent.tier_rank(to_tier)
+            from_label = _ent.tier_label(from_tier)
+            to_label = _ent.tier_label(to_tier)
+            if from_tier == to_tier:
+                direction = "identity"
+            elif from_rank == to_rank:
+                direction = "lateral"
+            elif to_rank > from_rank:
+                direction = "upgrade"
+            else:
+                direction = "downgrade"
+
+        return jsonify(
+            {
+                "from": from_tier,
+                "from_label": from_label,
+                "from_rank": from_rank,
+                "to": to_tier,
+                "to_label": to_label,
+                "to_rank": to_rank,
+                "direction": direction,
+                "bundles": out_cells,
+                "count": len(out_cells),
+                **env,
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_missing_all_bundle_batch_at_path: error: %s", exc
+        )
+        return jsonify(
+            _missing_all_bundle_batch_at_path_fallback(from_tier, to_tier)
+        )
+
+
 @bp_entitlement.route(
     "/api/entitlement/has-all-bundle-batch",
     methods=["POST"],
