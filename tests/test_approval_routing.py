@@ -84,7 +84,8 @@ def fresh_store(tmp_path, monkeypatch):
         pass
 
 
-def _pin_entitlement(monkeypatch, *, features=("approval_queue",)):
+def _pin_entitlement(monkeypatch, *, features=("approval_queue",
+                                               "approval_mirror")):
     import clawmetry.entitlements as ent
     e = ent.Entitlement(tier="pro", source="test", grace=False,
                         features=frozenset(features), runtimes=frozenset())

@@ -219,6 +219,7 @@
       }
     }
     renderHistory();
+    renderBuiltinMonitors();
 
     try {
       const ch = alertsState.localMode
@@ -294,13 +295,40 @@
         metaLine = `${meta.verb} ${threshold}${unit ? ' ' + escape(unit) : ''}`
           + (real ? ' · never triggered' : '');
       }
+      // Channel pills state what delivery IS, never what it could be.
+      // These used to render ex._exampleChannels ("💬 Slack · ✉️ Email") on
+      // every OFF row — decorative sample text that looked exactly like
+      // configured delivery, so arming a rule appeared to erase it. An OFF
+      // row now says nothing about channels; an armed one shows its real
+      // channels, or "In-app only", which is what empty channel_ids actually
+      // means server-side (routes/alerts.py defaults them to the banner).
       const channelPills = real
-        ? (real.channel_ids || []).map(cid => {
+        ? ((real.channel_ids || []).map(cid => {
             const ch = alertsState.channels.find(c => c.id === cid);
             return ch ? `<span class="alerts-chan-pill">${chTypeIcon(ch.channel_type)} ${escape(ch.name)}</span>` : '';
           }).join('')
-        : `<span class="alerts-chan-pill off">${ex._exampleChannels}</span>`;
+          || '<span class="alerts-chan-pill off" title="Shows in the bell menu and the banner. No external delivery.">In-app only</span>')
+        : '';
       const badge = real ? '' : '<span class="alerts-rule-example-badge">example</span>';
+      // Evaluator honesty. A rule nothing evaluates must not look identical
+      // to one that is armed and simply hasn't tripped — that equivalence is
+      // what let two dead rules sit on "never triggered" indefinitely.
+      const evaluator = real ? (real.evaluator || '') : '';
+      const isDead = evaluator === 'none';
+      const deadChip = isDead
+        ? '<span class="alerts-chan-pill off" title="'
+          + (real && real.needs_recreate
+              ? 'Created by an older version that did not record what it should watch. Turn it off and on again to rebuild it.'
+              : 'No evaluator runs this type on a self-hosted node yet. It will not fire.')
+          + '">not evaluated</span>'
+        : '';
+      // "never triggered" reads as "armed, all quiet". For a rule nothing
+      // evaluates, that is the wrong story — replace it with the real one.
+      if (isDead) {
+        metaLine = real && real.needs_recreate
+          ? 'Turn this off and on again to rebuild it — it can’t fire as saved'
+          : 'Nothing on this node evaluates this alert yet';
+      }
       const scopeChip = real
         ? (ruleRt(real) === 'all'
             ? '<span class="alerts-chan-pill off" title="Evaluates across all runtimes on this node">node-wide</span>'
@@ -310,15 +338,62 @@
         <div class="alerts-rule-row${real ? '' : ' alerts-rule-example'}" data-rule-id="${id}">
           <div class="alerts-rule-dot ${on ? 'on' : 'off'}" title="${on ? 'Enabled' : 'Disabled'}"></div>
           <div class="alerts-rule-main">
-            <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge} ${scopeChip}</div>
+            <div class="alerts-rule-title">${meta.icon} ${escape(name)} ${badge} ${scopeChip} ${deadChip}</div>
             <div class="alerts-rule-meta">${metaLine}</div>
           </div>
-          <div class="alerts-rule-chan">${channelPills || '<span class="alerts-chan-pill off">no channels</span>'}</div>
+          <div class="alerts-rule-chan">${channelPills}</div>
           ${toggleSwitch(id, on)}
           <button class="alerts-btn-ghost" onclick="alertsHandleEdit('${id}')">Edit</button>
         </div>
       `;
     }).join('');
+
+    // Orphan rules — saved and often ENABLED, but matching none of the eight
+    // canonical rows above, so previously rendered nowhere at all.
+    //
+    // Found while verifying this fix (2026-08-15): the reporter's own node had
+    // two enabled rules that the tab could not display, because matching keys
+    // on alert_type and rules written before the alert_type column have none.
+    // The tab showed all eight rows as untouched "example" while two live
+    // rules sat in the database — invisible, unturn-off-able, and (being
+    // "anomaly") unable to fire. Whatever else is true of a rule, if it exists
+    // the operator must be able to see it and switch it off.
+    const claimed = new Set();
+    EXAMPLE_RULES.forEach(ex => {
+      const c = alertsState.rules.filter(r => r.alert_type === ex.alert_type);
+      const pick = c.find(r => activeRt !== 'all' && ruleRt(r) === activeRt) || c[0];
+      if (pick) claimed.add(pick.id);
+    });
+    const orphans = alertsState.rules.filter(r => !claimed.has(r.id));
+    if (orphans.length) {
+      wrap.innerHTML += orphans.map(r => {
+        const on = !!r.enabled;
+        // Never surface the storage vocabulary ("anomaly", "token_spike") as
+        // a name — it tells the operator nothing. Note loadAlertsPage's
+        // local-schema normaliser fills `name` with the raw `type` when a row
+        // has no real name, so an equal-to-type name counts as no name.
+        const thr = (r.threshold_value != null ? r.threshold_value : r.threshold);
+        const realName = (r.name && r.name !== r.type) ? r.name : '';
+        const label = realName || RULE_TYPE_LABELS[r.alert_type]?.verb
+          || (thr != null ? `Old rule · threshold ${thr}` : 'Old rule');
+        const why = r.needs_recreate
+          ? 'Saved by an older version without a record of what it should watch, so nothing can run it.'
+          : 'This rule doesn’t match any alert type this version offers.';
+        return `
+        <div class="alerts-rule-row alerts-rule-orphan" data-rule-id="${escape(r.id)}">
+          <div class="alerts-rule-dot ${on ? 'on' : 'off'}" title="${on ? 'Enabled' : 'Disabled'}"></div>
+          <div class="alerts-rule-main">
+            <div class="alerts-rule-title">🗃️ ${escape(label)}
+              <span class="alerts-rule-example-badge">unrecognized</span>
+            </div>
+            <div class="alerts-rule-meta">${escape(why)} Switch it off to remove it.</div>
+          </div>
+          <div class="alerts-rule-chan"><span class="alerts-chan-pill off">not evaluated</span></div>
+          ${toggleSwitch(r.id, on)}
+          <button class="alerts-btn-ghost" onclick="alertsDeleteRule('${escape(r.id)}')">Remove</button>
+        </div>`;
+      }).join('');
+    }
   }
 
   function renderCannedExamples() {
@@ -334,7 +409,7 @@
             </div>
             <div class="alerts-rule-meta">Tap to customize — saves require Cloud Pro</div>
           </div>
-          <div class="alerts-rule-chan"><span class="alerts-chan-pill off">${ex._exampleChannels}</span></div>
+          <div class="alerts-rule-chan"><span class="alerts-chan-pill off" title="Delivery to ${escape(ex._exampleChannels.replace(/[^\x20-\x7E ·]/g, '').trim())} comes with Pro">Pro delivery</span></div>
           ${toggleSwitch(ex.id, false)}
           <button class="alerts-btn-ghost" onclick="event.stopPropagation();alertsHandleEdit('${ex.id}')">Edit</button>
         </div>
@@ -413,6 +488,45 @@
   function renderHistoryEmpty(msg) {
     document.getElementById('alerts-history-list').innerHTML =
       `<div class="alerts-loading">${escape(msg)}</div>`;
+  }
+
+  // Always-on monitors — the checks that fire without a rule behind them.
+  // Rendered read-only and visibly distinct from the toggleable rules above,
+  // so nobody mistakes them for something they forgot to switch off.
+  const _BUILTIN_ICONS = {
+    heartbeat_silent: '💤', agent_down: '📡', anomaly: '📈',
+    token_velocity: '⚡', agent_error_rate: '🛠', error_spike: '🔥',
+    security_threat: '🛡', numbat_finding: '🛡', security: '🔐',
+    threshold: '💰',
+  };
+
+  async function renderBuiltinMonitors() {
+    const wrap = document.getElementById('alerts-builtins-list');
+    if (!wrap) return;
+    let monitors = [];
+    try {
+      const d = await fetch('/api/alerts/builtins').then(r => r.json());
+      monitors = (d && d.monitors) || [];
+    } catch {
+      wrap.innerHTML = '<div class="alerts-loading">Couldn’t load the always-on monitors.</div>';
+      return;
+    }
+    if (!monitors.length) {
+      wrap.innerHTML = '<div class="alerts-loading">No always-on monitors on this build.</div>';
+      return;
+    }
+    wrap.innerHTML = monitors.map(m => `
+      <div class="alerts-rule-row alerts-builtin-row">
+        <div class="alerts-rule-dot on" title="Always on"></div>
+        <div class="alerts-rule-main">
+          <div class="alerts-rule-title">${_BUILTIN_ICONS[m.alert_type] || '🔔'} ${escape(m.label)}</div>
+          <div class="alerts-rule-meta">${escape(m.watches)}</div>
+        </div>
+        <div class="alerts-rule-chan">${(m.channels || []).map(c =>
+          `<span class="alerts-chan-pill">${escape(c === 'banner' ? 'In-app' : c)}</span>`).join('')}</div>
+        <span class="alerts-builtin-tag" title="Built in — fires with no rule of yours behind it">built in</span>
+      </div>
+    `).join('');
   }
 
   function renderChannelsSummary() {
@@ -503,6 +617,16 @@
           alertsState.rules.find(r => r.alert_type === ex.alert_type)) {
         return;
       }
+      // Ask where it should go BEFORE arming it. Turning an alert on with
+      // nowhere to send it is a decision the operator should make knowingly,
+      // not discover afterwards from a grey "no channels" pill.
+      if (isExample && newEnabled && !alertsState.channels.length
+          && !_deliveryChoiceMade) {
+        return openDeliveryPrompt(ruleId);
+      }
+      // With channels configured, "notify me" means the channels the operator
+      // already set up — send to all of them rather than silently to none.
+      const chosenChannels = alertsState.channels.map(c => c.id);
       let resp;
       if (isExample && newEnabled) {
         resp = await fetch(alertsState.localMode
@@ -515,7 +639,7 @@
             threshold_value: ex.threshold_value,
             threshold_unit: ex.threshold_unit || '',
             enabled: true,
-            channel_ids: [],
+            channel_ids: chosenChannels,
             re_alert_policy: 'once',
           }),
         });
@@ -531,6 +655,16 @@
         // Hit the Free-tier cap server-side
         return openPaywall();
       }
+      // 422 = the server has no evaluator for this type on a self-hosted
+      // node. Say so instead of leaving a toggle that flips back with no
+      // explanation (or worse, one that stays on and never fires).
+      if (resp.status === 422) {
+        let detail = {};
+        try { detail = await resp.json(); } catch {}
+        showRuleNotice(ruleId, detail.error
+          || 'This alert type has no evaluator on a self-hosted node yet.');
+        return;
+      }
       if (!resp.ok) throw new Error('toggle failed: HTTP ' + resp.status);
       // Optimistic update: the cloud cache warms a few seconds behind the
       // write (daemon heartbeat cache_push), so reflect the new state locally
@@ -540,7 +674,7 @@
         alertsState.rules.push({
           id: 'pending-' + ruleId, alert_type: ex.alert_type, name: ex.name,
           threshold_value: ex.threshold_value, threshold_unit: ex.threshold_unit || '',
-          enabled: true, channel_ids: [],
+          enabled: true, channel_ids: chosenChannels,
         });
       } else {
         const r = alertsState.rules.find(x => x.id === ruleId);
@@ -553,6 +687,88 @@
       console.warn(e);
     }
   };
+
+  // Delete a rule outright. Only reachable from an orphan row, where toggling
+  // off would leave an unusable rule sitting in the database forever.
+  window.alertsDeleteRule = async function (ruleId) {
+    try {
+      const resp = await fetch((alertsState.localMode
+        ? '/api/alerts/rules/' : '/api/cloud-proxy/api/alerts/') + ruleId,
+        { method: 'DELETE' });
+      if (!resp.ok) throw new Error('delete failed: HTTP ' + resp.status);
+      alertsState.rules = alertsState.rules.filter(r => r.id !== ruleId);
+      renderRules();
+      setTimeout(function () { window.loadAlertsPage(); }, 2000);
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  // ── Delivery prompt ───────────────────────────────────────────────────────
+  //
+  // Asked once per visit, before the first alert is armed with nowhere to
+  // send it. "Show it in the app" is a real answer, not a dismissal — it sets
+  // _deliveryChoiceMade so we don't re-ask on every subsequent toggle.
+
+  let _deliveryChoiceMade = false;
+  let _deliveryPendingRuleId = null;
+
+  function openDeliveryPrompt(ruleId) {
+    _deliveryPendingRuleId = ruleId;
+    const modal = detachModalToBody('alerts-delivery-modal');
+    const body = document.getElementById('alerts-delivery-body');
+    const ex = EXAMPLE_RULES.find(r => r.id === ruleId);
+    if (body && ex) {
+      body.textContent = 'You haven’t set up anywhere to send alerts yet. '
+        + 'ClawMetry can show “' + ex.name + '” in the app, or deliver '
+        + 'it to Slack, Telegram, or PagerDuty.';
+    }
+    modal.style.display = 'flex';
+  }
+
+  window.alertsCloseDelivery = function (e) {
+    // Backdrop click / Escape = cancel. The rule stays OFF, which is the
+    // truthful outcome: nothing was armed and nothing was configured.
+    if (e && e.target && e.target.id !== 'alerts-delivery-modal') return;
+    const el = document.getElementById('alerts-delivery-modal');
+    if (el) el.style.display = 'none';
+    _deliveryPendingRuleId = null;
+    renderRules();
+  };
+
+  window.alertsDeliverySetUp = function () {
+    const el = document.getElementById('alerts-delivery-modal');
+    if (el) el.style.display = 'none';
+    _deliveryPendingRuleId = null;
+    // Straight to Notifications, per the founder's ask: configure first, then
+    // come back and arm it. The rule is deliberately NOT created here — an
+    // alert that exists but was never confirmed is the ambiguity we're fixing.
+    if (typeof switchTab === 'function') switchTab('notifications');
+  };
+
+  window.alertsDeliveryInAppOnly = function () {
+    const el = document.getElementById('alerts-delivery-modal');
+    if (el) el.style.display = 'none';
+    _deliveryChoiceMade = true;
+    const ruleId = _deliveryPendingRuleId;
+    _deliveryPendingRuleId = null;
+    if (ruleId) window.alertsToggleRule(ruleId, true);
+  };
+
+  // Inline, per-row explanation. Used when the server refuses a rule type
+  // (422) — a toggle that springs back with no reason is its own small bug.
+  function showRuleNotice(ruleId, message) {
+    // Re-render first so the toggle returns to its true (off) position, then
+    // attach the reason to that row.
+    renderRules();
+    const row = document.querySelector('[data-rule-id="' + ruleId + '"]');
+    const main = row && row.querySelector('.alerts-rule-main');
+    if (!main) return;
+    const note = document.createElement('div');
+    note.className = 'alerts-rule-notice';
+    note.textContent = message;
+    main.appendChild(note);
+  }
 
   // ── Paywall modal ─────────────────────────────────────────────────────────
 

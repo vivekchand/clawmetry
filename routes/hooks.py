@@ -214,14 +214,15 @@ def _audit(result: str, tool_name: str, meta: dict) -> None:
 def _page_human(approval: dict) -> None:
     """Fan the parked approval out to this runtime's channels.
 
-    Non-blocking (approval_notify spawns the senders on a thread) and
+    Non-blocking (the delivering handler fans out on its own thread) and
     never raises: the human notification is an enhancement on top of a row
     that is already parked, so a broken webhook must not turn into a
-    stalled agent.
+    stalled agent. Nothing registered (no paid package) is not an error —
+    the row is still in the queue and the Approvals tab still renders it.
     """
     try:
-        from clawmetry import approval_notify as _an
-        _an.notify_pending(approval)
+        from clawmetry import approval_events as _ae
+        _ae.notify_pending(approval)
     except Exception:
         pass
 
@@ -556,20 +557,26 @@ def api_hook_claude_code_permissionrequest():
     tool_use_id = str(body.get("tool_use_id") or "").strip()
     resume_id = str(body.get("approval_id") or "").strip()
 
+    # Answering a runtime's own permission prompt remotely is the Pro half
+    # of approvals (Starter is TOLD an approval is waiting; Pro answers it
+    # without walking back to the terminal). Unentitled → "ask", which is
+    # that terminal prompt: the downgrade path is the pre-mirror behaviour,
+    # never a call left hanging.
     try:
         from clawmetry import entitlements as _ent
-        entitled = _ent.get_entitlement().allows_feature("approval_queue")
+        entitled = _ent.get_entitlement().allows_feature("approval_mirror")
     except Exception:
         entitled = True
     if not entitled:
-        return _mirror_answer("ask", note="approval queue not entitled")
+        return _mirror_answer("ask", note="phone approvals not entitled")
 
     try:
-        from clawmetry import approval_notify as _an
-        from clawmetry import claude_code_gate as _gate
-        if not _an.mirror_enabled("claude_code"):
+        from clawmetry import approval_events as _ae
+        if not _ae.mirror_wanted("claude_code"):
+            # Also the answer with no paid package installed: nothing
+            # registered → False → the runtime's own prompt, unchanged.
             return _mirror_answer("ask", note="mirroring is off")
-        window_s = _gate.mirror_timeout_s()
+        window_s = _ae.mirror_window_s("claude_code")
     except Exception:
         return _mirror_answer("ask", note="routing config unavailable")
 
