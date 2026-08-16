@@ -102,6 +102,22 @@ def test_resolved_event_clears(client):
     assert _row(client._store, "qwen_code:abc")["attention_state"] is None
 
 
+def test_response_reports_whether_the_write_actually_landed(client):
+    """`stored` is the diagnostic someone wiring a hook needs.
+
+    A write can silently no-op — commonest cause being a daemon older than
+    the proxy allowlist entry for set_session_attention — and answering "ok"
+    regardless would leave them with a hook that reports success and a badge
+    that never appears, with nothing to explain the gap. Observed for real on
+    a dev box mid-build, which is why it is pinned here.
+    """
+    r = client.post("/api/hooks/attention?runtime=qwen_code",
+                    json={"session_id": "abc", "tool_name": "Bash"})
+    body = r.get_json()
+    assert body["stored"] is True          # this fixture writes locally
+    assert "stored" in body
+
+
 def test_runtime_may_come_from_the_body(client):
     client.post("/api/hooks/attention",
                 json={"runtime": "qwen_code", "session_id": "abc",

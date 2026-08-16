@@ -250,15 +250,23 @@ def api_hook_attention():
 
         event = (request.args.get("event")
                  or str(body.get("event") or "waiting")).strip().lower()
+        # Report what ACTUALLY happened. A write can silently no-op — the
+        # commonest cause being an older daemon whose proxy allowlist has no
+        # set_session_attention — and answering "ok" regardless would leave
+        # someone wiring up a hook with no way to tell it through. The hook
+        # still never fails: `stored:false` is information, not an error.
         from routes.hooks import _ls_write
         if event in ("resolved", "answered", "clear", "done"):
-            _ls_write("clear_session_attention",
-                      session_id=sid, agent_type=runtime)
-            return jsonify({"ok": True, "state": "cleared"})
-        _ls_write("set_session_attention", session_id=sid, agent_type=runtime,
-                  state="waiting_approval", signal="hook",
-                  tool=_first(body, _TOOL_KEYS)[:80] or None)
-        return jsonify({"ok": True, "state": "waiting"})
+            stored = _ls_write("clear_session_attention",
+                               session_id=sid, agent_type=runtime)
+            return jsonify({"ok": True, "state": "cleared",
+                            "stored": bool(stored)})
+        stored = _ls_write("set_session_attention", session_id=sid,
+                           agent_type=runtime, state="waiting_approval",
+                           signal="hook",
+                           tool=_first(body, _TOOL_KEYS)[:80] or None)
+        return jsonify({"ok": True, "state": "waiting",
+                        "stored": bool(stored)})
     except Exception as e:  # noqa: BLE001
         # Fail open, loudly in the log and quietly on the wire. A hook that
         # 500s is a hook that might make someone's agent hesitate.
