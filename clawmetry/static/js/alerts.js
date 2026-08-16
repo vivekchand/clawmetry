@@ -948,12 +948,15 @@
       .map(i => i.dataset.channelId);
     const policy = document.querySelector('input[name="alerts-re"]:checked')?.value || 'once';
 
-    // Editing a canned example or saving on a non-Pro tier: fire the paywall
-    // here, AFTER the user has configured the rule. They're more invested by
-    // this point -- better conversion than gating on first click.
+    // Saving on a non-Pro tier: fire the paywall here, AFTER the user has
+    // configured the rule. They're more invested by this point -- better
+    // conversion than gating on first click. An entitled (Pro/trial) user
+    // editing a canned example must NOT hit the paywall — for them, saving
+    // an example creates the real rule (the old check paywalled them, so a
+    // paid user could never save an edited example).
     const editingExample = alertsState.editorRule
       && String(alertsState.editorRule.id || '').startsWith('example_');
-    if (editingExample || (alertsState.tier !== 'pro' && alertsState.tier !== 'trial')) {
+    if (alertsState.tier !== 'pro' && alertsState.tier !== 'trial') {
       window.alertsCloseEditor();
       return openPaywall();
     }
@@ -972,7 +975,9 @@
       runtime,
     };
 
-    const isEdit = !!alertsState.editorRule;
+    // An example row has no server-side rule — saving it is a create, not an
+    // update (PUT /api/alerts/rules/example_cost would 404).
+    const isEdit = !!alertsState.editorRule && !editingExample;
     const url = alertsState.localMode
       ? (isEdit ? '/api/alerts/rules/' + alertsState.editorRule.id : '/api/alerts/rules')
       : (isEdit ? '/api/cloud-proxy/api/alerts/' + alertsState.editorRule.id
