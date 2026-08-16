@@ -250,6 +250,17 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
   ">
   <span style="font-size:18px;">💔</span>
   <span id="heartbeat-banner-msg" style="flex:1;"></span>
+  <!-- This banner literally says "check if agent is running" and, until now,
+       gave you no way to check — the same dead end the generic alert banner
+       had (founder, 2026-08-15: "I just see dismiss button -- so what??").
+       Overview is where liveness is answered. -->
+  <a href="#" onclick="switchTab('overview');return false;" style="
+    color:#fde68a;
+    text-decoration:underline;
+    font-size:12px;
+    margin-right:8px;
+    font-weight:600;
+    " data-i18n="app.check_agent">Check agent →</a>
   <button onclick="document.getElementById('heartbeat-banner').style.display='none'" style="
     background:#92400e;
     color:#fef3c7;
@@ -312,6 +323,14 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
   ">
   <span style="font-size:18px;">⚠️</span>
   <span id="budget-cap-banner-msg" style="flex:1;"></span>
+  <!-- A spend alarm with no route to the spend. Same dead end as above. -->
+  <a href="#" onclick="switchTab('usage');return false;" style="
+    color:#fde68a;
+    text-decoration:underline;
+    font-size:12px;
+    margin-right:8px;
+    font-weight:600;
+    " data-i18n="app.see_spending">See spending →</a>
   <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="
     background:#92400e;
     color:#fef3c7;

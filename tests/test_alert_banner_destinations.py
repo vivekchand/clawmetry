@@ -111,3 +111,40 @@ def test_security_destination_opens_the_findings_panel():
         "live-scan endpoint (/api/security/threats) never sees ingested "
         "findings."
     )
+
+
+# ── Static banners ───────────────────────────────────────────────────────────
+# The generic alert banner builds its destination in JS, but several banners
+# are their own markup in partials/banners.html with their own buttons. Those
+# were missed by the first pass: #heartbeat-banner literally read "check if
+# agent is running" above a lone Dismiss, which is the founder's complaint
+# word for word, on a different element.
+
+BANNERS_HTML = REPO / "clawmetry" / "templates" / "partials" / "banners.html"
+
+
+def _banner_block(banner_id):
+    src = BANNERS_HTML.read_text(encoding="utf-8")
+    start = src.index(f'<div id="{banner_id}"')
+    end = src.find('\n<div id="', start + 1)
+    return src[start:end if end != -1 else len(src)]
+
+
+def test_alarm_banners_offer_a_way_to_investigate():
+    """A red banner reporting a problem must route somewhere.
+
+    Scoped to banners that report a CONDITION the user must look into.
+    Banners that carry their own action (update, upgrade, license) or that
+    report our own progress (sync) are deliberately excluded — they are not
+    dead ends.
+    """
+    for banner_id in ("heartbeat-banner", "budget-cap-banner"):
+        block = _banner_block(banner_id)
+        assert "switchTab(" in block, (
+            f"#{banner_id} offers only Dismiss. A banner that reports a "
+            f"problem must also offer a route to the screen that answers it."
+        )
+
+
+def test_stuck_session_banner_kept_its_route():
+    assert "switchTab(" in _banner_block("stuck-session-banner")
