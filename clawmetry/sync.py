@@ -13997,14 +13997,25 @@ def _live_counts_by_runtime(session_rows):
         # A future timestamp is a skewed clock, not a live session.
         if age < 0:
             age = 0.0
+        # An explicit terminal status from the runtime always wins over recency:
+        # OpenClaw and Codex can actually assert "this session is over", and a
+        # session they ended is NEVER counted as working or waiting no matter
+        # how fresh its timestamp is.
+        terminal = str(r.get("status") or "").strip().lower() in (
+            "completed", "stopped", "failed", "aborted",
+        )
         slot = out.setdefault(rt, {"working": 0, "waiting": 0, "lastSeenSecs": None})
+
+        # LAST SEEN and LIVENESS are two different questions, and only the
+        # second one is gated on the end signal. A session that finished 5s ago
+        # is not alive, but it does prove the agent moved 5s ago — dropping
+        # terminal rows here would print "never" for an agent with obvious
+        # recent activity, which is the class of lie this whole change removes.
         if slot["lastSeenSecs"] is None or age < slot["lastSeenSecs"]:
             slot["lastSeenSecs"] = int(age)
-        # An explicit terminal status from the runtime always wins over recency:
-        # OpenClaw and Codex can actually assert "this session is over".
-        if str(r.get("status") or "").strip().lower() in (
-            "completed", "stopped", "failed", "aborted",
-        ):
+
+        # LIVENESS: end signal first, recency only for sessions still open.
+        if terminal:
             continue
         if age < _SESSION_ACTIVE_SECS:
             slot["working"] += 1

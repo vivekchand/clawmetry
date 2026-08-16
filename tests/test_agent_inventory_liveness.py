@@ -55,6 +55,35 @@ def test_explicit_terminal_status_beats_recency():
     assert live["codex"]["lastSeenSecs"] <= 6
 
 
+def test_a_freshly_ended_session_is_never_counted_as_alive():
+    """The end signal beats recency even when the row is seconds old.
+
+    Drift Bot flagged the ordering here (PR #4911): the blueprint says "an
+    explicit end signal always wins over recency", so a session the runtime
+    ENDED one second ago must not appear as working. It does still set
+    ``lastSeenSecs`` — "when did this agent last move" is a different question
+    from "is it alive", and dropping ended rows there would print "never" for
+    an agent with obvious recent activity.
+    """
+    rows = [
+        _row("openclaw:just-finished", "openclaw", 1, status="completed"),
+        _row("openclaw:also-done", "openclaw", 2, status="failed"),
+    ]
+    live = sync._live_counts_by_runtime(rows)
+    assert live["openclaw"]["working"] == 0
+    assert live["openclaw"]["waiting"] == 0
+    assert live["openclaw"]["lastSeenSecs"] <= 2
+
+
+def test_ended_session_does_not_mask_a_live_one_in_the_same_runtime():
+    rows = [
+        _row("claude_code:ended", "claude_code", 1, status="completed"),
+        _row("claude_code:alive", "claude_code", 30),
+    ]
+    live = sync._live_counts_by_runtime(rows)
+    assert live["claude_code"]["working"] == 1
+
+
 def test_subagents_are_not_counted_as_peers():
     rows = [
         _row("claude_code:subagent-x", "claude_code", 5),
