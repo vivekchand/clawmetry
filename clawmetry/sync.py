@@ -16894,6 +16894,17 @@ ATTENTION_RECENT_MINUTES = int(
 # tool call and confirm nothing followed it, so this is far smaller than the
 # stuck window.
 _ATTENTION_EVENT_WINDOW = 40
+# Latest attention result, computed ONCE per daemon tick and served from here.
+# Running the detector per HTTP request would mean up to 300 proxied event
+# queries on every page load — the exact request storm the performance rule
+# forbids. Same contract as _LATEST_STUCK: ``ts`` is when it last refreshed,
+# and an EMPTY ``items`` with a FRESH ts means "checked, nobody is waiting",
+# which is how the UI self-clears. A stale ts means "no signal", never
+# "nobody waiting" — the difference matters, because silently reporting
+# "all clear" from a wedged detector is worse than reporting nothing.
+_LATEST_ATTENTION: dict = {"ts": 0.0, "items": []}
+# Readers treat a cache older than this as no-signal rather than all-clear.
+_ATTENTION_FRESH_SECONDS = 300
 # Event types that RESOLVE a pending tool call — seeing one means the tool
 # came back and the agent is not blocked on a human.
 _ATTENTION_TOOL_RESULT_TYPES = frozenset({
@@ -17471,6 +17482,48 @@ def _detect_ngram_loop_sessions(store) -> list[dict]:
     return out
 
 
+def _refresh_attention_cache(store) -> int:
+    """Recompute the "needs you" list and publish it to ``_LATEST_ATTENTION``.
+
+    Refreshes ``ts`` on every successful run INCLUDING the empty case, so a
+    UI showing "2 sessions need you" clears itself the moment they stop
+    waiting. On a detector ERROR we deliberately leave the previous value in
+    place and let the freshness gate age it out — clearing on a transient
+    error would hide a real, still-blocked session mid-incident. Returns the
+    number of waiting sessions found.
+    """
+    items = _detect_attention_sessions(store)
+    _LATEST_ATTENTION["items"] = items
+    _LATEST_ATTENTION["ts"] = time.time()
+    # Persist onto the session rows so every reader — the dashboard, the
+    # cloud snapshot, anything else — sees it through DuckDB rather than
+    # needing a live handle on this in-process cache. Best-effort: a failed
+    # write leaves the in-memory cache serving the daemon's own consumers.
+    try:
+        store.apply_session_attention(items)
+    except Exception as _pe:  # noqa: BLE001
+        log.debug("attention-detect: persist failed (continuing): %s", _pe)
+    return len(items)
+
+
+def attention_snapshot() -> dict:
+    """The current "needs you" list, for the dashboard and the snapshot.
+
+    Returns ``{"items": [...], "fresh": bool, "age_seconds": int}``.
+    ``fresh`` False means the daemon has not refreshed recently, so callers
+    must render "no signal" rather than "nobody is waiting" — an empty list
+    from a wedged detector must never read as all-clear.
+    """
+    ts = float(_LATEST_ATTENTION.get("ts") or 0.0)
+    age = int(max(0.0, time.time() - ts)) if ts else -1
+    fresh = bool(ts) and age <= _ATTENTION_FRESH_SECONDS
+    return {
+        "items": list(_LATEST_ATTENTION.get("items") or []) if fresh else [],
+        "fresh": fresh,
+        "age_seconds": age,
+    }
+
+
 def _emit_stuck_signals(store, state: dict) -> int:
     """Run stuck detection and emit each as a loop_signals row so the EXISTING
     device-alert path (``_build_device_summary`` → ``query_recent_loop_signals``)
@@ -17511,6 +17564,15 @@ def _emit_stuck_signals(store, state: dict) -> int:
         _LATEST_STUCK["ts"] = time.time()
     except Exception as _ce:  # noqa: BLE001
         log.debug("stuck-detect: cache refresh failed (continuing): %s", _ce)
+
+    # Refresh the "needs you" cache on the same tick. Deliberately separate
+    # from the stuck cache above: a session can be stuck, waiting, both, or
+    # neither, and collapsing them would lose the distinction that makes the
+    # attention list actionable. Never lets a detector bug take down the loop.
+    try:
+        _refresh_attention_cache(store)
+    except Exception as _ae:  # noqa: BLE001
+        log.debug("attention-detect: cache refresh failed (continuing): %s", _ae)
 
     memo = state.setdefault("stuck_emit_memo", {})
     if not isinstance(memo, dict):

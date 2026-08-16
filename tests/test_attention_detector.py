@@ -229,6 +229,66 @@ def test_user_prompt_pending_is_not_an_approval(store):
     assert _detect(store) == []
 
 
+# ── persistence onto session rows ───────────────────────────────────────────
+
+def test_attention_persists_to_session_rows(store):
+    _session(store, "s-persist", seconds_idle=300, cwd="/p/app", git_branch="main")
+    _event(store, "s-persist", "tool_call", 300, {"tool": "Bash"})
+    from clawmetry.sync import _refresh_attention_cache
+    assert _refresh_attention_cache(store) == 1
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "s-persist"][0]
+    assert row["attention_state"] == "waiting_approval"
+    assert row["attention_signal"] == "inferred"
+    assert row["attention_tool"] == "Bash"
+    assert row["attention_since"] is not None
+
+
+def test_attention_clears_once_answered(store):
+    """A badge that persists after you answered is worse than no badge --
+    it teaches people to ignore the real ones."""
+    from clawmetry.sync import _refresh_attention_cache
+    _session(store, "s-clear", seconds_idle=300)
+    _event(store, "s-clear", "tool_call", 300, {"tool": "Bash"}, eid="a")
+    _refresh_attention_cache(store)
+    assert [r for r in store.query_sessions_table(limit=20)
+            if r["session_id"] == "s-clear"][0]["attention_state"] is not None
+
+    # The human approves; the tool comes back.
+    _event(store, "s-clear", "tool_result", 1, {"ok": True}, eid="b")
+    assert _refresh_attention_cache(store) == 0
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "s-clear"][0]
+    assert row["attention_state"] is None
+    assert row["attention_tool"] is None
+
+
+def test_apply_attention_leaves_other_columns_alone(store):
+    _session(store, "s-safe", seconds_idle=300, title="Important",
+             cwd="/p/app", git_branch="main")
+    store.ingest_sessions_batch([{
+        "agent_type": "claude_code", "session_id": "s-safe",
+        "total_tokens": 999, "cost_usd": 1.25, "status": "active",
+    }])
+    store.apply_session_attention([{
+        "session_id": "s-safe", "runtime": "claude_code",
+        "state": "waiting_approval", "signal": "inferred",
+        "tool": "Bash", "waiting_seconds": 120,
+    }])
+    row = [r for r in store.query_sessions_table(limit=20)
+           if r["session_id"] == "s-safe"][0]
+    assert row["attention_state"] == "waiting_approval"
+    assert row["total_tokens"] == 999
+    assert row["cost_usd"] == pytest.approx(1.25)
+    assert row["cwd"] == "/p/app"
+    assert row["git_branch"] == "main"
+
+
+def test_apply_attention_tolerates_junk(store):
+    assert store.apply_session_attention(
+        [None, "x", {}, {"session_id": ""}]) == 0
+
+
 # ── never take the daemon down ──────────────────────────────────────────────
 
 def test_store_failure_yields_empty_not_exception():

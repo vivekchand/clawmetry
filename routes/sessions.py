@@ -660,6 +660,13 @@ def _try_local_store_sessions():
             "cwd":            r.get("cwd") or meta.get("cwd", ""),
             "git_branch":     r.get("git_branch") or meta.get("gitBranch", ""),
             "project":        _project_name(r.get("cwd") or meta.get("cwd", "")),
+            # "Needs you" badge. Empty string means nobody is waiting.
+            # attention_signal is deliberately exposed so the UI can say
+            # "looks like it's waiting" for an inference versus "waiting"
+            # for a hook-confirmed one, rather than overclaiming.
+            "attention":        r.get("attention_state") or "",
+            "attention_signal": r.get("attention_signal") or "",
+            "attention_tool":   r.get("attention_tool") or "",
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.

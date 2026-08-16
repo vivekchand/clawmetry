@@ -316,6 +316,16 @@ _DDL = [
         -- mid-session should show where it IS, not where it started.
         cwd                     VARCHAR,
         git_branch              VARCHAR,
+        -- "Needs you" state, recomputed by the daemon each tick
+        -- (clawmetry/sync.py::_refresh_attention_cache). NULL means nothing
+        -- is waiting on a human. attention_signal records HOW we know:
+        -- 'inferred' from the transcript shape, 'hook' from the runtime
+        -- telling us directly. Readers must render that difference rather
+        -- than presenting an inference as certainty.
+        attention_state         VARCHAR,
+        attention_since         BIGINT,
+        attention_signal        VARCHAR,
+        attention_tool          VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -1264,6 +1274,11 @@ _MIGRATIONS_V2 = [
     # until the next ingest pass re-reads the session. See the DDL above.
     ("sessions", "cwd",        "VARCHAR"),
     ("sessions", "git_branch", "VARCHAR"),
+    # "Needs you" state, recomputed each daemon tick. NULL = nobody waiting.
+    ("sessions", "attention_state",  "VARCHAR"),
+    ("sessions", "attention_since",  "BIGINT"),
+    ("sessions", "attention_signal", "VARCHAR"),
+    ("sessions", "attention_tool",   "VARCHAR"),
     # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
@@ -2366,6 +2381,68 @@ class LocalStore:
             log.debug("local store: update_session_location failed for %s",
                       session_id, exc_info=True)
             return False
+
+    def apply_session_attention(self, items: list[dict[str, Any]]) -> int:
+        """Publish the daemon's "needs you" pass onto the session rows.
+
+        ``items`` is the FULL current list, so this is a replace, not a
+        merge: any session previously flagged that is absent from ``items``
+        gets cleared. That clearing is the whole point — a badge that says
+        "needs you" after you have already answered is worse than no badge,
+        because it teaches people to ignore the real ones.
+
+        Runs as ONE transaction (clear-all then set-flagged) so no reader
+        ever observes a moment where every badge has vanished. Returns the
+        number of sessions flagged. Never raises into the daemon loop.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: apply_session_attention() called on read-only store"
+            )
+        rows = []
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            sid = it.get("session_id")
+            if not sid:
+                continue
+            since_ms = None
+            waiting = it.get("waiting_seconds")
+            if waiting is not None:
+                try:
+                    since_ms = int(time.time() * 1000) - int(waiting) * 1000
+                except (TypeError, ValueError):
+                    since_ms = None
+            rows.append([
+                _clean_str(it.get("state")) or "waiting_approval",
+                since_ms,
+                _clean_str(it.get("signal")) or "inferred",
+                _clean_str(it.get("tool")),
+                _clean_str(it.get("runtime")) or "openclaw",
+                str(sid),
+            ])
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        "UPDATE sessions SET attention_state = NULL, "
+                        "attention_since = NULL, attention_signal = NULL, "
+                        "attention_tool = NULL "
+                        "WHERE attention_state IS NOT NULL"
+                    )
+                    if rows:
+                        self._conn.executemany(
+                            "UPDATE sessions SET attention_state = ?, "
+                            "attention_since = ?, attention_signal = ?, "
+                            "attention_tool = ? "
+                            "WHERE agent_type = ? AND session_id = ?",
+                            rows,
+                        )
+            return len(rows)
+        except Exception:
+            log.debug("local store: apply_session_attention failed",
+                      exc_info=True)
+            return 0
 
     def reclassify_session_outcome(
         self,
@@ -9754,7 +9831,9 @@ class LocalStore:
                             AND e.agent_type = s.agent_type
                             AND e.event_type IN {renderable_in})
                    ) AS message_count,
-                   s.metadata, s.cwd, s.git_branch
+                   s.metadata, s.cwd, s.git_branch,
+                   s.attention_state, s.attention_since, s.attention_signal,
+                   s.attention_tool
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -9766,7 +9845,9 @@ class LocalStore:
         rows = self._fetch(sql, params)
         cols = ["agent_type", "session_id", "agent_id", "title", "started_at",
                 "last_active_at", "ended_at", "status", "total_tokens",
-                "cost_usd", "message_count", "metadata", "cwd", "git_branch"]
+                "cost_usd", "message_count", "metadata", "cwd", "git_branch",
+                "attention_state", "attention_since", "attention_signal",
+                "attention_tool"]
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))
