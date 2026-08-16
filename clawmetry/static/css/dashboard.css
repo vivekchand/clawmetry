@@ -2301,6 +2301,64 @@ body.has-profile-menu #logout-btn { display: none !important; }
   font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums;
 }
 
+/* ── Evidence panel ────────────────────────────────────────────────────────
+   Every flagged run must be inspectable: what fired, what it measured, what
+   it compared against, and the real moments behind it. Styled quieter than
+   the verdict itself — this is the receipt, not the headline. */
+.q-runs .q-evidence-toggle {
+  font-size: 12px; color: var(--text-secondary); background: none;
+  border: 0; border-bottom: 1px dotted rgba(255,255,255,0.15);
+  padding: 0 0 1px; cursor: pointer; font-family: inherit;
+}
+.q-runs .q-evidence-toggle:hover {
+  color: var(--text-primary); border-bottom-color: var(--text-secondary);
+}
+.q-evidence { display: none; margin-top: 12px; }
+.q-evidence.open { display: block; }
+.q-ev-block {
+  background: var(--bg-primary); border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--text-muted); border-radius: 4px;
+  padding: 12px 14px; margin-bottom: 8px;
+}
+.q-ev-head {
+  display: flex; align-items: baseline; gap: 10px;
+  justify-content: space-between; margin-bottom: 8px;
+}
+.q-ev-sig {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; letter-spacing: 0.06em; color: var(--text-secondary);
+}
+.q-ev-conf {
+  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; cursor: help;
+}
+.q-ev-obs, .q-ev-th {
+  font-size: 12px; color: var(--text-secondary); line-height: 1.7;
+}
+.q-ev-obs .k { color: var(--text-muted); }
+.q-ev-obs b, .q-ev-th b {
+  color: var(--text-primary); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.q-ev-obs i { color: var(--text-muted); font-style: normal; margin: 0 7px; }
+.q-ev-th .src { color: var(--text-muted); font-size: 11px; }
+.q-ev-list {
+  list-style: none; margin: 9px 0 0; padding: 9px 0 0;
+  border-top: 1px solid var(--border-primary);
+}
+.q-ev-list li {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; color: var(--text-secondary); line-height: 1.75;
+  display: flex; gap: 10px; align-items: baseline;
+  overflow-wrap: anywhere;
+}
+.q-ev-list .ts { color: var(--text-muted); white-space: nowrap; flex: 0 0 auto; }
+.q-ev-list .tl { white-space: nowrap; flex: 0 0 auto; color: var(--text-primary); }
+.q-ev-obs.long { overflow-wrap: anywhere; }
+.q-ev-list .f { color: var(--text-muted); }
+.q-ev-list .e { color: #d33528; }
+.q-ev-more { font-size: 11px; color: var(--text-muted); margin-top: 7px; }
+
 /* The inline eval builder — appears when "Prevent this →" is clicked */
 .q-builder {
   background: var(--bg-primary); border: 1px solid var(--border-primary);
@@ -2437,4 +2495,197 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .replay-tree-delegation > summary {
   cursor: pointer; font-size: 12px; color: var(--text-muted);
   padding: 2px 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   cm-fileview — GitHub-style file viewer (Skills + Memory browsers)
+
+   Raw source by default (line-number gutter, monospace, no syntax colouring),
+   with a Preview toggle for markdown, soft-wrap toggle, copy button and a
+   fullscreen mode for long reads. Everything inside is selectable; the gutter
+   is user-select:none so copying a range yields clean source without the
+   line numbers.
+   ───────────────────────────────────────────────────────────────────────── */
+.cm-fileview {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+.cm-fileview.cm-fileview-fs {
+  position: fixed; inset: 0; z-index: 9000;
+  height: 100vh !important; width: 100vw; max-height: 100vh;
+  border-radius: 0; border: none;
+}
+.cm-fv-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap;
+  padding: 7px 10px 7px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-primary);
+  min-height: 34px;
+}
+.cm-fv-meta {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 220px;
+  flex-wrap: nowrap; min-width: 0; overflow: hidden;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.cm-fv-meta > span { flex-shrink: 0; }
+.cm-fv-meta .cm-fv-name {
+  color: var(--text-primary); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 auto; min-width: 0;
+}
+.cm-fv-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cm-fv-seg {
+  display: inline-flex; border: 1px solid var(--border-primary);
+  border-radius: 6px; overflow: hidden;
+}
+.cm-fv-btn {
+  font: inherit; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; cursor: pointer;
+  background: var(--bg-primary); color: var(--text-secondary);
+  border: 1px solid var(--border-primary); border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+  line-height: 18px; white-space: nowrap;
+}
+.cm-fv-btn:hover { color: var(--text-primary); border-color: #6366f1; }
+.cm-fv-seg .cm-fv-btn { border: none; border-radius: 0; }
+.cm-fv-seg .cm-fv-btn + .cm-fv-btn { border-left: 1px solid var(--border-primary); }
+.cm-fv-btn.active { background: #6366f1; color: #fff; }
+.cm-fv-btn.active:hover { color: #fff; }
+.cm-fv-body {
+  flex: 1; min-height: 0; overflow: auto;
+  background: var(--bg-primary);
+}
+.cm-fv-empty { padding: 40px 22px; color: var(--text-muted); font-size: 12.5px; }
+
+/* Code view: one row per source line so numbers stay aligned even when
+   soft-wrap is on. Rows are block-level, so a multi-line selection copies
+   with real newlines. */
+.cm-fv-code {
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 12.5px; line-height: 1.55;
+  color: var(--text-primary);
+  padding: 8px 0 40px;
+  -webkit-user-select: text; user-select: text;
+  cursor: text;
+}
+.cm-fv-row { display: flex; width: max-content; min-width: 100%; min-height: 1.55em; }
+.cm-fv-row:hover { background: color-mix(in srgb, var(--text-primary) 5%, transparent); }
+.cm-fv-ln {
+  position: sticky; left: 0; z-index: 1;
+  flex: 0 0 auto;
+  width: calc(var(--cm-ln-w, 3ch) + 22px);
+  padding-right: 12px; text-align: right;
+  color: var(--text-muted); opacity: 0.55;
+  background: var(--bg-primary);
+  -webkit-user-select: none; user-select: none;
+  border-right: 1px solid var(--border-primary);
+}
+.cm-fv-row:hover .cm-fv-ln { opacity: 0.85; }
+.cm-fv-lc { padding: 0 18px 0 14px; white-space: pre; }
+.cm-fv-wrap .cm-fv-row { width: auto; }
+.cm-fv-wrap .cm-fv-lc { white-space: pre-wrap; word-break: break-word; flex: 1; min-width: 0; }
+.cm-fv-plain {
+  margin: 0; padding: 12px 18px 40px;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-primary);
+  white-space: pre;
+}
+
+/* Markdown preview */
+.cm-fv-preview { padding: 20px 26px 48px; max-width: 940px; }
+.cm-fv-fm {
+  margin: 0 0 18px; padding: 10px 12px;
+  background: var(--bg-secondary); border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.6; color: var(--text-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+.cm-fv-fm b { color: var(--text-secondary); font-weight: 600; }
+
+/* Full screen for panels that are not cm-fileview hosts (Memory IDE). */
+.cm-panel-fs {
+  position: fixed; inset: 0; z-index: 9000;
+  height: 100vh !important; width: 100vw; max-height: 100vh;
+  border-radius: 0 !important; border: none !important;
+}
+
+/* ── Overview hero: live session rows ──────────────────────────────────────
+   One row per session that is alive right now. The age column is deliberately
+   monospaced and right-aligned so "how long since each one moved" reads as a
+   single vertical scan rather than five separate facts. Rows are <button>s,
+   so they are keyboard reachable and announce as actionable. */
+.cm-live-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto 14px;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 10px;
+  margin: 0 -10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.cm-live-row:hover { background: rgba(255, 255, 255, 0.045); }
+.cm-live-row:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+  background: rgba(255, 255, 255, 0.045);
+}
+.cm-live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  animation: cmLivePulse 2.4s ease-in-out infinite;
+}
+.cm-live-title {
+  font-size: 14.5px; font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cm-live-rt {
+  font-size: 11px; color: var(--text-muted);
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  white-space: nowrap;
+}
+.cm-live-age {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); text-align: right; min-width: 62px;
+  white-space: nowrap;
+}
+.cm-live-arrow {
+  color: var(--text-muted); font-size: 13px;
+  opacity: 0; transform: translateX(-3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.cm-live-row:hover .cm-live-arrow,
+.cm-live-row:focus-visible .cm-live-arrow { opacity: 1; transform: translateX(0); }
+
+@keyframes cmLivePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-live-dot { animation: none; }
+  .cm-live-row, .cm-live-arrow { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .cm-live-row { grid-template-columns: 10px minmax(0, 1fr) auto; }
+  .cm-live-rt, .cm-live-arrow { display: none; }
+}
+
+/* Names the boundary between working and waiting rows. A dot colour alone
+   does not teach a first-timer what amber means. */
+.cm-live-group {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-muted);
+  padding: 12px 0 5px;
 }

@@ -11732,6 +11732,17 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 _sk = _sid_to_key.get(sid, "")
                 _sm = _sid_to_meta.get(sid, {})
                 _dn = label or _sm.get("subject") or _sk or sid[:8]
+                # OpenClaw is the one runtime that emits a REAL end signal:
+                # the transcript's ``type=="session"`` frame carries
+                # endReason/end_reason (parsed just above). Honour it — an
+                # explicit end always beats a recency guess. Without one, fall
+                # back to the same recency buckets the family runtimes use, so
+                # a live OpenClaw session stops reporting itself "completed"
+                # from its first turn.
+                if end_reason:
+                    _oc_status, _oc_ended = "completed", updated_at
+                else:
+                    _oc_status, _oc_ended = _session_liveness(updated_at)
                 batch.append(
                     {
                         "session_id": sid,
@@ -11739,7 +11750,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "session_key": _sk,
                         "channel": _sm.get("provider", ""),
                         "chat_type": _sm.get("chatType", ""),
-                        "status": "completed",
+                        "status": _oc_status,
+                        "ended_at": _oc_ended,
                         "end_reason": end_reason,
                         "model": model,
                         "recent_model": last_seen_model or model,
@@ -12426,6 +12438,9 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
     try:
         store.ingest_many(rows)
         for ns_sess, meta in sessions.items():
+            # One call: evaluating liveness twice could straddle the 120s
+            # boundary and write a status that contradicts its own ended_at.
+            _vm_status, _vm_ended = _session_liveness(meta["last"])
             srow = {
                 "agent_type": "openclaw",
                 "session_id": ns_sess,
@@ -12434,8 +12449,9 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
                 "title": "Model usage (%s)" % runtime,
                 "started_at": meta["first"],
                 "last_active_at": meta["last"],
-                "ended_at": meta["last"],
-                "status": "ended",
+                # Liveness derived from the newest usage-log line, not assumed.
+                "ended_at": _vm_ended,
+                "status": _vm_status,
                 "total_tokens": int(meta["tokens"]),
                 "cost_usd": None,
                 "message_count": int(meta["n"]),
@@ -12576,6 +12592,61 @@ def _epoch_to_iso(epoch) -> str | None:
         return None
 
 
+# Session liveness buckets. Deliberately the SAME thresholds the subagent
+# reader already derives (routes/sessions.py ``_try_local_store_subagents``:
+# <120s active, <600s idle, else stale) so the two surfaces cannot disagree
+# about what "right now" means.
+_SESSION_ACTIVE_SECS = 120
+_SESSION_IDLE_SECS = 600
+
+
+def _session_liveness(last_activity_iso: str | None) -> tuple[str, str | None]:
+    """Return ``(status, ended_at)`` for a session whose newest event is at
+    ``last_activity_iso``.
+
+    Family runtimes (Claude Code, Codex, Cursor, Antigravity, ...) emit no
+    explicit "session ended" record — the only truth on disk is how long ago
+    the transcript last grew. Every family row used to be stamped
+    ``status="ended"`` with a non-null ``ended_at`` from its very first turn,
+    which made a live session indistinguishable from a dead one and broke
+    every downstream consumer that asks "what is running?":
+
+      * ``routes/overview.py`` ``activeSessions`` counts ``status == "active"``
+        and so reported 0 on a node with six terminals mid-task.
+      * The stuck-session and n-gram loop detectors skip any row carrying
+        ``ended_at``, so they have never fired for a paid runtime despite
+        the comment claiming they cover all of them.
+      * The Overview hero read "It's idle right now" while the agent worked.
+
+    A LIVE session has no end time, so ``ended_at`` comes back ``None`` — that
+    is what puts the row back in front of those consumers (the upsert assigns
+    ``ended_at = excluded.ended_at`` with no COALESCE, so existing poisoned
+    rows heal on the next ingest pass).
+
+    Unparseable or missing timestamps fall back to the historical
+    ``("ended", last_activity_iso)``: a bad clock must never be able to
+    resurrect a dead session.
+    """
+    if not last_activity_iso:
+        return ("ended", last_activity_iso)
+    try:
+        seen = datetime.fromisoformat(str(last_activity_iso).replace("Z", "+00:00"))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return ("ended", last_activity_iso)
+    # A future timestamp means a skewed clock, not a live session. Treat the
+    # skew as "just now" rather than trusting it or discarding the session.
+    if age < 0:
+        age = 0.0
+    if age < _SESSION_ACTIVE_SECS:
+        return ("active", None)
+    if age < _SESSION_IDLE_SECS:
+        return ("idle", None)
+    return ("ended", last_activity_iso)
+
+
 def _session_cost_intel(s) -> dict:
     """Per-session cost-intelligence foundation: the token split + the derived
     reasoning-tax $ and cache-hit %, computed from the adapter Session.
@@ -12635,6 +12706,98 @@ def _session_cost_intel(s) -> dict:
     except Exception:
         pass
     return out
+
+
+def _adapter_events_to_rows(events, runtime: str) -> list:
+    """Adapter event objects → the dict shape ``quality_signals`` reads.
+
+    Mirrors the conversion further down this file that builds the DuckDB event
+    rows, so the assessment sees EXACTLY what gets persisted — not a
+    parallel, subtly-different view of the session. (A second, drifting
+    interpretation of the same events is how the previous Quality surface
+    ended up blind to family-runtime tool calls in the first place.)
+    """
+    out = []
+    for e in events or []:
+        data = {
+            "role":     getattr(e, "role", "") or "",
+            "content":  getattr(e, "content", "") or "",
+            "_runtime": runtime,
+        }
+        tcs = getattr(e, "tool_calls", None)
+        if tcs:
+            data["tool_calls"] = tcs
+        tn = getattr(e, "tool_name", "") or ""
+        if tn:
+            data["tool_name"] = tn
+        extra = getattr(e, "extra", None)
+        if isinstance(extra, dict) and extra:
+            data["extra"] = extra
+        out.append({
+            "event_type": getattr(e, "type", "") or "message",
+            "ts":         _epoch_to_iso(getattr(e, "ts", None)),
+            "data":       data,
+            "session_id": getattr(e, "session_id", "") or "",
+        })
+    return out
+
+
+# Per-runtime thresholds are calibrated from that runtime's own recent history
+# and change slowly, so we cache them for the life of an ingest pass rather
+# than re-reading 30 days of sessions once per graded session.
+_QUALITY_THRESHOLD_CACHE: dict = {}
+_QUALITY_THRESHOLD_CACHE_TS: dict = {}
+_QUALITY_THRESHOLD_TTL_SEC = 900
+
+
+def _quality_thresholds_for(runtime: str, store) -> dict:
+    """Thresholds for one runtime, calibrated off its own 30d history here.
+
+    Falls back to documented cold-start defaults on any read failure — a
+    calibration miss must never turn into a missing or invented verdict.
+    """
+    from clawmetry import quality_thresholds as _qt
+    now = time.time()
+    ts = _QUALITY_THRESHOLD_CACHE_TS.get(runtime, 0)
+    if runtime in _QUALITY_THRESHOLD_CACHE and (now - ts) < _QUALITY_THRESHOLD_TTL_SEC:
+        return _QUALITY_THRESHOLD_CACHE[runtime]
+    try:
+        since = _iso_utc_days_ago(30)
+        rows = store.query_quality_sessions(
+            runtime=runtime, since=since, limit=1500) or []
+        th = _qt.calibrate(rows, runtime=runtime)
+    except Exception:
+        th = dict(_qt.COLD_START)
+    _QUALITY_THRESHOLD_CACHE[runtime] = th
+    _QUALITY_THRESHOLD_CACHE_TS[runtime] = now
+    return th
+
+
+def _iso_utc_days_ago(days: int) -> str:
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    return (_dt.now(_tz.utc) - _td(days=days)).isoformat()
+
+
+def _session_quality(events, *, runtime: str, session_id: str,
+                     thresholds: dict) -> dict:
+    """Assess one session and return the compact block stored in metadata.
+
+    Stores the verdicts WITH their exhibits — the evidence is the product, and
+    a verdict that reaches the UI without it is exactly the defect this
+    rebuild exists to remove. Exhibit lists are already capped inside
+    ``Verdict.as_dict`` so the metadata blob stays small.
+    """
+    from clawmetry.quality_signals import assess_session
+    rows = _adapter_events_to_rows(events, runtime)
+    a = assess_session(rows, runtime=runtime, session_id=session_id,
+                       thresholds=thresholds)
+    d = a.as_dict()
+    # Drop the capability probe's raw event-kind list from the stored blob;
+    # the live /api/quality/capabilities endpoint reports that, and it would
+    # otherwise repeat on every session row in the snapshot.
+    d.pop("capabilities", None)
+    d["assessed_at"] = int(time.time())
+    return d
 
 
 def _session_tool_health(events) -> dict:
@@ -13007,6 +13170,19 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
                 metadata.update(_idle)
+                # Quality verdicts (2026-08-15 rebuild). Graded HERE, off the
+                # same events already in hand, and persisted into metadata so
+                # the Quality tab stays a pure DuckDB read — replaying events
+                # per request would be tens of thousands of rows per tab load.
+                # Best-effort: grading must never block ingest.
+                try:
+                    metadata["quality"] = _session_quality(
+                        _events, runtime=runtime, session_id=ns_id,
+                        thresholds=_quality_thresholds_for(runtime, store),
+                    )
+                except Exception:
+                    log.debug("quality assessment failed (%s)", ns_id,
+                              exc_info=True)
                 # Compression-potential meter (#2838): how much tool-output
                 # context is recoverable without changing answers. Aggregates
                 # only; raw content never leaves the daemon.
@@ -13042,6 +13218,10 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 )
                 if _compactions:
                     metadata["compactionCount"] = _compactions
+                # Liveness: derived from how long ago the transcript last grew,
+                # never hardcoded. Computed once so the local row and the cloud
+                # row below cannot disagree about whether this session is live.
+                _fstatus, _fended = _session_liveness(ended or started)
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -13052,8 +13232,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "title": _row_title,
                         "started_at": started,
                         "last_active_at": ended or started,
-                        "ended_at": ended,
-                        "status": "ended",
+                        "ended_at": _fended,
+                        "status": _fstatus,
                         "total_tokens": int(s.total_tokens or 0),
                         "cost_usd": s.cost_usd,
                         "message_count": int(s.message_count or 0),
@@ -13157,8 +13337,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "title": _ftitle,
                     "started_at": started,
                     "last_active_at": ended or started,
-                    "ended_at": ended,
-                    "status": "ended",
+                    "ended_at": _fended,
+                    "status": _fstatus,
                     "total_tokens": int(s.total_tokens or 0),
                     "cost_usd": s.cost_usd,
                     "message_count": int(s.message_count or 0),
@@ -13179,6 +13359,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "compression_potential_pct": _compress.get("compressionPotentialPct"),
                     "compressible_tool_tokens": _compress.get("compressibleToolTokens"),
                     "compression_recoverable_usd": _compress.get("compressionRecoverableUsd"),
+                    # Which surface launched the session (terminal / desktop /
+                    # sdk). Carried to cloud so the hosted Sessions list splits
+                    # them too — a local-only badge would render blank there.
+                    # Only the dedicated key: metadata["source"] is already used
+                    # by other adapters for cwd paths and provider names.
+                    "surface": metadata.get("surface") or "",
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 # Re-ingest the full event set for sessions that advanced (the
@@ -19294,6 +19480,19 @@ def run_daemon() -> None:
                  f"(policies: {_approvals.POLICIES_PATH})")
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
+
+    # ── Telegram approval decisions (inbound) ─────────────────────────
+    # The only channel that can answer an approval on a self-hosted node
+    # with no public endpoint: the daemon long-polls getUpdates, so the
+    # Approve/Deny buttons in the message resolve the DuckDB row directly.
+    # Idle (30 s config re-check) until Telegram is configured AND some
+    # runtime routes approvals to it — see clawmetry/approval_inbound.py.
+    try:
+        from clawmetry import approval_inbound as _ap_in
+        _ap_in.start(threading.Event())
+        log.info("approval inbound (telegram) poller started")
+    except Exception as _e:
+        log.warning(f"approval inbound poller failed to start: {_e}")
 
     # ── Decision-sampling cron (issue #1615) ──────────────────────────
     # Daily-at-midnight thread that picks N random sessions from yesterday

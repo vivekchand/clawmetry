@@ -58,8 +58,15 @@ def test_pro_only_features_include_published_pro_set(ent):
 
 
 def test_enterprise_features_match_pricing(ent):
-    """Enterprise card on /pricing promises these exact 6 keys."""
-    expected = frozenset({
+    """Enterprise card on /pricing promises these 6 keys — all must be honoured.
+
+    Asserted as a subset, not equality, so the catalogue can grow without the
+    guard going red: the promise is "the card's 6 keys are included", and a 7th
+    Enterprise key breaks nothing a customer was told. Mirrors how
+    ``test_pro_only_features`` guards the Pro set. What the card must never do
+    is lose one of these — that assertion is unchanged.
+    """
+    promised = frozenset({
         "siem_export",
         "sso",
         "audit_logs",
@@ -67,7 +74,18 @@ def test_enterprise_features_match_pricing(ent):
         "air_gapped_license",
         "custom_data_residency",
     })
-    assert ent.ENTERPRISE_FEATURES == expected
+    assert promised.issubset(ent.ENTERPRISE_FEATURES)
+
+
+def test_org_analytics_is_enterprise_only(ent):
+    """Org-wide Claude coverage reads Anthropic's Enterprise Analytics API.
+
+    That API is Enterprise-only upstream, so offering the feature on any lower
+    tier would sell a key the customer's own plan cannot mint. Not yet listed
+    on the /pricing Enterprise card.
+    """
+    assert "org_analytics" in ent.ENTERPRISE_FEATURES
+    assert "org_analytics" not in ent.PAID_FEATURES
 
 
 def test_compliance_pack_is_pro_and_enterprise(ent):

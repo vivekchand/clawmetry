@@ -748,6 +748,16 @@ _DAEMON_METHODS = frozenset({
     # ongoing) for the Overview tile + /api/outcomes endpoint. Inline-
     # classifies any unlabeled rows so the dashboard never paints "0%".
     "query_outcomes",
+    # Quality tab (2026-08-15 rebuild). Scopes by the REAL runtime (session-id
+    # prefix) and returns metadata, which carries both the true runtime label
+    # and the persisted quality verdicts. Deliberately separate from
+    # query_outcomes, which filters on the hardcoded agent_type column.
+    "query_quality_sessions",
+    # Drive-by: `make lint-daemon-allowlist` was red on main. Session replay
+    # (routes/sessions.py:3010) calls this through the proxy, but the entry
+    # was never added — so on daemon installs the replay tree silently came
+    # back empty. Same failure mode as the query_cache_metrics drive-by below.
+    "query_replay_events",
     "reclassify_session_outcome",
     # Issue #1619 Phase 1: LLM-as-judge eval surface. Reads + the persist
     # write all go via the daemon (writer-lock owner) so the dashboard
