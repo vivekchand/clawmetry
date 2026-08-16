@@ -2191,6 +2191,18 @@ function cmRenderNeedsYou(d) {
       : (working > 0
           ? t('needs.n_working', { n: working }, working + ' agents working')
           : t('needs.none_running', null, 'No agents running'));
+    // Some runtimes have no permission prompt at all (Pi's trust machinery
+    // guards loading config, not running tools). Filtered to one of those,
+    // "nothing needs you" would imply we looked and found nothing — so say
+    // what is actually true instead.
+    var noAsk = d.runtimes_without_approval || [];
+    var rtNow = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (noAsk.length && rtNow && rtNow !== 'all' && noAsk.indexOf(rtNow) !== -1) {
+      var rtName = (typeof _cmRuntimeLabel === 'function')
+        ? _cmRuntimeLabel(rtNow) : rtNow;
+      sub = t('needs.never_asks', { runtime: rtName },
+              rtName + " never asks for permission, so nothing here waits on you.");
+    }
     box.innerHTML =
       '<div class="cm-needs-head">' +
         '<span class="cm-needs-title">' +

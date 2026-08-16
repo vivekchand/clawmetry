@@ -875,6 +875,7 @@
   "needs.more": "+{n} more",
   "needs.n_waiting": "{n} agents need you",
   "needs.n_working": "{n} agents working",
+  "needs.never_asks": "{runtime} never asks for permission, so nothing here waits on you.",
   "needs.none_running": "No agents running",
   "needs.one_waiting": "1 agent needs you",
   "needs.one_working": "1 agent working",
