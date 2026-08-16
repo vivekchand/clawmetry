@@ -95,6 +95,19 @@
       _exampleChannels: '📟 PagerDuty' },
   ];
 
+  // Coerce a rule's channel list to a real array. Local rows store it as a
+  // JSON string, cloud rows as an array; anything else becomes [].
+  function _alertsChannelList(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+      try {
+        const p = JSON.parse(v);
+        return Array.isArray(p) ? p : [];
+      } catch (e) { return []; }
+    }
+    return [];
+  }
+
   // ── Tier resolution ───────────────────────────────────────────────────────
 
   async function resolveTier() {
@@ -173,7 +186,13 @@
             name: r.name || r.type,
             threshold_value: (r.threshold_value !== undefined && r.threshold_value !== null)
               ? r.threshold_value : r.threshold,
-            channel_ids: r.channel_ids || r.channels || [],
+            // ``channels`` arrives as a JSON string ('["banner"]') from the
+            // local store — passing it through as-is made renderRules throw
+            // on .map, which left the whole tab stuck on "Loading alerts…"
+            // (no rows, no Edit, no toggles) as soon as one rule existed.
+            channel_ids: _alertsChannelList(
+              r.channel_ids !== undefined && r.channel_ids !== null
+                ? r.channel_ids : r.channels),
           });
         });
       }
@@ -285,7 +304,10 @@
       const on = !!(real && real.enabled);
       const id = real ? real.id : ex.id;
       const meta = RULE_TYPE_LABELS[ex.alert_type] || { icon: '🔔', verb: ex.alert_type };
-      const name = real ? real.name : ex.name;
+      // A local row without a real name gets `type` copied in by the
+      // normaliser ("threshold") — that's storage vocabulary, not a name.
+      // Fall back to the canonical example's label instead.
+      const name = (real && real.name && real.name !== real.type) ? real.name : ex.name;
       const threshold = real ? real.threshold_value : ex.threshold_value;
       const unit = (real ? real.threshold_unit : ex.threshold_unit) || '';
       let metaLine;
@@ -303,7 +325,7 @@
       // channels, or "In-app only", which is what empty channel_ids actually
       // means server-side (routes/alerts.py defaults them to the banner).
       const channelPills = real
-        ? ((real.channel_ids || []).map(cid => {
+        ? (_alertsChannelList(real.channel_ids).map(cid => {
             const ch = alertsState.channels.find(c => c.id === cid);
             return ch ? `<span class="alerts-chan-pill">${chTypeIcon(ch.channel_type)} ${escape(ch.name)}</span>` : '';
           }).join('')
