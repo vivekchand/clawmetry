@@ -16864,6 +16864,52 @@ _STUCK_HEARTBEAT_MAX_MSG = 200
 # How many newest events to inspect per candidate session. 120 comfortably
 # covers a streak well past the threshold plus the preceding progress marker.
 _STUCK_EVENT_WINDOW = 120
+# ── "needs you" attention detector (control-plane P2) ─────────────────────
+#
+# STUCK answers "is the agent spinning". This answers the DIFFERENT question
+# "is the agent BLOCKED ON ME" — the one that actually costs someone their
+# afternoon, because a spinning agent burns money while a blocked one burns
+# nothing and simply never finishes.
+#
+# Transcript inference, not ground truth. A permission dialog is a UI state
+# the runtime never writes down; what it DOES leave behind is a tool
+# invocation with no result and no subsequent activity. That shape is also
+# what a legitimately slow tool looks like for its first few seconds, so the
+# dwell threshold below is what separates them. Every row this produces is
+# stamped ``signal="inferred"`` and callers must surface it as such — a hook
+# feed (which reports the dialog directly) will stamp ``signal="hook"`` and
+# outrank it. Never present an inference as a certainty.
+#
+# Tuning: 45s is well past any interactive tool's normal round trip (a Bash
+# call, a file read, a web fetch) and well under a human's reaction time to
+# a prompt they have noticed, so a row that trips this is overwhelmingly a
+# dialog nobody has answered.
+ATTENTION_PENDING_SECONDS = int(
+    os.environ.get("CLAWMETRY_ATTENTION_PENDING_SECONDS", "45"))
+# Beyond this a session stops being "needs you now" and is just abandoned;
+# flagging day-old sessions forever would train people to ignore the list.
+ATTENTION_RECENT_MINUTES = int(
+    os.environ.get("CLAWMETRY_ATTENTION_RECENT_MINUTES", "180"))
+# Newest events to inspect per candidate. We only need to find the newest
+# tool call and confirm nothing followed it, so this is far smaller than the
+# stuck window.
+_ATTENTION_EVENT_WINDOW = 40
+# Event types that RESOLVE a pending tool call — seeing one means the tool
+# came back and the agent is not blocked on a human.
+_ATTENTION_TOOL_RESULT_TYPES = frozenset({
+    "tool_result", "tool.result", "toolresult", "tool_output", "tool.output",
+})
+# Unambiguous progress — a human spoke, or the session finished. Assistant
+# envelopes are deliberately NOT here: on Claude Code and OpenClaw v3 a tool
+# call arrives INSIDE an ``assistant`` / ``model.completed`` turn, so treating
+# those as progress would blind the detector to the exact shape it exists to
+# find. They are classified by content instead (text = a reply = progress;
+# tool-only = the pending call), mirroring the stuck detector.
+_ATTENTION_PROGRESS_TYPES = frozenset({
+    "user", "prompt.submitted",
+    "session.ended", "session.end", "session.completed", "session.stopped",
+})
+
 # ── n-gram circular-loop detector constants ───────────────────────────────
 NGRAM_MIN_TOOL_CALLS = int(os.environ.get("CLAWMETRY_NGRAM_MIN_TOOLS", "6"))
 NGRAM_MIN_REPEATS    = int(os.environ.get("CLAWMETRY_NGRAM_MIN_REPEATS", "3"))
@@ -16980,6 +17026,158 @@ def _stuck_assistant_has_text(data: Any) -> bool:
     if isinstance(at, list) and any(isinstance(t, str) and t.strip() for t in at):
         return True
     return False
+
+
+def _attention_event_type(ev: dict) -> str:
+    """Lowercased event type of a store row, '' when absent."""
+    if not isinstance(ev, dict):
+        return ""
+    return str(ev.get("event_type") or ev.get("type") or "").strip().lower()
+
+
+def _detect_attention_sessions(store) -> list[dict]:
+    """Sessions that appear to be BLOCKED ON A HUMAN right now.
+
+    Distinct from :func:`_detect_stuck_sessions`, which finds agents spinning
+    through tool calls without progress. This finds the opposite failure: an
+    agent that has stopped dead waiting for someone to answer a permission
+    prompt. A spinning agent burns money; a blocked one burns nothing and
+    silently never finishes, which is why it goes unnoticed for hours.
+
+    The shape we match, walking each candidate's events newest-first:
+      * the newest meaningful event is a TOOL CALL,
+      * no tool result and no assistant/user turn came after it,
+      * and it has been pending longer than ``ATTENTION_PENDING_SECONDS``.
+
+    Returns ``[{session_id, runtime, state, waiting_seconds, tool, signal,
+    cwd, git_branch, title}]``, longest-waiting first. ``signal`` is always
+    ``"inferred"`` here — this reads a transcript, it does not observe the
+    dialog. Callers MUST render that distinction rather than implying we
+    know. Read-only and never raises: any store error logs and yields ``[]``
+    so the daemon loop survives a detection bug.
+    """
+    try:
+        sessions = store.query_sessions_table(limit=300) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("attention-detect: query_sessions_table failed: %s", e)
+        return []
+
+    out: list[dict] = []
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        # A finished agent is not waiting on anybody.
+        if s.get("ended_at"):
+            continue
+        if str(s.get("status") or "").lower() in (
+            "ended", "completed", "stopped", "failed",
+        ):
+            continue
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        # Rows are ordered most-recently-active first, so the first row past
+        # the window ends the scan rather than just skipping.
+        last_active = s.get("last_active_at") or s.get("started_at")
+        idle_s = _seconds_since(last_active)
+        if last_active and idle_s > ATTENTION_RECENT_MINUTES * 60:
+            break
+        # Cheap pre-filter: a session touched seconds ago cannot have been
+        # blocked long enough to qualify, and skipping it avoids the per-
+        # session event query entirely. At ~300 candidates a tick this is the
+        # difference between a free check and a real query cost.
+        if idle_s < ATTENTION_PENDING_SECONDS:
+            continue
+
+        try:
+            events = store.query_events(
+                session_id=sid, limit=_ATTENTION_EVENT_WINDOW,
+            ) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("attention-detect: query_events failed for %s: %s",
+                        sid, e)
+            continue
+
+        pending_tool: dict | None = None
+        for ev in events:  # newest-first
+            if not isinstance(ev, dict):
+                continue
+            et = _attention_event_type(ev)
+            if not et:
+                continue
+            data = ev.get("data")
+            # The tool came back — the agent is working, not blocked.
+            if et in _ATTENTION_TOOL_RESULT_TYPES:
+                break
+            role = _stuck_event_role(data)
+            # A human spoke, or the session ended.
+            if et in _ATTENTION_PROGRESS_TYPES or role == "user":
+                break
+            if et in _STUCK_ASSISTANT_EVENT_TYPES or role == "assistant":
+                # An assistant turn carrying TEXT is a reply: the agent got
+                # far enough to say something, so it is not sitting on an
+                # unanswered prompt.
+                if _stuck_assistant_has_text(data):
+                    break
+                # Tool-only assistant turn — this IS the pending call. On
+                # Claude Code this is the ONLY shape a pending tool takes,
+                # which is why classifying by envelope type alone missed it.
+                if _stuck_tool_call_count(et, data) > 0:
+                    pending_tool = ev
+                    break
+                continue
+            if _stuck_tool_call_count(et, data) > 0:
+                pending_tool = ev
+                break
+        if pending_tool is None:
+            continue
+
+        waiting = _seconds_since(pending_tool.get("ts"))
+        if waiting < ATTENTION_PENDING_SECONDS:
+            continue
+        out.append({
+            "session_id":      sid,
+            "runtime":         s.get("agent_type") or "",
+            "state":           "waiting_approval",
+            "waiting_seconds": waiting,
+            "tool":            _attention_tool_name(pending_tool),
+            # Inference, not observation. A hook feed will stamp "hook".
+            "signal":          "inferred",
+            "title":           s.get("title") or "",
+            "cwd":             s.get("cwd") or "",
+            "git_branch":      s.get("git_branch") or "",
+        })
+
+    out.sort(key=lambda r: r.get("waiting_seconds") or 0, reverse=True)
+    return out
+
+
+def _attention_tool_name(ev: dict) -> str:
+    """Best-effort name of the tool a session is blocked on ('' if unknown).
+
+    Knowing it is `Bash` versus `Read` is most of what someone needs to
+    decide whether to walk over and approve it, so it is worth digging for.
+    """
+    try:
+        from clawmetry.local_store import _iter_tool_invocation_names
+        names = list(_iter_tool_invocation_names(
+            _attention_event_type(ev), ev.get("data")))
+        if names:
+            return str(names[0])[:80]
+    except Exception:
+        pass
+    data = ev.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return ""
+    if isinstance(data, dict):
+        for key in ("tool", "tool_name", "toolName", "name"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()[:80]
+    return ""
 
 
 def _detect_stuck_sessions(store) -> list[dict]:
