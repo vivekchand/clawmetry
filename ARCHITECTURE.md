@@ -39,7 +39,7 @@ C4Context
 title C1: ClawMetry (open source) system context
 
 Person(dev, "Developer / Operator", "Runs AI agents; wants to see what they do and what they cost")
-System(clawmetry, "ClawMetry", "Local-first, real-time observability for 20 agent runtimes. Reads what your agents already write; never modifies them.")
+System(clawmetry, "ClawMetry", "Local-first, real-time observability for 21 agent runtimes. Reads what your agents already write; never modifies them.")
 
 System_Ext(runtimes, "AI Agent Runtimes", "OpenClaw + NVIDIA NemoClaw (free in OSS) and, with the optional Pro plugin, Claude Code, Codex, Cursor, Goose, Hermes, Aider, NanoClaw, opencode, PicoClaw, Qwen Code")
 System_Ext(gateway, "OpenClaw Gateway", "WebSocket control plane (JSON-RPC, :18789) for live data + cron RPC")

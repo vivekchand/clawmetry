@@ -18,7 +18,7 @@
 ## Audit method (the only valid "pass")
 1. Walk the trial path: hosted dashboard as a trial user, switch runtimes, click the tab → zero blank/wrong/error states + clean console.
 2. For data/observability features: send a **real** message/turn and watch it travel channel → daemon → DuckDB → handler → rendered tab → (cloud) snapshot.
-3. Verify across **all 20 runtimes**, not just OpenClaw (`/api/runtimes`).
+3. Verify across **all 21 runtimes**, not just OpenClaw (`/api/runtimes`).
 4. For device-facing slices: the 4-repo chain (pro adapter → OSS `_build_device_summary` → cloud wheel/relay → firmware render).
 
 ---

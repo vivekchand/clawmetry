@@ -6720,6 +6720,7 @@ _LITE_RT_LABELS = {
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
+    "exo": "Exo",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6765,6 +6766,11 @@ def _runtime_data_paths(rid: str) -> list:
         "deepseek_harness": [os.path.join(
             os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
                                os.path.join(home, ".dsh")), "sessions")],
+        "exo": ([os.path.expanduser(p.strip()) for p in
+                 (os.environ.get("CLAWMETRY_EXO_ROOTS") or "").split(os.pathsep)
+                 if p.strip()] +
+                [os.path.join(home, "exo", ".exo", "exoharness"),
+                 os.path.join(home, ".exo", "exoharness")]),
     }
     return _M.get(rid, [])
 
@@ -6899,6 +6905,11 @@ def _detect_runtimes_lite() -> list:
         "deepseek_harness": [os.path.join(
             os.path.expanduser(os.environ.get("DSH_HOME", "").strip() or
                                os.path.join(home, ".dsh")), "sessions")],
+        "exo": ([os.path.expanduser(p.strip()) for p in
+                 (os.environ.get("CLAWMETRY_EXO_ROOTS") or "").split(os.pathsep)
+                 if p.strip()] +
+                [os.path.join(home, "exo", ".exo", "exoharness"),
+                 os.path.join(home, ".exo", "exoharness")]),
     }
     for rid, paths in _present.items():
         try:
@@ -12417,6 +12428,12 @@ _FAMILY_ADAPTER_SPECS = (
     # zstd-compressed by default; the adapter lazily installs `zstandard`
     # only after compressed dsh data is positively detected.
     ("clawmetry_pro.adapters.deepseek_harness", "DeepSeekHarnessAdapter"),
+    # Exo harness (github.com/exoharness/exo) — one pretty-printed JSON file
+    # per event under <workspace>/.exo/exoharness/agents/*/conversations/*/
+    # events/, with per-call usage + cost persisted by Exo itself. The state
+    # dir is workspace-relative; the adapter scans well-known parents and
+    # honors CLAWMETRY_EXO_ROOTS.
+    ("clawmetry_pro.adapters.exo", "ExoAdapter"),
 )
 
 
@@ -13791,7 +13808,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok", "qm", "deepseek_harness",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
 })
 
 

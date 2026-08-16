@@ -1,7 +1,7 @@
 // Gateway connection — headless only. Every manual gateway-token UI is gone:
 // the auto-popping "ClawMetry Setup" wizard (v0.1-era UX from when ClawMetry
 // only watched the OpenClaw gateway) and the opt-in Developer > Gateway form
-// that replaced it. The product detects 20+ runtimes automatically and the
+// that replaced it. The product detects 21+ runtimes automatically and the
 // gateway token itself is auto-detected server-side from
 // ~/.openclaw/openclaw.json, so there is nothing left for a user to fill in.
 // What remains keeps an already-configured connection alive: a ?token=XXX URL
