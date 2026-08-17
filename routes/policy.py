@@ -58,6 +58,9 @@ def _arg_preview(args) -> str:
     """Short single-line preview of tool-call arguments — never the full body."""
     if args is None:
         return ""
+    if isinstance(args, dict) and isinstance(args.get("tool_input"), dict) \
+            and str(args.get("source") or "").endswith("-hook"):
+        args = args["tool_input"]
     if isinstance(args, dict):
         for k in ("command", "cmd", "tool", "path", "url"):
             v = args.get(k)
@@ -73,17 +76,28 @@ def _arg_preview(args) -> str:
 
 
 def _row_risk(r) -> "dict | None":
-    """Risk verdict stamped into an approval row's args blob under the
-    namespaced ``_cm_risk`` key (clawmetry/tool_risk.py via the watcher and
-    the pre-tool hook receiver). None for rows written before the risk
-    classifier shipped — the UI simply shows no chip."""
+    """Risk verdict for an approval row.
+
+    Prefers the ``_cm_risk`` verdict stamped at write time (watcher / hook
+    receiver); rows written before the classifier shipped are classified
+    at read time from their recorded tool + args so the whole audit
+    history carries chips, not just new rows. Never raises; None only
+    when there is nothing to classify."""
     args = r.get("args")
     if isinstance(args, dict):
         risk = args.get("_cm_risk")
         if isinstance(risk, dict) and risk.get("level"):
             return {"level": str(risk.get("level")),
                     "reasons": [str(x) for x in (risk.get("reasons") or [])][:4]}
-    return None
+    try:
+        from clawmetry.tool_risk import classify_tool_call
+        tool, raw = _row_tool_and_args(r)
+        if not tool:
+            return None
+        v = classify_tool_call(tool, raw)
+        return {"level": v["level"], "reasons": v["reasons"][:4]}
+    except Exception:
+        return None
 
 
 @bp_policy.route("/api/tool-policy")
