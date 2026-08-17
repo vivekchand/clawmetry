@@ -88,6 +88,13 @@ RUNTIME_PROBES: tuple = (
     # default ~/.dsh); JSONL session logs live in <home>/sessions.
     RuntimeProbe("deepseek_harness", "DeepSeek Harness",
                  ("~/.dsh/sessions",), env="DSH_HOME"),
+    # Exo harness state is WORKSPACE-relative (<workspace>/.exo/exoharness),
+    # not home-anchored; the probe checks the common clone locations and the
+    # CLAWMETRY_EXO_ROOTS override. The pro adapter does the deeper
+    # well-known-parents scan.
+    RuntimeProbe("exo", "Exo",
+                 ("~/exo/.exo/exoharness", "~/.exo/exoharness"),
+                 env="CLAWMETRY_EXO_ROOTS"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME

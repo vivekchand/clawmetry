@@ -99,6 +99,7 @@ PAID_RUNTIMES = frozenset(
         "grok",
         "qm",
         "deepseek_harness",
+        "exo",
     }
 )
 
@@ -135,6 +136,7 @@ RUNTIME_LABELS = {
     "grok": "Grok",
     "qm": "QM",
     "deepseek_harness": "DeepSeek Harness",
+    "exo": "Exo",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -231,6 +233,8 @@ RUNTIME_ALIASES = {
     "deepseek-harness": "deepseek_harness",
     "deepseekharness": "deepseek_harness",
     "dsh": "deepseek_harness",
+    "exo-harness": "exo",
+    "exoharness": "exo",
 }
 
 TIER_LABELS = {

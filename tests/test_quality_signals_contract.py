@@ -114,7 +114,7 @@ def test_dialect_anthropic_block_list_still_parsed():
 @pytest.mark.parametrize("runtime", [
     "claude_code", "codex", "cursor", "aider", "goose", "opencode",
     "qwen_code", "copilot", "antigravity", "n8n", "picoclaw", "nanoclaw",
-    "hermes", "grok", "qm", "deepseek_harness", "pi", "deepagents",
+    "hermes", "grok", "qm", "deepseek_harness", "exo", "pi", "deepagents",
 ])
 def test_dialect_every_family_runtime_parses(runtime):
     """Every family runtime shares one envelope. If a new adapter lands with a

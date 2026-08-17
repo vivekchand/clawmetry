@@ -243,7 +243,9 @@ def test_list_count_matches_detail_count_all_sessions(app):
                      "2026-05-19T12:00:02Z"))
 
     # Session B: ONLY non-renderable plumbing (0 renderable, 3 raw).
-    # Pre-fix this would show 3 in the list and 0 in the detail.
+    # #1718 made list and detail agree at 0/0; a session with nothing to
+    # render is now dropped from the list outright and its detail 404s, so
+    # the two still agree, and the user never reaches an empty card.
     store.ingest(_ev("B1", "sess-B", "session.started",
                      {"type": "session.started", "data": {},
                       "timestamp": "2026-05-19T13:00:00Z"},
@@ -287,7 +289,12 @@ def test_list_count_matches_detail_count_all_sessions(app):
     c = a.test_client()
     list_body = c.get("/api/transcripts").get_json()
     transcripts_by_id = {t["id"]: t for t in list_body["transcripts"]}
-    for sid in ("sess-A", "sess-B", "sess-C"):
+
+    # Nothing renderable -> not listed, and not fetchable either.
+    assert "sess-B" not in transcripts_by_id
+    assert c.get("/api/transcript/sess-B").status_code == 404
+
+    for sid in ("sess-A", "sess-C"):
         assert sid in transcripts_by_id, f"missing session {sid} in list"
         list_row = transcripts_by_id[sid]
         detail_body = c.get(f"/api/transcript/{sid}").get_json()

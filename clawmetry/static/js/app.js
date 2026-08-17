@@ -1356,11 +1356,41 @@ setTimeout(loadAnomalyPanel, 4000);
 visibilitySetInterval(loadAnomalyPanel, 120000);
 
 // === Heartbeat Gap Alerting ===
+// Dismissal is scoped to the current silence EPISODE, not to the tab. The
+// button used to just set display:none inline, which the 30s poller below
+// undid on its next tick, so "Dismiss" bought the user 30 seconds and the
+// banner came back forever. Keyed on last_heartbeat_ts because that value is
+// constant for the whole of one outage and changes the moment the agent
+// checks in again: dismissing silences THIS outage, and a genuinely new one
+// still alerts. Same shape as cm_paused_banner_dismissed.
+var _CM_HB_DISMISS_KEY = 'cm_heartbeat_banner_dismissed_for';
+
+function _cmHeartbeatEpisodeKey(data) {
+  // Falls back when the API can't name a last heartbeat (status "unknown");
+  // anything stable within one episode works.
+  return String((data && data.last_heartbeat_ts) || 'none');
+}
+
+function dismissHeartbeatBanner() {
+  var banner = document.getElementById('heartbeat-banner');
+  if (banner) banner.style.display = 'none';
+  try {
+    localStorage.setItem(_CM_HB_DISMISS_KEY, window._cmHeartbeatEpisode || 'none');
+  } catch(e) { /* private mode: banner just isn't sticky */ }
+}
+
 async function checkHeartbeatStatus() {
   try {
     var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
     var banner = document.getElementById('heartbeat-banner');
     if (!banner) return;
+    window._cmHeartbeatEpisode = _cmHeartbeatEpisodeKey(data);
+    var dismissedFor = null;
+    try { dismissedFor = localStorage.getItem(_CM_HB_DISMISS_KEY); } catch(e) {}
+    if (dismissedFor && dismissedFor === window._cmHeartbeatEpisode) {
+      banner.style.display = 'none';
+      return;
+    }
     if (data.status === 'warning' || data.status === 'silent') {
       var gap = data.gap_seconds;
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
@@ -4978,7 +5008,7 @@ var _Q_RUNTIME_NAMES = {
   qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
   n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
-  qm: 'QM', deepseek_harness: 'DeepSeek Harness'
+  qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo'
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -11019,7 +11049,7 @@ var _CM_RT_LABEL = {
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
   copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
-  deepseek_harness: 'DeepSeek Harness'
+  deepseek_harness: 'DeepSeek Harness', exo: 'Exo'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11028,7 +11058,7 @@ var _CM_RT_LABEL = {
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
-  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1
+  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -11165,6 +11195,7 @@ var _CM_RT_CAPS = {
   copilot:     ['SESSIONS','EVENTS','COST'],
   grok:        ['SESSIONS','EVENTS','COST'],
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -18961,6 +18992,18 @@ async function viewTranscript(sessionId) {
       window.CLOUD_MODE ? Promise.resolve(null)
         : fetch('/api/evals/metrics?session_id=' + encodeURIComponent(sessionId) + '&limit=8').then(r => r.json()).catch(() => null)
     ]);
+    // /api/transcript 404s when the session has no renderable turns (a
+    // session_id minted off a gateway log line, or a transcript whose file is
+    // gone). Without this guard the meta card below renders "Session
+    // undefined / Messages undefined" off the error payload.
+    if (!data || data.error) {
+      document.getElementById('transcript-meta').innerHTML = '';
+      document.getElementById('transcript-messages').innerHTML =
+        '<div style="color:#555;padding:16px;">' +
+        t("app.no_messages_in_this_transcript", null, "No messages in this transcript") +
+        '</div>';
+      return;
+    }
     var compactions = compactionsData.compactions || [];
     var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
     // Family runtimes store metrics under the canonical prefixed id
@@ -21670,6 +21713,7 @@ var _RT_FLOW = {
   copilot:     { label:'GitHub Copilot', src:['⌨️','Terminal'], accent:'#8b5cf6', stroke:'#7c3aed', tools:[['⚡','Bash'],['📖','View'],['📝','Edit'],['🌐','Web']] },
   grok:        { label:'Grok',        src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
   deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
+  exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -26756,7 +26800,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 20 runtimes side by side. Respects the global
+// the headline demo path — the 21 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -27596,7 +27640,7 @@ function _cmRuntimeIcon(id) {
     antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
-    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠',
+    n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
   };
   return map[id] || '•';
 }

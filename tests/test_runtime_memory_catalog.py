@@ -238,6 +238,20 @@ def test_deepseek_harness_entry_resolves(fake_home):
                for p in _files(rm, "deepseek_harness", "hooks"))
 
 
+def test_exo_entry_resolves(fake_home, tmp_path, monkeypatch):
+    ws = tmp_path / "exo-ws"
+    _write(ws, ".exo/exo-profile.md", "# local profile\n")
+    _write(ws, "exo/prompts/me.md", "# self prompt\n")
+    _write(ws, ".exo/tools/registry.json", "{}\n")
+    monkeypatch.setenv("CLAWMETRY_EXO_ROOTS", str(ws))
+    rm = _import_rm()
+    mem = _files(rm, "exo", "memory")
+    assert any(p.endswith("exo-profile.md") for p in mem)
+    assert any(p.endswith("prompts/me.md") for p in mem)
+    assert any(p.endswith("tools/registry.json")
+               for p in _files(rm, "exo", "skills"))
+
+
 def test_picoclaw_workspace_and_global_skills(fake_home):
     home, _ = fake_home
     _write(home, ".picoclaw/workspace/memory/MEMORY.md")

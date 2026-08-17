@@ -11,7 +11,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Δες τον πράκτορά σου να σκέφτεται.** Παρατηρησιμότητα σε πραγματικό χρόνο για **20 runtimes AI πρακτόρων**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex και 16 ακόμα. Ένας πίνακας ελέγχου για ολόκληρο τον στόλο πρακτόρων σου.
+**Δες τον πράκτορά σου να σκέφτεται.** Παρατηρησιμότητα σε πραγματικό χρόνο για **21 runtimes AI πρακτόρων**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex και 17 ακόμα. Ένας πίνακας ελέγχου για ολόκληρο τον στόλο πρακτόρων σου.
 
 > 🌐 **Διάβασέ το στα:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [περισσότερα →](docs/i18n/)
 
@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## Λειτουργεί με 20 runtimes πρακτόρων
+## Λειτουργεί με 21 runtimes πρακτόρων
 
 Το ClawMetry ξεκίνησε ως παρατηρησιμότητα για το OpenClaw, και τώρα μετράει ολόκληρο τον **στόλο πρακτόρων** σου σε έναν πίνακα ελέγχου, ανιχνεύοντας αυτόματα κάθε runtime στο μηχάνημά σου:
 

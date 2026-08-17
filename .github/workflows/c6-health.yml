@@ -188,12 +188,13 @@ jobs:
               and MARKER in c.get("body", "")
           )
 
-          # Count consecutive green days (for stop-condition detection).
-          # Walk prior health-check comments newest-first; stop at the first
-          # non-green day so only an unbroken streak counts.
           def count_green_streak(comments_list, today):
               """Return number of consecutive calendar days health-check was GREEN,
-              NOT counting today (caller adds 1 when today is green)."""
+              NOT counting today (caller adds 1 when today is green).
+
+              Counts both "confirmed GREEN" and "STOP CONDITION MET" posts as green
+              so the streak never breaks at the boundary where a stop-condition post
+              lacks the "confirmed GREEN" phrase (regression: 2026-08-14 reset)."""
               prior = sorted(
                   (c for c in (comments_list or [])
                    if (c.get("user") or {}).get("login", "") == "github-actions[bot]"
@@ -204,7 +205,8 @@ jobs:
               )
               streak = 0
               for c in prior:
-                  if "confirmed GREEN" in c.get("body", ""):
+                  body_text = c.get("body", "")
+                  if "confirmed GREEN" in body_text or "STOP CONDITION MET" in body_text:
                       streak += 1
                   else:
                       break
@@ -244,9 +246,28 @@ jobs:
           table += "\n" + "\n".join(rows)
 
           if all_confirmed_ok:
-              prior_green = count_green_streak(comments, today_utc)
-              green_streak = prior_green + 1  # today counts
-              stop_condition_met = green_streak >= 7
+              # Short-circuit: if the stop condition was already declared met by a
+              # prior health-check post (visible in the 50 most-recent comments),
+              # declare it met again immediately rather than restarting the 7-day
+              # countdown. "STOP CONDITION MET" posts do not contain "confirmed GREEN"
+              # so count_green_streak breaks the streak at that boundary and resets
+              # the counter to Day 1/7 on the very next run (regression: 2026-08-14).
+              stop_previously_declared = any(
+                  (c.get("user") or {}).get("login", "") == "github-actions[bot]"
+                  and MARKER in (c.get("body") or "")
+                  and "STOP CONDITION MET" in (c.get("body") or "")
+                  for c in (comments or [])
+              )
+              if stop_previously_declared:
+                  # Stop condition already met -- stay met. count_green_streak fix
+                  # (above) also prevents future resets once the prior stop comment
+                  # falls outside the 50-comment window.
+                  green_streak = 7
+                  stop_condition_met = True
+              else:
+                  prior_green = count_green_streak(comments, today_utc)
+                  green_streak = prior_green + 1  # today counts
+                  stop_condition_met = green_streak >= 7
               stop_date = (datetime.now(timezone.utc) + timedelta(days=7 - green_streak)).strftime("%Y-%m-%d")
 
               if stop_condition_met:

@@ -1283,7 +1283,7 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 20 runtimes available.")
+            print("  Pro adapters installed - all 21 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
@@ -3883,7 +3883,7 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('Plans')} {DIM('(same either way; each tier includes the one before):')}")
     print(f"    {DIM('Free    $0          watch OpenClaw + NVIDIA NemoClaw, forever')}")
-    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 20 runtimes')}")
+    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 21 runtimes')}")
     print(f"    {DIM('Pro    $19/node/mo  everything in Starter + governance (alerts, approvals, evals)')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
