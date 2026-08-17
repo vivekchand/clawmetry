@@ -80,16 +80,23 @@ def test_every_hardcoded_fire_is_documented():
 
 
 def test_monitor_entries_are_well_formed():
-    """The tab renders these fields directly; none may be blank."""
+    """The tab renders these fields directly; none may be blank.
+
+    ``channels`` is deliberately NOT part of the catalog any more — it was a
+    hardcoded lie ("telegram" on nodes with no Telegram). Delivery is
+    resolved live per node (see test_builtin_monitor_channels.py)."""
     from routes.alerts import BUILTIN_MONITORS
 
     seen = set()
     for m in BUILTIN_MONITORS:
-        for field in ("alert_type", "label", "watches", "channels", "source"):
+        for field in ("alert_type", "label", "watches", "source"):
             assert m.get(field), f"{m.get('alert_type')} is missing {field}"
         assert m["alert_type"] not in seen, f"duplicate {m['alert_type']}"
         seen.add(m["alert_type"])
-        assert isinstance(m["channels"], list) and m["channels"]
+        assert "channels" not in m, (
+            f"{m['alert_type']} hardcodes channels — delivery must come "
+            f"from dashboard._resolve_builtin_delivery"
+        )
 
 
 def test_builtins_endpoint_is_not_paywalled():

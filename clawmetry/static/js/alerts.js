@@ -513,14 +513,49 @@
   }
 
   // Always-on monitors — the checks that fire without a rule behind them.
-  // Rendered read-only and visibly distinct from the toggleable rules above,
-  // so nobody mistakes them for something they forgot to switch off.
+  // Visibly distinct from the rules above, but NOT read-only: each one can
+  // be muted, and its delivery channels pinned. The channel pills are the
+  // server's live answer (the same resolver _fire_alert uses), so a pill
+  // only appears for a destination this node can actually deliver to.
   const _BUILTIN_ICONS = {
     heartbeat_silent: '💤', agent_down: '📡', anomaly: '📈',
     token_velocity: '⚡', agent_error_rate: '🛠', error_spike: '🔥',
     security_threat: '🛡', numbat_finding: '🛡', security: '🔐',
     threshold: '💰',
   };
+  const _BUILTIN_CHAN_LABEL = { banner: 'In-app', telegram: 'Telegram', slack: 'Slack',
+    discord: 'Discord', webhook: 'Webhook' };
+  let _builtinAvailable = [];
+
+  function builtinToggle(alertType, on) {
+    return '<div class="alerts-toggle-switch" onclick="event.stopPropagation();alertsBuiltinSetEnabled(\'' + alertType + '\', ' + (on ? 'false' : 'true') + ')"'
+      + ' title="' + (on ? 'On — click to mute this monitor' : 'Muted — click to turn it back on') + '"'
+      + ' style="position:relative;width:42px;height:24px;cursor:pointer;flex-shrink:0;">'
+      + '<div style="position:absolute;inset:0;background:' + (on ? '#3b82f6' : '#374151') + ';border-radius:12px;transition:background 0.2s;"></div>'
+      + '<div style="position:absolute;top:3px;left:' + (on ? '21px' : '3px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3);"></div>'
+      + '</div>';
+  }
+
+  function builtinChannelPills(m) {
+    const active = new Set(m.channels || ['banner']);
+    const avail = _builtinAvailable.length ? _builtinAvailable : [{ id: 'banner', label: 'In-app' }];
+    const pills = avail.map(c => {
+      const on = active.has(c.id);
+      const isBanner = c.id === 'banner';
+      const title = isBanner
+        ? 'In-app is always on for this monitor. To silence it, use the switch.'
+        : (on ? 'Delivering here — click to stop' : 'Configured but not used by this monitor — click to add')
+          + (c.detail ? ' · ' + c.detail : '');
+      const click = isBanner ? '' : ` onclick="event.stopPropagation();alertsBuiltinToggleChannel('${m.alert_type}','${c.id}')"`;
+      return `<span class="alerts-chan-pill${on ? '' : ' off'}${isBanner ? '' : ' alerts-chan-pill-btn'}" title="${escape(title)}"${click}>${escape(c.label || _BUILTIN_CHAN_LABEL[c.id] || c.id)}</span>`;
+    });
+    // Nothing beyond in-app is configured on this node — say so, and point
+    // at where to fix it, instead of leaving the operator to guess.
+    if (avail.length === 1) {
+      pills.push('<span class="alerts-chan-pill off alerts-chan-pill-btn" title="No external channel is configured on this node. Connect Telegram, Slack, Discord or a webhook in Notifications and it will appear here." onclick="event.stopPropagation();if(typeof showTab===\'function\')showTab(\'notifications\')">+ add channel</span>');
+    }
+    return pills.join('');
+  }
 
   async function renderBuiltinMonitors() {
     const wrap = document.getElementById('alerts-builtins-list');
@@ -529,6 +564,7 @@
     try {
       const d = await fetch('/api/alerts/builtins').then(r => r.json());
       monitors = (d && d.monitors) || [];
+      _builtinAvailable = (d && d.channels_available) || [];
     } catch {
       wrap.innerHTML = '<div class="alerts-loading">Couldn’t load the always-on monitors.</div>';
       return;
@@ -537,19 +573,56 @@
       wrap.innerHTML = '<div class="alerts-loading">No always-on monitors on this build.</div>';
       return;
     }
-    wrap.innerHTML = monitors.map(m => `
-      <div class="alerts-rule-row alerts-builtin-row">
-        <div class="alerts-rule-dot on" title="Always on"></div>
+    wrap.innerHTML = monitors.map(m => {
+      const on = m.enabled !== false;
+      return `
+      <div class="alerts-rule-row alerts-builtin-row${on ? '' : ' alerts-builtin-muted'}" data-builtin="${escape(m.alert_type)}">
+        <div class="alerts-rule-dot ${on ? 'on' : 'off'}" title="${on ? 'Always on' : 'Muted'}"></div>
         <div class="alerts-rule-main">
-          <div class="alerts-rule-title">${_BUILTIN_ICONS[m.alert_type] || '🔔'} ${escape(m.label)}</div>
+          <div class="alerts-rule-title">${_BUILTIN_ICONS[m.alert_type] || '🔔'} ${escape(m.label)}${on ? '' : ' <span class="alerts-builtin-tag" style="margin-left:6px">muted</span>'}</div>
           <div class="alerts-rule-meta">${escape(m.watches)}</div>
         </div>
-        <div class="alerts-rule-chan">${(m.channels || []).map(c =>
-          `<span class="alerts-chan-pill">${escape(c === 'banner' ? 'In-app' : c)}</span>`).join('')}</div>
+        <div class="alerts-rule-chan">${builtinChannelPills(m)}</div>
         <span class="alerts-builtin-tag" title="Built in — fires with no rule of yours behind it">built in</span>
-      </div>
-    `).join('');
+        ${builtinToggle(m.alert_type, on)}
+      </div>`;
+    }).join('');
   }
+
+  async function _patchBuiltin(alertType, body) {
+    try {
+      const r = await fetch('/api/alerts/builtins/' + encodeURIComponent(alertType), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin', body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+    } catch (e) {
+      if (typeof showToast === 'function') showToast('Could not save monitor setting');
+    }
+    renderBuiltinMonitors();
+  }
+  // Exposed so the section can refresh independently of the full tab loader
+  // (and so E2E checks can drive it directly).
+  window.alertsRenderBuiltinMonitors = renderBuiltinMonitors;
+  window.alertsBuiltinSetEnabled = function (alertType, enabled) {
+    _patchBuiltin(alertType, { enabled: !!enabled });
+  };
+  window.alertsBuiltinToggleChannel = function (alertType, chan) {
+    const row = document.querySelector('.alerts-builtin-row[data-builtin="' + alertType + '"]');
+    // Current pinned set = the pills rendered as active; flip the clicked one.
+    const active = [];
+    if (row) row.querySelectorAll('.alerts-chan-pill').forEach(p => {
+      if (!p.classList.contains('off')) {
+        const label = p.textContent.trim();
+        const hit = _builtinAvailable.find(c => (c.label || _BUILTIN_CHAN_LABEL[c.id] || c.id) === label);
+        if (hit) active.push(hit.id);
+      }
+    });
+    if (!active.includes('banner')) active.push('banner');
+    const i = active.indexOf(chan);
+    if (i >= 0) active.splice(i, 1); else active.push(chan);
+    _patchBuiltin(alertType, { channels: active });
+  };
 
   function renderChannelsSummary() {
     const wrap = document.getElementById('alerts-channels-summary');
