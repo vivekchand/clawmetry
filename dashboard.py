@@ -15774,11 +15774,22 @@ _THREAT_NON_ACTION_TYPES = frozenset(
     {"MESSAGE", "THINKING", "USER", "ASSISTANT", "SUMMARY", "COMPACT", "SYSTEM"}
 )
 
-# Tool-call rows as the DuckDB fast path emits them (routes/brain.py's
-# ``evt_type = event_type.upper()``).
-_THREAT_TOOL_TYPES = frozenset(
-    {"TOOL_CALL", "TOOL.CALL", "TOOL_RESULT", "TOOL.RESULT", "TOOL_USE", "ERROR"}
-)
+# Tool-CALL rows as the DuckDB fast path emits them (routes/brain.py's
+# ``evt_type = event_type.upper()``). Only the call is an agent ACTION.
+#
+# TOOL_RESULT is deliberately absent, and so is ERROR (which routes/brain.py
+# derives from a failed TOOL_RESULT). A result is data the agent RECEIVED, not
+# something it did, and results are big free-text blobs — a page of docs, web
+# search output, a source file. Scanning them for action patterns produced
+# nothing but noise: live on a real node, all four hits were TOOL_RESULT rows
+# and all four were false positives (a Devin CLI docs page and a geocoding
+# result matched "browser reaching an admin panel"; a Python source file
+# matched "credential file access" at CRITICAL). Content-borne risk in results
+# is the policy scanners' job — see ``_scan_content_for_policy_events``.
+_THREAT_TOOL_TYPES = frozenset({"TOOL_CALL", "TOOL.CALL", "TOOL_USE"})
+
+# Returned data, not agent action. Excluded for the reason above.
+_THREAT_RESULT_TYPES = frozenset({"TOOL_RESULT", "TOOL.RESULT", "ERROR"})
 
 
 def _threat_tool_name_to_action(name):
@@ -15819,7 +15830,7 @@ def _threat_action_types(ev):
         return frozenset()
     if ev_type in _THREAT_ACTION_TYPES:
         return frozenset({ev_type})
-    if ev_type in _THREAT_NON_ACTION_TYPES:
+    if ev_type in _THREAT_NON_ACTION_TYPES or ev_type in _THREAT_RESULT_TYPES:
         return frozenset()
     if ev_type in _THREAT_TOOL_TYPES:
         name = ev.get("tool") or ev.get("toolName") or ev.get("name")

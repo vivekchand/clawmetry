@@ -867,6 +867,10 @@ _DAEMON_METHODS = frozenset({
     # Severity rollup for the Security tab's tiles — counted in SQL so the
     # numbers survive the list cap.
     "count_security_events",
+    # Undo for findings that should not have been recorded (engine-prefixed
+    # ids, so one engine's output can be removed without touching another's).
+    # A write, so it must go through the daemon like every other write.
+    "delete_security_events_by_id_prefix",
     # Undo for an unwanted ingest (e.g. a numbat at-rest scan backfilling the
     # live activity feed). Write under the daemon's _write_lock, so it must
     # go through the proxy like every other write.

@@ -327,9 +327,18 @@ def test_duckdb_tool_call_credential_read_fires():
     assert "SEC-002" in _rule_ids(threats)
 
 
-def test_duckdb_tool_result_fires():
-    threats, _ = _scan([_duck_ev("sudo su -", ev_type="TOOL_RESULT")])
-    assert "SEC-003" in _rule_ids(threats)
+def test_tool_results_are_not_scanned_for_actions():
+    """A tool RESULT is data the agent received, not something it did.
+
+    Live-verified on a real node: scanning results produced four hits and all
+    four were false positives — a Devin CLI docs page and a geocoding response
+    matched "browser reaching an admin panel" (high), and a Python source file
+    matched "credential file access" (CRITICAL). Results are free-text blobs;
+    content-borne risk in them belongs to the policy scanners.
+    """
+    for ev_type in ("TOOL_RESULT", "ERROR"):
+        threats, _ = _scan([_duck_ev("sudo su -", ev_type=ev_type)])
+        assert threats == [], f"{ev_type} should not match action signatures"
 
 
 def test_duckdb_session_id_is_read():

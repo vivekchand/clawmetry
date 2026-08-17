@@ -11811,6 +11811,34 @@ class LocalStore:
             self._conn.execute("DELETE FROM events WHERE event_type = ?", [et])
         return {"deleted_rows": int(before), "event_type": et}
 
+    def delete_security_events_by_id_prefix(self, prefix: str) -> dict[str, Any]:
+        """Delete ``security_events`` rows whose id starts with ``prefix``.
+
+        The undo for findings that should never have been recorded. Ids are
+        engine-prefixed at write time (``sec_`` for the built-in signature
+        scan, ``numbat_`` for agent-EDR findings), so this removes one engine's
+        output without touching another's. Same narrow shape as
+        :meth:`delete_events_by_type`: an exact prefix, no wildcards, no time
+        ranges. Read-only stores raise.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: delete_security_events_by_id_prefix() on read-only store"
+            )
+        pfx = (prefix or "").strip()
+        if not pfx:
+            raise ValueError("prefix is required")
+        like = pfx.replace("%", r"\%").replace("_", r"\_") + "%"
+        with self._write_lock:
+            before = self._conn.execute(
+                "SELECT COUNT(*) FROM security_events WHERE id LIKE ? ESCAPE '\\'",
+                [like],
+            ).fetchone()[0]
+            self._conn.execute(
+                "DELETE FROM security_events WHERE id LIKE ? ESCAPE '\\'", [like]
+            )
+        return {"deleted_rows": int(before), "prefix": pfx}
+
     def prune_events_by_age(
         self,
         retention_days: int | None,
