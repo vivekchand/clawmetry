@@ -2,7 +2,7 @@
 
 ClawMetry auto-detects 21 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
 
-> Every screenshot below is the real dashboard observing real sessions — each runtime was exercised with a few small demo tasks on a real machine. A couple of runtimes, noted inline, are shown replaying a previously recorded session.
+> Every screenshot below is the real dashboard observing real sessions — each runtime was exercised with a few small demo tasks on a real machine. Two runtimes, noted inline, are shown replaying a previously recorded session.
 
 Jump to: [OpenClaw](#openclaw) · [Claude Code](#claude-code) · [Codex](#codex) · [Cursor](#cursor) · [Aider](#aider) · [Goose](#goose) · [opencode](#opencode) · [Qwen Code](#qwen-code) · [Pi](#pi) · [DeepAgents](#deepagents) · [Hermes](#hermes) · [PicoClaw](#picoclaw) · [NanoClaw](#nanoclaw) · [Antigravity](#antigravity) · [GitHub Copilot](#github-copilot) · [n8n](#n8n) · [DeepSeek Harness](#deepseek-harness) · [qm](#qm) · [Exo](#exo)
 
@@ -66,7 +66,7 @@ Anthropic's CLI coding agent — live sessions with full model and token attribu
 
 ## Codex
 
-OpenAI's coding agent CLI. _Shown replaying a previously recorded session._
+OpenAI's coding agent CLI — live sessions with real token usage, including an applied code edit.
 
 **Overview**
 
@@ -92,7 +92,7 @@ OpenAI's coding agent CLI. _Shown replaying a previously recorded session._
 
 ## Cursor
 
-AI IDE — agent chats appear as sessions with full replay. _Shown with a small sample session._
+Cursor agent CLI — live sessions with full replay.
 
 **Overview**
 
@@ -274,7 +274,7 @@ LangChain's deep-agent CLI — live sessions including a real subagent spawn.
 
 ## Hermes
 
-Nous Research's agent runtime. _Shown replaying a previously recorded session._
+Nous Research's agent runtime — live sessions with tool calls, token usage, and skill lookups.
 
 **Overview**
 
@@ -448,7 +448,7 @@ DeepSeek's agent harness. _Shown replaying previously recorded sessions._
 
 ## qm
 
-Multiplayer agent harness — real turns with session and tool timelines.
+Multiplayer agent harness — live multi-user sessions with model attribution.
 
 **Overview**
 
