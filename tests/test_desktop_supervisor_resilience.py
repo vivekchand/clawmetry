@@ -36,9 +36,7 @@ Three properties are load-bearing and each test below fails if one regresses:
 """
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -307,7 +305,9 @@ def test_sustained_drift_still_restarts(tmp_path, monkeypatch):
         lambda: (restarts.__setitem__("n", restarts["n"] + 1), True)[1],
     )
 
-    on_restart = lambda: reloaded.__setitem__("n", reloaded["n"] + 1)
+    def on_restart():
+        reloaded["n"] += 1
+
     sup._tick(on_restart)
     assert restarts["n"] == 0
     sup._tick(on_restart)
