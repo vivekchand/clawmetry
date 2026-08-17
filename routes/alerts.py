@@ -336,73 +336,80 @@ BUILTIN_MONITORS = [
         "alert_type": "heartbeat_silent",
         "label": "Agent went quiet",
         "watches": "No heartbeat for 1.5x the expected interval",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "agent_down",
         "label": "Telemetry feed stopped",
         "watches": "No OTLP data received for the agent-down window",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "anomaly",
         "label": "Cost spike",
         "watches": "Today's spend above 2x the 7-day average",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "token_velocity",
         "label": "Token burst",
         "watches": "Sustained tokens/min above the built-in ceiling",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "agent_error_rate",
         "label": "Errors climbing",
         "watches": "A runtime's error rate over its recent baseline",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "error_spike",
         "label": "Error spike",
         "watches": "A burst of errors in a short window",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "security_threat",
         "label": "Threat signature matched",
         "watches": "Built-in signatures matching recent agent activity",
-        "channels": ["banner", "telegram"],
         "source": "security-scan",
     },
     {
         "alert_type": "numbat_finding",
         "label": "Security tool finding",
         "watches": "A critical or high finding from a connected scanner",
-        "channels": ["banner", "telegram"],
         "source": "numbat-ingest",
     },
     {
         "alert_type": "security",
         "label": "Security posture changed",
         "watches": "A drop in the node's security posture score",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
     {
         "alert_type": "threshold",
         "label": "Budget threshold",
         "watches": "Daily spend crossing the budget you configured",
-        "channels": ["banner", "telegram"],
         "source": "dashboard",
     },
 ]
+
+
+def _builtin_monitor_view(m, _d):
+    """One monitor as the Alerts tab renders it: the STATIC catalog entry
+    plus the LIVE delivery answer from the same resolver ``_fire_alert``
+    uses. ``channels`` is what will actually deliver; the hardcoded catalog
+    value is deliberately not exposed (founder 2026-08-17: it advertised
+    Telegram on nodes that never configured it)."""
+    view = {k: v for k, v in m.items() if k != "channels"}
+    try:
+        r = _d._resolve_builtin_delivery(m["alert_type"])
+    except Exception:
+        r = {"enabled": True, "channels": ["banner"], "mode": "auto"}
+    view["enabled"] = r["enabled"]
+    view["channels"] = r["channels"]
+    view["channels_mode"] = r["mode"]
+    return view
 
 
 @bp_alerts.route("/api/alerts/builtins")
@@ -412,9 +419,49 @@ def api_alerts_builtins():
     Read by the Alerts tab so the operator can see WHY a banner appeared
     when every rule on the page is switched off. No ``@gate``: knowing what
     is watching you is not a paid feature.
+
+    ``channels`` on each monitor is the live delivery list (in-app plus any
+    channel this node can actually deliver to right now, minus anything
+    the operator unpinned); ``channels_available`` is the picker menu.
     """
-    return jsonify({"monitors": BUILTIN_MONITORS,
-                    "count": len(BUILTIN_MONITORS)})
+    import dashboard as _d
+    monitors = [_builtin_monitor_view(m, _d) for m in BUILTIN_MONITORS]
+    try:
+        available = _d._builtin_channels_available()
+    except Exception:
+        available = [{"id": "banner", "label": "In-app", "configured": True}]
+    return jsonify({"monitors": monitors,
+                    "count": len(monitors),
+                    "channels_available": available})
+
+
+@bp_alerts.route("/api/alerts/builtins/<alert_type>", methods=["PATCH"])
+def api_alerts_builtin_update(alert_type):
+    """Mute/unmute a built-in monitor or pin its channels.
+
+    Body: ``{"enabled": bool}`` and/or ``{"channels": [...] | "auto"}``.
+    In-app is always kept; to silence a monitor set ``enabled: false``.
+    Local prefs, no ``@gate`` — silencing noise on your own node is not
+    a paid feature.
+    """
+    import dashboard as _d
+    known = {m["alert_type"]: m for m in BUILTIN_MONITORS}
+    if alert_type not in known:
+        return jsonify({"error": "unknown built-in monitor",
+                        "alert_type": alert_type}), 404
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled")
+    channels = data.get("channels", None)
+    if channels is not None and channels != "auto" and not isinstance(channels, list):
+        return jsonify({"error": "channels must be a list or \"auto\""}), 400
+    if enabled is None and channels is None:
+        return jsonify({"error": "nothing to update"}), 400
+    try:
+        _d._save_builtin_monitor_pref(alert_type, enabled=enabled, channels=channels)
+    except Exception as e:
+        return jsonify({"error": f"could not save: {e}"}), 500
+    return jsonify({"ok": True,
+                    "monitor": _builtin_monitor_view(known[alert_type], _d)})
 
 
 # ── Default alert-rule seed list (issue #1707) ─────────────────────────────
@@ -1546,8 +1593,10 @@ def api_harness_inject_cost():
                 continue
             msg = (f"Daily spending ${status['daily_spent']:.2f} exceeded "
                    f"threshold ${rule['threshold']:.2f}")
+            # A USER rule: deliver to exactly the channels it was saved
+            # with, never through the built-in monitor prefs.
             _d._fire_alert(rule_id=rule["id"], alert_type="threshold",
-                           message=msg, channels=channels)
+                           message=msg, channels=channels, builtin=False)
             rules_fired.append(rule["id"])
     history_after = len(_d._get_alert_history(limit=500))
     return jsonify({

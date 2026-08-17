@@ -1316,10 +1316,15 @@
   margin: -4px 0 10px; max-width: 68ch; line-height: 1.5;
 }
 .alerts-rule-row.alerts-builtin-row {
-  grid-template-columns: 24px 1fr auto auto;
+  grid-template-columns: 24px 1fr auto auto auto;
   border-left: 2px solid var(--border-primary);
 }
 .alerts-rule-row.alerts-builtin-row:hover { background: transparent; }
+.alerts-rule-row.alerts-builtin-muted .alerts-rule-main { opacity: 0.55; }
+/* Channel pills on built-in rows are pins: click to add/remove a configured
+   destination. In-app is fixed (not a button). */
+.alerts-chan-pill.alerts-chan-pill-btn { cursor: pointer; }
+.alerts-chan-pill.alerts-chan-pill-btn:hover { border-color: var(--text-muted); opacity: 1; }
 /* Orphan rules: saved but matching no known alert type. Amber left edge marks
    them as needing attention without shouting — they are stale config, not an
    incident. */
