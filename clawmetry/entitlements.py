@@ -139,6 +139,38 @@ RUNTIME_LABELS = {
     "exo": "Exo",
 }
 
+# Public per-runtime page on clawmetry.com for every known runtime. This is
+# the storefront half of "supported": a runtime is not shipped until this
+# path serves 200 and the README grid links to it. Declared here (next to
+# the catalogue) so ``tests/test_runtime_public_surfaces.py`` can assert
+# the README grid, and the landing repo's lockstep guard, agree with the
+# catalogue instead of someone remembering. Burned 2026-08-17: Exo landed
+# in the catalogue + wheel + cloud, and the README listed it unlinked with
+# no page behind it for a day.
+RUNTIME_LANDING_PATHS = {
+    "openclaw": "/runtimes/openclaw",
+    "nemoclaw": "/nemoclaw",
+    "claude_code": "/runtimes/claude-code",
+    "codex": "/runtimes/codex",
+    "cursor": "/runtimes/cursor",
+    "aider": "/runtimes/aider",
+    "goose": "/runtimes/goose",
+    "opencode": "/runtimes/opencode",
+    "qwen_code": "/runtimes/qwen-code",
+    "hermes": "/runtimes/hermes",
+    "picoclaw": "/runtimes/picoclaw",
+    "nanoclaw": "/runtimes/nanoclaw",
+    "pi": "/runtimes/pi",
+    "deepagents": "/runtimes/deep-agents",
+    "n8n": "/runtimes/n8n",
+    "antigravity": "/runtimes/antigravity",
+    "copilot": "/runtimes/copilot",
+    "grok": "/runtimes/grok",
+    "qm": "/runtimes/qm",
+    "deepseek_harness": "/runtimes/deepseek-harness",
+    "exo": "/runtimes/exo",
+}
+
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
 # same order the sync daemon walks them (``clawmetry/sync.py``
 # ``_CHANNEL_DIRS``). Every channel is FREE -- there is no paid-channel
