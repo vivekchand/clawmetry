@@ -1,6 +1,6 @@
 ## Unreleased
 
-- **Release: Exo harness support goes live — `pip install clawmetry` now observes Exo out of the box (with a Pro plan).**
+- **Release: Exo harness support goes live: `pip install clawmetry` now observes Exo out of the box (with a Pro plan).**
   - Carries #4942 to PyPI and the fleet. Pairs with clawmetry-pro 0.7.8 (the ExoAdapter wheel) already rolled to the cloud and deployed (clawmetry-cloud#2045), so upgrading daemons provision a pro build that knows the runtime immediately.
   - **Verified before release:** real `.exo` store ingested end to end on a live machine (daemon discovered `~/exo` zero-config, DuckDB rows carried runtime metadata + native per-call cost, dashboard runtime switcher/scope banner/fork lane and transcript all rendered; tool-call duplication found in the live transcript and fixed with a regression test before this release).
 
