@@ -164,7 +164,13 @@ answer is worse than a missing one.
 | ISO 27001 / ISO 42001 | Not started |
 | Independent penetration test | Not yet commissioned |
 | DPA / sub-processor list | Available on request; not yet published |
+| GDPR EU representative / lead supervisory authority | Being determined |
 | SSO / SAML / SCIM | Not implemented |
+
+ClawMetry is published by **Instalabs LLC**, a Wyoming, United States entity.
+Self-hosted and air-gapped deployments avoid the data-protection question
+entirely, because no personal data reaches us at all — see
+[docs/EGRESS.md](docs/EGRESS.md).
 
 If you need one of the missing items to evaluate ClawMetry, say so at
 security@clawmetry.com — that demand is how this list gets reordered.
