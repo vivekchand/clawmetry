@@ -4,7 +4,7 @@ truststore>=0.10.4; python_version >= "3.10"  # OS trust store for corporate TLS
 
 # Testing dependencies
 pytest>=9.1.1
-pytest-playwright>=0.8.0
+pytest-playwright>=0.9.0
 requests>=2.34.2
 
 # Optional: enables real-time OTLP metrics from OpenClaw
