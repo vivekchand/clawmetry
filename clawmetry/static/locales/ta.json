@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "சுவடு கொத்துகள்",
   "usage.trace_clusters_hint": "நடத்தை வடிவத்தின் அடிப்படையில் அமர்வுகளை தானாக குழுவாக்கு",
   "usage.trend": "போக்கு",
-  "version_impact.title": "மேம்படுத்தல் தாக்கம்"
+  "version_impact.title": "மேம்படுத்தல் தாக்கம்",
+  "app.approve_for_session": "செஷனுக்கு அனுமதிக்கவும்",
+  "app.always_allow": "எப்போதும் அனுமதிக்கவும்",
+  "approvals.min_risk_label": "குறைந்தபட்ச ஆபத்து நிலை",
+  "approvals.min_risk_any": "ஏதேனும் (கீவேர்டுகள் மட்டும் பொருத்தப்படும்)",
+  "approvals.min_risk_medium": "மிதமான அல்லது அதற்கு மேல்",
+  "approvals.min_risk_high": "அதிக அல்லது அதற்கு மேல்",
+  "approvals.min_risk_critical": "மிக அபாயகரமானவை மட்டும்",
+  "approvals.min_risk_hint": "ClawMetry ஒவ்வொரு டூல் அழைப்பையும் மதிப்பிடுகிறது (recursive deletes, sudo, credential access...). கீவேர்டுகளுடன் அல்லது இல்லாமல் ஆபத்து அடிப்படையில் வடிகட்ட இதை அமைக்கவும்."
 }

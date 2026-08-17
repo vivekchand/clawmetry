@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Кластеры трассировок",
   "usage.trace_clusters_hint": "автоматическая группировка сессий по шаблону поведения",
   "usage.trend": "Тренд",
-  "version_impact.title": "Влияние обновления"
+  "version_impact.title": "Влияние обновления",
+  "app.approve_for_session": "Одобрить для сессии",
+  "app.always_allow": "Всегда разрешать",
+  "approvals.min_risk_label": "Минимальный уровень риска",
+  "approvals.min_risk_any": "Любой (сопоставление только по ключевым словам)",
+  "approvals.min_risk_medium": "Средний и выше",
+  "approvals.min_risk_high": "Высокий и выше",
+  "approvals.min_risk_critical": "Только критический",
+  "approvals.min_risk_hint": "ClawMetry оценивает риск каждого вызова инструмента (рекурсивное удаление, sudo, доступ к учётным данным...). Настройте этот параметр, чтобы фильтровать по риску, с ключевыми словами или без них."
 }

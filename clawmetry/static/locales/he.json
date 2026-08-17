@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "אשכולות מעקב",
   "usage.trace_clusters_hint": "קיבוץ אוטומטי של סשנים לפי דפוס התנהגות",
   "usage.trend": "מגמה",
-  "version_impact.title": "השפעת השדרוג"
+  "version_impact.title": "השפעת השדרוג",
+  "app.approve_for_session": "אשר עבור הסשן",
+  "app.always_allow": "אפשר תמיד",
+  "approvals.min_risk_label": "רמת סיכון מינימלית",
+  "approvals.min_risk_any": "כל רמה (התאמה לפי מילות מפתח בלבד)",
+  "approvals.min_risk_medium": "בינונית ומעלה",
+  "approvals.min_risk_high": "גבוהה ומעלה",
+  "approvals.min_risk_critical": "קריטית בלבד",
+  "approvals.min_risk_hint": "ClawMetry מדרג כל קריאת כלי (מחיקות רקורסיביות, sudo, גישה לאישורים...). הגדירו זאת כדי לסנן לפי רמת סיכון, עם או בלי מילות מפתח."
 }

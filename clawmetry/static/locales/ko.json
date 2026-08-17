@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "트레이스 클러스터",
   "usage.trace_clusters_hint": "동작 패턴별 세션 자동 그룹화",
   "usage.trend": "추세",
-  "version_impact.title": "업그레이드 영향"
+  "version_impact.title": "업그레이드 영향",
+  "app.approve_for_session": "세션 동안 승인",
+  "app.always_allow": "항상 허용",
+  "approvals.min_risk_label": "최소 위험 수준",
+  "approvals.min_risk_any": "모두 (키워드로만 일치)",
+  "approvals.min_risk_medium": "중간 이상",
+  "approvals.min_risk_high": "높음 이상",
+  "approvals.min_risk_critical": "심각만",
+  "approvals.min_risk_hint": "ClawMetry는 모든 도구 호출의 위험도를 평가합니다(재귀적 삭제, sudo, 자격 증명 접근 등). 키워드 사용 여부와 관계없이 위험도로 필터링하려면 이 값을 설정하세요."
 }

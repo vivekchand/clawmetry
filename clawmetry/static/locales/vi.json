@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Cụm trace",
   "usage.trace_clusters_hint": "tự động nhóm phiên theo mẫu hành vi",
   "usage.trend": "Xu hướng",
-  "version_impact.title": "Tác động nâng cấp"
+  "version_impact.title": "Tác động nâng cấp",
+  "app.approve_for_session": "Phê duyệt cho phiên này",
+  "app.always_allow": "Luôn cho phép",
+  "approvals.min_risk_label": "Mức rủi ro tối thiểu",
+  "approvals.min_risk_any": "Bất kỳ (chỉ khớp theo từ khóa)",
+  "approvals.min_risk_medium": "Trung bình trở lên",
+  "approvals.min_risk_high": "Cao trở lên",
+  "approvals.min_risk_critical": "Chỉ nghiêm trọng",
+  "approvals.min_risk_hint": "ClawMetry chấm điểm rủi ro cho mọi lệnh gọi công cụ (xóa đệ quy, sudo, truy cập thông tin xác thực...). Đặt tùy chọn này để lọc theo mức rủi ro, có hoặc không kèm từ khóa."
 }
