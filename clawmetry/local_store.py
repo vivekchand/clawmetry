@@ -6713,7 +6713,7 @@ class LocalStore:
                         "broken_at": rid,
                         "error": (
                             f"event {rid} no longer matches its recorded hash "
-                            f"(node {rnid}) — a stored field was altered"
+                            f"(node {rnid}). A stored field was altered."
                         ),
                     }
                 checked += 1
@@ -6736,7 +6736,7 @@ class LocalStore:
                     "broken_at": orphans[0][0],
                     "error": (
                         f"event {orphans[0][0]} names a predecessor that is no "
-                        f"longer in the log (node {rnid}) — {len(orphans)} "
+                        f"longer in the log (node {rnid}). {len(orphans)} "
                         f"event(s) affected, so a record was removed"
                     ),
                 }

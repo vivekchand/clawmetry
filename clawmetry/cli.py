@@ -6420,7 +6420,7 @@ def _cmd_verify_integrity(args) -> None:
         # gating on this would fail on a healthy node.
         unlinked = result.get("unlinked") if isinstance(result, dict) else 0
         print(
-            f"  Result:      ⚠️   VERIFIED — all {checked} event(s) match their "
+            f"  Result:      ⚠️   VERIFIED: all {checked} event(s) match their "
             f"recorded hash; {unlinked or 0} could not be ordered into one chain"
         )
         print("               (no record was altered or removed)")

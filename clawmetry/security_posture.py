@@ -912,8 +912,8 @@ def claude_code_posture() -> dict:
                 "hooks_configured",
                 "Hooks",
                 "warn",
-                "No hooks configured — nothing inspects a tool call before it "
-                "runs.",
+                "No hooks configured, so nothing inspects a tool call before "
+                "it runs.",
                 "Add a PreToolUse hook, or run `clawmetry secure enable` to "
                 "install monitor-only agent-EDR hooks.",
                 "low",
@@ -1104,7 +1104,7 @@ def codex_posture() -> dict:
                 "approval_policy",
                 "Approval policy",
                 "warn",
-                "approval_policy is not set — Codex falls back to its built-in "
+                "approval_policy is not set, so Codex falls back to its built-in "
                 "default, which varies by version. We can only report what the "
                 "config actually declares.",
                 'Set approval_policy explicitly (e.g. "on-request") so the '
@@ -1146,7 +1146,7 @@ def codex_posture() -> dict:
                 "sandbox_mode",
                 "Sandbox mode",
                 "warn",
-                "sandbox_mode is not set — Codex falls back to its built-in "
+                "sandbox_mode is not set, so Codex falls back to its built-in "
                 "default, which varies by version. An empty config should not "
                 "read as a verified sandbox.",
                 'Set sandbox_mode explicitly (e.g. "workspace-write") so the '

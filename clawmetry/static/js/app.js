@@ -10823,7 +10823,7 @@ async function loadSecurityIntegrity() {
       // Calling that "Tampered" scared people about a bug of ours; calling it
       // "Intact" would hide a real insertion. It gets its own honest wording.
       var nUnlinked = (d.unlinked || 0).toLocaleString();
-      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain — a fault in how older versions recorded the order, now fixed. New events chain normally.'),
+      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain, a fault in how older versions recorded the order that is now fixed. New events chain normally.'),
             t('app.integrity_degraded_badge', null, 'Verified, order incomplete'), '#f59e0b', '&#128274;');
     } else if (window.CLOUD_MODE) {
       // Honest cloud state until the cm-cloud-security interceptor serves the
