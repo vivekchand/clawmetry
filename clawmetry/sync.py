@@ -6722,6 +6722,7 @@ _LITE_RT_LABELS = {
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
     "kimi": "Kimi CLI",
+    "exo": "Exo", "devin": "Devin",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6749,6 +6750,12 @@ def _kimi_store_paths() -> list:
     out += [os.path.join(home, ".kimi", "sessions"),
             os.path.join(home, ".kimi-code", "sessions")]
     return out
+def _xdg_data_home() -> str:
+    """``$XDG_DATA_HOME`` with the spec default. Devin (and Goose/opencode)
+    anchor their stores here, so honour the env var rather than hardcoding
+    ``~/.local/share`` — a machine that moves XDG_DATA_HOME would otherwise
+    read as "runtime not installed"."""
+    return os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
 
 
 def _runtime_data_paths(rid: str) -> list:
@@ -6790,6 +6797,13 @@ def _runtime_data_paths(rid: str) -> list:
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
         "kimi": _kimi_store_paths(),
+        # Devin CLI: one SQLite store for every session, XDG-anchored. The
+        # vendor installer migrates the legacy "cognition"/"chisel" data
+        # namespaces to "devin", so older installs still resolve.
+        "devin": ([os.path.expanduser(os.environ.get("CLAWMETRY_DEVIN_DB", "").strip())]
+                  if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
+            os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
+            for ns in ("devin", "cognition", "chisel")],
     }
     return _M.get(rid, [])
 
@@ -6930,6 +6944,13 @@ def _detect_runtimes_lite() -> list:
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
         "kimi": _kimi_store_paths(),
+        # Devin CLI: one SQLite store for every session, XDG-anchored. The
+        # vendor installer migrates the legacy "cognition"/"chisel" data
+        # namespaces to "devin", so older installs still resolve.
+        "devin": ([os.path.expanduser(os.environ.get("CLAWMETRY_DEVIN_DB", "").strip())]
+                  if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
+            os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
+            for ns in ("devin", "cognition", "chisel")],
     }
     for rid, paths in _present.items():
         try:
@@ -12507,6 +12528,12 @@ _FAMILY_ADAPTER_SPECS = (
     # dir)>/<uuid>/. The adapter reads BOTH share dirs (~/.kimi and the
     # successor ~/.kimi-code) plus $KIMI_SHARE_DIR / CLAWMETRY_KIMI_ROOTS.
     ("clawmetry_pro.adapters.kimi", "KimiAdapter"),
+    # Devin CLI (cli.devin.ai) — every session in ONE SQLite store at
+    # $XDG_DATA_HOME/devin/cli/sessions.db: a message FOREST (fork /
+    # revert leave abandoned branches the adapter must not bill) plus
+    # the ACP tool-call records. Devin Cloud sessions are API-only and
+    # deliberately not ingested here.
+    ("clawmetry_pro.adapters.devin", "DevinAdapter"),
 )
 
 
@@ -13883,6 +13910,7 @@ _RUNTIME_PREFIXES = frozenset({
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
     "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
     "kimi",
+    "devin",
 })
 
 

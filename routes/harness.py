@@ -33,6 +33,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "deepseek_harness",
     "exo",
     "kimi",
+    "devin",
 })
 
 

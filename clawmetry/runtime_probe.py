@@ -110,6 +110,19 @@ RUNTIME_PROBES: tuple = (
                   "~/.qm", "~/qm/package.json",
                   "/opt/qm/package.json"),
                  env="CLAWMETRY_QM_HOME"),
+    # Devin CLI (cli.devin.ai) keeps every session in ONE XDG-anchored SQLite
+    # store; ~/.config/devin/config.json is the other half of a real install
+    # (it exists even when the CLI has only ever run in ACP mode under an
+    # IDE, which never creates sessions.db). Devin Cloud sessions are
+    # API-only and cannot be probed from disk at all.
+    RuntimeProbe("devin", "Devin",
+                 ("~/.local/share/devin/cli/sessions.db",
+                  "~/.local/share/cognition/cli/sessions.db",
+                  "~/.local/share/chisel/cli/sessions.db",
+                  "~/.config/devin/config.json",
+                  "~/AppData/Local/devin/cli/sessions.db",
+                  "~/AppData/Roaming/devin/config.json"),
+                 env="CLAWMETRY_DEVIN_DB"),
 )
 
 

@@ -262,6 +262,7 @@ def test_paid_runtimes_exact_membership(ent):
             "deepseek_harness",
             "exo",
             "kimi",
+            "devin",
         }
     )
     assert ent.PAID_RUNTIMES == expected
