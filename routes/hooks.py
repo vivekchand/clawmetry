@@ -320,6 +320,19 @@ def api_hook_claude_code_pretooluse():
     if action != "require_approval":
         return _decided("allow", f"policy action '{action}' does not gate")
 
+    # Approve-and-remember: an earlier "approve for this session" decision
+    # for this exact (session, tool, command) skips the human round-trip.
+    try:
+        if session_id and ap.check_session_allow(
+                f"claude_code:{session_id}", tool_name, tool_input):
+            _audit("approved", tool_name, {"policy": policy.get("name"),
+                                           "session_id": session_id,
+                                           "session_allow": True})
+            return _decided("allow", "approved earlier this session "
+                                     "(remember-my-choice)")
+    except Exception:
+        pass
+
     # ── park a pending row in the local queue ────────────────────────────
     # Dedup: a client whose first POST timed out client-side retries without
     # approval_id.  Primary key: tool_use_id.  Fallback (tool_use_id absent):
@@ -358,6 +371,12 @@ def api_hook_claude_code_pretooluse():
         cmd_preview = ap._extract_command(tool_name, tool_input)[:140]
     except Exception:
         pass
+    try:
+        from clawmetry.tool_risk import classify_tool_call
+        _risk = classify_tool_call(tool_name, tool_input)
+        risk_meta = {"level": _risk["level"], "reasons": _risk["reasons"]}
+    except Exception:
+        risk_meta = None
     ok = _ls_write("ingest_approval", approval={
         "id": approval_id,
         "requestor_session_id": f"claude_code:{session_id}" if session_id
@@ -377,6 +396,7 @@ def api_hook_claude_code_pretooluse():
             "timeout": timeout_s,
             "on_timeout": policy.get("on_timeout") or "deny",
             "deadline_ms": now_ms + timeout_s * 1000,
+            "_cm_risk": risk_meta,
         },
         "status": "pending",
         "created_at": _utcnow(),
@@ -674,6 +694,22 @@ def api_hook_claude_code_permissionrequest():
             if _args_meta(r).get("tool_use_id") == tool_use_id:
                 return _wait_mirror(str(r.get("id")), r, tool_name)
 
+    # Approve-and-remember: an earlier "approve for this session" decision
+    # for this exact (session, tool, command) answers the runtime's own
+    # prompt without paging the human again.
+    try:
+        from clawmetry import approvals as _ap_sa
+        if session_id and _ap_sa.check_session_allow(
+                f"claude_code:{session_id}", tool_name, tool_input):
+            _audit("approved", tool_name, {"kind": "permission_prompt",
+                                           "session_id": session_id,
+                                           "session_allow": True})
+            return _mirror_answer("allow",
+                                  note="approved earlier this session "
+                                       "(remember-my-choice)")
+    except Exception:
+        pass
+
     approval_id = uuid.uuid4().hex
     now_ms = int(time.time() * 1000)
     try:
@@ -681,12 +717,19 @@ def api_hook_claude_code_permissionrequest():
         cmd_preview = ap._extract_command(tool_name, tool_input)[:140]
     except Exception:
         cmd_preview = ""
+    try:
+        from clawmetry.tool_risk import classify_tool_call as _ctc
+        _mr = _ctc(tool_name, tool_input)
+        mirror_risk = {"level": _mr["level"], "reasons": _mr["reasons"]}
+    except Exception:
+        mirror_risk = None
     ok = _ls_write("ingest_approval", approval={
         "id": approval_id,
         "requestor_session_id": f"claude_code:{session_id}" if session_id
                                 else None,
         "action": f"{tool_name}: {cmd_preview}",
         "args": {
+            "_cm_risk": mirror_risk,
             "source": "permissionrequest-hook",
             "runtime": "claude_code",
             "kind": "permission_prompt",

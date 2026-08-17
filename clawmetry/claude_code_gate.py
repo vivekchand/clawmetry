@@ -145,7 +145,18 @@ def _matcher_from_policies(policies) -> str:
             continue
         tool = str(p.get("tool") or "").strip()
         if tool == "":
-            _add("Bash")
+            if p.get("min_risk") or (
+                    isinstance(p.get("match"), dict)
+                    and p["match"].get("min_risk")):
+                # Risk-gated tool-agnostic policy ("pause anything high
+                # risk"): the risk classifier scores exec, write, web AND
+                # read calls, so the hook must see all of them — a
+                # Bash-only matcher would silently skip a critical
+                # ``Write /etc/hosts`` while promising risk coverage.
+                for frag in _CANON_TO_MATCHER.values():
+                    _add(frag)
+            else:
+                _add("Bash")
             continue
         canon = _canonical_tool(tool)
         _add(_CANON_TO_MATCHER.get(canon, tool))

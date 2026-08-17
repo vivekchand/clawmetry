@@ -65,10 +65,25 @@ def _arg_preview(args) -> str:
                 return str(v)[:160]
         try:
             import json as _json
-            return _json.dumps(args, separators=(",", ":"))[:160]
+            slim = {k: v for k, v in args.items() if k != "_cm_risk"}
+            return _json.dumps(slim, separators=(",", ":"))[:160]
         except Exception:
             return str(args)[:160]
     return str(args)[:160]
+
+
+def _row_risk(r) -> "dict | None":
+    """Risk verdict stamped into an approval row's args blob under the
+    namespaced ``_cm_risk`` key (clawmetry/tool_risk.py via the watcher and
+    the pre-tool hook receiver). None for rows written before the risk
+    classifier shipped — the UI simply shows no chip."""
+    args = r.get("args")
+    if isinstance(args, dict):
+        risk = args.get("_cm_risk")
+        if isinstance(risk, dict) and risk.get("level"):
+            return {"level": str(risk.get("level")),
+                    "reasons": [str(x) for x in (risk.get("reasons") or [])][:4]}
+    return None
 
 
 @bp_policy.route("/api/tool-policy")
@@ -202,6 +217,7 @@ def api_approvals_queue():
             "created_at":           r.get("created_at"),
             "requestor_session_id": r.get("requestor_session_id"),
             "args_preview":         _arg_preview(r.get("args")),
+            "risk":                 _row_risk(r),
             # "policy" (a protection rule fired) vs "permission_prompt"
             # (the runtime itself stopped to ask) — the UI says which,
             # because they mean different things to the person deciding.
@@ -238,6 +254,7 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             "id": r.get("id"),
             "action": r.get("action"),
             "args_preview": _arg_preview(r.get("args")),
+            "risk": _row_risk(r),
             "status": st,
             "decision": dec or None,
             "decision_reason": (str(r.get("decision_reason"))[:300]
@@ -272,6 +289,7 @@ def _policy_summary(compiled: dict) -> dict:
         "command_regex": _pat(compiled.get("command_regex")),
         "command_not_regex": _pat(compiled.get("command_not_regex")),
         "args_regex": _pat(compiled.get("args_regex")),
+        "min_risk": compiled.get("min_risk"),
     }
 
 
@@ -281,9 +299,9 @@ _VALID_ON_TIMEOUT = ("deny", "kill", "approve", "allow", "ask")
 # file). ``match`` is handled separately (nested block).
 _POLICY_SCALAR_KEYS = ("name", "tool", "runtime", "pattern_type", "pattern",
                        "action", "timeout", "on_timeout", "preset_key",
-                       "enabled")
+                       "enabled", "min_risk")
 _MATCH_SCALAR_KEYS = ("tool", "command_regex", "command_not_regex",
-                      "args_regex", "runtime")
+                      "args_regex", "runtime", "min_risk")
 
 
 def _yaml_quote(value):
@@ -362,6 +380,11 @@ def _validate_policies(policies) -> "tuple[list[dict], list[str]]":
             errors.append(f"{label}: on_timeout must be one of "
                           f"{', '.join(_VALID_ON_TIMEOUT)} "
                           f"(got '{on_timeout}')")
+        mr = p.get("min_risk") or (p.get("match") or {}).get("min_risk")
+        if mr is not None and str(mr).strip().lower() not in (
+                "low", "medium", "high", "critical"):
+            errors.append(f"{label}: min_risk must be one of "
+                          f"low, medium, high, critical (got '{mr}')")
         if p.get("timeout") is not None:
             try:
                 if int(p["timeout"]) <= 0:
@@ -533,6 +556,79 @@ def api_policy_replay():
     return jsonify(result), (200 if result.get("ok") else 400)
 
 
+
+def _row_tool_and_args(row) -> "tuple[str, dict]":
+    """Recover (tool_name, raw tool args) from an approval row.
+
+    Hook-gate rows wrap everything in a meta blob (``source:
+    "pretooluse-hook"`` with ``tool_name`` + ``tool_input``); watcher rows
+    store the raw tool args directly (plus the stamped ``_cm_risk``) and
+    carry the tool name as the ``action`` string prefix ("Bash: rm -rf x").
+    """
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    if args.get("source") == "pretooluse-hook":
+        raw = args.get("tool_input")
+        return (str(args.get("tool_name") or ""),
+                raw if isinstance(raw, dict) else {})
+    tool = str(row.get("action") or "").split(": ", 1)[0].strip()
+    raw = {k: v for k, v in args.items() if k != "_cm_risk"}
+    return tool, raw
+
+
+def _apply_remember(row, scope: str) -> "tuple[str | None, str | None]":
+    """Persist an approve-and-remember choice. Returns (remembered, error).
+
+    ``session`` → TTL-bound entry in approvals_session_allow.json (honored
+    by both the watcher and the hook gate). ``always`` → an ``action:
+    approve`` policy row appended to policies.yml, so it is visible and
+    revocable in the Approvals tab like any user-authored rule. A failed
+    "always" write degrades to session scope rather than silently
+    forgetting the choice.
+    """
+    import re as _re
+    from clawmetry import approvals as ap
+    tool, raw = _row_tool_and_args(row)
+    sid = str(row.get("requestor_session_id") or "")
+    if not tool:
+        return None, "row carries no tool name to remember"
+    if scope == "session":
+        ap.add_session_allow(sid, tool, raw)
+        return "session", None
+    # scope == "always"
+    cmd = ap._extract_command(tool, raw)
+    if not cmd:
+        return None, "cannot derive a command to pin an always-allow rule to"
+    name = f"Always allow {tool}: {cmd}"[:80]
+    name = name.replace("\n", " ").replace("'", "").replace('"', "")
+    candidate = {
+        "name": name,
+        "action": "approve",
+        "match": {"tool": ap._canonical_tool(tool),
+                  "command_regex": "^" + _re.escape(cmd) + "$"},
+    }
+    try:
+        existing = []
+        if ap.POLICIES_PATH.exists():
+            existing = [p_ for p_ in
+                        ap._load_yaml(ap.POLICIES_PATH.read_text(
+                            errors="replace"))
+                        if isinstance(p_, dict)]
+        merged, errors = _validate_policies(existing + [candidate])
+        if errors:
+            raise ValueError("; ".join(errors[:2]))
+        text = _serialize_policies_yaml(merged)
+        import os as _os
+        ap.POLICIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ap.POLICIES_PATH.with_suffix(".yml.tmp")
+        tmp.write_text(text)
+        _os.replace(tmp, ap.POLICIES_PATH)
+        return "always", None
+    except Exception as e:
+        ap.add_session_allow(sid, tool, raw)
+        return "session", f"always-allow rule not writable ({e}); " \
+                          "remembered for this session instead"
+
+
 @bp_policy.route("/api/approvals/<approval_id>/decide", methods=["POST"])
 @gate("approval_queue")
 def api_approval_decide(approval_id: str):
@@ -565,6 +661,12 @@ def api_approval_decide(approval_id: str):
     reason = body.get("reason")
     if reason is not None:
         reason = str(reason)[:300]
+    remember = str(body.get("remember") or "").strip().lower() or None
+    if remember is not None and remember not in ("session", "always"):
+        return jsonify({
+            "ok":    False,
+            "error": "remember must be 'session' or 'always'",
+        }), 400
 
     aid = (approval_id or "").strip()
     if not aid:
@@ -617,4 +719,12 @@ def api_approval_decide(approval_id: str):
         pass
 
     new_status = "approved" if decision == "approve" else "denied"
-    return jsonify({"ok": True, "status": new_status})
+    remembered = remember_error = None
+    if decision == "approve" and remember:
+        remembered, remember_error = _apply_remember(row, remember)
+    resp = {"ok": True, "status": new_status}
+    if remember:
+        resp["remembered"] = remembered
+        if remember_error:
+            resp["remember_error"] = remember_error
+    return jsonify(resp)

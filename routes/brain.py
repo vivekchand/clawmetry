@@ -51,6 +51,43 @@ def _annotate_risk(events):
     return events
 
 
+def _annotate_tool_risk(events):
+    """Stamp tool-call events with a ``toolRisk`` field (call-level risk
+    from clawmetry/tool_risk.py — a DIFFERENT axis from the hallucination
+    ``risk`` pill above: this one says what the CALL touches, not how
+    confident the model was). Key is namespaced so the two pills coexist.
+    Mutates in place, returns for chaining, never crashes."""
+    if not events:
+        return events
+    try:
+        from clawmetry.tool_risk import classify_tool_call
+    except Exception:
+        return events
+    for ev in events:
+        try:
+            if str(ev.get("type") or "").upper() not in (
+                    "TOOL_CALL", "TOOL.CALL", "EXEC"):
+                continue
+            tool = ev.get("toolName") or ev.get("tool") or ""
+            args = ev.get("toolInput")
+            if not tool and not args:
+                # Detail-only rows ("Bash: rm -rf x"): parse the prefix.
+                detail = str(ev.get("detail") or "")
+                if ":" in detail:
+                    tool, _, cmd = detail.partition(":")
+                    tool = tool.strip()
+                    args = {"command": cmd.strip()[:2000]}
+            if not tool:
+                continue
+            verdict = classify_tool_call(tool, args)
+            if verdict["level"] != "low":
+                ev["toolRisk"] = {"level": verdict["level"],
+                                  "reasons": verdict["reasons"]}
+        except Exception:
+            pass
+    return events
+
+
 _BRAIN_HISTORY_CACHE = {}
 _BRAIN_HISTORY_CACHE_TTL_SECONDS = 3.0
 _BRAIN_HISTORY_TAIL_BYTES = 512 * 1024
@@ -642,6 +679,23 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         try:
             if is_llm_event(r):
                 row["risk"] = compute_hallucination_risk(r)
+        except Exception:
+            pass
+        # Call-level tool risk (clawmetry/tool_risk.py): classify from the
+        # RAW row's tool blocks (full args) so the feed's TOOL_CALL rows
+        # carry an honest risk chip. Worst block wins on multi-call rows.
+        try:
+            if evt_type in ("TOOL_CALL", "TOOL.CALL", "EXEC"):
+                from clawmetry.approvals import _extract_tool_blocks
+                from clawmetry.tool_risk import classify_tool_call, risk_rank
+                worst = None
+                for _tcid, _tname, _targs in _extract_tool_blocks(r):
+                    v = classify_tool_call(_tname, _targs)
+                    if worst is None or v["rank"] > worst["rank"]:
+                        worst = v
+                if worst and worst["level"] != "low":
+                    row["toolRisk"] = {"level": worst["level"],
+                                       "reasons": worst["reasons"]}
         except Exception:
             pass
         out.append(row)
@@ -1356,6 +1410,7 @@ def api_brain_history():
     # stable either way, and the local-store fast path above already
     # picked up the rich rows.
     _annotate_risk(events)
+    _annotate_tool_risk(events)
 
     # Issue #563 — Token Probability Visualizer. Per-token confidence
     # heatmap on assistant responses. Only stamps when upstream captured
@@ -2070,7 +2125,10 @@ def api_brain_stream():
                                 pass
                     last_jsonl_scan = now
 
-                # Emit events
+                # Emit events (annotated with call-level tool risk so the
+                # LIVE stream carries the same chips as history loads —
+                # streams never pass through the history annotators).
+                _annotate_tool_risk(events)
                 for ev in events:
                     yield f"data: {json.dumps(ev)}\n\n"
 
