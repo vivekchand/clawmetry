@@ -7350,6 +7350,32 @@ function renderRiskBadge(ev) {
     'title="' + escHtml(tip) + '">' + cfg.dot + ' ' + cfg.label + '</span>';
 }
 
+var _toolRiskBadgeStyles = {
+  medium:   { label: 'Medium risk',   color: '#d97706', bg: 'rgba(217,119,6,0.14)' },
+  high:     { label: 'High risk',     color: '#ea580c', bg: 'rgba(234,88,12,0.16)' },
+  critical: { label: 'Critical risk', color: '#dc2626', bg: 'rgba(220,38,38,0.18)' }
+};
+
+// Call-level tool risk chip (ev.toolRisk from clawmetry/tool_risk.py) —
+// what the CALL touches (rm -rf, sudo, credentials …), a different axis
+// from the hallucination pill above. Low risk renders nothing: the chip
+// only appears when there is something to say.
+function renderToolRiskBadge(ev) {
+  if (!ev || typeof ev !== 'object') return '';
+  var tr = ev.toolRisk;
+  if (!tr || typeof tr !== 'object') return '';
+  var lvl = String(tr.level || '').toLowerCase();
+  var cfg = _toolRiskBadgeStyles[lvl];
+  if (!cfg) return '';
+  var tip = cfg.label + ': ' + (tr.reasons || []).join('; ');
+  return '<span class="brain-tool-risk brain-tool-risk-' + lvl + '" ' +
+    'style="display:inline-flex;align-items:center;gap:3px;background:' + cfg.bg +
+    ';color:' + cfg.color + ';padding:1px 6px;border-radius:3px;font-size:10px;' +
+    'font-weight:700;flex-shrink:0;white-space:nowrap;text-transform:uppercase;' +
+    'letter-spacing:0.4px;" title="' + escHtml(tip) + '">\u26a0 ' +
+    escHtml(lvl) + '</span>';
+}
+
 // Walk a Brain event list and return true when any LLM-call event hit
 // the "high" band. Drives the session-row warning icon (issue #567).
 function sessionHasHighRisk(events, sessionId) {
@@ -7520,7 +7546,7 @@ function renderBrainStream(events) {
     // chips that the backend stamped with a {risk_level, risk_explanation}
     // dict. Green/yellow/red dot + tooltip — readable without ML internals
     // per feedback_simple_ui_for_nontechnical.md.
-    var riskBadge = renderRiskBadge(ev);
+    var riskBadge = renderRiskBadge(ev) + renderToolRiskBadge(ev);
     // Build turn timeline for USER events (Phase 4: Agent Runtime Timeline)
     var turnTimeline = '';
     if (evType === 'USER') {
@@ -20471,6 +20497,11 @@ async function loadToolPolicy() {
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        if (d.risk && d.risk.level && d.risk.level !== 'low') {
+          var rColors = {medium:'#d97706', high:'#ea580c', critical:'#dc2626'};
+          var rc = rColors[d.risk.level] || '#6b7280';
+          rows += '<span title="'+escHtml((d.risk.reasons||[]).join('; '))+'" style="font-size:10px;font-weight:700;color:'+rc+';background:'+rc+'22;border:1px solid '+rc+'44;border-radius:4px;padding:1px 6px;text-transform:uppercase;">'+escHtml(String(d.risk.level))+'</span>';
+        }
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
@@ -20593,6 +20624,11 @@ async function loadToolPolicy() {
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        if (d.risk && d.risk.level && d.risk.level !== 'low') {
+          var rColors = {medium:'#d97706', high:'#ea580c', critical:'#dc2626'};
+          var rc = rColors[d.risk.level] || '#6b7280';
+          rows += '<span title="'+escHtml((d.risk.reasons||[]).join('; '))+'" style="font-size:10px;font-weight:700;color:'+rc+';background:'+rc+'22;border:1px solid '+rc+'44;border-radius:4px;padding:1px 6px;text-transform:uppercase;">'+escHtml(String(d.risk.level))+'</span>';
+        }
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';

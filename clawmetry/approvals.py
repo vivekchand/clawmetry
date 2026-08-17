@@ -154,6 +154,78 @@ def _default_want_gate(policies) -> bool:
 
 POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 
+# ── Approve-and-remember (session scope) ─────────────────────────────────
+#
+# "Approve for this session" decisions live in a small JSON file so BOTH
+# the daemon's reactive watcher and the dashboard's pre-tool hook receiver
+# (different processes) honor them. Entries are keyed on
+# sha256(session_id | canonical tool | extracted command) — the SAME
+# normalisation match_policy uses — and expire after a TTL so a leaked
+# session id can't become a permanent bypass. "Always allow" decisions do
+# NOT live here: they become an ``action: approve`` policy row (the
+# existing always-allow mechanism), so they are visible and revocable in
+# the Approvals tab like any other rule.
+_SESSION_ALLOW_PATH = Path.home() / ".clawmetry" / "approvals_session_allow.json"
+_SESSION_ALLOW_TTL_S = 24 * 3600
+
+
+def _session_allow_key(session_id: str, tool_name: str, args) -> str:
+    import hashlib as _hl
+    cmd = _extract_command(tool_name, args if isinstance(args, dict) else {})
+    raw = f"{session_id or ''}|{_canonical_tool(tool_name)}|{cmd}"
+    return _hl.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _load_session_allows() -> dict:
+    try:
+        if _SESSION_ALLOW_PATH.exists():
+            data = json.loads(_SESSION_ALLOW_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def add_session_allow(session_id: str, tool_name: str, args,
+                      ttl_s: int = _SESSION_ALLOW_TTL_S) -> str:
+    """Record "approved for this session" for this exact (session, tool,
+    command). Prunes expired entries on every write. Returns the key.
+    Never raises — a failed write degrades to re-prompting, never to a
+    blocked or auto-approved call."""
+    key = _session_allow_key(session_id, tool_name, args)
+    try:
+        now_ms = int(time.time() * 1000)
+        data = {k: v for k, v in _load_session_allows().items()
+                if isinstance(v, dict)
+                and int(v.get("expires_ms") or 0) > now_ms}
+        data[key] = {
+            "expires_ms": now_ms + int(ttl_s) * 1000,
+            "session_id": (session_id or "")[:120],
+            "tool": _canonical_tool(tool_name),
+            "command_preview": _extract_command(
+                tool_name, args if isinstance(args, dict) else {})[:140],
+        }
+        _SESSION_ALLOW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SESSION_ALLOW_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, _SESSION_ALLOW_PATH)
+    except Exception as e:
+        log.debug("session-allow write failed: %s", e)
+    return key
+
+
+def check_session_allow(session_id: str, tool_name: str, args) -> bool:
+    """True when this exact (session, tool, command) was approved earlier
+    this session and the entry has not expired. Read-only, never raises."""
+    try:
+        entry = _load_session_allows().get(
+            _session_allow_key(session_id, tool_name, args))
+        return (isinstance(entry, dict)
+                and int(entry.get("expires_ms") or 0) > time.time() * 1000)
+    except Exception:
+        return False
+
 # Default poll interval when waiting on a decision; cloud has 60-300 s timeouts
 # typically so 3 s gives the user perceived responsiveness without hammering
 # the API.
@@ -257,6 +329,17 @@ def _compile_policy(p: dict) -> Optional[dict]:
     )
     cmd_not_re = match.get("command_not_regex")
     args_re = match.get("args_regex")
+    # Risk-level gate: policy fires only when the CALL classifies at or
+    # above this level (clawmetry/tool_risk.py). Unknown strings are
+    # rejected here so a typo ("hgih") can't silently disable the gate.
+    min_risk = str(p.get("min_risk") or match.get("min_risk")
+                   or "").strip().lower() or None
+    if min_risk is not None:
+        from clawmetry.tool_risk import RISK_RANK
+        if min_risk not in RISK_RANK:
+            log.warning(f"policy '{p.get('name')}' has unknown min_risk "
+                        f"'{min_risk}' (want low/medium/high/critical)")
+            return None
     try:
         return {
             "name": p.get("name") or "(unnamed)",
@@ -270,6 +353,7 @@ def _compile_policy(p: dict) -> Optional[dict]:
             "command_regex": re.compile(cmd_re_str) if cmd_re_str else None,
             "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
             "args_regex": re.compile(args_re) if args_re else None,
+            "min_risk": min_risk,
             "action": (p.get("action") or "require_approval").strip(),
             "timeout": int(p.get("timeout") or 604800),  # default 7d (#4066)
             "on_timeout": (p.get("on_timeout") or "deny").strip(),
@@ -348,56 +432,16 @@ def _fetch_cloud_policies(api_key: str) -> list[dict]:
 
 # ── Match engine ──────────────────────────────────────────────────────────
 
-# Harness-agnostic tool categories. Approval policies are authored against
-# OpenClaw's tool names (``exec``, ``read``, …), but other harnesses emit the
-# SAME semantic tool under a different name — claude-cli/Claude Code calls the
-# shell ``Bash``, Codex ``shell``, etc. Without this map a policy with
-# ``tool: exec`` silently never matches a ``Bash`` toolCall, so no approval
-# ever fires (the recurring "I toggled rules but never see a pending
-# approval" bug). Map both sides to a canonical category before comparing.
-_TOOL_CANON = {}
-for _canon, _aliases in {
-    "exec": ["exec", "bash", "sh", "shell", "zsh", "fish", "powershell", "pwsh",
-             "cmd", "command", "run", "run_command", "run_terminal_cmd",
-             "terminal", "execute", "shell_command", "bashtool"],
-    "read": ["read", "cat", "view", "open", "read_file", "get_file", "fs_read",
-             "view_file", "view_file_outline", "list_dir", "read_agent"],
-    "write": ["write", "edit", "multiedit", "str_replace", "str_replace_editor",
-              "create", "apply_patch", "write_file", "fs_write",
-              "write_to_file", "replace_file_content", "edit_file"],
-    "web": ["web_fetch", "webfetch", "fetch", "curl", "wget", "http",
-            "web_search", "websearch", "browser", "browse", "search_web",
-            "read_url_content"],
-    "search": ["grep", "rg", "glob", "ls", "find", "search", "memory_search",
-               "grep_search", "find_by_name", "codebase_search"],
-}.items():
-    for _a in _aliases:
-        _TOOL_CANON[_a] = _canon
-
-
-def _canonical_tool(name: str) -> str:
-    """Map a harness-specific tool name to its canonical category (or itself)."""
-    return _TOOL_CANON.get((name or "").strip().lower(), (name or "").strip().lower())
-
-
-def _extract_command(tool_name: str, args: dict) -> str:
-    """Best-effort: derive the human-readable 'command' string from toolCall args.
-
-    Different OpenClaw tools name the field differently (`command`, `cmd`,
-    `script`, `query`, `path`, …). Match on whichever is present.
-    """
-    if not isinstance(args, dict):
-        return ""
-    for k in ("command", "cmd", "script", "query", "url", "path", "file_path",
-              "task", "message", "content"):
-        v = args.get(k)
-        if isinstance(v, str) and v:
-            return v
-    # Fallback: stringify args
-    try:
-        return json.dumps(args)[:500]
-    except Exception:
-        return ""
+# Harness-agnostic tool categories + command extraction now live in
+# ``clawmetry/tool_risk.py`` (the leaf module the risk classifier, the
+# watcher, replay, and the pre-tool hook gate all share — ONE source of
+# truth so the four surfaces can never drift). Re-exported here because
+# routes/hooks.py, claude_code_gate.py and tests import them from this
+# module.
+from clawmetry.tool_risk import (  # noqa: E402,F401  (re-export)
+    _TOOL_CANON, _canonical_tool, _extract_command,
+    classify_tool_call, risk_rank,
+)
 
 
 def match_policy(policies: list[dict], tool_name: str, args: dict):
@@ -421,6 +465,9 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
         pass
     ordered = ([p for p in policies if (p.get("action") or "") == "approve"] +
                [p for p in policies if (p.get("action") or "") != "approve"])
+    # Risk is classified at most once per call, and only when some policy
+    # actually gates on it (zero cost for min_risk-free policy sets).
+    call_risk_rank: Optional[int] = None
     for p in ordered:
         # Harness-agnostic tool match: a policy authored for ``exec`` matches a
         # ``Bash`` / ``shell`` toolCall (see _canonical_tool). Falls back to a
@@ -433,6 +480,11 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
             continue
         if p.get("args_regex") and not p["args_regex"].search(args_str):
             continue
+        if p.get("min_risk"):
+            if call_risk_rank is None:
+                call_risk_rank = classify_tool_call(tool_name, args)["rank"]
+            if call_risk_rank < risk_rank(p["min_risk"]):
+                continue
         return p
     return None
 
@@ -875,8 +927,16 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         _in_flight[key] = {"decision": "pending", "policy": policy["name"], "killed": False}
 
     cmd_preview = _extract_command(tool_name, args)[:140]
+    # Call-level risk verdict (tool_risk.py) — stamped into the approval
+    # row's args blob under the namespaced ``_cm_risk`` key so the queue,
+    # the audit feed, and the cloud inbox can render a risk chip without a
+    # schema migration (the raw tool args keys stay untouched).
+    risk = classify_tool_call(tool_name, args)
+    args_with_risk = dict(args) if isinstance(args, dict) else {"value": args}
+    args_with_risk["_cm_risk"] = {"level": risk["level"],
+                                  "reasons": risk["reasons"]}
     log.info(f"[approval] policy='{policy['name']}' tool={tool_name} "
-             f"cmd={cmd_preview!r} session={session_id}")
+             f"risk={risk['level']} cmd={cmd_preview!r} session={session_id}")
 
     approval_id = uuid.uuid4().hex
 
@@ -893,7 +953,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                 "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
                 "requestor_session_id": session_id,
                 "action": f"{tool_name}: {cmd_preview}",
-                "args": args,
+                "args": args_with_risk,
                 "status": "auto_approved",
                 "decision_reason": (f"always-allow rule '{policy['name']}' "
                                     "matched"),
@@ -931,7 +991,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                 "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
                 "requestor_session_id": session_id,
                 "action": f"{tool_name}: {cmd_preview}",
-                "args": args,
+                "args": args_with_risk,
                 "status": "simulated",
                 "decision_reason": (f"monitor mode: policy '{policy['name']}' "
                                     "would have paused this"),
@@ -963,12 +1023,41 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
             _in_flight[key] = result
         return result
 
+    # Approve-and-remember: an earlier "approve for this session" decision
+    # for this exact (session, tool, command) sails through with an audit
+    # row — same contract as an always-allow rule, but session-scoped and
+    # TTL-bound (see add_session_allow).
+    if session_id and check_session_allow(session_id, tool_name, args):
+        try:
+            import hashlib as _hl
+            from clawmetry import local_store as _lsm
+            _lsm.get_store().ingest_approval({
+                "id": approval_id,
+                "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
+                "requestor_session_id": session_id,
+                "action": f"{tool_name}: {cmd_preview}",
+                "args": args_with_risk,
+                "status": "auto_approved",
+                "decision_reason": "approved earlier this session "
+                                   "(remember-my-choice)",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime()),
+            })
+        except Exception as _sae:
+            log.debug("session-allow persist failed: %s", _sae)
+        result = {"decision": "approved", "policy": policy["name"],
+                  "killed": False, "approval_id": approval_id,
+                  "auto": True, "session_allow": True}
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
+
     req = {
         "id": approval_id,
         "node_id": node_id,
         "session_id": session_id,
         "tool_name": tool_name,
-        "args": args,
+        "args": args_with_risk,
         "context": f"Policy '{policy['name']}' fired on {tool_name}: {cmd_preview}",
         "policy_name": policy["name"],
         "timeout": policy["timeout"],
@@ -988,7 +1077,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
             "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
             "requestor_session_id": session_id,
             "action": f"{tool_name}: {cmd_preview}",
-            "args": args,
+            "args": args_with_risk,
             "status": "pending",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
@@ -1226,7 +1315,12 @@ _TOOL_BLOCK_TYPES = ("toolCall", "tool_use")
 # silently never fired for those runtimes (found 2026-06-10 by replaying a
 # policy over the live store: 2,539 tool_call rows in 3 days, 0 visible to
 # the watcher).
-_TOOL_EVENT_TYPES = ("message", "assistant", "tool_call")
+# ``model.completed`` (+ ``data.toolMetas``) is the CURRENT OpenClaw v3
+# on-disk shape for assistant turns; ``tool.call`` is NemoClaw's. Without
+# them the watcher never fires on today's OpenClaw sessions (2026-08-17
+# blind-spot audit).
+_TOOL_EVENT_TYPES = ("message", "assistant", "tool_call",
+                     "model.completed", "tool.call")
 
 
 def _read_persisted_watermark() -> "tuple[Optional[int], dict[str, int]]":
@@ -1314,6 +1408,41 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
     data = row.get("data")
     if not isinstance(data, dict):
         return out
+
+    def _norm_args(a):
+        """Args arrive as a dict (most adapters), a JSON string (codex,
+        picoclaw, hermes pass OpenAI ``arguments`` through unparsed), or
+        junk. Parse strings; anything else degrades to {} (name-only
+        classification, never a crash)."""
+        if isinstance(a, dict):
+            return a
+        if isinstance(a, str) and a.strip().startswith("{"):
+            try:
+                parsed = json.loads(a)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    def _blk_args(blk: dict):
+        # Adapter arg-key roulette: input (claude_code/copilot/exo/dsh),
+        # arguments (goose/opencode/deepagents/n8n + OpenAI strings),
+        # args, params / rawArgs (cursor toolFormerData).
+        for k in ("input", "arguments", "args", "params", "rawArgs"):
+            if k in blk:
+                return _norm_args(blk.get(k))
+        # OpenAI-nested shape: {id, type: "function",
+        #                       function: {name, arguments}} (hermes).
+        fn = blk.get("function")
+        if isinstance(fn, dict):
+            return _norm_args(fn.get("arguments"))
+        return {}
+
+    def _blk_name(blk: dict, fallback=None):
+        name = blk.get("name")
+        if not name and isinstance(blk.get("function"), dict):
+            name = blk["function"].get("name")
+        return name or fallback
     # Case A: ``data.message.content[]`` (assistant turn carries toolCalls)
     msg = data.get("message")
     if isinstance(msg, dict):
@@ -1326,7 +1455,7 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
                     out.append((
                         str(blk.get("id") or ""),
                         str(blk.get("name") or ""),
-                        blk.get("arguments") or blk.get("input") or {},
+                        _norm_args(blk.get("arguments") or blk.get("input")),
                     ))
     # Case B: ``data.content[]`` (flattened — no nested message)
     if not out and isinstance(data.get("content"), list):
@@ -1336,14 +1465,14 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
                     out.append((
                         str(blk.get("id") or ""),
                         str(blk.get("name") or ""),
-                        blk.get("arguments") or blk.get("input") or {},
+                        _norm_args(blk.get("arguments") or blk.get("input")),
                     ))
     # Case C: ``data`` IS the toolCall block (one-event-per-tool emitters)
     if not out and data.get("type") in _TOOL_BLOCK_TYPES:
         out.append((
             str(data.get("id") or ""),
             str(data.get("name") or ""),
-            data.get("arguments") or data.get("input") or {},
+            _norm_args(data.get("arguments") or data.get("input")),
         ))
     # Case D: family adapters (claude_code / codex / cursor / …) ingest one
     # row per tool call under ``event_type='tool_call'`` with an OpenAI-style
@@ -1355,15 +1484,36 @@ def _extract_tool_blocks(row: dict) -> list[tuple[str, str, dict]]:
             for blk in data["tool_calls"]:
                 if not isinstance(blk, dict):
                     continue
-                name = blk.get("name") or data.get("tool_name")
+                name = _blk_name(blk, data.get("tool_name"))
                 if not name:
                     continue
-                args = blk.get("input") or blk.get("arguments") or blk.get("args") or {}
                 out.append((
                     str(blk.get("id") or ""),
                     str(name),
-                    args if isinstance(args, dict) else {},
+                    _blk_args(blk),
                 ))
+    # Case E: OpenClaw v3 assistant turns — ``event_type='model.completed'``
+    # with ``data.toolMetas = [{id, name, input}]`` (sync._parse_v3_event).
+    # This is the CURRENT on-disk OpenClaw shape; without this branch the
+    # watcher only ever saw the legacy ``message.content[]`` layout.
+    if not out and isinstance(data.get("toolMetas"), list):
+        for blk in data["toolMetas"]:
+            if not isinstance(blk, dict) or not blk.get("name"):
+                continue
+            out.append((
+                str(blk.get("id") or ""),
+                str(blk.get("name")),
+                _norm_args(blk.get("input")),
+            ))
+    # Case F: NemoClaw toolkit rows — ``event_type='tool.call'`` with a
+    # flat ``data = {name, input}``.
+    if not out and str(row.get("event_type") or "") == "tool.call" \
+            and data.get("name"):
+        out.append((
+            str(data.get("id") or ""),
+            str(data.get("name")),
+            _norm_args(data.get("input") or data.get("args")),
+        ))
     return out
 
 

@@ -42503,6 +42503,220 @@ def api_entitlement_has_runtimes_bundle_batch():
         )
 
 
+def _has_bundle_row_at_body(row: dict, list_key: str) -> dict:
+    """Perspective-shaped sibling of :func:`_has_bundle_row_body`.
+
+    Same ``list_key`` / ``unknown`` / ``kind`` / ``count`` axes, but the
+    fold slot is renamed ``has_<axis>_at`` matching the singular scalar
+    ``has_features_at`` / ``has_runtimes_at`` name on
+    :func:`clawmetry.entitlements.has_features_bundle_batch_at` /
+    :func:`clawmetry.entitlements.has_runtimes_bundle_batch_at`. Kept
+    beside :func:`_has_bundle_row_body` so a future per-row envelope
+    tweak (extra keys, coercion) has ONE obvious edit-site per family
+    instead of drifting between the LIVE and the perspective endpoints.
+    Never raises; a missing key surfaces as the empty-row shape with
+    ``has_<axis>_at=False``.
+    """
+    fold_key = f"has_{list_key}_at"
+    return {
+        list_key: list(row.get(list_key) or []),
+        "unknown": list(row.get("unknown") or []),
+        "kind": row.get("kind"),
+        "count": int(row.get("count") or 0),
+        fold_key: bool(row.get(fold_key)),
+    }
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-features-bundle-batch-at",
+    methods=["POST"],
+)
+def api_entitlement_has_features_bundle_batch_at():
+    """``POST /api/entitlement/has-features-bundle-batch-at?tier=<perspective>``
+    -- hypothetical-perspective sibling of
+    ``/api/entitlement/has-features-bundle-batch``.
+
+    Wraps :func:`clawmetry.entitlements.has_features_bundle_batch_at`
+    so a pricing-matrix walkthrough can call the per-bundle boolean-
+    fold batch on the feature axis from any tier's perspective without
+    first switching the resolver. Fills the ``_at`` slot for the
+    feature-axis bundle-batch family alongside the aggregate
+    ``/has-all-bundle-batch-at`` and the runtime-axis sibling
+    ``/has-runtimes-bundle-batch-at``.
+
+    **Perspective-shaped** (grace-independent by design): each row's
+    ``has_features_at`` delegates to
+    :func:`clawmetry.entitlements.has_features_at` (backed by the
+    static per-tier grant table via
+    :func:`clawmetry.entitlements._hypothetical_entitlement`), so grace
+    vs enforce yields byte-identical row bodies (only the resolver
+    envelope shifts). Whole point of the ``_at`` slot: at
+    ``tier=oss`` a paid-feature bundle reports ``has_features_at=false``
+    even in grace, whereas the LIVE ``/has-features-bundle-batch``
+    reports ``has_features=true`` for the same bundle via grace pass-
+    through.
+
+    Request body is byte-identical to ``/has-features-bundle-batch``.
+    The extra ``tier=<perspective>`` query arg is required.
+
+    Response layers ``perspective_tier`` / ``perspective_tier_label`` /
+    ``perspective_tier_rank`` on top of the bare batch envelope so a
+    caller can render "from <perspective> this bundle would be locked"
+    copy off one call::
+
+        {
+          "perspective_tier":       "cloud_pro",
+          "perspective_tier_label": "Cloud Pro",
+          "perspective_tier_rank":  <int>,
+          "bundles":                [<row>, ...],
+          "count":                  <int>,
+          "current_tier":           "...",
+          "current_tier_rank":      <int>,
+          "grace":                  <bool>,
+          "enforced":               <bool>,
+        }
+
+    Each ``<row>`` mirrors the LIVE ``/has-features-bundle-batch`` row
+    body byte-for-byte on the axis echo slots with the fold slot
+    renamed ``has_features_at``::
+
+        {
+          "features":        ["fleet", "sso"],
+          "unknown":         ["bogus"],
+          "kind":            "features",
+          "count":           2,
+          "has_features_at": <bool>,
+        }
+
+    - **400** when ``tier=`` is missing / blank
+    - **404** when ``tier`` is unknown (body carries ``which=tier`` so a
+      caller can render the right "unknown tier" message)
+    - **400** when ``bundles`` is missing / non-list / empty
+    - **Never 5xxs**: a resolver failure yields the fallback envelope
+      so the paywall matrix keeps rendering.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.has_features_bundle_batch_at(tier_in, bundles) or []
+        out_rows = [_has_bundle_row_at_body(row, "features") for row in rows]
+        env = _perspective_envelope(_ent, tier_in)
+        return jsonify(
+            {
+                **env,
+                "bundles": out_rows,
+                "count": len(out_rows),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_features_bundle_batch_at: error: %s", exc
+        )
+        env = _perspective_fallback(tier_in)
+        return jsonify(
+            {
+                **env,
+                "bundles": [],
+                "count": 0,
+            }
+        )
+
+
+@bp_entitlement.route(
+    "/api/entitlement/has-runtimes-bundle-batch-at",
+    methods=["POST"],
+)
+def api_entitlement_has_runtimes_bundle_batch_at():
+    """``POST /api/entitlement/has-runtimes-bundle-batch-at?tier=<perspective>``
+    -- runtime-axis twin of
+    ``/api/entitlement/has-features-bundle-batch-at``.
+
+    Wraps :func:`clawmetry.entitlements.has_runtimes_bundle_batch_at`
+    so a pricing-matrix walkthrough can call the per-bundle boolean-
+    fold batch on the runtime axis from any tier's perspective without
+    first switching the resolver. Pairs with
+    ``/has-features-bundle-batch-at`` the same way
+    ``/has-runtimes-bundle-batch`` pairs with
+    ``/has-features-bundle-batch`` on the LIVE seat: together the two
+    perspective-scoped bundle-batch endpoints let a caller render "from
+    <perspective>, does this whole runtime set land granted?" copy off
+    ONE call per axis instead of N calls to
+    ``/has-runtime-at`` / ``/has-runtimes-at``.
+
+    Response shape and error paths mirror
+    ``/has-features-bundle-batch-at`` exactly, with ``kind="runtimes"``,
+    a ``runtimes`` list in place of ``features``, and
+    ``has_runtimes_at`` in place of ``has_features_at`` per row.
+    Runtime aliases (``claude-code`` -> ``claude_code``) canonicalise
+    per bundle inside the helper before the ``ALL_RUNTIMES`` membership
+    check, matching the LIVE ``/has-runtimes-bundle-batch`` alias
+    posture byte-for-byte.
+    """
+    raw_tier = request.args.get("tier")
+    tier_in = (raw_tier or "").strip().lower()
+    if not tier_in:
+        return jsonify({"error": "missing tier"}), 400
+    body = request.get_json(silent=True) or {}
+    bundles, err = _parse_bundles_body(body)
+    if err == "missing":
+        return jsonify({"error": "missing bundles"}), 400
+    if err == "empty":
+        return jsonify({"error": "empty bundles"}), 400
+    if err == "bundles_must_be_list":
+        return jsonify({"error": "bundles must be a list"}), 400
+    try:
+        from clawmetry import entitlements as _ent
+
+        if tier_in not in _ent._TIER_ORDER:
+            return (
+                jsonify(
+                    {"error": "unknown tier", "which": "tier", "tier": tier_in}
+                ),
+                404,
+            )
+        rows = _ent.has_runtimes_bundle_batch_at(tier_in, bundles) or []
+        out_rows = [_has_bundle_row_at_body(row, "runtimes") for row in rows]
+        env = _perspective_envelope(_ent, tier_in)
+        return jsonify(
+            {
+                **env,
+                "bundles": out_rows,
+                "count": len(out_rows),
+            }
+        )
+    except Exception as exc:
+        logger.warning(
+            "api_entitlement_has_runtimes_bundle_batch_at: error: %s", exc
+        )
+        env = _perspective_fallback(tier_in)
+        return jsonify(
+            {
+                **env,
+                "bundles": [],
+                "count": 0,
+            }
+        )
+
+
 def _parse_aggregate_bundles_body(body, key: str = "bundles"):
     """Extract a list of aggregate 5-axis bundle dicts from a JSON POST body.
 
