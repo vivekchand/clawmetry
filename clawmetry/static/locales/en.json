@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Trace Clusters",
   "usage.trace_clusters_hint": "auto-group sessions by behavior pattern",
   "usage.trend": "Trend",
-  "version_impact.title": "Upgrade Impact"
+  "version_impact.title": "Upgrade Impact",
+  "app.approve_for_session": "Approve for session",
+  "app.always_allow": "Always allow",
+  "approvals.min_risk_label": "Minimum risk level",
+  "approvals.min_risk_any": "Any (match on keywords only)",
+  "approvals.min_risk_medium": "Medium or above",
+  "approvals.min_risk_high": "High or above",
+  "approvals.min_risk_critical": "Critical only",
+  "approvals.min_risk_hint": "ClawMetry scores every tool call (recursive deletes, sudo, credential access...). Set this to gate by risk with or without keywords."
 }

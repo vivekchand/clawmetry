@@ -97,6 +97,16 @@
           <div style="font-size:10px;color:var(--text-faint);margin-top:3px;" data-i18n="approvals.keywords_hint">Enter keywords separated by commas. The agent will be paused when any of these are detected.</div>
         </div>
         <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.min_risk_label">Minimum risk level</label>
+          <select id="rule-min-risk" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="" selected data-i18n="approvals.min_risk_any">Any (match on keywords only)</option>
+            <option value="medium" data-i18n="approvals.min_risk_medium">Medium or above</option>
+            <option value="high" data-i18n="approvals.min_risk_high">High or above</option>
+            <option value="critical" data-i18n="approvals.min_risk_critical">Critical only</option>
+          </select>
+          <div style="font-size:10px;color:var(--text-faint);margin-top:3px;" data-i18n="approvals.min_risk_hint">ClawMetry scores every tool call (recursive deletes, sudo, credential access...). Set this to gate by risk with or without keywords.</div>
+        </div>
+        <div>
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.approval_timeout">Approval timeout</label>
           <select id="rule-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
             <option value="30" data-i18n="approvals.timeout_30s">30 seconds</option>
@@ -239,6 +249,10 @@
 
   /* ── Preset policies ── */
   var PRESETS = [
+    {key:'risk_high', name:'Require approval for high-risk actions', icon:'\ud83d\udee1\ufe0f',
+     desc:'Pauses any call ClawMetry classifies high or critical risk: recursive deletes, force pushes, sudo, credential access, cloud metadata probes. One rule, every runtime.',
+     tool:'', min_risk:'high', timeout:604800, on_timeout:'deny',
+     color:'#e11d48'},
     {key:'rm_rf', name:'Block destructive deletes', icon:'🗑',
      desc:'Stops rm -rf, shred, unlink on important paths',
      tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:604800, on_timeout:'deny',
@@ -462,6 +476,12 @@
       // Not one of the user's rules: the runtime itself stopped to ask.
       html += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">asked by the agent</span>';
     }
+    if (r.risk && r.risk.level) {
+      var riskColors = {low:'#6b7280', medium:'#f59e0b', high:'#f97316', critical:'#ef4444'};
+      var rc = riskColors[r.risk.level] || '#6b7280';
+      var rTitle = (r.risk.reasons || []).join('; ');
+      html += '<span title="' + escHtml(rTitle) + '" style="background:' + rc + '22;color:' + rc + ';border:1px solid ' + rc + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.risk.level) + ' risk</span>';
+    }
     if (r.policy_name) {
       html += '<span style="color:var(--text-muted);font-size:11px;" data-i18n="app.rule_eschtml_r_policy_name">rule: ' + escHtml(r.policy_name) + '</span>';
     }
@@ -484,6 +504,10 @@
       html += '<div style="display:flex;gap:8px;margin-top:8px;">';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_2">Approve</button>';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
+      if (_isOssMode()) {
+        html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\',{remember:\'session\'})" title="Approve, and skip the prompt for this exact command for the rest of this session" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_for_session">Approve for session</button>';
+        html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\',{remember:\'always\'})" title="Approve, and create a visible always-allow rule for this exact command" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.always_allow">Always allow</button>';
+      }
       if (r.expires_at) {
         html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
       }
@@ -515,6 +539,7 @@
       requested_at: r.created_at,
       session_id: r.requestor_session_id,
       args_preview: r.args_preview,
+      risk: r.risk,
       kind: r.kind
     };
   }
@@ -931,24 +956,26 @@
           return !(p.preset_key === presetKey || (!p.preset_key && p.name === preset.name));
         });
         if (enabled) {
-          next.push({
+          var row = {
             name: preset.name, tool: preset.tool,
-            pattern_type: 'command_regex', pattern: preset.pattern,
             action: 'require_approval', timeout: preset.timeout,
             on_timeout: preset.on_timeout, preset_key: preset.key
-          });
+          };
+          if (preset.min_risk) { row.min_risk = preset.min_risk; }
+          else { row.pattern_type = 'command_regex'; row.pattern = preset.pattern; }
+          next.push(row);
         }
         r = await _putOssPolicies(next);
       } else {
         r = await fetch('/api/cloud/policies', {
           method: 'POST', headers: _authHeaders(),
-          body: JSON.stringify({
+          body: JSON.stringify(Object.assign({
             name: preset.name, tool: preset.tool,
-            pattern_type: 'command_regex', pattern: preset.pattern,
             action: 'require_approval', timeout: preset.timeout,
             on_timeout: preset.on_timeout, enabled: enabled,
             preset_key: preset.key
-          })
+          }, preset.min_risk ? {min_risk: preset.min_risk}
+             : {pattern_type: 'command_regex', pattern: preset.pattern}))
         });
         if (!r.ok && r.status === 402) { showUpgradeModal(); loadApprovalsTab(); return; }
       }
@@ -974,15 +1001,20 @@
     var patternRaw = (document.getElementById('rule-pattern').value || '').trim();
     var timeout = parseInt(document.getElementById('rule-timeout').value) || 60;
     var onTimeout = document.getElementById('rule-on-timeout').value || 'deny';
+    var minRiskEl = document.getElementById('rule-min-risk');
+    var minRisk = minRiskEl ? (minRiskEl.value || '') : '';
     if (!name) { alert('Please enter a rule name.'); return; }
-    if (!patternRaw) { alert('Please enter at least one keyword to match.'); return; }
-    // Convert comma-separated keywords to regex alternation
-    var pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    if (!patternRaw && !minRisk) { alert('Enter keywords to match, or pick a minimum risk level.'); return; }
     var rule = {
-      name: name, tool: tool, pattern_type: 'command_regex',
-      pattern: pattern, action: 'require_approval',
+      name: name, tool: tool, action: 'require_approval',
       timeout: timeout, on_timeout: onTimeout
     };
+    if (patternRaw) {
+      // Convert comma-separated keywords to regex alternation
+      rule.pattern_type = 'command_regex';
+      rule.pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    }
+    if (minRisk) rule.min_risk = minRisk;
     try {
       if (ossMode) {
         // Append to the local YAML rule list (replace same-name rule).
@@ -1063,6 +1095,7 @@
         // thread / pre-tool hook long-poll sees it within ~3 s.
         var localBody = {decision: action};
         if (reason) localBody.reason = reason;
+        if (opts.remember) localBody.remember = opts.remember;
         r = await fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(localBody)
