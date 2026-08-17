@@ -3796,8 +3796,11 @@ DASHBOARD_HTML = r"""
 <title>ClawMetry</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Self-hosted webfonts. A page load must never contact a third party: an
+     air-gapped install has no route to Google, and in the EU an embedded
+     Google Fonts request discloses the viewer's IP to a US processor with
+     no legal basis. Regenerate with scripts/vendor_fonts.py. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=version) }}">
 <style>
   :root {
     /* Light theme (default) */
@@ -4812,8 +4815,8 @@ document.addEventListener('click', function(e) {
 
 <script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js', v=version) }}"></script>
 </head>
 <body data-theme="dark" class="booting">
 <!-- Login overlay -->
@@ -12867,19 +12870,26 @@ DASHBOARD_HTML = r"""
 <title>ClawMetry</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Self-hosted webfonts. A page load must never contact a third party: an
+     air-gapped install has no route to Google, and in the EU an embedded
+     Google Fonts request discloses the viewer's IP to a US processor with
+     no legal basis. Regenerate with scripts/vendor_fonts.py. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=version) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
-     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly. -->
+     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
+     chart.js + its date adapter are vendored on the same rule. Every file here is
+     byte-compared against its npm registry tarball by scripts/verify_vendor.py,
+     and scripts/verify_no_external_assets.py fails CI on any absolute http(s)
+     asset reference. The dashboard must render fully with zero egress. -->
 <script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js', v=version) }}"></script>
 </head>
 <body data-theme="dark" class="booting has-profile-menu">
 {% include 'partials/overlays.html' %}
@@ -13902,7 +13912,7 @@ FLEET_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClawMetry Fleet</title>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/fonts.css">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Manrope', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }
