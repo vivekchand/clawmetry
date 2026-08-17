@@ -3754,7 +3754,14 @@ def _detect_disk_mounts():
 
 
 def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    """Get the machine's public IP address (useful for cloud/VPS users).
+
+    Shadowed by the second definition further down this file, which is the one
+    that actually runs. Gated identically so the dead copy cannot reintroduce
+    an ungated third-party call if the definitions are ever reordered.
+    """
+    if _egress_suppressed():
+        return None
     try:
         import urllib.request
 
@@ -12833,8 +12840,33 @@ def _detect_disk_mounts():
     return mounts
 
 
+def _egress_suppressed():
+    """Whether discretionary outbound calls are disabled for this install.
+
+    Thin wrapper so a missing/older clawmetry package can never break startup.
+    Fails CLOSED: if the check itself errors we suppress the call, because the
+    cost of a missing banner line is nothing and the cost of an unexpected
+    third-party request in a customer network is a failed security review.
+    """
+    try:
+        from clawmetry.endpoints import egress_suppressed
+        return egress_suppressed()
+    except Exception:
+        return True
+
+
 def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    """The machine's public IP, for the "reachable at" startup banner line.
+
+    Returns None instead of calling out when this deployment is not supposed
+    to talk to the internet. api.ipify.org is a third party nobody in an
+    enterprise deployment agreed to, and the request itself discloses that
+    this network runs ClawMetry -- a poor trade for one cosmetic banner line.
+    Suppressed for self-hosted, offline/air-gapped, and repointed-endpoint
+    installs; see docs/EGRESS.md, which documents this as opt-out.
+    """
+    if _egress_suppressed():
+        return None
     try:
         import urllib.request
         return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
