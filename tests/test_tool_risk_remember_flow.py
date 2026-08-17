@@ -199,3 +199,20 @@ def test_watcher_session_allow_short_circuit(harness, monkeypatch):
     auto = next(r for r in rows if r.get("status") == "auto_approved")
     args = auto.get("args") or {}
     assert (args.get("_cm_risk") or {}).get("level") == "high"
+
+
+def test_audit_classifies_legacy_rows_and_previews_hook_command():
+    """Rows written before the classifier shipped still get a risk chip
+    (classified at read time), and hook-receiver rows preview the COMMAND
+    the human must judge, not the internal meta blob."""
+    from routes.policy import _row_risk, _arg_preview
+    legacy = {"id": "l", "action": "Bash: git push --force origin main",
+              "args": {"command": "git push --force origin main"}}
+    assert _row_risk(legacy)["level"] == "high"
+    hook_args = {"source": "pretooluse-hook", "tool_name": "Bash",
+                 "tool_input": {"command": "rm -rf /tmp/x"}, "cwd": "/tmp"}
+    assert _arg_preview(hook_args) == "rm -rf /tmp/x"
+    assert _row_risk({"id": "h", "action": "Bash: rm -rf /tmp/x",
+                      "args": hook_args})["level"] == "high"
+    # Nothing to classify → no chip, no crash.
+    assert _row_risk({"id": "e", "action": "", "args": None}) is None
