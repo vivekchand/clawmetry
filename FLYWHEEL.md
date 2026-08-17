@@ -156,7 +156,60 @@ Separately, **check [Pending Work Orders](https://factory.8090.ai) regularly**, 
 - **No em-dashes (`—`, U+2014), no double-dashes (`--`), no `X, Y, and Z [emdash] coda` pattern in user-facing copy.** That pattern is an AI-tell, and the user has explicitly banned it. Applies to: landing HTML, dashboard banners, marketing copy, blog posts, CHANGELOG release entries, bounty and job posts (incl. external platforms like rentahuman.ai), public docs, email templates, modal copy, and any PR description users see. Allowed in: code comments, internal notes in `docs/`, commit messages, and internal-only PR bodies. Use a comma, parenthetical, colon, or full stop instead. **Belt-and-braces:** before sending any user-facing text (a PR via someone else's API, a CHANGELOG entry, landing copy, modal text), grep the payload for `—` or `--` and refuse to send if matched. Burned twice: 2026-05-26 on landing PR #211 (em-dashes in marketing copy), 2026-05-28 on the rentahuman.ai bounty redraft (em-dashes everywhere despite the rule being in memory, so the user had to re-flag it).
 - **Keep business internals out of this public repo.** This repo is public — investors, competitors, and prospective hires browse it. Any doc with live revenue/MRR/funnel/conversion numbers or monetization/pricing strategy (conversion roadmaps, conversion PRDs, pricing analysis) goes in **`clawmetry-cloud/docs/` (private), NEVER `clawmetry/docs/`**. Same rule as `[intel/*]` issues. Before creating any doc, ask: would this leak positioning, lead pipeline, or revenue if a competitor read it? If yes → private repo. (Burned 2026-05-26: a conversion roadmap + PRDs with the real paying-customer/MRR funnel were written into public `docs/` and had to be relocated.)
 
-## 2a. Adding a runtime: the count is derived, never hand-edited
+## 2a. Adding a runtime: every surface, every repo, ONE sprint (canonical checklist)
+
+A runtime is "supported" only when it exists on **every** surface below, in all four
+repos, and is verified live. Half of it shipping is worse than none: the product says
+21, the homepage says 20, the README lists it unlinked, and `/runtimes/<slug>` is a 404.
+**Burned 2026-08-17 (Exo):** adapter, OSS wiring, `[RELEASE]` 0.12.726, cloud pin,
+`/api/runtimes` = 21 — all done — and the storefront never followed for a day. The
+product half of the flywheel had run; the storefront half had not. This section is the
+canonical list; `clawmetry-pro`, `clawmetry-cloud`, and `clawmetry-landing` FLYWHEELs
+point here and carry only their own slice.
+
+Order of operations (each step is a PR that merges before the next starts):
+
+**1. `clawmetry-pro` — the adapter (private).**
+`clawmetry_pro/adapters/<runtime>.py` (self-contained, base SDK only), `_PAID_ADAPTERS`
+entry, REAL fixture under `tests/fixtures/runtimes/<rt>/REAL/` with a README naming how
+it was captured, `RuntimeSpec` + a matrix leg in `runtime-conformance.yml` (the matrix is
+hardcoded, not derived), unit tests over the real file shapes (empty, torn tail, dup /
+replayed events, fork/subagent lineage, cost ladder). Bump `pyproject` + `__version__`
+in lockstep. Verify with an isolated ingest, not the daemon proxy (see memory
+`exo-runtime-adapter-shipped`).
+
+**2. `clawmetry` (this repo) — wiring + count + public contract, then `[RELEASE]`.**
+| Surface | What to touch |
+|---|---|
+| Catalogue | `clawmetry/entitlements.py`: `PAID_RUNTIMES` (or `FREE_RUNTIMES`), `RUNTIME_LABELS`, **`RUNTIME_LANDING_PATHS`** (`/runtimes/<slug>`, the public page this runtime WILL have). |
+| Ingest | `clawmetry/sync.py` family loop (label map + store-root discovery + `CLAWMETRY_<RT>_*` env override), `clawmetry/runtime_probe.py`, `clawmetry/runtime_memory.py` (memory/skills catalog), `clawmetry/numbat_ingest.py` aliases, `routes/harness.py`, `routes/usage.py`, `routes/attention.py`; a new provider → `clawmetry/providers_pricing.py`. |
+| UI | `clawmetry/static/js/app.js`: every runtime map (`_CM_RT_PREFIXES`, labels, icons, `_CM_RT_CAPS`, the harness card map at the `deepseek_harness:` anchors — grep the previous runtime's id and mirror EVERY hit; qm was missed in `_CM_RT_PREFIXES` once). |
+| Count | run `python3 scripts/sync_runtime_count.py` and commit what it rewrites (README, translations, FLYWHEEL, ARCHITECTURE, CLI, desktop onboarding, device page). `setup.py` derives the PyPI summary itself. |
+| README grid | add `EMOJI **[Label](https://clawmetry.com/runtimes/<slug>)**` to the "Works with N agent runtimes" line — LINKED, never bare bold. |
+| Docs | `docs/ENTITLEMENTS.md` runtime list; `docs/RUNTIME_SCREENSHOTS.md` + `screenshots/runtimes/<rt>/` once a real capture exists (staging recipe in memory `runtime-screenshot-gallery-staging-recipe`); `CHANGELOG.md` entry (no em-dashes). |
+| Tests (count pins that break) | `tests/test_entitlements.py::test_paid_runtimes_exact_membership`, `tests/test_phase4_adapter_move.py`, `tests/test_advertised_runtimes_match_catalogue.py`, `tests/test_runtime_count_copy_sync.py`, **`tests/test_runtime_public_surfaces.py`** (README grid links every catalogue runtime; `CLAWMETRY_LIVE_CHECKS=1` also asserts each page is 200 on clawmetry.com). |
+| Ship | `[RELEASE]` PR → PyPI; crack the wheel and grep for the runtime id before you pin it anywhere. |
+
+**3. `clawmetry-cloud` — serve it.** Roll the pro wheel (`_pro_wheel_path`), bump the
+`clawmetry==X` pin, deploy, then verify live: `GET /api/runtimes` includes the id and
+`/api/license/download` serves the pro version that carries the adapter.
+
+**4. `clawmetry-landing` + this README — the storefront (same day as step 3).**
+`runtimes-<slug>.html` themed to the vendor's own palette/type, `app.py` route,
+`sitemap_gen.py`, homepage `.rt-cloud` tile + tooltip enumeration, chip on every other
+runtime page, the fleet count everywhere it is quoted (connect, pricing, control tower,
+how-it-works, agent-builder, push, device, llms.txt, `locales/en.json`),
+`docs/PUBLIC_CLAIMS.md` §3.1 with a dated "Reconciled" line, and the guard
+`tests/test_pages.py::test_runtime_surfaces_are_in_lockstep`. Then run
+`CLAWMETRY_LIVE_CHECKS=1 pytest tests/test_runtime_public_surfaces.py` here: every
+`RUNTIME_LANDING_PATHS` entry must be 200 on clawmetry.com. Also `gh repo edit
+--description` if the count is in it, and any awesome-list / directory entries you own.
+
+**5. Verify like the founder will:** open the homepage grid, click the new tile, open
+the dashboard with the runtime switcher on the new runtime, screenshot all three, and
+put them in the PRs. If you cannot show the tile, the page, and the data, it did not ship.
+
+### The count is derived, never hand-edited
 
 `FREE_RUNTIMES | PAID_RUNTIMES` in `clawmetry/entitlements.py` is the **only**
 place the supported-runtime set is declared. Everything that quotes a number
@@ -166,12 +219,9 @@ hangs off it:
 |---|---|
 | PyPI summary (`setup.py`) | **Derived.** `setup.py` parses `entitlements.py` at build time, so it cannot drift. |
 | README, translations, FLYWHEEL, ARCHITECTURE, AUDIT, CLI, desktop onboarding, device page | **Rewritten** by `python3 scripts/sync_runtime_count.py`. |
+| README runtime grid links | **Enforced** by `tests/test_runtime_public_surfaces.py` against `RUNTIME_LANDING_PATHS`. |
 | All of the above | **Enforced** by `tests/test_runtime_count_copy_sync.py`, which fails CI on drift. Also runs via `make lint`. |
-| Landing pages, GitHub repo description | **Not covered by this repo's CI.** Update `clawmetry-landing` and `gh repo edit --description` by hand in the same sprint. |
-
-So the loop when a runtime lands is: add it to `PAID_RUNTIMES` (or `FREE_RUNTIMES`),
-add its label to `RUNTIME_LABELS`, add it to the README grid, then run
-`python3 scripts/sync_runtime_count.py` and commit what it rewrites.
+| Landing pages | **Enforced in `clawmetry-landing`** by `test_runtime_surfaces_are_in_lockstep` (derives the fleet from `runtimes-*.html`); cross-checked from here by the opt-in live test above. GitHub repo description: `gh repo edit --description` by hand in the same sprint. |
 
 If a number in prose legitimately is *not* the supported-runtime count (a free-tier
 count, a dated research note, a capacity estimate), add it to `EXEMPT` in the script
