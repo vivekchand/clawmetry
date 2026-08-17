@@ -3900,6 +3900,13 @@ def _first_user_title(fpath: str) -> str:
     return ""
 
 
+# How many transcript rows /api/transcripts returns, and how many session rows
+# we scan to fill them. The gap absorbs sessions dropped for having no
+# renderable turns (see ``_try_local_store_transcripts``).
+_TRANSCRIPT_LIST_LIMIT = 50
+_TRANSCRIPT_LIST_SCAN_LIMIT = 400
+
+
 def _try_local_store_transcripts():
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
@@ -3912,7 +3919,12 @@ def _try_local_store_transcripts():
       - the sessions table is empty
       - any unexpected error happens
     """
-    rows = _ls_call("query_sessions", limit=50)
+    # Over-fetch, then trim to _TRANSCRIPT_LIST_LIMIT after dropping the
+    # zero-renderable-turn rows below. Asking for exactly the display count
+    # would return a short list on installs where ghosts are a large share of
+    # the head. ``query_sessions`` applies its LIMIT *after* the GROUP BY, so
+    # a bigger cap costs DuckDB nothing extra.
+    rows = _ls_call("query_sessions", limit=_TRANSCRIPT_LIST_SCAN_LIMIT)
     if not rows:
         return None
     import dashboard as _d
@@ -3962,6 +3974,18 @@ def _try_local_store_transcripts():
         msg_count = r.get("message_count")
         if msg_count is None:
             msg_count = r.get("event_count") or 0
+        # A ``session_id`` is minted for EVERY distinct id the events table has
+        # seen — including ids scraped off gateway log lines, which land as
+        # ``{event_type: "log", data: {kind: "gateway_log"}}`` and carry zero
+        # renderable turns. Those rendered as bare-UUID rows that opened an
+        # empty "Messages 0" detail card (the #1718 count was already correct;
+        # the list just didn't act on it). They also sort to the TOP, because a
+        # log line is newer than the last real turn, so the Sessions tab opened
+        # on a wall of ghosts. If nothing will render in the detail modal, the
+        # row doesn't belong in the list — the detail path drops the same rows
+        # (see ``_try_local_store_transcript``), so list and detail agree.
+        if int(msg_count or 0) <= 0:
+            continue
         transcripts.append({
             "id": sid,
             # Derive the same ChatGPT-style title the legacy path / cloud use, so
@@ -3974,6 +3998,8 @@ def _try_local_store_transcripts():
             "modified": modified_ms,
             "started": started_ms,
         })
+        if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
+            break
     _fill_family_titles(transcripts)
     _fill_attention(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
@@ -4736,6 +4762,16 @@ def _try_local_store_transcript(session_id: str, _events=None):
             if raw_payload is not None:
                 msg_entry["raw"] = raw_payload
             messages.append(msg_entry)
+    if not messages:
+        # Same contract as the ``if not rows`` guard above, for the case where
+        # rows EXIST but none of them is a transcript turn — e.g. a session_id
+        # scraped off a gateway log line, whose only event is
+        # ``{event_type: "log"}``. Returning the zero-filled shell here served
+        # a 200 that rendered as a detail card with "Messages 0", no model, no
+        # duration and no turns, and it blocked the JSONL fallback that would
+        # have either served the real transcript from disk (#1772) or 404'd.
+        # Falling through is correct in both cases.
+        return None
     duration = None
     if first_ts and last_ts and last_ts > first_ts:
         dur_sec = (last_ts - first_ts) / 1000

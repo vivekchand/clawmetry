@@ -70,6 +70,8 @@ _AGENT_TO_RUNTIME = {
     "qm": "qm",
     "deepseek-harness": "deepseek_harness",
     "dsh": "deepseek_harness",
+    "exo-harness": "exo",
+    "exoharness": "exo",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

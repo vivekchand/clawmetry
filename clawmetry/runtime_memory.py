@@ -349,6 +349,30 @@ def _nanoclaw_checkout() -> str:
     return os.path.expanduser("~/nanoclaw")
 
 
+def _exo_workspace() -> str:
+    """Exo keeps state WORKSPACE-relative (``<workspace>/.exo``; the CLI's
+    ``--root`` default). Mirror the pro adapter's discovery: first
+    ``CLAWMETRY_EXO_ROOTS`` entry, then common checkout globs. Returns the
+    first candidate with an ``.exo`` state dir, else the first-glob
+    fallback so the tab can still render the paths it tried."""
+    def looks_like(d: str) -> bool:
+        return os.path.isdir(os.path.join(d, ".exo"))
+
+    env = os.environ.get("CLAWMETRY_EXO_ROOTS") or ""
+    for part in env.split(os.pathsep):
+        part = part.strip()
+        if part:
+            root = os.path.expanduser(part)
+            # accept the workspace itself or its .exo dir
+            return root[:-5] if root.endswith(os.sep + ".exo") else root
+    for pat in ("~/exo*", "~/projects/exo*", "~/src/exo*",
+                "~/code/exo*", "~/dev/exo*"):
+        for hit in sorted(_glob.glob(os.path.expanduser(pat))):
+            if looks_like(hit):
+                return hit
+    return os.path.expanduser("~/exo")
+
+
 def _claude_plugin_skill_roots(claude_home: str) -> list:
     """RootSpecs for Claude Code skills that ship inside installed plugins.
 
@@ -996,6 +1020,30 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Exo harness (exoharness/exo) ────────────────────────────────
+    # State is workspace-relative: <workspace>/.exo. The self-prompt lives
+    # in the checkout (exo/prompts/me.md), the local profile in
+    # .exo/exo-profile.md, and agent-editable tool modules under
+    # .exo/{tools,agent-tools,tool-sources}. Durable memory artifacts are
+    # binary blobs inside the event store, not files — the adapter, not
+    # this catalog, surfaces those.
+    exo_ws = _exo_workspace()
+    catalog.append(RuntimeCatalogEntry(
+        id="exo", label="Exo",
+        roots=(
+            RootSpec("memory", os.path.join(exo_ws, ".exo", "exo-profile.md"),
+                     label="Local profile", scope="global"),
+            RootSpec("memory", os.path.join(exo_ws, "exo", "prompts"),
+                     ("*.md",), "Self-prompts", "global"),
+            RootSpec("skills", os.path.join(exo_ws, ".exo", "tools"),
+                     label="Tool registry", scope="global"),
+            RootSpec("skills", os.path.join(exo_ws, ".exo", "agent-tools"),
+                     label="Agent tools", scope="global"),
+            RootSpec("skills", os.path.join(exo_ws, ".exo", "tool-sources"),
+                     label="Tool sources", scope="global"),
+        ),
+    ))
+
     # ── QM (yc-software/qm) ─────────────────────────────────────────
     # QM persists everything to Postgres — there is nothing on disk to
     # browse. An explicit empty entry keeps /api/runtimes/qm/files from
@@ -1303,7 +1351,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 20 runtimes would be a wall of
+    because listing every absent root for 21 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
