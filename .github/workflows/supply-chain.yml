@@ -82,7 +82,7 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: |
           python3 -m pip install --quiet -r requirements.txt
-          cyclonedx-py environment --output-format JSON --outfile clawmetry-sbom.json
+          cyclonedx-py environment --output-format JSON > clawmetry-sbom.json
       - name: Publish SBOM as a build artifact
         uses: actions/upload-artifact@v7
         with:
