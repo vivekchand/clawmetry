@@ -4,6 +4,9 @@
 [![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 **See every AI agent running on your machine.** One local dashboard for
 sessions, cost, tools, transcripts, alerts and approvals, across 22 agent

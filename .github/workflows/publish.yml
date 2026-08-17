@@ -15,6 +15,14 @@ jobs:
     name: Build & Publish to PyPI
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      # Mints the short-lived OIDC token used for build provenance and, once
+      # enabled, PyPI Trusted Publishing. Both are no-ops without it.
+      id-token: write
+      # Records the provenance attestation against the repo.
+      attestations: write
+
     steps:
       - uses: actions/checkout@v7
 
@@ -76,7 +84,46 @@ jobs:
           print("v2 bundle is present in wheel")
           PY
 
-      - name: Publish to PyPI
+      # Build provenance: a signed, publicly verifiable statement binding these
+      # exact artifacts to this workflow run, commit and repo. Free, and
+      # independent of PyPI — `gh attestation verify dist/clawmetry-*.whl
+      # --repo vivekchand/clawmetry` works for anyone, including an auditor who
+      # has no reason to take our word for what produced a wheel.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: "dist/*"
+
+      # ── Publishing: two mutually exclusive paths ───────────────────────────
+      #
+      # Trusted Publishing (OIDC) is the target state. It removes the
+      # long-lived PYPI_API_TOKEN secret entirely — a standing credential that
+      # can publish to PyPI is precisely what a supply-chain reviewer asks
+      # about — and it is the only way to get PEP 740 attestations, which put
+      # a verifiable "Provenance" badge on every release file linking back to
+      # the workflow run that built it.
+      #
+      # Gated on a repo variable rather than switched outright, because it
+      # CANNOT work until the Trusted Publisher is configured on PyPI, and
+      # this repo auto-publishes on merge. Flipping it without the PyPI-side
+      # setup would break releases.
+      #
+      # To switch (one time, ~2 minutes):
+      #   1. https://pypi.org/manage/project/clawmetry/settings/publishing/
+      #      Add a GitHub publisher: owner=vivekchand, repo=clawmetry,
+      #      workflow=publish.yml, environment=(blank)
+      #   2. Set repo variable PYPI_TRUSTED_PUBLISHING=true
+      #      (Settings > Secrets and variables > Actions > Variables)
+      #   3. Confirm the next release shows a Provenance badge on PyPI, then
+      #      delete the PYPI_API_TOKEN secret and this fallback step.
+      - name: Publish to PyPI (Trusted Publishing, attested)
+        if: vars.PYPI_TRUSTED_PUBLISHING == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+
+      - name: Publish to PyPI (API token — legacy fallback)
+        if: vars.PYPI_TRUSTED_PUBLISHING != 'true'
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
