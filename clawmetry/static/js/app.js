@@ -10534,21 +10534,34 @@ async function loadSecurityPage(silent) {
     loadSecurityFindings();
     return;
   }
+  // The durable findings feed is loaded FIRST so the tiles and the all-clear
+  // line can speak for the whole page. Painting them from the live signature
+  // scan alone is how the tab came to print "No threats detected" above a
+  // panel listing hundreds of findings, criticals included.
+  var edrCounts = await loadSecurityFindings();
   try {
-    var data = await fetchJsonWithTimeout('/api/security/threats', 10000);
+    var _secRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _secQs = (_secRt && _secRt !== 'all') ? '?runtime=' + encodeURIComponent(_secRt) : '';
+    var data = await fetchJsonWithTimeout('/api/security/threats' + _secQs, 10000);
     var threats = data.threats || [];
     _securityAllThreats = threats;
     var counts = data.counts || {};
-    document.getElementById('sec-critical-count').textContent = counts.critical || 0;
-    document.getElementById('sec-high-count').textContent = counts.high || 0;
-    document.getElementById('sec-medium-count').textContent = counts.medium || 0;
+    var edr = edrCounts || {};
+    // Tiles = live scan + recorded findings. One number per severity for the
+    // whole screen; the two feeds below say which engine reported what.
+    var totCritical = (counts.critical || 0) + (edr.critical || 0);
+    var totHigh = (counts.high || 0) + (edr.high || 0);
+    var totMedium = (counts.medium || 0) + (edr.medium || 0);
+    document.getElementById('sec-critical-count').textContent = totCritical;
+    document.getElementById('sec-high-count').textContent = totHigh;
+    document.getElementById('sec-medium-count').textContent = totMedium;
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = t("app.scanned", null, "Scanned ") + new Date().toLocaleTimeString();
     // Compact "all-clear" mode: when there's nothing to triage, hide the four
     // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
     // one calm green line instead. Restored the moment anything > 0.
-    var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
+    var nThreats = totCritical + totHigh + totMedium + (threats.length || 0) + (edr.total || 0);
     var summaryEl = document.getElementById('security-summary');
     var filterEl = document.getElementById('security-filter-pills');
     var listWrap = document.getElementById('security-threat-list');
@@ -10614,9 +10627,9 @@ async function loadSecurityPage(silent) {
     if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
   }
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
+  // (loadSecurityFindings already ran at the top — its counts feed the tiles.)
   loadSecurityIntegrity();
   loadSecurityAudit();
-  loadSecurityFindings();
   try {
     var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
     var badgeEl = document.getElementById('credential-scan-badge');
@@ -10698,42 +10711,45 @@ async function loadSecurityFindings() {
       + t('security.findings_local_only', null, 'Findings are recorded on the machine your agent runs on. Open the dashboard there to read them.')
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
+    return null;
   }
   var rows = [];
+  var counts = null;
+  // Per-runtime honesty: findings are keyed by session id, which carries the
+  // runtime prefix. Scope SERVER-side so the row cap applies to this runtime's
+  // findings — filtering a node-wide page in JS silently drops rows once a
+  // busy runtime fills the cap.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var qs = '?limit=100' + ((rt && rt !== 'all') ? '&runtime=' + encodeURIComponent(rt) : '');
   try {
-    var d = await fetchJsonWithTimeout('/api/security-threats?limit=100', 10000);
+    var d = await fetchJsonWithTimeout('/api/security-threats' + qs, 10000);
     rows = (d && d.threats) || [];
+    counts = (d && d.counts) || null;
   } catch (e) {
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
       + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
-  }
-  // Per-runtime honesty: findings are keyed by session id, which carries the
-  // runtime prefix, so a runtime filter must actually narrow this list rather
-  // than silently showing node-wide rows.
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (rt && rt !== 'all') {
-    rows = rows.filter(function (r) {
-      var sid = String(r.session_id || '');
-      var prefix = sid.indexOf(':') > 0 ? sid.split(':')[0] : 'openclaw';
-      return prefix === rt;
-    });
+    return null;
   }
   if (!rows.length) {
     listEl.innerHTML = '<div style="color:#86efac;padding:12px;font-size:12px;">✓ '
       + t('security.findings_empty', null, 'Nothing recorded yet. Findings from ClawMetry’s own scan and from any connected security tool will appear here.')
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
+    return counts;
   }
   if (countEl) {
-    countEl.textContent = rows.length + ' '
-      + (rows.length === 1
+    // The list is capped at 100; say how many there really are so the count
+    // never contradicts the tiles above.
+    var nTotal = (counts && counts.total) || rows.length;
+    countEl.textContent = nTotal + ' '
+      + (nTotal === 1
           ? t('security.finding_word', null, 'finding')
-          : t('security.findings_word', null, 'findings'));
+          : t('security.findings_word', null, 'findings'))
+      + (nTotal > rows.length
+          ? ' · ' + t('security.showing_latest', null, 'showing latest ') + rows.length
+          : '');
   }
   var html = '';
   rows.slice(0, 100).forEach(function (r) {
@@ -10764,6 +10780,7 @@ async function loadSecurityFindings() {
     html += '</div>';
   });
   listEl.innerHTML = html;
+  return counts;
 }
 
 // Jump from a finding to the transcript that produced it. Same hash-based
@@ -10798,6 +10815,16 @@ async function loadSecurityIntegrity() {
     } else if (d && d.ok === false) {
       paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
             t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+    } else if (d && d.status === 'degraded') {
+      // Third state, and the common one on a node that ran an older build:
+      // every event still matches its own hash (nothing was altered or
+      // removed), but some could not be placed in a single ordered chain
+      // because the writer chained two flush batches off the same head.
+      // Calling that "Tampered" scared people about a bug of ours; calling it
+      // "Intact" would hide a real insertion. It gets its own honest wording.
+      var nUnlinked = (d.unlinked || 0).toLocaleString();
+      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain — a fault in how older versions recorded the order, now fixed. New events chain normally.'),
+            t('app.integrity_degraded_badge', null, 'Verified, order incomplete'), '#f59e0b', '&#128274;');
     } else if (window.CLOUD_MODE) {
       // Honest cloud state until the cm-cloud-security interceptor serves the
       // securityIntegrity snapshot slice (no silent blank).

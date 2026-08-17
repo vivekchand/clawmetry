@@ -864,6 +864,9 @@ _DAEMON_METHODS = frozenset({
     # proxy so the dashboard process never opens DuckDB writable.
     "ingest_security_event",
     "query_security_events",
+    # Severity rollup for the Security tab's tiles — counted in SQL so the
+    # numbers survive the list cap.
+    "count_security_events",
     # Undo for an unwanted ingest (e.g. a numbat at-rest scan backfilling the
     # live activity feed). Write under the daemon's _write_lock, so it must
     # go through the proxy like every other write.

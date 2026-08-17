@@ -6386,6 +6386,8 @@ def _cmd_verify_integrity(args) -> None:
                 "checked": int(checked or 0),
                 "pre_chain": int(pre_chain or 0),
                 "broken_at": broken_at,
+                "unlinked": int(result.get("unlinked") or 0),
+                "fork_points": int(result.get("fork_points") or 0),
                 "error": error,
             }
         else:
@@ -6411,6 +6413,17 @@ def _cmd_verify_integrity(args) -> None:
         print("               (set CLAWMETRY_INTEGRITY=1 to enable stamping)")
     elif status == "valid":
         print(f"  Result:      ✅  VALID — chain intact across {checked} event(s)")
+    elif status == "degraded":
+        # Every event matches its own fingerprint; only the ordering links are
+        # incomplete (older builds chained two flush batches off one head).
+        # That is not a tamper finding and must not exit non-zero — a CI job
+        # gating on this would fail on a healthy node.
+        unlinked = result.get("unlinked") if isinstance(result, dict) else 0
+        print(
+            f"  Result:      ⚠️   VERIFIED — all {checked} event(s) match their "
+            f"recorded hash; {unlinked or 0} could not be ordered into one chain"
+        )
+        print("               (no record was altered or removed)")
     else:
         print(f"  Result:      ❌  INVALID — {error}")
         print(f"  First break: {broken_at}")

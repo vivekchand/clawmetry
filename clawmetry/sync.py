@@ -14673,6 +14673,10 @@ def _build_security_integrity_snapshot():
         "chain_length": int(raw.get("checked") or 0),
         "pre_chain": int(raw.get("pre_chain") or 0),
         "first_break": raw.get("broken_at"),
+        # "degraded" — content verified, ordering links incomplete. Cloud needs
+        # these to render the same third state the local tab does.
+        "unlinked": int(raw.get("unlinked") or 0),
+        "fork_points": int(raw.get("fork_points") or 0),
     }
 
 
