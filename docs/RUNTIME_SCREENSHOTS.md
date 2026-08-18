@@ -1,6 +1,6 @@
 # ClawMetry × your runtime — screenshot gallery
 
-ClawMetry auto-detects 21 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
+ClawMetry auto-detects 22 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
 
 > Every screenshot below is the real dashboard observing real sessions — each runtime was exercised with a few small demo tasks on a real machine. Two runtimes, noted inline, are shown replaying a previously recorded session.
 

@@ -67,6 +67,12 @@
   .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
   .version-badge.update-available { color: #22c55e; border-color: rgba(34,197,94,0.4); cursor: pointer; }
   .version-badge.update-available:hover { background: rgba(34,197,94,0.1); }
+  /* Refresh / reconnect control. Amber once the backend is known
+     unreachable, so the way out is visible before the user hunts for it. */
+  #cm-reconnect-btn.cm-attention { color: #f59e0b; border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.08); }
+  #cm-reconnect-btn.cm-spinning { cursor: wait; opacity: 0.75; }
+  #cm-reconnect-btn.cm-spinning svg { animation: cm-spin 0.9s linear infinite; }
+  @keyframes cm-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .version-badge.updating { color: #f59e0b; border-color: rgba(245,158,11,0.4); cursor: wait; }
   .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
