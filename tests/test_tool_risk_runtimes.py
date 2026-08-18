@@ -105,7 +105,8 @@ def _matrix() -> list:
     # ── family adapters with dict args under "input" ──
     for rt, tool in [("claude_code", "Bash"), ("nanoclaw", "Bash"),
                      ("copilot", "bash"), ("antigravity", "run_command"),
-                     ("deepseek_harness", "shell"), ("exo", "shell")]:
+                     ("deepseek_harness", "shell"), ("exo", "shell"),
+                     ("kimi", "Shell")]:
         cases.append((
             rt,
             _family_row(rt, tool, {"id": "c1", "name": tool,

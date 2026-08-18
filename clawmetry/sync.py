@@ -6721,6 +6721,7 @@ _LITE_RT_LABELS = {
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
+    "kimi": "Kimi CLI",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6731,6 +6732,23 @@ _LITE_RT_LABELS = {
 # node). We attach last_active + status so the Fleet can render honestly.
 _RT_ACTIVE_SECS = 7 * 86400     # used within a week -> active
 _RT_IDLE_SECS = 30 * 86400      # used within a month -> idle
+
+
+def _kimi_store_paths() -> list:
+    """Kimi CLI session stores: the CLAWMETRY_KIMI_ROOTS override, kimi-cli's
+    own $KIMI_SHARE_DIR, then the two default share dirs — ~/.kimi (kimi-cli)
+    and ~/.kimi-code (the standalone Kimi Code CLI it is folding into). Both
+    are the same runtime here, so recency is the newest of either."""
+    home = os.path.expanduser("~")
+    out = [os.path.expanduser(p.strip()) for p in
+           (os.environ.get("CLAWMETRY_KIMI_ROOTS") or "").split(os.pathsep)
+           if p.strip()]
+    share = (os.environ.get("KIMI_SHARE_DIR") or "").strip()
+    if share:
+        out.append(os.path.expanduser(share))
+    out += [os.path.join(home, ".kimi", "sessions"),
+            os.path.join(home, ".kimi-code", "sessions")]
+    return out
 
 
 def _runtime_data_paths(rid: str) -> list:
@@ -6771,6 +6789,7 @@ def _runtime_data_paths(rid: str) -> list:
                  if p.strip()] +
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
+        "kimi": _kimi_store_paths(),
     }
     return _M.get(rid, [])
 
@@ -6910,6 +6929,7 @@ def _detect_runtimes_lite() -> list:
                  if p.strip()] +
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
+        "kimi": _kimi_store_paths(),
     }
     for rid, paths in _present.items():
         try:
@@ -12482,6 +12502,11 @@ _FAMILY_ADAPTER_SPECS = (
     # dir is workspace-relative; the adapter scans well-known parents and
     # honors CLAWMETRY_EXO_ROOTS.
     ("clawmetry_pro.adapters.exo", "ExoAdapter"),
+    # Kimi CLI / Kimi Code CLI (github.com/MoonshotAI/kimi-cli) — one
+    # wire.jsonl event log per session under <share>/sessions/<md5(work
+    # dir)>/<uuid>/. The adapter reads BOTH share dirs (~/.kimi and the
+    # successor ~/.kimi-code) plus $KIMI_SHARE_DIR / CLAWMETRY_KIMI_ROOTS.
+    ("clawmetry_pro.adapters.kimi", "KimiAdapter"),
 )
 
 
@@ -13857,6 +13882,7 @@ _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
     "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
+    "kimi",
 })
 
 
@@ -14673,6 +14699,10 @@ def _build_security_integrity_snapshot():
         "chain_length": int(raw.get("checked") or 0),
         "pre_chain": int(raw.get("pre_chain") or 0),
         "first_break": raw.get("broken_at"),
+        # "degraded" — content verified, ordering links incomplete. Cloud needs
+        # these to render the same third state the local tab does.
+        "unlinked": int(raw.get("unlinked") or 0),
+        "fork_points": int(raw.get("fork_points") or 0),
     }
 
 

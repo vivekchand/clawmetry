@@ -6,7 +6,7 @@ a security reviewer would triage it: what does THIS invocation touch?
 
 Why call-level: definition-level risk (Matimo-style "POST = medium") can't
 tell ``ls`` from ``rm -rf /`` — both arrive through the same shell tool on
-every harness. ClawMetry sees the arguments for all 21+ runtimes at the
+every harness. ClawMetry sees the arguments for all 22+ runtimes at the
 same normalisation point the approvals watcher uses, so the classifier
 runs on (canonical category, extracted command, raw args) and the SAME
 verdict applies to a Claude Code ``Bash``, a Codex ``shell``, a Cursor
@@ -52,13 +52,18 @@ for _canon, _aliases in {
              "cmd", "command", "run", "run_command", "run_terminal_cmd",
              "terminal", "execute", "shell_command", "bashtool"],
     "read": ["read", "cat", "view", "open", "read_file", "get_file", "fs_read",
-             "view_file", "view_file_outline", "list_dir", "read_agent"],
+             "view_file", "view_file_outline", "list_dir", "read_agent",
+             # Kimi CLI ships PascalCase tool names (ReadFile, WriteFile,
+             # StrReplaceFile, SearchWeb, FetchURL); canonical_tool()
+             # lowercases before lookup, so the aliases are the lowered form.
+             "readfile", "readmediafile"],
     "write": ["write", "edit", "multiedit", "str_replace", "str_replace_editor",
               "create", "apply_patch", "write_file", "fs_write",
-              "write_to_file", "replace_file_content", "edit_file"],
+              "write_to_file", "replace_file_content", "edit_file",
+              "writefile", "strreplacefile"],
     "web": ["web_fetch", "webfetch", "fetch", "curl", "wget", "http",
             "web_search", "websearch", "browser", "browse", "search_web",
-            "read_url_content"],
+            "read_url_content", "searchweb", "fetchurl"],
     "search": ["grep", "rg", "glob", "ls", "find", "search", "memory_search",
                "grep_search", "find_by_name", "codebase_search"],
 }.items():

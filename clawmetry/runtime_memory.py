@@ -1044,6 +1044,47 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Kimi CLI / Kimi Code CLI (MoonshotAI/kimi-cli) ──────────────
+    # One share dir ($KIMI_SHARE_DIR, default ~/.kimi; the standalone Kimi
+    # Code CLI uses ~/.kimi-code). Memory is AGENTS.md, checked at
+    # <dir>/.kimi/AGENTS.md AND <dir>/AGENTS.md from project root to cwd
+    # (kimi_cli/soul/agent.py). Skills are discovered brand-group first —
+    # ~/.kimi/skills, then ~/.claude/skills and ~/.codex/skills, plus the
+    # cross-vendor ~/.agents/skills and ~/.config/agents/skills — and the
+    # same names project-locally (kimi_cli/skill/__init__.py). We list the
+    # kimi-owned roots; the borrowed Claude/Codex ones already appear under
+    # those runtimes and are not double-counted here.
+    kimi_home = _env_root("KIMI_SHARE_DIR", os.path.expanduser("~/.kimi"))
+    kimi_code_home = os.path.expanduser("~/.kimi-code")
+    kimi_roots = [
+        RootSpec("memory", os.path.join(kimi_home, "AGENTS.md"),
+                 label="Global AGENTS.md", scope="global"),
+        RootSpec("memory", os.path.join(ws, ".kimi", "AGENTS.md"),
+                 label="Project .kimi/AGENTS.md", scope="project"),
+        RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                 label="Project AGENTS.md", scope="project"),
+        RootSpec("skills", os.path.join(kimi_home, "skills"),
+                 label="Installed skills", scope="global"),
+        RootSpec("skills", os.path.join(kimi_home, "plugins"),
+                 ("**/SKILL.md",), "Installed plugins", "global"),
+        RootSpec("skills", os.path.join(ws, ".kimi", "skills"),
+                 label="Project skills", scope="project"),
+        RootSpec("hooks", os.path.join(kimi_home, "config.toml"),
+                 label="config.toml (hooks)", scope="global"),
+    ]
+    if os.path.isdir(kimi_code_home):
+        kimi_roots += [
+            RootSpec("memory", os.path.join(kimi_code_home, "AGENTS.md"),
+                     label="Kimi Code global AGENTS.md", scope="global"),
+            RootSpec("skills", os.path.join(kimi_code_home, "skills"),
+                     label="Kimi Code skills", scope="global"),
+            RootSpec("hooks", os.path.join(kimi_code_home, "config.toml"),
+                     label="Kimi Code config.toml (hooks)", scope="global"),
+        ]
+    catalog.append(RuntimeCatalogEntry(
+        id="kimi", label="Kimi CLI", roots=tuple(kimi_roots),
+    ))
+
     # ── QM (yc-software/qm) ─────────────────────────────────────────
     # QM persists everything to Postgres — there is nothing on disk to
     # browse. An explicit empty entry keeps /api/runtimes/qm/files from
@@ -1351,7 +1392,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 21 runtimes would be a wall of
+    because listing every absent root for 22 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
