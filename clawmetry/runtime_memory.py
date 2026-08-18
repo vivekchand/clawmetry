@@ -1083,6 +1083,8 @@ def _catalog() -> list:
         ]
     catalog.append(RuntimeCatalogEntry(
         id="kimi", label="Kimi CLI", roots=tuple(kimi_roots),
+    ))
+
     # ── Devin CLI (cli.devin.ai) ────────────────────────────────────
     # Paths are the CLI's own answer, not a guess: `devin skills paths`
     # prints the four skill roots below and `devin rules paths` prints
