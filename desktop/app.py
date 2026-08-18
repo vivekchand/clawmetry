@@ -42,6 +42,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
@@ -90,6 +91,12 @@ SHUTDOWN_WAIT_SECS = 5.0
 # See WATCHER_UPDATE_TIMEOUT_SECS. Lowering the cadence did not create these;
 # it just removed the last reason to keep tolerating them.
 UPGRADE_CHECK_INTERVAL_SECS = 60
+# Hard bound on any pywebview call made from a background thread. The
+# Cocoa backend's evaluate_js/load_url block the caller on an UNBOUNDED
+# Semaphore.acquire() (webview/platforms/cocoa.py:916) that a wedged or
+# dead WebContent process never releases. Nothing on the supervision
+# path may wait on the GUI indefinitely. See _gui_call().
+GUI_CALL_TIMEOUT_SECS = 8.0
 # How often the watcher thread checks for drift and crashes while the
 # app is running. Short enough that clicking "Update now" in the
 # dashboard translates into a visible restart within ~a minute. The
@@ -449,6 +456,16 @@ class RuntimeSupervisor:
         # Set to True by main() when the user closes the window so the
         # watcher stops trying to respawn the daemon on the way out.
         self.shutting_down = threading.Event()
+        # Version seen drifting on the PREVIOUS tick. A pip upgrade writes
+        # its dist-info ~4s before the console script exists, so a single
+        # tick's reading can describe an install that is still in flight.
+        # Acting on it killed a healthy daemon and could not respawn it
+        # (2026-08-17 freeze). Require two consecutive ticks to agree.
+        self._pending_drift: Optional[str] = None
+        # Wall-clock of the last completed watcher tick. The watchdog
+        # thread reads this to detect a stalled (not merely dead) watcher.
+        self._last_tick = 0.0
+        self._tick_count = 0
 
     def _venv_python(self) -> Path:
         return self.venv / ("Scripts" if platform.system() == "Windows" else "bin") / (
@@ -515,6 +532,13 @@ class RuntimeSupervisor:
                 for g in sp_globs
                 for d in self.venv.glob(f"{g}/clawmetry-*.dist-info")
                 if d.is_dir()
+                # An install is only COMPLETE once pip has written RECORD.
+                # pip creates the dist-info dir and METADATA seconds before
+                # it re-creates `bin/clawmetry`; reading the version off the
+                # bare directory name reports a release that cannot yet be
+                # launched. On 2026-08-17 that made the watcher stop a
+                # healthy daemon 548ms before its replacement existed.
+                and (d / "RECORD").exists()
             ]
             if infos:
                 newest = max(infos, key=_ver_key)
@@ -658,9 +682,32 @@ class RuntimeSupervisor:
         except OSError:
             pass
 
-    def start_daemon(self) -> None:
+    def entrypoint_ready(self) -> bool:
+        """True when the venv's clawmetry launcher exists and is
+        executable. pip DELETES this file and re-creates it ~4s later
+        during an upgrade; spawning inside that window raises
+        FileNotFoundError. Probe before every spawn."""
+        try:
+            cli = self._venv_clawmetry()
+            return cli.exists() and os.access(str(cli), os.X_OK)
+        except OSError:
+            return False
+
+    def start_daemon(self) -> bool:
+        """Spawn the dashboard child. Returns True if a process was
+        launched. NEVER raises — a failed spawn must cost one watcher
+        tick, not the supervisor thread (2026-08-17: an unguarded Popen
+        here killed the watcher and stranded the window for 6.5 hours)."""
+        cli = self._venv_clawmetry()
+        if not self.entrypoint_ready():
+            self._log(
+                f"start_daemon: {cli} missing or not executable "
+                "(pip upgrade in flight?); will retry"
+            )
+            self.proc = None
+            return False
         argv = [
-            str(self._venv_clawmetry()),
+            str(cli),
             "--no-debug",
             "--port", str(self.port),
         ]
@@ -668,6 +715,13 @@ class RuntimeSupervisor:
         # WERKZEUG_RUN_MAIN handled by --no-debug (waitress path).
         env.pop("PYTHONHOME", None)
         env.pop("PYTHONPATH", None)
+        # The shell owns pip AND the restart for its own child. Leaving the
+        # daemon's in-process updater armed gave one venv two independent
+        # updaters: the child pip-upgrades, calls os._exit(0) expecting a
+        # supervisor, and races the shell's own upgrade over the same files.
+        # Mutate the COPY only — _auto_update_disabled() reads os.environ
+        # and would otherwise disable the shell's updater too.
+        env["CLAWMETRY_AUTO_UPDATE"] = "0"
         kwargs: dict = {
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
@@ -685,8 +739,17 @@ class RuntimeSupervisor:
             )
         else:
             kwargs["start_new_session"] = True
-        self.proc = subprocess.Popen(argv, **kwargs)
+        try:
+            self.proc = subprocess.Popen(argv, **kwargs)
+        except OSError as exc:
+            # FileNotFoundError (script unlinked mid-upgrade),
+            # PermissionError (written but not yet chmod +x), ENOEXEC...
+            self._log(f"start_daemon: Popen failed: {exc!r}")
+            self.proc = None
+            return False
+        self._log(f"start_daemon: spawned pid={self.proc.pid} port={self.port}")
         self._write_instance_file()
+        return True
 
     def wait_ready(self, deadline_secs: float = STARTUP_TIMEOUT_SECS) -> bool:
         url = f"http://127.0.0.1:{self.port}/"
@@ -707,6 +770,7 @@ class RuntimeSupervisor:
         p = self.proc
         if not p:
             return
+        self._log(f"stop: terminating daemon pid={p.pid}")
         try:
             if os.name == "nt":
                 p.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
@@ -814,13 +878,34 @@ class RuntimeSupervisor:
     def restart_daemon(self) -> bool:
         """Stop the current daemon and spawn a fresh one on the same
         port. Returns True if the new daemon binds and answers before
-        the startup timeout. Idempotent; safe to call repeatedly."""
+        the startup timeout. Idempotent; safe to call repeatedly.
+
+        Never raises, and never destroys a working backend it cannot
+        replace: the entrypoint is probed BEFORE stop(), so a half-written
+        venv leaves the current daemon serving instead of stranding the
+        window on a dead port."""
+        if not self.entrypoint_ready():
+            self._log(
+                "restart_daemon: venv entrypoint not ready; deferring restart "
+                "(current daemon left running)"
+            )
+            return False
         self.stop()
         # Give TCP TIME_WAIT a moment on the freed port; on most systems
         # SO_REUSEADDR handles this, but on macOS a bare Popen can lose.
         time.sleep(0.5)
-        self.start_daemon()
-        return self.wait_ready()
+        for attempt in (1, 2, 3):
+            if self.shutting_down.is_set():
+                return False
+            if self.start_daemon() and self.wait_ready():
+                self._log(f"restart_daemon: ready (attempt {attempt})")
+                return True
+            self._log(f"restart_daemon: attempt {attempt} failed")
+            # Back off so a still-running pip has time to finish.
+            if self.shutting_down.wait(2.0 * attempt):
+                return False
+        self._log("restart_daemon: giving up after 3 attempts")
+        return False
 
     def watch(self, on_restart: Callable[[], None]) -> None:
         """Blocking watcher loop, meant to run in a daemon thread.
@@ -841,35 +926,85 @@ class RuntimeSupervisor:
              so users who never quit still get PyPI releases on the
              blueprint's 6h cadence. Any resulting version change is
              caught by step 2 on the next tick.
+
+        The loop body is wrapped: a raising tick logs a traceback and
+        the loop continues. Before that guard existed, one unguarded
+        FileNotFoundError out of Popen ended supervision permanently and
+        silently (2026-08-17) — the .app has no stderr, so the thread
+        simply vanished and the window sat on a dead port for 6.5 hours.
         """
-        while not self.shutting_down.is_set():
-            if self.shutting_down.wait(WATCHER_TICK_SECS):
-                return
+        self._log("watcher: started")
+        try:
+            while not self.shutting_down.is_set():
+                if self.shutting_down.wait(WATCHER_TICK_SECS):
+                    return
+                try:
+                    self._tick(on_restart)
+                except BaseException:
+                    # Deliberately BaseException: supervision must outlive
+                    # anything short of interpreter teardown.
+                    self._log(
+                        "watcher tick raised (supervision continues):\n"
+                        + traceback.format_exc()
+                    )
+                finally:
+                    self._last_tick = time.time()
+                    self._tick_count += 1
+                    if self._tick_count % 10 == 1:
+                        self._log(
+                            f"watcher: heartbeat tick={self._tick_count} "
+                            f"daemon_pid={getattr(self.proc, 'pid', None)}"
+                        )
+        finally:
+            self._log("watcher: thread exiting")
 
-            if self.proc is not None and self.proc.poll() is not None:
-                self._log(f"daemon exited with code {self.proc.returncode}; respawning")
-                if self.restart_daemon():
-                    on_restart()
-                continue
+    def _tick(self, on_restart: Callable[[], None]) -> None:
+        """One watcher iteration. May raise; watch() contains the damage."""
+        if self.proc is not None and self.proc.poll() is not None:
+            self._log(f"daemon exited with code {self.proc.returncode}; respawning")
+            ok = self.restart_daemon()
+            self._log(f"respawn after exit -> {ok}")
+            if ok:
+                on_restart()
+            return
 
-            # Heal the sync/ingest daemon too — same contract as the
-            # dashboard child: the shell owns it while the app runs.
-            self.ensure_sync_daemon()
+        # Heal the sync/ingest daemon too — same contract as the
+        # dashboard child: the shell owns it while the app runs.
+        self.ensure_sync_daemon()
 
-            installed = self._get_installed_version()
-            running = self._get_running_daemon_version()
-            if installed and running and installed != running:
+        installed = self._get_installed_version()
+        running = self._get_running_daemon_version()
+        if installed and running and installed != running:
+            # Debounce: a pip upgrade is visible in site-packages for
+            # seconds before it is launchable. Requiring two consecutive
+            # ticks to agree means we only ever restart onto a settled
+            # install. pip finishes in ~4s; the tick is 60s.
+            if self._pending_drift != installed:
+                self._pending_drift = installed
                 self._log(
-                    f"version drift: venv={installed} running={running}; restarting"
+                    f"version drift seen: venv={installed} running={running}; "
+                    "confirming on next tick"
                 )
-                self.on_status(f"Applying update to v{installed}")
-                if self.restart_daemon():
-                    on_restart()
-                continue
+                return
+            self._log(
+                f"version drift: venv={installed} running={running}; restarting"
+            )
+            # Recovery FIRST, status second. A status call is a synchronous
+            # RPC into the webview; it must never gate the restart.
+            ok = self.restart_daemon()
+            self._log(f"restart after drift -> {ok}")
+            self._pending_drift = None
+            if ok:
+                on_restart()
+            else:
+                self.on_status(f"Update to v{installed} pending; will retry")
+            return
 
-            if self._should_upgrade():
-                self._log("watcher: 6h elapsed, running clawmetry update")
-                self._background_pip_upgrade()
+        self._pending_drift = None
+
+        if self._should_upgrade():
+            self._log("watcher: upgrade interval elapsed, running clawmetry update")
+            self._background_pip_upgrade()
 
 
 def _ensure_user_path_windows(bin_dir: str, log: Callable[[str], None]) -> None:
@@ -1051,6 +1186,44 @@ class DesktopAPI:
         self._captured_email: str = ""
         self._captured_provider: str = ""
         self._captured_mode: str = ""
+        # Injected by main() once the window exists. The JS bridge is the
+        # only channel that still works when the HTTP origin is dead, so
+        # the page's outage overlay reaches recovery through here.
+        self._recover_backend: Optional[Callable[[], None]] = None
+        self._reload_window: Optional[Callable[[], None]] = None
+
+    # ── Recovery (reachable from a page whose backend is gone) ────────────
+    def backend_state(self) -> dict:
+        """Cheap liveness probe the page can poll without HTTP."""
+        proc = self._sup.proc
+        return {
+            "ok": True,
+            "port": self._sup.port,
+            "daemon_pid": getattr(proc, "pid", None) if proc else None,
+            "daemon_running": bool(proc and proc.poll() is None),
+            "last_tick": self._sup._last_tick,
+            "alive": _dashboard_alive(self._sup.port),
+        }
+
+    def restart_backend(self) -> dict:
+        """Restart the dashboard child and reload the window onto it.
+
+        Returns immediately — the restart can take up to
+        STARTUP_TIMEOUT_SECS and pywebview marshals this call on a worker
+        thread we must not hold."""
+        fn = self._recover_backend
+        if fn is None:
+            return {"ok": False, "error": "recovery not wired"}
+        threading.Thread(target=fn, daemon=True).start()
+        return {"ok": True}
+
+    def reload_dashboard(self) -> dict:
+        """Re-navigate the window to the dashboard URL."""
+        fn = self._reload_window
+        if fn is None:
+            return {"ok": False, "error": "reload not wired"}
+        threading.Thread(target=fn, daemon=True).start()
+        return {"ok": True}
 
     # ── OAuth (GitHub / Google) ────────────────────────────────────────────
     def start_oauth(self, provider: str) -> dict:
@@ -1354,15 +1527,43 @@ def main() -> int:
         background_color=BRAND_BG_DARK,
     )
 
+    def _gui_call(fn: Callable, *args, timeout: float = GUI_CALL_TIMEOUT_SECS) -> None:
+        """Run a pywebview call with a hard wall-clock bound.
+
+        pywebview's Cocoa backend blocks the CALLING thread on an
+        unbounded `Semaphore.acquire()` (webview/platforms/cocoa.py:916)
+        until the WebView's completion handler fires. If the WebContent
+        process is wedged or gone, that handler never fires and the
+        caller is parked forever. The supervisor thread must never take
+        that risk, so the call is pushed onto a throwaway thread and we
+        wait a bounded time for it. A hung webview then costs one leaked
+        thread instead of all supervision."""
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                fn(*args)
+            except Exception:
+                pass
+            finally:
+                done.set()
+
+        threading.Thread(target=_run, daemon=True).start()
+        if not done.wait(timeout):
+            sup._log(
+                f"gui call {getattr(fn, '__name__', fn)!r} did not return "
+                f"within {timeout}s; continuing without it"
+            )
+
     def _set_status(msg: str) -> None:
         """Push a progress line into the carousel's top bar. When the
         pane isn't the carousel (e.g. we've swapped to the auth pane),
-        the JS call is a no-op and we swallow the exception — status
-        messages are hints, not load-bearing."""
-        try:
-            window.evaluate_js(f"window.set_status && window.set_status({json.dumps(msg)});")
-        except Exception:
-            pass
+        the JS call is a no-op. Bounded: status messages are hints, and
+        must never be able to stall the caller (see _gui_call)."""
+        _gui_call(
+            window.evaluate_js,
+            f"window.set_status && window.set_status({json.dumps(msg)});",
+        )
 
     # Late-bind the real status hook now that window exists.
     sup.on_status = _set_status
@@ -1373,11 +1574,11 @@ def main() -> int:
         """Callback the watcher fires after a successful daemon
         restart. Reloading the same URL is enough — the WebView picks
         up whatever the fresh daemon serves, so users see the new
-        version immediately without having to quit and relaunch."""
-        try:
-            window.load_url(dashboard_url)
-        except Exception:
-            pass
+        version immediately without having to quit and relaunch.
+
+        Bounded for the same reason as _set_status: this runs on the
+        supervisor thread."""
+        _gui_call(window.load_url, dashboard_url)
 
     def _do_uninstall_flow() -> None:
         """Menu handler — confirm, then shell out to
@@ -1438,19 +1639,56 @@ def main() -> int:
         # off it so evaluate_js and subprocess don't block the main loop.
         threading.Thread(target=_do_uninstall_flow, daemon=True).start()
 
+    def _on_menu_reload() -> None:
+        """Re-navigate to the dashboard. The window has no browser chrome
+        and pywebview's Cocoa backend swallows Cmd-R, so without this the
+        user has literally no way to retry a page whose backend blipped."""
+        threading.Thread(target=_reload_window, daemon=True).start()
+
+    def _recover_backend() -> None:
+        """Restart the child daemon, then reload the page onto it."""
+        sup._log("manual recovery requested")
+        if sup.restart_daemon():
+            _reload_window()
+        else:
+            _set_status("Could not restart the backend. See bootstrap.log.")
+
+    def _on_menu_restart_backend() -> None:
+        # restart_daemon blocks for up to STARTUP_TIMEOUT_SECS; menu
+        # callbacks run on the GUI thread, so never inline it.
+        threading.Thread(target=_recover_backend, daemon=True).start()
+
+    # Give the API object the recovery hook so a stranded PAGE can call it.
+    # When the HTTP origin is dead the JS bridge is the only channel left.
+    api._recover_backend = _recover_backend  # type: ignore[attr-defined]
+    api._reload_window = _reload_window  # type: ignore[attr-defined]
+
     # Build the menu — tolerant of pywebview versions without a menu API.
     # macOS shows this alongside the standard app menu; the item name uses
     # the platform convention "Uninstall ClawMetry…" (ellipsis = confirms).
     menu_items: list = []
     try:
-        from webview.menu import Menu, MenuAction  # type: ignore
+        from webview.menu import Menu, MenuAction, MenuSeparator  # type: ignore
         menu_items = [
             Menu(APP_TITLE, [
+                MenuAction("Reload Dashboard", _on_menu_reload),
+                MenuAction("Restart Backend", _on_menu_restart_backend),
+                MenuSeparator(),
                 MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
             ]),
         ]
     except Exception:
-        menu_items = []
+        try:
+            from webview.menu import Menu, MenuAction  # type: ignore
+            menu_items = [
+                Menu(APP_TITLE, [
+                    MenuAction("Reload Dashboard", _on_menu_reload),
+                    MenuAction("Restart Backend", _on_menu_restart_backend),
+                    MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
+                ]),
+            ]
+        except Exception:
+            menu_items = []
 
     def _boot():
         # Phase 1: bootstrap the runtime venv.
@@ -1579,9 +1817,40 @@ def main() -> int:
         # Start the watcher after wait_ready so the initial startup exit
         # is never mistaken for a crash. Handles version drift ("Update
         # now") and unexpected exits by restarting + reloading the WebView.
+        sup._last_tick = time.time()
         threading.Thread(
             target=sup.watch, args=(_reload_window,), daemon=True
         ).start()
+
+        def _supervise_the_supervisor() -> None:
+            """Watch the watcher.
+
+            watch() now contains its own exceptions, but a thread can
+            still be lost to something it cannot catch — a wedged GUI
+            call, a hung subprocess, an interpreter-level kill. Nothing
+            noticed on 2026-08-17 because nothing was looking. A stale
+            _last_tick is the one signal that distinguishes "supervising"
+            from "gone", and re-arming is cheap and idempotent."""
+            stale_after = 3 * WATCHER_TICK_SECS
+            while not sup.shutting_down.wait(WATCHER_TICK_SECS):
+                try:
+                    last = sup._last_tick
+                    if not last or (time.time() - last) <= stale_after:
+                        continue
+                    sup._log(
+                        f"WATCHER STALLED: {time.time() - last:.0f}s since last "
+                        "tick; re-arming supervision"
+                    )
+                    # Re-arm first so a still-parked old thread cannot make
+                    # us spawn a new one every tick.
+                    sup._last_tick = time.time()
+                    threading.Thread(
+                        target=sup.watch, args=(_reload_window,), daemon=True
+                    ).start()
+                except Exception:
+                    sup._log("watchdog raised:\n" + traceback.format_exc())
+
+        threading.Thread(target=_supervise_the_supervisor, daemon=True).start()
 
         # Phase 5: load the ready-gate spinner, poll /api/overview
         # from Python (avoids CORS from a load_html origin), then load

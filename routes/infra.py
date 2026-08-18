@@ -1764,9 +1764,20 @@ def api_memory_access():
 
 @bp_security.route("/api/security/threats")
 def api_security_threats():
-    """Scan recent agent activity for security threats using built-in signatures."""
+    """Live signature scan over recent agent activity.
+
+    Findings persisted by a connected agent-EDR (numbat) are a separate,
+    durable feed served by ``/api/security-threats`` and rendered by the
+    "Recorded findings" panel — they are deliberately NOT merged here, so the
+    same finding never appears twice on one screen. The page-level verdict
+    (tiles + all-clear line) combines both; see ``loadSecurityPage``.
+
+    ``?runtime=<id>`` scopes the scan to one runtime; without it the response
+    is node-wide and says so via ``scope``.
+    """
     import dashboard as _d
     from routes.brain import api_brain_history
+    runtime = (request.args.get("runtime") or "").strip().lower() or None
     try:
         # Call brain-history endpoint internally
         brain_resp = api_brain_history()
@@ -1775,7 +1786,7 @@ def api_security_threats():
     except Exception:
         events = []
 
-    threats, counts = _d._scan_events_for_threats(events)
+    threats, counts = _d._scan_events_for_threats(events, runtime=runtime)
 
     # Fire alerts for critical/high threats (with cooldown via _fire_alert)
     for t in threats:
@@ -1813,7 +1824,12 @@ def api_security_threats():
             pass
 
     return jsonify(
-        {"threats": threats, "counts": counts, "scanned_events": len(events)}
+        {
+            "threats": threats,
+            "counts": counts,
+            "scanned_events": len(events),
+            "scope": runtime or "node",
+        }
     )
 
 
@@ -2021,13 +2037,19 @@ def _integrity_status() -> dict:
         }
     status = raw.get("status") or "unknown"
     return {
-        # ``ok`` is True only when the chain verified, False when broken,
-        # None when there's nothing stamped yet (empty / unknown).
+        # ``ok`` is True only when the chain verified end to end, False when a
+        # record was altered or removed, None otherwise — including the
+        # "degraded" verdict (every event matches its own hash, but some could
+        # not be placed in one ordered chain). None is the safe value for a
+        # stale cached frontend: it renders the neutral state rather than
+        # shouting "Tampered" about a linkage artefact.
         "ok": True if status == "valid" else (False if status == "invalid" else None),
         "status": status,
         "chain_length": int(raw.get("checked") or 0),
         "pre_chain": int(raw.get("pre_chain") or 0),
         "first_break": raw.get("broken_at"),
+        "unlinked": int(raw.get("unlinked") or 0),
+        "fork_points": int(raw.get("fork_points") or 0),
         "error": raw.get("error"),
     }
 

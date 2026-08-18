@@ -79,6 +79,26 @@ PROVIDER_MAP: dict[str, dict] = {
         "input_per_1m": 3.00,
         "output_per_1m": 15.00,
     },
+    "api.kimi.com": {
+        "name": "moonshot",
+        # kimi-k2.6 baseline (cache-MISS input), per
+        # platform.kimi.ai/docs/pricing/* (2026-08-18); overrides below cover
+        # the k3 / k2.7-code / k2.5 / moonshot-v1 tiers. Cache-hit input is
+        # ~6x cheaper and is not billed here — callers pass uncached input, so
+        # a cached-heavy session is under-, never over-charged.
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
+    "api.moonshot.ai": {
+        "name": "moonshot",
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
+    "api.moonshot.cn": {
+        "name": "moonshot",
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
     "api.deepseek.com": {
         "name": "deepseek",
         # deepseek-v4-flash baseline, per api-docs.deepseek.com/quick_start/
@@ -152,6 +172,18 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     # so callers that pass uncached input only slightly underbill). Note the
     # docs announce peak/off-peak billing from 2026-08-16 (off-peak = half);
     # these are the peak rates.
+    # Moonshot / Kimi, per platform.kimi.ai/docs/pricing/chat-* (2026-08-18;
+    # cache-MISS input rates — cache-hit input is $0.30 / $0.19 / $0.16 / $0.10
+    # respectively). _get_rates picks the LONGEST matching prefix, so
+    # "kimi-k2.7-code-highspeed" beats "kimi-k2.7-code".
+    ("moonshot", "kimi-k3"): (3.00, 15.00),
+    ("moonshot", "kimi-k2.7-code"): (0.95, 4.00),
+    ("moonshot", "kimi-k2.7-code-highspeed"): (1.90, 8.00),
+    ("moonshot", "kimi-k2.6"): (0.95, 4.00),
+    ("moonshot", "kimi-k2.5"): (0.60, 3.00),
+    ("moonshot", "moonshot-v1-8k"): (0.20, 2.00),
+    ("moonshot", "moonshot-v1-32k"): (1.00, 3.00),
+    ("moonshot", "moonshot-v1-128k"): (2.00, 5.00),
     ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
     ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
 }
