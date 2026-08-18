@@ -363,16 +363,23 @@ function clawmetryLocalSignin(){
       throw e;
     });
   };
+  // The probe in the recovery block uses this so a health check that
+  // fails cannot itself inflate the outage counter.
+  window.__cmOrigFetch=_origFetch;
   window.cmBackendFailures=function(){return _netFail;};
 })();
 
-// ── Global "backend unreachable" overlay ──
-// The recovery surface of last resort. Rendered on top of every tab, so it
-// cannot be missed the way a per-panel spinner can, and it always offers an
-// action. Inside the desktop shell the pywebview JS bridge still works when
-// the HTTP origin does not, so prefer it; in a browser tab, reload.
+// ── Backend recovery: the refresh button, the outage overlay, and Cmd-R ──
+// One implementation behind three entry points, because a naive "reload the
+// page" button is a trap in the desktop shell. A pywebview window has no
+// browser chrome, so if the backend is dead, location.reload() replaces a
+// frozen-but-readable dashboard with a blank WebKit error page that has no
+// buttons on it at all -- strictly worse than the freeze. So: probe first,
+// heal the backend if it is down, and only then reload.
 (function(){
   var BAR_ID='cm-backend-outage';
+  var BTN_ID='cm-reconnect-btn';
+  var busy=false;
 
   function _bridge(){
     try{
@@ -380,13 +387,71 @@ function clawmetryLocalSignin(){
     }catch(e){ return null; }
   }
 
+  // Probe with the UNWRAPPED fetch: a health probe that fails must not count
+  // toward the outage threshold that raised this overlay in the first place.
+  function _probe(timeoutMs){
+    return new Promise(function(resolve){
+      var done=false;
+      var t=setTimeout(function(){ if(!done){ done=true; resolve(false); } }, timeoutMs||4000);
+      function settle(v){ if(!done){ done=true; clearTimeout(t); resolve(v); } }
+      try{
+        (window.__cmOrigFetch||window.fetch).call(window,'/api/health',{cache:'no-store'})
+          .then(function(){ settle(true); }, function(){ settle(false); });
+      }catch(e){ settle(false); }
+    });
+  }
+
+  function _waitForBackend(budgetMs){
+    var deadline=Date.now()+(budgetMs||45000);
+    return new Promise(function(resolve){
+      (function attempt(){
+        _probe(2500).then(function(alive){
+          if(alive) return resolve(true);
+          if(Date.now()>=deadline) return resolve(false);
+          setTimeout(attempt,1500);
+        });
+      })();
+    });
+  }
+
+  function _btn(){ return document.getElementById(BTN_ID); }
+
+  function _setBusy(on,label){
+    busy=on;
+    var b=_btn();
+    if(b){
+      b.classList.toggle('cm-spinning',!!on);
+      b.setAttribute('aria-busy',on?'true':'false');
+      b.title=on?(label||'Reconnecting…'):'Refresh (Cmd/Ctrl + R)';
+    }
+    var bar=document.getElementById(BAR_ID);
+    if(bar && bar.__btn){
+      bar.__btn.disabled=!!on;
+      if(on) bar.__btn.textContent=label||'Restarting…';
+      else   bar.__btn.textContent=bar.__label;
+    }
+  }
+
+  // Mark the header button when the backend is known-unreachable, so the
+  // affordance is discoverable BEFORE the user goes hunting for it.
+  function _markDown(down){
+    var b=_btn();
+    if(b) b.classList.toggle('cm-attention',!!down);
+  }
+
   function _dismiss(){
     var el=document.getElementById(BAR_ID);
     if(el && el.parentNode) el.parentNode.removeChild(el);
+    _markDown(false);
   }
 
-  function _show(){
-    if(document.getElementById(BAR_ID)) return;
+  function _show(note){
+    _markDown(true);
+    var existing=document.getElementById(BAR_ID);
+    if(existing){
+      if(note && existing.__note) existing.__note.textContent=note;
+      return;
+    }
     var api=_bridge();
     var el=document.createElement('div');
     el.id=BAR_ID;
@@ -416,42 +481,70 @@ function clawmetryLocalSignin(){
       'border-radius:8px','border:1px solid #ef4444','background:#ef4444',
       'color:#fff','font-weight:600','font-size:13px'
     ].join(';');
-    btn.textContent=(api&&api.restart_backend)?'Restart backend':'Reload';
-    btn.onclick=function(){
-      btn.disabled=true;
-      btn.textContent='Restarting…';
-      if(api&&api.restart_backend){
-        try{
-          api.restart_backend();
-          // The shell reloads the window itself once the daemon answers.
-          // If it cannot, re-enable so the user can try again.
-          setTimeout(function(){
-            btn.disabled=false;
-            btn.textContent='Restart backend';
-          },20000);
-          return;
-        }catch(e){}
-      }
-      location.reload();
-    };
+    el.__label=(api&&api.restart_backend)?'Restart backend':'Reload';
+    btn.textContent=el.__label;
+    btn.onclick=function(){ window.cmReconnect(); };
+    el.__btn=btn;
     el.appendChild(btn);
 
-    // Honest fallback for the case the shell cannot fix itself.
-    if(!(api&&api.restart_backend)){
-      var hint=document.createElement('div');
-      hint.style.cssText='flex-basis:100%;font-size:12px;color:#e7a3a3';
-      hint.textContent='If reloading does not help, quit ClawMetry and open '
-        +'it again.';
-      el.appendChild(hint);
-    }
+    var hint=document.createElement('div');
+    hint.style.cssText='flex-basis:100%;font-size:12px;color:#e7a3a3';
+    hint.textContent=note||((api&&api.restart_backend)
+      ? 'This restarts the local backend and reloads the page.'
+      : 'If reloading does not help, quit ClawMetry and open it again.');
+    el.__note=hint;
+    el.appendChild(hint);
+
     (document.body||document.documentElement).appendChild(el);
   }
 
-  window.addEventListener('cm:backend-unreachable',_show);
+  // The single recovery path. Safe to call whether the backend is healthy
+  // (plain refresh) or dead (heal, then refresh).
+  function cmReconnect(){
+    if(busy) return Promise.resolve(false);
+    _setBusy(true,'Checking…');
+    return _probe(4000).then(function(alive){
+      if(alive){ location.reload(); return true; }
+      var api=_bridge();
+      if(api && api.restart_backend){
+        _setBusy(true,'Restarting…');
+        try{ api.restart_backend(); }
+        catch(e){ _setBusy(false); _show('Could not reach the app shell. Quit ClawMetry and open it again.'); return false; }
+        // Budget is overridable so the test suite can exercise the
+        // did-not-come-back branch without waiting three quarters of a minute.
+        return _waitForBackend(window.__cmRestartBudgetMs||45000).then(function(ok){
+          if(ok){ location.reload(); return true; }
+          _setBusy(false);
+          _show('The backend did not come back. Quit ClawMetry and open it again.');
+          return false;
+        });
+      }
+      // No bridge and no backend. Reloading here would swap the page for a
+      // blank error page with no way back, so refuse and say what helps.
+      _setBusy(false);
+      _show('The backend is not answering, so reloading would leave a blank page. Quit ClawMetry and open it again.');
+      return false;
+    });
+  }
+
+  window.addEventListener('cm:backend-unreachable',function(){ _show(); });
   window.addEventListener('cm:backend-reachable',_dismiss);
-  // Exposed for tests and for panels that want to raise it directly.
+
+  // Cmd/Ctrl+R. pywebview's Cocoa backend swallows the native shortcut, so
+  // inside the shell we implement it ourselves; in a real browser the native
+  // reload is already correct, so leave it alone.
+  document.addEventListener('keydown',function(e){
+    if(!(e.metaKey||e.ctrlKey) || e.altKey) return;
+    if(e.key!=='r' && e.key!=='R') return;
+    if(!_bridge()) return;
+    e.preventDefault();
+    cmReconnect();
+  },true);
+
+  window.cmReconnect=cmReconnect;
   window.cmShowBackendOutage=_show;
   window.cmHideBackendOutage=_dismiss;
+  window.cmBackendProbe=_probe;
 })();
 
 // ── Version badge + one-click update ──

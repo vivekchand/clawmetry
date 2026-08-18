@@ -3276,56 +3276,6 @@ def _safe_date_ts(date_str):
         return 0
 
 
-def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
-    warnings = []
-    tips = []
-
-    # Check if workspace looks like a real OpenClaw setup
-    workspace_files = ["SOUL.md", "AGENTS.md", "MEMORY.md", "memory"]
-    found_files = []
-    for f in workspace_files:
-        path = os.path.join(WORKSPACE, f)
-        if os.path.exists(path):
-            found_files.append(f)
-
-    if not found_files:
-        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append(
-            "[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace"
-        )
-
-    # Check if log directory exists and has recent logs
-    if not os.path.exists(LOG_DIR):
-        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
-    else:
-        # Check for recent log files
-        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [
-            f
-            for f in glob.glob(log_pattern)
-            if os.path.getmtime(f) > time.time() - 86400
-        ]  # Last 24h
-        if not recent_logs:
-            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
-            tips.append("[tip] Start your OpenClaw agent to see real-time data")
-
-    # Check if sessions directory exists
-    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("[tip] Sessions will appear when your agent starts conversations")
-
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(["openclaw", "--version"], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-
-    return warnings, tips
-
-
 def _auto_detect_data_dir():
     """Auto-detect OpenClaw data directory, including Docker volume mounts."""
     # Standard locations
@@ -11998,11 +11948,45 @@ def _safe_date_ts(date_str):
         return 0
 
 
+def _detected_runtimes():
+    """Presence-probe every supported runtime. [] when the probe is unavailable."""
+    try:
+        from clawmetry.runtime_probe import probe_runtimes
+        return [p for p in probe_runtimes() if p.get("found")]
+    except Exception:
+        return []
+
+
 def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
+    """Validate the detected configuration and provide helpful feedback for new users.
+
+    ClawMetry watches every supported runtime, so the OpenClaw-specific checks
+    below only run when OpenClaw (or NemoClaw, which shares its layout) is the
+    runtime on this machine. A Claude Code / Codex / Cursor user got a wall of
+    "install OpenClaw" warnings about a runtime they never asked for.
+    """
     warnings = []
     tips = []
-    
+
+    detected = _detected_runtimes()
+    detected_ids = {p["id"] for p in detected}
+    openclaw_family = bool({"openclaw", "nemoclaw"} & detected_ids)
+
+    if detected:
+        shown = [p["label"] for p in detected[:6]]
+        if len(detected) > len(shown):
+            shown.append(f"+{len(detected) - len(shown)} more")
+        plural = "runtime" if len(detected) == 1 else "runtimes"
+        tips.append(f"[ok] Detected {len(detected)} agent {plural}: {', '.join(shown)}")
+    else:
+        warnings.append("[warn]  No agent runtime detected on this machine")
+        tips.append("[tip] Start an agent (OpenClaw, Claude Code, Codex, Cursor, ...) and the dashboard fills in")
+
+    if not openclaw_family:
+        # Nothing below applies: the other runtimes keep their own session
+        # stores, which the adapters read directly.
+        return warnings, tips
+
     # Check if workspace looks like a real OpenClaw setup
     workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
     found_files = []
@@ -12018,7 +12002,7 @@ def validate_configuration():
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
+        tips.append("[tip] Make sure OpenClaw is running to generate logs")
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
@@ -12032,13 +12016,6 @@ def validate_configuration():
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
     
     return warnings, tips
 
@@ -12800,6 +12777,16 @@ DASHBOARD_HTML = r"""
   <div id="cm-global-runtime-wrap" style="display:none;align-items:center;gap:6px;">
     <span style="font-size:11px;color:var(--text-muted);font-weight:600;">Runtime</span>
     <select id="cm-global-runtime" onchange="_cmOnGlobalRuntimeChange(this)" title="Scope session views to a single agent runtime" style="font-size:12px;font-weight:600;padding:7px 10px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);cursor:pointer;"></select>
+  </div>
+  <!-- Refresh / reconnect. Always visible, because the desktop shell has no
+       browser chrome: no address bar, no reload button, and pywebview's Cocoa
+       backend swallows Cmd-R. Without this the only way out of a wedged page
+       was to quit the app. cmReconnect() probes the backend first and only
+       reloads when something is there to reload into -- reloading against a
+       dead port would replace the page with a blank error page. Turns amber
+       (.cm-attention) once the backend is known unreachable. -->
+  <div class="theme-toggle" id="cm-reconnect-btn" onclick="window.cmReconnect && window.cmReconnect()" role="button" tabindex="0" data-i18n-title="topbar.refresh" title="Refresh (Cmd/Ctrl + R)" style="cursor:pointer;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
@@ -18239,14 +18226,14 @@ ARCHITECTURE_OVERVIEW = """\
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
-  │  Your OpenClaw      │ ──────────->  │                     │ ──────────->  │                     │
-  │  agents             │              │  ClawMetry          │              │  Your browser       │
+  │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
+  │  Any of 22 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
   └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
-  Runs locally on the same machine as OpenClaw. Your data never leaves your box.
+  Runs locally on the same machine as your agents. Your data never leaves your box.
   Docs: https://clawmetry.com/how-it-works
 """
 
