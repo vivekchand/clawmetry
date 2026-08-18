@@ -263,6 +263,10 @@ def test_gate_env_override(flag: str, expected: str) -> None:
         {"CLAWMETRY_REONBOARD": flag},
     )
     assert f"RESULT={expected}" in out
+    if expected == "keep":
+        # Keeping a setup is never silent -- an operator who forced the skip
+        # still needs to see that nothing changed and how to change it.
+        assert "Keeping your current setup" in out
 
 
 @needs_pwsh

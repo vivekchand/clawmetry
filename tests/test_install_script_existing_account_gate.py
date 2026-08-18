@@ -357,6 +357,16 @@ def test_env_override_forces_reonboard(tmp_path: Path) -> None:
 
 
 @posix_only
+def test_env_override_skip_says_so(tmp_path: Path) -> None:
+    """A forced skip keeps the setup AND says it kept it -- silence reads as
+    "the installer ignored me"."""
+    home = _connected_home(tmp_path)
+    transcript = _run_decision_block(home, None, {"CLAWMETRY_REONBOARD": "0"})
+    assert not (home / ".clawmetry" / "onboard.ran").exists()
+    assert "Keeping your current setup" in transcript
+
+
+@posix_only
 def test_unconnected_node_runs_wizard_without_prompting(tmp_path: Path) -> None:
     """No account linked: unchanged behaviour -- onboard runs, no question."""
     home = tmp_path / "noacct"

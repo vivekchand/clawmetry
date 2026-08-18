@@ -386,7 +386,11 @@ function Confirm-ClawmetryReonboard {
     if ($env:CLAWMETRY_REONBOARD) {
         $flag = $env:CLAWMETRY_REONBOARD.ToLowerInvariant()
         if (@("1", "true", "yes", "on") -contains $flag) { return $true }
-        if (@("0", "false", "no", "off") -contains $flag) { return $false }
+        if (@("0", "false", "no", "off") -contains $flag) {
+            Write-Host "  Keeping your current setup."
+            Write-Host "  ↻ Change it anytime: clawmetry onboard"
+            return $false
+        }
     }
     $interactive = $true
     try { $interactive = (-not [Console]::IsInputRedirected) } catch {}

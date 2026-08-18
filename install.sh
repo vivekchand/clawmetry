@@ -409,7 +409,12 @@ _cm_run_onboard() {
 _cm_reonboard_gate() {
   case "${CLAWMETRY_REONBOARD:-}" in
     1|true|yes|on|TRUE|YES|ON) return 0 ;;
-    0|false|no|off|FALSE|NO|OFF) return 1 ;;
+    0|false|no|off|FALSE|NO|OFF)
+      echo -e "  ${DIM}Keeping your current setup.${NC}"
+      echo -e "  ${DIM}↻ Change it anytime:${NC} ${GREEN}clawmetry onboard${NC}"
+      CM_HINTED=1
+      return 1
+      ;;
   esac
   if ! (exec </dev/tty) 2>/dev/null; then
     echo -e "  ${DIM}Non-interactive install: keeping your current setup.${NC}"
