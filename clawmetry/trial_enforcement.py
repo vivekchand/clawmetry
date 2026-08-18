@@ -103,6 +103,12 @@ _ALLOWED_PATH_PREFIXES = (
     "/api/heartbeat",           # cloud liveness probe
     "/api/extensions",          # "is clawmetry-pro loaded?" probe
     "/api/auth/",               # OSS auth-check + zero-click bootstrap
+    "/api/onboarding/",         # the gate is how a locked install gets a
+                                # licence: state + activate-license + the
+                                # post-checkout poll all run while blocked
+    "/api/cloud-cta/",          # sign-in plumbing (OTP / OAuth bridge) — a
+                                # user who signs OUT to switch accounts must
+                                # be able to sign back IN without unlocking
     "/auth",                    # legacy auth endpoint sibling of /api/auth
     "/static/",                 # overlay JS/CSS must load
     "/favicon",                 # tab icon
@@ -112,6 +118,9 @@ _ALLOWED_PATH_EXACT = frozenset({
     "/robots.txt",
     "/api/entitlement",         # exact, also matched by prefix — belt & braces
     "/api/health",              # k8s / docker / cURL liveness probe
+    "/api/account/signout",     # forget the wrong account. Strictly narrows
+                                # entitlement (it deletes the licence), so it
+                                # can never be a way around the block
 })
 
 # Default upgrade destination when the cloud hasn't handed us a signed

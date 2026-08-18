@@ -48,6 +48,19 @@
     starter: ['Unlimited channels + cloud sync', 'Approval queue'],
     pro: ['Everything in Starter', 'Tool policy + evals + cost optimizer'],
   };
+  // Publish the table so the OTHER in-app upgrade surface — the self-host
+  // modal's expired-trial step (static/js/onboarding.js, loaded after this
+  // file) — sells the same plans at the same prices. Two hardcoded ladders
+  // is how a reprice ships half-done.
+  window.CM_PLANS = {
+    prices: PLAN_PRICES,
+    blurb: PLAN_BLURB,
+    features: PLAN_FEATURES,
+    // Annual-only perk. The cloud collects a shipping address on annual
+    // checkouts (_annual_device_checkout_extras) and ships on the first PAID
+    // invoice, so this is a real promise, not a made-up one.
+    deviceValue: 149,
+  };
   var _selTier = 'starter';
   var _selInterval = 'year';   // annual preselected: better retention + the device perk
   // Filled from /api/entitlement (allowlisted, so it answers while blocked).
@@ -4323,6 +4336,15 @@ function _renderOverviewHero() {
   // model card over ov.model here, else the hero kept showing the node's
   // dominant model (e.g. "running claude-opus-4-8" while PicoClaw is selected).
   var _scope = window._cmRuntimeScope;
+  // The cost tile starts life as a literal '$0.00' placeholder and only
+  // reaches its real value once loadMiniWidgets lands, ~15s into a load. So
+  // '$0.00' means EITHER 'genuinely free' OR 'not loaded yet', and the hero
+  // cannot tell them apart from the string alone — it spent the first quarter
+  // minute of every page load announcing 'free on your plan' over a real
+  // $8.49 of spend (founder report 2026-08-15). Track knownness explicitly:
+  // window._cmCostTodayRaw is the number loadMiniWidgets actually rendered.
+  var _costRaw = window._cmCostTodayRaw;
+  var _costKnown = _scope ? true : (typeof _costRaw === 'number');
   var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
@@ -4334,8 +4356,9 @@ function _renderOverviewHero() {
   var sessions = _scope ? _scope.sessions
                         : (_todayKnown ? ov.sessionsToday
                            : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
-  var free = cost === '$0.00' || cost === '$0' ||
-             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
+  // Never assert 'free' from a number we have not actually read.
+  var free = _costKnown && (cost === '$0.00' || cost === '$0' ||
+             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || ''));
   var say = window._cmLastAgentSay;
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
@@ -4350,7 +4373,9 @@ function _renderOverviewHero() {
   // sessions today but N on record, and "N sessions today" would be wrong while
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
-  stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  // Show nothing rather than a placeholder: an unlabelled '$0.00' next to
+  // live sessions reads as a real reading, not as 'still loading'.
+  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
   // daemon slice is fresh for the CURRENT runtime filter and passes the trust
@@ -4517,6 +4542,9 @@ async function loadAll() {
 async function loadMiniWidgets(overview, usage) {
   // 💰 Cost Ticker 
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // Record the value we actually rendered so the hero can tell a real $0.00
+  // from the '$0.00' placeholder it would otherwise read off the DOM.
+  window._cmCostTodayRaw = Number(usage.todayCost || 0);
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
   document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
@@ -4646,6 +4674,7 @@ async function loadMiniWidgets(overview, usage) {
         _set('hot-sessions-count', _scope.sessions);
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
+        window._cmCostTodayRaw = Number(_scope.cost || 0);
         _set('cost-today', '$' + _scope.cost.toFixed(2));
         // SPENDING wk/mo sub-figures scope too (were node-wide projections).
         if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
@@ -5008,7 +5037,8 @@ var _Q_RUNTIME_NAMES = {
   qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
   n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
-  qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo'
+  qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
+  kimi: 'Kimi CLI'
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -10560,21 +10590,34 @@ async function loadSecurityPage(silent) {
     loadSecurityFindings();
     return;
   }
+  // The durable findings feed is loaded FIRST so the tiles and the all-clear
+  // line can speak for the whole page. Painting them from the live signature
+  // scan alone is how the tab came to print "No threats detected" above a
+  // panel listing hundreds of findings, criticals included.
+  var edrCounts = await loadSecurityFindings();
   try {
-    var data = await fetchJsonWithTimeout('/api/security/threats', 10000);
+    var _secRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _secQs = (_secRt && _secRt !== 'all') ? '?runtime=' + encodeURIComponent(_secRt) : '';
+    var data = await fetchJsonWithTimeout('/api/security/threats' + _secQs, 10000);
     var threats = data.threats || [];
     _securityAllThreats = threats;
     var counts = data.counts || {};
-    document.getElementById('sec-critical-count').textContent = counts.critical || 0;
-    document.getElementById('sec-high-count').textContent = counts.high || 0;
-    document.getElementById('sec-medium-count').textContent = counts.medium || 0;
+    var edr = edrCounts || {};
+    // Tiles = live scan + recorded findings. One number per severity for the
+    // whole screen; the two feeds below say which engine reported what.
+    var totCritical = (counts.critical || 0) + (edr.critical || 0);
+    var totHigh = (counts.high || 0) + (edr.high || 0);
+    var totMedium = (counts.medium || 0) + (edr.medium || 0);
+    document.getElementById('sec-critical-count').textContent = totCritical;
+    document.getElementById('sec-high-count').textContent = totHigh;
+    document.getElementById('sec-medium-count').textContent = totMedium;
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = t("app.scanned", null, "Scanned ") + new Date().toLocaleTimeString();
     // Compact "all-clear" mode: when there's nothing to triage, hide the four
     // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
     // one calm green line instead. Restored the moment anything > 0.
-    var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
+    var nThreats = totCritical + totHigh + totMedium + (threats.length || 0) + (edr.total || 0);
     var summaryEl = document.getElementById('security-summary');
     var filterEl = document.getElementById('security-filter-pills');
     var listWrap = document.getElementById('security-threat-list');
@@ -10640,9 +10683,9 @@ async function loadSecurityPage(silent) {
     if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
   }
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
+  // (loadSecurityFindings already ran at the top — its counts feed the tiles.)
   loadSecurityIntegrity();
   loadSecurityAudit();
-  loadSecurityFindings();
   try {
     var cd = await fetchJsonWithTimeout('/api/security/credential-scan', 10000);
     var badgeEl = document.getElementById('credential-scan-badge');
@@ -10724,42 +10767,45 @@ async function loadSecurityFindings() {
       + t('security.findings_local_only', null, 'Findings are recorded on the machine your agent runs on. Open the dashboard there to read them.')
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
+    return null;
   }
   var rows = [];
+  var counts = null;
+  // Per-runtime honesty: findings are keyed by session id, which carries the
+  // runtime prefix. Scope SERVER-side so the row cap applies to this runtime's
+  // findings — filtering a node-wide page in JS silently drops rows once a
+  // busy runtime fills the cap.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var qs = '?limit=100' + ((rt && rt !== 'all') ? '&runtime=' + encodeURIComponent(rt) : '');
   try {
-    var d = await fetchJsonWithTimeout('/api/security-threats?limit=100', 10000);
+    var d = await fetchJsonWithTimeout('/api/security-threats' + qs, 10000);
     rows = (d && d.threats) || [];
+    counts = (d && d.counts) || null;
   } catch (e) {
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
       + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
-  }
-  // Per-runtime honesty: findings are keyed by session id, which carries the
-  // runtime prefix, so a runtime filter must actually narrow this list rather
-  // than silently showing node-wide rows.
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (rt && rt !== 'all') {
-    rows = rows.filter(function (r) {
-      var sid = String(r.session_id || '');
-      var prefix = sid.indexOf(':') > 0 ? sid.split(':')[0] : 'openclaw';
-      return prefix === rt;
-    });
+    return null;
   }
   if (!rows.length) {
     listEl.innerHTML = '<div style="color:#86efac;padding:12px;font-size:12px;">✓ '
       + t('security.findings_empty', null, 'Nothing recorded yet. Findings from ClawMetry’s own scan and from any connected security tool will appear here.')
       + '</div>';
     if (countEl) countEl.textContent = '';
-    return;
+    return counts;
   }
   if (countEl) {
-    countEl.textContent = rows.length + ' '
-      + (rows.length === 1
+    // The list is capped at 100; say how many there really are so the count
+    // never contradicts the tiles above.
+    var nTotal = (counts && counts.total) || rows.length;
+    countEl.textContent = nTotal + ' '
+      + (nTotal === 1
           ? t('security.finding_word', null, 'finding')
-          : t('security.findings_word', null, 'findings'));
+          : t('security.findings_word', null, 'findings'))
+      + (nTotal > rows.length
+          ? ' · ' + t('security.showing_latest', null, 'showing latest ') + rows.length
+          : '');
   }
   var html = '';
   rows.slice(0, 100).forEach(function (r) {
@@ -10790,6 +10836,7 @@ async function loadSecurityFindings() {
     html += '</div>';
   });
   listEl.innerHTML = html;
+  return counts;
 }
 
 // Jump from a finding to the transcript that produced it. Same hash-based
@@ -10824,6 +10871,16 @@ async function loadSecurityIntegrity() {
     } else if (d && d.ok === false) {
       paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
             t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+    } else if (d && d.status === 'degraded') {
+      // Third state, and the common one on a node that ran an older build:
+      // every event still matches its own hash (nothing was altered or
+      // removed), but some could not be placed in a single ordered chain
+      // because the writer chained two flush batches off the same head.
+      // Calling that "Tampered" scared people about a bug of ours; calling it
+      // "Intact" would hide a real insertion. It gets its own honest wording.
+      var nUnlinked = (d.unlinked || 0).toLocaleString();
+      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain, a fault in how older versions recorded the order that is now fixed. New events chain normally.'),
+            t('app.integrity_degraded_badge', null, 'Verified, order incomplete'), '#f59e0b', '&#128274;');
     } else if (window.CLOUD_MODE) {
       // Honest cloud state until the cm-cloud-security interceptor serves the
       // securityIntegrity snapshot slice (no silent blank).
@@ -11075,7 +11132,7 @@ var _CM_RT_LABEL = {
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
   copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
-  deepseek_harness: 'DeepSeek Harness', exo: 'Exo'
+  deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11084,7 +11141,8 @@ var _CM_RT_LABEL = {
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
-  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1
+  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
+  kimi: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -11222,6 +11280,7 @@ var _CM_RT_CAPS = {
   grok:        ['SESSIONS','EVENTS','COST'],
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -21750,6 +21809,7 @@ var _RT_FLOW = {
   grok:        { label:'Grok',        src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
   deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
   exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
+  kimi: { label:'Kimi CLI', src:['⌨️','Terminal'], accent:'#0f172a', stroke:'#334155', tools:[['⚡','Shell'],['📖','ReadFile'],['📝','WriteFile'],['🔍','Grep']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -26836,7 +26896,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 21 runtimes side by side. Respects the global
+// the headline demo path — the 22 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -27677,6 +27737,7 @@ function _cmRuntimeIcon(id) {
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
     n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
+    kimi: '🌙',
   };
   return map[id] || '•';
 }

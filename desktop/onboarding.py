@@ -482,7 +482,7 @@ CROSS_SELL_SLIDES = [
         "eyebrow": "You just installed ClawMetry.",
         "title": "Every AI agent on this machine, in one dashboard.",
         "body": (
-            "Watch spend, sessions, and errors across 21+ runtimes in real time. "
+            "Watch spend, sessions, and errors across 22+ runtimes in real time. "
             "Cost breakdowns per model, per skill, per session. Loop detection. "
             "Budget alerts. All read-only, all local, all yours."
         ),
