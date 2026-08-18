@@ -48,6 +48,19 @@
     starter: ['Unlimited channels + cloud sync', 'Approval queue'],
     pro: ['Everything in Starter', 'Tool policy + evals + cost optimizer'],
   };
+  // Publish the table so the OTHER in-app upgrade surface — the self-host
+  // modal's expired-trial step (static/js/onboarding.js, loaded after this
+  // file) — sells the same plans at the same prices. Two hardcoded ladders
+  // is how a reprice ships half-done.
+  window.CM_PLANS = {
+    prices: PLAN_PRICES,
+    blurb: PLAN_BLURB,
+    features: PLAN_FEATURES,
+    // Annual-only perk. The cloud collects a shipping address on annual
+    // checkouts (_annual_device_checkout_extras) and ships on the first PAID
+    // invoice, so this is a real promise, not a made-up one.
+    deviceValue: 149,
+  };
   var _selTier = 'starter';
   var _selInterval = 'year';   // annual preselected: better retention + the device perk
   // Filled from /api/entitlement (allowlisted, so it answers while blocked).
