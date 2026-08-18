@@ -100,6 +100,7 @@ PAID_RUNTIMES = frozenset(
         "qm",
         "deepseek_harness",
         "exo",
+        "kimi",
     }
 )
 
@@ -137,6 +138,7 @@ RUNTIME_LABELS = {
     "qm": "QM",
     "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
+    "kimi": "Kimi CLI",
 }
 
 # Public per-runtime page on clawmetry.com for every known runtime. This is
@@ -169,6 +171,7 @@ RUNTIME_LANDING_PATHS = {
     "qm": "/runtimes/qm",
     "deepseek_harness": "/runtimes/deepseek-harness",
     "exo": "/runtimes/exo",
+    "kimi": "/runtimes/kimi",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -267,6 +270,15 @@ RUNTIME_ALIASES = {
     "dsh": "deepseek_harness",
     "exo-harness": "exo",
     "exoharness": "exo",
+    # Kimi CLI is folding into the standalone "Kimi Code CLI"; both write
+    # the same store shape and are ONE runtime here. numbat emits
+    # source_agent="kimi-code" for hook findings, which without these
+    # aliases fell through to an uncatalogued "kimi_code" runtime id.
+    "kimi-cli": "kimi",
+    "kimicli": "kimi",
+    "kimi-code": "kimi",
+    "kimi_code": "kimi",
+    "kimicode": "kimi",
 }
 
 TIER_LABELS = {

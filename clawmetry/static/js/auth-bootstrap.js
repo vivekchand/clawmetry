@@ -312,19 +312,146 @@ function clawmetryLocalSignin(){
       if(err) err.style.display='block';
     });
 }
-// Inject auth header into all fetch calls
+// Inject auth header into all fetch calls, and notice when the backend
+// stops answering at all.
+//
+// A dead local backend rejects every fetch with a network-level TypeError
+// ("Load failed" in WebKit, "Failed to fetch" in Chromium) -- no status, no
+// response. Each panel used to absorb that on its own, so a machine-wide
+// outage rendered as a dozen unrelated "Loading..." spinners and one
+// unhelpful per-panel Retry. On 2026-08-17 a desktop user sat in front of
+// that for over six hours with nothing telling them the backend was gone.
+// This is the one place every /api/ call passes through, so the global
+// outage signal belongs here.
 (function(){
   var _origFetch=window.fetch;
+  var _netFail=0;
+  // One transient failure means nothing (a restart, a sleep/wake, a
+  // navigation racing an in-flight request). Three in a row is an outage.
+  var FAIL_THRESHOLD=3;
+
+  function _isNetworkError(e){
+    // Never treat an HTTP error status as an outage -- those resolve.
+    return !!e && (e.name==='TypeError' || e instanceof TypeError);
+  }
+
   window.fetch=function(url,opts){
     var tok=localStorage.getItem('clawmetry-token');
-    if(tok && typeof url==='string' && url.startsWith('/api/')){
+    var isApi=(typeof url==='string' && url.startsWith('/api/'));
+    if(tok && isApi){
       opts=opts||{};
       opts.headers=opts.headers||{};
       if(opts.headers instanceof Headers){opts.headers.set('Authorization','Bearer '+tok);}
       else{opts.headers['Authorization']='Bearer '+tok;}
     }
-    return _origFetch.call(this,url,opts);
+    if(!isApi) return _origFetch.call(this,url,opts);
+    return _origFetch.call(this,url,opts).then(function(r){
+      // Any answer at all -- even a 500 -- means the backend is reachable.
+      if(_netFail!==0){
+        _netFail=0;
+        window.dispatchEvent(new CustomEvent('cm:backend-reachable'));
+      }
+      return r;
+    },function(e){
+      if(_isNetworkError(e)){
+        _netFail++;
+        if(_netFail===FAIL_THRESHOLD){
+          window.dispatchEvent(new CustomEvent('cm:backend-unreachable',
+            {detail:{url:String(url)}}));
+        }
+      }
+      throw e;
+    });
   };
+  window.cmBackendFailures=function(){return _netFail;};
+})();
+
+// ── Global "backend unreachable" overlay ──
+// The recovery surface of last resort. Rendered on top of every tab, so it
+// cannot be missed the way a per-panel spinner can, and it always offers an
+// action. Inside the desktop shell the pywebview JS bridge still works when
+// the HTTP origin does not, so prefer it; in a browser tab, reload.
+(function(){
+  var BAR_ID='cm-backend-outage';
+
+  function _bridge(){
+    try{
+      return (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+    }catch(e){ return null; }
+  }
+
+  function _dismiss(){
+    var el=document.getElementById(BAR_ID);
+    if(el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  function _show(){
+    if(document.getElementById(BAR_ID)) return;
+    var api=_bridge();
+    var el=document.createElement('div');
+    el.id=BAR_ID;
+    el.setAttribute('role','alert');
+    el.style.cssText=[
+      'position:fixed','left:50%','transform:translateX(-50%)','bottom:24px',
+      'z-index:2147483000','max-width:min(640px,92vw)',
+      'display:flex','align-items:center','gap:14px','flex-wrap:wrap',
+      'padding:14px 18px','border-radius:12px',
+      'background:#2a1215','border:1px solid #7f1d1d','color:#fecaca',
+      'box-shadow:0 12px 32px rgba(0,0,0,.45)',
+      'font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
+    ].join(';');
+
+    var msg=document.createElement('div');
+    msg.style.cssText='flex:1 1 260px;min-width:220px';
+    msg.innerHTML='<strong style="color:#fca5a5">Cannot reach the ClawMetry '
+      +'backend on this machine.</strong><br>'
+      +'<span style="color:#f3b5b5">Numbers on every tab are frozen at their '
+      +'last known values.</span>';
+    el.appendChild(msg);
+
+    var btn=document.createElement('button');
+    btn.type='button';
+    btn.style.cssText=[
+      'cursor:pointer','white-space:nowrap','padding:8px 16px',
+      'border-radius:8px','border:1px solid #ef4444','background:#ef4444',
+      'color:#fff','font-weight:600','font-size:13px'
+    ].join(';');
+    btn.textContent=(api&&api.restart_backend)?'Restart backend':'Reload';
+    btn.onclick=function(){
+      btn.disabled=true;
+      btn.textContent='Restarting…';
+      if(api&&api.restart_backend){
+        try{
+          api.restart_backend();
+          // The shell reloads the window itself once the daemon answers.
+          // If it cannot, re-enable so the user can try again.
+          setTimeout(function(){
+            btn.disabled=false;
+            btn.textContent='Restart backend';
+          },20000);
+          return;
+        }catch(e){}
+      }
+      location.reload();
+    };
+    el.appendChild(btn);
+
+    // Honest fallback for the case the shell cannot fix itself.
+    if(!(api&&api.restart_backend)){
+      var hint=document.createElement('div');
+      hint.style.cssText='flex-basis:100%;font-size:12px;color:#e7a3a3';
+      hint.textContent='If reloading does not help, quit ClawMetry and open '
+        +'it again.';
+      el.appendChild(hint);
+    }
+    (document.body||document.documentElement).appendChild(el);
+  }
+
+  window.addEventListener('cm:backend-unreachable',_show);
+  window.addEventListener('cm:backend-reachable',_dismiss);
+  // Exposed for tests and for panels that want to raise it directly.
+  window.cmShowBackendOutage=_show;
+  window.cmHideBackendOutage=_dismiss;
 })();
 
 // ── Version badge + one-click update ──

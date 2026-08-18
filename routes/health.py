@@ -3592,6 +3592,9 @@ def api_security_threats_history():
     session_id = (request.args.get("session_id") or "").strip() or None
     severity = (request.args.get("severity") or "").strip() or None
     since = (request.args.get("since") or "").strip() or None
+    runtime = (request.args.get("runtime") or "").strip().lower() or None
+    if runtime in ("all", "node"):
+        runtime = None
     try:
         limit = max(1, min(1000, int(request.args.get("limit", 200))))
     except (TypeError, ValueError):
@@ -3606,21 +3609,77 @@ def api_security_threats_history():
                 session_id=session_id,
                 severity=severity,
                 since=since,
+                runtime=runtime,
                 limit=limit,
             )
         except Exception:
             rows = None
+        if rows is None and runtime:
+            # Version skew: a daemon older than the runtime kwarg raises rather
+            # than filtering. Retry unfiltered and narrow here — a scoped view
+            # that degrades to node-wide silently would break FLYWHEEL §1c.
+            try:
+                from routes.local_query import local_store_via_daemon
+                rows = local_store_via_daemon(
+                    "query_security_events",
+                    session_id=session_id,
+                    severity=severity,
+                    since=since,
+                    limit=limit,
+                )
+                if rows is not None:
+                    rows = [
+                        r for r in rows
+                        if str((r or {}).get("session_id") or "")
+                        .split(":", 1)[0].lower() == runtime
+                    ]
+            except Exception:
+                rows = None
 
     if rows is None:
         try:
             from clawmetry import local_store as _ls
             rows = _ls.get_store().query_security_events(
-                session_id=session_id, severity=severity, since=since, limit=limit
+                session_id=session_id, severity=severity, since=since,
+                runtime=runtime, limit=limit,
             )
         except Exception:
             rows = []
 
-    return jsonify({"threats": rows or [], "total": len(rows or [])})
+    # True severity rollup, counted in SQL. The list above is capped for the
+    # browser; counting it would under-report the tiles on a node that holds
+    # hundreds of findings.
+    counts = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        counts = local_store_via_daemon(
+            "count_security_events", runtime=runtime, since=since
+        )
+    except Exception:
+        counts = None
+    if counts is None:
+        try:
+            from clawmetry import local_store as _ls
+            counts = _ls.get_store().count_security_events(
+                runtime=runtime, since=since
+            )
+        except Exception:
+            counts = None
+    if not isinstance(counts, dict):
+        # Last resort: count what we actually have rather than claiming zero.
+        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+                  "total": len(rows or [])}
+        for r in rows or []:
+            sev = str((r or {}).get("severity") or "").lower()
+            if sev in counts and sev != "total":
+                counts[sev] += 1
+
+    return jsonify({
+        "threats": rows or [],
+        "total": len(rows or []),
+        "counts": counts,
+        "scope": runtime or "node",
+    })
 
 
 @bp_health.route("/api/doctor-findings")

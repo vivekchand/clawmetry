@@ -72,6 +72,12 @@ _AGENT_TO_RUNTIME = {
     "dsh": "deepseek_harness",
     "exo-harness": "exo",
     "exoharness": "exo",
+    # numbat installs its hooks into ~/.kimi-code/config.toml and stamps
+    # source_agent="kimi-code"; without these it fell through to an
+    # uncatalogued "kimi_code" runtime id nothing else in the app knows.
+    "kimi": "kimi",
+    "kimi-cli": "kimi",
+    "kimi-code": "kimi",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

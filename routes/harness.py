@@ -32,6 +32,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
     "deepseek_harness",
     "exo",
+    "kimi",
 })
 
 

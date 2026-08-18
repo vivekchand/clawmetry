@@ -15916,22 +15916,134 @@ for _sig in _THREAT_SIGNATURES:
     ]
 
 
-def _scan_events_for_threats(events):
-    """Scan brain-history events against threat signatures. Returns list of threat matches."""
+# Action labels a signature's ``tool_types`` may declare. These come from the
+# LEGACY JSONL parser's ``tool_to_type()`` (routes/brain.py) and predate the
+# DuckDB-first read path.
+_THREAT_ACTION_TYPES = frozenset(
+    {"EXEC", "READ", "WRITE", "BROWSER", "SEARCH", "MSG", "SPAWN", "TOOL"}
+)
+
+# Rows that are agent *speech*, not agent *action*. Running action signatures
+# over these is how you flag the model for merely discussing ``~/.ssh/id_rsa``.
+# Content-borne risk (PII, injection, leaked keys) is the content scanners'
+# job — see ``_scan_content_for_policy_events``.
+_THREAT_NON_ACTION_TYPES = frozenset(
+    {"MESSAGE", "THINKING", "USER", "ASSISTANT", "SUMMARY", "COMPACT", "SYSTEM"}
+)
+
+# Tool-CALL rows as the DuckDB fast path emits them (routes/brain.py's
+# ``evt_type = event_type.upper()``). Only the call is an agent ACTION.
+#
+# TOOL_RESULT is deliberately absent, and so is ERROR (which routes/brain.py
+# derives from a failed TOOL_RESULT). A result is data the agent RECEIVED, not
+# something it did, and results are big free-text blobs — a page of docs, web
+# search output, a source file. Scanning them for action patterns produced
+# nothing but noise: live on a real node, all four hits were TOOL_RESULT rows
+# and all four were false positives (a Devin CLI docs page and a geocoding
+# result matched "browser reaching an admin panel"; a Python source file
+# matched "credential file access" at CRITICAL). Content-borne risk in results
+# is the policy scanners' job — see ``_scan_content_for_policy_events``.
+_THREAT_TOOL_TYPES = frozenset({"TOOL_CALL", "TOOL.CALL", "TOOL_USE"})
+
+# Returned data, not agent action. Excluded for the reason above.
+_THREAT_RESULT_TYPES = frozenset({"TOOL_RESULT", "TOOL.RESULT", "ERROR"})
+
+
+def _threat_tool_name_to_action(name):
+    """Map a tool NAME to a legacy action label. Mirrors routes/brain.py's
+    ``tool_to_type`` so both taxonomies agree on what 'EXEC' means."""
+    tn = str(name or "").lower()
+    if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+        return "EXEC"
+    if "read" in tn or "grep" in tn or "glob" in tn:
+        return "READ"
+    if "write" in tn or "edit" in tn:
+        return "WRITE"
+    if "browser" in tn or "canvas" in tn or "image" in tn:
+        return "BROWSER"
+    if "web_search" in tn or "web_fetch" in tn or "search" in tn or "fetch" in tn:
+        return "SEARCH"
+    if "subagent" in tn or "spawn" in tn or "task" in tn:
+        return "SPAWN"
+    return "TOOL"
+
+
+def _threat_action_types(ev):
+    """Which action labels an event should be matched against.
+
+    The signature table gates on the legacy ``EXEC/READ/WRITE/...`` vocabulary,
+    but since the DuckDB-first migration brain rows arrive as
+    ``TOOL_CALL/TOOL_RESULT/MESSAGE/THINKING/ERROR``. The two vocabularies do
+    not intersect, so every event fell through every signature and the scanner
+    could never report a threat (it was structurally pinned at 0). This bridges
+    them: legacy labels pass through, speech rows are excluded, and a tool row
+    with no tool NAME is matched against every signature — the store keeps the
+    tool INPUT in ``detail`` but not which tool produced it, and the signature
+    regexes are specific enough (``/dev/tcp/``, ``.ssh/id_rsa``) to carry the
+    precision on their own.
+    """
+    ev_type = str(ev.get("type") or "").upper()
+    if not ev_type:
+        return frozenset()
+    if ev_type in _THREAT_ACTION_TYPES:
+        return frozenset({ev_type})
+    if ev_type in _THREAT_NON_ACTION_TYPES or ev_type in _THREAT_RESULT_TYPES:
+        return frozenset()
+    if ev_type in _THREAT_TOOL_TYPES:
+        name = ev.get("tool") or ev.get("toolName") or ev.get("name")
+        if name:
+            return frozenset({_threat_tool_name_to_action(name)})
+        return _THREAT_ACTION_TYPES
+    # CHANNEL.*, NUMBAT_FINDING, daemon rows, anything else we don't recognise
+    # as an agent action: leave alone rather than guess.
+    return frozenset()
+
+
+def _threat_event_session(ev):
+    """Session id for a brain event across both read paths.
+
+    The legacy parser used ``source``; the DuckDB fast path emits ``sessionId``
+    (full) plus ``src`` (truncated to 32 chars). Reading only ``source`` meant
+    every event reported the empty string, so a node with five active sessions
+    reported ``sessions_scanned: 1``.
+    """
+    return str(
+        ev.get("sessionId") or ev.get("source") or ev.get("src") or ""
+    )
+
+
+def _threat_session_runtime(session_id):
+    """``claude_code:1bfbb30f-...`` → ``claude_code``. Bare ids → ""."""
+    sid = str(session_id or "")
+    return sid.split(":", 1)[0] if ":" in sid else ""
+
+
+def _scan_events_for_threats(events, runtime=None):
+    """Scan brain-history events against threat signatures. Returns list of threat matches.
+
+    ``runtime`` scopes the scan to one agent runtime (per FLYWHEEL §1c —
+    a number shown under the runtime switcher must belong to that runtime).
+    """
     threats = []
     sessions_seen = set()
     sessions_with_threats = set()
+    want_runtime = str(runtime or "").strip().lower()
 
     for ev in events:
-        source = ev.get("source", "")
+        source = _threat_event_session(ev)
+        if want_runtime and _threat_session_runtime(source).lower() != want_runtime:
+            continue
         sessions_seen.add(source)
-        ev_type = ev.get("type", "")
+        action_types = _threat_action_types(ev)
+        if not action_types:
+            continue
+        ev_type = str(ev.get("type") or "")
         detail = ev.get("detail", "")
         if not detail:
             continue
 
         for sig in _THREAT_SIGNATURES:
-            if ev_type not in sig["tool_types"]:
+            if not action_types.intersection(sig["tool_types"]):
                 continue
             for compiled in sig["_compiled"]:
                 if compiled.search(detail):
@@ -15946,6 +16058,8 @@ def _scan_events_for_threats(events):
                             "session": ev.get("sourceLabel", source),
                             "source": source,
                             "event_type": ev_type,
+                            "engine": "builtin",
+                            "runtime": _threat_session_runtime(source),
                         }
                     )
                     break  # One match per signature per event

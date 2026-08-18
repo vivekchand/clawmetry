@@ -272,3 +272,76 @@ def test_delete_events_by_type_is_the_undo_for_a_bad_ingest(store):
     assert store.delete_events_by_type("numbat_finding")["deleted_rows"] == 0
     with pytest.raises(ValueError):
         store.delete_events_by_type("  ")
+
+
+def test_runtime_filter_scopes_findings_to_one_runtime(store):
+    """Findings are keyed ``<runtime>:<session>``, so the runtime switcher has
+    to narrow them SERVER-side. Filtering a node-wide page in the browser
+    silently drops rows once a busy runtime fills the row cap."""
+    for rt, fid in (("claude-code", "fnd-cc"), ("codex", "fnd-cx")):
+        mapped = ni.map_records([_finding(finding_id=fid, source_agent=rt)])
+        for sec in mapped["security_events"]:
+            store.ingest_security_event(sec)
+    assert len(store.query_security_events(limit=10)) == 2
+    scoped = store.query_security_events(runtime="codex", limit=10)
+    assert [r["id"] for r in scoped] == ["numbat_fnd-cx"]
+    assert scoped[0]["session_id"].startswith("codex:")
+
+
+def test_event_type_filter_separates_engines(store):
+    """The built-in signature scan and the agent-EDR share one table; the tab
+    needs to ask for one engine's rows without the other's."""
+    mapped = ni.map_records([_finding()])
+    for sec in mapped["security_events"]:
+        store.ingest_security_event(sec)
+    store.ingest_security_event({
+        "id": "sec_SEC-001_abc", "ts": "2026-08-01T10:00:00",
+        "type": "TOOL_CALL", "severity": "critical",
+        "session_id": "claude_code:s1", "rule_id": "SEC-001",
+        "description": "Reverse shell attempt", "snippet": "bash -i",
+    })
+    assert len(store.query_security_events(limit=10)) == 2
+    edr = store.query_security_events(event_type="numbat_finding", limit=10)
+    assert [r["rule_id"] for r in edr] == ["exec.agent_runtime_bypass_flags"]
+
+
+def test_counts_are_computed_in_sql_not_from_the_page(store):
+    """The list is capped for the browser; counting the returned page would
+    under-report the tiles on a node holding hundreds of findings."""
+    for i in range(7):
+        mapped = ni.map_records([_finding(
+            finding_id=f"fnd-{i:02d}",
+            severity="critical" if i < 2 else "high",
+        )])
+        for sec in mapped["security_events"]:
+            store.ingest_security_event(sec)
+    page = store.query_security_events(limit=3)
+    assert len(page) == 3
+    counts = store.count_security_events()
+    assert counts["total"] == 7
+    assert counts["critical"] == 2
+    assert counts["high"] == 5
+    assert counts["total"] == sum(
+        counts[k] for k in ("critical", "high", "medium", "low", "info")
+    )
+
+
+def test_delete_by_id_prefix_removes_one_engine_only(store):
+    """Undo for findings that should never have been recorded — without
+    taking the other engine's rows with them."""
+    mapped = ni.map_records([_finding()])
+    for sec in mapped["security_events"]:
+        store.ingest_security_event(sec)
+    store.ingest_security_event({
+        "id": "sec_SEC-015_xyz", "ts": "2026-08-01T10:00:00",
+        "type": "TOOL_RESULT", "severity": "high",
+        "session_id": "claude_code:s1", "rule_id": "SEC-015",
+        "description": "false positive", "snippet": "docs page",
+    })
+    assert store.count_security_events()["total"] == 2
+    result = store.delete_security_events_by_id_prefix("sec_")
+    assert result["deleted_rows"] == 1
+    remaining = store.query_security_events(limit=10)
+    assert [r["id"] for r in remaining] == ["numbat_fnd-0123456789abcdef01234567"]
+    with pytest.raises(ValueError):
+        store.delete_security_events_by_id_prefix("")

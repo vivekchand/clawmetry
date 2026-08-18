@@ -213,3 +213,132 @@ def test_batched_dedup_redelivery_keeps_chain_valid(store_with_integrity):
     assert second["status"] == "valid", second
     # Only the 2 genuinely new events get stamped; re-deliveries are skipped.
     assert second["checked"] == n1 + 2, (n1, second["checked"])
+
+
+def test_multi_runtime_batch_verifies_regardless_of_arrival_order(store_with_integrity):
+    """The false positive that painted "Tampered" on healthy nodes.
+
+    The chain is BUILT per flush batch sorted by ``id`` (lexicographic); the
+    verifier used to WALK rows ordered by ``created_at`` (arrival order). On a
+    multi-runtime node those orders differ — ids like ``claude_code:…`` <
+    ``hermes:…`` < ``picoclaw:…`` chain in one order while arriving in another
+    — so the walk hit a row whose ``chain_prev_hash`` was not the previous
+    row's hash and reported a break at the first boundary. Verification now
+    follows the ``chain_prev_hash`` links, so arrival order cannot matter.
+    """
+    s = store_with_integrity
+    # Ingest in an order deliberately REVERSED from the id sort the stamper uses.
+    for prefix in ("picoclaw", "hermes", "claude_code"):
+        for i in range(4):
+            s.ingest(_ev(node_id="node-a", id="{}:{:02d}".format(prefix, i)))
+    _flush(s)
+    result = s.verify_integrity()
+    assert result["status"] == "valid", result
+    assert result["checked"] == 12, result
+
+
+def test_redelivery_mid_batch_does_not_fork_the_chain(store_with_integrity):
+    """Second break generator: an already-stamped id inside a fresh batch used
+    to rewind the running head to that row's stored hash, so every later NEW
+    row in the batch chained off an old predecessor — forking the chain against
+    the row that already claimed it. Re-delivery is routine here (the daemon
+    re-tails JSONL, family adapters re-scan the most recent N sessions each
+    tick, numbat's HTTP sink retries by design)."""
+    s = store_with_integrity
+    old = [_ev(node_id="node-a", id="aaa:{:02d}".format(i)) for i in range(3)]
+    for e in old:
+        s.ingest(e)
+    _flush(s)
+    assert s.verify_integrity()["status"] == "valid"
+    # A batch that INTERLEAVES a re-delivery with new rows sorting after it.
+    s.ingest(dict(old[0]))
+    for i in range(3):
+        s.ingest(_ev(node_id="node-a", id="zzz:{:02d}".format(i)))
+    s.ingest(dict(old[2]))
+    _flush(s)
+    result = s.verify_integrity()
+    assert result["status"] == "valid", result
+    assert result["checked"] == 6, result
+
+
+def test_verify_still_catches_a_deleted_event(store_with_integrity):
+    """Link-following must not be softer than the old walk: removing an event
+    from the middle orphans its successors and has to be reported."""
+    s = store_with_integrity
+    for i in range(6):
+        s.ingest(_ev(node_id="node-a", id="ev:{:02d}".format(i)))
+    _flush(s)
+    assert s.verify_integrity()["status"] == "valid"
+    s._conn.execute("DELETE FROM events WHERE id = 'ev:02'")
+    result = s.verify_integrity()
+    assert result["status"] == "invalid", result
+    assert result["broken_at"], result
+
+
+def test_two_batches_in_one_millisecond_are_not_reported_as_tampering(store_with_integrity):
+    """The false positive the founder hit, reproduced exactly.
+
+    Each flush batch is chained independently, sorted by ``id``. The verifier
+    used to walk ``ORDER BY node_id, created_at, id`` and assert row N+1's
+    ``chain_prev_hash`` equalled row N's ``chain_hash`` — which silently
+    assumed one batch per ``created_at`` millisecond. When two batches land in
+    the SAME millisecond, that ORDER BY interleaves two independently chained
+    runs by id, so the links no longer line up and the tab painted "Tampered ·
+    the activity log may have been altered" over a log where nothing had been
+    touched. Live evidence on the reporter's node: 42,110 stamped events, 0
+    content mismatches, 4,510 fork points.
+
+    ``created_at`` is not part of the hash, so forcing it equal here changes no
+    fingerprint — it just makes the millisecond collision deterministic.
+    """
+    s = store_with_integrity
+    for eid in ("a:1", "c:1"):          # batch 1 chains a:1 -> c:1
+        s.ingest(_ev(node_id="node-a", id=eid))
+    _flush(s)
+    for eid in ("b:1", "d:1"):          # batch 2 chains b:1 -> d:1
+        s.ingest(_ev(node_id="node-a", id=eid))
+    _flush(s)
+    # Same millisecond for every row: id order (a, b, c, d) now interleaves the
+    # two chained runs (a->c and b->d).
+    s._conn.execute("UPDATE events SET created_at = 1000")
+    result = s.verify_integrity()
+    assert result["status"] == "valid", result
+    assert result["checked"] == 4, result
+
+
+def test_forked_chain_is_degraded_not_tampered(store_with_integrity):
+    """A fork means the ordering is unprovable, NOT that data changed.
+
+    Forks are what ClawMetry's own writer produced for months, so reporting
+    them as tampering cried wolf. Every event still has to match its own hash;
+    the verdict says the ordering is incomplete and says so separately.
+    """
+    s = store_with_integrity
+    for i in range(4):
+        s.ingest(_ev(node_id="node-a", id="ev:{:02d}".format(i)))
+    _flush(s)
+    assert s.verify_integrity()["status"] == "valid"
+    # Re-point one event at an earlier predecessor, re-stamping its own hash so
+    # the CONTENT check still passes — a pure linkage fork.
+    row = s._conn.execute(
+        "SELECT id, node_id, agent_type, agent_id, session_id, workspace_id,"
+        " event_type, ts FROM events WHERE id = 'ev:03'"
+    ).fetchone()
+    genesis_hash = s._conn.execute(
+        "SELECT chain_hash FROM events WHERE id = 'ev:00'"
+    ).fetchone()[0]
+    ed = dict(zip(
+        ("id", "node_id", "agent_type", "agent_id", "session_id",
+         "workspace_id", "event_type", "ts"), row,
+    ))
+    import clawmetry.local_store as _ls
+    s._conn.execute(
+        "UPDATE events SET chain_prev_hash = ?, chain_hash = ? WHERE id = 'ev:03'",
+        [genesis_hash, _ls._integrity_hash(genesis_hash, ed)],
+    )
+    result = s.verify_integrity()
+    assert result["status"] == "degraded", result
+    assert result["unlinked"] == 1, result
+    assert result["fork_points"] == 1, result
+    assert result["broken_at"] is None
+    assert "altered or removed" in (result["error"] or "")
