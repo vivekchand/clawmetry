@@ -67,8 +67,7 @@ below live here so the free UI can render locked rows with an accurate
 `claude_code`, `codex`, `cursor`, `aider`, `goose`, `opencode`,
 `qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
 `n8n`, `antigravity`, `copilot`, `grok`, `qm`, `deepseek_harness`, `exo`,
-`kimi`.
-`n8n`, `antigravity`, `copilot`, `grok`, `qm`, `deepseek_harness`, `exo`, `devin`.
+`kimi`, `devin`.
 
 **Additional features**, split across three tiers:
 
