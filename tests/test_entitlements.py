@@ -261,10 +261,11 @@ def test_paid_runtimes_exact_membership(ent):
             "qm",
             "deepseek_harness",
             "exo",
+            "kimi",
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 19
+    assert len(ent.PAID_RUNTIMES) == 20
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):

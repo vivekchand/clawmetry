@@ -1,6 +1,6 @@
 # Runtime / Agent Compatibility
 
-ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each runtime that
+ClawMetry observes 22 AI-agent runtimes. Each runtime that
 isn't OpenClaw ships a dedicated reader adapter (`clawmetry/adapters/`) that
 translates its native session format into ClawMetry's unified Session/Event
 shapes; the daemon then ingests them into the same local DuckDB store and cloud
@@ -11,9 +11,14 @@ This page tracks each one's real status, honestly.
 > New to NanoClaw / PicoClaw? See [`RUNTIME_FAMILY.md`](RUNTIME_FAMILY.md) for a
 > primer on the OpenClaw-family runtimes specifically.
 
+Running [Perplexity's numbat](https://github.com/perplexityai/numbat) agent-security
+tool? ClawMetry ingests its findings and enforcement decisions out of the box.
+See [`NUMBAT.md`](NUMBAT.md).
+
 | Runtime / Agent | Status         | Session store                          | Notes |
 | --------------- | -------------- | -------------------------------------- | ----- |
 | OpenClaw    | Native         | v3 JSONL `~/.openclaw/agents/main/sessions/` | Reference runtime; auto-detected. |
+| NVIDIA NemoClaw | Native | OpenClaw v3 JSONL on the host or inside an OpenShell container | Auto-detected (binary + container scan). See [`NEMOCLAW.md`](NEMOCLAW.md). |
 | PicoClaw    | Beta adapter   | Flat `providers.Message` JSONL `~/.picoclaw/workspace/sessions/` | Transcripts, model, tool calls. Tokens/cost not on disk. |
 | NanoClaw    | Beta adapter   | Per-session SQLite `data/v2-sessions/<group>/<session>/{inbound,outbound}.db` | Transcripts. Model/tokens/cost not on disk. |
 | Hermes      | Beta adapter   | SQLite `~/.hermes/state.db` (sessions + messages) | Transcripts, model, pre-computed tokens/cost. |
@@ -28,7 +33,17 @@ This page tracks each one's real status, honestly.
 | Deep Agents | Beta adapter   | SQLite `~/.deepagents/.state/sessions.db` | Transcripts, model, tool calls, real tokens + cost. |
 | n8n         | Beta adapter   | SQLite `~/.n8n/database.sqlite` (`execution_entity`/`execution_data`, WAL) | Workflow executions as sessions, node runs as tool calls, AI Agent prompts + model attribution; tokens + cost where the model sub-node records usage. Postgres and n8n Cloud installs are not covered by this adapter. |
 | Antigravity | Beta adapter   | Brain JSONL under `~/.gemini/<flavor>/brain/<uuid>/` (flavors: `antigravity`, `antigravity-cli`, `antigravity-ide`, `jetski`) + `conversations/<uuid>.db` (SQLite, WAL) | Conversations as sessions, planner/tool steps as events, thinking + checkpoint (compaction) events; per-generation model, token split (prompt/thinking/response) and cost decoded from `gen_metadata`; background-generation burn; subagent + battle-mode metadata. |
+| GitHub Copilot | Beta adapter | Copilot CLI `events.jsonl` under `~/.copilot/session-state/` + the `session-store.db` per-call usage ledger | Conversations, tool calls, model routing, cache-aware token split, vendor-billed AI-credit cost. |
+| Grok | Beta adapter | xAI Grok Build CLI: `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}` | Conversations, per-turn token split, model routing, and the outbound repo payload staged under `~/.grok/upload_queue/`. |
+| QM | Beta adapter | Postgres (no on-disk session store); adapter reads `DATABASE_URL` / `CLAWMETRY_QM_DATABASE_URL` read-only | YC's multiplayer harness; delegates to Pi / opencode / Codex / Claude Code, which show up as their own runtimes. |
+| DeepSeek Harness | Beta adapter | JSONL under `$DSH_HOME/sessions` (default `~/.dsh/sessions`), zstd-compressed by default | Transcripts, model, tool calls. `zstandard` is installed lazily, only once compressed dsh data is detected. |
+| Exo | Beta adapter | One pretty-printed JSON file per event under `<workspace>/.exo/exoharness/agents/*/conversations/*/events/` | Per-call usage + cost persisted by Exo itself. State dir is workspace-relative; set `CLAWMETRY_EXO_ROOTS` for unusual layouts. |
+| Kimi CLI | Beta adapter | One `wire.jsonl` event log per session under `<share>/sessions/<md5(workdir)>/<uuid>/` | Reads both share dirs (`~/.kimi`, `~/.kimi-code`) plus `$KIMI_SHARE_DIR`. Model id is not written to disk. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
+
+OpenClaw and NVIDIA NemoClaw are free in the OSS package; every other
+runtime needs a Starter or Pro plan, or a self-hosted license key. See
+[`ENTITLEMENTS.md`](ENTITLEMENTS.md).
 
 ## What "Beta adapter" means (and what it does not)
 

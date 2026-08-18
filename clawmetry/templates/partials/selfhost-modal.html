@@ -42,7 +42,7 @@
       <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;">
       <span style="font-size:18px;font-weight:700;color:#fff;" data-i18n="selfhost.title">Self-Host</span>
     </div>
-    <p style="
+    <p id="shm-tagline" style="
       color:#94a3b8;
       font-size:14px;
       margin:0 0 24px;
@@ -150,6 +150,12 @@
           " data-i18n="selfhost.activate_trial">Activate trial</button>
       </div>
       <p id="shm-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <!-- An account whose trial is already spent fails activation with the
+           cloud's message and nothing to do about it. Offer the plans step
+           right there instead of sending them back to the email box. -->
+      <p id="shm-otp-plans" style="margin:8px 0 0;text-align:center;display:none;">
+        <span style="color:#E5443A;font-size:12px;font-weight:600;cursor:pointer;" onclick="shmShowPlans()" data-i18n="selfhost.see_plans">See plans</span>
+      </p>
       <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;">
         <span style="cursor:pointer;" onclick="shmResendOtp()" data-i18n="selfhost.resend_code">Resend code</span>
         <span style="color:#334155;margin:0 8px;">·</span>
@@ -191,11 +197,62 @@
       <p id="shm-license-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
       <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.back">Back</p>
     </div>
-    <div id="shm-step-ended" style="display:none;text-align:center;padding:8px 0;">
-      <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 6px;" data-i18n="selfhost.trial_ended_title">Your 7-day trial has ended</p>
-      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;" data-i18n="selfhost.trial_ended_body">You're signed in. Keep every runtime with a license.</p>
-      <a href="https://clawmetry.com/pricing?deploy=self" target="_blank" rel="noopener" style="display:block;padding:10px 14px;background:#E5443A;color:#fff;border-radius:8px;font-size:14px;font-weight:600;text-decoration:none;" data-i18n="selfhost.see_pricing">See pricing</a>
-      <p style="color:#64748b;font-size:12px;margin:12px 0 0;cursor:pointer;" onclick="shmShowLicense()" data-i18n="selfhost.have_license">I have a license key</p>
+    <!-- Expired trial → in-modal plan picker. This step used to be a single
+         "See pricing" link out to clawmetry.com, which dropped a user who
+         had already signed in onto a public marketing page and made them
+         start a checkout from scratch. Everything needed to charge them is
+         already on this machine (the account's cm_ key), so the picker sells
+         here: interval × tier, then POST /api/trial/checkout mints a Stripe
+         Checkout Session scoped to that account. Prices/blurbs come from
+         window.CM_PLANS (app.js) so the hard-block overlay and this modal can
+         never quote different numbers. -->
+    <div id="shm-step-ended" style="display:none;padding:4px 0;">
+      <style>
+        #shm-step-ended .shm-seg{display:flex;gap:6px;background:#1a2235;border-radius:10px;padding:4px;margin:0 0 14px;}
+        #shm-step-ended .shm-seg button{flex:1;padding:8px 6px;border:none;border-radius:7px;background:transparent;color:#94a3b8;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
+        #shm-step-ended .shm-seg button[aria-pressed="true"]{background:#2a3550;color:#fff;}
+        #shm-step-ended .shm-save{display:block;font-size:10px;font-weight:600;color:#4ade80;letter-spacing:0.2px;}
+        #shm-step-ended .shm-tier{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:12px;margin-bottom:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:#141c2c;color:#e2e8f0;cursor:pointer;font-family:inherit;}
+        #shm-step-ended .shm-tier[aria-pressed="true"]{border-color:#E5443A;background:rgba(229,68,58,0.08);}
+        #shm-step-ended .shm-radio{flex:0 0 16px;width:16px;height:16px;margin-top:2px;border-radius:50%;border:2px solid #475569;}
+        #shm-step-ended .shm-tier[aria-pressed="true"] .shm-radio{border-color:#E5443A;background:radial-gradient(#E5443A 45%,transparent 47%);}
+        #shm-step-ended .shm-tier-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+        #shm-step-ended .shm-tier-name{font-size:14px;font-weight:700;color:#fff;}
+        #shm-step-ended .shm-tier-price{font-size:13px;font-weight:700;color:#fff;white-space:nowrap;}
+        #shm-step-ended .shm-tier-per{font-size:11px;font-weight:500;color:#94a3b8;}
+        #shm-step-ended .shm-was{color:#64748b;text-decoration:line-through;font-weight:500;margin-right:4px;}
+        #shm-step-ended .shm-tier-sub{display:block;margin-top:3px;font-size:12px;line-height:1.4;color:#94a3b8;}
+      </style>
+      <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 4px;" data-i18n="selfhost.trial_ended_title">Your 7-day trial has ended</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 14px;" data-i18n="selfhost.trial_ended_pick">Pick a plan to keep every runtime unlocked. Priced per node, cancel any time.</p>
+      <div class="shm-seg" role="group" aria-label="Billing interval">
+        <button type="button" data-interval="month" aria-pressed="false" onclick="shmSetInterval('month')" data-i18n="selfhost.monthly">Monthly</button>
+        <button type="button" data-interval="year" aria-pressed="true" onclick="shmSetInterval('year')"><span data-i18n="selfhost.annual">Annual</span><span class="shm-save" data-i18n="selfhost.two_months_free">2 months free</span></button>
+      </div>
+      <button type="button" class="shm-tier" data-tier="starter" aria-pressed="true" onclick="shmSetTier('starter')">
+        <span class="shm-radio"></span>
+        <span style="flex:1;">
+          <span class="shm-tier-head"><span class="shm-tier-name" data-i18n="selfhost.tier_starter">Starter</span><span class="shm-tier-price" id="shm-price-starter"></span></span>
+          <span class="shm-tier-sub" id="shm-blurb-starter"></span>
+        </span>
+      </button>
+      <button type="button" class="shm-tier" data-tier="pro" aria-pressed="false" onclick="shmSetTier('pro')">
+        <span class="shm-radio"></span>
+        <span style="flex:1;">
+          <span class="shm-tier-head"><span class="shm-tier-name" data-i18n="selfhost.tier_pro">Pro</span><span class="shm-tier-price" id="shm-price-pro"></span></span>
+          <span class="shm-tier-sub" id="shm-blurb-pro"></span>
+        </span>
+      </button>
+      <div id="shm-device" style="margin:2px 0 12px;padding:9px 11px;border-radius:8px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);color:#bbf7d0;font-size:12px;line-height:1.45;">
+        <span data-i18n="selfhost.device_perk">Includes a free $149 desk device, shipped when your first annual invoice is paid.</span>
+      </div>
+      <button type="button" id="shm-checkout-btn" onclick="shmCheckout()" style="display:block;width:100%;padding:11px 14px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="selfhost.continue_checkout">Continue to secure checkout</button>
+      <p id="shm-ended-status" style="color:#94a3b8;font-size:12px;margin:8px 0 0;text-align:center;line-height:1.45;display:none;"></p>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
+        <span style="color:#94a3b8;font-size:12px;cursor:pointer;" onclick="shmShowLicense()" data-i18n="selfhost.have_license">I have a license key</span>
+        <span style="color:#334155;font-size:12px;margin:0 8px;">·</span>
+        <span id="shm-signout-link" style="color:#94a3b8;font-size:12px;cursor:pointer;" onclick="shmSignOut()" data-i18n="selfhost.use_other_account">Use a different account</span>
+      </div>
     </div>
   </div>
 </div>
