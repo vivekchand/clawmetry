@@ -256,8 +256,7 @@ _KNOWN_RUNTIMES = frozenset({
     "claude_code", "codex", "cursor", "openclaw", "nemoclaw", "qwen_code",
     "opencode", "aider", "goose", "hermes", "picoclaw", "nanoclaw",
     "antigravity", "copilot", "grok", "deepagents", "n8n", "pi", "qm",
-    "deepseek_harness", "exo", "kimi", "gemini_cli",
-    "deepseek_harness", "exo", "devin", "gemini_cli",
+    "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
 })
 
 

@@ -6720,9 +6720,7 @@ _LITE_RT_LABELS = {
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
-    "exo": "Exo",
-    "kimi": "Kimi CLI",
-    "exo": "Exo", "devin": "Devin",
+    "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
