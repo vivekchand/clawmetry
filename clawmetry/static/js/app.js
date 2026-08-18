@@ -4323,6 +4323,15 @@ function _renderOverviewHero() {
   // model card over ov.model here, else the hero kept showing the node's
   // dominant model (e.g. "running claude-opus-4-8" while PicoClaw is selected).
   var _scope = window._cmRuntimeScope;
+  // The cost tile starts life as a literal '$0.00' placeholder and only
+  // reaches its real value once loadMiniWidgets lands, ~15s into a load. So
+  // '$0.00' means EITHER 'genuinely free' OR 'not loaded yet', and the hero
+  // cannot tell them apart from the string alone — it spent the first quarter
+  // minute of every page load announcing 'free on your plan' over a real
+  // $8.49 of spend (founder report 2026-08-15). Track knownness explicitly:
+  // window._cmCostTodayRaw is the number loadMiniWidgets actually rendered.
+  var _costRaw = window._cmCostTodayRaw;
+  var _costKnown = _scope ? true : (typeof _costRaw === 'number');
   var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
@@ -4334,8 +4343,9 @@ function _renderOverviewHero() {
   var sessions = _scope ? _scope.sessions
                         : (_todayKnown ? ov.sessionsToday
                            : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
-  var free = cost === '$0.00' || cost === '$0' ||
-             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
+  // Never assert 'free' from a number we have not actually read.
+  var free = _costKnown && (cost === '$0.00' || cost === '$0' ||
+             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || ''));
   var say = window._cmLastAgentSay;
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
@@ -4350,7 +4360,9 @@ function _renderOverviewHero() {
   // sessions today but N on record, and "N sessions today" would be wrong while
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
-  stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  // Show nothing rather than a placeholder: an unlabelled '$0.00' next to
+  // live sessions reads as a real reading, not as 'still loading'.
+  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
   // daemon slice is fresh for the CURRENT runtime filter and passes the trust
@@ -4517,6 +4529,9 @@ async function loadAll() {
 async function loadMiniWidgets(overview, usage) {
   // 💰 Cost Ticker 
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // Record the value we actually rendered so the hero can tell a real $0.00
+  // from the '$0.00' placeholder it would otherwise read off the DOM.
+  window._cmCostTodayRaw = Number(usage.todayCost || 0);
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
   document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
@@ -4646,6 +4661,7 @@ async function loadMiniWidgets(overview, usage) {
         _set('hot-sessions-count', _scope.sessions);
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
+        window._cmCostTodayRaw = Number(_scope.cost || 0);
         _set('cost-today', '$' + _scope.cost.toFixed(2));
         // SPENDING wk/mo sub-figures scope too (were node-wide projections).
         if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
