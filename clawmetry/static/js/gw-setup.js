@@ -465,6 +465,18 @@ function _cmProfileRender(st) {
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
       + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
   }
+  if (st.signedIn) {
+    // Switch account. Distinct from the "Sign out" below it, which only ever
+    // clears THIS BROWSER's dashboard session token: this one forgets the
+    // ClawMetry account on the machine (licence + cm_ key + onboarding
+    // stamps) so the gate can be answered with a different email. Until it
+    // existed the only way off a wrong account was the CLI, which stranded
+    // anyone whose licence lives on another address (founder report
+    // 2026-08-18). Two clicks — the first arms, the second commits.
+    h += '<button class="cm-profile-item" onclick="cmAccountSignOut(this)">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>'
+      + t('profile.switch_account', null, 'Switch account') + '</button>';
+  }
   // No "Gateway settings" item: the gw-setup overlay is a first-run wizard
   // for the OpenClaw gateway token, not an ongoing settings surface — it
   // auto-opens whenever the gateway is unconfigured, which is the only time
@@ -480,6 +492,33 @@ function _cmProfileRender(st) {
       + t('profile.sign_out', null, 'Sign out') + '</button>';
   }
   menu.innerHTML = h;
+}
+
+// Two-step so a stray click never signs anybody out. The first click swaps
+// the row's label (the menu stays open); the second calls the endpoint, which
+// clears the licence, the cm_ key and both onboarding stamps, then kicks the
+// sync daemon so it drops the old account's key from memory. Local DuckDB
+// data is untouched — this is an identity change, not a wipe.
+function cmAccountSignOut(btn) {
+  if (!btn) return;
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1';
+    btn.textContent = t('profile.switch_account_confirm', null,
+      'Confirm sign out of this account');
+    btn.style.color = '#ef4444';
+    return;
+  }
+  btn.textContent = t('profile.signing_out', null, 'Signing out');
+  fetch('/api/account/signout', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) { location.reload(); return; }
+      btn.textContent = (d && d.error)
+        || t('profile.switch_account_failed', null, 'Could not sign out');
+    })
+    .catch(function () {
+      btn.textContent = t('profile.switch_account_failed', null, 'Could not sign out');
+    });
 }
 
 function cmProfileClose() {

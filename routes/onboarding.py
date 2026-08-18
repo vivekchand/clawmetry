@@ -400,3 +400,140 @@ def api_onboarding_activate_license():
     _ensure_daemon_for_choice(state)
     _ping_onboarded(state)
     return jsonify({"ok": True, "state": state, "message": msg})
+
+
+# ── Account sign-out (switch to a different ClawMetry account) ─────────────
+# Until this existed the ONLY way off a signed-in account was the CLI
+# (``clawmetry disconnect`` then ``clawmetry login``) — so a user whose Pro
+# licence sits on a different email hit the expired-trial modal with no way
+# forward: the gate blocks the dashboard, and every button on it re-uses the
+# identity already on disk (founder live-hit 2026-08-18).
+#
+# "Sign out" here means FORGET THE ACCOUNT ON THIS MACHINE, which is four
+# separate pieces of state — miss any one and the gate either refuses to
+# re-open or the daemon quietly re-installs the old account's licence on its
+# next heartbeat:
+#   1. ~/.clawmetry/license.key      the entitlement itself
+#   2. ~/.clawmetry/config.json      the cm_ cloud key (+ sync state file)
+#   3. ~/.clawmetry/onboarding.json  this gate's recorded choice
+#   4. the desktop shell's onboarding-completed.json stamp (_shell_stamp_choice
+#      keeps the gate closed on .app installs even with 1-3 gone)
+# Ingested data in DuckDB is deliberately left alone: signing out is an
+# identity operation, not a factory reset.
+
+def _signout_clear_cloud_identity() -> bool:
+    """Delete the cm_ key + sync state. True when something was removed."""
+    removed = False
+    try:
+        from clawmetry.sync import CONFIG_FILE, STATE_FILE
+
+        for path in (Path(str(CONFIG_FILE)), Path(str(STATE_FILE))):
+            try:
+                if path.exists():
+                    path.unlink()
+                    removed = True
+            except Exception as exc:
+                log.warning("signout: cannot remove %s: %s", path, exc)
+    except Exception as exc:
+        log.warning("signout: cloud identity clear failed: %s", exc)
+    # A stale sync-progress file makes the dashboard banner freeze on
+    # whatever phase the old account's daemon was in (same reason
+    # ``clawmetry disconnect`` drops it).
+    try:
+        prog = Path.home() / ".clawmetry" / "sync_progress.json"
+        if prog.exists():
+            prog.unlink()
+    except Exception:
+        pass
+    return removed
+
+
+def _signout_clear_choice() -> bool:
+    """Drop both onboarding stamps so the gate prompts again."""
+    removed = False
+    for path in (Path(_STATE_PATH),
+                 _desktop_shell_runtime_dir() / "onboarding-completed.json"):
+        try:
+            if path.exists():
+                path.unlink()
+                removed = True
+        except Exception as exc:
+            log.warning("signout: cannot remove %s: %s", path, exc)
+    return removed
+
+
+def _signout_restart_daemon() -> None:
+    """Kick the sync daemon so it drops the old account's key.
+
+    ``run_daemon`` reads ``config.json`` ONCE at startup and keeps the key in
+    memory for the whole process, so deleting the file is not enough — a
+    running daemon would keep heartbeating as the signed-out account and
+    ``_maybe_install_license_from_heartbeat`` would write its licence straight
+    back. Restarting drops it into local-only mode (ingestion continues,
+    nothing leaves the machine). Off-thread + best-effort: launchctl/systemctl
+    are real latency the browser should not wait on, and a failed restart just
+    means the change lands on the daemon's next natural restart.
+    """
+    def _run() -> None:
+        try:
+            import dashboard as _d
+
+            _d._restart_sync_daemon()
+        except Exception as exc:
+            log.warning("signout: daemon restart failed: %s", exc)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        _run()
+
+
+@bp_onboarding.route("/api/account/signout", methods=["POST"])
+def api_account_signout():
+    """Forget the ClawMetry account this machine is signed in with.
+
+    Idempotent — signing out twice is a no-op, not an error. Always returns
+    HTTP 200 with what was actually cleared so the caller can reload into the
+    gate regardless; the one hard failure is the hosted dashboard, where
+    account state lives in the cloud session rather than on disk.
+    """
+    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+        return jsonify({
+            "ok": False,
+            "error": "Sign out from your account menu on app.clawmetry.com.",
+        }), 400
+
+    cleared = {"license": False, "cloud": False, "choice": False}
+    try:
+        from clawmetry import license as _lic
+
+        ok, removed = _lic.deactivate(actor="dashboard-signout")
+        cleared["license"] = bool(ok and removed)
+    except Exception as exc:
+        log.warning("signout: license deactivate failed: %s", exc)
+
+    cleared["cloud"] = _signout_clear_cloud_identity()
+    cleared["choice"] = _signout_clear_choice()
+
+    # No egress while nobody is signed in. Symmetric with sign-in: the
+    # managed branch clears this marker via ``config.enable_cloud()`` and the
+    # self-host branch re-writes it, so neither path is blocked by it.
+    try:
+        from clawmetry import config as _cfg
+
+        marker = Path(str(_cfg.NOCLOUD_MARKER_PATH))
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
+    except Exception as exc:
+        log.warning("signout: nocloud marker failed: %s", exc)
+
+    try:
+        from clawmetry import entitlements as _ent
+
+        _ent.invalidate()
+    except Exception:
+        pass
+
+    _signout_restart_daemon()
+    log.info("signout: cleared %s", cleared)
+    return jsonify({"ok": True, "cleared": cleared, "state": _resolve_state()})
