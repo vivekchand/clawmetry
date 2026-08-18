@@ -1077,6 +1077,7 @@
   "skills.title": "Skills",
   "topbar.active_alerts": "Active alerts",
   "topbar.logout": "Logout",
+  "topbar.refresh": "Refresh (Cmd/Ctrl + R)",
   "topbar.switch_profile": "Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro.",
   "topbar.version": "ClawMetry version",
   "topbar.zoom_in": "Zoom in (Ctrl/Cmd + +)",

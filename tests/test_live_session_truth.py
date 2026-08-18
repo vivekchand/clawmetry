@@ -262,3 +262,26 @@ def test_overview_active_count_matches_live_vocabulary():
         "activeSessions is back to matching a single status literal — that is "
         "how it read 0 while six terminals were mid-task"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. The hero never claims "free" from a number it has not read
+# ---------------------------------------------------------------------------
+
+def test_hero_never_claims_free_from_a_placeholder():
+    """The cost tile ships as a literal '$0.00' placeholder and only reaches
+    its real value once loadMiniWidgets lands. Deriving "free on your plan"
+    from that string announced free spend over a real $8.49 for the first
+    ~15s of every page load (founder report 2026-08-15)."""
+    js = open(APP_JS).read()
+    assert "window._cmCostTodayRaw = Number(usage.todayCost || 0);" in js, (
+        "the hero lost its record of the cost value actually rendered"
+    )
+    assert re.search(r"var free = _costKnown && \(", js), (
+        "'free on your plan' is being derived from the string again, so a "
+        "not-yet-loaded tile reads as genuinely free"
+    )
+    assert re.search(r"if \(_costKnown\) stats\.push\('💸", js), (
+        "the cost chip renders before its value is known — an unlabelled "
+        "$0.00 next to live sessions reads as a real reading"
+    )
