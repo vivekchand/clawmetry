@@ -95,6 +95,12 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("exo", "Exo",
                  ("~/exo/.exo/exoharness", "~/.exo/exoharness"),
                  env="CLAWMETRY_EXO_ROOTS"),
+    # Kimi CLI keeps everything under one share dir ($KIMI_SHARE_DIR,
+    # default ~/.kimi); the standalone successor Kimi Code CLI uses
+    # ~/.kimi-code. Same store shape, same runtime here.
+    RuntimeProbe("kimi", "Kimi CLI",
+                 ("~/.kimi/sessions", "~/.kimi-code/sessions"),
+                 env="KIMI_SHARE_DIR"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME
