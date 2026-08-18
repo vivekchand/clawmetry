@@ -197,8 +197,57 @@ def test_claude_code_empty_settings_warns_on_permissions(tmp_path, monkeypatch):
     d = sp.get_posture("claude_code")
     checks = _by_id(d)
     assert checks["permissions_present"]["status"] == "warn"
-    assert checks["hooks_configured"]["status"] == "pass"  # informational
-    assert checks["api_key_helper"]["status"] == "pass"  # informational
+    # No hooks means nothing inspects a tool call before it runs — that is a
+    # real gap, not an informational note. It used to pass on every code path,
+    # which handed the grade 5 free weight it had not measured.
+    assert checks["hooks_configured"]["status"] == "warn"
+    assert checks["hooks_configured"]["remediation"]
+    # apiKeyHelper genuinely cannot fail (both states are legitimate), so it
+    # stays visible but must carry ZERO weight rather than inflating the score.
+    assert checks["api_key_helper"]["status"] == "pass"
+    assert checks["api_key_helper"]["weight"] == 0
+
+
+def test_empty_config_does_not_score_an_a(tmp_path, monkeypatch):
+    """An unconfigured runtime must not read as "Excellent".
+
+    Founder-reported 2026-08-15: the Security tab showed "A · Excellent ·
+    94.4%" for a Claude Code install with NO deny rules, because two of the
+    seven checks (``hooks_configured``, ``api_key_helper``) passed on every
+    code path and donated 10 weight of unearned credit. An empty config is an
+    unmeasured config; the grade has to say so.
+    """
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    (cfg / "settings.json").write_text("{}")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    d = sp.get_posture("claude_code")
+    assert d["score"] != "A", (
+        "an empty settings.json scored {} ({}%) — padding is back".format(
+            d["score"], d.get("score_pct")
+        )
+    )
+
+
+def test_codex_empty_config_does_not_score_an_a(tmp_path, monkeypatch):
+    """Same class of bug on the Codex provider.
+
+    Both of its risk checks (``approval_policy``, ``sandbox_mode``) used to
+    ``pass`` when the key was ABSENT, so a zero-byte config.toml scored an A
+    while the sandbox state was entirely unverified.
+    """
+    home = tmp_path / "codex"
+    home.mkdir()
+    (home / "config.toml").write_text("")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    d = sp.get_posture("codex")
+    assert d["status"] == "ok"
+    assert d["score"] != "A", (
+        "an empty config.toml scored {} ({}%)".format(d["score"], d.get("score_pct"))
+    )
+    checks = _by_id(d)
+    assert checks["sandbox_mode"]["status"] == "warn"
+    assert checks["approval_policy"]["status"] == "warn"
 
 
 # ── codex provider ─────────────────────────────────────────────────────────

@@ -3276,56 +3276,6 @@ def _safe_date_ts(date_str):
         return 0
 
 
-def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
-    warnings = []
-    tips = []
-
-    # Check if workspace looks like a real OpenClaw setup
-    workspace_files = ["SOUL.md", "AGENTS.md", "MEMORY.md", "memory"]
-    found_files = []
-    for f in workspace_files:
-        path = os.path.join(WORKSPACE, f)
-        if os.path.exists(path):
-            found_files.append(f)
-
-    if not found_files:
-        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append(
-            "[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace"
-        )
-
-    # Check if log directory exists and has recent logs
-    if not os.path.exists(LOG_DIR):
-        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
-    else:
-        # Check for recent log files
-        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [
-            f
-            for f in glob.glob(log_pattern)
-            if os.path.getmtime(f) > time.time() - 86400
-        ]  # Last 24h
-        if not recent_logs:
-            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
-            tips.append("[tip] Start your OpenClaw agent to see real-time data")
-
-    # Check if sessions directory exists
-    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("[tip] Sessions will appear when your agent starts conversations")
-
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(["openclaw", "--version"], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-
-    return warnings, tips
-
-
 def _auto_detect_data_dir():
     """Auto-detect OpenClaw data directory, including Docker volume mounts."""
     # Standard locations
@@ -11998,11 +11948,45 @@ def _safe_date_ts(date_str):
         return 0
 
 
+def _detected_runtimes():
+    """Presence-probe every supported runtime. [] when the probe is unavailable."""
+    try:
+        from clawmetry.runtime_probe import probe_runtimes
+        return [p for p in probe_runtimes() if p.get("found")]
+    except Exception:
+        return []
+
+
 def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
+    """Validate the detected configuration and provide helpful feedback for new users.
+
+    ClawMetry watches every supported runtime, so the OpenClaw-specific checks
+    below only run when OpenClaw (or NemoClaw, which shares its layout) is the
+    runtime on this machine. A Claude Code / Codex / Cursor user got a wall of
+    "install OpenClaw" warnings about a runtime they never asked for.
+    """
     warnings = []
     tips = []
-    
+
+    detected = _detected_runtimes()
+    detected_ids = {p["id"] for p in detected}
+    openclaw_family = bool({"openclaw", "nemoclaw"} & detected_ids)
+
+    if detected:
+        shown = [p["label"] for p in detected[:6]]
+        if len(detected) > len(shown):
+            shown.append(f"+{len(detected) - len(shown)} more")
+        plural = "runtime" if len(detected) == 1 else "runtimes"
+        tips.append(f"[ok] Detected {len(detected)} agent {plural}: {', '.join(shown)}")
+    else:
+        warnings.append("[warn]  No agent runtime detected on this machine")
+        tips.append("[tip] Start an agent (OpenClaw, Claude Code, Codex, Cursor, ...) and the dashboard fills in")
+
+    if not openclaw_family:
+        # Nothing below applies: the other runtimes keep their own session
+        # stores, which the adapters read directly.
+        return warnings, tips
+
     # Check if workspace looks like a real OpenClaw setup
     workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
     found_files = []
@@ -12018,7 +12002,7 @@ def validate_configuration():
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
+        tips.append("[tip] Make sure OpenClaw is running to generate logs")
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
@@ -12032,13 +12016,6 @@ def validate_configuration():
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
     
     return warnings, tips
 
@@ -12800,6 +12777,16 @@ DASHBOARD_HTML = r"""
   <div id="cm-global-runtime-wrap" style="display:none;align-items:center;gap:6px;">
     <span style="font-size:11px;color:var(--text-muted);font-weight:600;">Runtime</span>
     <select id="cm-global-runtime" onchange="_cmOnGlobalRuntimeChange(this)" title="Scope session views to a single agent runtime" style="font-size:12px;font-weight:600;padding:7px 10px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);cursor:pointer;"></select>
+  </div>
+  <!-- Refresh / reconnect. Always visible, because the desktop shell has no
+       browser chrome: no address bar, no reload button, and pywebview's Cocoa
+       backend swallows Cmd-R. Without this the only way out of a wedged page
+       was to quit the app. cmReconnect() probes the backend first and only
+       reloads when something is there to reload into -- reloading against a
+       dead port would replace the page with a blank error page. Turns amber
+       (.cm-attention) once the backend is known unreachable. -->
+  <div class="theme-toggle" id="cm-reconnect-btn" onclick="window.cmReconnect && window.cmReconnect()" role="button" tabindex="0" data-i18n-title="topbar.refresh" title="Refresh (Cmd/Ctrl + R)" style="cursor:pointer;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
@@ -15916,22 +15903,134 @@ for _sig in _THREAT_SIGNATURES:
     ]
 
 
-def _scan_events_for_threats(events):
-    """Scan brain-history events against threat signatures. Returns list of threat matches."""
+# Action labels a signature's ``tool_types`` may declare. These come from the
+# LEGACY JSONL parser's ``tool_to_type()`` (routes/brain.py) and predate the
+# DuckDB-first read path.
+_THREAT_ACTION_TYPES = frozenset(
+    {"EXEC", "READ", "WRITE", "BROWSER", "SEARCH", "MSG", "SPAWN", "TOOL"}
+)
+
+# Rows that are agent *speech*, not agent *action*. Running action signatures
+# over these is how you flag the model for merely discussing ``~/.ssh/id_rsa``.
+# Content-borne risk (PII, injection, leaked keys) is the content scanners'
+# job — see ``_scan_content_for_policy_events``.
+_THREAT_NON_ACTION_TYPES = frozenset(
+    {"MESSAGE", "THINKING", "USER", "ASSISTANT", "SUMMARY", "COMPACT", "SYSTEM"}
+)
+
+# Tool-CALL rows as the DuckDB fast path emits them (routes/brain.py's
+# ``evt_type = event_type.upper()``). Only the call is an agent ACTION.
+#
+# TOOL_RESULT is deliberately absent, and so is ERROR (which routes/brain.py
+# derives from a failed TOOL_RESULT). A result is data the agent RECEIVED, not
+# something it did, and results are big free-text blobs — a page of docs, web
+# search output, a source file. Scanning them for action patterns produced
+# nothing but noise: live on a real node, all four hits were TOOL_RESULT rows
+# and all four were false positives (a Devin CLI docs page and a geocoding
+# result matched "browser reaching an admin panel"; a Python source file
+# matched "credential file access" at CRITICAL). Content-borne risk in results
+# is the policy scanners' job — see ``_scan_content_for_policy_events``.
+_THREAT_TOOL_TYPES = frozenset({"TOOL_CALL", "TOOL.CALL", "TOOL_USE"})
+
+# Returned data, not agent action. Excluded for the reason above.
+_THREAT_RESULT_TYPES = frozenset({"TOOL_RESULT", "TOOL.RESULT", "ERROR"})
+
+
+def _threat_tool_name_to_action(name):
+    """Map a tool NAME to a legacy action label. Mirrors routes/brain.py's
+    ``tool_to_type`` so both taxonomies agree on what 'EXEC' means."""
+    tn = str(name or "").lower()
+    if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+        return "EXEC"
+    if "read" in tn or "grep" in tn or "glob" in tn:
+        return "READ"
+    if "write" in tn or "edit" in tn:
+        return "WRITE"
+    if "browser" in tn or "canvas" in tn or "image" in tn:
+        return "BROWSER"
+    if "web_search" in tn or "web_fetch" in tn or "search" in tn or "fetch" in tn:
+        return "SEARCH"
+    if "subagent" in tn or "spawn" in tn or "task" in tn:
+        return "SPAWN"
+    return "TOOL"
+
+
+def _threat_action_types(ev):
+    """Which action labels an event should be matched against.
+
+    The signature table gates on the legacy ``EXEC/READ/WRITE/...`` vocabulary,
+    but since the DuckDB-first migration brain rows arrive as
+    ``TOOL_CALL/TOOL_RESULT/MESSAGE/THINKING/ERROR``. The two vocabularies do
+    not intersect, so every event fell through every signature and the scanner
+    could never report a threat (it was structurally pinned at 0). This bridges
+    them: legacy labels pass through, speech rows are excluded, and a tool row
+    with no tool NAME is matched against every signature — the store keeps the
+    tool INPUT in ``detail`` but not which tool produced it, and the signature
+    regexes are specific enough (``/dev/tcp/``, ``.ssh/id_rsa``) to carry the
+    precision on their own.
+    """
+    ev_type = str(ev.get("type") or "").upper()
+    if not ev_type:
+        return frozenset()
+    if ev_type in _THREAT_ACTION_TYPES:
+        return frozenset({ev_type})
+    if ev_type in _THREAT_NON_ACTION_TYPES or ev_type in _THREAT_RESULT_TYPES:
+        return frozenset()
+    if ev_type in _THREAT_TOOL_TYPES:
+        name = ev.get("tool") or ev.get("toolName") or ev.get("name")
+        if name:
+            return frozenset({_threat_tool_name_to_action(name)})
+        return _THREAT_ACTION_TYPES
+    # CHANNEL.*, NUMBAT_FINDING, daemon rows, anything else we don't recognise
+    # as an agent action: leave alone rather than guess.
+    return frozenset()
+
+
+def _threat_event_session(ev):
+    """Session id for a brain event across both read paths.
+
+    The legacy parser used ``source``; the DuckDB fast path emits ``sessionId``
+    (full) plus ``src`` (truncated to 32 chars). Reading only ``source`` meant
+    every event reported the empty string, so a node with five active sessions
+    reported ``sessions_scanned: 1``.
+    """
+    return str(
+        ev.get("sessionId") or ev.get("source") or ev.get("src") or ""
+    )
+
+
+def _threat_session_runtime(session_id):
+    """``claude_code:1bfbb30f-...`` → ``claude_code``. Bare ids → ""."""
+    sid = str(session_id or "")
+    return sid.split(":", 1)[0] if ":" in sid else ""
+
+
+def _scan_events_for_threats(events, runtime=None):
+    """Scan brain-history events against threat signatures. Returns list of threat matches.
+
+    ``runtime`` scopes the scan to one agent runtime (per FLYWHEEL §1c —
+    a number shown under the runtime switcher must belong to that runtime).
+    """
     threats = []
     sessions_seen = set()
     sessions_with_threats = set()
+    want_runtime = str(runtime or "").strip().lower()
 
     for ev in events:
-        source = ev.get("source", "")
+        source = _threat_event_session(ev)
+        if want_runtime and _threat_session_runtime(source).lower() != want_runtime:
+            continue
         sessions_seen.add(source)
-        ev_type = ev.get("type", "")
+        action_types = _threat_action_types(ev)
+        if not action_types:
+            continue
+        ev_type = str(ev.get("type") or "")
         detail = ev.get("detail", "")
         if not detail:
             continue
 
         for sig in _THREAT_SIGNATURES:
-            if ev_type not in sig["tool_types"]:
+            if not action_types.intersection(sig["tool_types"]):
                 continue
             for compiled in sig["_compiled"]:
                 if compiled.search(detail):
@@ -15946,6 +16045,8 @@ def _scan_events_for_threats(events):
                             "session": ev.get("sourceLabel", source),
                             "source": source,
                             "event_type": ev_type,
+                            "engine": "builtin",
+                            "runtime": _threat_session_runtime(source),
                         }
                     )
                     break  # One match per signature per event
@@ -18125,14 +18226,14 @@ ARCHITECTURE_OVERVIEW = """\
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
-  │  Your OpenClaw      │ ──────────->  │                     │ ──────────->  │                     │
-  │  agents             │              │  ClawMetry          │              │  Your browser       │
+  │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
+  │  Any of 22 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
   └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
-  Runs locally on the same machine as OpenClaw. Your data never leaves your box.
+  Runs locally on the same machine as your agents. Your data never leaves your box.
   Docs: https://clawmetry.com/how-it-works
 """
 

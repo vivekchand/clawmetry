@@ -5,8 +5,9 @@ consumers: humans debugging an agent, CI gating on agent health, and AI
 agents reading their own telemetry to improve themselves mid-task.
 
 Phase 1 ships the self-improve loop core. Setup/ops commands
-(`clawmetry status`, `connect`, `sync`, `proxy`, ...) are documented in the
-README; this page covers the observability reads.
+(`clawmetry status`, `connect`, `sync`, `proxy`, ...) are listed by
+`clawmetry --help` and in [DEVELOPMENT.md](DEVELOPMENT.md); this page covers
+the observability reads.
 
 ## Commands
 

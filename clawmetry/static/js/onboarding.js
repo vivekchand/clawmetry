@@ -91,10 +91,28 @@
       var el = $('shm-step-' + s);
       if (el) el.style.display = s === name ? 'block' : 'none';
     });
+    // The sign-in tagline promises a free 7-day trial. On the expired-trial
+    // step that is the one thing this user cannot have, so it goes away
+    // rather than sitting two lines above "Your 7-day trial has ended".
+    var tag = $('shm-tagline');
+    if (tag) tag.style.display = (name === 'ended') ? 'none' : '';
+    if (name === 'ended') {
+      _shmRenderPlans();
+      // Signing in as an account that ALREADY pays lands here too: the
+      // self-host rail reports "trial expired" because the trial is spent,
+      // while the real licence for that account arrives on the daemon's next
+      // heartbeat (up to ~60s later). Poll from the moment this step opens so
+      // a paying customer is let in instead of being sold a plan they own.
+      _shmPollForLicense();
+    }
   }
 
   function _shmStopPoll() {
     if (_oauthTimer) { clearInterval(_oauthTimer); _oauthTimer = null; }
+    // The post-checkout licence poll reloads the page when it lands, so a
+    // closed modal must stop it too — otherwise closing the modal to look at
+    // the free runtimes still yanks the page out from under the user.
+    if (_shmPollTimer) { clearInterval(_shmPollTimer); _shmPollTimer = null; }
   }
 
   window.openSelfhostModal = function () {
@@ -123,6 +141,176 @@
     _err('shm-license-error', '');
     _shmStep('license');
     setTimeout(function () { var el = $('shm-license-input'); if (el) el.focus(); }, 60);
+  };
+
+  // ── Expired trial: pick a plan and pay, without leaving the modal ────
+  // The account is already known locally (the cm_ key written at sign-in),
+  // so /api/trial/checkout can mint a Stripe Checkout Session scoped to it
+  // and the user lands on a card form instead of a marketing page. Prices
+  // come from window.CM_PLANS (app.js) — one table for both upgrade
+  // surfaces, so a reprice can't leave this one quoting stale numbers.
+  var _PLAN_FALLBACK = {
+    prices: { starter: { month: 9, year: 90, was: 190 },
+              pro: { month: 19, year: 190, was: 390 } },
+    blurb: {
+      starter: 'Every agent, every session, and every dollar in one dashboard.',
+      pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+    },
+    deviceValue: 149,
+  };
+  var _shmTier = 'starter';
+  var _shmInterval = 'year';   // annual first: it carries the device perk
+  var _shmPollTimer = null;
+
+  function _plans() { return window.CM_PLANS || _PLAN_FALLBACK; }
+
+  function _shmPriceHtml(tier) {
+    var p = (_plans().prices || {})[tier] || {};
+    var yearly = _shmInterval === 'year';
+    var amt = yearly ? p.year : p.month;
+    if (typeof amt !== 'number') return '';
+    var was = (yearly && p.was)
+      ? '<span class="shm-was">$' + p.was + '</span>' : '';
+    return was + '$' + amt + '<span class="shm-tier-per"> / node / '
+      + (yearly ? 'year' : 'month') + '</span>';
+  }
+
+  function _shmRenderPlans() {
+    ['starter', 'pro'].forEach(function (tier) {
+      var pe = $('shm-price-' + tier);
+      if (pe) pe.innerHTML = _shmPriceHtml(tier);
+      var be = $('shm-blurb-' + tier);
+      if (be && !be.textContent) be.textContent = (_plans().blurb || {})[tier] || '';
+      var card = document.querySelector('#shm-step-ended .shm-tier[data-tier="' + tier + '"]');
+      if (card) card.setAttribute('aria-pressed', String(tier === _shmTier));
+    });
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#shm-step-ended .shm-seg button'), function (b) {
+        b.setAttribute('aria-pressed',
+          String(b.getAttribute('data-interval') === _shmInterval));
+      });
+    var dev = $('shm-device');
+    if (dev) dev.style.display = (_shmInterval === 'year') ? '' : 'none';
+  }
+
+  function _shmStatus(msg, isErr) {
+    var el = $('shm-ended-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isErr ? '#E5443A' : '#94a3b8';
+    el.style.display = msg ? 'block' : 'none';
+  }
+
+  window.shmShowPlans = function () {
+    _shmStopPoll();
+    _shmStatus('');
+    _shmStep('ended');
+  };
+
+  window.shmSetInterval = function (interval) {
+    _shmInterval = interval === 'year' ? 'year' : 'month';
+    _shmRenderPlans();
+  };
+
+  window.shmSetTier = function (tier) {
+    _shmTier = tier === 'pro' ? 'pro' : 'starter';
+    _shmRenderPlans();
+  };
+
+  // Checkout completes in a Stripe tab; the licence comes back to THIS
+  // machine on the daemon's next heartbeat (up to ~60s), so poll the gate's
+  // own state and reload the moment it stops requiring a choice. No key to
+  // copy, no second sign-in.
+  function _shmPollForLicense() {
+    if (_shmPollTimer) clearInterval(_shmPollTimer);
+    var tries = 0;
+    _shmPollTimer = setInterval(function () {
+      tries += 1;
+      if (tries > 120) { clearInterval(_shmPollTimer); _shmPollTimer = null; return; }
+      fetch('/api/trial/refresh-license', { method: 'POST' }).catch(function () {})
+        .then(function () { return fetch('/api/onboarding/state'); })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d && d.required === false) {
+            clearInterval(_shmPollTimer); _shmPollTimer = null;
+            location.reload();
+          }
+        }).catch(function () {});
+    }, 5000);
+  }
+
+  window.shmCheckout = function () {
+    var btn = $('shm-checkout-btn');
+    // The tab MUST be opened synchronously inside the click handler —
+    // popup blockers kill a window.open() fired from a fetch callback.
+    var payTab = null;
+    try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+    function go(url) {
+      if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
+      try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
+    }
+    if (btn) btn.disabled = true;
+    _shmStatus('Opening secure checkout…');
+    fetch('/api/trial/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tier: _shmTier,
+        plan: _shmInterval === 'year' ? 'yearly' : 'monthly',
+      }),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (btn) btn.disabled = false;
+      if (!d || !d.url) {
+        if (payTab) { try { payTab.close(); } catch (e) { /* noop */ } }
+        _shmStatus('Could not open checkout. Try again, or paste a license key.', true);
+        return;
+      }
+      go(d.url);
+      _shmStatus('Waiting for payment. This dashboard unlocks by itself once checkout completes.');
+      _shmPollForLicense();
+    }).catch(function () {
+      if (btn) btn.disabled = false;
+      if (payTab) { try { payTab.close(); } catch (e) { /* noop */ } }
+      _shmStatus('Network error. Try again, or paste a license key.', true);
+    });
+  };
+
+  // ── Sign out / switch account ────────────────────────────────────────
+  // The account on disk may simply be the wrong one (the licence lives on
+  // another email). Clearing it was CLI-only until now, which meant the
+  // expired-trial modal was a dead end for exactly that user. Two clicks,
+  // so a stray click never signs anyone out.
+  var _shmSignoutArmed = false;
+
+  window.shmSignOut = function () {
+    var link = $('shm-signout-link');
+    if (!_shmSignoutArmed) {
+      _shmSignoutArmed = true;
+      if (link) { link.textContent = 'Confirm sign out'; link.style.color = '#E5443A'; }
+      _shmStatus('Signs this machine out of the current account. Your local data stays.');
+      setTimeout(function () {
+        if (!_shmSignoutArmed) return;
+        _shmSignoutArmed = false;
+        if (link) { link.textContent = 'Use a different account'; link.style.color = '#94a3b8'; }
+      }, 8000);
+      return;
+    }
+    _shmSignoutArmed = false;
+    if (link) link.textContent = 'Signing out';
+    _shmStatus('Signing out…');
+    fetch('/api/account/signout', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) {
+          _shmStatus((d && d.error) || 'Could not sign out. Run `clawmetry disconnect` instead.', true);
+          if (link) link.textContent = 'Use a different account';
+          return;
+        }
+        location.reload();
+      }).catch(function () {
+        _shmStatus('Network error. Try again.', true);
+        if (link) link.textContent = 'Use a different account';
+      });
   };
 
   // Google/GitHub → mode=selfhost bridge: identity + trial, egress stays off.
@@ -197,6 +385,8 @@
       var em = $('shm-otp-email');
       if (em) em.textContent = _email;
       _err('shm-otp-error', '');
+      var plansEl = $('shm-otp-plans');
+      if (plansEl) plansEl.style.display = 'none';
       _shmStep('otp');
       setTimeout(function () { var el = $('shm-otp-input'); if (el) { el.value = ''; el.focus(); } }, 60);
     }).catch(function () {
@@ -236,6 +426,11 @@
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (!d || !d.ok) {
         _err('shm-otp-error', (d && d.error) || 'Activation failed. Try again.');
+        // Most activation failures at this point are "this account already
+        // had its trial" — the one failure a retry cannot fix. Surface the
+        // paid path rather than leaving the user re-typing codes.
+        var plansEl = $('shm-otp-plans');
+        if (plansEl) plansEl.style.display = 'block';
         if (btn) { btn.textContent = 'Activate trial'; btn.disabled = false; }
         return;
       }

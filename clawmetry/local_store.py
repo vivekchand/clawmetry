@@ -5791,8 +5791,10 @@ class LocalStore:
         """Compute the #2200 hash-chain stamps for one flush batch WITHOUT
         touching the events table (the caller folds the result into the bulk
         INSERT). Same scheme as the retired ``_stamp_integrity``: group by
-        node_id, sort by id within the node (matches verify_integrity's
-        ORDER BY), chain via ``_integrity_hash`` from the node's current head.
+        node_id, sort by id within the node, chain via ``_integrity_hash``
+        from the node's current head. The sort only has to be deterministic —
+        ``verify_integrity`` follows the ``chain_prev_hash`` links rather than
+        re-deriving this order, so the two can never disagree.
 
         Returns ``(stamp, restamp, new_heads)``:
           * ``stamp[id] = (chain_prev_hash, chain_hash)`` for NEW rows;
@@ -5803,9 +5805,9 @@ class LocalStore:
             ``self._chain_heads`` cache only AFTER the COMMIT (a retried
             flush must not chain off a rolled-back head).
 
-        An already-stamped re-delivered id resets the running head to its
-        stored hash (chain-repair behavior carried over from
-        ``_stamp_integrity``). Caller holds ``_write_lock``.
+        An already-stamped re-delivered id is skipped WITHOUT disturbing the
+        running head (rewinding it forked the chain — see the inline note).
+        Caller holds ``_write_lock``.
         """
         if not _INTEGRITY_ENABLED:
             return {}, [], {}
@@ -5836,7 +5838,16 @@ class LocalStore:
                 if eid in existing:
                     prev = existing[eid]
                     if prev is not None:
-                        head = prev
+                        # Already stamped and already chained — this is a
+                        # re-delivery, which is ROUTINE here (the daemon
+                        # re-tails JSONL, family adapters re-scan the most
+                        # recent N sessions every tick, numbat's HTTP sink
+                        # retries by design). Leave the running head alone.
+                        # Rewinding it to this row's stored prev — the old
+                        # behaviour — made every subsequent NEW row in the
+                        # batch chain off an old hash, forking the chain
+                        # against the row that already claimed that
+                        # predecessor and reporting the node as tampered.
                         continue
                     new_hash = _integrity_hash(head, e)
                     restamp.append((head, new_hash, eid))
@@ -6607,7 +6618,7 @@ class LocalStore:
     # delete+reinsert against all six secondary indexes per event.
 
     def verify_integrity(self, node_id: str | None = None) -> dict:
-        """Walk the hash chain and verify every stamped event in order.
+        """Verify every stamped event by FOLLOWING THE CHAIN LINKS.
 
         Returns a dict with keys:
           - status: 'valid' | 'invalid' | 'empty'
@@ -6616,6 +6627,28 @@ class LocalStore:
           - pre_chain: events with no hash (inserted before integrity was enabled)
           - broken_at: first event id where the chain breaks (or None)
           - error: description of the break (or None)
+
+        This used to walk rows in ``ORDER BY node_id, created_at, id`` and
+        assert each row's ``chain_prev_hash`` equalled the previous row's
+        ``chain_hash``. That assumed the verify order matched the order the
+        chain was BUILT in — and it never does: ``_integrity_plan_locked``
+        chains each flush batch sorted by ``id`` (lexicographic), while
+        ``created_at`` is stamped per row at build time, i.e. arrival order.
+        The two agree only if every batch happens to arrive in id order, so on
+        any multi-runtime node ("claude_code" < "hermes" < "picoclaw" in the
+        chain, a different order in the walk) the verifier reported a break on
+        a chain that was perfectly intact, and the Security tab painted
+        "Tampered · the activity log may have been altered" at first sight.
+
+        Link-following removes the ordering assumption entirely and is a
+        STRICTER check than the old walk:
+          1. every row's ``chain_hash`` must equal ``_integrity_hash`` recomputed
+             from its own stored ``chain_prev_hash`` + hashed fields — this is
+             what actually catches an edited event;
+          2. the rows must form ONE chain per node from genesis, with no fork
+             (two rows claiming the same predecessor) and no orphan (a row whose
+             predecessor is absent) — this is what catches an insertion or a
+             deletion.
         """
         where = "WHERE chain_hash IS NOT NULL"
         params: list = []
@@ -6651,34 +6684,97 @@ class LocalStore:
                 "error": None,
             }
 
-        # Verify per node, in the order rows are sorted (node_id, created_at).
-        current_node: str | None = None
-        expected_prev = "0" * 64
-        checked = 0
+        # Group by node, then verify each node's chain independently.
+        from collections import defaultdict
+        by_node: dict[str, list[tuple]] = defaultdict(list)
         for row in rows:
-            rid, rnid, prev_h, h, *rest_fields = row
-            # rest_fields = [agent_type, agent_id, session_id, workspace_id, event_type, ts]
-            event_dict = dict(zip(
-                ("id", "node_id", "agent_type", "agent_id", "session_id", "workspace_id", "event_type", "ts"),
-                (rid, rnid) + tuple(rest_fields),
-            ))
-            if rnid != current_node:
-                current_node = rnid
-                # Re-anchor expected_prev to the stored prev of the first row for this node
-                expected_prev = prev_h or "0" * 64
+            by_node[row[1]].append(row)
 
-            expected_hash = _integrity_hash(expected_prev, event_dict)
-            if h != expected_hash or prev_h != expected_prev:
+        checked = 0
+        unlinked = 0
+        fork_points = 0
+        degraded_node = None
+        for rnid, node_rows in by_node.items():
+            # ── 1. Content check — THE tamper signal. A row whose hashed fields
+            #    were edited fails here regardless of where it sits in the chain.
+            for row in node_rows:
+                rid, _nid, prev_h, h, *rest_fields = row
+                event_dict = dict(zip(
+                    ("id", "node_id", "agent_type", "agent_id", "session_id",
+                     "workspace_id", "event_type", "ts"),
+                    (rid, rnid) + tuple(rest_fields),
+                ))
+                if h != _integrity_hash(prev_h or "0" * 64, event_dict):
+                    return {
+                        "status": "invalid",
+                        "node_id": node_id or "all",
+                        "checked": checked,
+                        "pre_chain": pre_chain,
+                        "broken_at": rid,
+                        "error": (
+                            f"event {rid} no longer matches its recorded hash "
+                            f"(node {rnid}). A stored field was altered."
+                        ),
+                    }
+                checked += 1
+
+            # ── 2. Deletion check: every predecessor a row names must exist.
+            #    A missing one means an event was removed from the middle.
+            hashes = {r[3] for r in node_rows}
+            genesis = "0" * 64
+            orphans = [
+                r for r in node_rows
+                if (r[2] or genesis) != genesis and (r[2] or genesis) not in hashes
+            ]
+            if orphans:
+                orphans.sort(key=lambda r: (str(r[9] or ""), str(r[0])))
                 return {
                     "status": "invalid",
                     "node_id": node_id or "all",
                     "checked": checked,
                     "pre_chain": pre_chain,
-                    "broken_at": rid,
-                    "error": f"chain break at event {rid} (node {rnid})",
+                    "broken_at": orphans[0][0],
+                    "error": (
+                        f"event {orphans[0][0]} names a predecessor that is no "
+                        f"longer in the log (node {rnid}). {len(orphans)} "
+                        f"event(s) affected, so a record was removed"
+                    ),
                 }
-            expected_prev = h
-            checked += 1
+
+            # ── 3. Linkage check: do the rows form ONE chain, or several?
+            #    Forks do NOT mean altered data — every row above already
+            #    verified against its own hash. They mean the writer chained two
+            #    flush batches off the same head, which ClawMetry itself did
+            #    until the ``_integrity_plan_locked`` fix (a re-delivered event
+            #    rewound the running head mid-batch). Reporting that as
+            #    "Tampered" cried wolf on healthy nodes; reporting it as
+            #    "intact" would hide a real insertion. It gets its own verdict.
+            by_prev: dict[str, list[tuple]] = defaultdict(list)
+            for row in node_rows:
+                by_prev[row[2] or genesis].append(row)
+            node_forks = {p: rs for p, rs in by_prev.items() if len(rs) > 1}
+            if node_forks:
+                fork_points += len(node_forks)
+                unlinked += sum(len(rs) - 1 for rs in node_forks.values())
+                if degraded_node is None:
+                    degraded_node = rnid
+
+        if fork_points:
+            return {
+                "status": "degraded",
+                "node_id": node_id or "all",
+                "checked": checked,
+                "pre_chain": pre_chain,
+                "broken_at": None,
+                "unlinked": unlinked,
+                "fork_points": fork_points,
+                "error": (
+                    f"{checked} event(s) each still match their recorded hash, "
+                    f"but {unlinked} could not be placed in a single ordered "
+                    f"chain (node {degraded_node}). No record was altered or "
+                    f"removed."
+                ),
+            }
 
         return {
             "status": "valid",
@@ -6686,6 +6782,8 @@ class LocalStore:
             "checked": checked,
             "pre_chain": pre_chain,
             "broken_at": None,
+            "unlinked": 0,
+            "fork_points": 0,
             "error": None,
         }
 
@@ -8708,9 +8806,20 @@ class LocalStore:
         session_id: str | None = None,
         severity: str | None = None,
         since: str | None = None,
+        runtime: str | None = None,
+        event_type: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Read security-event rows, most-recent first."""
+        """Read security-event rows, most-recent first.
+
+        ``runtime`` scopes to one agent runtime. Findings are keyed by the
+        canonical ``<runtime>:<session>`` id (numbat's ``source_agent`` is
+        folded into that prefix at ingest), so the runtime filter is a prefix
+        match on ``session_id`` — that is what keeps the Security tab honest
+        under the global runtime switcher (FLYWHEEL §1c).
+
+        ``event_type`` filters the ``type`` column (e.g. ``numbat_finding``).
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if session_id:
@@ -8722,6 +8831,12 @@ class LocalStore:
         if since:
             clauses.append("ts >= ?")
             params.append(since)
+        if runtime:
+            clauses.append("session_id LIKE ?")
+            params.append(f"{runtime}:%")
+        if event_type:
+            clauses.append("type = ?")
+            params.append(event_type)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT id, ts, type, severity, session_id, rule_id, description, snippet
@@ -8733,6 +8848,44 @@ class LocalStore:
         params.append(int(limit))
         cols = ["id", "ts", "type", "severity", "session_id", "rule_id", "description", "snippet"]
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def count_security_events(
+        self,
+        *,
+        runtime: str | None = None,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Severity rollup over the WHOLE security_events table.
+
+        The findings list is capped for the browser, so counting the returned
+        page would under-report — a node holding 900 high findings would print
+        whatever the cap was. This counts in SQL instead, so the tiles state the
+        real number. ``runtime`` prefix-matches ``session_id`` as in
+        :meth:`query_security_events`.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if runtime:
+            clauses.append("session_id LIKE ?")
+            params.append(f"{runtime}:%")
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._fetch(
+            f"SELECT lower(COALESCE(severity, '')), COUNT(*) "
+            f"FROM security_events {where} GROUP BY 1",
+            params,
+        )
+        out = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "total": 0}
+        for sev, n in rows:
+            n = int(n or 0)
+            out["total"] += n
+            key = str(sev or "").strip()
+            # numbat also emits "info"; anything unrecognised is counted low so
+            # the total always equals the sum of the buckets.
+            out[key if key in out and key != "total" else "low"] += n
+        return out
 
     # ------------------------------------------------------------------
     # Audit log (#3306) — persistent operator action trail
@@ -11658,6 +11811,34 @@ class LocalStore:
             self._conn.execute("DELETE FROM events WHERE event_type = ?", [et])
         return {"deleted_rows": int(before), "event_type": et}
 
+    def delete_security_events_by_id_prefix(self, prefix: str) -> dict[str, Any]:
+        """Delete ``security_events`` rows whose id starts with ``prefix``.
+
+        The undo for findings that should never have been recorded. Ids are
+        engine-prefixed at write time (``sec_`` for the built-in signature
+        scan, ``numbat_`` for agent-EDR findings), so this removes one engine's
+        output without touching another's. Same narrow shape as
+        :meth:`delete_events_by_type`: an exact prefix, no wildcards, no time
+        ranges. Read-only stores raise.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: delete_security_events_by_id_prefix() on read-only store"
+            )
+        pfx = (prefix or "").strip()
+        if not pfx:
+            raise ValueError("prefix is required")
+        like = pfx.replace("%", r"\%").replace("_", r"\_") + "%"
+        with self._write_lock:
+            before = self._conn.execute(
+                "SELECT COUNT(*) FROM security_events WHERE id LIKE ? ESCAPE '\\'",
+                [like],
+            ).fetchone()[0]
+            self._conn.execute(
+                "DELETE FROM security_events WHERE id LIKE ? ESCAPE '\\'", [like]
+            )
+        return {"deleted_rows": int(before), "prefix": pfx}
+
     def prune_events_by_age(
         self,
         retention_days: int | None,
@@ -12615,7 +12796,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "picoclaw", "nanoclaw", "hermes",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
-    "qm", "deepseek_harness", "exo",
+    "qm", "deepseek_harness", "exo", "kimi",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
