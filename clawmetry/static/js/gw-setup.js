@@ -504,7 +504,7 @@ function cmAccountSignOut(btn) {
   if (btn.dataset.armed !== '1') {
     btn.dataset.armed = '1';
     btn.textContent = t('profile.switch_account_confirm', null,
-      'Confirm — sign out of this account');
+      'Confirm sign out of this account');
     btn.style.color = '#ef4444';
     return;
   }
