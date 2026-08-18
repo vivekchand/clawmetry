@@ -12801,6 +12801,16 @@ DASHBOARD_HTML = r"""
     <span style="font-size:11px;color:var(--text-muted);font-weight:600;">Runtime</span>
     <select id="cm-global-runtime" onchange="_cmOnGlobalRuntimeChange(this)" title="Scope session views to a single agent runtime" style="font-size:12px;font-weight:600;padding:7px 10px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);cursor:pointer;"></select>
   </div>
+  <!-- Refresh / reconnect. Always visible, because the desktop shell has no
+       browser chrome: no address bar, no reload button, and pywebview's Cocoa
+       backend swallows Cmd-R. Without this the only way out of a wedged page
+       was to quit the app. cmReconnect() probes the backend first and only
+       reloads when something is there to reload into -- reloading against a
+       dead port would replace the page with a blank error page. Turns amber
+       (.cm-attention) once the backend is known unreachable. -->
+  <div class="theme-toggle" id="cm-reconnect-btn" onclick="window.cmReconnect && window.cmReconnect()" role="button" tabindex="0" data-i18n-title="topbar.refresh" title="Refresh (Cmd/Ctrl + R)" style="cursor:pointer;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+  </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
 
   <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
