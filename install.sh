@@ -195,6 +195,246 @@ for _cm_dir in "${_cm_path_dirs[@]}"; do
   done
 done
 
+# >>> CM_EXISTING_SETUP_BLOCK_START (tests source everything between these
+# sentinels; keep them around the helpers) >>>
+# ── Existing setup: account probe + "re-onboard?" gate ──────────────────────
+# Re-running `curl … | bash` on a machine that is ALREADY set up used to replay
+# the whole first-run wizard (plans, [1]/[2], runtime grid) as if ClawMetry had
+# never been installed — even though the account, the cloud-vs-local choice and
+# the license were all sitting on disk. Now the installer reads that state back
+# first, prints it, and only re-runs `clawmetry onboard` when the user asks for
+# it. A machine with NO account linked keeps the original behaviour: straight
+# into the wizard.
+#
+# ``_cm_probe_account`` sets: CM_CONNECTED (0/1), CM_EMAIL, CM_PLAN,
+# CM_SYNC (cloud|local-only), CM_NODE, CM_VER.
+CM_CONNECTED=0
+CM_EMAIL=""
+CM_PLAN=""
+CM_SYNC=""
+CM_NODE=""
+CM_VER=""
+CM_E2E=0
+CM_DASH=""
+# Set once the "↻ Change it anytime: clawmetry onboard" line has been printed,
+# so the closing hint at the bottom of the installer doesn't repeat it.
+CM_HINTED=0
+
+# Reads `clawmetry status --json` (authoritative: it resolves the live account
+# email/plan and honours every local-only signal) and falls back to the config
+# files on disk when the CLI is too old, offline or broken — the probe must
+# never be the reason an install fails, so every branch degrades to "not
+# connected" and the caller just runs the wizard as before.
+_CM_PROBE_PY=$(cat <<'PYEOF'
+import json, os, shlex, sys
+
+HOME = os.path.expanduser("~")
+
+
+def _read_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+
+try:
+    _raw = sys.stdin.read()
+except Exception:
+    _raw = ""
+try:
+    snap = json.loads(_raw) if _raw.strip() else {}
+except Exception:
+    snap = {}
+if not isinstance(snap, dict):
+    snap = {}
+
+cloud = snap.get("cloud_sync") or {}
+acct = cloud.get("account") or {}
+cfg = _read_json(os.path.join(HOME, ".clawmetry", "config.json"))
+
+api_key = str(cfg.get("api_key") or "") or os.environ.get("CLAWMETRY_API_KEY", "")
+connected = bool(api_key) or bool(cloud.get("api_key_masked"))
+
+# A placeholder account (…@clawmetry.auto / …@clawmetry.linked) is the daemon's
+# zero-friction auto-registration, not the user's login — it is invisible from
+# their dashboard, so treat it as "not connected" and let the wizard run.
+email = str(acct.get("email") or cfg.get("account_email") or "").strip()
+if bool(acct.get("placeholder")) or email.lower().endswith(("@clawmetry.auto", "@clawmetry.linked")):
+    connected = False
+    email = ""
+
+plan = str(acct.get("plan") or "").strip()
+if not plan:
+    plan = str(_read_json(os.path.join(HOME, ".clawmetry", "cloud_plan.json")).get("plan") or "").strip()
+plan_label = ""
+if plan:
+    try:
+        from clawmetry.entitlements import tier_label as _tl
+        plan_label = _tl(plan)
+    except Exception:
+        plan_label = plan.replace("cloud_", "").replace("_", " ").title()
+
+# Never promise a dashboard URL that nothing answers on, and never guess the
+# port: the daemon records the live one in server.json (8961 on a box where
+# 8900 was taken). Any HTTP answer -- including 401/302 -- counts as "up".
+def _dashboard_url():
+    import urllib.error
+    import urllib.request
+
+    ports, seen = [], set()
+    try:
+        _p = int(_read_json(os.path.join(HOME, ".clawmetry", "server.json")).get("port") or 0)
+    except Exception:
+        _p = 0
+    for cand in (_p, 8900):
+        if cand and cand not in seen:
+            seen.add(cand)
+            ports.append(cand)
+    for port in ports:
+        url = "http://127.0.0.1:%d/" % port
+        try:
+            urllib.request.urlopen(url, timeout=0.8).close()
+            return "http://localhost:%d" % port
+        except urllib.error.HTTPError:
+            return "http://localhost:%d" % port
+        except Exception:
+            continue
+    return ""
+
+
+local_only = cloud.get("local_only")
+if local_only is None:
+    local_only = (
+        bool(cfg.get("local_only"))
+        or os.path.isfile(os.path.join(HOME, ".clawmetry", "nocloud"))
+        or os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower() in ("1", "true", "yes", "on")
+    )
+
+out = {
+    "CM_CONNECTED": "1" if connected else "0",
+    "CM_EMAIL": email,
+    "CM_PLAN": plan_label,
+    "CM_SYNC": "local-only" if local_only else "cloud",
+    "CM_NODE": str(cloud.get("node_id") or cfg.get("node_id") or ""),
+    "CM_VER": str(snap.get("version") or ""),
+    "CM_E2E": "1" if ((cloud.get("encryption") or {}).get("enabled") or cfg.get("encryption_key")) else "0",
+    "CM_DASH": _dashboard_url(),
+}
+for _k, _v in out.items():
+    print("%s=%s" % (_k, shlex.quote(str(_v))))
+PYEOF
+)
+
+_cm_probe_account() {
+  CM_CONNECTED=0
+  CM_EMAIL=""
+  CM_PLAN=""
+  CM_SYNC=""
+  CM_NODE=""
+  CM_VER=""
+  CM_E2E=0
+  CM_DASH=""
+  _p_bin="${1:-$INSTALL_DIR/bin/clawmetry}"
+  _p_py="$INSTALL_DIR/bin/python3"
+  if [ ! -x "$_p_py" ]; then
+    _p_py="$(command -v python3 2>/dev/null || true)"
+  fi
+  if [ -z "$_p_py" ]; then
+    return 0
+  fi
+  _p_snap=""
+  if [ -x "$_p_bin" ]; then
+    _p_snap=$("$_p_bin" status --json 2>/dev/null || true)
+  fi
+  _p_vals=$(printf '%s' "$_p_snap" | "$_p_py" -c "$_CM_PROBE_PY" 2>/dev/null || true)
+  if [ -n "$_p_vals" ]; then
+    eval "$_p_vals"
+  fi
+  # `status --json` is the version source; the console script is the fallback
+  # for the file-only path (CLI too old for --json, or the snapshot failed).
+  if [ -z "$CM_VER" ] && [ -x "$_p_bin" ]; then
+    CM_VER=$("$_p_bin" --version 2>/dev/null | awk '{print $NF}')
+  fi
+  return 0
+}
+
+# Show the setup that is already on this machine, so the user can tell at a
+# glance which account/plan this node reports to before deciding to change it.
+_cm_print_existing() {
+  echo ""
+  echo -e "  ${GREEN}${BOLD}✓ You're already connected to ClawMetry${NC}"
+  echo ""
+  if [ -n "$CM_EMAIL" ]; then
+    if [ -n "$CM_PLAN" ]; then
+      echo -e "    ${DIM}Account:${NC}     ${BOLD}${CM_EMAIL}${NC}  ${DIM}(${CM_PLAN} plan)${NC}"
+    else
+      echo -e "    ${DIM}Account:${NC}     ${BOLD}${CM_EMAIL}${NC}"
+    fi
+  fi
+  if [ "$CM_SYNC" = "local-only" ]; then
+    echo -e "    ${DIM}Cloud sync:${NC}  Local-only ${DIM}(data stays on this machine)${NC}"
+  elif [ "$CM_E2E" = "1" ]; then
+    echo -e "    ${DIM}Cloud sync:${NC}  On ${DIM}(E2E-encrypted snapshots to app.clawmetry.com)${NC}"
+  else
+    echo -e "    ${DIM}Cloud sync:${NC}  On ${DIM}(app.clawmetry.com)${NC}"
+  fi
+  if [ -n "$CM_VER" ]; then
+    echo -e "    ${DIM}Version:${NC}     ${CM_VER}"
+  fi
+  if [ -n "$CM_NODE" ]; then
+    echo -e "    ${DIM}Node:${NC}        ${CM_NODE}"
+  fi
+  if [ -n "$CM_DASH" ]; then
+    echo -e "    ${DIM}Dashboard:${NC}   ${CM_DASH}"
+  else
+    echo -e "    ${DIM}Dashboard:${NC}   not running ${DIM}(start it:${NC} ${GREEN}clawmetry${NC}${DIM})${NC}"
+  fi
+  echo ""
+}
+
+_cm_run_onboard() {
+  _o_bin="${1:-$CLAWMETRY_BIN}"
+  if (exec </dev/tty) 2>/dev/null; then
+    "$_o_bin" onboard </dev/tty || true
+  else
+    "$_o_bin" onboard || true
+  fi
+}
+
+# 0 => caller should re-run the wizard, 1 => keep the current setup untouched.
+# Never re-onboards without an explicit yes: a non-interactive re-install (CI,
+# provisioning script, `| bash` with no tty) keeps whatever is already set up.
+_cm_reonboard_gate() {
+  case "${CLAWMETRY_REONBOARD:-}" in
+    1|true|yes|on|TRUE|YES|ON) return 0 ;;
+    0|false|no|off|FALSE|NO|OFF) return 1 ;;
+  esac
+  if ! (exec </dev/tty) 2>/dev/null; then
+    echo -e "  ${DIM}Non-interactive install: keeping your current setup.${NC}"
+    echo -e "  ${DIM}↻ Change it anytime:${NC} ${GREEN}clawmetry onboard${NC}"
+    CM_HINTED=1
+    return 1
+  fi
+  _g_ans=""
+  printf "  Re-run setup (account, cloud vs local-only, license)? [y/N]: "
+  read -r _g_ans </dev/tty || _g_ans=""
+  case "$(printf '%s' "$_g_ans" | tr -d '\r' | tr '[:upper:]' '[:lower:]')" in
+    y|yes)
+      echo ""
+      return 0
+      ;;
+  esac
+  echo ""
+  echo -e "  ${DIM}Keeping your current setup.${NC}"
+  echo -e "  ${DIM}↻ Change it anytime:${NC} ${GREEN}clawmetry onboard${NC}"
+  CM_HINTED=1
+  return 1
+}
+
+# <<< CM_EXISTING_SETUP_BLOCK_END <<<
+
 # ── Early exit: already up to date ──────────────────────────────────────────
 if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then
   _CURRENT=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
@@ -205,6 +445,18 @@ print(json.loads(r.read())['info']['version'])
 " 2>/dev/null)
   if [ -n "$_CURRENT" ] && [ "$_CURRENT" = "$_LATEST" ] && [ -n "$_existing_pids" ]; then
     echo -e "  ${GREEN}${BOLD}✓ ClawMetry $_CURRENT already up to date${NC}"
+    # Nothing to install — but if this node is already linked to an account,
+    # say so (email, plan, cloud-vs-local) and offer the wizard instead of
+    # dead-ending on a one-line hint.
+    _cm_probe_account "$INSTALL_DIR/bin/clawmetry"
+    if [ "$CM_CONNECTED" = "1" ]; then
+      _cm_print_existing
+      if _cm_reonboard_gate; then
+        _cm_run_onboard "$INSTALL_DIR/bin/clawmetry"
+      fi
+      echo ""
+      exit 0
+    fi
     echo ""
     echo -e "  ${DIM}↻ Change your setup (local-only ↔ cloud, license key)? Run:${NC} ${GREEN}clawmetry onboard${NC}"
     exit 0
@@ -850,10 +1102,19 @@ esac
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
   [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1) — set up later with:${NC} ${GREEN}clawmetry onboard${NC}"
-elif (exec </dev/tty) 2>/dev/null; then
-  "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
-  "$CLAWMETRY_BIN" onboard || true
+  # Already linked to an account? The upgrade is done; show the setup that is
+  # on this box and ask before replaying the wizard over it. No account (fresh
+  # install, or a local-only node that never linked one) keeps the old path.
+  _cm_probe_account "$CLAWMETRY_BIN"
+  if [ "$CM_CONNECTED" = "1" ]; then
+    _cm_print_existing
+    if _cm_reonboard_gate; then
+      _cm_run_onboard "$CLAWMETRY_BIN"
+    fi
+  else
+    _cm_run_onboard "$CLAWMETRY_BIN"
+  fi
 fi
 
 # ── PATH reminder if needed ──────────────────────────────────────────────────
@@ -873,6 +1134,8 @@ fi
 # ── Closing hint ─────────────────────────────────────────────────────────────
 # `clawmetry onboard` is the setup wizard (local-only / cloud / license key)
 # and is always safe to re-run — advertise it on the way out.
-echo ""
-echo -e "  ${DIM}↻ Change your setup anytime (local-only ↔ cloud, license key):${NC} ${GREEN}clawmetry onboard${NC}"
-echo ""
+if [ "${CM_HINTED:-0}" != "1" ]; then
+  echo ""
+  echo -e "  ${DIM}↻ Change your setup anytime (local-only ↔ cloud, license key):${NC} ${GREEN}clawmetry onboard${NC}"
+  echo ""
+fi
