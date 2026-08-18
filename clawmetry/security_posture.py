@@ -904,14 +904,18 @@ def claude_code_posture() -> dict:
             )
         )
     else:
+        # Was "pass" — which meant this check passed on EVERY code path and
+        # could not fail, quietly donating its whole weight to the score. A
+        # posture check that cannot fail is padding, not a measurement.
         checks.append(
             _check(
                 "hooks_configured",
                 "Hooks",
-                "pass",
-                "No hooks configured (optional — PreToolUse hooks can add "
-                "guardrails).",
-                None,
+                "warn",
+                "No hooks configured, so nothing inspects a tool call before "
+                "it runs.",
+                "Add a PreToolUse hook, or run `clawmetry secure enable` to "
+                "install monitor-only agent-EDR hooks.",
                 "low",
                 5,
             )
@@ -948,7 +952,10 @@ def claude_code_posture() -> dict:
             )
         )
 
-    # (f) apiKeyHelper — informational
+    # (f) apiKeyHelper — informational, weight 0. Both states are legitimate
+    # (a custom helper and default credential handling are each fine), so this
+    # can never fail. It stays visible for context but must not contribute
+    # weight: a check that always passes inflates the grade for free.
     helper = next(
         (data.get("apiKeyHelper") for _, data in files if data.get("apiKeyHelper")),
         None,
@@ -963,7 +970,7 @@ def claude_code_posture() -> dict:
                 "script, keep it non-world-readable.".format(helper),
                 None,
                 "low",
-                5,
+                0,
             )
         )
     else:
@@ -975,7 +982,7 @@ def claude_code_posture() -> dict:
                 "No apiKeyHelper configured (default credential handling).",
                 None,
                 "low",
-                5,
+                0,
             )
         )
 
@@ -1096,9 +1103,12 @@ def codex_posture() -> dict:
             _check(
                 "approval_policy",
                 "Approval policy",
-                "pass",
-                "approval_policy not set — Codex default (on-request) applies.",
-                None,
+                "warn",
+                "approval_policy is not set, so Codex falls back to its built-in "
+                "default, which varies by version. We can only report what the "
+                "config actually declares.",
+                'Set approval_policy explicitly (e.g. "on-request") so the '
+                "behaviour is pinned rather than inherited.",
                 "high",
                 20,
             )
@@ -1135,9 +1145,12 @@ def codex_posture() -> dict:
             _check(
                 "sandbox_mode",
                 "Sandbox mode",
-                "pass",
-                "sandbox_mode not set — Codex default sandboxing applies.",
-                None,
+                "warn",
+                "sandbox_mode is not set, so Codex falls back to its built-in "
+                "default, which varies by version. An empty config should not "
+                "read as a verified sandbox.",
+                'Set sandbox_mode explicitly (e.g. "workspace-write") so the '
+                "sandbox is pinned rather than inherited.",
                 "critical",
                 25,
             )
