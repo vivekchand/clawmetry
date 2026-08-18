@@ -154,53 +154,6 @@ if ((Test-Path $venvPython) -and (Test-Path "$installDir\pyvenv.cfg")) {
     }
 }
 
-# ── Early exit: already up to date ─────────────────────────────────────────
-# Mirror of install.sh's early-exit section: if the installed version already
-# equals the latest PyPI release, nothing needs to be installed. We still apply
-# the existing-account gate so a re-run on an already-connected machine reports
-# the current setup and offers the wizard -- same contract as the post-install
-# path below.
-$_binDir0 = "$installDir\Scripts"
-$_cmExe0  = "$_binDir0\clawmetry.exe"
-if ((Test-Path $_cmExe0) -and (Test-Path $venvPython)) {
-    $_curVer = ""
-    try { $_curVer = (((& $_cmExe0 --version 2>$null) | Out-String) -replace '.*?(\d+\.\d+\.\d+).*','$1').Trim() } catch {}
-    $_latVer = ""
-    try {
-        $_latVer = ((& $venvPython -c "import json,urllib.request;print(json.loads(urllib.request.urlopen('https://pypi.org/pypi/clawmetry/json',timeout=2).read())['info']['version'])" 2>$null) | Out-String).Trim()
-    } catch {}
-    if ($_curVer -and $_latVer -and ($_curVer -eq $_latVer)) {
-        Write-Host ""
-        Write-Host "  ✓ ClawMetry $_curVer already up to date" -ForegroundColor Green
-        Write-Host ""
-        if ($env:CLAWMETRY_SKIP_ONBOARD -ne "1") {
-            $_conn = "0"
-            try {
-                $_conn = ((& $venvPython -c "import json,os;h=os.path.expanduser('~');d=os.path.join(h,'.clawmetry');g=lambda p:(json.loads(open(p).read()) if p and os.path.exists(p) else {});c=g(os.path.join(d,'config.json'));k=str(c.get('api_key') or '') or os.environ.get('CLAWMETRY_API_KEY','');e=str(c.get('account_email') or '');ph=e.lower().endswith(('@clawmetry.auto','@clawmetry.linked'));print('1' if (bool(k) and not ph) else '0')" 2>$null) | Out-String).Trim()
-            } catch {}
-            if ($_conn -eq "1") {
-                if ($env:CLAWMETRY_REONBOARD) {
-                    $flag = $env:CLAWMETRY_REONBOARD.ToLowerInvariant()
-                    if (@("1","true","yes","on") -contains $flag) { try { & $_cmExe0 onboard } catch {} }
-                    else { Write-Host "  Keeping your current setup."; Write-Host "  ↻ Change it anytime: clawmetry onboard" }
-                } else {
-                    $_isInteractive = $true
-                    try { $_isInteractive = (-not [Console]::IsInputRedirected) } catch {}
-                    if ($_isInteractive) {
-                        $_ans = ""; try { $_ans = Read-Host "  Re-run setup (account, cloud vs local-only, license)? [y/N]" } catch {}
-                        if (@("y","yes") -contains ("$_ans").Trim().ToLowerInvariant()) { try { & $_cmExe0 onboard } catch {} }
-                        else { Write-Host ""; Write-Host "  Keeping your current setup."; Write-Host "  ↻ Change it anytime: clawmetry onboard" }
-                    } else {
-                        Write-Host "  Non-interactive install: keeping your current setup."
-                        Write-Host "  ↻ Change it anytime: clawmetry onboard"
-                    }
-                }
-            }
-        }
-        exit 0
-    }
-}
-
 # Upgrade pip (using python -m pip to avoid in-use upgrade error on Windows)
 & $venvPython -m pip install --upgrade pip 2>&1 | Out-Null
 

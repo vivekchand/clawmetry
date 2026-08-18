@@ -1,5 +1,4 @@
 @echo off
-setlocal enabledelayedexpansion
 REM ClawMetry Installer for Windows (CMD)
 REM Usage: curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd
 
@@ -60,43 +59,6 @@ if not errorlevel 1 (
 goto :eof
 
 :cm_sweep_done
-
-REM ── Early exit: already up to date ──────────────────────────────────────
-REM Mirror of install.sh: if the installed version equals the latest PyPI
-REM release, skip the install but still apply the existing-account gate.
-set "CM_CUR_VER="
-set "CM_LAT_VER="
-for /f "delims=" %%V in ('%PYTHON% -c "try:import importlib.metadata;print(importlib.metadata.version(\"clawmetry\"))" 2^>nul') do set "CM_CUR_VER=%%V"
-if "!CM_CUR_VER!"=="" goto :cm_do_install
-for /f "delims=" %%L in ('%PYTHON% -c "import json,urllib.request;print(json.loads(urllib.request.urlopen(\"https://pypi.org/pypi/clawmetry/json\",timeout=2).read())[\"info\"][\"version\"])" 2^>nul') do set "CM_LAT_VER=%%L"
-if not "!CM_CUR_VER!"=="!CM_LAT_VER!" goto :cm_do_install
-echo.
-echo   ✓ ClawMetry !CM_CUR_VER! already up to date
-echo.
-if "%CLAWMETRY_SKIP_ONBOARD%"=="1" goto :eof
-set "CM_STATUS_FILE=%TEMP%\clawmetry-status-early.json"
-%PYTHON% -m clawmetry status --json > "%CM_STATUS_FILE%" 2>nul
-%PYTHON% -c "import json,os;h=os.path.expanduser('~');d=os.path.join(h,'.clawmetry');g=lambda p:(json.loads(open(p).read()) if p and os.path.exists(p) else {});c=g(os.path.join(d,'config.json'));s=g(os.environ.get('CM_STATUS_FILE',''));cl=s.get('cloud_sync') or {};a=cl.get('account') or {};k=str(c.get('api_key') or '') or os.environ.get('CLAWMETRY_API_KEY','');e=str(a.get('email') or c.get('account_email') or '');ph=bool(a.get('placeholder')) or e.lower().endswith(('@clawmetry.auto','@clawmetry.linked'));conn=(bool(k) or bool(cl.get('api_key_masked'))) and not ph;raise SystemExit(0 if conn else 1)" 2>nul
-set "CM_EARLY_PROBE_RC=!ERRORLEVEL!"
-del "%CM_STATUS_FILE%" >nul 2>&1
-set "CM_STATUS_FILE="
-if not "!CM_EARLY_PROBE_RC!"=="0" goto :eof
-if /I "%CLAWMETRY_REONBOARD%"=="1" goto :cm_early_reonboard
-if /I "%CLAWMETRY_REONBOARD%"=="0" goto :cm_early_keep
-set "CM_EARLY_ANS="
-set /p "CM_EARLY_ANS=  Re-run setup [account, cloud vs local-only, license]? [y/N]: "
-if /I "!CM_EARLY_ANS!"=="y" goto :cm_early_reonboard
-if /I "!CM_EARLY_ANS!"=="yes" goto :cm_early_reonboard
-:cm_early_keep
-echo.
-echo   Keeping your current setup.
-echo   Change it anytime: clawmetry onboard
-goto :eof
-:cm_early_reonboard
-%PYTHON% -m clawmetry onboard
-goto :eof
-
-:cm_do_install
 
 echo   → Installing clawmetry...
 %PYTHON% -m pip install --upgrade clawmetry >nul 2>&1
