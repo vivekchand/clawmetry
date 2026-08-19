@@ -629,6 +629,10 @@ _DAEMON_METHODS = frozenset({
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
     "query_cron_runs",
     "query_subagents",
+    # Orchestration capture: events-join-free subagent rows (kind / workflow
+    # run / prompt / reply / nowTool live in the data blob). Read by
+    # /api/session-orchestration and the Brain feed's per-run header.
+    "query_subagents_lite",
     # Context graph: decision-lineage tree (recursive subagent fan-out) for a session.
     "query_session_lineage",
     # Context graph: per-parent sub-agent cost rollup (true-cost-of-an-ask chip).
