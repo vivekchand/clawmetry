@@ -1979,7 +1979,21 @@ def cloud_cta_verify_otp():
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            if result.get("token"):
+            # The cloud mints the key under "api_key" (routes/auth.py
+            # api_otp_verify), which is also what the CLI and the desktop
+            # pane read. This proxy only ever looked for "token", so a
+            # SUCCESSFUL verify fell through to the error branch below and
+            # rendered "Invalid code" — after the cloud had already deleted
+            # the OTP. Every valid code was reported as invalid and burned,
+            # on this path and on the cloud modal that shares it. Accept
+            # every name the cloud has used rather than pinning one.
+            cm_key = (
+                result.get("api_key")
+                or result.get("token")
+                or result.get("key")
+                or ""
+            ).strip()
+            if cm_key:
                 # managed: route through _full_connect_with_key so this path
                 # is symmetric with the OAuth loopback bridge AND with
                 # `clawmetry connect --start-sync-now` — persist identity
@@ -1997,30 +2011,42 @@ def cloud_cta_verify_otp():
                 trial = "unavailable"
                 try:
                     if mode == "selfhost":
-                        _node_id, trial = _d._selfhost_signin_with_key(result["token"])
+                        _node_id, trial = _d._selfhost_signin_with_key(cm_key)
                     else:
-                        _node_id, _enc_key, trial = _d._full_connect_with_key(result["token"])
+                        _node_id, _enc_key, trial = _d._full_connect_with_key(cm_key)
                 except Exception:
                     # If _full_connect_with_key fails, still persist the
                     # token — pairing is more important than daemon restart
                     # or trial activation, which recover naturally later.
                     try:
-                        _d._write_cloud_token(result["token"])
+                        _d._write_cloud_token(cm_key)
                     except Exception:
                         pass
                 return jsonify({
                     "ok": True,
-                    "token": result["token"],
+                    "token": cm_key,
                     "trial": trial,
                     "mode": mode,
                 })
-            return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
+            # A 200 carrying neither a key nor an error is a shape we do not
+            # understand. Say that, rather than blaming the code the user
+            # typed — a wrong code comes back as a 401 and is handled below.
+            return jsonify({
+                "ok": False,
+                "error": result.get("error")
+                or "Signed in, but the server response was not understood. Try again.",
+            })
     except Exception as _ex:
         try:
             _eb = _jr.loads(_ex.read()) if hasattr(_ex, "read") else {}
         except Exception:
             _eb = {}
-        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+        # A rejected code is a 401 from the cloud, not a gateway failure —
+        # pass its status through so an API consumer can tell "you typed the
+        # wrong code" from "the cloud is unreachable".
+        _up = getattr(_ex, "code", None)
+        _status = _up if isinstance(_up, int) and 400 <= _up < 500 else 502
+        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), _status
 
 
 def _compute_device_summary() -> dict:
