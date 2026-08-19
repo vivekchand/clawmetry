@@ -1,4 +1,4 @@
-"""`/api/cloud-cta/verify-otp` must not flip egress on by itself.
+`/api/cloud-cta/verify-otp` must not flip egress on by itself.
 
 Identity and egress are separate choices — `_selfhost_intent()` says so in
 its own docstring, and the OAuth twin (`/api/cloud-cta/oauth-start`) has
