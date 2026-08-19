@@ -136,6 +136,13 @@ def _read_discovery():
 
         if not _pid_alive(pid):
             return None
+        # The daemon only owns ITS DuckDB. A process pointed at a different
+        # file (CLAWMETRY_LOCAL_STORE_PATH — pytest fixtures, a scratch DB)
+        # must not forward reads OR writes to it: that is how test fixture
+        # rows ended up in an operator's live alert_rules table.
+        from clawmetry.local_server import discovery_serves_this_db
+        if not discovery_serves_this_db(data):
+            return None
         return {"port": port, "token": token}
     except (FileNotFoundError, ValueError, OSError):
         return None
