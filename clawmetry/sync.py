@@ -3931,9 +3931,9 @@ def _local_ingest_session_batch(
 # tend toward ``workspace``/``project``. Order is priority: the first
 # non-empty alias wins.
 _CWD_ALIASES = (
-    "cwd", "workingDirectory", "working_directory", "working_dir",
-    "workspace", "workspace_path", "workspaceRoot", "project_path",
-    "project_dir", "projectRoot", "directory", "folder",
+    "cwd", "workingDir", "workingDirectory", "working_directory",
+    "working_dir", "workspace", "workspace_path", "workspaceRoot",
+    "project_path", "project_dir", "projectRoot", "directory", "folder",
 )
 _GIT_BRANCH_ALIASES = (
     "git_branch", "gitBranch", "branch", "vcs_branch", "scm_branch",
@@ -9419,6 +9419,64 @@ def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
     return {"ok": True, "scope_pending": False, "error": "", "raw": blob[:1000]}
 
 
+def _proc_control_cwd_backfill(runtime: str, session_id: str) -> str:
+    """Working directory for a session about to be signaled, read from the
+    local store. The cloud Stop/Pause relay never carried ``cwd`` in its
+    action (found 2026-08-19), so every cwd-resolved runtime (codex / goose /
+    opencode / aider / …) failed with ``no_cwd`` — the store already knows the
+    directory (``sessions.cwd``, or a metadata alias like goose
+    ``workingDir`` / opencode ``directory``). Never raises; '' when unknown.
+    """
+    ns_id = f"{runtime}:{session_id}" if runtime else session_id
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        for sid in (ns_id, session_id):
+            row = store.get_session_location(sid)
+            if not row:
+                continue
+            cwd = row.get("cwd")
+            if isinstance(cwd, str) and cwd.strip():
+                return cwd.strip()
+            meta = row.get("metadata")
+            if isinstance(meta, dict):
+                hit = _first_alias(meta, _CWD_ALIASES)
+                if hit:
+                    return hit
+    except Exception as e:  # noqa: BLE001 - backfill is best-effort
+        log.debug("proc-control cwd backfill failed (%s): %s", ns_id, e)
+    return ""
+
+
+def _registered_kill(runtime: str, session_id: str) -> dict | None:
+    """Try the pro-registered per-runtime kill handler
+    (``clawmetry.approvals.KILL_HANDLERS`` — nanoclaw docker-stop, n8n
+    execution-stop API, antigravity CancelCascadeInvocation, …). These fired
+    only on an approval DENY before 2026-08-19; the cloud Stop button now
+    consults them too. Returns a result dict on a handled runtime (ok True or
+    False), or None when no handler is registered so the caller falls through
+    to the pid-based engine. Never raises."""
+    try:
+        from clawmetry.approvals import KILL_HANDLERS
+    except Exception:  # noqa: BLE001
+        return None
+    handler = KILL_HANDLERS.get((runtime or "").strip().lower())
+    if handler is None:
+        return None
+    ns_id = f"{runtime}:{session_id}"
+    try:
+        ok = bool(handler(ns_id))
+    except Exception as e:  # noqa: BLE001 - a bad plugin degrades, never crashes
+        log.warning("registered kill handler (%s) raised: %s", runtime, e)
+        return {"ok": False, "action": "kill", "runtime": runtime,
+                "session_id": session_id,
+                "detail": f"kill handler error: {str(e)[:200]}"}
+    return {"ok": ok, "action": "kill", "runtime": runtime,
+            "session_id": session_id,
+            "detail": ("stopped via %s kill handler" % runtime) if ok
+            else "kill handler could not stop this session"}
+
+
 def _run_process_control(config: dict, action: dict) -> None:
     """Worker body for _action_process_control (runs in a daemon thread)."""
     import clawmetry.process_control as _pc
@@ -9426,19 +9484,32 @@ def _run_process_control(config: dict, action: dict) -> None:
     runtime = str(action.get("runtime") or "").strip()
     session_id = str(action.get("session_id") or "").strip()
     cwd = str(action.get("cwd") or "").strip()
+    # The cloud relay does not send cwd; cwd-resolved runtimes need it.
+    if not cwd and runtime and runtime not in ("openclaw", "claude_code"):
+        cwd = _proc_control_cwd_backfill(runtime, session_id)
     result = {"ok": False, "error": "no-op", "runtime": runtime, "action": atype}
     try:
         if atype == "kill_session":
             _hitl_set_pause(session_id, True)
-            if runtime == "openclaw":
+            if runtime in ("openclaw", "nemoclaw"):
+                # nemoclaw is OpenClaw-derived and shares the task registry
+                # when gateway-run; sandboxed runs surface the CLI's real
+                # error honestly instead of a guaranteed "unsupported".
                 cr = _openclaw_cancel_task(session_id)
                 result = {"ok": bool(cr.get("ok")), "action": "cancel",
-                          "runtime": "openclaw", "session_id": session_id,
+                          "runtime": runtime, "session_id": session_id,
                           "scope_pending": bool(cr.get("scope_pending")),
                           "detail": (cr.get("error") or "task cancel requested")}
             else:
                 mode = str(action.get("mode") or "")
-                result = _pc.kill_session(runtime, session_id, cwd, mode=mode)
+                result = None
+                if mode != "stop":
+                    # Per-runtime API kill (n8n / antigravity / nanoclaw …)
+                    # wins over signals when a handler is registered.
+                    result = _registered_kill(runtime, session_id)
+                if result is None or (not result.get("ok")
+                                      and runtime in _pc.SUPPORTED_RUNTIMES):
+                    result = _pc.kill_session(runtime, session_id, cwd, mode=mode)
         elif atype == "pause_session":
             _hitl_set_pause(session_id, True)
             if runtime == "openclaw":
@@ -12671,11 +12742,17 @@ def _family_ingest_rev() -> str:
     (tokens, cost, model) changes across pro releases. Stamping the rev
     means an upgrade re-ingests every session once instead of trusting a
     mark written by older extraction code. "" when pro is absent.
+
+    The ``/cwd1`` salt is OSS-side: 2026-08-19 the family upsert started
+    persisting ``cwd``/``git_branch`` (kill/pause pid resolution reads them),
+    and only a rev change makes existing sessions re-ingest to backfill the
+    column. Bump the salt when the OSS extraction changes without a pro
+    release.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro")
+        return _ilm.version("clawmetry-pro") + "/cwd1"
     except Exception:
         return ""
 
@@ -13406,6 +13483,15 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # never hardcoded. Computed once so the local row and the cloud
                 # row below cannot disagree about whether this session is live.
                 _fstatus, _fended = _session_liveness(ended or started)
+                # Where this session runs. The adapters record the directory
+                # under per-runtime spellings (pi ``cwd``, opencode
+                # ``directory``, goose ``workingDir``, kimi/grok via
+                # ``extra``), all merged into ``metadata`` above — but no
+                # family session row ever persisted ``cwd``, which is exactly
+                # the column the kill/pause pid resolution needs
+                # (process_control.resolve_by_cwd). Found 2026-08-19.
+                _fcwd = _session_cwd(metadata)
+                _fbranch = _session_git_branch(metadata)
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -13422,6 +13508,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "cost_usd": s.cost_usd,
                         "message_count": int(s.message_count or 0),
                         "metadata": metadata,
+                        "cwd": _fcwd,
+                        "git_branch": _fbranch,
                     })
                 except Exception as _se:
                     log.warning("family session upsert failed (%s): %s", ns_id, _se)
@@ -13583,7 +13671,11 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "node_id": node_id,
                         "agent_id": "main",
                         "session_id": ns_id,
-                        "workspace_id": None,
+                        # The session's working directory. approvals'
+                        # _session_cwd_hint reads events.workspace_id to
+                        # resolve deny-kills for cwd-resolved runtimes; None
+                        # here made that hint permanently empty (2026-08-19).
+                        "workspace_id": _fcwd,
                         "event_type": e.type or "message",
                         "ts": ets,
                         "data": data,

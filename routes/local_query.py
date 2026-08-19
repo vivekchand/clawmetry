@@ -587,6 +587,11 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # Emergency-stop cwd lookup: routes/sessions.py:api_session_stop routes
+    # family sids through process_control and needs the session's working
+    # directory (sessions.cwd) to resolve the pid — read via the daemon so
+    # the dashboard process never opens DuckDB itself.
+    "get_session_location",
     # "Needs you" state. The hook receiver (routes/hooks.py) runs in the
     # DASHBOARD process while the daemon owns the writer lock, so these must
     # be proxied — an unlisted method is a silent no-op and the badge would

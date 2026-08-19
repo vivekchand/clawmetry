@@ -2463,6 +2463,42 @@ class LocalStore:
                       session_id, exc_info=True)
             return False
 
+    def get_session_location(self, session_id: str) -> dict[str, Any] | None:
+        """Read one session's ``cwd`` / ``git_branch`` / decoded ``metadata``.
+
+        Companion read for :meth:`update_session_location`, added for the
+        process-control cwd backfill (the cloud Stop/Pause relay carries no
+        cwd, so the daemon looks the directory up here before resolving the
+        session to a pid). Matches by ``session_id`` alone — the caller may
+        hold either the namespaced (``runtime:uuid``) or bare id and tries
+        both. Returns None when the session is unknown; never raises.
+        """
+        sid = _clean_str(session_id)
+        if not sid:
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT cwd, git_branch, metadata FROM sessions "
+                "WHERE session_id = ? LIMIT 1",
+                [sid],
+            ).fetchone()
+        except Exception:
+            log.debug("local store: get_session_location failed for %s",
+                      sid, exc_info=True)
+            return None
+        if row is None:
+            return None
+        meta: dict[str, Any] = {}
+        if row[2]:
+            try:
+                decoded = json.loads(row[2])
+                if isinstance(decoded, dict):
+                    meta = decoded
+            except Exception:
+                pass
+        return {"session_id": sid, "cwd": row[0], "git_branch": row[1],
+                "metadata": meta}
+
     def apply_session_attention(self, items: list[dict[str, Any]]) -> int:
         """Publish the daemon's INFERRED "needs you" pass onto session rows.
 

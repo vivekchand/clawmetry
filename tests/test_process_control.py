@@ -578,3 +578,145 @@ def test_guard_still_fails_closed_on_unparseable_ps_output(monkeypatch):
     ok, reason = pc.verify_pid(os.getpid(), recorded_start=_EN_LSTART)
     assert ok is False
     assert reason.startswith("start_mismatch"), reason
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# copilot: log-filename pid map (2026-08-19 matrix-gap sprint)
+# ──────────────────────────────────────────────────────────────────────────
+def _write_copilot_log(home, sid, pid, epoch_ms=1787175091173):
+    d = home / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"process-{epoch_ms}-{pid}.log"
+    p.write_text(
+        "2026-08-19T00:00:00.000Z [INFO] Session indexing debug\n"
+        f"2026-08-19T00:00:00.100Z [INFO] Workspace initialized: {sid} (checkpoints: 0)\n"
+        "2026-08-19T00:00:00.200Z [INFO] Starting Copilot CLI: 1.0.80\n"
+    )
+    return p
+
+
+def test_resolve_copilot_maps_sid_to_pid_from_log_filename(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
+    sid = "1035fc8f-aaaa-bbbb-cccc-333333333333"
+    _write_copilot_log(tmp_path, sid, 29965)
+    info = pc.resolve_copilot(sid)
+    assert info["ok"] is True
+    assert info["pid"] == 29965
+    assert info["runtime"] == "copilot"
+    # epoch_ms from the FILENAME becomes the recorded start (seconds).
+    assert abs(info["recorded_start"] - 1787175091.173) < 0.01
+
+
+def test_resolve_copilot_unknown_sid(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
+    _write_copilot_log(tmp_path, "some-other-session", 1234)
+    info = pc.resolve_copilot("not-there")
+    assert info["ok"] is False
+    assert info["reason"] == "session_not_in_copilot_logs"
+
+
+def test_resolve_copilot_no_logs_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "absent"))
+    info = pc.resolve_copilot("x")
+    assert info["ok"] is False
+    assert info["reason"] == "no_copilot_logs_dir"
+
+
+@posix_only
+def test_copilot_kill_session_end_to_end(spawned, tmp_path, monkeypatch):
+    """A copilot session resolved from the log map is actually killable, and
+    the pid-reuse guard still refuses a mismatched start."""
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
+    p = spawned()
+    sid = "e2e-copilot-session"
+    # recorded epoch_ms far in the past -> start mismatch -> guard refuses
+    _write_copilot_log(tmp_path, sid, p.pid, epoch_ms=1000000000000)
+    res = pc.kill_session("copilot", sid)
+    assert res["ok"] is False
+    assert "pid_guard_refused" in (res.get("detail") or "")
+    # rewrite with the true start time -> kill succeeds
+    for f in (tmp_path / "logs").iterdir():
+        f.unlink()
+    start = pc._proc_start_epoch(p.pid)
+    if start is None:
+        start = time.time()
+    _write_copilot_log(tmp_path, sid, p.pid, epoch_ms=int(start * 1000))
+    res = pc.kill_session("copilot", sid)
+    assert res["ok"] is True, res
+    # SIGTERM on a plain python sleep exits promptly. Reap to observe the
+    # exit (an unreaped child is a zombie and still passes is_alive).
+    assert _reaped(p), res
+    assert p.returncode is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# qwen_code: pid sidecar
+# ──────────────────────────────────────────────────────────────────────────
+def _write_qwen_sidecar(root, sid, pid, work_dir):
+    d = root / "projects" / "abc123" / "chats"
+    d.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    (d / f"{sid}.runtime.json").write_text(_json.dumps({
+        "schema_version": 1, "pid": pid, "session_id": sid,
+        "work_dir": str(work_dir), "started_at": "2026-08-19T00:00:00Z",
+    }))
+
+
+def test_resolve_qwen_code_sidecar_dead_pid_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("QWEN_CODE_HOME", str(tmp_path))
+    _write_qwen_sidecar(tmp_path, "sid-1", 99999999, tmp_path)
+    info = pc.resolve_qwen_code("sid-1")
+    assert info["ok"] is False
+    assert info["reason"] == "sidecar_pid_not_alive"
+
+
+def test_resolve_qwen_code_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("QWEN_CODE_HOME", str(tmp_path))
+    info = pc.resolve_qwen_code("nope")
+    assert info["ok"] is False
+    assert info["reason"] in ("no_qwen_projects_dir", "session_not_in_qwen_sidecars")
+
+
+@posix_only
+def test_resolve_qwen_code_live_pid_identity_check(spawned, tmp_path, monkeypatch):
+    """A live sidecar pid that is NOT a qwen process is refused (identity
+    guard replaces the unreliable sidecar start time)."""
+    monkeypatch.setenv("QWEN_CODE_HOME", str(tmp_path))
+    p = spawned()  # a python sleep, argv has no 'qwen'
+    _write_qwen_sidecar(tmp_path, "sid-2", p.pid, os.getcwd())
+    info = pc.resolve_qwen_code("sid-2")
+    assert info["ok"] is False
+    assert info["reason"] == "sidecar_pid_not_qwen"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# exact-basename argv hints ("pi" must not match pip/python)
+# ──────────────────────────────────────────────────────────────────────────
+def test_hint_matches_exact_for_pi():
+    assert pc._hint_matches(("pi",), "pi", "pi") is True
+    assert pc._hint_matches(("pi",), "/usr/local/bin/pi", "/usr/local/bin/pi") is True
+    assert pc._hint_matches(("pi",), "pip", "pip install x") is False
+    assert pc._hint_matches(("pi",), "python3", "python3 -m pip") is False
+
+
+def test_hint_matches_substring_for_others():
+    assert pc._hint_matches(("copilot",), "node",
+                            "node /opt/homebrew/bin/copilot -p hi") is True
+    assert pc._hint_matches(("qwen",), "node",
+                            "node /x/qwen-code/bundle/gemini.js") is True
+    assert pc._hint_matches(("dsh",), "bash", "bash /tmp/dshboard.sh") is False
+    assert pc._hint_matches(("dsh",), "dsh", "dsh --resume x") is True
+
+
+def test_new_runtimes_are_supported():
+    for rt in ("copilot", "qwen_code", "pi", "grok", "deepseek_harness", "kimi"):
+        assert rt in pc.SUPPORTED_RUNTIMES, rt
+        assert rt in pc._RUNTIME_ARGV_HINTS, rt
+
+
+def test_cursor_cli_resolves_ide_refuses():
+    # No cursor-agent process running in the test env and no cwd ->
+    # the honest single-IDE-process refusal.
+    info = pc.resolve_session("cursor", session_id="x", cwd="")
+    assert info["ok"] is False
+    assert info.get("unsupported") is True
