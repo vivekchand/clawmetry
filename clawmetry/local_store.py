@@ -1622,13 +1622,23 @@ def _daemon_registered() -> bool:
     right back to reclaim it. Stealing it there starves the daemon's ingest and
     blanks every snapshot read (Models/Embodied go empty). Only a true
     single-process boot (no file at all — tests / dev / first run) lets a
-    non-owner open the writer. Best-effort; any error -> False (allow)."""
+    non-owner open the writer. Best-effort; any error -> False (allow).
+
+    The daemon only owns ITS file. When this process is pointed at a
+    different DuckDB (``DB_PATH`` != the daemon's ``db_path``) it is not a
+    non-owner of that daemon's store — it is the sole user of another file
+    and must open it directly. Proxying here sent pytest fixture writes
+    into the live store (see ``local_server.discovery_serves_this_db``)."""
     try:
         import json as _j
 
         with open(os.path.expanduser("~/.clawmetry/local_query.json")) as _f:
-            pid = _j.load(_f).get("pid")
-        return bool(pid) and int(pid) != os.getpid()
+            disc = _j.load(_f)
+        pid = disc.get("pid")
+        if not pid or int(pid) == os.getpid():
+            return False
+        from clawmetry.local_server import discovery_serves_this_db
+        return discovery_serves_this_db(disc, db_path=DB_PATH)
     except Exception:
         return False
 
