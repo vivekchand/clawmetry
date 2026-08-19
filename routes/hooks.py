@@ -150,9 +150,14 @@ def _ls_write(method_name: str, **kwargs) -> bool:
     """Writer call: daemon proxy first (it owns the DuckDB writer lock),
     direct writable store as the single-process fallback."""
     try:
-        from routes.local_query import local_store_via_daemon
-        result = local_store_via_daemon(method_name, **kwargs)
-        if result is not None:
+        from routes.local_query import (
+            local_store_call_via_daemon, PROXY_UNAVAILABLE,
+        )
+        # Every writer here (ingest_approval, ...) returns None on SUCCESS.
+        # The old ``result is not None`` test therefore read a completed
+        # write as a failure and fell through to a store that cannot write,
+        # so the call reported False despite the row having landed.
+        if local_store_call_via_daemon(method_name, **kwargs) is not PROXY_UNAVAILABLE:
             return True
     except Exception:
         pass
