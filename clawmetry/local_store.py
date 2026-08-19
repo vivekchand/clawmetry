@@ -37,6 +37,7 @@ Concurrency model:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -1636,6 +1637,53 @@ def _daemon_registered() -> bool:
 _store_proxy = None
 
 
+# Signature cache for :func:`_proxy_call_kwargs` — ``inspect.signature`` is
+# not free and the dashboard calls through the proxy dozens of times a page.
+_PROXY_SIG_CACHE: dict = {}
+
+
+def _proxy_call_kwargs(name: str, args: tuple, kwargs: dict):
+    """Fold a positional call into the kwargs-only form the daemon speaks.
+
+    The proxy transport is ``{"kwargs": {...}}`` — it has no slot for
+    positional arguments. Forwarding ``store.foo(x)`` as ``foo()`` used to
+    drop ``x`` silently; the daemon then answered ``400 missing required
+    argument`` and every caller swallowed that as an empty result (the
+    Sessions authority-count and approval-mirror bugs). Bind against the
+    real :class:`LocalStore` signature so both call styles work.
+
+    Returns the kwargs to send, or ``None`` when the call cannot be
+    expressed that way (unknown method, ``*args``-style signature).
+    """
+    if not args:
+        return dict(kwargs)
+    sig = _PROXY_SIG_CACHE.get(name)
+    if sig is None:
+        fn = getattr(LocalStore, name, None)
+        if not callable(fn):
+            return None
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return None
+        _PROXY_SIG_CACHE[name] = sig
+    params = list(sig.parameters.values())
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params):
+        return None
+    try:
+        # ``None`` stands in for ``self`` — the signature is the unbound one.
+        bound = sig.bind_partial(None, *args, **kwargs)
+    except TypeError:
+        return None
+    out = dict(bound.arguments)
+    if params:
+        out.pop(params[0].name, None)  # drop the ``self`` placeholder
+    for p in params:
+        if p.kind is inspect.Parameter.VAR_KEYWORD and p.name in out:
+            out.update(out.pop(p.name) or {})
+    return out
+
+
 class _ProxyStore:
     """Stand-in returned by ``get_store()`` in a NON-writer process (the
     dashboard) when a daemon owns the DuckDB writer.
@@ -1651,10 +1699,33 @@ class _ProxyStore:
     _read_only = True
 
     def __getattr__(self, name):
+        # Dunder probes (copy/pickle/inspect) must not resolve to a proxy
+        # call — returning a callable for ``__deepcopy__`` & friends makes
+        # this object lie about protocols it does not implement.
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        # Private helpers are deliberately absent from the daemon allowlist
+        # (``_fetch`` would be arbitrary SQL over the RPC). Forwarding them
+        # only produces a 400 the caller swallows as "empty result", so fail
+        # here instead — loudly, and without the pointless round-trip.
+        if name.startswith("_"):
+            log.warning(
+                "local_store: %s() is not proxyable through the daemon; "
+                "call a query_* method instead (returning None)", name,
+            )
+            return lambda *a, **k: None
+
         def _forward(*args, **kwargs):
             try:
                 from routes.local_query import local_store_via_daemon
-                return local_store_via_daemon(name, **kwargs)
+                call_kwargs = _proxy_call_kwargs(name, args, kwargs)
+                if call_kwargs is None:
+                    log.warning(
+                        "local_store: cannot proxy %s(%d positional arg(s)) "
+                        "through the daemon — returning None", name, len(args),
+                    )
+                    return None
+                return local_store_via_daemon(name, **call_kwargs)
             except Exception:
                 return None
         return _forward

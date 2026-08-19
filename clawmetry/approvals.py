@@ -363,6 +363,32 @@ def _compile_policy(p: dict) -> Optional[dict]:
         return None
 
 
+# Fingerprint of the last policy set we announced, so a reload that changes
+# nothing stays quiet. None until the first successful load.
+_last_policy_signature: Optional[tuple] = None
+
+
+def _policy_signature(compiled: list[dict]) -> tuple:
+    """Order-sensitive fingerprint of a compiled policy set.
+
+    Compiled entries hold ``re.Pattern`` objects, which do not compare equal
+    across compilations, so fingerprint their source patterns instead.
+    """
+    return tuple(
+        (
+            c.get("name"),
+            c.get("tool"),
+            c.get("action"),
+            c.get("timeout"),
+            c.get("on_timeout"),
+            getattr(c.get("command_regex"), "pattern", None),
+            getattr(c.get("command_not_regex"), "pattern", None),
+            getattr(c.get("args_regex"), "pattern", None),
+        )
+        for c in compiled
+    )
+
+
 def load_policies(api_key: Optional[str] = None) -> list[dict]:
     """Load policies from local YAML + cloud (if api_key is set).
 
@@ -401,8 +427,18 @@ def load_policies(api_key: Optional[str] = None) -> list[dict]:
             log.warning(f"failed to read {POLICIES_PATH}: {e}")
 
     if compiled:
-        log.info(f"loaded {len(compiled)} approval policies "
-                 f"(cloud + {POLICIES_PATH})")
+        # This runs on every evaluation pass (multiple times a minute). Only
+        # say something at INFO when the policy set actually CHANGED —
+        # otherwise it is 1,300+ identical lines per log file, which buries
+        # the errors an operator is grepping for.
+        global _last_policy_signature
+        signature = _policy_signature(compiled)
+        if signature != _last_policy_signature:
+            _last_policy_signature = signature
+            log.info(f"loaded {len(compiled)} approval policies "
+                     f"(cloud + {POLICIES_PATH})")
+        else:
+            log.debug(f"approval policies unchanged ({len(compiled)})")
     return compiled
 
 
