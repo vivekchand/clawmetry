@@ -89,13 +89,29 @@ def test_is_enforced_env_parsing(ent, monkeypatch):
 # ── catalogue invariants ────────────────────────────────────────────────────────
 
 
-def test_free_runtimes_is_openclaw_and_nemoclaw(ent):
+def test_free_runtimes_is_openclaw_nemoclaw_and_goose(ent):
     # NVIDIA NemoClaw is a free-tier agent runtime alongside OpenClaw
     # (issue #2289). NeMo *governance* is a separate free feature.
-    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw"})
+    # Goose (block/goose) joined 2026-08-19 under the open-source-runtime
+    # rule; the commercial vendor products stay paid.
+    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw", "goose"})
     assert "claude_code" in ent.PAID_RUNTIMES
     assert "nemoclaw" not in ent.PAID_RUNTIMES
+    assert "goose" not in ent.PAID_RUNTIMES
     assert ent.FREE_RUNTIMES.isdisjoint(ent.PAID_RUNTIMES)
+
+
+def test_commercial_vendor_runtimes_stay_paid(ent):
+    """The paid side of the open-source-runtime rule.
+
+    Freeing the OSS runtimes is a distribution move, not a decision to stop
+    charging. Whoever pays a vendor for the agent will pay to observe it, so
+    these six must never drift into FREE_RUNTIMES without a deliberate
+    pricing change.
+    """
+    for rt in ("claude_code", "codex", "copilot", "cursor", "antigravity", "grok"):
+        assert rt in ent.PAID_RUNTIMES, rt
+        assert rt not in ent.FREE_RUNTIMES, rt
 
 
 def test_nemo_governance_is_a_free_feature(ent):
@@ -246,7 +262,6 @@ def test_paid_runtimes_exact_membership(ent):
             "codex",
             "cursor",
             "aider",
-            "goose",
             "opencode",
             "qwen_code",
             "hermes",
@@ -266,7 +281,8 @@ def test_paid_runtimes_exact_membership(ent):
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 21
+    assert len(ent.PAID_RUNTIMES) == 20
+    assert len(ent.ALL_RUNTIMES) == 23
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):

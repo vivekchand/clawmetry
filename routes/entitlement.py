@@ -17671,7 +17671,19 @@ def api_runtimes():
         logger.warning("api_runtimes: falling back to OSS-free: %s", exc)
         return jsonify(
             {
+                # Sorted by id, matching runtime_catalog()'s ordering, so the
+                # fallback is shape-identical to the happy path. Keep this in
+                # lockstep with entitlements.FREE_RUNTIMES — guarded by
+                # tests/test_advertised_runtimes_match_catalogue.py.
                 "runtimes": [
+                    {
+                        "id": "goose",
+                        "label": "Goose",
+                        "free": True,
+                        "tier": "free",
+                        "allowed": True,
+                        "locked": False,
+                    },
                     {
                         "id": "nemoclaw",
                         "label": "NemoClaw",

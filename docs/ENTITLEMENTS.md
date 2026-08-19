@@ -31,6 +31,32 @@ The FREE layer needs no key, no network call, and no account.
 
 - `openclaw` — OpenClaw agents
 - `nemoclaw` — NVIDIA NemoClaw agents
+- `goose` — [Goose](https://github.com/block/goose) agents (Block, Apache-2.0)
+
+Free here means genuinely free: each of these adapters ships **in this
+package** (`clawmetry/adapters/`), so `pip install clawmetry` observes them
+with no account, no licence key, and no wheel download. A runtime listed as
+free whose reader lived only in the closed wheel would not be free in any
+sense a user cares about, so `tests/test_phase4_adapter_move.py` pins the
+invariant.
+
+### The rule for which runtimes are free
+
+**An open-source runtime gets a free, open-source adapter. A commercial
+vendor product stays paid.** Whoever pays a vendor for the agent will pay to
+observe it; whoever runs an OSS agent is part of a community we would rather
+reach than bill. Goose moved free on 2026-08-19 as the first application of
+the rule, for three reasons worth recording:
+
+1. Its maintainers will accept a ClawMetry tutorial into **their own docs**
+   only if it works without a paid plan (`aaif-goose/goose#11282`). That
+   placement is worth more than the runtime ever earned us.
+2. An audit of every paying account found **zero** that depend on Goose — or
+   on any other OSS runtime. Every payer is anchored on OpenClaw (already
+   free) or on a runtime we keep paid.
+3. Free alternatives in this category already publish integration pages for
+   these runtimes. Being the paid option loses the comparison before anyone
+   installs us.
 
 `nemo_governance` (policy enforcement layered on top of any runtime) is a
 separate **free feature**, not a runtime — see the feature list below.
@@ -64,7 +90,7 @@ below live here so the free UI can render locked rows with an accurate
 
 **Additional runtimes** (`entitlements.PAID_RUNTIMES`):
 
-`claude_code`, `codex`, `cursor`, `aider`, `goose`, `opencode`,
+`claude_code`, `codex`, `cursor`, `aider`, `opencode`,
 `qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
 `n8n`, `antigravity`, `copilot`, `grok`, `qm`, `deepseek_harness`, `exo`,
 `kimi`, `devin`.

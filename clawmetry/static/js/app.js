@@ -281,13 +281,13 @@
     var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
-      : ['openclaw', 'nemoclaw'];
+      : ['openclaw', 'nemoclaw', 'goose'];
     // nemoclaw is NVIDIA NemoClaw and it is FREE. nanoclaw is a different
     // runtime entirely, and it is PAID (entitlements.PAID_RUNTIMES). This
     // mapping said 'NanoClaw', so the one screen that tells a blocked user
     // what they still get named a runtime they do NOT get and never named
     // the one they do. Labels come from entitlements.RUNTIME_LABELS.
-    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw' };
+    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw', goose: 'Goose' };
     var freeRuntimesLabel = freeRuntimes
       .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
@@ -494,8 +494,8 @@
     });
 
     // Free-mode escape: expired-trial users can drop back to
-    // OpenClaw/NemoClaw-only mode instead of paying (entitlements.py's
-    // FREE_RUNTIMES = {openclaw, nemoclaw} — NOT nanoclaw, which is paid;
+    // free-runtime-only mode instead of paying (entitlements.py's
+    // FREE_RUNTIMES = {openclaw, nemoclaw, goose} — NOT nanoclaw, which is paid;
     // this comment said NanoClaw and that is how the label above got it
     // wrong too). Posts to the
     // continue-free endpoint (allowlisted), then reloads to a

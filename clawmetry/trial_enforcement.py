@@ -61,9 +61,27 @@ _HARD_BLOCK_CHECKOUT_URL_ENV = "CLAWMETRY_CHECKOUT_URL"
 _HARD_BLOCK_ESCAPE_ENV = "CLAWMETRY_HARD_BLOCK_ESCAPE"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
+# Last-resort literal for the free runtime ids, used ONLY when importing the
+# entitlement catalogue fails. Kept in lockstep with
+# ``entitlements.FREE_RUNTIMES`` by ``tests/test_trial_hard_block_free_only.py``
+# — a stale copy here would tell a blocked user they still get fewer runtimes
+# than they actually do, on the one screen where that promise matters.
+_FREE_RUNTIME_FALLBACK: tuple = ("openclaw", "nemoclaw", "goose")
+
+
+def _free_runtime_ids() -> list:
+    """Sorted free-runtime ids for the block payload. Never raises."""
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES
+
+        return sorted(FREE_RUNTIMES)
+    except Exception:  # pragma: no cover - defensive
+        return sorted(_FREE_RUNTIME_FALLBACK)
+
+
 # Free-only mode marker. Written by ``POST /api/trial/continue-free`` when an
-# expired-trial user chooses to keep only the FREE_RUNTIMES (openclaw +
-# nemoclaw) working rather than upgrade. Presence of this file flips the gate
+# expired-trial user chooses to keep only the FREE_RUNTIMES (openclaw,
+# nemoclaw, goose) working rather than upgrade. Presence of this file flips the gate
 # from "block everything" to "block only paid-runtime scoped requests" so
 # ``openclaw`` observability keeps working; ``claude_code`` etc. still 402.
 # Documented in the TrialHardBlockPaywall component of the Local Agent
@@ -212,7 +230,7 @@ def _classify_scope(path: str | None, runtime: str | None) -> str | None:
         try:
             from clawmetry.entitlements import FREE_RUNTIMES, PAID_RUNTIMES
         except Exception:
-            FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+            FREE_RUNTIMES = frozenset(_FREE_RUNTIME_FALLBACK)
             PAID_RUNTIMES = frozenset()
         rt = (runtime or "").strip().lower()
         if rt:
@@ -505,7 +523,7 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "free_only_endpoint": "/api/trial/continue-free",
             "exit_free_endpoint": "/api/trial/exit-free",
             "free_only_mode": free_only_mode_enabled(),
-            "free_runtimes": ["openclaw", "nemoclaw"],
+            "free_runtimes": _free_runtime_ids(),
         }
     except Exception as exc:
         logger.warning("trial_enforcement: block_payload failed: %s", exc)
@@ -520,7 +538,7 @@ def block_payload(ent: "Entitlement | None" = None) -> dict:
             "free_only_endpoint": "/api/trial/continue-free",
             "exit_free_endpoint": "/api/trial/exit-free",
             "free_only_mode": free_only_mode_enabled(),
-            "free_runtimes": ["openclaw", "nemoclaw"],
+            "free_runtimes": _free_runtime_ids(),
         }
 
 

@@ -7,9 +7,9 @@ nothing should gate on a hardcoded plan check scattered across routes.
 
 Open-core model
 ---------------
-* **FREE** (this OSS package): the OpenClaw + NVIDIA NemoClaw runtimes +
-  NeMo governance + the core observability surface. Always available — no
-  key, no network call.
+* **FREE** (this OSS package): the OpenClaw + NVIDIA NemoClaw + Goose
+  runtimes + NeMo governance + the core observability surface. Always
+  available — no key, no network call.
 * **PAID** (the closed-source ``clawmetry-pro`` package, fetched only with
   a valid license key or a cloud entitlement — it is *not* shipped in this
   repo): the other agent runtimes (Claude Code, Codex, Cursor, …), the
@@ -71,10 +71,24 @@ _PAID_TIERS = frozenset(
 )
 
 # ── Runtime catalogue ───────────────────────────────────────────────────────
-# FREE: the OpenClaw and NVIDIA NemoClaw runtimes. NeMo *governance* (policy
-# enforcement) is a separate free feature; ``nemoclaw`` here is the agent
-# runtime itself, which is part of the free tier alongside ``openclaw``.
-FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+# FREE: the OpenClaw, NVIDIA NemoClaw and Goose runtimes. NeMo *governance*
+# (policy enforcement) is a separate free feature; ``nemoclaw`` here is the
+# agent runtime itself, which is part of the free tier alongside ``openclaw``.
+# Every runtime listed here has its adapter bundled in this package (see
+# ``clawmetry/adapters/``) — "free" means installable, not merely ungated.
+# ``goose`` (block/goose, Block's Apache-2.0 agent) joined the free tier
+# 2026-08-19. The rule it establishes: an OPEN-SOURCE runtime gets a free,
+# open-source adapter; a COMMERCIAL vendor product (Claude Code, Codex,
+# GitHub Copilot, Cursor, Antigravity, Grok) stays paid. Rationale, in order
+# of weight: (1) Goose's maintainers will accept a ClawMetry tutorial into
+# their own docs only if it works without a paid plan (aaif-goose/goose#11282),
+# and that placement is worth more than the runtime ever earned; (2) a prod
+# audit of every paying account found ZERO that depend on goose or any other
+# OSS runtime -- every payer is anchored on OpenClaw or on a runtime we keep
+# paid, so the revenue exposure is nil; (3) the free alternatives in this
+# category already publish integration pages, so being the paid option loses
+# the comparison before anyone installs us.
+FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 # PAID: every other agent runtime ClawMetry can observe. These ship in the
 # closed-source ``clawmetry-pro`` package, not here — listed so the UI can
@@ -85,7 +99,6 @@ PAID_RUNTIMES = frozenset(
         "codex",
         "cursor",
         "aider",
-        "goose",
         "opencode",
         "qwen_code",
         "hermes",
