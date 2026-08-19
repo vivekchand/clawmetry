@@ -69,17 +69,21 @@ def test_every_literal_fetch_path_is_registered():
     )
 
 
+def _fn(src: str, name: str) -> str:
+    """Source of one top-level function in the JS file."""
+    start = src.index("function %s(" % name)
+    return src[start:src.index("\nfunction ", start + 1)]
+
+
 def test_email_signin_uses_the_local_cloud_cta_proxy():
     """Regression pin: the email flow must go through the local proxy pair,
     not straight at the cloud. /api/cloud-cta/verify-otp persists the cm_ key
-    via _full_connect_with_key(); a direct browser call to the cloud would
-    set a cookie and leave this machine unpaired."""
+    and pairs the machine; a direct browser call to the cloud would set a
+    cookie and leave this machine unpaired."""
     src = open(_JS, encoding="utf-8").read()
-    start = src.index("function clawmetryEmailOtpStart(")
-    body = src[start:src.index("\nfunction ", start + 1)]
-    assert "/api/cloud-cta/send-otp" in body, body[:400]
-    assert "/api/cloud-cta/verify-otp" in body, body[:400]
-    assert "/api/auth/email-otp" not in body, (
+    assert "/api/cloud-cta/send-otp" in _fn(src, "clawmetryEmailOtpSend")
+    assert "/api/cloud-cta/verify-otp" in _fn(src, "clawmetryEmailOtpVerify")
+    assert "/api/auth/email-otp" not in _fn(src, "clawmetryEmailOtpSend"), (
         "/api/auth/email-otp is a cloud-only route; it 404s on the local "
         "dashboard and surfaces as a bogus 'Network error'."
     )
@@ -94,8 +98,32 @@ def test_email_signin_probes_the_rail_before_pairing():
     the email path has to make the same probe or a self-hosted install that
     signs back in starts pushing snapshots.
     """
+    body = _fn(open(_JS, encoding="utf-8").read(), "clawmetryEmailOtpVerify")
+    assert "/api/cloud-cta/status" in body
+    assert "'selfhost'" in body and "'managed'" in body
+
+
+def test_email_signin_never_opens_a_blocking_dialog():
+    """The steps render inside the card. window.prompt() freezes the whole
+    pywebview shell, which has no browser chrome to recover with, and asking
+    a first-time user for their email in a raw JS dialog is not a thing we
+    do."""
     src = open(_JS, encoding="utf-8").read()
-    start = src.index("function clawmetryEmailOtpStart(")
-    body = src[start:src.index("\nfunction ", start + 1)]
-    assert "/api/cloud-cta/status" in body, body[:600]
-    assert "'selfhost'" in body and "'managed'" in body, body[:600]
+    for name in ("clawmetryEmailOtpStart", "clawmetryEmailOtpSend",
+                 "clawmetryEmailOtpVerify"):
+        assert "prompt(" not in _fn(src, name), name
+
+
+def test_card_carries_the_elements_the_flow_drives():
+    """The JS reaches for these ids by hand; a rename in the template with no
+    matching rename here is a silently dead button."""
+    html = open(
+        os.path.join(_REPO_ROOT, "clawmetry", "templates", "partials",
+                     "overlays.html"),
+        encoding="utf-8",
+    ).read()
+    for el in ("login-choices", "login-email-step", "login-email-input",
+               "login-email-send", "login-otp-step", "login-otp-input",
+               "login-otp-verify", "login-otp-sent", "login-email-back",
+               "login-error", "login-local-btn"):
+        assert 'id="%s"' % el in html, el
