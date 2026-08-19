@@ -19435,6 +19435,21 @@ function _cmSyncDismiss() {
   try { localStorage.setItem('cm-sync-verified-ts', String(Date.now())); } catch (e) {}
 }
 
+// Name what we are actually syncing. `prog.runtimes` is the node's detected
+// runtimes (see _sync_scope_runtimes in dashboard.py); the banner used to
+// hardcode "your OpenClaw workspace", which is a flat lie on a machine that
+// only runs Claude Code. Falls back to a runtime-neutral phrase when detection
+// is empty or unavailable, never to a named runtime.
+function _cmSyncScopeTitle(prog) {
+  var names = ((prog && prog.runtimes) || []).map(function (r) {
+    return (r && (r.label || r.id)) || '';
+  }).filter(Boolean);
+  if (!names.length) return t('app.syncing_your_agents', null, 'Syncing your AI agents');
+  if (names.length === 1) return 'Syncing your ' + names[0] + ' data';
+  if (names.length === 2) return 'Syncing ' + names[0] + ' and ' + names[1];
+  return 'Syncing ' + names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
+}
+
 function _cmSyncRender(prog, health) {
   var bar = document.getElementById('sync-status-banner');
   if (!bar) return;
@@ -19444,6 +19459,7 @@ function _cmSyncRender(prog, health) {
   var errBox = document.getElementById('sync-status-error');
   var title = document.getElementById('sync-status-title');
   if (!sub || !details || !stepper || !errBox || !title) return;
+  title.textContent = _cmSyncScopeTitle(prog);
 
   // Determine the active phase: highest-index phase that's running/complete.
   var phase = (prog && prog.phase) || '';
