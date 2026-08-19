@@ -397,6 +397,9 @@ bp_entitlement = Blueprint("entitlement", __name__)
 # (which would look like "OSS install has no free features -- lock everything"
 # once enforcement is live).
 _MINIMAL_OSS_FREE_SNAPSHOT = {
+    # Resolver unavailable => plan unknown. Never let a paywall read this
+    # snapshot as a confirmed free plan (see entitlements.plan_pending()).
+    "pending": True,
     "tier": "oss",
     "tier_label": "OSS",
     "tier_rank": 0,
@@ -462,7 +465,11 @@ def api_entitlement():
     try:
         from clawmetry import entitlements as _ent
 
-        return jsonify(_ent.get_entitlement().to_dict())
+        out = _ent.get_entitlement().to_dict()
+        # "We do not know this account's plan yet" — distinct from "this
+        # account is on the free plan". Gating UI must not lock while true.
+        out["pending"] = _ent.plan_pending()
+        return jsonify(out)
     except Exception as exc:
         logger.warning(
             "api_entitlement: primary resolver failed, falling back to OSS-free: %s",
@@ -477,7 +484,11 @@ def api_entitlement():
     try:
         from clawmetry import entitlements as _ent
 
-        return jsonify(_ent._oss_free().to_dict())
+        degraded = _ent._oss_free().to_dict()
+        # The resolver just failed, so this is "unknown", never "confirmed
+        # free". Gating UI must not lock on it.
+        degraded["pending"] = True
+        return jsonify(degraded)
     except Exception as exc2:
         logger.warning(
             "api_entitlement: OSS-free fallback also failed, using minimal snapshot: %s",
@@ -17643,11 +17654,17 @@ def api_runtimes():
         from clawmetry import entitlements as _ent
 
         ent = _ent.get_entitlement()
+        # ``pending`` = a linked account whose plan has not resolved yet (the
+        # daemon writes cloud_plan.json a few seconds after boot). The rows
+        # below then read entitled=False for every paid runtime, which is
+        # "unknown", not "not allowed" — clients must not lock on it. See
+        # entitlements.plan_pending().
         return jsonify(
             {
                 "runtimes": _ent.runtime_catalog(),
                 "grace": ent.grace,
                 "enforced": not ent.grace,
+                "pending": _ent.plan_pending(),
             }
         )
     except Exception as exc:
@@ -17674,6 +17691,7 @@ def api_runtimes():
                 ],
                 "grace": True,
                 "enforced": False,
+                "pending": True,
             }
         )
 
@@ -46496,6 +46514,9 @@ _EMPTY_RUNTIME_DETECTION = {
     "current_tier_label": "OSS",
     "grace": True,
     "enforced": False,
+    # Resolver unavailable => we do not know the plan. Never let an upsell
+    # surface read this envelope as "confirmed free".
+    "pending": True,
     "probes": [],
     "counts": {
         "total": 0,
@@ -46643,12 +46664,20 @@ def api_entitlement_runtime_detection():
     except Exception:
         enforced = False
 
+    # ``pending``: the plan has not resolved yet, so ``allowed=False`` on the
+    # probes below means "unknown", not "not on your plan". Upsell surfaces
+    # must stay silent while true. See entitlements.plan_pending().
+    try:
+        pending = _ent.plan_pending()
+    except Exception:
+        pending = False
     return jsonify(
         {
             "current_tier": current_tier,
             "current_tier_label": current_tier_label,
             "grace": grace,
             "enforced": enforced,
+            "pending": pending,
             "probes": probes_out,
             "counts": _runtime_detection_counts(probes_out),
             "detected_locked": detected_locked,
