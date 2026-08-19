@@ -503,6 +503,7 @@ _TIER_RANK = {
 
 _LICENSE_PATH = os.path.expanduser("~/.clawmetry/license.key")
 _CLOUD_PLAN_CACHE = os.path.expanduser("~/.clawmetry/cloud_plan.json")
+_CONNECT_CONFIG_PATH = os.path.expanduser("~/.clawmetry/config.json")
 _ENFORCE_ENABLE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CACHE_TTL_SECS = 60.0
 _ENFORCE_AT_ENV = "CLAWMETRY_ENFORCE_AT"
@@ -2519,6 +2520,53 @@ def _read_cloud_plan() -> Entitlement | None:
     except Exception as exc:
         logger.warning("entitlements: cloud-plan read failed: %s", exc)
         return None
+
+
+def _account_is_linked() -> bool:
+    """True when ``clawmetry connect`` has linked this machine to an account.
+
+    Presence of an ``api_key`` in the connect config is the signal — it is
+    written at link time and outlives daemon restarts.
+    """
+    try:
+        if not os.path.isfile(_CONNECT_CONFIG_PATH):
+            return False
+        with open(_CONNECT_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            return bool((json.load(fh) or {}).get("api_key"))
+    except Exception as exc:
+        logger.debug("entitlements: connect-config read failed: %s", exc)
+        return False
+
+
+def plan_pending() -> bool:
+    """True while a linked account's plan is not resolvable yet.
+
+    The daemon fetches the plan and writes ``cloud_plan.json`` a few
+    seconds AFTER boot, because it has to reach the cloud first. Until that
+    lands, resolution falls through to :func:`_oss_free` — and that verdict
+    does **not** mean "this user is on the free plan", it means "we do not
+    know yet".
+
+    Anything that LOCKS on entitlement (runtime paywalls, upgrade modals,
+    feature gates) must treat pending as "do not lock". Otherwise a paying
+    user is shown an upgrade prompt for the first seconds of every launch,
+    which is exactly the desktop report from 2026-08-19: the dashboard
+    booted at 18:09:01, ``cloud_plan.json`` landed at 18:09:39, and the
+    catalog fetched in between locked all 20 paid runtimes for a Pro
+    account.
+
+    False once we actually know (a license key or a readable cloud plan),
+    and False on an unlinked machine, where OSS-free is the true answer.
+    """
+    try:
+        if _read_local_license() is not None:
+            return False
+        if _read_cloud_plan() is not None:
+            return False
+        return _account_is_linked()
+    except Exception as exc:
+        logger.debug("entitlements: plan_pending check failed: %s", exc)
+        return False
 
 
 # ── cached resolution ────────────────────────────────────────────────────────
