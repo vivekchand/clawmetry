@@ -13,7 +13,12 @@ jobs:
   auth-bootstrap-guard:
     name: Auth bootstrap no-reload smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    # 3 minutes could not cover this job's own setup: "Install runtime deps"
+    # apt-installs Chromium's dependencies and downloads the browser, which
+    # alone routinely outruns that budget. The guard steps that actually
+    # matter run in seconds; the timeout was killing the download every time
+    # and reporting it as a cancelled check on any PR touching static/js.
+    timeout-minutes: 10
     # Trial-end hard block is default-ON in code — opt out for this
     # auth-bootstrap smoke; hard-block coverage in test_trial_hard_block.py.
     env:
