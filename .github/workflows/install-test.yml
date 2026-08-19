@@ -46,6 +46,7 @@ jobs:
 
   test-windows-ps:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python
@@ -54,15 +55,55 @@ jobs:
           python-version: '3.12'
       - name: Run PowerShell install
         shell: pwsh
+        env:
+          CLAWMETRY_SKIP_ONBOARD: '1'
         run: .\install.ps1
       - name: Verify clawmetry binary
         shell: pwsh
         run: |
           $env:PATH = "$env:LOCALAPPDATA\clawmetry\Scripts;$env:PATH"
           clawmetry --version
+      # Re-running the installer on a node that is ALREADY linked to an account
+      # must report that setup and leave it alone -- not replay the wizard.
+      # USERPROFILE points the probe at a synthetic profile, so this exercises
+      # the real script without depending on runner state.
+      - name: Gate — connected node keeps its setup
+        shell: pwsh
+        env:
+          CLAWMETRY_REONBOARD: '0'
+        run: |
+          $profileDir = Join-Path $env:RUNNER_TEMP "cm-connected"
+          $dataDir = Join-Path $profileDir ".clawmetry"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          Set-Content -Path (Join-Path $dataDir "config.json") -Value '{"api_key":"cm_abc123456789","node_id":"ci-box","account_email":"founder@example.com"}'
+          Set-Content -Path (Join-Path $dataDir "cloud_plan.json") -Value '{"plan":"cloud_pro"}'
+          New-Item -ItemType File -Force -Path (Join-Path $dataDir "nocloud") | Out-Null
+          $env:USERPROFILE = $profileDir
+          $out = (.\install.ps1 6>&1 | Out-String)
+          Write-Host $out
+          if ($out -notmatch "already connected") { throw "no existing-setup summary" }
+          if ($out -notmatch "founder@example.com") { throw "account email not reported" }
+          if ($out -notmatch "Pro plan") { throw "plan not reported" }
+          if ($out -notmatch "Local-only") { throw "cloud sync mode not reported" }
+          if ($out -notmatch "Keeping your current setup") { throw "did not keep the existing setup" }
+          if ($out -match "How do you want to run ClawMetry") { throw "wizard replayed over an existing setup" }
+      # A node with NO account keeps the original behaviour: the wizard runs.
+      - name: Gate — fresh node still gets the wizard
+        shell: pwsh
+        env:
+          CLAWMETRY_LOCAL_ONLY: '1'
+        run: |
+          $profileDir = Join-Path $env:RUNNER_TEMP "cm-fresh"
+          New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+          $env:USERPROFILE = $profileDir
+          $out = (.\install.ps1 6>&1 | Out-String)
+          Write-Host $out
+          if ($out -match "already connected") { throw "claimed a connection that does not exist" }
+          if ($out -notmatch "How do you want to run ClawMetry") { throw "onboarding wizard did not run" }
 
   test-windows-cmd:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python
@@ -71,10 +112,33 @@ jobs:
           python-version: '3.12'
       - name: Run CMD install
         shell: cmd
+        env:
+          CLAWMETRY_SKIP_ONBOARD: '1'
         run: install.cmd
       - name: Verify clawmetry binary
         shell: cmd
         run: clawmetry --version
+      # Same gate as the PowerShell path: an already-connected node is reported
+      # and left alone. CLAWMETRY_REONBOARD=0 answers the question up front so
+      # the step never waits on input.
+      - name: Gate — connected node keeps its setup
+        shell: cmd
+        env:
+          CLAWMETRY_REONBOARD: '0'
+        run: |
+          mkdir "%RUNNER_TEMP%\cm-connected\.clawmetry"
+          > "%RUNNER_TEMP%\cm-connected\.clawmetry\config.json" echo {"api_key":"cm_abc123456789","node_id":"ci-box","account_email":"founder@example.com"}
+          > "%RUNNER_TEMP%\cm-connected\.clawmetry\cloud_plan.json" echo {"plan":"cloud_pro"}
+          type nul > "%RUNNER_TEMP%\cm-connected\.clawmetry\nocloud"
+          set "USERPROFILE=%RUNNER_TEMP%\cm-connected"
+          install.cmd > "%RUNNER_TEMP%\cmd-gate.log" 2>&1
+          type "%RUNNER_TEMP%\cmd-gate.log"
+          findstr /C:"already connected" "%RUNNER_TEMP%\cmd-gate.log" >nul || exit /b 1
+          findstr /C:"founder@example.com" "%RUNNER_TEMP%\cmd-gate.log" >nul || exit /b 1
+          findstr /C:"Pro plan" "%RUNNER_TEMP%\cmd-gate.log" >nul || exit /b 1
+          findstr /C:"Keeping your current setup" "%RUNNER_TEMP%\cmd-gate.log" >nul || exit /b 1
+          findstr /C:"How do you want to run ClawMetry" "%RUNNER_TEMP%\cmd-gate.log" >nul && exit /b 1
+          exit /b 0
 
   shellcheck:
     runs-on: ubuntu-latest
