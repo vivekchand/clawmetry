@@ -11677,16 +11677,34 @@ function _cmPopulateGlobalRuntime(counts) {
   try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
 }
 
+// True iff `rt` is still locked after a FRESH catalog read. _cmLockedRuntimes
+// is a snapshot taken once at page load; re-reading before blocking someone
+// is the difference between a stale paywall and a correct one.
+async function _cmRuntimeStillLocked(rt) {
+  try { await _cmLoadRuntimeCatalog(); } catch (e) { /* keep the snapshot */ }
+  return !!_cmLockedRuntimes[rt];
+}
+
 function _cmOnGlobalRuntimeChange(sel) {
   if (!sel) return;
   var val = sel.value;
-  // If the chosen runtime is locked (paid, enforcement on) revert the
-  // selection and show the upgrade modal instead of switching.
+  // If the chosen runtime looks locked, re-verify against the server before
+  // refusing the switch — the snapshot can be stale in exactly the case
+  // that hurts most (a paid account whose plan had not resolved at boot).
   if (val !== 'all' && _cmLockedRuntimes[val]) {
     sel.value = _cmRuntimeFilter() || 'all';
-    _cmShowRuntimePaywall(val, _CM_RT_LABEL[val] || val);
+    _cmRuntimeStillLocked(val).then(function (stillLocked) {
+      if (stillLocked) { _cmShowRuntimePaywall(val, _CM_RT_LABEL[val] || val); return; }
+      // Entitled after all: honour the switch the user actually asked for.
+      sel.value = val;
+      _cmApplyRuntimeSelection(val);
+    });
     return;
   }
+  _cmApplyRuntimeSelection(val);
+}
+
+function _cmApplyRuntimeSelection(val) {
   _cmSetRuntimeFilter(val);
   // Hide OpenClaw-only tabs (Memory/Skills/Self-Evolve/Crons/Tool-Policy/NeMo)
   // for non-OpenClaw runtimes — they'd only show OpenClaw's data.
@@ -12200,6 +12218,10 @@ function _invCheckLockedDetected(detected, bodyEl) {
   fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
     .then(function (d) {
+      // Plan not resolved yet => allowed=false means "unknown". Saying
+      // "watching it is part of Starter" to a Pro account is worse than
+      // saying nothing; the caller re-runs once the plan lands.
+      if (d && d.pending) return;
       var probes = (d && d.probes) || [];
       var detectedIds = {};
       detected.forEach(function (r) { detectedIds[r.name] = true; });
@@ -12369,7 +12391,19 @@ async function renderInventory() {
   try { _cmApplyRuntimeScopeNote('inventory'); } catch (e) {}
 }
 
-function _cmShowRuntimePaywall(harness, label) {
+async function _cmShowRuntimePaywall(harness, label) {
+  // Never paywall someone who is actually entitled. Every entry point here
+  // (the header switcher, the runtime chip menu, the inventory "locked
+  // runtime detected" banner) reads a client-side snapshot that can be
+  // stale, so re-verify against the live catalog before rendering. A
+  // suppressed modal is a paying user getting what they paid for; a shown
+  // one they should not see is a support ticket.
+  try {
+    var fresh = (Date.now() - (window._cmRtCatalogTs || 0)) < 5000;
+    if (!fresh) { await _cmLoadRuntimeCatalog(); }
+    if (harness && !_cmLockedRuntimes[harness]) return;
+  } catch (e) { /* verification unavailable — fall through and show it */ }
+
   // Emit paywall_view telemetry (fire-and-forget).
   try {
     fetch('/api/paywall/event', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -12541,14 +12575,20 @@ async function _cmLoadRuntimeCatalog() {
   //      surface; picking it opens the non-blocking two-path card.
   // Cloud guard: the hosted server resolves entitlement as OSS-free, so in
   // CLOUD_MODE trust the account plan/trial instead. A paying or trialing
-  // hosted user must never see the teaser. Re-checked once after 4s because
-  // window._account loads async.
+  // hosted user must never see the teaser.
+  // Pending guard: on a linked machine the daemon writes cloud_plan.json a
+  // few seconds AFTER boot, so a catalog fetched in that window reports
+  // entitled=false for every paid runtime. That is "unknown", not "not on
+  // your plan" — locking on it is what showed a Pro account the upgrade
+  // modal (desktop report 2026-08-19). Never lock while cat.pending, and
+  // re-check until the plan resolves.
   try {
     var cat = await fetch('/api/runtimes', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
     if (!cat || !Array.isArray(cat.runtimes)) return;
-    var teaserOk = true;
+    var pending = !!cat.pending;
+    var teaserOk = !pending;
     try {
-      if (window.CLOUD_MODE) {
+      if (teaserOk && window.CLOUD_MODE) {
         var plan = String(window.CLOUD_PLAN || '').toLowerCase();
         var acct = window._account || {};
         teaserOk = !(/pro|starter|paid/.test(plan) || acct.trial_active);
@@ -12558,7 +12598,7 @@ async function _cmLoadRuntimeCatalog() {
     var free = {};
     cat.runtimes.forEach(function(r) {
       if (!r || !r.id) return;
-      if ((cat.enforced && r.locked) ||
+      if ((!pending && cat.enforced && r.locked) ||
           (teaserOk && r.free === false && r.entitled === false)) locked[r.id] = 1;
       // Free runtimes stay in the switcher even at 0 recent sessions (the
       // 24h session cap must never make OpenClaw itself disappear).
@@ -12566,9 +12606,15 @@ async function _cmLoadRuntimeCatalog() {
     });
     _cmLockedRuntimes = locked;
     _cmFreeRuntimes = free;
-    if (window.CLOUD_MODE && !window._cmRtCatalogRecheck) {
-      window._cmRtCatalogRecheck = 1;
-      setTimeout(_cmLoadRuntimeCatalog, 4000);
+    // Freshness stamp so the paywall guard below knows whether it can trust
+    // this snapshot or has to re-fetch before blocking anyone.
+    window._cmRtCatalogTs = Date.now();
+    // Re-check while the answer can still change: the plan is still
+    // resolving (pending), or CLOUD_MODE's window._account loads async.
+    // Bounded so a permanently-pending box does not poll forever.
+    window._cmRtCatalogTries = (window._cmRtCatalogTries || 0) + 1;
+    if ((pending || window.CLOUD_MODE) && window._cmRtCatalogTries < 20) {
+      setTimeout(_cmLoadRuntimeCatalog, pending ? 3000 : 4000);
     }
   } catch (e) { /* non-fatal: keeps the previous behaviour */ }
 }
