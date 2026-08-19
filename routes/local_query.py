@@ -24,10 +24,13 @@ node_id ownership check).
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from flask import Blueprint, jsonify, request
+
+log = logging.getLogger("clawmetry.local_query")
 
 bp_local_query = Blueprint("local_query", __name__)
 
@@ -959,6 +962,29 @@ def _invalidate_daemon_cache():
     _DAEMON_CACHE["ts"] = 0.0
 
 
+class _ProxyUnavailable:
+    """Sentinel for "the daemon proxy could not answer".
+
+    Distinct from ``None``, which is what a *successful* call to any void
+    method (every ``ingest_*`` writer, ``mark_*``, ``log_*``) returns, and
+    from ``{}`` / ``[]``, which are successful empty reads. Callers that
+    treated those as failure re-ran the call against a direct store — the
+    source of both the duplicate 400s in sync.log and ``_ls_write``
+    reporting a successful write as failed.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):  # pragma: no cover - debugging aid
+        return "<PROXY_UNAVAILABLE>"
+
+    def __bool__(self):
+        return False
+
+
+PROXY_UNAVAILABLE = _ProxyUnavailable()
+
+
 def local_store_via_daemon(method_name: str, **kwargs):
     """Cross-process LocalStore call.
 
@@ -976,17 +1002,28 @@ def local_store_via_daemon(method_name: str, **kwargs):
     through to the legacy direct-open path (``get_store()`` works fine in
     single-process boots, e.g. tests + dev mode).
     """
+    result = local_store_call_via_daemon(method_name, **kwargs)
+    return None if result is PROXY_UNAVAILABLE else result
+
+
+def local_store_call_via_daemon(method_name: str, **kwargs):
+    """Same call as :func:`local_store_via_daemon`, but returns the
+    :data:`PROXY_UNAVAILABLE` sentinel — not ``None`` — when the daemon
+    could not be reached, the method is not allowlisted, or the call
+    errored. Use this whenever ``None`` / ``{}`` / ``[]`` is a legitimate
+    result and you need to know whether to fall back to a direct store.
+    """
     # Loop-break: when local_server is hosted in THIS process (the daemon)
     # the proxy hop is pointless — talk to the LocalStore directly.
     try:
         from clawmetry import local_server as _ls_srv
         if _ls_srv.is_running():
-            return None
+            return PROXY_UNAVAILABLE
     except ImportError:
         pass
     disc = _cached_discovery()
     if not disc:
-        return None
+        return PROXY_UNAVAILABLE
     import urllib.request
     import urllib.error
     payload = _json.dumps({"kwargs": kwargs}).encode("utf-8")
@@ -1005,9 +1042,13 @@ def local_store_via_daemon(method_name: str, **kwargs):
         # Stale port / daemon restarted / network gremlin (after retrying
         # timeouts) — drop the cache so the next call re-reads discovery.
         _invalidate_daemon_cache()
-        return None
+        return PROXY_UNAVAILABLE
     if "error" in body:
-        return None
+        log.warning(
+            "local_query: daemon refused %s(): %s",
+            method_name, str(body.get("error"))[:200],
+        )
+        return PROXY_UNAVAILABLE
     return body.get("result")
 
 
