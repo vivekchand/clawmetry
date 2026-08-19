@@ -585,6 +585,7 @@
       // default — rows carry the requesting session id, whose prefix names
       // the runtime. BOTH renders (pending + history) filter identically.
       var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+      var _rtLbl = (_rt && _rt !== 'all' && typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(_rt) : '';
       if (_rt && _rt !== 'all' && typeof _cmRuntimeOf === 'function') {
         var _match = function(r){
           return _cmRuntimeOf({session_id: r.session_id || r.requestor_session_id}) === _rt;
@@ -596,12 +597,23 @@
       // Pending
       var pe = document.getElementById('approvals-pending-list');
       if (p.length === 0) {
+        // Empty state: one line, scoped to the runtime the operator is
+        // looking at. Founder 2026-08-19: the previous paragraph explained
+        // every runtime's gate (and named OpenClaw) under a Claude Code
+        // filter — approvals are per-runtime, so the copy must be too.
+        var _gateHint = { claude_code: 'pause before they run (PreToolUse hook)',
+                          openclaw: 'pause before they run (exec-policy preset)' }[_rt]
+                        || (_rtLbl ? 'are caught as they happen' : '');
+        var _emptyTitle = _rtLbl ? 'No pending approvals for ' + escHtml(_rtLbl) + '.' : 'No pending approvals.';
+        var _emptyHint = _rtLbl
+          ? ('Turn on a protection rule on the right and risky ' + escHtml(_rtLbl) + ' calls ' + _gateHint + ', then land here for a decision.')
+          : 'Turn on a protection rule on the right and risky calls from your agents land here for a decision.';
         pe.innerHTML = ossMode
-          ? '<div style="padding:16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.6;">'
-            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;" data-i18n="approvals.oss_empty_title">No pending approvals.</div>'
-            + '<span data-i18n="approvals.oss_empty_how">How this works: the local daemon watches every agent\'s tool calls against your Protection Rules and parks matches here for a decision. For runtimes with a native pre-execution gate (Claude Code via a PreToolUse hook, OpenClaw via its exec-policy preset — installed automatically when a rule needs them), the call is paused <b>before</b> it runs until you approve or deny it here. Other runtimes are detected reactively: a denied call stops the offending session. Enable a rule on the right to start — and under <b>Where approvals go</b>, pick where each runtime should page you (Telegram answers right in the chat) and whether Claude Code\'s own permission prompts should reach your phone instead of stopping in the terminal.</span>'
+          ? '<div style="padding:14px 16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.5;">'
+            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:2px;">' + _emptyTitle + '</div>'
+            + '<span>' + _emptyHint + '</span>'
             + '</div>'
-          : '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
+          : '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">' + _emptyTitle.replace(/\.$/, '') + ' right now.</div>';
         // Drop selections for IDs that are no longer pending (decided
         // elsewhere, expired, etc.) so the bulk header doesn't lie.
         _approvalsBulkSelected.clear();
@@ -636,7 +648,10 @@
 
       // History
       var he = document.getElementById('approvals-history-list');
-      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.no_decisions_yet_enable_a_protection_rule_above_to">No decisions yet. Enable a protection rule above to get started.</div>';
+      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('')
+        : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">'
+          + (_rtLbl ? 'No ' + escHtml(_rtLbl) + ' decisions yet.' : 'No decisions yet. Enable a protection rule above to get started.')
+          + '</div>';
 
       // Counts + badge
       document.getElementById('approvals-pending-count').textContent = p.length ? '(' + p.length + ' pending)' : '';
