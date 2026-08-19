@@ -250,19 +250,29 @@ function clawmetryOauthLogin(provider){
       if(err){ err.textContent = 'Network error. Try again in a moment.'; err.style.display='block'; }
     });
 }
-// Email OTP: swap the login card into a two-step (email → code) inline flow.
-// Uses /api/auth/email-otp (same endpoint `clawmetry onboard` and the
-// desktop pane hit). On success the returned cm_key is saved server-side
-// and the page reloads to pick up the fresh gateway token via auto-signin.
+// Email OTP: a two-step (email → code) inline flow on the login card.
+//
+// Routes through the LOCAL proxy pair /api/cloud-cta/send-otp and
+// /api/cloud-cta/verify-otp — the same seam the cloud modal uses. They
+// forward to app.clawmetry.com and, on verify, persist the returned cm_
+// key through _full_connect_with_key() so the machine is actually paired.
+//
+// This used to POST /api/auth/email-otp, which is a CLOUD-only route: the
+// CLI and the desktop pane hit it on https://ingest.clawmetry.com, but the
+// relative URL here resolved against the local dashboard, which has no such
+// route. Flask answered 404 with an HTML body, r.json() threw, and the
+// catch below painted "Network error. Try again." on every attempt — the
+// email button was dead on every install (founder report 2026-08-19).
 function clawmetryEmailOtpStart(){
   var err = document.getElementById('login-error');
   if(err){ err.style.display='none'; }
   var email = prompt('Email address to send a sign-in code to:');
   if(!email || email.indexOf('@') < 0){ return; }
-  fetch('/api/auth/email-otp', {
+  email = email.trim();
+  fetch('/api/cloud-cta/send-otp', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'send', email: email.trim()}),
+    body: JSON.stringify({email: email}),
   })
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -272,12 +282,14 @@ function clawmetryEmailOtpStart(){
       }
       var code = prompt('Check ' + email + ' for a 6-digit code:');
       if(!code){ return; }
-      return fetch('/api/auth/email-otp', {
+      return fetch('/api/cloud-cta/verify-otp', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({action:'verify', email: email.trim(), otp: code.trim()}),
+        body: JSON.stringify({email: email, code: code.replace(/\s/g, '')}),
       }).then(function(r){ return r.json(); }).then(function(v){
-        if(v && v.ok){
+        if(v && v.ok && v.token){
+          // Clearing the marker re-arms zero-click auto-login, so the reload
+          // picks the on-disk gateway token back up and drops the wall.
           try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
           location.reload();
         } else {

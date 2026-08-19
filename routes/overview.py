@@ -1929,7 +1929,11 @@ def cloud_cta_send_otp():
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            return jsonify({"ok": True, "error": result.get("error")})
+            # A 200 carrying an "error" field is still a failure — the cloud
+            # answers that way for rate limits and blocked addresses. Reporting
+            # ok=True there walked the caller on to the code prompt for a mail
+            # that was never sent.
+            return jsonify({"ok": not result.get("error"), "error": result.get("error")})
     except Exception as _ex:
         _sc = getattr(getattr(_ex, "code", None), "__class__", type(_ex)).__name__
         try:
