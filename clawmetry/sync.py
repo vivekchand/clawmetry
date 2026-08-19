@@ -13490,7 +13490,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # family session row ever persisted ``cwd``, which is exactly
                 # the column the kill/pause pid resolution needs
                 # (process_control.resolve_by_cwd). Found 2026-08-19.
-                _fcwd = _session_cwd(metadata)
+                _fcwd = ((getattr(s, "cwd", "") or "").strip() or None) \
+                    or _session_cwd(metadata)
                 _fbranch = _session_git_branch(metadata)
                 # Local upsert (the sessions list reads this).
                 try:
