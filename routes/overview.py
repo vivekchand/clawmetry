@@ -1956,6 +1956,18 @@ def cloud_cta_verify_otp():
     code = (data.get("code") or "").strip()
     if not email or not code:
         return jsonify({"ok": False, "error": "Missing email or code"}), 400
+    # Same rail selection as /api/cloud-cta/oauth-start. Explicit mode wins;
+    # otherwise follow the install's recorded intent, because identity and
+    # egress are separate choices and signing in must never flip egress on
+    # by itself (founder report 2026-08-09, on the OAuth twin of this path).
+    mode = (data.get("mode") or "").strip().lower()
+    if mode not in ("managed", "selfhost"):
+        if mode:
+            return jsonify({"ok": False, "error": "Unsupported mode"}), 400
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
     try:
         from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "code": code}).encode()
@@ -1968,8 +1980,8 @@ def cloud_cta_verify_otp():
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
             if result.get("token"):
-                # Route through _full_connect_with_key so this path is
-                # symmetric with the OAuth loopback bridge AND with
+                # managed: route through _full_connect_with_key so this path
+                # is symmetric with the OAuth loopback bridge AND with
                 # `clawmetry connect --start-sync-now` — persist identity
                 # into ~/.clawmetry/config.json, mint-or-reuse the 7-day
                 # Pro trial, enable cloud egress, restart the sync daemon.
@@ -1978,9 +1990,16 @@ def cloud_cta_verify_otp():
                 # founder ask 2026-08-12: cloud users must get the same
                 # 7-day trial self-host gets, or they can't experience the
                 # full product before deciding to pay.
+                #
+                # selfhost: identity + the same trial, egress stays off. The
+                # nocloud marker is written BEFORE the key lands, so the
+                # daemon never observes a cm_ key without it.
                 trial = "unavailable"
                 try:
-                    _node_id, _enc_key, trial = _d._full_connect_with_key(result["token"])
+                    if mode == "selfhost":
+                        _node_id, trial = _d._selfhost_signin_with_key(result["token"])
+                    else:
+                        _node_id, _enc_key, trial = _d._full_connect_with_key(result["token"])
                 except Exception:
                     # If _full_connect_with_key fails, still persist the
                     # token — pairing is more important than daemon restart
@@ -1989,7 +2008,12 @@ def cloud_cta_verify_otp():
                         _d._write_cloud_token(result["token"])
                     except Exception:
                         pass
-                return jsonify({"ok": True, "token": result["token"], "trial": trial})
+                return jsonify({
+                    "ok": True,
+                    "token": result["token"],
+                    "trial": trial,
+                    "mode": mode,
+                })
             return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
     except Exception as _ex:
         try:

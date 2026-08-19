@@ -83,3 +83,19 @@ def test_email_signin_uses_the_local_cloud_cta_proxy():
         "/api/auth/email-otp is a cloud-only route; it 404s on the local "
         "dashboard and surfaces as a bogus 'Network error'."
     )
+
+
+def test_email_signin_probes_the_rail_before_pairing():
+    """Signing in must not flip cloud egress on by itself.
+
+    /api/cloud-cta/verify-otp pairs the machine, and its managed rail calls
+    enable_cloud(). The OAuth button on the same card already probes
+    /api/cloud-cta/status and sends mode=selfhost on a local-only machine;
+    the email path has to make the same probe or a self-hosted install that
+    signs back in starts pushing snapshots.
+    """
+    src = open(_JS, encoding="utf-8").read()
+    start = src.index("function clawmetryEmailOtpStart(")
+    body = src[start:src.index("\nfunction ", start + 1)]
+    assert "/api/cloud-cta/status" in body, body[:600]
+    assert "'selfhost'" in body and "'managed'" in body, body[:600]

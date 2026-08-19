@@ -282,11 +282,23 @@ function clawmetryEmailOtpStart(){
       }
       var code = prompt('Check ' + email + ' for a 6-digit code:');
       if(!code){ return; }
-      return fetch('/api/cloud-cta/verify-otp', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({email: email, code: code.replace(/\s/g, '')}),
-      }).then(function(r){ return r.json(); }).then(function(v){
+      // Same rail probe clawmetryOauthLogin does: on a self-hosted machine
+      // signing in must not flip egress on, so send mode=selfhost and let
+      // verify-otp take the identity-only path.
+      return fetch('/api/cloud-cta/status')
+        .then(function(r){ return r.ok ? r.json() : {local_only: false}; })
+        .catch(function(){ return {local_only: false}; })
+        .then(function(status){
+          return fetch('/api/cloud-cta/verify-otp', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({
+              email: email,
+              code: code.replace(/\s/g, ''),
+              mode: (status && status.local_only) ? 'selfhost' : 'managed',
+            }),
+          });
+        }).then(function(r){ return r.json(); }).then(function(v){
         if(v && v.ok && v.token){
           // Clearing the marker re-arms zero-click auto-login, so the reload
           // picks the on-disk gateway token back up and drops the wall.
