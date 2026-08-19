@@ -423,11 +423,11 @@ ping è "fire-and-forget" su un thread daemon con un timeout di 3s.
 
 ## Cronologia delle Star
 
-<a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
+<a href="https://star-history.dera.page/#vivekchand/clawmetry&type=date">
  <picture>
- <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=vivekchand/clawmetry&type=date&theme=dark&legend=top-left" />
- <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
- <img alt="Star History Chart" src="https://api.star-history.com/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
+ <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/image?repos=vivekchand/clawmetry&type=date&theme=dark&legend=top-left" />
+ <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
+ <img alt="Star History Chart" src="https://star-history.dera.page/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
  </picture>
 </a>
 
