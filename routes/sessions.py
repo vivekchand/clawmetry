@@ -208,17 +208,25 @@ def _decorate_with_authority_counts(sessions):
     """
     if not sessions:
         return sessions
-    ids = [s.get("session_id") or s.get("sessionId") for s in sessions]
+    ids = [s.get("session_id") or s.get("sessionId") for s in sessions if s.get("session_id") or s.get("sessionId")]
     counts = {}
+    answered = False
     try:
-        from routes.local_query import local_store_via_daemon
-        result = local_store_via_daemon("query_session_authority_counts",
-                                        session_ids=ids)
-        if isinstance(result, dict):
-            counts = result
+        from routes.local_query import (
+            local_store_call_via_daemon, PROXY_UNAVAILABLE,
+        )
+        result = local_store_call_via_daemon("query_session_authority_counts",
+                                             session_ids=ids)
+        # ``{}`` means "no violations", which is the common case — treating it
+        # as a miss re-ran the whole lookup against a direct store on every
+        # request. Only an unreachable proxy warrants the fallback.
+        if result is not PROXY_UNAVAILABLE:
+            answered = True
+            if isinstance(result, dict):
+                counts = result
     except Exception:
         pass
-    if not counts:
+    if not answered:
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
