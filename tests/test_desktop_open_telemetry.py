@@ -388,3 +388,69 @@ def test_trust_ladder_never_raises(tele, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _no_tls_libs)
     monkeypatch.setattr(tele, "_SSL_CTX", None)
     assert isinstance(tele._ssl_context(), ssl.SSLContext)
+
+
+# ── The trust store must exist on every install ─────────────────────────────
+#
+# The ladder is only as good as what is installed alongside it. truststore
+# cannot install below 3.10, so on 3.8/3.9 certifi is the ONLY rung that
+# works, and without it the ladder falls through to a default context that
+# has no CA bundle at all on interpreters whose certificate step was never
+# run. That is a silent failure by construction: the pings swallow their
+# errors, so it surfaces as an endpoint that never hears from those
+# machines rather than as anything anybody could report.
+
+
+def _install_requires():
+    """Read setup.py's install_requires without importing it (importing
+    runs setup())."""
+    import ast
+
+    tree = ast.parse(Path(REPO_ROOT / "setup.py").read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "install_requires":
+            return [ast.literal_eval(e) for e in node.value.elts]
+    raise AssertionError("install_requires not found in setup.py")
+
+
+def test_certifi_is_an_unconditional_dependency():
+    """Ungated on purpose: 3.8/3.9 cannot have truststore, and those are
+    exactly the interpreters most likely to lack a CA bundle."""
+    reqs = _install_requires()
+    certifi_reqs = [r for r in reqs if r.split(">=")[0].split(";")[0].strip() == "certifi"]
+    assert certifi_reqs, f"certifi must be in install_requires; got {reqs}"
+    assert ";" not in certifi_reqs[0], (
+        f"certifi must NOT carry a version marker ({certifi_reqs[0]}) -- gating it "
+        "would leave 3.8/3.9 with no usable trust store at all"
+    )
+
+
+def test_truststore_stays_gated_at_310():
+    """It cannot install below 3.10, so the marker has to stay or the
+    whole package becomes uninstallable on 3.9."""
+    reqs = _install_requires()
+    ts = [r for r in reqs if r.startswith("truststore")]
+    assert ts and 'python_version >= "3.10"' in ts[0], ts
+
+
+def test_ladder_finds_real_cas_when_truststore_is_unavailable(tele, monkeypatch):
+    """The 3.8/3.9 path, exercised on whatever Python runs the suite: with
+    truststore blocked, the context must still carry actual CA
+    certificates. An empty store is what CERTIFICATE_VERIFY_FAILED looks
+    like before it happens."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_truststore(name, *a, **kw):
+        if name == "truststore":
+            raise ImportError("simulating a 3.9 interpreter")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", _no_truststore)
+    monkeypatch.setattr(tele, "_SSL_CTX", None)
+    ctx = tele._ssl_context()
+    assert len(ctx.get_ca_certs()) > 0, (
+        "no CA certificates loaded -- every HTTPS call from this install "
+        "would fail with CERTIFICATE_VERIFY_FAILED, silently"
+    )
