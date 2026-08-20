@@ -1,5 +1,11 @@
 ## Unreleased
 
+- **Release: the Cursor and Copilot gate hooks launch a way the working directory cannot break. Carries #5035 to PyPI.**
+  - **Who this reaches:** anyone using the new pre-execution gates whose project happens to contain a folder named `clawmetry`. On GitHub Copilot that combination denied every tool call.
+  - **What was wrong:** the runtimes start our hook with the agent's own working directory, and the previous launcher form let that directory take precedence when importing. A project with a folder of that name shadowed the installed package, the command was rejected, and the hook exited with an error. Copilot treats a hook that errors as a refusal, so the agent could not run anything.
+  - **How it was found:** while verifying the published wheel from a checkout of this repo, which is itself such a project. It looked like a problem with the verification setup twice before it was recognised as the product's own bug.
+  - **What changed:** the hook now runs through the installed `clawmetry` command, whose import path is fixed by where it is installed rather than by where the agent happens to be working. Installs that predate this release are recognised and replaced rather than left behind.
+
 - **Release: stop and pause reach six more runtimes, and Cursor and GitHub Copilot get real pre-execution gates. Carries #5009 to PyPI.**
   - **Who this reaches:** anyone whose Stop button covered fewer runtimes than the product claimed, and anyone who wanted a tool call paused for approval on Cursor or Copilot rather than reported after the fact.
   - **The claim that was not true.** Stop and Pause were advertised for Codex, OpenCode, Aider and Goose, but the shipped path could not work. The relay that carries a stop request never included the session's working directory, the resolver needs it to find the process, and no session row had ever stored one. Every such stop ended in `no_cwd`. The daemon now looks the directory up from the session record before resolving, and family-runtime sessions persist it at ingest.
