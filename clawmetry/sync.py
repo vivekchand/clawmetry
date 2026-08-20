@@ -2758,6 +2758,141 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+def _parse_openclaw_subagent_index(index) -> dict:
+    """Delegation records from an OpenClaw ``sessions.json`` index. -> {}.
+
+    Orchestration capture, nemoclaw leg. A NemoClaw sandbox hosts a full
+    OpenClaw workspace, so a sandboxed agent that spawns a sub-agent writes
+    the SAME ``agent:<agent>:subagent:<uuid>`` index entries the host runtime
+    does. Real entry shape (captured live from a 2026.8 OpenClaw
+    ``sessions.json`` on 2026-08-20 — a ``sessions_spawn`` run):
+
+        agent:main:subagent:d38a6bbd-… : {
+          "spawnDepth": 1, "subagentRole": "leaf",
+          "sessionId": "55d5d1e2-…",            # child transcript file uuid
+          "sessionFile": "…/sessions/55d5d1e2-….jsonl",
+          "spawnedBy": "agent:main:main",       # index key of the spawner
+          "label": "ping-test", "status": "failed",
+          "startedAt": 1787185058306, "endedAt": 1787185058372,   # epoch ms
+          "updatedAt": 1787185058560, "runtimeMs": 55, …
+        }
+
+    ``task`` / ``model`` / ``totalTokens`` are optional (the captured failed
+    spawn carried none). Returns ``{child_file_uuid: record}`` where record
+    holds the delegation facts; ``parent_session_id`` is resolved through the
+    index (``spawnedBy`` key -> that entry's own ``sessionId``) and left None
+    when the spawner entry is missing — an unresolvable parent is never
+    guessed. Pure function so tests can pin it without an openshell install.
+    """
+    out: dict = {}
+    if not isinstance(index, dict):
+        return out
+
+    def _file_uuid(meta: dict) -> str:
+        fid = str(meta.get("sessionId") or "")
+        if not fid:
+            sf = str(meta.get("sessionFile") or "")
+            if sf.endswith(".jsonl"):
+                fid = os.path.basename(sf).split(".jsonl", 1)[0]
+        return fid
+
+    for key, meta in index.items():
+        if not isinstance(meta, dict) or ":subagent:" not in str(key):
+            continue
+        child_uuid = str(key).rsplit(":", 1)[-1]
+        fid = _file_uuid(meta)
+        if not child_uuid:
+            continue
+        parent_uuid = None
+        spawned_by = str(meta.get("spawnedBy") or "")
+        pmeta = index.get(spawned_by)
+        if isinstance(pmeta, dict):
+            parent_uuid = _file_uuid(pmeta) or None
+        rec = {
+            "subagent_id": child_uuid,
+            "file_uuid": fid,
+            "parent_session_id": parent_uuid,
+            "spawned_by_key": spawned_by,
+            "label": str(meta.get("label") or ""),
+            "task": str(meta.get("task") or ""),
+            "status": str(meta.get("status") or ""),
+            "spawn_depth": meta.get("spawnDepth"),
+            "subagent_role": str(meta.get("subagentRole") or ""),
+            "model": str(meta.get("model") or ""),
+            "started_at_ms": meta.get("startedAt") or meta.get("sessionStartedAt") or 0,
+            "ended_at_ms": meta.get("endedAt") or 0,
+            "updated_at_ms": meta.get("updatedAt") or 0,
+            "total_tokens": meta.get("totalTokens") or 0,
+        }
+        # Key by the transcript file uuid so the jsonl scan can look up its
+        # subagent identity; a failed spawn may never write a transcript
+        # (observed live: 55 ms 'failed' child with no .jsonl on disk), so
+        # fall back to the subagent uuid to keep the record reachable for
+        # the rollup ingest below.
+        out[fid or child_uuid] = rec
+    return out
+
+
+def _ingest_sandbox_subagent_rows(sub_by_file: dict, sb_name: str, node_id: str) -> None:
+    """Upsert one ``subagents`` row per sandbox delegation record. Never raises.
+
+    Mirrors the family-adapter branch in ``sync_family_runtimes`` (the
+    ``ingest_subagent`` call around line 13466) so the /api/subagents shaper,
+    the Command River and ``query_subagents`` treat sandboxed OpenClaw
+    children exactly like host ones. ``agent_type='nemoclaw'`` keeps the
+    (agent_type, subagent_id) PK from colliding with host OpenClaw rows.
+    """
+    if not sub_by_file:
+        return
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+        for _rec in sub_by_file.values():
+            _status = _rec["status"] or ""
+            _lowered = _status.lower()
+            if any(b in _lowered for b in ("error", "fail", "kill", "cancel")):
+                _norm = "failed"
+            elif _rec["ended_at_ms"]:
+                _norm = "completed"
+            else:
+                _norm = _status or "running"
+            _store.ingest_subagent({
+                "subagent_id": _rec["subagent_id"],
+                "agent_type": "nemoclaw",
+                # Bare parent file uuid — NemoClawAdapter session ids ARE the
+                # transcript file uuids (no runtime prefix), so this matches
+                # the parent Session row 1:1. None stays None (never guessed).
+                "parent_session_id": _rec["parent_session_id"],
+                "spawned_at": _epoch_to_iso((_rec["started_at_ms"] or 0) / 1000.0),
+                "ended_at": _epoch_to_iso((_rec["ended_at_ms"] or 0) / 1000.0),
+                "task": _rec["task"],
+                "status": _norm,
+                "token_count": int(_rec["total_tokens"] or 0),
+                # data-blob fields (whitelisted by the /api/subagents shaper +
+                # NemoClawAdapter enrichment).
+                "kind": "subagent",
+                "label": _rec["label"],
+                "displayName": _rec["label"] or _rec["subagent_id"][:12],
+                "model": _rec["model"],
+                "depth": int(_rec["spawn_depth"] or 1),
+                "subagentRole": _rec["subagent_role"],
+                "sessionId": _rec["file_uuid"],
+                "sandbox": sb_name,
+                "spawnedBy": _rec["spawned_by_key"],
+                "rawStatus": _status,
+                "updatedAtMs": int(_rec["updated_at_ms"] or 0),
+                "startedAtMs": int(_rec["started_at_ms"] or 0),
+                "endedAtMs": int(_rec["ended_at_ms"] or 0),
+                # prompt only when the registry actually persisted a task —
+                # the captured failed spawn carried none, and an empty/
+                # invented prompt violates the orchestration honesty contract.
+                **({"prompt": _rec["task"][:400]} if _rec["task"] else {}),
+            })
+        _store.flush()
+    except Exception as _sae:
+        log.debug("nemoclaw sandbox subagent ingest failed (non-fatal): %s", _sae)
+
+
 def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
     """Ingest sessions from inside NemoClaw sandbox containers via openshell exec.
 
@@ -2819,6 +2954,29 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
         sb_name = sb.get("name", "")
         if not sb_name:
             continue
+
+        # Orchestration capture (nemoclaw leg): read the sandbox's own
+        # sessions.json index so spawned sub-agents stop landing as unrelated
+        # peer sessions. One extra exec per sandbox per tick; the index is a
+        # small JSON file. Only agents/main spawns sub-agents — the advisor
+        # dir is a sibling agent, not a delegation, and gets NO parent edge.
+        sub_by_file: dict = {}
+        try:
+            idx_out = subprocess.run(
+                [openshell_bin, "sandbox", "exec", "--name", sb_name, "--",
+                 "cat", "/sandbox/.openclaw/agents/main/sessions/sessions.json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if idx_out.returncode == 0 and idx_out.stdout.strip():
+                sub_by_file = _parse_openclaw_subagent_index(
+                    json.loads(idx_out.stdout)
+                )
+        except Exception as _ie:
+            log.debug(
+                "sandbox-session sync: subagent index read failed for %s: %s",
+                sb_name, _ie,
+            )
+        _ingest_sandbox_subagent_rows(sub_by_file, sb_name, node_id)
 
         # Scan both main and advisor agent dirs (#3698).
         # NemoClaw's advisor/analysis session runner (createAgentSession) writes
@@ -2886,7 +3044,16 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                             for _ev in batch:
                                 if isinstance(_ev, dict):
                                     _ev["_nemo_rk"] = _rk
-                        _flush_session_batch(batch, fname, api_key, enc_key, node_id, None,
+                        # Child transcripts flush under their subagent uuid
+                        # (matches the host path: events.session_id ==
+                        # subagents.subagent_id, the query_subagents join
+                        # key). Non-delegation files keep the filename uuid.
+                        _sa_rec = (
+                            sub_by_file.get(fname.split(".jsonl", 1)[0])
+                            if _agent_dir == "main" else None
+                        )
+                        _flush_session_batch(batch, fname, api_key, enc_key, node_id,
+                                             _sa_rec["subagent_id"] if _sa_rec else None,
                                              agent_type="nemoclaw")
                         total += len(batch)
                     cursors[cursor_key] = len(all_lines)
@@ -11438,11 +11605,20 @@ _RUN_LEDGER_SRC_COLS = (
 
 def _openclaw_task_ledger_paths() -> list[Path]:
     """Candidate locations of OpenClaw's run ledger SQLite, newest layout
-    first. OpenClaw 2026.5.x writes ``~/.openclaw/tasks/runs.sqlite``."""
+    first. OpenClaw 2026.6.5+/2026.7.x keeps ``task_runs`` (plus
+    ``subagent_runs`` and ``flow_runs``) in the unified
+    ``~/.openclaw/state/openclaw.sqlite``; 2026.5.x wrote a standalone
+    ``~/.openclaw/tasks/runs.sqlite``. Both are candidates — the reader
+    ingests from EVERY existing candidate (per-path watermarks, PK upsert)
+    so an install that migrated mid-history loses neither side.
+    """
     oc = Path(_get_openclaw_dir())
     return [
+        oc / "state" / "openclaw.sqlite",
         oc / "tasks" / "runs.sqlite",
+        Path("/root/.openclaw/state/openclaw.sqlite"),
         Path("/root/.openclaw/tasks/runs.sqlite"),
+        Path("/sandbox/.openclaw/state/openclaw.sqlite"),
         Path("/sandbox/.openclaw/tasks/runs.sqlite"),
     ]
 
@@ -11470,36 +11646,20 @@ def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
         log.debug("sync_run_ledger: local_store unavailable: %s", e)
         return 0
 
-    src = next((p for p in _openclaw_task_ledger_paths() if p.exists()), None)
-    if src is None:
+    srcs = [p for p in _openclaw_task_ledger_paths() if p.exists()]
+    if not srcs:
         return 0
 
     node_id = config.get("node_id", "") if isinstance(config, dict) else ""
-    watermark = int(state.get("run_ledger_watermark", 0) or 0)
+    # Per-path watermarks: the 2026.6.5+ migration moved task_runs from
+    # tasks/runs.sqlite into state/openclaw.sqlite. A single shared watermark
+    # advanced by one DB would skip the other's history, so each source keeps
+    # its own (legacy single watermark is adopted as the default for
+    # backwards compatibility with existing daemon state files).
+    legacy_wm = int(state.get("run_ledger_watermark", 0) or 0)
+    marks = state.setdefault("run_ledger_watermarks", {})
 
     import sqlite3
-    rows: list[dict] = []
-    try:
-        # Read-only URI open so we never contend with OpenClaw's writer.
-        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
-        try:
-            conn.row_factory = sqlite3.Row
-            cur = conn.execute(
-                f"SELECT {', '.join(_RUN_LEDGER_SRC_COLS)} FROM task_runs "
-                "WHERE COALESCE(last_event_at, ended_at, created_at, 0) >= ? "
-                "ORDER BY COALESCE(last_event_at, ended_at, created_at, 0) ASC "
-                "LIMIT 5000",
-                [watermark],
-            )
-            rows = [dict(r) for r in cur.fetchall()]
-        finally:
-            conn.close()
-    except Exception as e:  # noqa: BLE001 — locked / corrupt / schema drift
-        log.debug("sync_run_ledger: read failed (%s)", e)
-        return 0
-
-    if not rows:
-        return 0
 
     try:
         store = _ls.get_store()
@@ -11508,23 +11668,323 @@ def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
         return 0
 
     n = 0
-    new_watermark = watermark
-    for r in rows:
+    for src in srcs:
+        key = str(src)
+        watermark = int(marks.get(key, legacy_wm) or 0)
+        rows: list[dict] = []
         try:
-            store.ingest_run_ledger_row(r, node_id=node_id)
-            n += 1
-            wm = r.get("last_event_at") or r.get("ended_at") or r.get("created_at") or 0
+            # Read-only URI open so we never contend with OpenClaw's writer.
+            conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
             try:
-                new_watermark = max(new_watermark, int(wm))
-            except (TypeError, ValueError):
-                pass
-        except Exception as e_in:  # noqa: BLE001
-            log.debug("sync_run_ledger: ingest skipped for %s: %s",
-                      r.get("task_id"), e_in)
-    state["run_ledger_watermark"] = new_watermark
+                conn.row_factory = sqlite3.Row
+                # The unified state DB holds many tables; skip a candidate
+                # without task_runs instead of erroring the whole pass.
+                has = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='task_runs'").fetchone()
+                if not has:
+                    continue
+                cur = conn.execute(
+                    f"SELECT {', '.join(_RUN_LEDGER_SRC_COLS)} FROM task_runs "
+                    "WHERE COALESCE(last_event_at, ended_at, created_at, 0) >= ? "
+                    "ORDER BY COALESCE(last_event_at, ended_at, created_at, 0) ASC "
+                    "LIMIT 5000",
+                    [watermark],
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001 — locked / corrupt / schema drift
+            log.debug("sync_run_ledger: read failed for %s (%s)", src, e)
+            continue
+
+        new_watermark = watermark
+        for r in rows:
+            try:
+                store.ingest_run_ledger_row(r, node_id=node_id)
+                n += 1
+                wm = r.get("last_event_at") or r.get("ended_at") or r.get("created_at") or 0
+                try:
+                    new_watermark = max(new_watermark, int(wm))
+                except (TypeError, ValueError):
+                    pass
+            except Exception as e_in:  # noqa: BLE001
+                log.debug("sync_run_ledger: ingest skipped for %s: %s",
+                          r.get("task_id"), e_in)
+        marks[key] = new_watermark
     if n:
-        log.debug("sync_run_ledger: ingested %d rows (watermark=%d)",
-                  n, new_watermark)
+        log.debug("sync_run_ledger: ingested %d rows across %d source(s)",
+                  n, len(srcs))
+    return n
+
+
+def _openclaw_session_key_to_id(index: dict, key: str) -> str:
+    """Resolve an OpenClaw session KEY (``agent:main:main``,
+    ``agent:main:subagent:<uuid>``) to the canonical session UUID the
+    sessions/events tables are keyed on. sessions.json maps key -> meta with
+    ``sessionId`` (preferred) or a ``sessionFile`` whose basename is the id.
+    Falls back to the key's uuid tail, then the key itself. Never raises."""
+    if not key:
+        return ""
+    try:
+        meta = index.get(key) if isinstance(index, dict) else None
+        if isinstance(meta, dict):
+            sid = meta.get("sessionId") or ""
+            if sid:
+                return str(sid)
+            sf = os.path.basename(meta.get("sessionFile") or "")
+            if sf.endswith(".jsonl"):
+                return sf[:-6]
+    except Exception:
+        pass
+    tail = key.split(":")[-1]
+    return tail or key
+
+
+def sync_openclaw_subagent_runs(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's sub-agent + flow registries into the ``subagents``
+    table with the orchestration facts (prompt / reply / status / parent).
+
+    OpenClaw 2026.6.5+/2026.7.x persists the authoritative record of every
+    delegation in ``~/.openclaw/state/openclaw.sqlite``:
+
+      * ``subagent_runs`` — one row per spawned sub-agent, carrying exactly
+        the operator-facing facts the orchestration surfaces render:
+        ``task`` (the context the child was handed → ``prompt``),
+        ``frozen_result_text`` (its final reply → ``reply``), ``label`` /
+        ``task_name``, ``model``, ``spawn_mode``, ``requester_session_key``
+        (the parent), ``created_at``/``started_at``/``ended_at`` and
+        ``ended_reason`` (status). The sessions.json snapshot pass only
+        knows label/age; this is the piece that adds WHAT each sub-agent
+        was asked and WHAT it answered.
+      * ``flow_runs`` — one row per multi-step managed flow (OpenClaw's
+        workflow primitive): ``goal``, ``status``, ``current_step``,
+        ``blocked_summary``, ``owner_key``. Mirrored as kind='workflow'
+        children so the same Activity badge / Sessions panel that renders
+        Claude Code Workflow runs renders OpenClaw flows.
+
+    Rows upsert onto the SAME subagents PK the sessions.json snapshot pass
+    writes (the child key's uuid tail), so the two sources enrich one row
+    instead of duplicating it. Incremental via per-table watermarks in
+    daemon state. Read-only (SQLite ro URI); every failure degrades to 0.
+    """
+    if not _sync_allowed():
+        return 0
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_openclaw_subagent_runs: local_store unavailable: %s", e)
+        return 0
+
+    db = _openclaw_state_sqlite()
+    if not db.exists():
+        return 0
+
+    # sessions.json index for key -> canonical session id resolution.
+    index: dict = {}
+    try:
+        sessions_dir = paths.get("sessions_dir", "") if isinstance(paths, dict) else ""
+        index_path = os.path.join(sessions_dir, "sessions.json") if sessions_dir else ""
+        if index_path and os.path.isfile(index_path):
+            with open(index_path) as _f:
+                index = json.load(_f)
+    except Exception:
+        index = {}
+
+    import sqlite3
+    marks = state.setdefault("openclaw_subagent_run_watermarks", {})
+    now_ms = int(time.time() * 1000)
+    rows_sub: list[dict] = []
+    rows_flow: list[dict] = []
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "subagent_runs" in names:
+                wm = int(marks.get("subagent_runs", 0) or 0)
+                rows_sub = [dict(r) for r in conn.execute(
+                    "SELECT run_id, child_session_key, requester_session_key, "
+                    "controller_session_key, task, task_name, label, model, "
+                    "spawn_mode, created_at, started_at, ended_at, ended_reason, "
+                    "outcome_json, frozen_result_text, fallback_frozen_result_text "
+                    "FROM subagent_runs "
+                    "WHERE COALESCE(ended_at, started_at, created_at, 0) >= ? "
+                    "ORDER BY COALESCE(ended_at, started_at, created_at, 0) ASC "
+                    "LIMIT 2000", [wm]).fetchall()]
+            if "flow_runs" in names:
+                wm = int(marks.get("flow_runs", 0) or 0)
+                rows_flow = [dict(r) for r in conn.execute(
+                    "SELECT flow_id, shape, owner_key, status, goal, "
+                    "current_step, blocked_summary, created_at, updated_at, "
+                    "ended_at FROM flow_runs "
+                    "WHERE COALESCE(updated_at, created_at, 0) >= ? "
+                    "ORDER BY COALESCE(updated_at, created_at, 0) ASC "
+                    "LIMIT 2000", [wm]).fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 — locked / corrupt / schema drift
+        log.debug("sync_openclaw_subagent_runs: read failed (%s)", e)
+        return 0
+
+    if not rows_sub and not rows_flow:
+        return 0
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_openclaw_subagent_runs: get_store failed: %s", e)
+        return 0
+
+    def _iso(ms):
+        try:
+            ms = int(ms)
+        except (TypeError, ValueError):
+            return None
+        if ms <= 0:
+            return None
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
+
+    def _clip(v, n=400):
+        if v is None:
+            return ""
+        v = str(v).strip()
+        return v if len(v) <= n else v[: n - 1] + "…"
+
+    def _task_body(task):
+        """Strip OpenClaw's spawn-prompt plumbing so ``prompt`` reads as the
+        operator's actual ask. A real 2026.7.1 spawn wraps the task as:
+        "[Subagent Context] You are running as a subagent (depth 1/1)...\n
+        [Subagent Task]\n<the real task>\nBegin. Execute the assigned task
+        to completion." — verified live on this shape.
+        """
+        t = str(task or "")
+        marker = "[Subagent Task]"
+        if marker in t:
+            t = t.split(marker, 1)[1]
+        tail = "Begin. Execute the assigned task to completion."
+        if t.rstrip().endswith(tail):
+            t = t.rstrip()[: -len(tail)]
+        return t.strip()
+
+    n = 0
+    wm_sub = int(marks.get("subagent_runs", 0) or 0)
+    for r in rows_sub:
+        try:
+            child_key = r.get("child_session_key") or ""
+            sid = _openclaw_session_key_to_id(index, child_key)
+            if not sid:
+                continue
+            parent_key = (r.get("requester_session_key")
+                          or r.get("controller_session_key") or "")
+            parent_id = _openclaw_session_key_to_id(index, parent_key)
+            ended = r.get("ended_at")
+            # Terminal outcome: outcome_json {"status": ...} wins, then
+            # ended_reason; a row with no ended_at is still running.
+            status = "running"
+            error_txt = ""
+            if ended:
+                status = "completed"
+                reason = (r.get("ended_reason") or "").lower()
+                outcome = ""
+                try:
+                    oj = json.loads(r.get("outcome_json") or "null")
+                    if isinstance(oj, dict):
+                        outcome = str(oj.get("status") or "").lower()
+                        error_txt = _clip(oj.get("error") or "", 200)
+                except (ValueError, TypeError):
+                    pass
+                # Substring match: real reasons include compound forms like
+                # "subagent-error" (observed live on 2026.7.1).
+                _bad = ("error", "fail", "timeout", "kill", "cancel")
+                if (any(b in outcome for b in _bad)
+                        or any(b in reason for b in _bad)):
+                    status = "failed"
+                    error_txt = error_txt or reason
+            reply = (r.get("frozen_result_text")
+                     or r.get("fallback_frozen_result_text") or "")
+            task_body = _task_body(r.get("task"))
+            label = (r.get("label") or r.get("task_name")
+                     or _clip(task_body, 80) or sid[:12])
+            store.ingest_subagent({
+                "subagent_id": sid,
+                "agent_type": "openclaw",
+                "parent_session_id": parent_id or None,
+                "spawned_at": _iso(r.get("started_at") or r.get("created_at")),
+                "ended_at": _iso(ended),
+                "task": _clip(task_body, 200) or None,
+                "status": status,
+                # Rollup tokens/cost stay on the events-derived read path
+                # (query_subagents GREATEST bridge) — the registry has none.
+                "cost_usd": 0.0,
+                "token_count": 0,
+                # data-blob orchestration facts (same keys the family
+                # adapters emit — one contract, every surface).
+                "kind": "subagent",
+                "label": str(label)[:120],
+                "displayName": str(label)[:120],
+                "model": r.get("model") or "",
+                "prompt": _clip(task_body),
+                "reply": _clip(reply),
+                "spawnMode": r.get("spawn_mode") or "",
+                "runId": r.get("run_id") or "",
+                "error": error_txt,
+                "runtime": "openclaw",
+                "parentKey": parent_key,
+                "key": child_key,
+            })
+            n += 1
+            wm_sub = max(wm_sub, int(r.get("ended_at") or r.get("started_at")
+                                     or r.get("created_at") or 0))
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_openclaw_subagent_runs: subagent row skipped: %s", e_in)
+    marks["subagent_runs"] = wm_sub
+
+    wm_flow = int(marks.get("flow_runs", 0) or 0)
+    for r in rows_flow:
+        try:
+            fid = r.get("flow_id") or ""
+            if not fid:
+                continue
+            parent_id = _openclaw_session_key_to_id(index, r.get("owner_key") or "")
+            raw_status = (r.get("status") or "").lower()
+            if raw_status in ("running", "active", "waiting", "blocked", "paused"):
+                status = "running"
+            elif raw_status in ("failed", "error", "cancelled", "canceled"):
+                status = "failed"
+            else:
+                status = "completed"
+            store.ingest_subagent({
+                "subagent_id": f"flow:{fid}",
+                "agent_type": "openclaw",
+                "parent_session_id": parent_id or None,
+                "spawned_at": _iso(r.get("created_at")),
+                "ended_at": _iso(r.get("ended_at")),
+                "task": _clip(r.get("goal"), 200) or None,
+                "status": status,
+                "cost_usd": 0.0,
+                "token_count": 0,
+                "kind": "workflow",
+                "workflowRunId": fid,
+                "workflowName": _clip(r.get("goal"), 80) or fid,
+                "label": _clip(r.get("goal"), 120) or fid,
+                "displayName": _clip(r.get("goal"), 120) or fid,
+                "phase": _clip(r.get("current_step"), 120),
+                "prompt": _clip(r.get("goal")),
+                "error": _clip(r.get("blocked_summary"), 200),
+                "shape": r.get("shape") or "",
+                "runtime": "openclaw",
+            })
+            n += 1
+            wm_flow = max(wm_flow, int(r.get("updated_at")
+                                       or r.get("created_at") or 0))
+        except Exception as e_in:  # noqa: BLE001
+            log.debug("sync_openclaw_subagent_runs: flow row skipped: %s", e_in)
+    marks["flow_runs"] = wm_flow
+
+    if n:
+        log.debug("sync_openclaw_subagent_runs: %d registry rows (now=%d)",
+                  n, now_ms)
     return n
 
 
@@ -18743,6 +19203,15 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                     )
                     if status == "active":
                         active_count += 1
+                    # Parent linkage (orchestration capture): sessions.json
+                    # stamps spawnedBy / parentSessionKey (a session KEY) on
+                    # 2026.7.x — resolve to the canonical parent session id
+                    # so the fan-out tree renders even without the state-DB
+                    # registry (older installs, or a pruned registry).
+                    _parent_key = (meta.get("spawnedBy")
+                                   or meta.get("parentSessionKey") or "")
+                    _parent_sid = (_openclaw_session_key_to_id(index, _parent_key)
+                                   if _parent_key else "")
                     subagents_list.append(
                         {
                             "label": meta.get("label", key.split(":")[-1][:12]),
@@ -18752,6 +19221,10 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                             "tokens": meta.get("totalTokens", 0),
                             "sessionId": key.split(":")[-1],
                             "key": key,
+                            "parent": _parent_sid,
+                            "spawnedBy": _parent_key,
+                            "depth": int(meta.get("spawnDepth") or 1),
+                            "subagentRole": meta.get("subagentRole", ""),
                             # sessionFile basename lets the cloud map file-UUID → subagent-UUID
                             # for brain blobs that were synced before subagent_id was added.
                             "sessionFile": os.path.basename(
@@ -18788,8 +19261,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             _sid = _sa.get("sessionId") or _sa.get("key")
             if not _sid:
                 continue
-            _sa_store.ingest_subagent(
-                {
+            _sa_row = {
                     "subagent_id": _sid,
                     "agent_type": "openclaw",
                     "task": _sa.get("task", ""),
@@ -18801,8 +19273,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                     "session_file": _sa.get("sessionFile", ""),
                     "updated_at_ms": _sa.get("updatedAt", 0),
                     "runtime_ms": _sa.get("runtimeMs", 0),
-                }
-            )
+                    "kind": "subagent",
+                    "runtime": "openclaw",
+                    "depth": _sa.get("depth") or 1,
+            }
+            # Only stamp parent/role keys when known — ingest_subagent's
+            # COALESCE keeps a richer value (e.g. from the state-DB registry
+            # pass) instead of blanking it with an empty string.
+            if _sa.get("parent"):
+                _sa_row["parent_session_id"] = _sa["parent"]
+            if _sa.get("spawnedBy"):
+                _sa_row["spawnedBy"] = _sa["spawnedBy"]
+            if _sa.get("subagentRole"):
+                _sa_row["subagentRole"] = _sa["subagentRole"]
+            _sa_store.ingest_subagent(_sa_row)
     except Exception as _e:
         log.debug("local_store: subagent ingest failed: %s", _e)
     try:
@@ -20158,6 +20642,14 @@ def run_daemon() -> None:
             log.info(f"  Run ledger: {rl} rows ingested")
     except Exception as e:
         log.warning(f"  Run-ledger ingest error: {e}")
+    # Sub-agent + flow registries (state/openclaw.sqlite) → subagents rows
+    # with prompt/reply/status/parent (orchestration capture, OpenClaw leg).
+    try:
+        sr = sync_openclaw_subagent_runs(config, state, paths)
+        if sr:
+            log.info(f"  Subagent/flow registry: {sr} rows ingested")
+    except Exception as e:
+        log.warning(f"  Subagent-registry ingest error: {e}")
     # Effective sandbox + tool policy per agent (PRD P1-1 governance) →
     # DuckDB tool_policy. Feeds the Tool Policy tab. Near-static config;
     # re-synced on a slow cadence in the steady-state loop below.
@@ -20708,6 +21200,7 @@ def run_daemon() -> None:
             # OpenClaw run ledger (tasks/runs.sqlite) → DuckDB run_ledger.
             try:
                 sync_run_ledger(config, state, paths)
+                sync_openclaw_subagent_runs(config, state, paths)
             except Exception as _e_rl:
                 log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
             # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.

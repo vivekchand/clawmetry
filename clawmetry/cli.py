@@ -6990,6 +6990,10 @@ def main() -> None:
         except Exception:
             _ver = "unknown"
         _telemetry.maybe_ping(_ver)
+        # Desktop shell launched us? Report the open (which runtimes this
+        # machine has, cloud vs local) once things settle. No-ops for a
+        # plain `pip install clawmetry && clawmetry`.
+        _telemetry.maybe_desktop_ping(_ver)
     except Exception:
         # Never let telemetry plumbing break startup.
         pass
