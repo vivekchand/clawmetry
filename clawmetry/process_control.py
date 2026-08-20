@@ -93,6 +93,20 @@ SUPPORTED_RUNTIMES = frozenset(
 )
 UNSUPPORTED_RUNTIMES = frozenset({"cursor"})
 
+# Runtimes whose support is decided PER SESSION, not per runtime, because the
+# runtime hosts sessions in more than one execution model. These are listed in
+# UNSUPPORTED_RUNTIMES (the safe default: a session we cannot place is refused)
+# and their resolver decides case by case.
+#
+# cursor is the only one today: Cursor CLI ("cursor-agent") runs one process
+# tree per session and IS stoppable; conversations inside the Cursor editor
+# share the single IDE process and are NOT. resolve_cursor() therefore answers
+# with either a guarded pid (CLI) or the explicit unsupported result (editor),
+# and callers surface that answer verbatim. Membership in SUPPORTED_RUNTIMES
+# would be a lie for half this runtime's sessions, which is why it is absent
+# from that set even though some of its sessions are killable.
+SPLIT_SUPPORT_RUNTIMES = frozenset({"cursor"})
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Result helpers

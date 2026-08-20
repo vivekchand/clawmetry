@@ -845,3 +845,12 @@ def test_receiver_runtime_scoped_policy_does_not_cross(hooks_app):
     hso = r.get_json()["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert ls.get_store().query_approvals(status="pending", limit=10) == []
+
+
+def test_split_support_runtimes_is_explicit_and_not_in_supported():
+    """cursor's support is per SESSION (CLI killable, editor not), so it must
+    stay OUT of SUPPORTED_RUNTIMES while being named as split support."""
+    import clawmetry.process_control as pc
+    assert "cursor" in pc.SPLIT_SUPPORT_RUNTIMES
+    assert "cursor" in pc.UNSUPPORTED_RUNTIMES
+    assert "cursor" not in pc.SUPPORTED_RUNTIMES
