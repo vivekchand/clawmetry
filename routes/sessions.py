@@ -4349,7 +4349,7 @@ def _fill_attention(transcripts):
     which is the correct quiet default. Never fails the request.
     """
     try:
-        rows = _ls_call("query_sessions_table", limit=300) or []
+        rows = _ls_call("query_sessions_table", limit=500) or []
     except Exception:
         return
     state = {}
@@ -4393,7 +4393,7 @@ def _fill_family_titles(transcripts):
             return
         stored = {}
         try:
-            for r in (_ls_call("query_sessions_table", limit=200) or []):
+            for r in (_ls_call("query_sessions_table", limit=500) or []):
                 sid = r.get("session_id") or ""
                 title = (r.get("title") or "").strip()
                 if sid and title and not _st.looks_like_session_id(title, sid):
