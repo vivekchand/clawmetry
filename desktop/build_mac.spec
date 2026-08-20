@@ -51,6 +51,14 @@ brand_datas = [
      'desktop/assets'),
 ]
 
+# Written by the CI "Stamp bundle version" step; absent in a dev checkout
+# (app.py then reports "dev"). Appended conditionally so a local
+# `pyinstaller` run doesn't fail on a missing data file.
+_version_txt = os.path.join(ASSETS_SRC, 'version.txt')
+if os.path.exists(_version_txt):
+    brand_datas.append((_version_txt, 'desktop/assets'))
+
+
 extra_hidden = [
     'PIL',
     'webview',

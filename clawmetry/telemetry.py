@@ -172,21 +172,64 @@ def _build_payload(version: str, event: str = "install", extra: dict | None = No
     return payload
 
 
-def _post(payload: dict, url: str) -> None:
+_SSL_CTX = None
+
+
+def _ssl_context():
+    """An SSLContext that can verify public certs wherever we run.
+
+    The stdlib default trusts whatever OpenSSL finds on the box, which is
+    nothing at all inside a frozen bundle and nothing on a python.org
+    interpreter whose certificate installer was never run. Both cases
+    fail closed with CERTIFICATE_VERIFY_FAILED, and because this module
+    swallows every error by design, they fail SILENTLY: the ping simply
+    never arrives. Same ladder the desktop shell uses (OS trust store,
+    then certifi's bundle, then the default), cached because building it
+    parses a PEM. Never raises; the last rung is the old behaviour.
+    """
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return _SSL_CTX
+    import ssl
+    try:
+        import truststore  # type: ignore
+        _SSL_CTX = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        return _SSL_CTX
+    except Exception:
+        pass
+    try:
+        import certifi  # type: ignore
+        _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+        return _SSL_CTX
+    except Exception:
+        pass
+    _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
+
+
+def _post(payload: dict, url: str, api_key: str = "") -> None:
     """Fire-and-forget POST. Swallows every exception by design — any
-    failure here must NEVER surface to the user."""
+    failure here must NEVER surface to the user.
+
+    ``api_key`` is only ever set by the desktop ping below, and only so
+    the machine can be listed under "Desktop apps" in its own owner's
+    account. The anonymous install ping never sends it."""
     try:
         body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent":   f"clawmetry/{payload.get('version','?')} install-telemetry",
+        }
+        if api_key.startswith("cm_"):
+            headers["Authorization"] = f"Bearer {api_key}"
         req = urllib.request.Request(
             url,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent":   f"clawmetry/{payload.get('version','?')} install-telemetry",
-            },
+            headers=headers,
         )
-        with urllib.request.urlopen(req, timeout=TELEMETRY_TIMEOUT_SEC) as r:
+        ctx = _ssl_context() if url.lower().startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=TELEMETRY_TIMEOUT_SEC, context=ctx) as r:
             r.read()  # drain so the connection releases cleanly
     except Exception as e:
         log.debug("telemetry: post failed: %s", e)
@@ -367,6 +410,160 @@ def ping_event(event: str, version: str = "unknown",
         args=(event, version, extra),
         daemon=True,
         name="clawmetry-telemetry-event",
+    )
+    t.start()
+    return t
+
+
+# ── Desktop app: per-open telemetry (daemon stage) ───────────────────────────
+# The .app/.exe shell pings ``/api/desktop/open`` the moment its window
+# appears (see desktop/app.py) — that stage fires even when the Python
+# bootstrap never completes. This is the second stage: once the daemon is
+# actually running we report what the shell could not know — which agent
+# runtimes this machine has data for, whether the install syncs to cloud or
+# stays local, and which node it is. Correlated with the shell ping by
+# ``session_id``, so "opened but never reached a working daemon" is a
+# subtraction rather than a guess.
+#
+# Fires ONLY when launched by the desktop shell (CLAWMETRY_LAUNCHER=desktop);
+# a plain ``pip install clawmetry && clawmetry`` never sends this.
+#
+# Same privacy contract as the install ping above: no hostname, username,
+# IP (the server derives a country and drops the IP), workspace path, or
+# transcript content. The one addition is the cm_ key, sent as a bearer
+# header purely so the machine shows up under "Desktop apps" in its own
+# owner's account; without a paired key the ping stays anonymous.
+DESKTOP_PING_PATH = "/api/desktop/open"
+# Runtime detection walks the home dir (~3s) and a freshly-claimed account
+# key can land seconds after boot — both settle inside this delay.
+DESKTOP_PING_DELAY_SEC = 10.0
+CONFIG_JSON = CONFIG_DIR / "config.json"
+NOCLOUD_MARKER = CONFIG_DIR / "nocloud"
+
+
+def _read_config() -> dict:
+    try:
+        data = json.loads(CONFIG_JSON.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sync_mode(cfg: dict) -> str:
+    """cloud | local | selfhosted | unknown — how this install is wired.
+
+    ``local`` is the ``clawmetry disconnect`` state: the daemon runs and
+    keeps everything on the machine. ``selfhosted`` means an enterprise
+    endpoint is configured (and, per the contract above, we never get
+    here — those installs don't ping the managed cloud at all)."""
+    try:
+        from clawmetry.endpoints import is_custom_endpoint
+        if is_custom_endpoint():
+            return "selfhosted"
+    except Exception:
+        pass
+    try:
+        if NOCLOUD_MARKER.exists():
+            return "local"
+    except Exception:
+        pass
+    if cfg.get("local_only"):
+        return "local"
+    if str(cfg.get("api_key") or "").startswith("cm_"):
+        return "cloud"
+    return "unknown"
+
+
+def _monitored_runtimes() -> list:
+    """Runtime ids with data on this machine, e.g.
+    ``["openclaw", "claude_code", "cursor"]``. Ids only — no paths, no
+    session contents, no counts."""
+    out = []
+    for name, p in _AGENT_DIRS:
+        try:
+            if p.exists():
+                out.append(name)
+        except Exception:
+            pass
+    try:
+        from clawmetry.sync import _detect_runtimes_lite
+        for r in (_detect_runtimes_lite() or []):
+            rid = str((r or {}).get("id") or "").strip()
+            if rid and rid not in out:
+                out.append(rid)
+    except Exception:
+        pass
+    return out[:40]
+
+
+def _build_desktop_payload(version: str) -> dict:
+    cfg = _read_config()
+    try:
+        open_count = int(os.environ.get("CLAWMETRY_DESKTOP_OPEN_COUNT", "") or 0)
+    except ValueError:
+        open_count = 0
+    runtimes = _monitored_runtimes()
+    return {
+        "install_id":      _ensure_install_id() or "",
+        "event":           "desktop_ready",
+        "stage":           "daemon",
+        "session_id":      os.environ.get("CLAWMETRY_DESKTOP_SESSION", "")[:64],
+        "open_count":      open_count,
+        "first_open":      open_count == 1,
+        "desktop_version": os.environ.get("CLAWMETRY_DESKTOP_VERSION", "")[:32],
+        "version":         version,
+        "os":              platform.system() or "unknown",
+        "os_version":      platform.release() or "",
+        "arch":            platform.machine() or "",
+        "python":          platform.python_version(),
+        "mode":            _sync_mode(cfg),
+        "runtimes":        runtimes,
+        "runtime_count":   len(runtimes),
+        "node_id":         str(cfg.get("node_id") or "")[:64],
+    }
+
+
+def _send_desktop_ping(version: str) -> None:
+    """Worker body. Sleeps out the settle delay, then posts once.
+    Swallows everything — telemetry never surfaces to the user."""
+    try:
+        time.sleep(DESKTOP_PING_DELAY_SEC)
+        if _is_optout():
+            return
+        payload = _build_desktop_payload(version)
+        if not payload.get("install_id"):
+            return
+        url = os.environ.get("CLAWMETRY_DESKTOP_PING_URL", "").strip()
+        if not url:
+            try:
+                from clawmetry.endpoints import is_custom_endpoint, app_url
+                if is_custom_endpoint():
+                    # Enterprise deployment — its data stays inside it.
+                    return
+                base = app_url()
+            except Exception:
+                base = "https://app.clawmetry.com"
+            url = base.rstrip("/") + DESKTOP_PING_PATH
+        api_key = str(_read_config().get("api_key") or "")
+        _post(payload, url, api_key=api_key)
+    except Exception as e:
+        log.debug("telemetry: desktop ping failed: %s", e)
+
+
+def maybe_desktop_ping(version: str = "unknown") -> threading.Thread | None:
+    """Public entry point, called once on CLI startup alongside
+    :func:`maybe_ping`. No-ops unless the desktop shell launched us.
+
+    Returns the thread for tests; ``None`` when it does not apply."""
+    if os.environ.get("CLAWMETRY_LAUNCHER", "").strip().lower() != "desktop":
+        return None
+    if _is_optout():
+        return None
+    t = threading.Thread(
+        target=_send_desktop_ping,
+        args=(version,),
+        daemon=True,
+        name="clawmetry-desktop-ping",
     )
     t.start()
     return t
