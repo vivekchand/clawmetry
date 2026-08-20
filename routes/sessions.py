@@ -4328,14 +4328,19 @@ def _try_local_store_transcripts(runtime: str = ""):
                         return int(f if f > 1e12 else f * 1000)
                     except Exception:
                         return 0
+            _started = _ms(r.get("started_at"))
             transcripts.append({
                 "id": sid,
                 "title": (r.get("title") or "").strip(),
                 "name": sid[:40],
                 "messages": mc,
                 "size": 0,
-                "modified": _ms(r.get("updated_at")),
-                "started": _ms(r.get("started_at")),
+                # last-activity: not every adapter persists updated_at —
+                # fall through so the list never renders "never" for a
+                # session that plainly has a start time.
+                "modified": (_ms(r.get("updated_at"))
+                             or _ms(r.get("ended_at")) or _started),
+                "started": _started,
             })
             if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
                 break
