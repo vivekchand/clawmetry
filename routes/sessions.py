@@ -4292,6 +4292,46 @@ def _try_local_store_transcripts(runtime: str = ""):
         })
         if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
             break
+    if runtime and len(transcripts) < _TRANSCRIPT_LIST_LIMIT:
+        # Event-light runtimes (e.g. Grok renders only model_change/error
+        # rows into the events table) aggregate to message_count 0 above and
+        # get ghost-filtered, leaving their filtered Sessions tab empty even
+        # though the typed ``sessions`` table knows the real turn counts the
+        # family adapter reported. Backfill from that table for the filtered
+        # runtime only — unfiltered behavior is unchanged.
+        have = {t["id"] for t in transcripts}
+        try:
+            rows2 = _ls_call("query_sessions_table", limit=500) or []
+        except Exception:
+            rows2 = []
+        for r in rows2:
+            sid = r.get("session_id") or ""
+            if (not sid or sid in have or _sid_runtime(sid) != runtime
+                    or hide_clawmetry_session(sid)):
+                continue
+            mc = int(r.get("message_count") or 0)
+            if mc <= 0:
+                continue
+            def _ms(v):
+                if not v:
+                    return 0
+                try:
+                    return int(datetime.fromisoformat(
+                        str(v).replace("Z", "+00:00")).timestamp() * 1000)
+                except Exception:
+                    return 0
+            transcripts.append({
+                "id": sid,
+                "title": (r.get("title") or "").strip(),
+                "name": sid[:40],
+                "messages": mc,
+                "size": 0,
+                "modified": _ms(r.get("updated_at")),
+                "started": _ms(r.get("started_at")),
+            })
+            if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
+                break
+        transcripts.sort(key=lambda t: t.get("modified") or 0, reverse=True)
     _fill_family_titles(transcripts)
     _fill_attention(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
