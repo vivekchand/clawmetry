@@ -2251,6 +2251,29 @@ def _try_local_store_subagents(_rows=None):
             "tokensOut":        int(extra.get("tokensOut") or 0),
             "spawnAck":         extra.get("spawnAck") or "",
             "runId":            extra.get("runId") or "",
+            # Orchestration capture (#5008/#5014 + the per-runtime legs): the
+            # facts the Activity badges and the Sessions Orchestration panel
+            # render. They ride HERE because this shaper is also what the sync
+            # daemon reads back to build the cloud snapshot's ``subagents[]``
+            # slice — without them the hosted dashboard can only ever show the
+            # legacy flat list, and the feature is inert in cloud.
+            "kind":             extra.get("kind") or "subagent",
+            "workflowRunId":    extra.get("workflowRunId") or "",
+            "workflowName":     extra.get("workflowName") or "",
+            "phase":            extra.get("phase") or "",
+            "agentType":        extra.get("agentType") or "",
+            "label":            extra.get("label") or display,
+            "prompt":           extra.get("prompt") or "",
+            "reply":            extra.get("reply") or "",
+            "nowTool":          (extra.get("nowTool") or "") if status in ("active", "running") else "",
+            "lastTool":         extra.get("lastTool") or "",
+            "toolCalls":        int(extra.get("toolCalls") or 0),
+            "turns":            int(extra.get("turns") or 0),
+            "agentCount":       int(extra.get("agentCount") or 0),
+            "agentsRunning":    int(extra.get("agentsRunning") or 0),
+            "agentsDone":       int(extra.get("agentsDone") or 0),
+            "agentsFailed":     int(extra.get("agentsFailed") or 0),
+            "runtimeName":      extra.get("runtime") or r.get("agent_type") or "",
         })
 
     # "running" is the daemon's own word for "active"; without it the
