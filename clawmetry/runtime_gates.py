@@ -78,13 +78,46 @@ def _hook_command(runtime_slug: str, base: str) -> str:
     space into a "command not found", and a Copilot ``preToolUse`` command
     hook that exits non-zero is fail-CLOSED — every gated tool call would be
     denied. Found in review before this ever shipped."""
-    py = _windowless_python(sys.executable or "python3", os.name == "nt")
+    launcher = _console_script() or _windowless_python(
+        sys.executable or "python3", os.name == "nt")
     if os.name == "nt":
         import subprocess as _sp
-        quoted = _sp.list2cmdline([py])
+        quoted = _sp.list2cmdline([launcher])
     else:
-        quoted = shlex.quote(py)
-    return f"{quoted} -m clawmetry hook {runtime_slug} --base {base}"
+        quoted = shlex.quote(launcher)
+    suffix = "" if _console_script() else " -m clawmetry"
+    return f"{quoted}{suffix} hook {runtime_slug} --base {base}"
+
+
+def _console_script() -> "str | None":
+    """Absolute path of the installed ``clawmetry`` console script, if any.
+
+    Preferred over ``python -m clawmetry`` because the runtimes spawn the
+    hook with the AGENT'S working directory. For ``-m``, Python puts that
+    directory first on ``sys.path``, so any project containing a
+    ``clawmetry/`` folder shadows the installed package: the import resolves
+    to the user's own directory, argparse rejects the ``hook`` subcommand,
+    and the process exits non-zero. On Copilot a non-zero command hook is
+    fail-CLOSED, so that would deny EVERY tool call for anyone whose repo has
+    a directory of that name (this repo included). A console script sets
+    ``sys.path[0]`` to its own bin directory instead, so the working
+    directory can never shadow the package.
+
+    Returns None when no script sits next to the running interpreter (pipx /
+    unusual layouts), in which case the caller falls back to ``-m``.
+    """
+    exe = sys.executable or ""
+    if not exe:
+        return None
+    bindir = os.path.dirname(exe)
+    name = "clawmetry.exe" if os.name == "nt" else "clawmetry"
+    cand = os.path.join(bindir, name)
+    try:
+        if os.path.isfile(cand) and (os.name == "nt" or os.access(cand, os.X_OK)):
+            return cand
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 def _timeout_from_policies(policies) -> int:
@@ -189,7 +222,11 @@ def _remove_marker_if_ours(runtime: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _CURSOR_STATE_PATH = os.path.expanduser("~/.clawmetry/cursor_gate.json")
-CURSOR_CMD_MARKER = "-m clawmetry hook cursor"
+# Deliberately form-agnostic: matches BOTH "<py> -m clawmetry hook cursor"
+# (how we used to write it, still present in older installs) and
+# "<prefix>/bin/clawmetry hook cursor" (what we write now). An entry is ours
+# if it carries this substring, whichever launcher form it uses.
+CURSOR_CMD_MARKER = "clawmetry hook cursor"
 
 # Blocking Cursor hook events we install on. beforeShellExecution +
 # beforeMCPExecution are always gated (exec is what policies overwhelmingly
@@ -327,7 +364,7 @@ def _cursor_uninstall() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _COPILOT_STATE_PATH = os.path.expanduser("~/.clawmetry/copilot_gate.json")
-COPILOT_CMD_MARKER = "-m clawmetry hook copilot"
+COPILOT_CMD_MARKER = "clawmetry hook copilot"  # form-agnostic, see CURSOR_CMD_MARKER
 _COPILOT_GATE_BASENAME = "clawmetry.json"
 
 

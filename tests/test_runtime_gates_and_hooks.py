@@ -944,3 +944,61 @@ def test_copilot_uninstall_leaves_a_foreign_file_alone(rt_gates):
         {"type": "command", "command": "/usr/local/bin/someone-else"}]}}))
     rg.copilot_gate_handler(False, [])
     assert path.exists(), "a foreign file must never be deleted"
+
+
+def test_hook_command_prefers_console_script(rt_gates, monkeypatch, tmp_path):
+    """The runtimes spawn the hook with the AGENT'S cwd. With `-m`, that
+    directory is first on sys.path, so a project containing a `clawmetry/`
+    folder shadows the installed package: argparse rejects `hook`, the
+    process exits non-zero, and on Copilot that DENIES every tool call."""
+    rg, _ = rt_gates
+    bindir = tmp_path / "venv" / "bin"
+    bindir.mkdir(parents=True)
+    script = bindir / "clawmetry"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(rg.sys, "executable", str(bindir / "python3"))
+    cmd = rg._hook_command("copilot", "http://127.0.0.1:8900")
+    assert str(script) in cmd
+    assert " -m clawmetry" not in cmd
+    assert cmd.endswith("hook copilot --base http://127.0.0.1:8900")
+
+
+def test_hook_command_falls_back_to_dash_m_without_a_script(rt_gates,
+                                                            monkeypatch,
+                                                            tmp_path):
+    rg, _ = rt_gates
+    bindir = tmp_path / "nolauncher" / "bin"
+    bindir.mkdir(parents=True)
+    monkeypatch.setattr(rg.sys, "executable", str(bindir / "python3"))
+    cmd = rg._hook_command("cursor", "http://127.0.0.1:8900")
+    assert " -m clawmetry hook cursor " in cmd
+
+
+def test_markers_match_both_launcher_forms(rt_gates):
+    """Older installs wrote the `-m` form; uninstall must still recognise
+    them as ours."""
+    rg, _ = rt_gates
+    legacy = {"type": "command",
+              "command": "/usr/bin/python3 -m clawmetry hook cursor --base x"}
+    modern = {"type": "command",
+              "command": "/venv/bin/clawmetry hook cursor --base x"}
+    foreign = {"type": "command", "command": "/usr/local/bin/other-hook"}
+    assert rg._cursor_entry_is_ours(legacy) is True
+    assert rg._cursor_entry_is_ours(modern) is True
+    assert rg._cursor_entry_is_ours(foreign) is False
+
+
+def test_legacy_dash_m_entry_is_replaced_not_duplicated(rt_gates):
+    rg, tmp = rt_gates
+    path = tmp / "cursor" / "hooks.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "hooks": {
+        "beforeShellExecution": [
+            {"type": "command",
+             "command": "/old/python3 -m clawmetry hook cursor --base y",
+             "timeout": 60}]}}))
+    rg.cursor_gate_handler(True, _POL)
+    entries = json.loads(path.read_text())["hooks"]["beforeShellExecution"]
+    ours = [e for e in entries if rg._cursor_entry_is_ours(e)]
+    assert len(ours) == 1, "legacy entry must be replaced, not stacked"
