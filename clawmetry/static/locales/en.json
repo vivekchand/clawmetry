@@ -1181,5 +1181,22 @@
   "approvals.min_risk_medium": "Medium or above",
   "approvals.min_risk_high": "High or above",
   "approvals.min_risk_critical": "Critical only",
-  "approvals.min_risk_hint": "ClawMetry scores every tool call (recursive deletes, sudo, credential access...). Set this to gate by risk with or without keywords."
+  "approvals.min_risk_hint": "ClawMetry scores every tool call (recursive deletes, sudo, credential access...). Set this to gate by risk with or without keywords.",
+  "brain.workflow": "workflow",
+  "brain.workflows": "workflows",
+  "brain.subagent": "sub-agent",
+  "brain.subagents": "sub-agents",
+  "brain.wf_agent": "wf agent",
+  "brain.running": "running",
+  "brain.agents_done": "agents done",
+  "brain.orch_badge_tooltip": "Workflows and sub-agents this session spawned (from the local store). Open the session in the Sessions tab for the full fan-out with per-agent context and replies.",
+  "transcripts.orchestration": "Orchestration",
+  "transcripts.orch_agents": "agents",
+  "transcripts.orch_subagents": "Sub-agents",
+  "transcripts.orch_done": "done",
+  "transcripts.orch_failed": "failed",
+  "transcripts.orch_context": "Context given",
+  "transcripts.orch_reply": "Replied",
+  "transcripts.orch_error": "Error",
+  "transcripts.orch_result": "Result"
 }
