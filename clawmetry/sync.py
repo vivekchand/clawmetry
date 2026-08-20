@@ -2758,6 +2758,141 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+def _parse_openclaw_subagent_index(index) -> dict:
+    """Delegation records from an OpenClaw ``sessions.json`` index. -> {}.
+
+    Orchestration capture, nemoclaw leg. A NemoClaw sandbox hosts a full
+    OpenClaw workspace, so a sandboxed agent that spawns a sub-agent writes
+    the SAME ``agent:<agent>:subagent:<uuid>`` index entries the host runtime
+    does. Real entry shape (captured live from a 2026.8 OpenClaw
+    ``sessions.json`` on 2026-08-20 — a ``sessions_spawn`` run):
+
+        agent:main:subagent:d38a6bbd-… : {
+          "spawnDepth": 1, "subagentRole": "leaf",
+          "sessionId": "55d5d1e2-…",            # child transcript file uuid
+          "sessionFile": "…/sessions/55d5d1e2-….jsonl",
+          "spawnedBy": "agent:main:main",       # index key of the spawner
+          "label": "ping-test", "status": "failed",
+          "startedAt": 1787185058306, "endedAt": 1787185058372,   # epoch ms
+          "updatedAt": 1787185058560, "runtimeMs": 55, …
+        }
+
+    ``task`` / ``model`` / ``totalTokens`` are optional (the captured failed
+    spawn carried none). Returns ``{child_file_uuid: record}`` where record
+    holds the delegation facts; ``parent_session_id`` is resolved through the
+    index (``spawnedBy`` key -> that entry's own ``sessionId``) and left None
+    when the spawner entry is missing — an unresolvable parent is never
+    guessed. Pure function so tests can pin it without an openshell install.
+    """
+    out: dict = {}
+    if not isinstance(index, dict):
+        return out
+
+    def _file_uuid(meta: dict) -> str:
+        fid = str(meta.get("sessionId") or "")
+        if not fid:
+            sf = str(meta.get("sessionFile") or "")
+            if sf.endswith(".jsonl"):
+                fid = os.path.basename(sf).split(".jsonl", 1)[0]
+        return fid
+
+    for key, meta in index.items():
+        if not isinstance(meta, dict) or ":subagent:" not in str(key):
+            continue
+        child_uuid = str(key).rsplit(":", 1)[-1]
+        fid = _file_uuid(meta)
+        if not child_uuid:
+            continue
+        parent_uuid = None
+        spawned_by = str(meta.get("spawnedBy") or "")
+        pmeta = index.get(spawned_by)
+        if isinstance(pmeta, dict):
+            parent_uuid = _file_uuid(pmeta) or None
+        rec = {
+            "subagent_id": child_uuid,
+            "file_uuid": fid,
+            "parent_session_id": parent_uuid,
+            "spawned_by_key": spawned_by,
+            "label": str(meta.get("label") or ""),
+            "task": str(meta.get("task") or ""),
+            "status": str(meta.get("status") or ""),
+            "spawn_depth": meta.get("spawnDepth"),
+            "subagent_role": str(meta.get("subagentRole") or ""),
+            "model": str(meta.get("model") or ""),
+            "started_at_ms": meta.get("startedAt") or meta.get("sessionStartedAt") or 0,
+            "ended_at_ms": meta.get("endedAt") or 0,
+            "updated_at_ms": meta.get("updatedAt") or 0,
+            "total_tokens": meta.get("totalTokens") or 0,
+        }
+        # Key by the transcript file uuid so the jsonl scan can look up its
+        # subagent identity; a failed spawn may never write a transcript
+        # (observed live: 55 ms 'failed' child with no .jsonl on disk), so
+        # fall back to the subagent uuid to keep the record reachable for
+        # the rollup ingest below.
+        out[fid or child_uuid] = rec
+    return out
+
+
+def _ingest_sandbox_subagent_rows(sub_by_file: dict, sb_name: str, node_id: str) -> None:
+    """Upsert one ``subagents`` row per sandbox delegation record. Never raises.
+
+    Mirrors the family-adapter branch in ``sync_family_runtimes`` (the
+    ``ingest_subagent`` call around line 13466) so the /api/subagents shaper,
+    the Command River and ``query_subagents`` treat sandboxed OpenClaw
+    children exactly like host ones. ``agent_type='nemoclaw'`` keeps the
+    (agent_type, subagent_id) PK from colliding with host OpenClaw rows.
+    """
+    if not sub_by_file:
+        return
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+        for _rec in sub_by_file.values():
+            _status = _rec["status"] or ""
+            _lowered = _status.lower()
+            if any(b in _lowered for b in ("error", "fail", "kill", "cancel")):
+                _norm = "failed"
+            elif _rec["ended_at_ms"]:
+                _norm = "completed"
+            else:
+                _norm = _status or "running"
+            _store.ingest_subagent({
+                "subagent_id": _rec["subagent_id"],
+                "agent_type": "nemoclaw",
+                # Bare parent file uuid — NemoClawAdapter session ids ARE the
+                # transcript file uuids (no runtime prefix), so this matches
+                # the parent Session row 1:1. None stays None (never guessed).
+                "parent_session_id": _rec["parent_session_id"],
+                "spawned_at": _epoch_to_iso((_rec["started_at_ms"] or 0) / 1000.0),
+                "ended_at": _epoch_to_iso((_rec["ended_at_ms"] or 0) / 1000.0),
+                "task": _rec["task"],
+                "status": _norm,
+                "token_count": int(_rec["total_tokens"] or 0),
+                # data-blob fields (whitelisted by the /api/subagents shaper +
+                # NemoClawAdapter enrichment).
+                "kind": "subagent",
+                "label": _rec["label"],
+                "displayName": _rec["label"] or _rec["subagent_id"][:12],
+                "model": _rec["model"],
+                "depth": int(_rec["spawn_depth"] or 1),
+                "subagentRole": _rec["subagent_role"],
+                "sessionId": _rec["file_uuid"],
+                "sandbox": sb_name,
+                "spawnedBy": _rec["spawned_by_key"],
+                "rawStatus": _status,
+                "updatedAtMs": int(_rec["updated_at_ms"] or 0),
+                "startedAtMs": int(_rec["started_at_ms"] or 0),
+                "endedAtMs": int(_rec["ended_at_ms"] or 0),
+                # prompt only when the registry actually persisted a task —
+                # the captured failed spawn carried none, and an empty/
+                # invented prompt violates the orchestration honesty contract.
+                **({"prompt": _rec["task"][:400]} if _rec["task"] else {}),
+            })
+        _store.flush()
+    except Exception as _sae:
+        log.debug("nemoclaw sandbox subagent ingest failed (non-fatal): %s", _sae)
+
+
 def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
     """Ingest sessions from inside NemoClaw sandbox containers via openshell exec.
 
@@ -2819,6 +2954,29 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
         sb_name = sb.get("name", "")
         if not sb_name:
             continue
+
+        # Orchestration capture (nemoclaw leg): read the sandbox's own
+        # sessions.json index so spawned sub-agents stop landing as unrelated
+        # peer sessions. One extra exec per sandbox per tick; the index is a
+        # small JSON file. Only agents/main spawns sub-agents — the advisor
+        # dir is a sibling agent, not a delegation, and gets NO parent edge.
+        sub_by_file: dict = {}
+        try:
+            idx_out = subprocess.run(
+                [openshell_bin, "sandbox", "exec", "--name", sb_name, "--",
+                 "cat", "/sandbox/.openclaw/agents/main/sessions/sessions.json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if idx_out.returncode == 0 and idx_out.stdout.strip():
+                sub_by_file = _parse_openclaw_subagent_index(
+                    json.loads(idx_out.stdout)
+                )
+        except Exception as _ie:
+            log.debug(
+                "sandbox-session sync: subagent index read failed for %s: %s",
+                sb_name, _ie,
+            )
+        _ingest_sandbox_subagent_rows(sub_by_file, sb_name, node_id)
 
         # Scan both main and advisor agent dirs (#3698).
         # NemoClaw's advisor/analysis session runner (createAgentSession) writes
@@ -2886,7 +3044,16 @@ def sync_sandbox_sessions_openshell(config: dict, state: dict) -> int:
                             for _ev in batch:
                                 if isinstance(_ev, dict):
                                     _ev["_nemo_rk"] = _rk
-                        _flush_session_batch(batch, fname, api_key, enc_key, node_id, None,
+                        # Child transcripts flush under their subagent uuid
+                        # (matches the host path: events.session_id ==
+                        # subagents.subagent_id, the query_subagents join
+                        # key). Non-delegation files keep the filename uuid.
+                        _sa_rec = (
+                            sub_by_file.get(fname.split(".jsonl", 1)[0])
+                            if _agent_dir == "main" else None
+                        )
+                        _flush_session_batch(batch, fname, api_key, enc_key, node_id,
+                                             _sa_rec["subagent_id"] if _sa_rec else None,
                                              agent_type="nemoclaw")
                         total += len(batch)
                     cursors[cursor_key] = len(all_lines)
