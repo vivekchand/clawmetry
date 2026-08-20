@@ -1002,3 +1002,43 @@ def test_legacy_dash_m_entry_is_replaced_not_duplicated(rt_gates):
     entries = json.loads(path.read_text())["hooks"]["beforeShellExecution"]
     ours = [e for e in entries if rg._cursor_entry_is_ours(e)]
     assert len(ours) == 1, "legacy entry must be replaced, not stacked"
+
+
+def test_cc_gate_prefers_console_script_and_quotes_it(tmp_path, monkeypatch):
+    """Same cwd-shadowing defect as the Cursor/Copilot gates: Claude Code
+    spawns the hook with the agent's cwd, so `-m` lets a project containing a
+    `clawmetry/` folder shadow the package. There the hook errors non-blocking
+    rather than denying, so the gate silently does nothing."""
+    import shlex
+    import clawmetry.claude_code_gate as ccg
+    bindir = tmp_path / "My Env" / "bin"
+    bindir.mkdir(parents=True)
+    script = bindir / "clawmetry"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(ccg.sys, "executable", str(bindir / "python3"))
+    cmd = ccg._hook_command("http://127.0.0.1:8900")
+    assert str(script) in cmd
+    assert " -m clawmetry" not in cmd
+    # the space in the path must survive shell-splitting
+    assert shlex.split(cmd)[0] == str(script)
+    mirror = ccg._mirror_command("http://127.0.0.1:8900")
+    assert shlex.split(mirror)[0] == str(script)
+    assert mirror.endswith("hook claude-code-permission --base http://127.0.0.1:8900")
+
+
+def test_cc_gate_markers_match_both_forms_and_stay_distinct(tmp_path):
+    """The mirror marker CONTAINS the gate marker, so the ordering trap must
+    still hold with form-agnostic markers."""
+    import clawmetry.claude_code_gate as ccg
+    legacy_gate = {"hooks": [{"command": "/usr/bin/python3 -m clawmetry hook claude-code --base x"}]}
+    modern_gate = {"hooks": [{"command": "/venv/bin/clawmetry hook claude-code --base x"}]}
+    legacy_mirror = {"hooks": [{"command": "/usr/bin/python3 -m clawmetry hook claude-code-permission --base x"}]}
+    modern_mirror = {"hooks": [{"command": "/venv/bin/clawmetry hook claude-code-permission --base x"}]}
+    assert ccg._entry_is_ours(legacy_gate) is True
+    assert ccg._entry_is_ours(modern_gate) is True
+    # a mirror entry must NEVER read as the pre-tool gate
+    assert ccg._entry_is_ours(legacy_mirror) is False
+    assert ccg._entry_is_ours(modern_mirror) is False
+    assert ccg._entry_is_mirror(legacy_mirror) is True
+    assert ccg._entry_is_mirror(modern_mirror) is True
