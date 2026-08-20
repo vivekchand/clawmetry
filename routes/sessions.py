@@ -2654,6 +2654,275 @@ def api_orchestration():
     })
 
 
+# ── Orchestration capture: per-session fan-out (workflows + subagents) ──────
+#
+# The family adapters emit every spawned child as a Session with parent_id set
+# and extra.kind in {subagent, workflow, workflow_agent}; the daemon lands them
+# on the ``subagents`` table with those facts (plus the context each child was
+# handed, what it replied, and what tool it is on right now) in the data blob.
+# These two routes read that table straight (no events join) and shape it into
+# the tree the Sessions tab + the Activity per-run header render.
+
+_ORCH_TERMINAL_OK = ("completed", "done", "succeeded", "success", "idle", "stale")
+_ORCH_RUNNING = ("running", "active")
+
+
+def _orch_bare_id(sid):
+    """Strip a runtime prefix ('claude_code:<uuid>' -> '<uuid>'). A child id
+    ('<uuid>::wf_x') keeps its tail; only the FIRST ':' that is not part of a
+    '::' separator is treated as the prefix delimiter."""
+    sid = (sid or "").strip()
+    if not sid:
+        return ""
+    head = sid.split("::", 1)[0]
+    if ":" in head:
+        pfx, _, rest = sid.partition(":")
+        if rest and not rest.startswith(":"):
+            return rest
+    return sid
+
+
+def _orch_status(raw):
+    st = (raw or "").strip().lower()
+    if st in _ORCH_RUNNING:
+        return "running"
+    if st in ("failed", "error", "errored"):
+        return "failed"
+    return "completed"
+
+
+def _orch_ts_ms(ts):
+    if not ts:
+        return 0
+    if isinstance(ts, (int, float)):
+        return int(ts if ts > 1e12 else ts * 1000)
+    try:
+        return int(datetime.fromisoformat(
+            str(ts).replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _orch_child(row, *, include_text=True):
+    """One subagents row -> the flat child dict every orchestration surface
+    reads. ``include_text`` drops prompt/reply (the bulk summary endpoint
+    polls every few seconds and only needs counts + the live tool)."""
+    extra = row.get("data") if isinstance(row.get("data"), dict) else {}
+    status = _orch_status(row.get("status"))
+    started = _orch_ts_ms(row.get("spawned_at"))
+    ended = _orch_ts_ms(row.get("ended_at")) if status != "running" else 0
+    label = (extra.get("label") or extra.get("displayName")
+             or (row.get("task") or "") or (row.get("subagent_id") or ""))
+    out = {
+        "id":          row.get("subagent_id") or "",
+        "parent":      row.get("parent_session_id") or "",
+        "kind":        (extra.get("kind") or "subagent"),
+        "label":       str(label)[:160],
+        "status":      status,
+        "model":       extra.get("model") or "",
+        "agentType":   extra.get("agentType") or "",
+        "phase":       extra.get("phase") or "",
+        "startedAt":   started,
+        "endedAt":     ended,
+        "durationMs":  int(extra.get("durationMs") or 0) or (
+            max(0, ended - started) if (started and ended) else 0),
+        "tokens":      int(row.get("token_count") or 0),
+        "costUsd":     round(float(row.get("cost_usd") or 0.0), 6),
+        "toolCalls":   int(extra.get("toolCalls") or 0),
+        "turns":       int(extra.get("turns") or 0),
+        "nowTool":     (extra.get("nowTool") or "") if status == "running" else "",
+        "lastTool":    extra.get("lastTool") or "",
+        "error":       extra.get("error") or "",
+        "runtime":     extra.get("runtime") or row.get("agent_type") or "",
+    }
+    if extra.get("kind") == "workflow":
+        out.update({
+            "runId":         extra.get("workflowRunId") or "",
+            "name":          extra.get("workflowName") or out["label"],
+            "description":   extra.get("description") or "",
+            "agentCount":    int(extra.get("agentCount") or 0),
+            "agentsRunning": int(extra.get("agentsRunning") or 0),
+            "agentsDone":    int(extra.get("agentsDone") or 0),
+            "agentsFailed":  int(extra.get("agentsFailed") or 0),
+            "phases":        extra.get("phases") if isinstance(extra.get("phases"), list) else [],
+            "rollupCostUsd": round(float(extra.get("rollupCostUsd") or 0.0), 6),
+            "rollupTokens":  int(extra.get("rollupTokens") or extra.get("manifestTokens") or 0),
+            "agents":        [],
+        })
+    elif extra.get("kind") == "workflow_agent":
+        out["runId"] = extra.get("workflowRunId") or ""
+        out["workflowName"] = extra.get("workflowName") or ""
+    if include_text:
+        out["prompt"] = extra.get("prompt") or ""
+        out["reply"] = extra.get("reply") or ""
+        out["lastToolSummary"] = extra.get("lastToolSummary") or ""
+        out["description"] = out.get("description") or extra.get("description") or ""
+        out["toolUseId"] = extra.get("toolUseId") or ""
+    return out
+
+
+def _orch_rows_for(session_ids):
+    """Direct children + grandchildren (workflow agents) for the given parent
+    ids, in every id form the store may hold (bare / runtime-prefixed)."""
+    exact, like = [], []
+    for sid in session_ids:
+        sid = (sid or "").strip()
+        if not sid:
+            continue
+        bare = _orch_bare_id(sid)
+        exact.extend([sid, bare])
+        # Only bare uuids / simple ids go into LIKE (no wildcard chars).
+        if bare and "%" not in bare and "_" not in bare:
+            like.append("%:" + bare)
+            like.append("%:" + bare + "::%")
+            like.append(bare + "::%")
+    if not exact:
+        return []
+    rows = _ls_call("query_subagents_lite",
+                    parent_session_ids=sorted(set(exact)),
+                    parent_like=sorted(set(like)), limit=4000)
+    return rows if isinstance(rows, list) else []
+
+
+def _orch_tree(session_id, rows, *, include_text=True):
+    """Shape rows into {workflows:[{..., agents:[]}], subagents:[], summary}."""
+    sid = (session_id or "").strip()
+    bare = _orch_bare_id(sid)
+
+    def _is_direct_parent(pid):
+        pid = pid or ""
+        return pid == sid or pid == bare or (
+            pid.endswith(":" + bare) and "::" not in pid)
+
+    workflows = {}
+    subagents = []
+    orphans_by_parent = collections.defaultdict(list)
+    for r in rows:
+        child = _orch_child(r, include_text=include_text)
+        pid = child["parent"]
+        if child["kind"] == "workflow" and _is_direct_parent(pid):
+            workflows[child["id"]] = child
+            workflows.setdefault(_orch_bare_id(child["id"]), child)
+        elif child["kind"] == "workflow_agent":
+            orphans_by_parent[pid].append(child)
+            orphans_by_parent[_orch_bare_id(pid)].append(child)
+        elif _is_direct_parent(pid):
+            subagents.append(child)
+    seen = set()
+    for wid, wf in list(workflows.items()):
+        if id(wf) in seen:
+            continue
+        seen.add(id(wf))
+        agents = []
+        ag_seen = set()
+        for key in (wf["id"], _orch_bare_id(wf["id"])):
+            for a in orphans_by_parent.get(key, []):
+                if a["id"] in ag_seen:
+                    continue
+                ag_seen.add(a["id"])
+                agents.append(a)
+        agents.sort(key=lambda a: (a["startedAt"] or 0))
+        wf["agents"] = agents
+        # Live counts from the rows beat the manifest-time counts when the
+        # run is still going (the adapter refreshes running children each
+        # daemon pass; the manifest only lands at the end).
+        if agents:
+            wf["agentsRunning"] = sum(1 for a in agents if a["status"] == "running")
+            wf["agentsFailed"] = sum(1 for a in agents if a["status"] == "failed")
+            wf["agentsDone"] = sum(1 for a in agents if a["status"] == "completed")
+            if not wf.get("agentCount"):
+                wf["agentCount"] = len(agents)
+            wf["rollupCostUsd"] = round(sum(a["costUsd"] for a in agents), 6)
+            wf["rollupTokens"] = sum(a["tokens"] for a in agents)
+        if wf["agentsRunning"] and wf["status"] != "running":
+            # A run whose agents are still warm is still going, whatever the
+            # (possibly stale) run row says.
+            wf["status"] = "running"
+    wf_list = []
+    wf_ids = set()
+    for wf in workflows.values():
+        if wf["id"] in wf_ids:
+            continue
+        wf_ids.add(wf["id"])
+        wf_list.append(wf)
+    wf_list.sort(key=lambda w: -(w["startedAt"] or 0))
+    subagents.sort(key=lambda a: -(a["startedAt"] or 0))
+
+    def _bucket(items):
+        return {
+            "total":     len(items),
+            "running":   sum(1 for x in items if x["status"] == "running"),
+            "completed": sum(1 for x in items if x["status"] == "completed"),
+            "failed":    sum(1 for x in items if x["status"] == "failed"),
+        }
+    all_agents = [a for w in wf_list for a in w["agents"]]
+    running_now = []
+    for x in all_agents + subagents:
+        if x["status"] == "running":
+            running_now.append({
+                "id": x["id"], "label": x["label"], "kind": x["kind"],
+                "nowTool": x.get("nowTool") or "", "phase": x.get("phase") or "",
+            })
+    running_now = running_now[:8]
+    cost = round(sum(a["costUsd"] for a in all_agents) + sum(s["costUsd"] for s in subagents), 6)
+    tokens = sum(a["tokens"] for a in all_agents) + sum(s["tokens"] for s in subagents)
+    return {
+        "session_id": sid,
+        "summary": {
+            "workflows":   _bucket(wf_list),
+            "agents":      _bucket(all_agents),
+            "subagents":   _bucket(subagents),
+            "children":    len(all_agents) + len(subagents),
+            "cost_usd":    cost,
+            "tokens":      tokens,
+            "running_now": running_now,
+        },
+        "workflows": wf_list,
+        "subagents": subagents,
+    }
+
+
+@bp_sessions.route("/api/session-orchestration/<path:session_id>")
+def api_session_orchestration(session_id):
+    """The full fan-out of ONE session: every Workflow run it launched (with
+    each run's agents, their phase/model/state, the context each was handed
+    and what it replied) plus every plain sub-agent — straight from the
+    ``subagents`` table. Local-store only; honest empty tree otherwise."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return jsonify({"error": "session_id required"}), 400
+    rows = _orch_rows_for([sid])
+    tree = _orch_tree(sid, rows, include_text=True)
+    tree["_source"] = "local_store" if rows else "none"
+    return jsonify(tree)
+
+
+@bp_sessions.route("/api/orchestration-summary")
+def api_orchestration_summary():
+    """Bulk per-session fan-out counts for the Activity feed's run headers.
+
+    ``?session_ids=a,b,c`` (max 60). Returns ``{sessions: {sid: summary}}``
+    where summary is the same shape as ``/api/session-orchestration``'s
+    ``summary`` (workflows/agents/subagents buckets + what is running now).
+    No prompt/reply text — this is polled."""
+    raw = request.args.get("session_ids") or request.args.get("ids") or ""
+    ids = [x.strip() for x in raw.split(",") if x.strip()][:60]
+    if not ids:
+        return jsonify({"sessions": {}})
+    rows = _orch_rows_for(ids)
+    out = {}
+    for sid in ids:
+        bare = _orch_bare_id(sid)
+        mine = [r for r in rows
+                if _orch_bare_id((r.get("parent_session_id") or "").split("::", 1)[0]) == bare]
+        if not mine:
+            continue
+        tree = _orch_tree(sid, mine, include_text=False)
+        if tree["summary"]["children"]:
+            out[sid] = tree["summary"]
+    return jsonify({"sessions": out})
+
+
 @bp_sessions.route("/api/subagents/integrity")
 def api_subagents_integrity():
     """Validate subagent state-machine: orphans, cycles, duplicate completions.

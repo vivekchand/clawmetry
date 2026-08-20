@@ -13284,6 +13284,21 @@ def _ingest_keepalive_heartbeat(config: dict) -> bool:
         return True
 
 
+# Session.extra keys a family adapter may stamp on a CHILD session (subagent /
+# workflow run / workflow agent) that ride into the ``subagents`` row's data
+# blob verbatim. Everything the orchestration surfaces read lives here; the
+# adapters clip the free-text ones (prompt / reply / lastToolSummary) to a few
+# hundred chars before we ever see them.
+_SUBAGENT_EXTRA_PASSTHROUGH = (
+    "kind", "workflowRunId", "workflowName", "phase", "phaseIndex", "phases",
+    "agentType", "agentFile", "toolUseId", "spawnDepth", "attempt",
+    "prompt", "reply", "lastTool", "lastToolSummary", "nowTool", "turns",
+    "toolCalls", "durationMs", "tokens", "manifestTokens", "taskId",
+    "agentCount", "agentsRunning", "agentsDone", "agentsFailed", "agentsListed",
+    "rollupCostUsd", "rollupTokens", "description",
+)
+
+
 def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     """Ingest PicoClaw + NanoClaw sessions into DuckDB (and the cloud) so they
     appear in the sessions list + transcripts the same way OpenClaw does.
@@ -13400,8 +13415,16 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _hw_raw = str(_evt_hw.get(ns_id) or "")
                 _hw_ts, _, _hw_rev = _hw_raw.partition("@@")
                 _activity = ended or started
+                # A still-running child (open stream: ended_at=None, so its
+                # activity mark never advances) must be re-read every pass —
+                # its row carries "what it is doing right now" (nowTool /
+                # reply so far / agents running), which is the whole point
+                # of surfacing it live. Finished children fall back to the
+                # normal skip.
+                _child_running = bool(getattr(s, "parent_id", None)) and (
+                    (getattr(s, "cost_status", "") or "") == "running")
                 if (_hw_ts and _activity and _activity <= _hw_ts
-                        and _hw_rev == _ingest_rev):
+                        and _hw_rev == _ingest_rev and not _child_running):
                     continue
                 metadata = {
                     "runtime": runtime,
@@ -13550,9 +13573,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                             "label": _ftitle,
                             "displayName": _ftitle,
                             "depth": int(_sa_extra.get("depth") or 1),
-                            "error": (_sa_extra.get("description")
+                            "error": (_sa_extra.get("error")
+                                      or _sa_extra.get("description")
                                       if s.end_reason == "error" else ""),
                             "runtime": runtime,
+                            # Orchestration capture: the adapter's view of
+                            # WHAT this child is (plain subagent / workflow
+                            # run / workflow agent), the context it was
+                            # handed, what it replied, and what it is doing
+                            # right now. Whitelisted so a future adapter key
+                            # can't silently bloat the row.
+                            **{k: _sa_extra[k] for k in _SUBAGENT_EXTRA_PASSTHROUGH
+                               if _sa_extra.get(k) not in (None, "", [], {})},
                         })
                         _subagent_ingested = True
                     except Exception as _sae:
@@ -13587,22 +13619,26 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                             "family spawn-span ingest failed (%s): %s",
                             ns_id, _spe,
                         )
-                # Sub-agent children stop here: they ride the snapshot
-                # ``subagents[]`` slice (river lanes), not the top-level
-                # Sessions list (local: excluded in ``query_sessions_table``;
-                # cloud: not pushed below). Their tokens/cost are carried on the
-                # subagent row itself (cache-aware, from the adapter), so we skip
-                # the per-event re-ingest + cloud session push entirely — a big
-                # CPU saving for a session that fanned out to hundreds of agents.
-                # Mark the watermark ONLY when the subagent row actually landed,
-                # so a failed write is retried next pass (self-healing) instead of
-                # being stranded behind an advanced high-water mark.
-                if getattr(s, "parent_id", None):
-                    if _activity and _subagent_ingested:
-                        _evt_hw[ns_id] = _activity
-                    continue
-                # Carry the same row to cloud so the cloud Sessions list shows it.
-                cloud_session_rows.append({
+                # Sub-agent children skip the CLOUD session push (they ride
+                # the snapshot ``subagents[]`` slice, not the Sessions list)
+                # but their EVENTS now flow through the rows loop below like
+                # any session (orchestration capture): without event rows the
+                # child's transcript 404s, it never appears in the Activity
+                # feed, and query_subagents' events-derived cost reads 0. The
+                # high-water mark below keeps re-passes cheap; a failed
+                # subagent-row write is retried next pass (self-healing)
+                # because the mark only advances on a clean event ingest.
+                _is_child = bool(getattr(s, "parent_id", None))
+                if _is_child and not _subagent_ingested and _activity:
+                    # Don't let the events loop advance the mark past a child
+                    # whose subagent row failed to land — clamp by clearing
+                    # activity so the mark stays behind and we retry.
+                    _activity = ""
+                # Carry the same row to cloud so the cloud Sessions list
+                # shows it (top-level sessions only; children ride the
+                # snapshot subagents[] slice instead).
+                if not _is_child:
+                    cloud_session_rows.append({
                     "agent_type": "openclaw",
                     "session_id": ns_id,
                     "node_id": node_id,
