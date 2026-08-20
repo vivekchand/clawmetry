@@ -1,5 +1,10 @@
 ## Unreleased
 
+- **Release: the Claude Code gate hook launches the same shadow-proof way. Carries #5038 to PyPI.**
+  - **Who this reaches:** anyone with a Claude Code approval rule whose project contains a folder named `clawmetry`. The gate was installed, but it could not run.
+  - **What was wrong:** the previous release fixed this launcher for Cursor and Copilot, where the consequence was severe enough to block the agent outright. Claude Code treats the same failure as a warning and carries on, so the tool call ran with nobody checking it. A rule that is shown as active and quietly does nothing is worse than one that is visibly off, which is why it is fixed here too.
+  - **What changed:** the hook and the approval mirror now both run through the installed `clawmetry` command, whose location determines what it imports. Entries written by earlier releases are recognised and replaced rather than left in place beside a new one.
+
 - **Release: the Cursor and Copilot gate hooks launch a way the working directory cannot break. Carries #5035 to PyPI.**
   - **Who this reaches:** anyone using the new pre-execution gates whose project happens to contain a folder named `clawmetry`. On GitHub Copilot that combination denied every tool call.
   - **What was wrong:** the runtimes start our hook with the agent's own working directory, and the previous launcher form let that directory take precedence when importing. A project with a folder of that name shadowed the installed package, the command was rejected, and the hook exited with an error. Copilot treats a hook that errors as a refusal, so the agent could not run anything.
