@@ -48,6 +48,20 @@ jobs:
       # version check on Tahoe / macOS 26 and refuses to build; the
       # setup_py2app.py spec is kept in-tree for the day py2app
       # catches up but is not on the shipping path.
+      # Stamp the bundle version into desktop/assets/version.txt so the
+      # shipped shell can report WHICH build the user opened (the open
+      # ping in desktop/app.py reads it). Tag-first, same resolution the
+      # packaging steps below use.
+      - name: Stamp bundle version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          fi
+          echo "$VERSION" > desktop/assets/version.txt
+          echo "stamped $VERSION"
+
       - name: Build .app
         run: pyinstaller --clean --noconfirm desktop/build_mac.spec
 
@@ -212,6 +226,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip wheel
           pip install -r desktop/requirements-dev.txt
+
+      # Stamp the bundle version into desktop/assets/version.txt — see
+      # the macOS job for why. -NoNewline so the shell reads a clean
+      # value, and ASCII so no BOM lands in the file.
+      - name: Stamp bundle version
+        shell: pwsh
+        run: |
+          $refName = "${{ github.ref_name }}"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = $refName.Substring(1)
+          } else {
+            $version = (Select-String -Path dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
+          }
+          [IO.File]::WriteAllText("desktop/assets/version.txt", $version, [Text.Encoding]::ASCII)
+          Write-Host "stamped $version"
 
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
@@ -395,6 +424,20 @@ jobs:
           # actually needs (see requirements-dev.txt), and re-introduce
           # the "cannot import _gi" crash the pin exists to avoid.
           pip install --ignore-installed -r desktop/requirements-dev.txt
+
+      # Stamp the bundle version into desktop/assets/version.txt so the
+      # shipped shell can report WHICH build the user opened (the open
+      # ping in desktop/app.py reads it). Tag-first, same resolution the
+      # packaging steps below use.
+      - name: Stamp bundle version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          fi
+          echo "$VERSION" > desktop/assets/version.txt
+          echo "stamped $VERSION"
 
       - name: Build tray binary
         run: pyinstaller --clean --noconfirm desktop/build_linux.spec

@@ -3403,16 +3403,40 @@ class LocalStore:
             ])
 
     def ingest_subagent(self, sa: dict[str, Any]) -> None:
-        """Upsert one subagent rollup row. Required: subagent_id."""
+        """Upsert one subagent rollup row. Required: subagent_id.
+
+        The ``data`` blob is MERGED with the existing row's blob (new keys
+        win, absent keys survive) rather than replaced wholesale. Two writers
+        legitimately enrich the same row — the sessions.json snapshot pass
+        (label/status/age, every 60s) and the orchestration registry pass
+        (prompt/reply/parent, per sync cycle) — and before the merge the more
+        frequent snapshot writer silently wiped the registry's prompt/reply
+        every minute. Stale-key risk is bounded: readers gate the live-only
+        fields on status (e.g. ``nowTool`` only renders while running).
+        """
         sid = sa.get("subagent_id")
         if not sid:
             raise ValueError("subagent must include 'subagent_id'")
         atype = sa.get("agent_type") or "openclaw"
-        data_blob = _to_blob({k: v for k, v in sa.items()
-                              if k not in {"subagent_id", "agent_type",
-                                           "parent_session_id", "spawned_at",
-                                           "ended_at", "task", "status",
-                                           "cost_usd", "token_count"}})
+        new_extra = {k: v for k, v in sa.items()
+                     if k not in {"subagent_id", "agent_type",
+                                  "parent_session_id", "spawned_at",
+                                  "ended_at", "task", "status",
+                                  "cost_usd", "token_count"}}
+        try:
+            prev = self._fetch(
+                "SELECT data FROM subagents WHERE agent_type = ? AND subagent_id = ?",
+                [atype, sid])
+            if prev and prev[0] and prev[0][0] is not None:
+                decoded = _decode_data_blob_rows([(prev[0][0],)], ["data"])
+                old_extra = decoded[0].get("data") if decoded else None
+                if isinstance(old_extra, dict):
+                    merged = dict(old_extra)
+                    merged.update(new_extra)
+                    new_extra = merged
+        except Exception:
+            pass  # merge is best-effort; a fresh blob is still correct
+        data_blob = _to_blob(new_extra)
         now_ms = int(time.time() * 1000)
         with self._write_lock:
             self._conn.execute("""

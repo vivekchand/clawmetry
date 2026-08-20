@@ -27,6 +27,37 @@ path, file contents, your api_key, your email, anything PII or
 workspace-specific. The wire payload is auditable in
 [`clawmetry/telemetry.py`](clawmetry/telemetry.py).
 
+## The desktop app's open ping
+
+The macOS/Windows/Linux desktop app additionally posts to
+`https://app.clawmetry.com/api/desktop/open` **once per launch**, so we
+can tell a download apart from an actual open, and a first open apart
+from the fiftieth. It goes out in two stages: the shell pings the moment
+the window appears (this one fires even when the app fails to bootstrap
+its Python runtime — otherwise we would never hear about the launches
+that break), and the daemon pings once the dashboard is actually live.
+
+| Field | Example | Why |
+|---|---|---|
+| `install_id` | the same UUID as above | one machine is one install, not two |
+| `session_id` | random UUID per launch | pairs the two stages of one launch |
+| `open_count` / `first_open` | `7` / `false` | first open vs nth; opens counted locally, so offline launches still count |
+| `stage` | `shell` / `daemon` | opened vs opened-and-working |
+| `desktop_version` / `version` | `0.12.900` / `0.12.900` | which bundle, and which pip release it pulled |
+| `os` / `os_version` / `arch` | `Windows` / `11` / `AMD64` | platform support priorities |
+| `mode` | `cloud` / `local` / `unknown` | how many installs sync to Cloud vs stay entirely local |
+| `runtimes` | `["openclaw", "claude_code"]` | which agent runtimes this machine has data for — **ids only**, no paths, no session contents, no counts |
+
+If the app is paired with a Cloud account, the ping carries your API key
+as a bearer header — never in the stored body — purely so the machine
+shows up under **Desktop apps** on your own account page. Unpaired
+installs stay anonymous.
+
+Everything above is subject to the same opt-outs, and an enterprise
+endpoint (`CLAWMETRY_ENDPOINT`, or `endpoint` in
+`~/.clawmetry/config.json`) disables both pings entirely — a self-hosted
+deployment's data stays inside the deployment.
+
 **Opt out** (any one of these disables it permanently):
 
 ```bash
