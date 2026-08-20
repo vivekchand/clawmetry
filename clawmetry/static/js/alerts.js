@@ -181,6 +181,17 @@
         // Local rows speak the local schema (type/threshold/channels);
         // normalise onto the fields the renderer reads.
         serverRules = (serverRules || []).map(function (r) {
+          // DuckDB-backed rows (cloud-authored via the heartbeat relay, or
+          // evaluator-owned rules mirrored from the fleet DB) keep the rule
+          // body in ``condition_json`` — alert_type / threshold_value /
+          // channel_ids live one level down, exactly like the cloud blob.
+          // Flatten first (top-level id/name/enabled win); without this
+          // every such rule missed the alert_type match and rendered as an
+          // "unrecognized" orphan even though it was a perfectly good
+          // daily_spend / token_velocity rule.
+          if (r && r.condition_json && typeof r.condition_json === 'object') {
+            r = Object.assign({}, r.condition_json, r);
+          }
           return Object.assign({}, r, {
             alert_type: r.alert_type || r.type,
             name: r.name || r.type,

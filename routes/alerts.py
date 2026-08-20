@@ -107,7 +107,24 @@ def _try_local_store_alert_rules():
     # the handler fall through to the legacy fleet-DB path, which hangs
     # ~3 s on this user's box. Return [] tagged with the local_store
     # source instead — the dashboard JS handles an empty list cleanly.
-    return {"rules": rows or [], "_source": "local_store"}
+    #
+    # DuckDB keeps the rule body (alert_type / threshold_value / channel_ids
+    # / runtime) inside ``condition_json``; the top level is id / name /
+    # enabled / timestamps. Promote body keys the top level lacks so the
+    # evaluator-provenance stamp below, the mirror repair, and the Alerts
+    # tab all see ``alert_type`` where they read it. Without this every
+    # DuckDB-backed rule was an "unrecognized" orphan with no evaluator,
+    # even a valid daily_spend rule. ``condition_json`` stays intact.
+    flat = []
+    for r in rows or []:
+        if isinstance(r, dict):
+            body = r.get("condition_json")
+            if isinstance(body, dict) and body:
+                merged = dict(body)
+                merged.update(r)
+                r = merged
+        flat.append(r)
+    return {"rules": flat, "_source": "local_store"}
 
 
 def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
