@@ -2463,31 +2463,48 @@ class LocalStore:
                       session_id, exc_info=True)
             return False
 
-    def get_session_location(self, session_id: str) -> dict[str, Any] | None:
+    def get_session_location(
+        self,
+        session_id: str,
+        agent_type: str | None = None,
+    ) -> dict[str, Any] | None:
         """Read one session's ``cwd`` / ``git_branch`` / decoded ``metadata``.
 
         Companion read for :meth:`update_session_location`, added for the
         process-control cwd backfill (the cloud Stop/Pause relay carries no
         cwd, so the daemon looks the directory up here before resolving the
-        session to a pid). Matches by ``session_id`` alone — the caller may
-        hold either the namespaced (``runtime:uuid``) or bare id and tries
-        both. Returns None when the session is unknown; never raises.
+        session to a pid).
+
+        ``agent_type`` scopes the lookup: the table is keyed
+        ``(agent_type, session_id)``, and an unscoped match could hand back a
+        DIFFERENT runtime's directory for a colliding id — which would then
+        be used to pick a process to signal. Goes through ``_fetch`` so it
+        takes the same lock as every other read rather than touching the
+        connection directly. Returns None when unknown; never raises.
         """
         sid = _clean_str(session_id)
         if not sid:
             return None
         try:
-            row = self._conn.execute(
-                "SELECT cwd, git_branch, metadata FROM sessions "
-                "WHERE session_id = ? LIMIT 1",
-                [sid],
-            ).fetchone()
+            if agent_type:
+                rows = self._fetch(
+                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "WHERE agent_type = ? AND session_id = ? LIMIT 1",
+                    [str(agent_type), sid],
+                )
+            else:
+                rows = self._fetch(
+                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "WHERE session_id = ? LIMIT 1",
+                    [sid],
+                )
         except Exception:
             log.debug("local store: get_session_location failed for %s",
                       sid, exc_info=True)
             return None
-        if row is None:
+        if not rows:
             return None
+        row = rows[0]
         meta: dict[str, Any] = {}
         if row[2]:
             try:

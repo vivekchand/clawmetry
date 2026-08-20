@@ -40,7 +40,9 @@ Stdlib-only: the hook fast path runs on every gated tool call.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shlex
 import sys
 import time
 
@@ -64,9 +66,25 @@ def _utcnow() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+log = logging.getLogger("clawmetry.runtime_gates")
+
+
 def _hook_command(runtime_slug: str, base: str) -> str:
+    r"""The hook command line each runtime will execute.
+
+    The interpreter path is QUOTED: ``sys.executable`` routinely contains a
+    space (``/Users/First Last/venv/bin/python``, ``C:\Program Files\...``)
+    and these runtimes shell-split the command. An unquoted path split at the
+    space into a "command not found", and a Copilot ``preToolUse`` command
+    hook that exits non-zero is fail-CLOSED — every gated tool call would be
+    denied. Found in review before this ever shipped."""
     py = _windowless_python(sys.executable or "python3", os.name == "nt")
-    return f"{py} -m clawmetry hook {runtime_slug} --base {base}"
+    if os.name == "nt":
+        import subprocess as _sp
+        quoted = _sp.list2cmdline([py])
+    else:
+        quoted = shlex.quote(py)
+    return f"{quoted} -m clawmetry hook {runtime_slug} --base {base}"
 
 
 def _timeout_from_policies(policies) -> int:
@@ -108,6 +126,35 @@ def _policies_gate_reads(policies) -> bool:
                 return True
             continue
         if _canonical_tool(tool) == "read":
+            return True
+    return False
+
+
+def _policies_gate_uncovered_tools(policies, covered: "set") -> bool:
+    """True when some require_approval policy targets a tool category our
+    installed hook events do NOT see.
+
+    This decides whether we may claim hook coverage. Cursor's blocking events
+    cover exec (shell), MCP tools and (optionally) reads — but NOT file
+    writes. Claiming blanket coverage for a write-only policy told the
+    reactive watcher to skip the runtime entirely, so the policy would have
+    been enforced by nobody (found in review). When anything is uncovered we
+    leave the marker off and the after-the-fact watcher keeps working."""
+    try:
+        from clawmetry.approvals import _canonical_tool
+    except Exception:
+        def _canonical_tool(name):  # type: ignore
+            return (name or "").strip().lower()
+    for p in policies or []:
+        if not isinstance(p, dict):
+            continue
+        if (p.get("action") or "require_approval") != "require_approval":
+            continue
+        tool = str(p.get("tool") or "").strip()
+        if tool == "":
+            # Tool-agnostic (incl. risk-gated): spans every category.
+            return True
+        if _canonical_tool(tool) not in covered:
             return True
     return False
 
@@ -170,8 +217,10 @@ def cursor_gate_handler(want_gate: bool, policies) -> None:
             _cursor_install(policies)
         else:
             _cursor_uninstall()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - a gate must never kill the watcher
+        # Logged, not swallowed silently: a gate that never installed is
+        # otherwise indistinguishable from one that did.
+        log.warning("cursor gate sync failed (%s): %s", type(e).__name__, e)
 
 
 def _cursor_install(policies) -> None:
@@ -190,8 +239,10 @@ def _cursor_install(policies) -> None:
     desired_entry = {"type": "command", "command": command, "timeout": timeout}
 
     events = list(_CURSOR_BASE_EVENTS)
+    covered = {"exec", "web", "search"}  # shell + MCP tool calls
     if _policies_gate_reads(policies):
         events.append(_CURSOR_READ_EVENT)
+        covered.add("read")
 
     changed = False
     for ev in events:
@@ -223,7 +274,14 @@ def _cursor_install(policies) -> None:
 
     if changed:
         _write_json_atomic(path, config)
-    marker_written = _ensure_marker("cursor")
+    # Only claim coverage when our events see every gated category; otherwise
+    # the reactive watcher must keep covering this runtime (see
+    # _policies_gate_uncovered_tools).
+    if _policies_gate_uncovered_tools(policies, covered):
+        _remove_marker_if_ours("cursor")
+        marker_written = False
+    else:
+        marker_written = _ensure_marker("cursor")
     st = _read_json(_CURSOR_STATE_PATH)
     if changed or not st.get("installed"):
         _write_json_atomic(_CURSOR_STATE_PATH, {
@@ -288,8 +346,8 @@ def copilot_gate_handler(want_gate: bool, policies) -> None:
             _copilot_install(policies)
         else:
             _copilot_uninstall()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - a gate must never kill the watcher
+        log.warning("copilot gate sync failed (%s): %s", type(e).__name__, e)
 
 
 def _copilot_install(policies) -> None:
@@ -311,9 +369,14 @@ def _copilot_install(policies) -> None:
     }
     current = _read_json(path)
     marker_written = _ensure_marker("copilot")
-    if current == desired:
+    st = _read_json(_COPILOT_STATE_PATH)
+    if current == desired and st.get("installed"):
         return
-    _write_json_atomic(path, desired)
+    if current != desired:
+        _write_json_atomic(path, desired)
+    # Self-heal the state file even when the hook file was already correct:
+    # without this, a deleted state file made uninstall a permanent no-op and
+    # our hook stayed installed forever (found in review).
     _write_json_atomic(_COPILOT_STATE_PATH, {
         "installed": True, "hooks_path": path, "command": command,
         "timeout": timeout, "base": base,
@@ -329,7 +392,7 @@ def _copilot_uninstall() -> None:
     # Only delete a file that is still OURS (marker in the command).
     current = _read_json(path)
     blob = json.dumps(current) if current else ""
-    if COPILOT_CMD_MARKER in blob or not current:
+    if COPILOT_CMD_MARKER in blob:
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -357,6 +420,20 @@ def _read_stdin_event() -> dict:
         return {}
 
 
+def _first_workspace_root(event: dict) -> str:
+    """First entry of Cursor's ``workspace_roots``, defensively.
+
+    The field is documented as a list of folder paths, but a hook client must
+    never assume a payload shape: a dict/int/None here previously raised
+    (KeyError/TypeError) out of the client, which for Copilot means a denied
+    tool call. Anything unexpected yields ''."""
+    roots = event.get("workspace_roots")
+    if isinstance(roots, (list, tuple)) and roots:
+        first = roots[0]
+        return first if isinstance(first, str) else ""
+    return ""
+
+
 def _cursor_payload(event: dict) -> dict:
     """Map a Cursor hook stdin event onto the receiver's neutral shape.
 
@@ -380,8 +457,7 @@ def _cursor_payload(event: dict) -> dict:
         # per-run session_id changes every generation.
         "session_id": str(event.get("conversation_id")
                           or event.get("session_id") or ""),
-        "cwd": str(event.get("cwd")
-                   or (event.get("workspace_roots") or [""])[0] or ""),
+        "cwd": str(event.get("cwd") or _first_workspace_root(event) or ""),
         "hook_event_name": hook_event or "beforeShellExecution",
         "tool_use_id": str(event.get("generation_id") or ""),
     }
@@ -435,8 +511,20 @@ _RUNTIME_CLIENTS = {
 
 def hook_main(argv: "list | None" = None) -> int:
     """`clawmetry hook cursor|copilot --base <url>` — ALWAYS returns 0.
-    On a decision, print the runtime's own response shape; on ANY failure
-    print nothing (no opinion → the runtime's normal permission flow)."""
+
+    Total fail-open wrapper. A Copilot ``preToolUse`` COMMAND hook that
+    crashes or exits non-zero is fail-CLOSED (it denies the tool), so an
+    unhandled exception here would block every gated call on the user's
+    machine. BaseException is caught deliberately: even an unexpected
+    SystemExit/MemoryError must degrade to "no opinion", never to a denied
+    agent."""
+    try:
+        return _hook_main_inner(argv)
+    except BaseException:  # noqa: BLE001 - see docstring; must never propagate
+        return 0
+
+
+def _hook_main_inner(argv: "list | None" = None) -> int:
     argv = list(argv or [])
     if not argv or argv[0] not in _RUNTIME_CLIENTS:
         return 0

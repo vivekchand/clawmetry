@@ -854,3 +854,93 @@ def test_split_support_runtimes_is_explicit_and_not_in_supported():
     assert "cursor" in pc.SPLIT_SUPPORT_RUNTIMES
     assert "cursor" in pc.UNSUPPORTED_RUNTIMES
     assert "cursor" not in pc.SUPPORTED_RUNTIMES
+
+
+# ── 8. Fixes from the adversarial review (2026-08-21) ───────────────────────
+
+
+def test_hook_command_quotes_interpreter_with_spaces(rt_gates, monkeypatch):
+    """sys.executable routinely contains a space. The runtimes shell-split
+    the hook command, and a Copilot preToolUse command hook that exits
+    non-zero is fail-CLOSED — an unquoted path would deny every tool call."""
+    import shlex
+    rg, _ = rt_gates
+    spacey = "/Users/First Last/venv/bin/python3"
+    monkeypatch.setattr(rg, "_windowless_python", lambda py, w, **k: spacey)
+    cmd = rg._hook_command("copilot", "http://127.0.0.1:8900")
+    parts = shlex.split(cmd)
+    assert parts[0] == spacey
+    assert parts[1:4] == ["-m", "clawmetry", "hook"]
+
+
+@pytest.mark.parametrize("payload", [
+    '{"workspace_roots": {"a": 1}, "command": "ls"}',
+    '{"workspace_roots": 5, "command": "ls"}',
+    '{"tool_name": null, "tool_input": null}',
+    'not json at all',
+    '',
+])
+def test_client_fails_open_on_malformed_payloads(rt_gates, monkeypatch, payload):
+    """Any client crash is fail-CLOSED for Copilot (a crashed command hook
+    denies the tool), so no payload may raise out of hook_main."""
+    rg, _ = rt_gates
+    monkeypatch.setattr(rg, "_post_json", lambda *a, **k: None)
+    monkeypatch.setattr(rg.sys, "stdin", io.StringIO(payload))
+    out = io.StringIO()
+    monkeypatch.setattr(rg.sys, "stdout", out)
+    assert rg.hook_main(["cursor"]) == 0
+    assert out.getvalue() == ""
+
+
+def test_client_fails_open_even_if_payload_mapper_explodes(rt_gates, monkeypatch):
+    rg, _ = rt_gates
+
+    def _boom(_event):
+        raise RuntimeError("mapper exploded")
+
+    monkeypatch.setitem(rg._RUNTIME_CLIENTS, "cursor", (_boom, rg._emit_cursor))
+    monkeypatch.setattr(rg.sys, "stdin", io.StringIO("{}"))
+    out = io.StringIO()
+    monkeypatch.setattr(rg.sys, "stdout", out)
+    assert rg.hook_main(["cursor"]) == 0
+    assert out.getvalue() == ""
+
+
+def test_cursor_marker_not_claimed_for_uncovered_tool_categories(rt_gates):
+    """A write-only policy installs shell/MCP hooks that cannot see writes.
+    Claiming PreToolUse coverage would make the reactive watcher skip the
+    runtime, leaving the policy enforced by nobody."""
+    rg, tmp = rt_gates
+    rg.cursor_gate_handler(True, [{"name": "w", "tool": "write",
+                                   "action": "require_approval", "timeout": 60}])
+    marker = json.loads((tmp / "marker.json").read_text()) \
+        if (tmp / "marker.json").exists() else {}
+    assert "cursor" not in marker
+    # An exec policy IS fully covered, so the marker is claimed.
+    rg.cursor_gate_handler(True, [{"name": "e", "tool": "exec",
+                                   "action": "require_approval", "timeout": 60}])
+    assert "cursor" in json.loads((tmp / "marker.json").read_text())
+
+
+def test_copilot_uninstall_still_works_after_state_file_loss(rt_gates):
+    """A deleted state file used to make uninstall a permanent no-op, so our
+    hook stayed installed forever."""
+    rg, tmp = rt_gates
+    rg.copilot_gate_handler(True, _POL)
+    path = tmp / "copilot" / "hooks" / "clawmetry.json"
+    assert path.exists()
+    (tmp / "copilot_gate.json").unlink()      # lose the state file
+    rg.copilot_gate_handler(True, _POL)       # refresh self-heals it
+    rg.copilot_gate_handler(False, [])
+    assert not path.exists()
+
+
+def test_copilot_uninstall_leaves_a_foreign_file_alone(rt_gates):
+    """Only a file still carrying our marker may be deleted."""
+    rg, tmp = rt_gates
+    rg.copilot_gate_handler(True, _POL)
+    path = tmp / "copilot" / "hooks" / "clawmetry.json"
+    path.write_text(json.dumps({"version": 1, "hooks": {"preToolUse": [
+        {"type": "command", "command": "/usr/local/bin/someone-else"}]}}))
+    rg.copilot_gate_handler(False, [])
+    assert path.exists(), "a foreign file must never be deleted"

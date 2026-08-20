@@ -9598,10 +9598,12 @@ def _proc_control_cwd_backfill(runtime: str, session_id: str) -> str:
     try:
         from clawmetry import local_store as _ls
         store = _ls.get_store()
-        for sid in (ns_id, session_id):
-            row = store.get_session_location(sid)
-            if not row:
-                continue
+        # Family rows are stored under agent_type 'openclaw' with a
+        # namespaced session id. Deliberately NOT falling back to the bare
+        # id: an unscoped match can return a DIFFERENT runtime's directory,
+        # which would then be used to choose a process to signal.
+        row = store.get_session_location(ns_id, agent_type="openclaw")
+        if row:
             cwd = row.get("cwd")
             if isinstance(cwd, str) and cwd.strip():
                 return cwd.strip()
@@ -9648,7 +9650,9 @@ def _run_process_control(config: dict, action: dict) -> None:
     """Worker body for _action_process_control (runs in a daemon thread)."""
     import clawmetry.process_control as _pc
     atype = action.get("type")
-    runtime = str(action.get("runtime") or "").strip()
+    # Lowercased once: _registered_kill lowercases its lookup, and the
+    # SUPPORTED_RUNTIMES membership test below must agree with it.
+    runtime = str(action.get("runtime") or "").strip().lower()
     session_id = str(action.get("session_id") or "").strip()
     cwd = str(action.get("cwd") or "").strip()
     # The cloud relay does not send cwd; cwd-resolved runtimes need it.

@@ -595,16 +595,42 @@ def _write_copilot_log(home, sid, pid, epoch_ms=1787175091173):
     return p
 
 
-def test_resolve_copilot_maps_sid_to_pid_from_log_filename(tmp_path, monkeypatch):
+def test_resolve_copilot_maps_sid_to_pid_from_log_filename(spawned, tmp_path,
+                                                           monkeypatch):
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
     sid = "1035fc8f-aaaa-bbbb-cccc-333333333333"
-    _write_copilot_log(tmp_path, sid, 29965)
+    p = spawned()  # must be a LIVE pid: stale logs are skipped by design
+    _write_copilot_log(tmp_path, sid, p.pid)
     info = pc.resolve_copilot(sid)
     assert info["ok"] is True
-    assert info["pid"] == 29965
+    assert info["pid"] == p.pid
     assert info["runtime"] == "copilot"
     # epoch_ms from the FILENAME becomes the recorded start (seconds).
     assert abs(info["recorded_start"] - 1787175091.173) < 0.01
+
+
+def test_resolve_copilot_skips_stale_log_for_dead_pid(tmp_path, monkeypatch):
+    """The per-process log is not removed on exit, so a stale entry is
+    normal. It must be skipped, not returned — otherwise it masks a live
+    session and suppresses the argv+cwd fallback."""
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
+    sid = "dead-session"
+    _write_copilot_log(tmp_path, sid, 999999)
+    info = pc.resolve_copilot(sid)
+    assert info["ok"] is False
+    assert info["reason"] == "session_not_in_copilot_logs"
+
+
+def test_resolve_copilot_requires_exact_session_id(spawned, tmp_path,
+                                                   monkeypatch):
+    """A truncated id must NOT resolve to the full session's pid: the
+    recorded start comes from the same filename, so the pid-reuse guard
+    would pass and we would signal the wrong session."""
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
+    p = spawned()
+    _write_copilot_log(tmp_path, "1035fc8f-full-uuid-here", p.pid)
+    assert pc.resolve_copilot("1035fc8f")["ok"] is False
+    assert pc.resolve_copilot("1035fc8f-full-uuid-here")["ok"] is True
 
 
 def test_resolve_copilot_unknown_sid(tmp_path, monkeypatch):
@@ -700,10 +726,27 @@ def test_hint_matches_exact_for_pi():
 
 
 def test_hint_matches_substring_for_others():
+    # copilot is EXACT-basename: the platform binary (the real agent) is
+    # `.../@github/copilot-darwin-arm64/copilot`, while the npm loader runs
+    # as `node`. Matching the loader is unnecessary (we want the child) and
+    # matching on the cmdline would also hit the editor's language server.
+    assert pc._hint_matches(("copilot",), "copilot",
+                            "/opt/homebrew/bin/copilot -p hi") is True
     assert pc._hint_matches(("copilot",), "node",
-                            "node /opt/homebrew/bin/copilot -p hi") is True
+                            "node /opt/homebrew/bin/copilot -p hi") is False
     assert pc._hint_matches(("qwen",), "node",
                             "node /x/qwen-code/bundle/gemini.js") is True
+
+
+def test_hint_matches_excludes_language_servers():
+    """An editor language server shares the runtime's name and runs in the
+    workspace root — signaling it would kill the user's editor tooling."""
+    assert pc._hint_matches(
+        ("copilot",), "node",
+        "node /u/.vscode/extensions/github.copilot/dist/"
+        "copilot-language-server --stdio") is False
+    assert pc._hint_matches(("cursor-agent",), "node",
+                            "node /x/cursor/worker-server") is False
     assert pc._hint_matches(("dsh",), "bash", "bash /tmp/dshboard.sh") is False
     assert pc._hint_matches(("dsh",), "dsh", "dsh --resume x") is True
 
@@ -720,3 +763,72 @@ def test_cursor_cli_resolves_ide_refuses():
     info = pc.resolve_session("cursor", session_id="x", cwd="")
     assert info["ok"] is False
     assert info.get("unsupported") is True
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Safety guards added after adversarial review (2026-08-21)
+# ──────────────────────────────────────────────────────────────────────────
+def test_cursor_ide_session_never_resolves_to_a_pid(tmp_path, monkeypatch):
+    """An IDE conversation must never resolve to a CLI agent's pid just
+    because they share a directory — that would stop an unrelated terminal
+    session and report success."""
+    monkeypatch.setenv("CLAWMETRY_CURSOR_CHATS_ROOT", str(tmp_path / "chats"))
+    info = pc.resolve_session("cursor", session_id="ide-conversation-1",
+                              cwd=os.getcwd())
+    assert info["ok"] is False
+    assert info.get("unsupported") is True
+    assert info["reason"] == "cursor_single_ide_process_no_per_session_signal"
+
+
+def test_cursor_cli_session_is_recognised(tmp_path, monkeypatch):
+    """A session present in Cursor's CLI chat store IS a CLI session, so it
+    gets a real resolution attempt (here: no process, honest not-found)."""
+    chats = tmp_path / "chats" / "d10a1c600d91eeb605acc62dd97e0ff8" / "sid-1"
+    chats.mkdir(parents=True)
+    (chats / "meta.json").write_text('{"cwd": "/proj"}')
+    monkeypatch.setenv("CLAWMETRY_CURSOR_CHATS_ROOT", str(tmp_path / "chats"))
+    info = pc.resolve_session("cursor", session_id="sid-1", cwd="/proj")
+    assert info["ok"] is False
+    assert info.get("unsupported") is not True
+    assert info["reason"] in ("cursor_cli_session_process_not_found",
+                              "no_matching_process", "ambiguous_candidates")
+
+
+def test_cursor_path_traversal_session_id_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAWMETRY_CURSOR_CHATS_ROOT", str(tmp_path / "chats"))
+    assert pc._cursor_cli_session_exists("../../etc") is False
+    assert pc._cursor_cli_session_exists("") is False
+
+
+@posix_only
+def test_ambiguous_cwd_candidates_are_refused(spawned):
+    """Two sibling sessions of the same runtime in one directory: refuse
+    rather than silently stopping the lowest pid (somebody else's session)."""
+    a, b = spawned(), spawned()
+    assert pc._pick_session_pid([a.pid, b.pid]) is None
+    assert pc._pick_session_pid([a.pid]) == a.pid
+
+
+@posix_only
+def test_parent_with_children_is_not_ambiguous(spawned):
+    """A top-level CLI plus its own children is NOT ambiguous — the ancestor
+    is the session process."""
+    code = ("import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            "time.sleep(60)\n")
+    parent = spawned([sys.executable, "-c", code])
+    time.sleep(0.6)
+    kids = pc.descendant_pids(parent.pid)
+    assert kids, "expected a child process"
+    assert pc._pick_session_pid([parent.pid] + kids) == parent.pid
+
+
+def test_qwen_sidecar_unverifiable_pid_fails_closed(tmp_path, monkeypatch):
+    """The sidecar is not deleted on exit. A live pid whose identity cannot
+    be read must be REFUSED, not signaled on liveness alone."""
+    monkeypatch.setenv("QWEN_CODE_HOME", str(tmp_path))
+    _write_qwen_sidecar(tmp_path, "sid-x", os.getpid(), tmp_path)
+    monkeypatch.setattr(pc, "_proc_cmdline", lambda pid: [])
+    info = pc.resolve_qwen_code("sid-x")
+    assert info["ok"] is False
+    assert info["reason"] == "sidecar_pid_unverifiable"

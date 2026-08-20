@@ -593,6 +593,26 @@ def descendant_pids(pid: int) -> List[int]:
     return out
 
 
+def _pick_session_pid(candidates: List[int]) -> Optional[int]:
+    """Choose THE session process among cwd+argv matches, or None when the
+    match is ambiguous.
+
+    One candidate -> that one. Several -> only if exactly one of them is an
+    ancestor of all the others (the top-level CLI with its own children);
+    two unrelated sessions in the same directory are ambiguous and must be
+    refused rather than guessed."""
+    uniq = sorted(set(int(c) for c in candidates))
+    if not uniq:
+        return None
+    if len(uniq) == 1:
+        return uniq[0]
+    for cand in uniq:
+        tree = set(descendant_pids(cand)) | {cand}
+        if all(other in tree for other in uniq):
+            return cand
+    return None
+
+
 def _pgid_of(pid: int) -> Optional[int]:
     """Process-group id of ``pid``. Uses os.getpgid (cheap) then ps fallback."""
     try:
@@ -920,9 +940,11 @@ _RUNTIME_ARGV_HINTS = {
     "opencode": ("opencode", "opencode-tui"),
     "aider": ("aider",),
     # GitHub Copilot CLI: the npm loader (`node /opt/homebrew/bin/copilot`)
-    # spawns the platform binary (`…/@github/copilot-darwin-arm64/copilot`);
-    # both match the "copilot" hint. Used as the FALLBACK when the log-file
-    # map below can't resolve the session (see resolve_copilot).
+    # spawns the platform binary (`…/@github/copilot-darwin-arm64/copilot`).
+    # EXACT basename only: a substring hint also matched the VS Code
+    # extension's `copilot-language-server`, whose cwd is routinely the
+    # workspace root — the fallback would have SIGKILLed the user's editor
+    # tooling (found in review).
     "copilot": ("copilot",),
     # qwen-code's CLI is a node bundle; "qwen" appears in both the launcher
     # basename and the bundle path. Fallback for resolve_qwen_code.
@@ -943,21 +965,32 @@ _RUNTIME_ARGV_HINTS = {
 # Hints in this set must equal the process's argv basename exactly —
 # substring matching for 2-3 letter names would hit pip/python ("pi") or any
 # path containing "dsh".
-_EXACT_ARGV_HINTS = frozenset({"pi", "dsh"})
+_EXACT_ARGV_HINTS = frozenset({"pi", "dsh", "copilot"})
+
+# Substrings that disqualify a candidate even when a hint matched: these are
+# editor/language-server side processes that share a runtime's name but are
+# NOT the per-session agent. Signaling one kills the user's editor tooling.
+_ARGV_EXCLUDE = ("language-server", "language_server", "-lsp", "lsp-server",
+                 "worker-server", "--stdio")
 
 
 def _hint_matches(hints: Tuple[str, ...], name: str, blob: str) -> bool:
     """True when a process (argv[0] basename ``name``, full lowered cmdline
     ``blob``) matches one of the runtime's argv hints. Exact-set hints must
     equal the basename; everything else keeps the historical substring
-    semantics."""
+    semantics. Editor/language-server side processes are excluded outright
+    (see ``_ARGV_EXCLUDE``) — they share the runtime's name, run in the
+    workspace root, and are never the per-session agent."""
+    blob_l = (blob or "").lower()
+    if any(bad in blob_l for bad in _ARGV_EXCLUDE):
+        return False
     base = os.path.basename(name or "").lower()
     for h in hints:
         if h in _EXACT_ARGV_HINTS:
             if base == h:
                 return True
             continue
-        if h in base or h in blob:
+        if h in base or h in blob_l:
             return True
     return False
 
@@ -997,7 +1030,13 @@ def resolve_copilot(session_id: str) -> Dict[str, Any]:
                 "reason": "no_copilot_logs_dir", "session_id": sid}
     # Filename embeds the start epoch_ms: newest first, bounded scan.
     names.sort(reverse=True)
-    marker = "Workspace initialized: " + sid
+    # ANCHORED: an unanchored substring let a truncated id ("1035fc8f")
+    # resolve to a DIFFERENT session's pid — and because recorded_start comes
+    # from that same filename, the pid-reuse guard would pass, producing a
+    # correctly-guarded signal to the wrong session (found in review).
+    import re as _re
+    marker_re = _re.compile(
+        r"Workspace initialized: " + _re.escape(sid) + r"(?![0-9A-Za-z_-])")
     for name in names[:200]:
         parts = name[len("process-"):-len(".log")].split("-")
         if len(parts) != 2:
@@ -1013,7 +1052,13 @@ def resolve_copilot(session_id: str) -> Dict[str, Any]:
                 head = fh.read(16384)
         except Exception:  # noqa: BLE001
             continue
-        if marker not in head:
+        if not marker_re.search(head):
+            continue
+        # The sidecar log is NOT removed when the run exits, so a stale entry
+        # is normal. Skip dead pids instead of returning them: otherwise a
+        # newer stale log masked a live session and suppressed the argv+cwd
+        # fallback (found in review).
+        if not is_alive(pid):
             continue
         return {
             "ok": True,
@@ -1076,11 +1121,16 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
         if pid <= 0 or not is_alive(pid):
             return {"ok": False, "runtime": "qwen_code",
                     "reason": "sidecar_pid_not_alive", "session_id": sid}
-        # Sidecar start times are unreliable — guard by identity instead:
-        # the live process must still look like qwen, and (when readable)
-        # still run in the recorded work_dir.
+        # Sidecar start times are unreliable (the file records its WRITE
+        # time), so identity is the guard instead — and it FAILS CLOSED: the
+        # sidecar is not deleted on exit, so a stale pid recycled onto a
+        # process whose cmdline we cannot read must be refused, never
+        # signaled on liveness alone (found in review).
         blob = " ".join(_proc_cmdline(pid)).lower()
-        if blob and "qwen" not in blob:
+        if not blob:
+            return {"ok": False, "runtime": "qwen_code",
+                    "reason": "sidecar_pid_unverifiable", "session_id": sid}
+        if "qwen" not in blob:
             return {"ok": False, "runtime": "qwen_code",
                     "reason": "sidecar_pid_not_qwen", "session_id": sid}
         work_dir = rec.get("work_dir") or None
@@ -1096,21 +1146,54 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
             "reason": "session_not_in_qwen_sidecars", "session_id": sid}
 
 
+def _cursor_cli_session_exists(session_id: str) -> bool:
+    """True when ``session_id`` is a Cursor **CLI** session.
+
+    Cursor CLI writes ``<chats>/<md5(cwd)>/<session-id>/meta.json`` per
+    session (verified live 2026-08-19); IDE conversations live in the
+    editor's own store under different ids. Without this check, a stop
+    request for an IDE conversation resolved to whatever ``cursor-agent``
+    process happened to share the directory — killing an unrelated terminal
+    agent and reporting success (found in review). Never raises."""
+    sid = str(session_id or "").strip()
+    if not sid or os.sep in sid or sid in (".", ".."):
+        return False
+    root = os.path.expanduser(
+        os.environ.get("CLAWMETRY_CURSOR_CHATS_ROOT")
+        or os.path.join("~", ".cursor", "chats"))
+    try:
+        for hashed in os.listdir(root):
+            if os.path.isdir(os.path.join(root, hashed, sid)):
+                return True
+    except Exception:  # noqa: BLE001 - absent dir / permission
+        return False
+    return False
+
+
 def resolve_cursor(session_id: str, cwd: str) -> Dict[str, Any]:
-    """Cursor: CLI sessions (``cursor-agent`` / ``agent``) run one process
-    tree per session and ARE killable; IDE (GUI) conversations share the
-    single editor process and are not. We match CLI processes by the
-    ``cursor-agent`` marker in their cmdline (the CLI runs as
-    ``node ~/.local/share/cursor-agent/versions/<v>/index.js``) plus the
-    session's cwd. When no CLI process matches, we return the honest
-    single-IDE-process refusal instead of guessing."""
+    """Cursor: CLI sessions (``cursor-agent``) run one process tree per
+    session and ARE killable; IDE (GUI) conversations share the single editor
+    process and are not.
+
+    Support is decided PER SESSION (see ``SPLIT_SUPPORT_RUNTIMES``), and the
+    CLI half must be PROVEN, not assumed: we require the session to exist in
+    Cursor's CLI chat store before we will resolve any pid for it. Anything
+    else — an IDE conversation, an unknown id — gets the honest refusal."""
+    if not _cursor_cli_session_exists(session_id):
+        return {"ok": False, "runtime": "cursor", "unsupported": True,
+                "reason": "cursor_single_ide_process_no_per_session_signal",
+                "session_id": session_id}
     if cwd:
         hit = resolve_by_cwd("cursor", cwd)
         if hit.get("ok"):
             return hit
-    return {"ok": False, "runtime": "cursor", "unsupported": True,
-            "reason": "cursor_single_ide_process_no_per_session_signal",
+    return {"ok": False, "runtime": "cursor",
+            "reason": "cursor_cli_session_process_not_found",
             "session_id": session_id}
+
+
+#: Per-session resolvers for SPLIT_SUPPORT_RUNTIMES (see that constant).
+_SPLIT_RESOLVERS = {"cursor": resolve_cursor}
 
 
 def resolve_by_cwd(runtime: str, cwd: str) -> Dict[str, Any]:
@@ -1167,7 +1250,15 @@ def resolve_by_cwd(runtime: str, cwd: str) -> Dict[str, Any]:
     if not candidates:
         return {"ok": False, "runtime": runtime, "reason": "no_matching_process",
                 "cwd": target_cwd}
-    pid = min(candidates)
+    pid = _pick_session_pid(candidates)
+    if pid is None:
+        # Two sibling sessions of the same runtime in the same directory is
+        # the ordinary case (two terminals, one repo). Picking the lowest pid
+        # would stop somebody else's session and report success, so refuse
+        # and say why (found in review).
+        return {"ok": False, "runtime": runtime,
+                "reason": "ambiguous_candidates", "cwd": target_cwd,
+                "candidates": sorted(candidates)}
     return {
         "ok": True,
         "runtime": runtime,
@@ -1194,8 +1285,9 @@ def resolve_session(runtime: str, session_id: str = "",
     * anything else -> unsupported.
     """
     runtime = (runtime or "").lower()
-    if runtime == "cursor":
-        return resolve_cursor(session_id, cwd)
+    if runtime in SPLIT_SUPPORT_RUNTIMES:
+        # Support decided per session, not per runtime (today: cursor).
+        return _SPLIT_RESOLVERS[runtime](session_id, cwd)
     if runtime in UNSUPPORTED_RUNTIMES:
         return {"ok": False, "runtime": runtime, "unsupported": True,
                 "reason": "runtime_not_signal_supported"}

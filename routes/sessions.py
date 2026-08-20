@@ -3991,7 +3991,32 @@ def api_session_stop(session_id):
                 _cwd = _row.get("cwd") or ""
             except Exception:
                 _cwd = ""
-            res = _pc.kill_session(_rt, _bare.strip(), _cwd) or {}
+            # Bounded: without psutil the resolver shells out per process
+            # (~9s on a miss) and graceful_kill adds its escalation window,
+            # which would pin a web worker. Run it on a worker thread with a
+            # deadline and answer honestly if it outlives that.
+            import concurrent.futures as _cf
+            try:
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    res = _ex.submit(
+                        _pc.kill_session, _rt, _bare.strip(), _cwd
+                    ).result(timeout=20) or {}
+            except _cf.TimeoutError:
+                return jsonify({
+                    "ok": False,
+                    "session_id": str(session_id),
+                    "engine": "process_control",
+                    "detail": ("still working on it — the stop is running in "
+                               "the background; refresh in a moment to see "
+                               "whether this session ended"),
+                    "pending": True,
+                }), 202
+            except Exception as _e:
+                return jsonify({
+                    "ok": False, "session_id": str(session_id),
+                    "engine": "process_control",
+                    "detail": f"stop failed: {str(_e)[:200]}",
+                }), 500
             status = 200 if res.get("ok") else 409
             return jsonify({
                 "ok": bool(res.get("ok")),
