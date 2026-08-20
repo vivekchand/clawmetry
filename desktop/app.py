@@ -513,7 +513,17 @@ def _post_open_ping(payload: dict, base: str, api_key: str) -> None:
             method="POST",
             headers=headers,
         )
-        with urllib.request.urlopen(req, timeout=OPEN_PING_TIMEOUT_SECS) as r:
+        # A frozen bundle cannot verify public certs with the default
+        # context: OpenSSL looks for a trust store at build-machine paths
+        # that do not exist inside the .app/.exe, so every HTTPS call
+        # dies with CERTIFICATE_VERIFY_FAILED. That is what broke the
+        # onboarding "Send code" button on 2026-08-12, and the ladder
+        # built for it (OS trust store, then bundled certifi, then the
+        # default) is reused here rather than rediscovered. Without it
+        # the shell-stage ping fails silently in exactly the builds it
+        # exists to report on.
+        ctx = onboarding._ssl_context() if base.lower().startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=OPEN_PING_TIMEOUT_SECS, context=ctx) as r:
             r.read()
     except Exception:
         pass

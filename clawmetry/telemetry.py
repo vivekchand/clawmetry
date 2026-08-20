@@ -172,6 +172,41 @@ def _build_payload(version: str, event: str = "install", extra: dict | None = No
     return payload
 
 
+_SSL_CTX = None
+
+
+def _ssl_context():
+    """An SSLContext that can verify public certs wherever we run.
+
+    The stdlib default trusts whatever OpenSSL finds on the box, which is
+    nothing at all inside a frozen bundle and nothing on a python.org
+    interpreter whose certificate installer was never run. Both cases
+    fail closed with CERTIFICATE_VERIFY_FAILED, and because this module
+    swallows every error by design, they fail SILENTLY: the ping simply
+    never arrives. Same ladder the desktop shell uses (OS trust store,
+    then certifi's bundle, then the default), cached because building it
+    parses a PEM. Never raises; the last rung is the old behaviour.
+    """
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return _SSL_CTX
+    import ssl
+    try:
+        import truststore  # type: ignore
+        _SSL_CTX = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        return _SSL_CTX
+    except Exception:
+        pass
+    try:
+        import certifi  # type: ignore
+        _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+        return _SSL_CTX
+    except Exception:
+        pass
+    _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
+
+
 def _post(payload: dict, url: str, api_key: str = "") -> None:
     """Fire-and-forget POST. Swallows every exception by design — any
     failure here must NEVER surface to the user.
@@ -193,7 +228,8 @@ def _post(payload: dict, url: str, api_key: str = "") -> None:
             method="POST",
             headers=headers,
         )
-        with urllib.request.urlopen(req, timeout=TELEMETRY_TIMEOUT_SEC) as r:
+        ctx = _ssl_context() if url.lower().startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=TELEMETRY_TIMEOUT_SEC, context=ctx) as r:
             r.read()  # drain so the connection releases cleanly
     except Exception as e:
         log.debug("telemetry: post failed: %s", e)
