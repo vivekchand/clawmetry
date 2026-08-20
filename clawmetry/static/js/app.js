@@ -7075,10 +7075,16 @@ var _brainTypeIcons = {
 
 // Issue #53 — apply the same filter pills that drive the list view to the
 // graph view, so toggling a source/type/channel hides matching neurons.
+// Canonical per-event source key. The JSONL slow path stamps ev.source; the
+// local-store fast path only carries sessionId/src — without this fallback the
+// session filter chips matched nothing on the fast path (the common install).
+function _brainEvSource(ev) {
+  return (ev && (ev.source || ev.sessionId || ev.src)) || 'main';
+}
 function _brainApplyFilters(events) {
   var out = Array.isArray(events) ? events : [];
   if (_brainFilter && _brainFilter !== 'all') {
-    out = out.filter(function(ev) { return ev && ev.source === _brainFilter; });
+    out = out.filter(function(ev) { return ev && _brainEvSource(ev) === _brainFilter; });
   }
   if (_brainTypeFilter && _brainTypeFilter !== 'all') {
     out = out.filter(function(ev) { return ev && ev.type === _brainTypeFilter; });
@@ -7452,7 +7458,7 @@ function _isPlumbingEvent(ev) {
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
-  var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return ev.source === _brainFilter; });
+  var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return _brainEvSource(ev) === _brainFilter; });
   if (_brainTypeFilter !== 'all') {
     filtered = filtered.filter(function(ev) { return ev.type === _brainTypeFilter; });
   }
@@ -7843,12 +7849,81 @@ function _brainSeqLabel(ev) {
   var sid = (ev && (ev.sessionId || ev.src)) || '';
   var rt = 'openclaw', native = sid;
   var i = sid.indexOf(':');
-  if (i > 0) {
+  if (i > 0 && sid.charAt(i + 1) !== ':') {
     var pfx = sid.slice(0, i).toLowerCase();
     if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { rt = pfx; native = sid.slice(i + 1); }
   }
   var label = (_CM_RT_LABEL && _CM_RT_LABEL[rt]) || rt;
+  // Orchestration children are namespaced "<parent>::wf_<run>::agent-<id>"
+  // (workflow agents) or "<parent>::agent-<id>" (plain subagents). Label
+  // them as what they are instead of repeating the parent uuid.
+  var parts = (native || '').split('::');
+  if (parts.length >= 2) {
+    var tail = parts[parts.length - 1];
+    var kindLbl = tail.indexOf('agent-') === 0
+      ? (parts.length >= 3 || parts[1].indexOf('wf_') === 0
+          ? t('brain.wf_agent', null, 'wf agent') : t('brain.subagent', null, 'subagent'))
+      : (tail.indexOf('wf_') === 0 ? t('brain.workflow', null, 'workflow') : 'child');
+    return label + ' \u00b7 ' + parts[0].slice(0, 8) + ' \u21b3 ' + kindLbl + ' ' +
+      tail.replace(/^agent-/, '').replace(/^wf_/, '').slice(0, 8);
+  }
   return label + ' \u00b7 ' + (native || '?').slice(0, 8);
+}
+
+// ── Orchestration badges: workflows + agents each session spawned ──────────
+// Filled by _brainLoadOrchSummaries (polls /api/orchestration-summary for the
+// TOP-LEVEL sessions in view); _brainOrchBadgeHtml renders inline in each
+// session block's header: "\u26a1 1 workflow \u00b7 9/10 agents \u00b7 \u25b6 Bash".
+var _brainOrchSummaries = {};
+var _brainOrchLastFetch = 0;
+function _brainOrchBadgeHtml(sid) {
+  if (!sid || sid.indexOf('::') >= 0) return '';
+  var sum = _brainOrchSummaries[sid];
+  if (!sum) return '';
+  var wf = sum.workflows || {}, ag = sum.agents || {}, sa = sum.subagents || {};
+  var bits = [];
+  if (wf.total) {
+    bits.push('\u26a1 ' + wf.total + ' ' + t(wf.total === 1 ? 'brain.workflow' : 'brain.workflows', null, wf.total === 1 ? 'workflow' : 'workflows')
+      + (wf.running ? ' (' + wf.running + ' ' + t('brain.running', null, 'running') + ')' : ''));
+  }
+  if (ag.total) {
+    bits.push('\ud83e\udd16 ' + ((ag.completed || 0) + (ag.failed || 0)) + '/' + ag.total + ' ' + t('brain.agents_done', null, 'agents done')
+      + (ag.failed ? ' \u00b7 \u26a0 ' + ag.failed : ''));
+  }
+  if (sa.total) bits.push('\ud83e\udd16 ' + sa.total + ' ' + t(sa.total === 1 ? 'brain.subagent' : 'brain.subagents', null, sa.total === 1 ? 'subagent' : 'subagents'));
+  var now = (sum.running_now || [])[0];
+  if (now && now.nowTool) bits.push('\u25b6 ' + escHtml(now.nowTool));
+  if (!bits.length) return '';
+  var running = (wf.running || 0) + (ag.running || 0) + (sa.running || 0);
+  var col = running ? '#f59e0b' : 'var(--text-muted)';
+  var title = t('brain.orch_badge_tooltip', null, 'Workflows and sub-agents this session spawned (from the local store). Open the session in the Sessions tab for the full fan-out with per-agent context and replies.');
+  return '<span class="brain-seq-orch" title="' + escHtml(title) + '" style="font-size:10px;color:' + col + ';white-space:nowrap;flex-shrink:0;border:1px solid ' + (running ? 'rgba(245,158,11,0.4)' : 'var(--border,#444)') + ';border-radius:10px;padding:1px 7px;">'
+    + bits.join(' \u00b7 ') + '</span>';
+}
+function _brainLoadOrchSummaries(events) {
+  var nowMs = Date.now();
+  if (nowMs - _brainOrchLastFetch < 10000) return;  // poll at most every 10s
+  var seen = {}, ids = [];
+  (events || []).forEach(function(ev) {
+    var sid = ev.sessionId || ev.src || '';
+    if (!sid || sid.indexOf('::') >= 0 || seen[sid]) return;
+    seen[sid] = 1;
+    ids.push(sid);
+  });
+  ids = ids.slice(0, 40);
+  if (!ids.length) return;
+  _brainOrchLastFetch = nowMs;
+  fetch('/api/orchestration-summary?session_ids=' + encodeURIComponent(ids.join(',')))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var sums = (d && d.sessions) || {};
+      var changed = JSON.stringify(sums) !== JSON.stringify(_brainOrchSummaries);
+      _brainOrchSummaries = sums;
+      if (changed && _brainAllEvents && _brainAllEvents.length) {
+        renderBrainStream(_brainAllEvents);
+      }
+    })
+    .catch(function() {});
 }
 
 function _brainGroupSequences(rows) {
@@ -7900,11 +7975,13 @@ function _brainGroupSequences(rows) {
     var errBadge = errs
       ? '<span class="brain-seq-errs" title="' + errs + ' failed tool call' + (errs === 1 ? '' : 's') + ' in this run">\u26a0 ' + errs + '</span>'
       : '';
-    out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '">'
+    var seqSid = ((g[0].ev || {}).sessionId || (g[0].ev || {}).src || '');
+    out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '" data-sess="' + escHtml(seqSid) + '">'
         +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
         +  '<span class="brain-seq-chevron">\u203a</span>'
         +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
         +  errBadge
+        +  _brainOrchBadgeHtml(seqSid)
         +  '<span class="brain-seq-meta">' + escHtml(meta) + '</span>'
         +  '</div>'
         +  '<div class="brain-seq-body">'
@@ -8423,7 +8500,7 @@ function renderBrainChart(events) {
   // chart full of bars from other runtimes' events. Apply the same four
   // filters here.
   if (_brainFilter !== 'all') {
-    events = events.filter(function(ev) { return ev.source === _brainFilter; });
+    events = events.filter(function(ev) { return _brainEvSource(ev) === _brainFilter; });
   }
   if (_brainTypeFilter !== 'all') {
     events = events.filter(function(ev) { return ev.type === _brainTypeFilter; });
@@ -9163,13 +9240,26 @@ function _stopBrainSSE() {
 }
 
 function _buildSourcesList(events) {
+  // Client-side session chips: one chip per session in view, labelled the
+  // same way the sequence blocks are ("Claude Code · 097c609a"), newest
+  // first. This is the ONLY source list on the local-store fast path (the
+  // API's `sources` ride the JSONL slow path), so it powers the
+  // sessions/all-sessions filter for the standard install.
   var seen = {};
   var sources = [];
-  events.forEach(function(ev) {
-    if (!seen[ev.source]) {
-      seen[ev.source] = true;
-      sources.push({id: ev.source, label: ev.sourceLabel || ev.source, color: ev.color || '#888'});
+  (events || []).forEach(function(ev) {
+    var id = _brainEvSource(ev);
+    var ts = ev.time ? new Date(ev.time).getTime() : 0;
+    if (!seen[id]) {
+      var label = ev.sourceLabel || (typeof _brainSeqLabel === 'function' ? _brainSeqLabel(ev) : id);
+      var cat = 'other';
+      if (String(id).indexOf('::') >= 0 || String(id).indexOf('subagent') >= 0) cat = 'subagent';
+      seen[id] = {id: id, label: label, color: ev.color || brainSourceColor(id),
+                  category: cat, last_ts: ts, count: 0};
+      sources.push(seen[id]);
     }
+    seen[id].count++;
+    if (ts > seen[id].last_ts) seen[id].last_ts = ts;
   });
   return sources;
 }
@@ -9564,7 +9654,8 @@ async function loadBrainPage(silent) {
       return tb - ta;
     });
     _brainAllEvents = events;
-    renderBrainFilterChips(data.sources || []);
+    renderBrainFilterChips((data.sources && data.sources.length) ? data.sources : _buildSourcesList(events));
+    _brainLoadOrchSummaries(events);
     renderBrainTypeChips(events);
     // Channel filter chips
     window._brainChannelCounts = data.channels || {};
@@ -19209,6 +19300,7 @@ async function viewTranscript(sessionId) {
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadAuthorityPanel(sessionId);
+    _loadOrchestrationPanel(sessionId);
     _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
     // Build replay events array - include compaction markers as special events
     var events = [];
@@ -19252,6 +19344,102 @@ async function viewTranscript(sessionId) {
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">' + t("app.failed_to_load_transcript", null, "Failed to load transcript") + '</div>';
   }
+}
+
+// Orchestration panel — the session's full fan-out: every Workflow run it
+// launched (with each run's agents, phases, status, tokens/cost, the context
+// each agent was handed and what it replied) plus plain sub-agents. Fed by
+// /api/session-orchestration/<id> (DuckDB subagents table; local-store only).
+async function _loadOrchestrationPanel(sessionId) {
+  var panel = document.getElementById('orchestration-panel');
+  var body = document.getElementById('orchestration-panel-body');
+  var sumEl = document.getElementById('orchestration-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  body.innerHTML = '';
+  try {
+    var d = await fetch('/api/session-orchestration/' + encodeURIComponent(sessionId)).then(function(r) { return r.json(); });
+    if (!d || d.error) return;
+    var wfs = d.workflows || [];
+    var subs = d.subagents || [];
+    if (!wfs.length && !subs.length) return;
+    var sum = d.summary || {};
+    var bits = [];
+    if ((sum.workflows || {}).total) bits.push((sum.workflows.total) + ' ' + t(sum.workflows.total === 1 ? 'brain.workflow' : 'brain.workflows', null, sum.workflows.total === 1 ? 'workflow' : 'workflows'));
+    if ((sum.agents || {}).total) bits.push(sum.agents.total + ' ' + t('transcripts.orch_agents', null, 'agents'));
+    if (subs.length) bits.push(subs.length + ' ' + t(subs.length === 1 ? 'brain.subagent' : 'brain.subagents', null, subs.length === 1 ? 'sub-agent' : 'sub-agents'));
+    var runningTotal = ((sum.workflows || {}).running || 0) + ((sum.agents || {}).running || 0) + ((sum.subagents || {}).running || 0);
+    if (runningTotal) bits.push('<span style="color:#f59e0b;">' + runningTotal + ' ' + t('brain.running', null, 'running') + '</span>');
+    if (sum.cost_usd) bits.push('$' + Number(sum.cost_usd).toFixed(2));
+    if (sumEl) sumEl.innerHTML = bits.join(' · ');
+
+    function statusPill(st) {
+      var m = {running: ['#f59e0b', t('brain.running', null, 'running')],
+               failed: ['#ef4444', t('transcripts.orch_failed', null, 'failed')],
+               completed: ['#10b981', t('transcripts.orch_done', null, 'done')]};
+      var c = m[st] || ['#888', st];
+      return '<span style="font-size:9px;font-weight:700;color:' + c[0] + ';border:1px solid ' + c[0] + ';border-radius:8px;padding:0 6px;">' + escHtml(c[1]) + '</span>';
+    }
+    function textBlock(label, txt) {
+      if (!txt) return '';
+      return '<div style="margin-top:4px;font-size:10px;"><span style="font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(label) + '</span>'
+        + '<div style="margin-top:2px;padding:5px 8px;background:var(--bg-primary);border-radius:5px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow-y:auto;">' + escHtml(txt) + '</div></div>';
+    }
+    function agentRow(a) {
+      var meta = [];
+      if (a.phase) meta.push(escHtml(a.phase));
+      if (a.model) meta.push(escHtml(String(a.model).replace(/^claude-/, '')));
+      if (a.tokens) meta.push(Number(a.tokens).toLocaleString() + ' tok');
+      if (a.costUsd) meta.push('$' + Number(a.costUsd).toFixed(2));
+      if (a.status === 'running' && a.nowTool) meta.push('<span style="color:#f59e0b;">▶ ' + escHtml(a.nowTool) + '</span>');
+      else if (a.lastTool) meta.push('🔧 ' + escHtml(a.lastTool));
+      var det = textBlock(t('transcripts.orch_context', null, 'Context given'), a.prompt)
+              + textBlock(t('transcripts.orch_reply', null, 'Replied'), a.reply)
+              + (a.error ? textBlock(t('transcripts.orch_error', null, 'Error'), a.error) : '');
+      var hasDet = !!det;
+      return '<div style="border-top:1px solid var(--border-secondary);padding:5px 0 5px 14px;">'
+        + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;' + (hasDet ? 'cursor:pointer;' : '') + '"'
+        + (hasDet ? ' onclick="var n=this.nextElementSibling;n.style.display=n.style.display===\'none\'?\'\':\'none\'"' : '') + '>'
+        + statusPill(a.status)
+        + '<span style="font-size:11px;color:var(--text-primary);">' + escHtml((a.label || a.id).slice(0, 90)) + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);">' + meta.join(' · ') + '</span>'
+        + (hasDet ? '<span style="font-size:9px;color:var(--text-muted);">▾</span>' : '')
+        + '</div>'
+        + (hasDet ? '<div style="display:none;">' + det + '</div>' : '')
+        + '</div>';
+    }
+    var html = '';
+    wfs.forEach(function(w) {
+      var phases = (w.phases || []).map(function(ph) { return escHtml(ph.title); }).join(' → ');
+      var head = [];
+      head.push((w.agentsDone + w.agentsFailed) + '/' + (w.agentCount || (w.agents || []).length) + ' ' + t('transcripts.orch_agents', null, 'agents'));
+      if (w.agentsRunning) head.push('<span style="color:#f59e0b;">' + w.agentsRunning + ' ' + t('brain.running', null, 'running') + '</span>');
+      if (w.agentsFailed) head.push('<span style="color:#ef4444;">⚠ ' + w.agentsFailed + '</span>');
+      if (w.rollupTokens) head.push(Number(w.rollupTokens).toLocaleString() + ' tok');
+      if (w.rollupCostUsd) head.push('$' + Number(w.rollupCostUsd).toFixed(2));
+      html += '<div style="margin-top:10px;">'
+        + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        + '<span style="font-size:12px;">⚡</span>'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(w.name || w.runId) + '</span>'
+        + statusPill(w.status)
+        + '<span style="font-size:10px;color:var(--text-muted);">' + head.join(' · ') + '</span>'
+        + '</div>'
+        + (w.description ? '<div style="font-size:10px;color:var(--text-muted);margin:2px 0 0 22px;">' + escHtml(w.description) + '</div>' : '')
+        + (phases ? '<div style="font-size:10px;color:var(--text-muted);margin:2px 0 4px 22px;">' + phases + '</div>' : '')
+        + '<div style="margin-left:8px;">' + (w.agents || []).map(agentRow).join('') + '</div>'
+        + (w.reply ? '<div style="margin-left:22px;">' + textBlock(t('transcripts.orch_result', null, 'Result'), w.reply) + '</div>' : '')
+        + '</div>';
+    });
+    if (subs.length) {
+      html += '<div style="margin-top:10px;">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--text-primary);">🤖 ' + t('transcripts.orch_subagents', null, 'Sub-agents') + '</div>'
+        + subs.map(agentRow).join('') + '</div>';
+    }
+    body.innerHTML = html;
+    panel.style.display = '';
+    // Auto-expand while anything is still running — that is when you look.
+    if (runningTotal) body.style.display = '';
+  } catch (e) { /* panel stays hidden */ }
 }
 
 // Authority footprint panel (#880) — fetches /api/authority for the current
@@ -19435,6 +19623,21 @@ function _cmSyncDismiss() {
   try { localStorage.setItem('cm-sync-verified-ts', String(Date.now())); } catch (e) {}
 }
 
+// Name what we are actually syncing. `prog.runtimes` is the node's detected
+// runtimes (see _sync_scope_runtimes in dashboard.py); the banner used to
+// hardcode "your OpenClaw workspace", which is a flat lie on a machine that
+// only runs Claude Code. Falls back to a runtime-neutral phrase when detection
+// is empty or unavailable, never to a named runtime.
+function _cmSyncScopeTitle(prog) {
+  var names = ((prog && prog.runtimes) || []).map(function (r) {
+    return (r && (r.label || r.id)) || '';
+  }).filter(Boolean);
+  if (!names.length) return t('app.syncing_your_agents', null, 'Syncing your AI agents');
+  if (names.length === 1) return 'Syncing your ' + names[0] + ' data';
+  if (names.length === 2) return 'Syncing ' + names[0] + ' and ' + names[1];
+  return 'Syncing ' + names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
+}
+
 function _cmSyncRender(prog, health) {
   var bar = document.getElementById('sync-status-banner');
   if (!bar) return;
@@ -19444,6 +19647,7 @@ function _cmSyncRender(prog, health) {
   var errBox = document.getElementById('sync-status-error');
   var title = document.getElementById('sync-status-title');
   if (!sub || !details || !stepper || !errBox || !title) return;
+  title.textContent = _cmSyncScopeTitle(prog);
 
   // Determine the active phase: highest-index phase that's running/complete.
   var phase = (prog && prog.phase) || '';
