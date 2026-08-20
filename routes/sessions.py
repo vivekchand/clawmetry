@@ -4315,11 +4315,19 @@ def _try_local_store_transcripts(runtime: str = ""):
             def _ms(v):
                 if not v:
                     return 0
+                # Adapters persist either ISO strings or epoch numbers
+                # (grok stores epoch-ms) — accept both.
+                if isinstance(v, (int, float)):
+                    return int(v if v > 1e12 else v * 1000)
                 try:
                     return int(datetime.fromisoformat(
                         str(v).replace("Z", "+00:00")).timestamp() * 1000)
                 except Exception:
-                    return 0
+                    try:
+                        f = float(v)
+                        return int(f if f > 1e12 else f * 1000)
+                    except Exception:
+                        return 0
             transcripts.append({
                 "id": sid,
                 "title": (r.get("title") or "").strip(),
