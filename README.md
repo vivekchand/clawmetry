@@ -86,7 +86,7 @@ the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 | [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Sandboxed NVIDIA NemoClaw setups |
 | [Docker](docs/DOCKER.md) | Image, compose, volume mounts |
 | [Architecture](ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) | How it works inside; running from source |
-| [Telemetry](docs/TELEMETRY.md) | The anonymous install ping, and how to turn it off |
+| [Telemetry](docs/TELEMETRY.md) | The anonymous install and desktop-open pings, and how to turn them off |
 
 ## Screenshots
 
