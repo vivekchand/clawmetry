@@ -3481,6 +3481,122 @@ def detect_config(args=None):
         pass
 
 
+# Cache for _sync_scope_runtimes(). The sync banner polls, and adapter
+# detect() calls glob session dirs (~3.3s measured on a busy machine), so this
+# must never run inline in a request handler. 60s is well under how fast a user
+# installs a new agent.
+_SYNC_SCOPE_CACHE = {"ts": 0.0, "runtimes": [], "running": False}
+_SYNC_SCOPE_LOCK = threading.Lock()
+
+
+def _sync_scope_runtimes():
+    """Cached runtime list for the sync banner, served off the request path.
+
+    The first call returns ``[]`` (banner shows the runtime-neutral "Syncing
+    your AI agents") and kicks a background refresh; the next poll has the real
+    list. Never blocks, never raises.
+    """
+    with _SYNC_SCOPE_LOCK:
+        stale = time.time() - float(_SYNC_SCOPE_CACHE.get("ts") or 0) >= 60
+        if stale and not _SYNC_SCOPE_CACHE["running"]:
+            _SYNC_SCOPE_CACHE["running"] = True
+            threading.Thread(target=_sync_scope_refresh_safe, daemon=True).start()
+        return _SYNC_SCOPE_CACHE["runtimes"]
+
+
+def _sync_scope_refresh_safe():
+    """Thread target: refresh the cache, and always clear the in-flight flag.
+
+    Without this a single unexpected raise would leave ``running`` True and
+    wedge the cache at its last value for the life of the process.
+    """
+    try:
+        _sync_scope_refresh()
+    except Exception as _e:
+        with _SYNC_SCOPE_LOCK:
+            _SYNC_SCOPE_CACHE["ts"] = time.time()
+            _SYNC_SCOPE_CACHE["running"] = False
+        print(f"[sync-scope] runtime detection failed: {_e}")
+
+
+def _sync_scope_refresh():
+    """Detect which agent runtimes actually have sessions on this machine.
+
+    Powers the sync banner title so it names the real runtimes ("Syncing your
+    Claude Code data") instead of asserting OpenClaw on a machine that never
+    had it. Pure filesystem detection: no DuckDB, no writer lock, never raises.
+
+    Same honesty rule as ``_detect_runtimes_for_heartbeat``: a runtime is only
+    named when it has **sessions on disk**. Presence alone is not enough, the
+    Cursor IDE creates its state dir whether or not the agent was ever used,
+    and naming a runtime we aren't actually syncing is the same lie this
+    function exists to remove.
+
+    Returns ``[{"id": ..., "label": ...}, ...]``; empty when nothing qualifies.
+    """
+    found = {}   # id -> {"label": str, "sessions": int}
+
+    def _put(rid, label, sessions):
+        rid = str(rid or "").strip().lower()
+        if not rid:
+            return
+        cur = found.get(rid)
+        if cur is None or int(sessions or 0) > cur["sessions"]:
+            found[rid] = {"label": label or (cur or {}).get("label") or rid,
+                          "sessions": int(sessions or 0)}
+
+    # OpenClaw / NemoClaw ship as adapters in OSS. Prefer the live registry
+    # (plugins may have overridden an adapter); fall back to the built-ins,
+    # because registration happens at app creation and can be empty here.
+    _oss = []
+    try:
+        from clawmetry.adapters import registry as _reg
+        _oss = list(_reg.detect_all())
+    except Exception:
+        pass
+    if not _oss:
+        try:
+            from clawmetry.adapters.openclaw import OpenClawAdapter as _OC
+            from clawmetry.adapters.nemo import NemoClawAdapter as _NC
+            for _cls in (_OC, _NC):
+                try:
+                    _oss.append(_cls().detect())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    for _r in _oss:
+        if getattr(_r, "detected", False):
+            _put(getattr(_r, "name", ""), getattr(_r, "display_name", ""),
+                 getattr(_r, "session_count", 0))
+
+    # Every other runtime. The lite detector is free and always present; the
+    # family adapters are more accurate but live in clawmetry-pro, so they
+    # return nothing in OSS. Merge both, keep the higher count per runtime.
+    try:
+        from clawmetry import sync as _sync_mod
+        try:
+            for _r in (_sync_mod._detect_runtimes_lite() or []):
+                _put(_r.get("id"), _r.get("label"), _r.get("sessions"))
+        except Exception:
+            pass
+        try:
+            for _r in (_sync_mod._detect_family_runtimes() or []):
+                _put(_r.get("name"), _r.get("displayName"), _r.get("sessionCount"))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    rows = [{"id": k, "label": v["label"]}
+            for k, v in found.items() if v["sessions"] > 0]
+    with _SYNC_SCOPE_LOCK:
+        _SYNC_SCOPE_CACHE["ts"] = time.time()
+        _SYNC_SCOPE_CACHE["runtimes"] = rows
+        _SYNC_SCOPE_CACHE["running"] = False
+    return rows
+
+
 def _detect_workspace_from_config():
     """Try to read workspace from Moltbot/OpenClaw agent config."""
     config_paths = [
@@ -12476,15 +12592,22 @@ def detect_config(args=None):
     # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
     # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
     # each phase; we just stream it through. Local-only, no auth.
+    # `runtimes` is added here (not by the daemon) so the banner can NAME what
+    # it is syncing instead of hardcoding "your OpenClaw workspace" on a
+    # machine that may only run Claude Code / Codex / Cursor.
     @app.route("/api/sync-progress", endpoint="sync_progress")
     def _sync_progress():
         from flask import jsonify as _jsonify
         progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
         if not os.path.isfile(progress_path):
-            return _jsonify({"error": "no sync progress yet"}), 404
+            return _jsonify({"error": "no sync progress yet",
+                             "runtimes": _sync_scope_runtimes()}), 404
         try:
             with open(progress_path) as _f:
-                return _jsonify(json.load(_f))
+                _payload = json.load(_f)
+            if isinstance(_payload, dict):
+                _payload["runtimes"] = _sync_scope_runtimes()
+            return _jsonify(_payload)
         except Exception as _e:
             return _jsonify({"error": f"unreadable: {_e}"}), 500
 
