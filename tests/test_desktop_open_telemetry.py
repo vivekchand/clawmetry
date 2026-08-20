@@ -153,7 +153,7 @@ def test_key_is_sent_as_a_header_only_when_paired(shell, monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
-    def _urlopen(req, timeout=None):
+    def _urlopen(req, timeout=None, context=None):
         seen["headers"] = dict(req.headers)
         seen["url"] = req.full_url
         return _Resp()
@@ -308,3 +308,83 @@ def test_runtime_detection_failure_is_not_fatal(tele, monkeypatch):
 
     monkeypatch.setattr(sync, "_detect_runtimes_lite", _boom)
     assert tele._monitored_runtimes() == []
+
+
+# ── TLS trust (the 2026-08-12 class) ────────────────────────────────────────
+#
+# A frozen bundle has no OpenSSL trust store at the paths the default
+# context looks in, so every HTTPS call from inside the .app/.exe fails
+# with CERTIFICATE_VERIFY_FAILED. That took out the onboarding "Send
+# code" button once already. Both pings swallow errors by design, so the
+# same mistake here does not surface as a bug report: it surfaces as an
+# endpoint that quietly receives nothing, from precisely the installs it
+# exists to hear about. These guards fail if either ping ever goes back
+# to an unverified default context.
+
+
+def _capture_urlopen(monkeypatch, mod):
+    seen = {}
+
+    class _Resp:
+        def read(self): return b""
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _urlopen(req, timeout=None, context=None, **kw):
+        seen["context"] = context
+        seen["url"] = getattr(req, "full_url", req)
+        return _Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", _urlopen)
+    return seen
+
+
+def test_shell_ping_verifies_certificates(shell, monkeypatch):
+    import ssl
+
+    seen = _capture_urlopen(monkeypatch, shell)
+    shell._post_open_ping({"desktop_version": "1"}, "https://app.clawmetry.com", "")
+    assert isinstance(seen["context"], ssl.SSLContext), (
+        "the shell ping must pass a verifying SSL context; the frozen bundle "
+        "cannot verify public certs with the default one"
+    )
+
+
+def test_shell_ping_skips_the_context_for_plain_http(shell, monkeypatch):
+    """A local sink over http has no certificates to verify, and handing
+    a context to a plain-http request is meaningless."""
+    seen = _capture_urlopen(monkeypatch, shell)
+    shell._post_open_ping({"desktop_version": "1"}, "http://127.0.0.1:8977", "")
+    assert seen["context"] is None
+
+
+def test_daemon_ping_verifies_certificates(tele, monkeypatch):
+    import ssl
+
+    seen = _capture_urlopen(monkeypatch, tele)
+    tele._post({"version": "1"}, "https://app.clawmetry.com/api/desktop/open")
+    assert isinstance(seen["context"], ssl.SSLContext)
+
+
+def test_daemon_ping_skips_the_context_for_plain_http(tele, monkeypatch):
+    seen = _capture_urlopen(monkeypatch, tele)
+    tele._post({"version": "1"}, "http://127.0.0.1:8977/api/desktop/open")
+    assert seen["context"] is None
+
+
+def test_trust_ladder_never_raises(tele, monkeypatch):
+    """Every rung is best-effort: a missing truststore/certifi must
+    degrade to the default context, not take the ping down with it."""
+    import builtins
+    import ssl
+
+    real_import = builtins.__import__
+
+    def _no_tls_libs(name, *a, **kw):
+        if name in ("truststore", "certifi"):
+            raise ImportError(name)
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", _no_tls_libs)
+    monkeypatch.setattr(tele, "_SSL_CTX", None)
+    assert isinstance(tele._ssl_context(), ssl.SSLContext)
