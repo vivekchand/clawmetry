@@ -2,9 +2,9 @@
 
 ClawMetry auto-detects 22 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
 
-> Every screenshot below is the real dashboard observing real sessions — each runtime was exercised with a few small demo tasks on a real machine. Two runtimes, noted inline, are shown replaying a previously recorded session.
+> Every screenshot below is the real dashboard rendering a real ClawMetry instance. The 2026-08 refresh: each runtime's store was populated with a showcase project written in that runtime's **native on-disk session format** (schema-verified against the production adapters — 12 sessions per runtime, each building an app for a social cause: clean water, safer roads, food security, and more), plus live Claude Code and OpenClaw sessions captured on a real machine. Alerts, approvals, and quality data come from the product's own evaluators running against that store.
 
-Jump to: [OpenClaw](#openclaw) · [Claude Code](#claude-code) · [Codex](#codex) · [Cursor](#cursor) · [Aider](#aider) · [Goose](#goose) · [opencode](#opencode) · [Qwen Code](#qwen-code) · [Pi](#pi) · [DeepAgents](#deepagents) · [Hermes](#hermes) · [PicoClaw](#picoclaw) · [NanoClaw](#nanoclaw) · [Antigravity](#antigravity) · [GitHub Copilot](#github-copilot) · [n8n](#n8n) · [DeepSeek Harness](#deepseek-harness) · [qm](#qm) · [Exo](#exo)
+Jump to: [OpenClaw](#openclaw) · [Claude Code](#claude-code) · [Codex](#codex) · [Cursor](#cursor) · [Aider](#aider) · [Goose](#goose) · [opencode](#opencode) · [Qwen Code](#qwen-code) · [Pi](#pi) · [DeepAgents](#deepagents) · [Hermes](#hermes) · [PicoClaw](#picoclaw) · [NanoClaw](#nanoclaw) · [Antigravity](#antigravity) · [GitHub Copilot](#github-copilot) · [n8n](#n8n) · [DeepSeek Harness](#deepseek-harness) · [qm](#qm) · [Exo](#exo) · [Grok](#grok) · [Kimi CLI](#kimi-cli)
 
 ---
 
@@ -495,6 +495,43 @@ Exo harness conversations, including a real fork with lineage and native cost re
 **Activity feed**
 
 ![Exo — Activity feed](../screenshots/runtimes/exo/brain.png)
+
+---
+
+
+## Grok
+
+xAI's Grok CLI — session summaries, model switches, and token/cost attribution.
+
+**Overview**
+
+![Grok — Overview](../screenshots/runtimes/grok/overview.png)
+
+**Sessions**
+
+![Grok — Sessions](../screenshots/runtimes/grok/transcripts.png)
+
+---
+
+## Kimi CLI
+
+MoonshotAI's Kimi CLI — wire-protocol sessions with tool risk badges and estimated cost.
+
+**Overview**
+
+![Kimi CLI — Overview](../screenshots/runtimes/kimi/overview.png)
+
+**Sessions**
+
+![Kimi CLI — Sessions](../screenshots/runtimes/kimi/transcripts.png)
+
+**Session replay**
+
+![Kimi CLI — Session replay](../screenshots/runtimes/kimi/transcript-open.png)
+
+**Activity feed**
+
+![Kimi CLI — Activity feed](../screenshots/runtimes/kimi/brain.png)
 
 ---
 
