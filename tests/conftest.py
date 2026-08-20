@@ -11,6 +11,27 @@ import pytest
 import requests
 
 
+# Point the WHOLE test session at a scratch DuckDB unless the caller already
+# chose one. ``clawmetry.local_store`` resolves ``DB_PATH`` from this env var
+# at import time, so it has to be set here (conftest imports before any test
+# module is collected), not in a fixture.
+#
+# Why (2026-08-19): a test module that called ``get_store()`` without a path
+# override opened — or, with the sync daemon up, PROXIED INTO — the
+# developer's real ``~/.clawmetry/clawmetry.duckdb``. Thirteen alert-rule
+# fixtures (``rule 0``, ``owner-A``, ``Via dispatch`` …) landed in the live
+# store and rendered in the Alerts tab. The per-process ownership check in
+# ``local_server.discovery_serves_this_db`` stops the proxy hop; this default
+# stops the direct-open leak for every test that forgot to isolate itself.
+_CONFTEST_SET_STORE_PATH = "CLAWMETRY_LOCAL_STORE_PATH" not in os.environ
+if _CONFTEST_SET_STORE_PATH:
+    import tempfile as _tempfile
+
+    os.environ["CLAWMETRY_LOCAL_STORE_PATH"] = os.path.join(
+        _tempfile.mkdtemp(prefix="clawmetry-pytest-store-"), "clawmetry.duckdb"
+    )
+
+
 # On Windows, ntpath.expanduser resolves "~" from USERPROFILE (not HOME), so
 # monkeypatch.setenv("HOME", tmp_path) silently fails to sandbox the config
 # dir.  This shim restores POSIX parity for the test suite only.
@@ -179,6 +200,11 @@ def server(base_url, token):
     # setdefault) so a CI runner that happens to inherit CLAWMETRY_HARD_BLOCK=1
     # from a matrix step still gets the opt-out applied here.
     env["CLAWMETRY_HARD_BLOCK"] = "0"
+    # The spawned dashboard must see the SAME store the CI workflow's other
+    # processes use (default path) — the scratch path above is for in-process
+    # unit tests only, so hand back the caller's original environment here.
+    if _CONFTEST_SET_STORE_PATH:
+        env.pop("CLAWMETRY_LOCAL_STORE_PATH", None)
     # Derive port from base_url
     try:
         port = base_url.split(":")[-1].rstrip("/")
