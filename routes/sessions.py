@@ -4184,9 +4184,22 @@ _TRANSCRIPT_LIST_LIMIT = 50
 _TRANSCRIPT_LIST_SCAN_LIMIT = 400
 
 
-def _try_local_store_transcripts():
+def _sid_runtime(sid: str) -> str:
+    """Runtime key for a session id: the ``<runtime>:`` prefix, else openclaw
+    (native OpenClaw sessions are bare UUIDs)."""
+    return sid.split(":", 1)[0] if ":" in sid else "openclaw"
+
+
+def _try_local_store_transcripts(runtime: str = ""):
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
+
+    ``runtime``: optional runtime key (``claude_code``, ``codex``, …,
+    ``openclaw``). When set, only that runtime's sessions fill the list.
+    Without it, the 50-row cap is shared across every runtime on the box —
+    on a many-runtime install the Sessions tab filtered to one runtime
+    showed only the 2-3 of its sessions that made the global top-50 and
+    looked near-empty (the rest existed but never left the store).
 
     Issue #1088: routes through the daemon HTTP proxy first (cross-process
     safe), with a direct ``get_store()`` fallback for single-process boots.
@@ -4217,6 +4230,8 @@ def _try_local_store_transcripts():
         # (clawmetry-fix / clawmetry-selfevolve / clawmetry-mem-probe …) so
         # our plumbing doesn't mix with the user's agent activity.
         if hide_clawmetry_session(sid):
+            continue
+        if runtime and _sid_runtime(sid) != runtime:
             continue
         # Coerce ts (ISO string) to ms-since-epoch for parity with the
         # legacy ``int(os.path.getmtime(fpath) * 1000)`` shape.
@@ -4360,14 +4375,27 @@ def _fill_family_titles(transcripts):
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
-    """List available session transcript .jsonl files."""
+    """List available session transcript .jsonl files.
+
+    ``?runtime=<key>`` scopes the list (and its 50-row cap) to one runtime,
+    matching the dashboard's runtime switcher.
+    """
     import dashboard as _d
+
+    runtime = (request.args.get("runtime") or "").strip()
+    if runtime == "all":
+        runtime = ""
 
     # Epic #964 — opt-in DuckDB fast path.
     if is_local_store_read_enabled():
-        fast = _try_local_store_transcripts()
+        fast = _try_local_store_transcripts(runtime=runtime)
         if fast is not None:
             return jsonify(fast)
+
+    # Legacy filesystem fallback lists native OpenClaw JSONLs only; any other
+    # runtime filter has no files here by definition.
+    if runtime and runtime != "openclaw":
+        return jsonify({"transcripts": []})
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
