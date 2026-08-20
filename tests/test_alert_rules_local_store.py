@@ -181,6 +181,12 @@ def test_api_alerts_rules_fast_path_serves_local_store(fresh_store, monkeypatch)
     rule = body["rules"][0]
     assert rule["id"] == "r-fast"
     assert rule["condition_json"]["alert_type"] == "token_velocity"
+    # The body is promoted to the top level too: the Alerts tab and the
+    # evaluator-provenance stamp read ``alert_type`` there. Before the
+    # promote, every DuckDB-backed rule rendered as an "unrecognized" orphan.
+    assert rule["alert_type"] == "token_velocity"
+    assert rule["threshold_value"] == 9999
+    assert rule["name"] == "fast-path rule"
 
 
 def test_api_alerts_rules_flag_off_uses_legacy(fresh_store, monkeypatch):

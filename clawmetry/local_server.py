@@ -106,11 +106,63 @@ def _pick_free_port() -> int:
     return port
 
 
+def default_db_path() -> str:
+    """The DuckDB file a daemon owns when nothing overrides it."""
+    return os.path.expanduser("~/.clawmetry/clawmetry.duckdb")
+
+
+def process_db_path() -> str:
+    """The DuckDB file THIS process is pointed at (``CLAWMETRY_LOCAL_STORE_PATH``
+    wins; else the default)."""
+    return os.environ.get("CLAWMETRY_LOCAL_STORE_PATH") or default_db_path()
+
+
+def _norm_path(p) -> str:
+    try:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(str(p))))
+    except Exception:
+        return str(p)
+
+
+def discovery_serves_this_db(disc, db_path=None) -> bool:
+    """True when the daemon described by discovery payload ``disc`` owns the
+    SAME DuckDB file this process is pointed at.
+
+    A registered daemon only ever owns *its* file. Every proxy decision
+    (``local_store.get_store()`` handing out a ``_ProxyStore``,
+    ``routes.local_query`` forwarding over HTTP) must first ask this — a
+    process pointed at a different file (``CLAWMETRY_LOCAL_STORE_PATH``:
+    pytest fixtures, a second install, a scratch DB) must open that file
+    directly, never talk to the daemon. Before this check existed, running
+    ``pytest tests/test_alert_rules_local_store.py`` on a dev box with the
+    daemon up forwarded every fixture write into the LIVE store: the
+    fixture's tmp DuckDB was never touched and thirteen ``rule 0`` /
+    ``owner-A`` / ``Via dispatch`` rows rendered in the operator's Alerts
+    tab as "unrecognized" (2026-08-19).
+
+    ``db_path`` overrides the env-derived process path (``local_store`` passes
+    its module-level ``DB_PATH`` so a monkeypatched path is honoured too).
+    Discovery files written before ``db_path`` was recorded are read as the
+    default path — the only file a legacy daemon could have owned by default.
+    """
+    daemon_db = (disc or {}).get("db_path") if isinstance(disc, dict) else None
+    mine = db_path if db_path is not None else process_db_path()
+    return _norm_path(daemon_db or default_db_path()) == _norm_path(mine)
+
+
 def _write_discovery_file(port: int, token: str) -> None:
     """Atomically write the port+token JSON. Mode 0600 so only the same
-    user can read it."""
+    user can read it. Records ``db_path`` so non-owner processes can tell
+    whether this daemon serves *their* DuckDB (see
+    :func:`discovery_serves_this_db`)."""
     DISCOVERY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"port": port, "token": token, "pid": os.getpid()}
+    try:
+        from clawmetry import local_store as _ls
+        db_path = str(_ls.DB_PATH)
+    except Exception:
+        db_path = process_db_path()
+    payload = {"port": port, "token": token, "pid": os.getpid(),
+               "db_path": db_path}
     tmp = DISCOVERY_PATH.with_suffix(DISCOVERY_PATH.suffix + ".tmp")
     tmp.write_text(json.dumps(payload))
     os.chmod(tmp, 0o600)
