@@ -13021,6 +13021,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
+    "cline",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label

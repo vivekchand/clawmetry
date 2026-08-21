@@ -62,6 +62,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "kimi",
     "devin",
     "gemini_cli",
+    "cline",
 ))
 
 def _event_runtime(ev) -> str:
@@ -928,6 +929,7 @@ _RUNTIME_PREFIXES = frozenset({
     "kimi",
     "devin",
     "gemini_cli",
+    "cline",
 })
 
 

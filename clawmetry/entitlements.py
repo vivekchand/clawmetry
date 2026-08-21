@@ -116,6 +116,7 @@ PAID_RUNTIMES = frozenset(
         "kimi",
         "devin",
         "gemini_cli",
+        "cline",
     }
 )
 
@@ -155,6 +156,7 @@ RUNTIME_LABELS = {
     "exo": "Exo",
     "kimi": "Kimi CLI",
     "gemini_cli": "Gemini CLI",
+    "cline": "Cline",
     "devin": "Devin",
 }
 
@@ -191,6 +193,7 @@ RUNTIME_LANDING_PATHS = {
     "kimi": "/runtimes/kimi",
     "devin": "/runtimes/devin",
     "gemini_cli": "/runtimes/gemini-cli",
+    "cline": "/runtimes/cline",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -304,6 +307,8 @@ RUNTIME_ALIASES = {
     "gemini-cli": "gemini_cli",
     "geminicli": "gemini_cli",
     "gemini": "gemini_cli",
+    "cline-cli": "cline",
+    "clinebot": "cline",
 }
 
 TIER_LABELS = {

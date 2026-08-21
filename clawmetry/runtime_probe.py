@@ -118,6 +118,13 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("gemini_cli", "Gemini CLI",
                  ("~/.gemini/tmp/*/chats", "~/.gemini/projects.json"),
                  env="CLAWMETRY_GEMINI_CLI_HOME"),
+    # Cline CLI keeps sessions under the DATA leaf of its home -- ~/.cline
+    # itself only holds hooks/ and worktrees/, which our own installer creates,
+    # so probing the bare ~/.cline would false-positive on every machine that
+    # has ClawMetry's hooks installed and no Cline at all.
+    RuntimeProbe("cline", "Cline",
+                 ("~/.cline/data/db/sessions.db", "~/.cline/data/sessions"),
+                 env="CLAWMETRY_CLINE_DATA_DIR"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME
