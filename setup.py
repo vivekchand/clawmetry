@@ -82,8 +82,20 @@ setup(
         # OS trust store for TLS (Windows CryptoAPI / macOS Security /
         # Linux CA dir) -- makes corporate TLS-interception root CAs
         # (Zscaler/Netskope/Palo Alto) "just work" without certifi hacks.
-        # Needs 3.10+; on 3.8/3.9 clawmetry.net falls back to stock trust.
+        # Needs 3.10+; 3.8/3.9 fall through to certifi below.
         'truststore>=0.8; python_version >= "3.10"',
+        # The second rung of that same ladder, and the only one available
+        # on 3.8/3.9 where truststore cannot install. Without a usable
+        # trust store, every outbound HTTPS call (cloud sync, licence
+        # checks, the install and desktop-open pings) fails with
+        # CERTIFICATE_VERIFY_FAILED on any interpreter whose OpenSSL has
+        # no CA bundle -- a python.org install whose certificate step was
+        # never run is the common case. The pings swallow their own
+        # errors so that a network problem cannot break a launch, which
+        # means that failure is SILENT: no traceback, no report, just an
+        # endpoint that never hears from those machines. ~160 KB, pure
+        # data, no transitive deps. See docs/TELEMETRY.md.
+        "certifi>=2024.2.2",
     ],
     extras_require={
         "otel": ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
