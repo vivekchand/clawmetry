@@ -101,6 +101,7 @@ PAID_RUNTIMES = frozenset(
         "deepseek_harness",
         "exo",
         "kimi",
+        "devin",
     }
 )
 
@@ -139,6 +140,7 @@ RUNTIME_LABELS = {
     "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
     "kimi": "Kimi CLI",
+    "devin": "Devin",
 }
 
 # Public per-runtime page on clawmetry.com for every known runtime. This is
@@ -172,6 +174,7 @@ RUNTIME_LANDING_PATHS = {
     "deepseek_harness": "/runtimes/deepseek-harness",
     "exo": "/runtimes/exo",
     "kimi": "/runtimes/kimi",
+    "devin": "/runtimes/devin",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
