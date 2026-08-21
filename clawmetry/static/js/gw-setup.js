@@ -198,10 +198,16 @@ function cloudVerifyOtp() {
   // /api/cloud-cta/status kept reporting connected=false, the onboarding
   // gate stayed required=true, and the modal reappeared on every launch
   // (founder report 2026-08-12).
+  // Same rail selection cloudOauth makes: "Enable Cloud Sync" IS the egress
+  // opt-in and sends mode=managed, while the profile menu's "Sign in" leaves
+  // mode off so verify-otp follows the install's recorded intent. Without
+  // this a self-hosted machine signing back in by email got enable_cloud().
+  var _verifyBody = {email: _cloudEmail, code: code};
+  if (_cloudModalIntent !== 'signin') _verifyBody.mode = 'managed';
   fetch('/api/cloud-cta/verify-otp', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email: _cloudEmail, code: code}),
+    body: JSON.stringify(_verifyBody),
   })
     .then(function(r){ return r.json(); })
     .then(function(d){
