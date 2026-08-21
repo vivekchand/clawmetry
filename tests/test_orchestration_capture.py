@@ -235,3 +235,40 @@ def test_orchestration_empty_session_is_honest(app):
     d = client.get("/api/session-orchestration/claude_code:no-such").get_json()
     assert d["workflows"] == [] and d["subagents"] == []
     assert d["summary"]["children"] == 0
+
+
+def test_subagents_shaper_carries_orchestration_fields_for_cloud(app):
+    """The /api/subagents shaper is ALSO what the sync daemon reads back to
+    build the cloud snapshot's ``subagents[]`` slice. If the orchestration
+    fields stop riding it, the hosted dashboard silently degrades to the
+    legacy flat list — the feature goes inert in cloud while local keeps
+    working (the classic silent-cloud-drift class). Lock the contract.
+    """
+    a, ls = app
+    _seed(ls)
+    import routes.sessions as sessions_mod
+    rows = ls.get_store().query_subagents(limit=500)
+    shaped = sessions_mod._try_local_store_subagents(_rows=rows)
+    assert shaped and shaped["subagents"]
+    by_id = {x["sessionId"]: x for x in shaped["subagents"]}
+
+    run = by_id[RUN]
+    assert run["kind"] == "workflow"
+    assert run["workflowRunId"] == "wf_test1234-abc"
+    assert run["workflowName"] == "orchestration-e2e"
+    assert run["agentCount"] == 2
+
+    agent = by_id[f"{RUN}::agent-adead1"]
+    assert agent["kind"] == "workflow_agent"
+    assert agent["phase"] == "Audit"
+    assert agent["prompt"].startswith("You are a research agent")
+    assert agent["reply"] == '{"found": 3}'
+
+    live = by_id[f"{RUN}::agent-abeef2"]
+    assert live["nowTool"] == "WebFetch"          # only while running
+
+    plain = by_id[f"{NS_PARENT}::agent-acafe3"]
+    assert plain["kind"] == "subagent"
+    assert plain["agentType"] == "Explore"
+    assert plain["reply"].startswith("It lives in")
+
