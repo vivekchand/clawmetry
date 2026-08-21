@@ -172,3 +172,141 @@ def test_missing_cache_key_is_noop(captured_posts, hitl_dir):
 def test_action_types_in_allowlist():
     for t in ("kill_session", "pause_session", "resume_session"):
         assert t in sync._PENDING_ACTIONS
+
+
+def test_kill_consults_registered_handler_first(captured_posts, hitl_dir,
+                                                monkeypatch):
+    """n8n / antigravity / nanoclaw kills registered via
+    approvals.register_kill_handler must be reachable from the cloud Stop
+    button, not only from the approvals deny path (2026-08-19)."""
+    from clawmetry import approvals
+    seen = {}
+    monkeypatch.setitem(approvals.KILL_HANDLERS, "n8n",
+                        lambda ns_id: seen.setdefault("ns_id", ns_id) or True)
+    pc_called = {}
+    monkeypatch.setattr(pc, "kill_session",
+                        lambda *a, **k: pc_called.setdefault("hit", a) or
+                        {"ok": False})
+    sync._dispatch_pending_action(_CFG, {
+        "type": "kill_session", "session_id": "exec-77", "runtime": "n8n",
+        "cache_key": "ck-n8n", "id": "a1"})
+    assert _wait(lambda: len(captured_posts) == 1)
+    assert seen["ns_id"] == "n8n:exec-77"
+    # handler succeeded -> the signal engine must NOT be consulted
+    assert "hit" not in pc_called
+
+
+def test_kill_falls_back_to_signals_when_handler_fails(captured_posts,
+                                                       hitl_dir, monkeypatch):
+    from clawmetry import approvals
+    monkeypatch.setitem(approvals.KILL_HANDLERS, "copilot", lambda ns_id: False)
+    calls = {}
+
+    def _fake_kill(runtime, session_id, cwd="", mode="kill"):
+        calls["kill"] = (runtime, session_id, cwd)
+        return {"ok": True, "action": "graceful_kill", "pid": 7,
+                "runtime": runtime, "detail": "terminated"}
+
+    monkeypatch.setattr(pc, "kill_session", _fake_kill)
+    sync._dispatch_pending_action(_CFG, {
+        "type": "kill_session", "session_id": "sid-1", "runtime": "copilot",
+        "cache_key": "ck-cp", "id": "a2"})
+    assert _wait(lambda: len(captured_posts) == 1)
+    assert calls["kill"][0] == "copilot"
+
+
+def test_cwd_backfill_from_store_when_action_lacks_cwd(captured_posts,
+                                                       hitl_dir, monkeypatch):
+    """The cloud relay sends no cwd; the daemon must look it up from the
+    session row before resolving codex/goose/opencode/aider (2026-08-19 —
+    without this every cwd-resolved kill failed with no_cwd)."""
+    monkeypatch.setattr(sync, "_proc_control_cwd_backfill",
+                        lambda rt, sid: "/work/dir")
+    calls = {}
+
+    def _fake_kill(runtime, session_id, cwd="", mode="kill"):
+        calls["kill"] = (runtime, session_id, cwd)
+        return {"ok": True, "action": "graceful_kill", "pid": 9,
+                "runtime": runtime, "detail": "terminated"}
+
+    monkeypatch.setattr(pc, "kill_session", _fake_kill)
+    sync._dispatch_pending_action(_CFG, {
+        "type": "kill_session", "session_id": "sid-2", "runtime": "goose",
+        "cache_key": "ck-g", "id": "a3"})
+    assert _wait(lambda: len(captured_posts) == 1)
+    assert calls["kill"] == ("goose", "sid-2", "/work/dir")
+
+
+def test_cwd_backfill_reads_store_row(monkeypatch, tmp_path):
+    """_proc_control_cwd_backfill prefers sessions.cwd, falls back to the
+    metadata aliases (goose workingDir / opencode directory)."""
+    class _FakeStore:
+        def __init__(self, rows):
+            self.rows = rows
+            self.calls = []
+
+        def get_session_location(self, sid, agent_type=None):
+            self.calls.append((sid, agent_type))
+            return self.rows.get(sid)
+
+    from clawmetry import local_store as _ls
+    rows = {
+        "goose:s1": {"cwd": None,
+                     "metadata": {"workingDir": "/proj/demo"}},
+        "opencode:s2": {"cwd": "/direct/col",
+                        "metadata": {"directory": "/ignored"}},
+    }
+    monkeypatch.setattr(_ls, "get_store", lambda *a, **k: _FakeStore(rows))
+    assert sync._proc_control_cwd_backfill("goose", "s1") == "/proj/demo"
+    assert sync._proc_control_cwd_backfill("opencode", "s2") == "/direct/col"
+    assert sync._proc_control_cwd_backfill("aider", "nope") == ""
+
+
+def test_nemoclaw_kill_routes_to_openclaw_cancel(captured_posts, hitl_dir,
+                                                 monkeypatch):
+    seen = {}
+    monkeypatch.setattr(sync, "_openclaw_cancel_task",
+                        lambda sid: seen.setdefault("sid", sid) or
+                        {"ok": True, "scope_pending": False, "error": ""})
+    sync._dispatch_pending_action(_CFG, {
+        "type": "kill_session", "session_id": "task-9", "runtime": "nemoclaw",
+        "cache_key": "ck-n", "id": "a4"})
+    assert _wait(lambda: len(captured_posts) == 1)
+    assert seen["sid"] == "task-9"
+
+
+def test_cwd_backfill_is_runtime_scoped_and_has_no_bare_fallback(monkeypatch):
+    """An unscoped/bare-id lookup could return a DIFFERENT runtime's
+    directory, which would then be used to pick a process to signal."""
+    seen = []
+
+    class _Store:
+        def get_session_location(self, sid, agent_type=None):
+            seen.append((sid, agent_type))
+            return None
+
+    from clawmetry import local_store as _ls
+    monkeypatch.setattr(_ls, "get_store", lambda *a, **k: _Store())
+    assert sync._proc_control_cwd_backfill("kimi", "uuid-1") == ""
+    # exactly one lookup, namespaced, and scoped by agent_type
+    assert seen == [("kimi:uuid-1", "openclaw")]
+
+
+def test_relayed_runtime_case_is_normalised(captured_posts, hitl_dir,
+                                             monkeypatch):
+    """A relayed 'Copilot' must hit the same paths as 'copilot' — the
+    handler lookup lowercases, so the SUPPORTED_RUNTIMES check must too."""
+    calls = {}
+
+    def _fake_kill(runtime, session_id, cwd="", mode="kill"):
+        calls["kill"] = (runtime, session_id)
+        return {"ok": True, "action": "graceful_kill", "pid": 5,
+                "runtime": runtime, "detail": "terminated"}
+
+    monkeypatch.setattr(pc, "kill_session", _fake_kill)
+    monkeypatch.setattr(sync, "_proc_control_cwd_backfill", lambda rt, sid: "/w")
+    sync._dispatch_pending_action(_CFG, {
+        "type": "kill_session", "session_id": "s-1", "runtime": "Copilot",
+        "cache_key": "ck-case", "id": "a9"})
+    assert _wait(lambda: len(captured_posts) == 1)
+    assert calls["kill"][0] == "copilot"

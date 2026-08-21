@@ -1896,6 +1896,17 @@ def _register_default_gate_handlers() -> None:
         GATE_HANDLERS.setdefault("claude_code", _cc_gate)
     except Exception as e:  # never let a broken module kill the watcher
         log.debug("claude_code gate handler unavailable: %s", e)
+    # Cursor + Copilot CLI native pre-tool gates (2026-08-19 matrix-gap
+    # sprint) — same install-only-when-policies-want-it lifecycle.
+    try:
+        from clawmetry.runtime_gates import (
+            copilot_gate_handler as _cp_gate,
+            cursor_gate_handler as _cu_gate,
+        )
+        GATE_HANDLERS.setdefault("cursor", _cu_gate)
+        GATE_HANDLERS.setdefault("copilot", _cp_gate)
+    except Exception as e:
+        log.debug("cursor/copilot gate handlers unavailable: %s", e)
     _default_gates_registered = True
 
 
