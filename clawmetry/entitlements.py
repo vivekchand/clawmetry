@@ -115,6 +115,7 @@ PAID_RUNTIMES = frozenset(
         "exo",
         "kimi",
         "devin",
+        "gemini_cli",
     }
 )
 
@@ -153,6 +154,7 @@ RUNTIME_LABELS = {
     "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
     "kimi": "Kimi CLI",
+    "gemini_cli": "Gemini CLI",
     "devin": "Devin",
 }
 
@@ -188,6 +190,7 @@ RUNTIME_LANDING_PATHS = {
     "exo": "/runtimes/exo",
     "kimi": "/runtimes/kimi",
     "devin": "/runtimes/devin",
+    "gemini_cli": "/runtimes/gemini-cli",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -295,6 +298,12 @@ RUNTIME_ALIASES = {
     "kimi-code": "kimi",
     "kimi_code": "kimi",
     "kimicode": "kimi",
+    # Google Gemini CLI. "gemini" alone maps here rather than to
+    # ``antigravity`` -- Antigravity stores under ~/.gemini/antigravity* but
+    # is its own product, and hook clients that say "gemini" mean the CLI.
+    "gemini-cli": "gemini_cli",
+    "geminicli": "gemini_cli",
+    "gemini": "gemini_cli",
 }
 
 TIER_LABELS = {

@@ -1044,6 +1044,34 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Gemini CLI (google-gemini/gemini-cli) ───────────────────────
+    # Memory is GEMINI.md (DEFAULT_CONTEXT_FILENAME in the v0.56.0 bundle),
+    # loaded globally from <home>/.gemini/GEMINI.md and per-project from
+    # ./GEMINI.md and ./.gemini/GEMINI.md. Skills/commands/policies live under
+    # the global .gemini dir (getUserSkillsDir / getUserCommandsDir /
+    # getUserPoliciesDir), with project-local mirrors under <ws>/.gemini.
+    # NOTE the env var names the dir CONTAINING .gemini, unlike KIMI_SHARE_DIR.
+    gemini_home = os.path.join(
+        _env_root("GEMINI_CLI_HOME", os.path.expanduser("~")), ".gemini")
+    catalog.append(RuntimeCatalogEntry(
+        id="gemini_cli", label="Gemini CLI", roots=(
+            RootSpec("memory", os.path.join(gemini_home, "GEMINI.md"),
+                     label="Global GEMINI.md", scope="global"),
+            RootSpec("memory", os.path.join(ws, "GEMINI.md"),
+                     label="Project GEMINI.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".gemini", "GEMINI.md"),
+                     label="Project .gemini/GEMINI.md", scope="project"),
+            RootSpec("skills", os.path.join(gemini_home, "skills"),
+                     label="Installed skills", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".gemini", "skills"),
+                     label="Project skills", scope="project"),
+            RootSpec("skills", os.path.join(gemini_home, "commands"),
+                     label="Custom commands", scope="global"),
+            RootSpec("hooks", os.path.join(gemini_home, "settings.json"),
+                     label="settings.json", scope="global"),
+        ),
+    ))
+
     # ── Kimi CLI / Kimi Code CLI (MoonshotAI/kimi-cli) ──────────────
     # One share dir ($KIMI_SHARE_DIR, default ~/.kimi; the standalone Kimi
     # Code CLI uses ~/.kimi-code). Memory is AGENTS.md, checked at
@@ -1425,7 +1453,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 23 runtimes would be a wall of
+    because listing every absent root for 24 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime

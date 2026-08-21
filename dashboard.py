@@ -326,7 +326,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.747"
+__version__ = "0.12.748"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -18392,7 +18392,7 @@ ARCHITECTURE_OVERVIEW = """\
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
-  │  Any of 23 runtimes │              │  ClawMetry          │              │  Your browser       │
+  │  Any of 24 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │

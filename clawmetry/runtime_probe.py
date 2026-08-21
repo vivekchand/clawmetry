@@ -110,6 +110,14 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("kimi", "Kimi CLI",
                  ("~/.kimi/sessions", "~/.kimi-code/sessions"),
                  env="KIMI_SHARE_DIR"),
+    # Google Gemini CLI keeps per-project chat recordings under
+    # <home>/.gemini/tmp/<project-basename>/chats/. NOTE the env var names the
+    # dir CONTAINING .gemini (unlike KIMI_SHARE_DIR/QWEN_HOME, which name the
+    # data dir itself), so the probe globs both the plain ~/.gemini tree and
+    # the CLAWMETRY override that points straight at a data dir.
+    RuntimeProbe("gemini_cli", "Gemini CLI",
+                 ("~/.gemini/tmp/*/chats", "~/.gemini/projects.json"),
+                 env="CLAWMETRY_GEMINI_CLI_HOME"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME
