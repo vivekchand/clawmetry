@@ -55,3 +55,12 @@ dist/
 
 # Stamped by CI at desktop-build time (see desktop-artifacts.yml)
 desktop/assets/version.txt
+
+# Re-assert the v2 bundle un-ignore. .gitignore is last-match-wins, so the
+# duplicate `dist/` directly above silently re-hid clawmetry/static/v2/dist/
+# despite the un-ignore near the top of this file. Already-tracked files were
+# unaffected (tracking beats .gitignore), which is why this went unnoticed —
+# but every NEW file in a rebuilt bundle was dropped, so a CI build from a
+# clean checkout would ship an incomplete SPA.
+!clawmetry/static/v2/dist/
+!clawmetry/static/v2/dist/**

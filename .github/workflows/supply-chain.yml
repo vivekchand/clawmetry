@@ -1,0 +1,123 @@
+name: Supply chain
+
+# Everything a vendor security review asks about the code we ship, enforced on
+# every PR so the answers stay true between reviews:
+#
+#   "Which third parties does the dashboard contact?"  -> none, gated below
+#   "Is the vendored JS the real published release?"   -> byte-compared to npm
+#   "Do you produce an SBOM?"                          -> yes, per run + release
+#   "Any known-vulnerable dependencies?"               -> pip-audit + OSV
+#
+# These jobs are cheap (no matrix, no browser) and deliberately independent so
+# one failure names one problem.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Advisories land continuously; a passing PR months ago says nothing about
+    # today. Re-audit the shipped tree every Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: supply-chain-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  no-external-assets:
+    name: No third-party asset loads
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Scan served pages for absolute http(s) asset references
+        run: python3 scripts/verify_no_external_assets.py
+
+  vendored-assets:
+    name: Vendored assets match npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Verify sha256 pins and byte-compare against the npm registry
+        run: python3 scripts/verify_vendor.py
+
+  fonts-current:
+    name: Vendored fonts not stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install --quiet certifi
+      # Regenerates from the Google Fonts API and diffs against what is checked
+      # in, so a hand-edited stylesheet or a half-finished regeneration fails.
+      - name: Check checked-in font CSS matches a fresh generation
+        run: python3 scripts/vendor_fonts.py --check
+
+  python-deps:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install --quiet pip-audit cyclonedx-bom
+      - name: Audit declared dependencies for known advisories
+        # Non-blocking on PRs: a fresh advisory in a transitive dep should not
+        # wedge unrelated work. It still fails the scheduled run, which is the
+        # signal that someone needs to act.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: pip-audit --requirement requirements.txt --strict --progress-spinner off
+      - name: Generate CycloneDX SBOM
+        run: |
+          python3 -m pip install --quiet -r requirements.txt
+          cyclonedx-py environment --output-format JSON > clawmetry-sbom.json
+      - name: Publish SBOM as a build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: clawmetry-sbom
+          path: clawmetry-sbom.json
+          retention-days: 90
+
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    # Scorecard reads repo settings/branch protection, and publishing results
+    # needs id-token. Skipped on forks, which cannot mint the token.
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@v2
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # Publishes to the public OpenSSF API so the README badge resolves.
+          # Results are already public for a public repo.
+          publish_results: true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scorecard-results
+          path: scorecard-results.sarif
+          retention-days: 30
+      # Surfaces findings in the GitHub Security tab rather than only in logs.
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard-results.sarif

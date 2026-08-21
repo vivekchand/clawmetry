@@ -326,11 +326,18 @@ def _resolve_telemetry_url() -> str:
     if url:
         return url
     try:
-        from clawmetry.endpoints import is_custom_endpoint
-        if is_custom_endpoint():
+        # egress_suppressed(), not is_custom_endpoint(): a self-hosted SERVER
+        # container does not necessarily set CLAWMETRY_ENDPOINT, because it IS
+        # the endpoint. Keying only off the endpoint left that process pinging
+        # the managed cloud on startup even with SELF_HOSTED=true. Also covers
+        # CLAWMETRY_OFFLINE (air-gapped), where the call can only ever hang.
+        from clawmetry.endpoints import egress_suppressed
+        if egress_suppressed():
             return ""
     except Exception:
-        pass
+        # Fail closed. A missing or older endpoints module must not result in
+        # an unexpected phone-home from a customer's network.
+        return ""
     return TELEMETRY_URL_DEFAULT
 
 

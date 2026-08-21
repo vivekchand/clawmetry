@@ -4681,6 +4681,21 @@ def _unattended_update_target(current: str):
             "Unattended updates disabled "
             "(CLAWMETRY_AUTO_UPDATE kill switch or CI environment)"
         )
+    # A deployment that declared itself private (self-hosted, air-gapped, or
+    # repointed at a customer-run server) must not reach pypi.org. On a network
+    # with no route out the call can only time out; on a monitored one it is
+    # unexplained egress during a security review. Upgrades in these
+    # deployments belong to the operator's change process, not to us.
+    try:
+        from clawmetry.endpoints import egress_suppressed
+        if egress_suppressed():
+            return None, (
+                "Unattended updates disabled (self-hosted / offline deployment "
+                "— upgrade through your own change process)"
+            )
+    except Exception:
+        # Fail closed: no policy module means no unattended network call.
+        return None, "Update policy unavailable; skipping unattended update"
     try:
         req = urllib.request.Request(
             "https://pypi.org/pypi/clawmetry/json",
