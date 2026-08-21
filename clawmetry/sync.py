@@ -6887,8 +6887,7 @@ _LITE_RT_LABELS = {
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
-    "exo": "Exo",
-    "kimi": "Kimi CLI",
+    "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6916,6 +6915,12 @@ def _kimi_store_paths() -> list:
     out += [os.path.join(home, ".kimi", "sessions"),
             os.path.join(home, ".kimi-code", "sessions")]
     return out
+def _xdg_data_home() -> str:
+    """``$XDG_DATA_HOME`` with the spec default. Devin (and Goose/opencode)
+    anchor their stores here, so honour the env var rather than hardcoding
+    ``~/.local/share`` — a machine that moves XDG_DATA_HOME would otherwise
+    read as "runtime not installed"."""
+    return os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
 
 
 def _runtime_data_paths(rid: str) -> list:
@@ -6957,6 +6962,13 @@ def _runtime_data_paths(rid: str) -> list:
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
         "kimi": _kimi_store_paths(),
+        # Devin CLI: one SQLite store for every session, XDG-anchored. The
+        # vendor installer migrates the legacy "cognition"/"chisel" data
+        # namespaces to "devin", so older installs still resolve.
+        "devin": ([os.path.expanduser(os.environ.get("CLAWMETRY_DEVIN_DB", "").strip())]
+                  if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
+            os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
+            for ns in ("devin", "cognition", "chisel")],
     }
     return _M.get(rid, [])
 
@@ -7097,6 +7109,13 @@ def _detect_runtimes_lite() -> list:
                 [os.path.join(home, "exo", ".exo", "exoharness"),
                  os.path.join(home, ".exo", "exoharness")]),
         "kimi": _kimi_store_paths(),
+        # Devin CLI: one SQLite store for every session, XDG-anchored. The
+        # vendor installer migrates the legacy "cognition"/"chisel" data
+        # namespaces to "devin", so older installs still resolve.
+        "devin": ([os.path.expanduser(os.environ.get("CLAWMETRY_DEVIN_DB", "").strip())]
+                  if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
+            os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
+            for ns in ("devin", "cognition", "chisel")],
     }
     for rid, paths in _present.items():
         try:
@@ -12998,11 +13017,19 @@ def _build_machine_info():
 # namespaced + tagged with the runtime. To add a runtime: ship its adapter and
 # add a (module, class) row here. Import is per-adapter + defensive so a missing
 # or broken adapter (e.g. an older wheel) never blocks the others.
-# The 12 paid runtime adapters live in the closed-source clawmetry-pro
-# package (moved in Phase 4 of the open-core split). ``_family_adapter_classes()``
+# The paid runtime adapters live in the closed-source clawmetry-pro package
+# (moved in Phase 4 of the open-core split). ``_family_adapter_classes()``
 # below imports them by absolute path; the import gracefully fails when
-# clawmetry-pro is not installed and the daemon proceeds with OpenClaw +
-# NeMo (the Free runtimes) only.
+# clawmetry-pro is not installed and the daemon proceeds with the Free
+# runtimes only.
+#
+# FREE adapters are bundled right here in OSS and carry a ``clawmetry.adapters.*``
+# import path, so `pip install clawmetry` alone observes them -- no account, no
+# licence, no wheel download. Goose (block/goose) is the first: its maintainers
+# will only take a ClawMetry tutorial into their docs if it works without a paid
+# plan, and it is an OSS runtime with no enterprise willingness-to-pay, so the
+# adapter belongs in the open package. See docs/ENTITLEMENTS.md for the rule
+# (open-source runtime -> free adapter; commercial vendor product -> paid).
 _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.picoclaw", "PicoClawAdapter"),
     ("clawmetry_pro.adapters.nanoclaw", "NanoClawAdapter"),
@@ -13011,7 +13038,11 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.codex", "CodexAdapter"),
     ("clawmetry_pro.adapters.cursor", "CursorAdapter"),
     ("clawmetry_pro.adapters.aider", "AiderAdapter"),
-    ("clawmetry_pro.adapters.goose", "GooseAdapter"),
+    # FREE + bundled in OSS (see the note above). A licensed install may also
+    # carry clawmetry-pro's own GooseAdapter; the registry override seam in
+    # dashboard.py keeps whichever registered first, and both read the same
+    # sessions.db, so there is no double-ingest either way.
+    ("clawmetry.adapters.goose", "GooseAdapter"),
     ("clawmetry_pro.adapters.opencode", "OpencodeAdapter"),
     ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
@@ -13042,6 +13073,12 @@ _FAMILY_ADAPTER_SPECS = (
     # dir)>/<uuid>/. The adapter reads BOTH share dirs (~/.kimi and the
     # successor ~/.kimi-code) plus $KIMI_SHARE_DIR / CLAWMETRY_KIMI_ROOTS.
     ("clawmetry_pro.adapters.kimi", "KimiAdapter"),
+    # Devin CLI (cli.devin.ai) — every session in ONE SQLite store at
+    # $XDG_DATA_HOME/devin/cli/sessions.db: a message FOREST (fork /
+    # revert leave abandoned branches the adapter must not bill) plus
+    # the ACP tool-call records. Devin Cloud sessions are API-only and
+    # deliberately not ingested here.
+    ("clawmetry_pro.adapters.devin", "DevinAdapter"),
 )
 
 
@@ -14476,6 +14513,7 @@ _RUNTIME_PREFIXES = frozenset({
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
     "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
     "kimi",
+    "devin",
 })
 
 

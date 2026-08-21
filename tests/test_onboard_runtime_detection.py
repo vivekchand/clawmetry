@@ -12,6 +12,8 @@ import os
 import pytest
 
 from clawmetry import runtime_probe
+from clawmetry.entitlements import ALL_RUNTIMES
+from clawmetry.entitlements import FREE_RUNTIMES as CATALOGUE_FREE_RUNTIMES
 from clawmetry.entitlements import get_entitlement  # noqa: F401 (import parity canary)
 from clawmetry.runtime_probe import (
     FREE_RUNTIMES,
@@ -22,11 +24,22 @@ from clawmetry.runtime_probe import (
 
 
 def test_probe_catalogue_covers_all_supported_runtimes():
-    """One probe per supported runtime, ids unique, free set exact."""
+    """One probe per supported runtime, ids unique, free set exact.
+
+    Derived from the entitlement catalogue rather than a magic number: the
+    literal count silently went stale when deepseek_harness / exo / kimi
+    landed (it still said 19 against a 22-runtime catalogue), which is the
+    drift this test exists to catch. Compare sets, not counts, so the
+    failure message names the missing runtime.
+    """
     ids = [p.id for p in RUNTIME_PROBES]
     assert len(ids) == len(set(ids))
-    assert len(ids) == 19  # qm joined 2026-08-06 (grok 2026-08-05)
-    assert FREE_RUNTIMES == {"openclaw", "nemoclaw"}
+    assert set(ids) == set(ALL_RUNTIMES), (
+        "probe catalogue drifted from entitlements.ALL_RUNTIMES; "
+        f"missing={set(ALL_RUNTIMES) - set(ids)} extra={set(ids) - set(ALL_RUNTIMES)}"
+    )
+    # runtime_probe re-exports the catalogue's free set — never its own copy.
+    assert FREE_RUNTIMES == CATALOGUE_FREE_RUNTIMES
     for rt in ("claude_code", "cursor", "codex", "qwen_code", "picoclaw", "n8n"):
         assert rt in ids
 
@@ -130,5 +143,5 @@ def test_probes_never_raise_when_probe_explodes(monkeypatch):
         lambda self: (_ for _ in ()).throw(OSError("boom")),
     )
     results = probe_runtimes()
-    assert len(results) == 19
+    assert len(results) == len(RUNTIME_PROBES)
     assert all(p["found"] is False for p in results)

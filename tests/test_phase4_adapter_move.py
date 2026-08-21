@@ -1,13 +1,18 @@
-"""Tests for the OSS-side cleanup after Phase 4 moved 10 paid runtime
-adapters to clawmetry-pro.
+"""Tests for the OSS-side adapter split.
+
+Phase 4 moved the paid runtime adapters to clawmetry-pro. Goose came back
+the other way 2026-08-19 (see ``entitlements.FREE_RUNTIMES``): an
+open-source runtime gets a free, open-source adapter, so `pip install
+clawmetry` observes it with no account and no wheel download.
 
 Verifies that:
-* OSS clawmetry/adapters/ only contains the base + registry + the two
-  Free runtime adapters (openclaw, nemo).
+* OSS clawmetry/adapters/ ships the mechanism + exactly the Free runtime
+  adapters (openclaw, nemo, goose) and none of the paid ones.
 * ``clawmetry/sync.py:_FAMILY_ADAPTER_SPECS`` points at
-  ``clawmetry_pro.adapters.*`` import paths.
-* ``_family_adapter_classes()`` returns an empty list when
-  clawmetry-pro is not installed (every import fails defensively),
+  ``clawmetry_pro.adapters.*`` for every PAID runtime, and at
+  ``clawmetry.adapters.*`` for every FREE one.
+* ``_family_adapter_classes()`` still yields the bundled Free adapters when
+  clawmetry-pro is not installed (the paid imports fail defensively),
   and the registry still has the Free OpenClaw adapter.
 """
 from __future__ import annotations
@@ -16,18 +21,19 @@ import importlib
 import sys
 
 
-def test_oss_only_keeps_base_registry_openclaw_nemo():
-    """The OSS adapters package must only ship the Free adapters."""
-    from clawmetry import adapters as _a
+def test_oss_only_keeps_mechanism_and_free_adapters():
+    """The OSS adapters package must ship the Free adapters, and only those."""
+    # The Free runtimes + the mechanism are importable from OSS.
+    from clawmetry.adapters import (  # noqa: F401
+        base, registry, openclaw, nemo, goose, cost,
+    )
 
-    # The Free runtimes + the mechanism are still importable.
-    from clawmetry.adapters import base, registry, openclaw, nemo  # noqa: F401
-
-    # The paid adapter modules MUST NOT exist in OSS anymore.
+    # The paid adapter modules MUST NOT exist in OSS.
     for name in (
-        "claude_code", "codex", "cursor", "aider", "goose",
+        "claude_code", "codex", "cursor", "aider",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
+        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
     ):
         try:
             importlib.import_module(f"clawmetry.adapters.{name}")
@@ -39,33 +45,67 @@ def test_oss_only_keeps_base_registry_openclaw_nemo():
         )
 
 
-def test_family_adapter_specs_target_clawmetry_pro():
-    """Sync's adapter discovery list must point at clawmetry-pro, not OSS."""
+def test_free_adapter_modules_ship_in_oss():
+    """Every non-OpenClaw FREE runtime must have its adapter bundled here.
+
+    This is the guard that keeps the promise honest: a runtime listed as
+    free but whose reader only exists in the closed wheel would be
+    unusable on `pip install clawmetry`, which is exactly the complaint
+    that put Goose in the free tier.
+    """
+    from clawmetry.entitlements import FREE_RUNTIMES
+
+    # openclaw + nemoclaw have bespoke module names; the rest map 1:1.
+    module_for = {"openclaw": "openclaw", "nemoclaw": "nemo"}
+    for rt in sorted(FREE_RUNTIMES):
+        mod = module_for.get(rt, rt)
+        importlib.import_module(f"clawmetry.adapters.{mod}")
+
+
+def test_family_adapter_specs_split_by_tier():
+    """Paid specs point at clawmetry-pro; free specs stay in OSS."""
     from clawmetry import sync as _s
+    from clawmetry.entitlements import FREE_RUNTIMES
 
     specs = _s._FAMILY_ADAPTER_SPECS
-    assert len(specs) == 20, f"expected 20 paid adapters, got {len(specs)}"
-    for module_name, class_name in specs:
-        assert module_name.startswith("clawmetry_pro.adapters."), (
-            f"sync._FAMILY_ADAPTER_SPECS still references OSS path: "
-            f"{module_name}.{class_name}"
+    assert len(specs) == 21, f"expected 21 family adapters, got {len(specs)}"
+
+    free_specs = [s for s in specs if s[0].startswith("clawmetry.adapters.")]
+    paid_specs = [s for s in specs if s[0].startswith("clawmetry_pro.adapters.")]
+    assert len(free_specs) + len(paid_specs) == len(specs), (
+        f"unrecognised adapter import path in {specs}"
+    )
+
+    # Every bundled family spec must be a runtime we actually advertise free.
+    for module_name, class_name in free_specs:
+        runtime = module_name.rsplit(".", 1)[-1]
+        assert runtime in FREE_RUNTIMES, (
+            f"{module_name}.{class_name} is bundled in OSS but {runtime!r} is "
+            "not in FREE_RUNTIMES — a paid adapter must not ship in the open "
+            "package."
         )
 
 
-def test_family_adapter_classes_empty_when_pro_absent(monkeypatch):
-    """When clawmetry-pro is not installed, _family_adapter_classes()
-    returns []; each per-adapter import fails defensively and the daemon
-    proceeds with the Free runtimes only."""
+def test_family_adapter_classes_keeps_free_when_pro_absent(monkeypatch):
+    """Without clawmetry-pro, _family_adapter_classes() still yields the
+    bundled FREE adapters; every paid import fails defensively.
+
+    This is the whole point of bundling Goose: a plain `pip install
+    clawmetry` — no account, no licence, no wheel download — must still be
+    able to read a Goose install.
+    """
     monkeypatch.setitem(sys.modules, "clawmetry_pro", None)
     monkeypatch.setitem(sys.modules, "clawmetry_pro.adapters", None)
     for name in (
-        "claude_code", "codex", "cursor", "aider", "goose",
+        "claude_code", "codex", "cursor", "aider",
         "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
+        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
     ):
         monkeypatch.setitem(sys.modules, f"clawmetry_pro.adapters.{name}", None)
 
     from clawmetry import sync as _s
     classes = _s._family_adapter_classes()
-    # Empty when nothing is importable; daemon falls back to OpenClaw + NeMo.
-    assert classes == []
+    names = sorted(getattr(c, "name", "") for c in classes)
+    # Exactly the bundled free family adapters — nothing paid leaked through.
+    assert names == ["goose"], names

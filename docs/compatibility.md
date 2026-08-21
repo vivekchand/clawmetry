@@ -26,7 +26,7 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Codex       | Beta adapter   | "rollout" JSONL `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Transcripts, model, tool calls, token usage (from `token_count` events). |
 | Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
 | Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
-| Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
+| Goose       | Beta adapter (**free**) | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. Adapter ships in the OSS package (`clawmetry/adapters/goose.py`) — no plan required. |
 | opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
 | Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
 | Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |
@@ -41,8 +41,12 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Kimi CLI | Beta adapter | One `wire.jsonl` event log per session under `<share>/sessions/<md5(workdir)>/<uuid>/` | Reads both share dirs (`~/.kimi`, `~/.kimi-code`) plus `$KIMI_SHARE_DIR`. Model id is not written to disk. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
-OpenClaw and NVIDIA NemoClaw are free in the OSS package; every other
-runtime needs a Starter or Pro plan, or a self-hosted license key. See
+OpenClaw, NVIDIA NemoClaw and Goose are free in the OSS package — their
+adapters ship in `pip install clawmetry`, so observing them needs no
+account, no licence key and no network call. The rule: an **open-source
+runtime** gets a free, open-source adapter; a **commercial vendor product**
+(Claude Code, Codex, GitHub Copilot, Cursor, Antigravity, Grok) needs a
+Starter or Pro plan, or a self-hosted licence key. See
 [`ENTITLEMENTS.md`](ENTITLEMENTS.md).
 
 ## What "Beta adapter" means (and what it does not)

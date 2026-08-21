@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ট্রেস ক্লাস্টার",
   "usage.trace_clusters_hint": "আচরণের প্যাটার্ন অনুযায়ী সেশন স্বয়ংক্রিয়ভাবে গ্রুপ করুন",
   "usage.trend": "ট্রেন্ড",
-  "version_impact.title": "আপগ্রেড প্রভাব"
+  "version_impact.title": "আপগ্রেড প্রভাব",
+  "app.approve_for_session": "সেশনের জন্য অনুমোদন করুন",
+  "app.always_allow": "সবসময় অনুমতি দিন",
+  "approvals.min_risk_label": "সর্বনিম্ন ঝুঁকির মাত্রা",
+  "approvals.min_risk_any": "যেকোনো (শুধু কীওয়ার্ডের ভিত্তিতে মিলিয়ে দেখুন)",
+  "approvals.min_risk_medium": "মাঝারি বা তার বেশি",
+  "approvals.min_risk_high": "উচ্চ বা তার বেশি",
+  "approvals.min_risk_critical": "শুধু সংকটজনক",
+  "approvals.min_risk_hint": "ClawMetry প্রতিটি টুল কলের ঝুঁকি স্কোর করে (রিকার্সিভ ডিলিট, sudo, ক্রেডেনশিয়াল অ্যাক্সেস...)। কীওয়ার্ড দিয়ে হোক বা না হোক, ঝুঁকির ভিত্তিতে গেট করতে এটি সেট করুন।"
 }

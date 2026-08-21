@@ -25,7 +25,16 @@ import os
 from dataclasses import dataclass
 
 # Runtimes the free tier watches (FLYWHEEL: free on every plan).
-FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+#
+# Sourced from the entitlement catalogue rather than duplicated: this module
+# only labels a probe row ``free``, and a stale copy here would show a free
+# runtime as locked in onboarding while the gate happily allowed it. The
+# literal is kept solely as an import-failure fallback (this module is
+# imported by the installer path, which must never hard-fail on an import).
+try:  # pragma: no cover - trivial import shim
+    from clawmetry.entitlements import FREE_RUNTIMES
+except Exception:  # pragma: no cover - defensive; keep onboarding alive
+    FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
 @dataclass
@@ -110,6 +119,19 @@ RUNTIME_PROBES: tuple = (
                   "~/.qm", "~/qm/package.json",
                   "/opt/qm/package.json"),
                  env="CLAWMETRY_QM_HOME"),
+    # Devin CLI (cli.devin.ai) keeps every session in ONE XDG-anchored SQLite
+    # store; ~/.config/devin/config.json is the other half of a real install
+    # (it exists even when the CLI has only ever run in ACP mode under an
+    # IDE, which never creates sessions.db). Devin Cloud sessions are
+    # API-only and cannot be probed from disk at all.
+    RuntimeProbe("devin", "Devin",
+                 ("~/.local/share/devin/cli/sessions.db",
+                  "~/.local/share/cognition/cli/sessions.db",
+                  "~/.local/share/chisel/cli/sessions.db",
+                  "~/.config/devin/config.json",
+                  "~/AppData/Local/devin/cli/sessions.db",
+                  "~/AppData/Roaming/devin/config.json"),
+                 env="CLAWMETRY_DEVIN_DB"),
 )
 
 

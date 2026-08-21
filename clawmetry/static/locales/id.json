@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Klaster Trace",
   "usage.trace_clusters_hint": "kelompokkan sesi secara otomatis berdasarkan pola perilaku",
   "usage.trend": "Tren",
-  "version_impact.title": "Dampak Peningkatan"
+  "version_impact.title": "Dampak Peningkatan",
+  "app.approve_for_session": "Setujui untuk sesi ini",
+  "app.always_allow": "Selalu izinkan",
+  "approvals.min_risk_label": "Tingkat risiko minimum",
+  "approvals.min_risk_any": "Semua (cocokkan berdasarkan kata kunci saja)",
+  "approvals.min_risk_medium": "Sedang ke atas",
+  "approvals.min_risk_high": "Tinggi ke atas",
+  "approvals.min_risk_critical": "Kritis saja",
+  "approvals.min_risk_hint": "ClawMetry menilai risiko setiap panggilan tool (penghapusan rekursif, sudo, akses kredensial...). Atur ini untuk menyaring berdasarkan risiko, dengan atau tanpa kata kunci."
 }

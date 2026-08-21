@@ -180,7 +180,6 @@ def test_min_tier_paid_runtime_is_cloud_starter(ent):
         "codex",
         "cursor",
         "aider",
-        "goose",
         "opencode",
         "qwen_code",
         "hermes",

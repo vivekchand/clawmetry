@@ -281,13 +281,13 @@
     var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
-      : ['openclaw', 'nemoclaw'];
+      : ['openclaw', 'nemoclaw', 'goose'];
     // nemoclaw is NVIDIA NemoClaw and it is FREE. nanoclaw is a different
     // runtime entirely, and it is PAID (entitlements.PAID_RUNTIMES). This
     // mapping said 'NanoClaw', so the one screen that tells a blocked user
     // what they still get named a runtime they do NOT get and never named
     // the one they do. Labels come from entitlements.RUNTIME_LABELS.
-    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw' };
+    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw', goose: 'Goose' };
     var freeRuntimesLabel = freeRuntimes
       .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
@@ -494,8 +494,8 @@
     });
 
     // Free-mode escape: expired-trial users can drop back to
-    // OpenClaw/NemoClaw-only mode instead of paying (entitlements.py's
-    // FREE_RUNTIMES = {openclaw, nemoclaw} — NOT nanoclaw, which is paid;
+    // free-runtime-only mode instead of paying (entitlements.py's
+    // FREE_RUNTIMES = {openclaw, nemoclaw, goose} — NOT nanoclaw, which is paid;
     // this comment said NanoClaw and that is how the label above got it
     // wrong too). Posts to the
     // continue-free endpoint (allowlisted), then reloads to a
@@ -5038,7 +5038,8 @@ var _Q_RUNTIME_NAMES = {
   n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
   qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
-  kimi: 'Kimi CLI'
+  kimi: 'Kimi CLI',
+  devin: 'Devin'
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -11223,7 +11224,8 @@ var _CM_RT_LABEL = {
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
   copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
-  deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI'
+  deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
+  devin: 'Devin'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11233,7 +11235,8 @@ var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
   n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
-  kimi: 1
+  kimi: 1,
+  devin: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -11372,6 +11375,9 @@ var _CM_RT_CAPS = {
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Devin CLI: tokens + ACUs per message, but no subagent lineage in the
+  // local store, so no SUBAGENTS panel rather than an empty one.
+  devin: ['SESSIONS','EVENTS','COST'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -18320,7 +18326,14 @@ async function loadTranscripts() {
         window._cmEvalScoresByRow = _byId;
       } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
     }
-    var data = await fetch('/api/transcripts').then(r => r.json());
+    // Scope the request to the active runtime so its 50-row cap belongs to
+    // that runtime alone. Unscoped, a 20-runtime box shares one global cap
+    // and a filtered Sessions tab renders 2-3 rows and looks empty.
+    var _rtFilter = '';
+    try { _rtFilter = (_cmRuntimeFilter && _cmRuntimeFilter()) || ''; } catch (_e) {}
+    var _tUrl = '/api/transcripts' +
+      (_rtFilter && _rtFilter !== 'all' ? '?runtime=' + encodeURIComponent(_rtFilter) : '');
+    var data = await fetch(_tUrl).then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
     // daemon shipped one in the snapshot), with the full session id demoted
@@ -22060,6 +22073,7 @@ var _RT_FLOW = {
   deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
   exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
   kimi: { label:'Kimi CLI', src:['⌨️','Terminal'], accent:'#0f172a', stroke:'#334155', tools:[['⚡','Shell'],['📖','ReadFile'],['📝','WriteFile'],['🔍','Grep']] },
+  devin: { label:'Devin', src:['⌨️','Terminal'], accent:'#5b8def', stroke:'#3f6fd1', tools:[['⚡','Shell'],['📖','Read'],['📝','Edit'],['✅','Todo']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -27146,7 +27160,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 22 runtimes side by side. Respects the global
+// the headline demo path — the 23 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -27988,6 +28002,7 @@ function _cmRuntimeIcon(id) {
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
     n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
     kimi: '🌙',
+    devin: '🅓',
   };
   return map[id] || '•';
 }

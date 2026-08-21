@@ -19,16 +19,22 @@ import pytest
 
 
 # Canonical list per /pricing tier bullets + homepage hero (snapshot
-# taken 2026-05-31; update both places + this list in lockstep when
-# adding a runtime).
-EXPECTED_FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+# taken 2026-08-19; update both places + this list in lockstep when
+# adding a runtime or moving one between tiers).
+#
+# goose moved free 2026-08-19 — see entitlements.FREE_RUNTIMES for why.
+# Moving a runtime between these two sets is a PUBLIC PRICING CHANGE: the
+# /pricing bullets and the homepage hero must ship in the same batch, or
+# this guard is lying rather than pinning.
+EXPECTED_FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 EXPECTED_PAID_RUNTIMES = frozenset({
-    "claude_code", "codex", "cursor", "aider", "goose",
+    "claude_code", "codex", "cursor", "aider",
     "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
     "deepseek_harness",
     "exo",
     "kimi",
+    "devin",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 

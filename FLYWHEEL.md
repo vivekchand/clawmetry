@@ -26,10 +26,10 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
 > - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
 
-> ## Multi-runtime: ClawMetry observes 22 agent runtimes, not just OpenClaw (non-negotiable)
-> **ClawMetry is runtime-neutral. It observes 22 AI agent runtimes, not OpenClaw alone.** Free on every plan: **OpenClaw, NVIDIA NemoClaw**. Also supported: **Aider, Antigravity, Claude Code, Codex, Cursor, Deep Agents, DeepSeek Harness, Exo, GitHub Copilot, Goose, Grok, Hermes, n8n, NanoClaw, opencode, Pi, PicoClaw, QM, Qwen Code**. The enabled set is live at `GET /api/runtimes` (authed); read it, never hardcode a stale copy. The *count* in prose is derived from `FREE_RUNTIMES | PAID_RUNTIMES` and enforced by `scripts/sync_runtime_count.py` (see section 2a).
+> ## Multi-runtime: ClawMetry observes 23 agent runtimes, not just OpenClaw (non-negotiable)
+> **ClawMetry is runtime-neutral. It observes 23 AI agent runtimes, not OpenClaw alone.** Free on every plan: **OpenClaw, NVIDIA NemoClaw, Goose**. Also supported: **Aider, Antigravity, Claude Code, Codex, Cursor, Deep Agents, DeepSeek Harness, Devin, Exo, GitHub Copilot, Grok, Hermes, Kimi CLI, n8n, NanoClaw, opencode, Pi, PicoClaw, QM, Qwen Code**. The enabled set is live at `GET /api/runtimes` (authed); read it, never hardcode a stale copy. The *count* in prose is derived from `FREE_RUNTIMES | PAID_RUNTIMES` and enforced by `scripts/sync_runtime_count.py` (see section 2a).
 > - **User-facing copy and UI must never imply OpenClaw-only.** Framing like "designed for OpenClaw agents", "your OpenClaw machine", "No OpenClaw detected", or "Looking for OpenClaw activity" is a bug. Use runtime-neutral language ("your AI agent", "the machine your agent runs on") or name the runtimes ("OpenClaw, NVIDIA NemoClaw + 10 more runtimes", matching the homepage install card). Naming runtimes is public; pricing and tier internals stay private.
-> - **Verify across all 22 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
+> - **Verify across all 23 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
 > Burned 2026-06-01: the docs FAQ said "ClawMetry is designed for OpenClaw agents" and the cloud empty-states plus the radar assumed OpenClaw-only. Many surfaces still need this sweep; when you touch a screen, fix its runtime framing.
 
 ---
@@ -86,14 +86,17 @@ ClawMetry is open-core. There are **four repos**, each with a clear remit; agent
 
 | Repo | Visibility | Holds |
 |---|---|---|
-| **clawmetry** (this repo) | **Public OSS** | OpenClaw runtime + NeMo governance + 21 chat-channel adapters + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + **hook points / stubs** for every gated feature. |
-| **clawmetry-pro** | **Private** (not on public PyPI; served only to activated installs by the license server) | The gated runtime adapters (Claude Code, Codex, Cursor, Aider, Goose, opencode, Qwen Code, Hermes, PicoClaw, NanoClaw) and the Pro paid CLI / analytical features. Plugs into OSS via the `clawmetry.extensions` entry point. |
+| **clawmetry** (this repo) | **Public OSS** | The FREE runtime adapters (OpenClaw, NemoClaw, **Goose**) + NeMo governance + 21 chat-channel adapters + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + **hook points / stubs** for every gated feature. |
+| **clawmetry-pro** | **Private** (not on public PyPI; served only to activated installs by the license server) | The gated runtime adapters (Claude Code, Codex, Cursor, Aider, opencode, Qwen Code, Hermes, PicoClaw, NanoClaw, …) and the Pro paid CLI / analytical features. Plugs into OSS via the `clawmetry.extensions` entry point. |
 | **clawmetry-cloud** | Private | Cloud SaaS server + license server (`/api/license/*`) + Stripe + admin + heartbeat-relay + the closed-wheel hosting (`wheels/` baked into the Cloud Run image). Business + revenue + funnel docs (private). |
 | **clawmetry-landing** | Private repo, public site `clawmetry.com` | Marketing + pricing page + public Buy buttons + installer script. Storefront only; no gated code. |
 
 ### Decision tree (do this before opening a PR)
 
-1. **A new agent-runtime adapter** (something OpenClaw-shaped that emits sessions/events from a *different* harness — Codex/Cursor/etc.) → **clawmetry-pro** (`clawmetry_pro/adapters/<runtime>.py`), registered in `clawmetry_pro.__init__._PAID_ADAPTERS`. Import only `from clawmetry.adapters.base import …` — never an OSS sibling adapter — so the file stays valid when OSS strips its bundled copies at enforce.
+1. **A new agent-runtime adapter** (something OpenClaw-shaped that emits sessions/events from a *different* harness — Codex/Cursor/etc.) → the tier decides the repo:
+   - **Commercial vendor product** (Claude Code, Codex, GitHub Copilot, Cursor, Antigravity, Grok, …) → **clawmetry-pro** (`clawmetry_pro/adapters/<runtime>.py`), registered in `clawmetry_pro.__init__._PAID_ADAPTERS`. Import only `from clawmetry.adapters.base import …` — never an OSS sibling adapter — so the file stays valid when OSS strips its bundled copies at enforce.
+   - **Open-source runtime** (Goose today; the other OSS runtimes are following) → **this repo** (`clawmetry/adapters/<runtime>.py`), added to `FREE_RUNTIMES` and to `sync._FAMILY_ADAPTER_SPECS` with a `clawmetry.adapters.*` path. The point is that `pip install clawmetry` observes it with no account and no wheel download — that is what makes the runtime's own maintainers willing to link us from their docs. Anything less and "free" is a claim we cannot back.
+   Either way the adapter must be built against a REAL install of the runtime with a fixture under `tests/fixtures/runtimes/<rt>/`.
 2. **An advanced / paid feature** (custom alerts, multi-node fleet, anomaly detection, Self-Evolve, cost optimizer) → implementation in **clawmetry-pro**; OSS may ship a thin stub route guarded by `entitlements.get_entitlement().allows_feature(<key>)` that defers to the plugin when present and returns an upgrade CTA otherwise.
 3. **An Enterprise feature** (OTel export, SSO, audit logs, RBAC, air-gapped license) → OSS route, **entitlement-gated** (`allows_feature('otel_export'|'audit_logs'|'sso'|'rbac'|…)`). Examples already merged: `routes/otel_export.py`, `routes/audit.py`. Grace mode is permissive; enforce returns HTTP 402 `upgrade_required`.
 4. **A billing / Stripe / license / wheel-serving endpoint** → **clawmetry-cloud** `routes/`. Cloud-native routes need no `cloud_route_policy` entry; remember to exempt public ones (`/api/license/*`) from the `cm_`-key gate in `dashboard.py:before_request`.
@@ -275,16 +278,43 @@ EVERY change:
 ## 4. PR → green CI → merge
 
 ```bash
-git checkout -B feat/<slug> origin/main      # branch off origin/main, never a stale release branch
+git fetch origin main                        # ALWAYS first: your origin/main ref is stale
+git checkout -B feat/<slug> origin/main      # branch off FRESH origin/main, never a stale release branch
+# … make your change, verify it locally (§3) …
+git fetch origin main && git rebase origin/main   # rebase again right before you push
 gh pr create --title "feat: …" --body "…"    # explain WHY + the verification you did
 ```
+
+- **Rebase on fresh `origin/main` immediately before every PR. No exceptions.**
+  Two fetches, not one: once when you cut the branch, and once more right
+  before you push, because `main` moves while you work. A branch cut hours (or
+  days) ago carries a stale base, and everything downstream inherits that
+  staleness:
+  - **You reintroduce fixed bugs.** Your diff is computed against an old tree,
+    so a merge silently reverts whatever landed on `main` in the meantime.
+  - **CI lies to you.** Green on a stale base says nothing about green on
+    today's `main`, and the merge is what deploys.
+  - **You resolve conflicts blind.** Conflicts found at merge time, in the
+    GitHub UI, are resolved with none of the context you had while writing the
+    code.
+  - **You edit a file someone already moved.** The route module, template, or
+    helper you patched may have been split or relocated on `main`; rebasing
+    surfaces that as a conflict now, instead of as a mystery no-op later.
+
+  If the rebase conflicts, resolve it **in the worktree, locally, with the code
+  fresh in your head** — never punt it to the merge. Re-run the §3 verification
+  after any non-trivial rebase: a clean textual rebase can still be a
+  behavioural regression. Same rule for an existing PR that has gone stale:
+  `git fetch origin main && git rebase origin/main && git push --force-with-lease`
+  (or `gh pr update-branch`) before asking for a merge. Rebased and current is
+  the only state a PR is allowed to be in when it merges.
 
 - **Never push directly to `main`. No exceptions.** Not for empty re-trigger commits. Not for `Dockerfile` cache-bust comments. Not for one-line CI tweaks. Not for typo fixes. Not even for reverts. Every change goes through a branch + PR + CI, including changes whose only purpose is to nudge CI itself. The 30 seconds a one-line PR costs is the price of every other agent and human being able to trust `main`. If a deploy is stuck and you think the fix is "obvious," that means it is a perfect 1-line PR, not a justification to bypass review. Burned 2026-05-28 on `clawmetry-landing`: I pushed two commits straight to `main` (`a2cfb7b` empty re-trigger and `acfa10e` 2-line Dockerfile cache-bust) framing the urgency of a stuck Cloud Run deploy as license to skip the rule. Both would have taken 30 seconds as PRs. The user rightly called it out.
 - End commit messages with the `Co-Authored-By` trailer; end PR bodies with the Claude Code footer.
 - **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **`drift-bot`** (Software Factory blueprint/requirement sync, §1f — fix the doc gap, it is not a flaky check to retry).
 - A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it.
 - Merge with `gh pr merge <n> --squash --delete-branch`.
-- After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green."
+- After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green." This is the same rule as the rebase-before-PR one above, applied to PRs that were already open when `main` moved.
 
 ## 5. Release to PyPI (`[RELEASE]`)
 

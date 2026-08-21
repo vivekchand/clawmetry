@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Provenance lock for clawmetry/static/vendor/*.",
+    "Every vendored third-party file records the npm package + version it came",
+    "from and the sha256 of the exact bytes we serve. scripts/verify_vendor.py",
+    "re-downloads the registry tarball and byte-compares, so a tampered or",
+    "silently-updated vendor file fails CI.",
+    "To add or bump: put the file in clawmetry/static/vendor/, add the entry,",
+    "then run `python3 scripts/verify_vendor.py --update` to fill in the hash."
+  ],
+  "files": {
+    "chart.umd.min.js": {
+      "package": "chart.js",
+      "version": "4.4.7",
+      "path_in_tarball": "package/dist/chart.umd.js",
+      "license": "MIT",
+      "sha256": "2812cb8825fdc57469eb2f7bb055e9429244e599920511ee477e828499b632cb",
+      "why": "Charts on usage/cost/health tabs."
+    },
+    "chartjs-adapter-date-fns.bundle.min.js": {
+      "package": "chartjs-adapter-date-fns",
+      "version": "3.0.0",
+      "path_in_tarball": "package/dist/chartjs-adapter-date-fns.bundle.min.js",
+      "license": "MIT",
+      "sha256": "ea7ab30d26c38dcf1f2d26bb43e73a94537b58f1906f55e1a546dd09321b5615",
+      "why": "Time-axis scale for chart.js."
+    },
+    "marked.min.js": {
+      "package": "marked",
+      "version": "13.0.3",
+      "path_in_tarball": "package/marked.min.js",
+      "license": "MIT",
+      "sha256": "5adea7d8ee41a700fccc14bb9d503104f0470cc17a84ad3e167d3f5251eae0da",
+      "why": "Renders transcript markdown. Output always passes through DOMPurify (cmSafeMarkdown in app.js).",
+      "note": "No OSV advisories at this version (checked 2026-08-17). npm latest is 18.x; that is a 5-major jump, so it is deliberately a separate change with transcript-rendering tests, not folded into this one."
+    },
+    "purify.min.js": {
+      "package": "dompurify",
+      "version": "3.4.13",
+      "path_in_tarball": "package/dist/purify.min.js",
+      "license": "Apache-2.0 OR MPL-2.0",
+      "sha256": "9ab3d44d73c3e3947f9ab72e0f0bc15c7f1931d60b365ba261fc85fe59013c56",
+      "why": "Sanitizes transcript markdown before it touches innerHTML. Security-critical.",
+      "note": "Upgraded from 3.1.7, which OSV flags for CVE-2025-26791 (mXSS via template literals, fixed in 3.2.4). Not reachable here — that path needs SAFE_FOR_TEMPLATES:true and we never set it — but a scanner flags the version regardless, so the finding is removed at the source. No OSV advisories at 3.4.13 (checked 2026-08-17)."
+    }
+  }
+}

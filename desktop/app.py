@@ -333,6 +333,23 @@ def _runtime_dir() -> Path:
     return d
 
 
+def _webview_storage_dir() -> str:
+    """Private browser-profile dir for the pywebview window.
+
+    Without an explicit storage_path, pywebview uses a SHARED per-user
+    profile (%APPDATA%\\pywebview on Windows) that no uninstaller can
+    safely delete — cookies/localStorage from a signed-in session then
+    outlive every uninstall. Keeping the profile inside the ClawMetry
+    app-data dir means the uninstaller's existing directory sweep removes
+    it with everything else."""
+    d = _runtime_dir().parent / "webview"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return str(d)
+
+
 def _win_subprocess_kwargs() -> dict:
     """Extra Popen/run kwargs that stop Windows from flashing a console
     window. The desktop app is built windowed (console=False), but every
@@ -1366,7 +1383,7 @@ def _check_existing_instance(runtime: Path):
         return None
     if port and _dashboard_alive(port):
         if app_pid and _pid_alive(app_pid) and app_pid != os.getpid():
-            return ("attach", port)
+            return ("attach", port, daemon_pid)
         if daemon_pid and _pid_alive(daemon_pid):
             return ("orphan", daemon_pid)
     try:
@@ -1414,6 +1431,7 @@ class DesktopAPI:
         self._captured_email: str = ""
         self._captured_provider: str = ""
         self._captured_mode: str = ""
+        self._skipped: bool = False
         # Injected by main() once the window exists. The JS bridge is the
         # only channel that still works when the HTTP origin is dead, so
         # the page's outage overlay reaches recovery through here.
@@ -1498,6 +1516,10 @@ class DesktopAPI:
     def skip_auth(self) -> dict:
         # No key captured; downstream `_apply_and_boot_daemon` will
         # just skip the connect step and go straight to the dashboard.
+        # `_skipped` records that this was an explicit choice: only an
+        # explicit skip stamps onboarding completed. A user who merely
+        # walked away (auth wait timeout) gets the pane again next boot.
+        self._skipped = True
         self._auth_done.set()
         return {"ok": True}
 
@@ -1713,6 +1735,15 @@ def main() -> int:
 
     runtime = _runtime_dir()
     existing = _check_existing_instance(runtime)
+    if existing and existing[0] == "attach" and onboarding.is_first_launch(runtime):
+        # A live daemon on a first-launch install is leftover state from a
+        # broken/manual uninstall — attaching would land on the dashboard
+        # with zero onboarding (the last of the three skip-login bypasses,
+        # founder report 2026-08-10). Kill it and boot fresh so the auth
+        # pane runs.
+        if len(existing) > 2 and existing[2]:
+            _kill_pid_tree(existing[2])
+        existing = None
 
     # Count and report this launch before anything can fail. Every path
     # below (attach, orphan-kill, cold boot) is a user opening the app,
@@ -1731,7 +1762,6 @@ def main() -> int:
     os.environ["CLAWMETRY_DESKTOP_VERSION"] = _desktop_version()
     os.environ["CLAWMETRY_DESKTOP_SESSION"] = _session_id
     os.environ["CLAWMETRY_DESKTOP_OPEN_COUNT"] = str(_open_state.get("open_count", 0))
-
     if existing and existing[0] == "attach":
         # Another instance owns the daemon — open a window onto it and
         # get out of the way. No supervisor, no watcher, and closing
@@ -1742,7 +1772,7 @@ def main() -> int:
             width=1280, height=820, min_size=(900, 600),
             background_color=BRAND_BG_DARK,
         )
-        webview.start(private_mode=False)
+        webview.start(private_mode=False, storage_path=_webview_storage_dir())
         return 0
     if existing and existing[0] == "orphan":
         # Daemon outlived its app (pre-guard versions leaked one per
@@ -1974,9 +2004,19 @@ def main() -> int:
             target=sup.ensure_sync_daemon, daemon=True
         ).start()
 
-        # Phase 2: onboarding — only on the very first launch.
+        # Phase 2: onboarding — on first launch, or when the credentials a
+        # previous run left behind are explicitly rejected by the cloud.
+        # A stamp file alone must never present a signed-in app: leftover
+        # state from a broken/manual uninstall used to skip login entirely
+        # (founder report 2026-08-10). Network trouble fails OPEN so an
+        # offline machine still gets its dashboard.
         runtime = sup.runtime
         show_pane = onboarding.is_first_launch(runtime)
+        if not show_pane:
+            cred_state = onboarding.stored_credentials_state()
+            if cred_state == "invalid":
+                onboarding.clear_onboarding_stamp(runtime)
+                show_pane = True
         if show_pane:
             _set_status("Ready — please sign in")
             detected = onboarding.detect_runtimes_via_venv(sup._venv_python())
@@ -2026,30 +2066,41 @@ def main() -> int:
                 sup._venv_clawmetry(), captured_key,
                 mode=api._captured_mode or "cloud",
             )
-            if not ok_key:
+            if ok_key:
+                onboarding.mark_onboarding_completed(
+                    runtime,
+                    signed_in=True,
+                    provider=api._captured_provider,
+                    email=api._captured_email,
+                )
+            else:
+                # Do NOT stamp: a failed connect must re-prompt on the next
+                # launch instead of wedging the install in a signed-in-
+                # not-really state that the pane can never fix again.
                 _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
-            # We got here because captured_key is a real cm_ key that
-            # cloud minted in this same request (verify_email_otp /
-            # oauth_loopback_flow returned it). Record signed_in=True
-            # and pass the chosen mode regardless of apply_cm_key's exit
-            # code — the subprocess failing is a downstream setup issue
-            # (daemon start, permissions, Pro-wheel network hiccup), not
-            # a sign-in failure. apply_cm_key's fallback has already
-            # persisted the key to ~/.openclaw so the dashboard's cloud
-            # status flips to connected either way. Recording
-            # signed_in=False here used to make the dashboard's
-            # onboarding gate re-prompt for the SAME cloud/self-host
-            # choice on every relaunch even after a "successful" OTP
-            # (founder report 2026-08-12).
-            onboarding.mark_onboarding_completed(
-                runtime,
-                signed_in=True,
-                provider=api._captured_provider,
-                email=api._captured_email,
-                mode=api._captured_mode or "cloud",
-            )
-        elif show_pane:
-            # User skipped — stamp so we don't re-prompt.
+                # We got here because captured_key is a real cm_ key that
+                # cloud minted in this same request (verify_email_otp /
+                # oauth_loopback_flow returned it). Record signed_in=True
+                # and pass the chosen mode regardless of apply_cm_key's exit
+                # code — the subprocess failing is a downstream setup issue
+                # (daemon start, permissions, Pro-wheel network hiccup), not
+                # a sign-in failure. apply_cm_key's fallback has already
+                # persisted the key to ~/.openclaw so the dashboard's cloud
+                # status flips to connected either way. Recording
+                # signed_in=False here used to make the dashboard's
+                # onboarding gate re-prompt for the SAME cloud/self-host
+                # choice on every relaunch even after a "successful" OTP
+                # (founder report 2026-08-12).
+                onboarding.mark_onboarding_completed(
+                    runtime,
+                    signed_in=True,
+                    provider=api._captured_provider,
+                    email=api._captured_email,
+                    mode=api._captured_mode or "cloud",
+                )
+        elif show_pane and api._skipped:
+            # User explicitly skipped — stamp so we don't nag on every
+            # launch. (A walk-away timeout deliberately does NOT stamp.)
             onboarding.mark_onboarding_completed(
                 runtime, signed_in=False, provider="", email="",
             )
@@ -2136,10 +2187,13 @@ def main() -> int:
 
     # js_api makes DesktopAPI methods callable as window.pywebview.api.*
     # Older pywebview versions don't accept `menu=`; fall back cleanly.
+    # Pass storage_path so browser state (cookies/localStorage) is scoped
+    # to the app's runtime dir and doesn't survive an uninstall-reinstall.
+    _storage = _webview_storage_dir()
     try:
-        webview.start(private_mode=False, menu=menu_items)
+        webview.start(private_mode=False, menu=menu_items, storage_path=_storage)
     except TypeError:
-        webview.start(private_mode=False)
+        webview.start(private_mode=False, storage_path=_storage)
     return 0
 
 

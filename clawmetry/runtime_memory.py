@@ -1085,6 +1085,39 @@ def _catalog() -> list:
         id="kimi", label="Kimi CLI", roots=tuple(kimi_roots),
     ))
 
+    # ── Devin CLI (cli.devin.ai) ────────────────────────────────────
+    # Paths are the CLI's own answer, not a guess: `devin skills paths`
+    # prints the four skill roots below and `devin rules paths` prints
+    # .windsurf/rules as Devin's always-on rules (Windsurf is Cognition's
+    # too, so that IS Devin's rule format). `devin rules paths` also lists
+    # .cursor/rules as a conditional import; that root belongs to the
+    # Cursor entry and is deliberately NOT duplicated here, or the same
+    # file would be attributed to two runtimes.
+    devin_cfg = _env_root("DEVIN_CONFIG_DIR",
+                          os.path.expanduser("~/.config/devin"))
+    devin_agents = os.path.expanduser("~/.agents")
+    catalog.append(RuntimeCatalogEntry(
+        id="devin", label="Devin",
+        roots=(
+            RootSpec("skills", os.path.join(devin_cfg, "skills"),
+                     ("**/SKILL.md",), "User skills", "global"),
+            RootSpec("skills", os.path.join(devin_agents, "skills"),
+                     ("**/SKILL.md",), "Shared agent skills", "global"),
+            RootSpec("skills", os.path.join(ws, ".devin", "skills"),
+                     ("**/SKILL.md",), "Project skills", "project"),
+            RootSpec("skills", os.path.join(ws, ".agents", "skills"),
+                     ("**/SKILL.md",), "Shared project skills", "project"),
+            RootSpec("memory", os.path.join(ws, ".windsurf", "rules"),
+                     ("*.md",), "Always-on rules", "project"),
+            RootSpec("hooks", os.path.join(devin_cfg, "config.json"),
+                     label="config.json", scope="global"),
+            RootSpec("hooks", os.path.join(devin_cfg, "mcp_config.json"),
+                     label="mcp_config.json", scope="global"),
+            RootSpec("hooks", os.path.join(ws, ".devin", "mcp_config.json"),
+                     label="Project MCP servers", scope="project"),
+        ),
+    ))
+
     # ── QM (yc-software/qm) ─────────────────────────────────────────
     # QM persists everything to Postgres — there is nothing on disk to
     # browse. An explicit empty entry keeps /api/runtimes/qm/files from
@@ -1392,7 +1425,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 22 runtimes would be a wall of
+    because listing every absent root for 23 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime

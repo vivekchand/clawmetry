@@ -98,6 +98,20 @@ _MODEL_CFG = json.dumps({
     "toolshim_model": None,
 })
 
+# A PAID provider config (Anthropic) for the one fixture session whose
+# ``accumulated_cost`` is populated. Real Goose installs on a paid provider
+# write the USD into ``accumulated_cost`` (cost_status -> "exact"); the all-local
+# rows leave it NULL (adapter DERIVES $0). Without this row the COST path is only
+# ever exercised at $0, so a broken paid-cost parse would pass unnoticed.
+_MODEL_CFG_PAID = json.dumps({
+    "model_name": "claude-haiku-4-5-20251001",
+    "context_limit": None,
+    "temperature": None,
+    "max_tokens": None,
+    "toolshim": False,
+    "toolshim_model": None,
+})
+
 _USER_META = json.dumps({"userVisible": True, "agentVisible": True})
 
 
@@ -204,6 +218,32 @@ _SESSIONS = [
              1779738732),
         ],
     },
+    {
+        # PAID provider (Anthropic): accumulated_cost is populated, so the
+        # adapter surfaces it verbatim with cost_status="exact". This is the
+        # row the cost-conformance test asserts cost_usd > 0 against, so a
+        # future break in the paid-cost parse path FAILS instead of looking
+        # like a (correct) local $0.
+        "id": "20260525_4_paid",
+        "name": "Anthropic paid turn",
+        "created_at": "2026-05-25 20:10:00",
+        "updated_at": "2026-05-25 20:10:09",
+        "total_tokens": 1500,
+        "input_tokens": 1200,
+        "output_tokens": 300,
+        "accumulated_total_tokens": 1500,
+        "accumulated_cost": 0.4231,
+        "provider_name": "anthropic",
+        "model_config_json": _MODEL_CFG_PAID,
+        "messages": [
+            ("msg_demo_4_a", "user",
+             _text_block("Summarise the repo in one sentence."),
+             1779746200),
+            ("chatcmpl-401", "assistant",
+             _text_block("It's a real-time observability dashboard for AI agents."),
+             1779746205),
+        ],
+    },
 ]
 
 
@@ -222,12 +262,14 @@ def make_fixture(db_path: str) -> str:
                 "working_dir, created_at, updated_at, total_tokens, input_tokens, "
                 "output_tokens, accumulated_total_tokens, accumulated_cost, "
                 "provider_name, model_config_json, goose_mode) "
-                "VALUES (?, ?, '', 'user', ?, ?, ?, ?, ?, ?, ?, ?, 'ollama', ?, 'auto')",
+                "VALUES (?, ?, '', 'user', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'auto')",
                 (
                     s["id"], s["name"], "/tmp/goose-demo-workspace",
                     s["created_at"], s["updated_at"],
                     s["total_tokens"], s["input_tokens"], s["output_tokens"],
-                    s["accumulated_total_tokens"], s["accumulated_cost"], _MODEL_CFG,
+                    s["accumulated_total_tokens"], s["accumulated_cost"],
+                    s.get("provider_name", "ollama"),
+                    s.get("model_config_json", _MODEL_CFG),
                 ),
             )
             for (message_id, role, content_json, created_ts) in s["messages"]:

@@ -100,7 +100,7 @@ def test_body_required_tier_starter_runtime(ent_grace):
     catalogue -- the body echoes that so the UI renders the Starter CTA."""
     from clawmetry._paywall import upgrade_required_body_for_runtime
 
-    for rt in ("claude_code", "codex", "cursor", "aider", "goose"):
+    for rt in ("claude_code", "codex", "cursor", "aider", "opencode"):
         body = upgrade_required_body_for_runtime(rt)
         assert body["required_tier"] == ent_grace.TIER_CLOUD_STARTER, rt
 
