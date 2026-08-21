@@ -248,8 +248,31 @@ def _args_meta(row) -> dict:
 
 # ── the receiver ───────────────────────────────────────────────────────────
 
+# URL slug -> the runtime name stamped on approval rows. Each gated runtime
+# gets its OWN receiver URL so a Cursor pause is never filed as a
+# claude_code approval (2026-08-19 matrix-gap sprint: cursor + copilot
+# gates in clawmetry/runtime_gates.py reuse this whole engine).
+_HOOK_RUNTIME_SLUGS = {
+    "claude-code": "claude_code",
+    "cursor": "cursor",
+    "copilot": "copilot",
+}
+
+
 @bp_hooks.route("/api/hooks/claude-code/pretooluse", methods=["POST"])
 def api_hook_claude_code_pretooluse():
+    return _pretooluse_impl("claude_code")
+
+
+@bp_hooks.route("/api/hooks/<slug>/pretooluse", methods=["POST"])
+def api_hook_runtime_pretooluse(slug):
+    runtime = _HOOK_RUNTIME_SLUGS.get(str(slug or "").lower())
+    if not runtime:
+        return jsonify({"error": "unknown hook runtime"}), 404
+    return _pretooluse_impl(runtime)
+
+
+def _pretooluse_impl(runtime: str):
     # Loopback-only: the hook always runs on this machine (the installer
     # embeds 127.0.0.1). A 0.0.0.0-bound dashboard must not take pre-tool
     # verdict requests off the wire.
@@ -292,7 +315,10 @@ def api_hook_claude_code_pretooluse():
     # ── fresh call: policy match ─────────────────────────────────────────
     try:
         from clawmetry import approvals as ap
-        policies = ap.load_policies()
+        # Runtime-scoped: a policy pinned to another runtime must not gate
+        # this one (mirrors sync_runtime_gates, which installs each gate
+        # from the same filtered set).
+        policies = ap._policies_for_runtime(ap.load_policies(), runtime)
         policy = ap.match_policy(policies, tool_name, tool_input) \
             if policies else None
     except Exception as e:
@@ -309,11 +335,11 @@ def api_hook_claude_code_pretooluse():
         # Dry-run: record what WOULD have paused, never block.
         _ls_write("ingest_approval", approval={
             "id": uuid.uuid4().hex,
-            "requestor_session_id": f"claude_code:{session_id}" if session_id
+            "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                     else None,
             "action": f"{tool_name}: "
                       f"{ap._extract_command(tool_name, tool_input)[:140]}",
-            "args": {"source": "pretooluse-hook", "runtime": "claude_code",
+            "args": {"source": "pretooluse-hook", "runtime": runtime,
                      "tool_input": tool_input},
             "status": "simulated",
             "decision_reason": f"monitor mode: policy '{policy['name']}' "
@@ -329,7 +355,7 @@ def api_hook_claude_code_pretooluse():
     # for this exact (session, tool, command) skips the human round-trip.
     try:
         if session_id and ap.check_session_allow(
-                f"claude_code:{session_id}", tool_name, tool_input):
+                f"{runtime}:{session_id}", tool_name, tool_input):
             _audit("approved", tool_name, {"policy": policy.get("name"),
                                            "session_id": session_id,
                                            "session_allow": True})
@@ -349,7 +375,7 @@ def api_hook_claude_code_pretooluse():
                 return _wait_on_row(str(r.get("id")), r, tool_name)
     elif session_id:
         ih = _input_hash(tool_input)
-        req_sid = f"claude_code:{session_id}"
+        req_sid = f"{runtime}:{session_id}"
         cutoff_ms = int(time.time() * 1000) - 30_000
         for r in _rows(_ls_read("query_approvals", status="pending",
                                 limit=100)):
@@ -384,14 +410,14 @@ def api_hook_claude_code_pretooluse():
         risk_meta = None
     ok = _ls_write("ingest_approval", approval={
         "id": approval_id,
-        "requestor_session_id": f"claude_code:{session_id}" if session_id
+        "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                 else None,
         "action": f"{tool_name}: {cmd_preview}",
         # Meta rides in the args blob so resume requests are stateless:
         # the row itself knows its policy window and timeout action.
         "args": {
             "source": "pretooluse-hook",
-            "runtime": "claude_code",
+            "runtime": runtime,
             "tool_name": tool_name,
             "tool_input": tool_input,
             "cwd": cwd,
@@ -412,7 +438,7 @@ def api_hook_claude_code_pretooluse():
                                   "policy": policy.get("name"),
                                   "session_id": session_id,
                                   "command": cmd_preview})
-    _page_human({"id": approval_id, "runtime": "claude_code",
+    _page_human({"id": approval_id, "runtime": runtime,
                  "kind": "policy", "tool_name": tool_name,
                  "command": cmd_preview, "cwd": cwd,
                  "policy": policy.get("name"),

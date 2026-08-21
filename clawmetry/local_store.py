@@ -2463,6 +2463,59 @@ class LocalStore:
                       session_id, exc_info=True)
             return False
 
+    def get_session_location(
+        self,
+        session_id: str,
+        agent_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Read one session's ``cwd`` / ``git_branch`` / decoded ``metadata``.
+
+        Companion read for :meth:`update_session_location`, added for the
+        process-control cwd backfill (the cloud Stop/Pause relay carries no
+        cwd, so the daemon looks the directory up here before resolving the
+        session to a pid).
+
+        ``agent_type`` scopes the lookup: the table is keyed
+        ``(agent_type, session_id)``, and an unscoped match could hand back a
+        DIFFERENT runtime's directory for a colliding id — which would then
+        be used to pick a process to signal. Goes through ``_fetch`` so it
+        takes the same lock as every other read rather than touching the
+        connection directly. Returns None when unknown; never raises.
+        """
+        sid = _clean_str(session_id)
+        if not sid:
+            return None
+        try:
+            if agent_type:
+                rows = self._fetch(
+                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "WHERE agent_type = ? AND session_id = ? LIMIT 1",
+                    [str(agent_type), sid],
+                )
+            else:
+                rows = self._fetch(
+                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "WHERE session_id = ? LIMIT 1",
+                    [sid],
+                )
+        except Exception:
+            log.debug("local store: get_session_location failed for %s",
+                      sid, exc_info=True)
+            return None
+        if not rows:
+            return None
+        row = rows[0]
+        meta: dict[str, Any] = {}
+        if row[2]:
+            try:
+                decoded = json.loads(row[2])
+                if isinstance(decoded, dict):
+                    meta = decoded
+            except Exception:
+                pass
+        return {"session_id": sid, "cwd": row[0], "git_branch": row[1],
+                "metadata": meta}
+
     def apply_session_attention(self, items: list[dict[str, Any]]) -> int:
         """Publish the daemon's INFERRED "needs you" pass onto session rows.
 
@@ -3403,16 +3456,40 @@ class LocalStore:
             ])
 
     def ingest_subagent(self, sa: dict[str, Any]) -> None:
-        """Upsert one subagent rollup row. Required: subagent_id."""
+        """Upsert one subagent rollup row. Required: subagent_id.
+
+        The ``data`` blob is MERGED with the existing row's blob (new keys
+        win, absent keys survive) rather than replaced wholesale. Two writers
+        legitimately enrich the same row — the sessions.json snapshot pass
+        (label/status/age, every 60s) and the orchestration registry pass
+        (prompt/reply/parent, per sync cycle) — and before the merge the more
+        frequent snapshot writer silently wiped the registry's prompt/reply
+        every minute. Stale-key risk is bounded: readers gate the live-only
+        fields on status (e.g. ``nowTool`` only renders while running).
+        """
         sid = sa.get("subagent_id")
         if not sid:
             raise ValueError("subagent must include 'subagent_id'")
         atype = sa.get("agent_type") or "openclaw"
-        data_blob = _to_blob({k: v for k, v in sa.items()
-                              if k not in {"subagent_id", "agent_type",
-                                           "parent_session_id", "spawned_at",
-                                           "ended_at", "task", "status",
-                                           "cost_usd", "token_count"}})
+        new_extra = {k: v for k, v in sa.items()
+                     if k not in {"subagent_id", "agent_type",
+                                  "parent_session_id", "spawned_at",
+                                  "ended_at", "task", "status",
+                                  "cost_usd", "token_count"}}
+        try:
+            prev = self._fetch(
+                "SELECT data FROM subagents WHERE agent_type = ? AND subagent_id = ?",
+                [atype, sid])
+            if prev and prev[0] and prev[0][0] is not None:
+                decoded = _decode_data_blob_rows([(prev[0][0],)], ["data"])
+                old_extra = decoded[0].get("data") if decoded else None
+                if isinstance(old_extra, dict):
+                    merged = dict(old_extra)
+                    merged.update(new_extra)
+                    new_extra = merged
+        except Exception:
+            pass  # merge is best-effort; a fresh blob is still correct
+        data_blob = _to_blob(new_extra)
         now_ms = int(time.time() * 1000)
         with self._write_lock:
             self._conn.execute("""
