@@ -275,16 +275,43 @@ EVERY change:
 ## 4. PR → green CI → merge
 
 ```bash
-git checkout -B feat/<slug> origin/main      # branch off origin/main, never a stale release branch
+git fetch origin main                        # ALWAYS first: your origin/main ref is stale
+git checkout -B feat/<slug> origin/main      # branch off FRESH origin/main, never a stale release branch
+# … make your change, verify it locally (§3) …
+git fetch origin main && git rebase origin/main   # rebase again right before you push
 gh pr create --title "feat: …" --body "…"    # explain WHY + the verification you did
 ```
+
+- **Rebase on fresh `origin/main` immediately before every PR. No exceptions.**
+  Two fetches, not one: once when you cut the branch, and once more right
+  before you push, because `main` moves while you work. A branch cut hours (or
+  days) ago carries a stale base, and everything downstream inherits that
+  staleness:
+  - **You reintroduce fixed bugs.** Your diff is computed against an old tree,
+    so a merge silently reverts whatever landed on `main` in the meantime.
+  - **CI lies to you.** Green on a stale base says nothing about green on
+    today's `main`, and the merge is what deploys.
+  - **You resolve conflicts blind.** Conflicts found at merge time, in the
+    GitHub UI, are resolved with none of the context you had while writing the
+    code.
+  - **You edit a file someone already moved.** The route module, template, or
+    helper you patched may have been split or relocated on `main`; rebasing
+    surfaces that as a conflict now, instead of as a mystery no-op later.
+
+  If the rebase conflicts, resolve it **in the worktree, locally, with the code
+  fresh in your head** — never punt it to the merge. Re-run the §3 verification
+  after any non-trivial rebase: a clean textual rebase can still be a
+  behavioural regression. Same rule for an existing PR that has gone stale:
+  `git fetch origin main && git rebase origin/main && git push --force-with-lease`
+  (or `gh pr update-branch`) before asking for a merge. Rebased and current is
+  the only state a PR is allowed to be in when it merges.
 
 - **Never push directly to `main`. No exceptions.** Not for empty re-trigger commits. Not for `Dockerfile` cache-bust comments. Not for one-line CI tweaks. Not for typo fixes. Not even for reverts. Every change goes through a branch + PR + CI, including changes whose only purpose is to nudge CI itself. The 30 seconds a one-line PR costs is the price of every other agent and human being able to trust `main`. If a deploy is stuck and you think the fix is "obvious," that means it is a perfect 1-line PR, not a justification to bypass review. Burned 2026-05-28 on `clawmetry-landing`: I pushed two commits straight to `main` (`a2cfb7b` empty re-trigger and `acfa10e` 2-line Dockerfile cache-bust) framing the urgency of a stuck Cloud Run deploy as license to skip the rule. Both would have taken 30 seconds as PRs. The user rightly called it out.
 - End commit messages with the `Co-Authored-By` trailer; end PR bodies with the Claude Code footer.
 - **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **`drift-bot`** (Software Factory blueprint/requirement sync, §1f — fix the doc gap, it is not a flaky check to retry).
 - A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it.
 - Merge with `gh pr merge <n> --squash --delete-branch`.
-- After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green."
+- After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green." This is the same rule as the rebase-before-PR one above, applied to PRs that were already open when `main` moved.
 
 ## 5. Release to PyPI (`[RELEASE]`)
 
