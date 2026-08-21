@@ -2251,6 +2251,29 @@ def _try_local_store_subagents(_rows=None):
             "tokensOut":        int(extra.get("tokensOut") or 0),
             "spawnAck":         extra.get("spawnAck") or "",
             "runId":            extra.get("runId") or "",
+            # Orchestration capture (#5008/#5014 + the per-runtime legs): the
+            # facts the Activity badges and the Sessions Orchestration panel
+            # render. They ride HERE because this shaper is also what the sync
+            # daemon reads back to build the cloud snapshot's ``subagents[]``
+            # slice — without them the hosted dashboard can only ever show the
+            # legacy flat list, and the feature is inert in cloud.
+            "kind":             extra.get("kind") or "subagent",
+            "workflowRunId":    extra.get("workflowRunId") or "",
+            "workflowName":     extra.get("workflowName") or "",
+            "phase":            extra.get("phase") or "",
+            "agentType":        extra.get("agentType") or "",
+            "label":            extra.get("label") or display,
+            "prompt":           extra.get("prompt") or "",
+            "reply":            extra.get("reply") or "",
+            "nowTool":          (extra.get("nowTool") or "") if status in ("active", "running") else "",
+            "lastTool":         extra.get("lastTool") or "",
+            "toolCalls":        int(extra.get("toolCalls") or 0),
+            "turns":            int(extra.get("turns") or 0),
+            "agentCount":       int(extra.get("agentCount") or 0),
+            "agentsRunning":    int(extra.get("agentsRunning") or 0),
+            "agentsDone":       int(extra.get("agentsDone") or 0),
+            "agentsFailed":     int(extra.get("agentsFailed") or 0),
+            "runtimeName":      extra.get("runtime") or r.get("agent_type") or "",
         })
 
     # "running" is the daemon's own word for "active"; without it the
@@ -3965,6 +3988,67 @@ def api_sessions_cost_breakdown():
 def api_session_stop(session_id):
     """Emergency stop for a session: SIGTERM if pid is known and/or .stop signal file."""
     import dashboard as _d
+    # Family-runtime sessions ('claude_code:UUID', 'codex:UUID', …) are not
+    # OpenClaw's: _resolve_session_stop_target only knows
+    # ~/.openclaw/agents/main/sessions, so before 2026-08-19 a family sid
+    # wrote a `.stop` file NOTHING reads and returned ok:true — a silent
+    # no-op reported as success. Route them to the real pid-based engine
+    # and report its honest outcome instead.
+    if ":" in str(session_id):
+        _rt, _, _bare = str(session_id).partition(":")
+        _rt = _rt.strip().lower()
+        try:
+            from clawmetry import process_control as _pc
+        except Exception:
+            _pc = None
+        if _pc is not None and (_rt in _pc.SUPPORTED_RUNTIMES
+                                or _rt in _pc.UNSUPPORTED_RUNTIMES
+                                or _rt == "cursor"):
+            _cwd = ""
+            try:
+                # Via the daemon proxy — the dashboard process must never
+                # open DuckDB itself (the daemon owns the writer lock).
+                from routes.local_query import local_store_via_daemon
+                _row = local_store_via_daemon(
+                    "get_session_location", session_id=str(session_id)) or {}
+                _cwd = _row.get("cwd") or ""
+            except Exception:
+                _cwd = ""
+            # Bounded: without psutil the resolver shells out per process
+            # (~9s on a miss) and graceful_kill adds its escalation window,
+            # which would pin a web worker. Run it on a worker thread with a
+            # deadline and answer honestly if it outlives that.
+            import concurrent.futures as _cf
+            try:
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    res = _ex.submit(
+                        _pc.kill_session, _rt, _bare.strip(), _cwd
+                    ).result(timeout=20) or {}
+            except _cf.TimeoutError:
+                return jsonify({
+                    "ok": False,
+                    "session_id": str(session_id),
+                    "engine": "process_control",
+                    "detail": ("still working on it — the stop is running in "
+                               "the background; refresh in a moment to see "
+                               "whether this session ended"),
+                    "pending": True,
+                }), 202
+            except Exception as _e:
+                return jsonify({
+                    "ok": False, "session_id": str(session_id),
+                    "engine": "process_control",
+                    "detail": f"stop failed: {str(_e)[:200]}",
+                }), 500
+            status = 200 if res.get("ok") else 409
+            return jsonify({
+                "ok": bool(res.get("ok")),
+                "session_id": str(session_id),
+                "engine": "process_control",
+                "detail": res.get("detail") or res.get("reason") or "",
+                "pid": res.get("pid"),
+                "unsupported": bool(res.get("unsupported")),
+            }), status
     target = _d._resolve_session_stop_target(session_id)
     sid = target.get("session_id", "")
     if not sid:

@@ -108,10 +108,14 @@ The daemon owns the DuckDB writer lock and runs a localhost query server so the 
 - `/api/alerts/*` — Custom alert rules
 
 ## Dependencies
-Minimal by design:
+Minimal by design, and this list had drifted — `setup.py` is the source of truth:
 - **flask** (>=2.0,<4) — HTTP server framework
 - **waitress** (>=2.0) — WSGI application server
 - **cryptography** (>=3.0) — AES-256-GCM for cloud sync
+- **duckdb** (>=0.10) — the local store at `~/.clawmetry/clawmetry.duckdb`
+- **websocket-client** (>=1.6) — cloud cold-data relay tunnel
+- **truststore** (>=0.8, 3.10+ only) — OS trust store, so corporate TLS-interception root CAs work
+- **certifi** (>=2024.2.2) — CA bundle; the trust-store fallback on 3.8/3.9 and on any interpreter whose OpenSSL has no CA store. Without one, every outbound HTTPS call fails `CERTIFICATE_VERIFY_FAILED`, and for the fire-and-forget pings that failure is silent
 - **Optional**: `opentelemetry-proto` for OTLP support (`pip install clawmetry[otel]`)
 
 ## Running locally

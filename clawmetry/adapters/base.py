@@ -111,6 +111,12 @@ class Session:
     cost_usd: float | None = None
     cost_status: str = ""
     end_reason: str = ""
+    # Working directory the session ran in ("" when the runtime hides it).
+    # First-class because kill/pause pid resolution keys on it
+    # (process_control.resolve_by_cwd); adapters should ALSO mirror it into
+    # extra["cwd"] while older OSS wheels without this field are in the
+    # fleet (a pro adapter passing cwd= against an old wheel would crash).
+    cwd: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +140,7 @@ class Session:
             "costUsd": self.cost_usd,
             "costStatus": self.cost_status,
             "endReason": self.end_reason,
+            "cwd": self.cwd,
         }
         if self.extra:
             d["extra"] = self.extra
