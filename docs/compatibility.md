@@ -40,6 +40,7 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Exo | Beta adapter | One pretty-printed JSON file per event under `<workspace>/.exo/exoharness/agents/*/conversations/*/events/` | Per-call usage + cost persisted by Exo itself. State dir is workspace-relative; set `CLAWMETRY_EXO_ROOTS` for unusual layouts. |
 | Kimi CLI | Beta adapter | One `wire.jsonl` event log per session under `<share>/sessions/<md5(workdir)>/<uuid>/` | Reads both share dirs (`~/.kimi`, `~/.kimi-code`) plus `$KIMI_SHARE_DIR`. Model id is not written to disk. |
 | Gemini CLI | Beta adapter | One JSONL chat recording per session under `~/.gemini/tmp/<project-basename>/chats/session-<ts>-<id8>.jsonl` | Recording is always on (no setting to enable). Per-turn token split + model id + tool calls with results, and nested `chats/<parentSessionId>/` sub-agent transcripts. The project dir is the cwd's BASENAME; the sha256 is stored inside the file as `projectHash`. `GEMINI_CLI_HOME` names the dir *containing* `.gemini`. |
+| Cline | Beta adapter | SQLite index at `~/.cline/data/db/sessions.db` plus `~/.cline/data/sessions/<id>/<id>.messages.json` per session | Cost in USD is on disk, which is rare. The index records `pid`, `status` and sub-agent lineage, so liveness is reported rather than guessed. Rejected tool calls are surfaced as errors. Note the `data` leaf: `~/.cline` itself holds only hooks and worktrees. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 OpenClaw, NVIDIA NemoClaw and Goose are free in the OSS package — their

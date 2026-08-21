@@ -1072,6 +1072,26 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Cline (github.com/cline/cline) ──────────────────────────────
+    # Rules are .clinerules -- a FILE or a DIRECTORY of .md files, both
+    # supported by Cline -- project-local and global. Workflows live beside
+    # them. The CLI home also carries hooks/ and installed skills.
+    cline_home = _env_root("CLINE_DIR", os.path.expanduser("~/.cline"))
+    catalog.append(RuntimeCatalogEntry(
+        id="cline", label="Cline", roots=(
+            RootSpec("memory", os.path.join(ws, ".clinerules"),
+                     label="Project .clinerules", scope="project"),
+            RootSpec("memory", os.path.join(cline_home, "rules"),
+                     label="Global rules", scope="global"),
+            RootSpec("skills", os.path.join(ws, ".clinerules", "workflows"),
+                     ("**/*.md",), "Project workflows", "project"),
+            RootSpec("skills", os.path.join(cline_home, "skills"),
+                     label="Installed skills", scope="global"),
+            RootSpec("hooks", os.path.join(cline_home, "hooks"),
+                     label="Hooks", scope="global"),
+        ),
+    ))
+
     # ── Kimi CLI / Kimi Code CLI (MoonshotAI/kimi-cli) ──────────────
     # One share dir ($KIMI_SHARE_DIR, default ~/.kimi; the standalone Kimi
     # Code CLI uses ~/.kimi-code). Memory is AGENTS.md, checked at
@@ -1453,7 +1473,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 24 runtimes would be a wall of
+    because listing every absent root for 25 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
