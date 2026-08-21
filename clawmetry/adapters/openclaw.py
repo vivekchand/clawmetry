@@ -1212,19 +1212,40 @@ def _discover_model_router_port() -> Optional[int]:
     return None
 
 
-def _model_router_health_ok(port: int) -> bool:
-    """True if the model-router ``/health`` endpoint answers 2xx on localhost.
+def _model_router_health_check(port: int):
+    """Probe the model-router ``/health`` endpoint and parse the response body.
 
-    Falls back to a raw TCP connect (port accepting connections) when the HTTP
-    probe errors, so a wedged-but-listening router still reads as up. Short
-    timeouts keep detect() fast. Never raises.
+    Returns ``(is_running: bool, pool_detail: Optional[dict])`` where
+    ``pool_detail`` carries ``healthy_endpoints`` and/or
+    ``unhealthy_endpoints`` lists when the router returns a parseable JSON
+    body (the NemoClaw ROUTER_HEALTHY_BODY shape). Both are ``None``/``False``
+    on any failure. Falls back to a raw TCP connect when the HTTP probe errors;
+    in that case ``pool_detail`` is always ``None``. Never raises.
     """
+    import json as _json
+    import urllib.request as _u
+
     try:
-        import urllib.request as _u
         req = _u.Request(f"http://127.0.0.1:{port}/health", method="GET")
         with _u.urlopen(req, timeout=0.3) as resp:  # nosec B310 - localhost only
             status = getattr(resp, "status", None) or resp.getcode()
-            return 200 <= int(status) < 300
+            ok = 200 <= int(status) < 300
+            pool_detail = None
+            if ok:
+                try:
+                    raw = resp.read(65536).decode("utf-8", errors="replace")
+                    parsed = _json.loads(raw)
+                    if isinstance(parsed, dict):
+                        detail = {}
+                        if "healthy_endpoints" in parsed:
+                            detail["healthy_endpoints"] = parsed["healthy_endpoints"]
+                        if "unhealthy_endpoints" in parsed:
+                            detail["unhealthy_endpoints"] = parsed["unhealthy_endpoints"]
+                        if detail:
+                            pool_detail = detail
+                except Exception:
+                    pass
+            return ok, pool_detail
     except Exception:
         pass
     try:
@@ -1233,9 +1254,19 @@ def _model_router_health_ok(port: int) -> bool:
         s.settimeout(0.2)
         rc = s.connect_ex(("127.0.0.1", port))
         s.close()
-        return rc == 0
+        return rc == 0, None
     except Exception:
-        return False
+        return False, None
+
+
+def _model_router_health_ok(port: int) -> bool:
+    """True if the model-router ``/health`` endpoint answers 2xx on localhost.
+
+    Falls back to a raw TCP connect (port accepting connections) when the HTTP
+    probe errors, so a wedged-but-listening router still reads as up. Short
+    timeouts keep detect() fast. Never raises.
+    """
+    return _model_router_health_check(port)[0]
 
 
 def _model_router_launch_log(tail_lines: int = 50) -> Optional[str]:
@@ -1300,8 +1331,13 @@ def _model_router_live() -> dict:
         if log is not None:
             result["modelRouterLaunchLog"] = log
         return result
-    running = _model_router_health_ok(port)
+    running, pool = _model_router_health_check(port)
     result = {"modelRouterPort": port, "modelRouterRunning": running}
+    if pool is not None:
+        if "healthy_endpoints" in pool:
+            result["modelRouterHealthyEndpoints"] = pool["healthy_endpoints"]
+        if "unhealthy_endpoints" in pool:
+            result["modelRouterUnhealthyEndpoints"] = pool["unhealthy_endpoints"]
     if not running:
         log = _model_router_launch_log()
         if log is not None:
