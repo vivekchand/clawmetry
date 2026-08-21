@@ -217,10 +217,29 @@ async function testNormalUser() {
     // intentionally no `source` field
   });
   check('register: api_key shape', /^cm_[a-f0-9]{32}$/.test(reg.api_key));
-  check('register: plan=free', reg.plan === 'free');
 
   const hb = await heartbeat(reg, machineId);
   console.log(`  hb response: ${JSON.stringify(hb)}`);
+  // Registration must report the plan the account actually holds.
+  //
+  // This used to assert `plan === 'free'`, which pinned a hardcoded string
+  // in the response rather than a fact about the account: registration
+  // creates the row on a trial, and the heartbeat two lines down has always
+  // said so. A returning operator whose address already has a paid account
+  // got the same 'free', which is one of the ways a paid install renders as
+  // an unpaid one after a reinstall.
+  //
+  // Comparing the two answers is the contract worth holding: whatever the
+  // plan is, the two endpoints must not disagree about it. That catches the
+  // hardcoded lie in either direction without pinning today's default.
+  check(
+    'register: plan is a real value, not a placeholder',
+    typeof reg.plan === 'string' && reg.plan.length > 0
+  );
+  check(
+    `register + heartbeat agree on the plan (register=${reg.plan}, heartbeat=${hb.plan})`,
+    reg.plan === hb.plan
+  );
   check(
     'normal user heartbeat: sync_allowed is NOT false (deferred-sync gate must not catch standard users)',
     hb.sync_allowed !== false
