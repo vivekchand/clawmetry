@@ -12282,6 +12282,320 @@ def missing_runtimes_bundle_batch(bundles) -> list[dict]:
     return out
 
 
+def _missing_features_bundle_row_at(perspective_tier: str, bundle) -> dict:
+    """Perspective-shaped sibling of :func:`_missing_features_bundle_row`.
+
+    Normalises one caller-supplied feature bundle exactly the way the LIVE
+    row helper does (whitespace stripped, lowercased, deduplicated
+    preserving first-seen order; unknown ids bucketed into ``unknown``
+    instead of leaking into the ``missing`` walk) then folds the known
+    subset through :func:`missing_features_at` against ``perspective_tier``
+    so the row reflects the STATIC per-tier grant for that hypothetical
+    tier instead of the LIVE resolver.
+
+    **Grace-independent by construction**: :func:`missing_features_at` is
+    backed by :func:`_hypothetical_entitlement` on the feature axis (via
+    the singular :func:`has_feature_at`), so the per-row
+    ``missing_features_at`` list is identical under grace vs enforce for
+    the same ``(perspective, bundle)`` pair. Whole point of the ``_at``
+    slot: a paywall walkthrough at OSS ("if I were on OSS today, WHICH
+    items of this bundle would still be locked?") sees the would-be-
+    denied subset even while the LIVE :func:`missing_features_bundle_batch`
+    reports ``missing=[]`` for every fully-known bundle via grace pass-
+    through.
+
+    Row keys mirror :func:`_missing_features_bundle_row` byte-for-byte on
+    the axis-echo slots with the fold slot renamed ``missing_features_at``
+    (matching the singular scalar :func:`missing_features_at` return-slot
+    name) so a UI wiring both the LIVE and the perspective batches can
+    distinguish the two answers on the same ``(bundle,)`` cell::
+
+        {
+          "features":            ["fleet", "sso"],
+          "unknown":             ["bogus"],
+          "kind":                "features",
+          "count":               2,
+          "missing_features_at": [<subset denied at perspective>],
+        }
+
+    Empty / all-unknown bundles surface as a stable row with
+    ``missing_features_at=[]`` (nothing known to check, nothing missing
+    -- matches :func:`missing_features_at` empty-``[]`` posture). Never
+    raises: a delegate failure returns the empty row shape with
+    ``missing_features_at=[]``.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            fid = str(token).strip().lower()
+        except Exception:
+            continue
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        if fid in ALL_FEATURES:
+            known.append(fid)
+        else:
+            unknown.append(fid)
+    try:
+        missing = list(missing_features_at(perspective_tier, known)) if known else []
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _missing_features_bundle_row_at(%r) fold failed: %s",
+            perspective_tier,
+            exc,
+        )
+        missing = []
+    return {
+        "features": known,
+        "unknown": unknown,
+        "kind": "features",
+        "count": len(known),
+        "missing_features_at": missing,
+    }
+
+
+def _missing_runtimes_bundle_row_at(perspective_tier: str, bundle) -> dict:
+    """Runtime-axis twin of :func:`_missing_features_bundle_row_at`.
+
+    Applies :func:`canonical_runtime` before the :data:`ALL_RUNTIMES`
+    membership check so aliases (``claude-code`` -> ``claude_code``)
+    resolve the same way the LIVE :func:`_missing_runtimes_bundle_row`
+    helper does; duplicates that collapse after canonicalisation only
+    contribute one row. Unknown runtime tokens are echoed into
+    ``unknown`` using the raw lowercased id and drop from the ``missing``
+    walk (a typo does NOT silently render as "denied"). Grace-independent
+    by construction (delegates to :func:`missing_runtimes_at`, which
+    reads :func:`_hypothetical_entitlement` via :func:`has_runtime_at`).
+
+    :data:`FREE_RUNTIMES` (``openclaw``, ``nemoclaw``) reports
+    ``missing_runtimes_at=[]`` on every row regardless of perspective
+    (the static per-tier map grants free runtimes at every tier). Never
+    raises.
+    """
+    known: list[str] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    try:
+        raw_items = list(bundle) if bundle is not None else []
+    except TypeError:
+        raw_items = []
+    for token in raw_items:
+        try:
+            raw = str(token).strip().lower()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        canon = canonical_runtime(raw)
+        if canon and canon in ALL_RUNTIMES:
+            if canon in seen:
+                continue
+            seen.add(canon)
+            known.append(canon)
+        else:
+            if raw in seen:
+                continue
+            seen.add(raw)
+            unknown.append(raw)
+    try:
+        missing = list(missing_runtimes_at(perspective_tier, known)) if known else []
+    except Exception as exc:
+        logger.warning(
+            "entitlements: _missing_runtimes_bundle_row_at(%r) fold failed: %s",
+            perspective_tier,
+            exc,
+        )
+        missing = []
+    return {
+        "runtimes": known,
+        "unknown": unknown,
+        "kind": "runtimes",
+        "count": len(known),
+        "missing_runtimes_at": missing,
+    }
+
+
+def missing_features_bundle_batch_at(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Hypothetical-perspective row-detail sibling of
+    :func:`missing_features_bundle_batch`: per-bundle "which subset would
+    ``perspective_tier`` NOT grant?" for N caller-supplied feature bundles
+    in ONE round-trip.
+
+    Same relationship to :func:`missing_features_bundle_batch` that
+    :func:`has_features_bundle_batch_at` has to
+    :func:`has_features_bundle_batch` on the boolean-fold seat and that
+    :func:`missing_features_at` has to :func:`missing_features` on the
+    singular scalar seat: the ``perspective_tier`` argument tells the
+    fold which STATIC per-tier grant to reason from so a pricing-matrix
+    walkthrough can hydrate the per-bundle "which items would be locked
+    at <tier>?" list off ONE call per (perspective, bundles) cell instead
+    of N calls to :func:`missing_features_at`.
+
+    **Perspective-shaped (grace-independent by design)**: unlike the LIVE
+    :func:`missing_features_bundle_batch` (which passes through
+    :func:`missing_features`'s grace answer so every fully-known bundle
+    reports ``missing=[]`` while ``ent.grace`` is ``True``), each row's
+    ``missing_features_at`` here delegates to :func:`missing_features_at`
+    (backed by :func:`_hypothetical_entitlement` on the feature axis), so
+    the row IS shaped by the hypothetical perspective.
+    ``missing_features_bundle_batch_at("oss", [["fleet"]])`` reports
+    ``missing_features_at=["fleet"]`` for the fleet row even in grace --
+    that is the whole point of the ``_at`` slot.
+
+    Row shape mirrors :func:`missing_features_bundle_batch` byte-for-byte
+    on the axis-echo slots with the fold slot renamed
+    ``missing_features_at`` (matching :func:`missing_features_at` return-
+    slot name)::
+
+        {
+          "features":            ["fleet", "sso"],
+          "unknown":             ["bogus"],
+          "kind":                "features",
+          "count":               2,
+          "missing_features_at": [<subset denied at perspective>],
+        }
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`); returns ``None`` for empty / unknown /
+    non-string ``perspective_tier`` so the paired endpoint can surface a
+    404 with ``which=tier``. Matches the ``None`` posture the rest of the
+    ``_at`` bundle-batch family uses (see
+    :func:`has_features_bundle_batch_at`,
+    :func:`missing_all_bundle_batch_at`).
+
+    Argument handling on ``bundles`` mirrors
+    :func:`missing_features_bundle_batch`:
+
+    * ``bundles is None`` or non-iterable -- returns ``[]`` (perspective
+      valid but nothing to fold).
+    * Each bundle may itself be ``None``, non-iterable, or empty -- the
+      helper emits the empty row shape (``missing_features_at=[]``)
+      rather than raising.
+    * Non-string tokens inside a bundle are coerced via ``str(...)``
+      (matches the singular endpoint's silent-drop posture for garbage).
+
+    Complement invariant with :func:`has_features_bundle_batch_at`: on a
+    valid perspective, for every fully-known bundle,
+    ``bool(row["missing_features_at"]) == (not has_row["has_features_at"])``
+    -- pins the row-detail seat as the exact perspective-shaped negation
+    of the boolean-fold seat.
+
+    Never raises: a per-bundle failure short-circuits to the empty row
+    shape so the batch keeps building. A perspective-validation failure
+    returns ``None`` so the paired endpoint can surface a 404.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_missing_features_bundle_row_at(p, bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: missing_features_bundle_batch_at row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "features": [],
+                    "unknown": [],
+                    "kind": "features",
+                    "count": 0,
+                    "missing_features_at": [],
+                }
+            )
+    return out
+
+
+def missing_runtimes_bundle_batch_at(
+    perspective_tier: str, bundles
+) -> list[dict] | None:
+    """Runtime-axis twin of :func:`missing_features_bundle_batch_at`:
+    per-bundle "which subset would ``perspective_tier`` NOT grant?" for N
+    caller-supplied runtime bundles in ONE round-trip.
+
+    Same relationship to :func:`missing_runtimes_bundle_batch` that
+    :func:`missing_features_bundle_batch_at` has to
+    :func:`missing_features_bundle_batch`. Pairs with
+    :func:`missing_features_bundle_batch_at` the same way
+    :func:`has_runtimes_bundle_batch_at` pairs with
+    :func:`has_features_bundle_batch_at`: together the two perspective-
+    shaped bundle-batch helpers let a pricing-matrix walkthrough ("from
+    Starter, WHICH items of {claude_code, cursor} would still be locked?
+    {openclaw}? {aider, goose}?") hydrate every bundle's per-item denial
+    list off TWO calls per perspective instead of 2 * N calls to
+    :func:`missing_runtimes_at`.
+
+    Row shape mirrors :func:`missing_runtimes_bundle_batch` byte-for-byte
+    on the axis-echo slots with the fold slot renamed
+    ``missing_runtimes_at``. Runtime aliases (``claude-code`` ->
+    ``claude_code``) canonicalise per bundle via
+    :func:`_missing_runtimes_bundle_row_at` before the
+    :data:`ALL_RUNTIMES` membership check, matching the LIVE row helper's
+    alias posture byte-for-byte -- an alias input surfaces as its
+    canonical id in ``runtimes`` (and, if denied at ``perspective_tier``,
+    in ``missing_runtimes_at``) rather than in ``unknown``.
+
+    :data:`FREE_RUNTIMES` (``openclaw``, ``nemoclaw``) reports
+    ``missing_runtimes_at=[]`` on every row regardless of perspective
+    (the static per-tier map grants free runtimes at every tier).
+
+    Perspective validation, ``bundles`` handling, grace-independence and
+    never-raise contract all mirror
+    :func:`missing_features_bundle_batch_at` byte-for-byte.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        if bundles is None:
+            return []
+        items = list(bundles)
+    except TypeError:
+        return []
+    out: list[dict] = []
+    for bundle in items:
+        try:
+            out.append(_missing_runtimes_bundle_row_at(p, bundle))
+        except Exception as exc:
+            logger.warning(
+                "entitlements: missing_runtimes_bundle_batch_at row failed: %s",
+                exc,
+            )
+            out.append(
+                {
+                    "runtimes": [],
+                    "unknown": [],
+                    "kind": "runtimes",
+                    "count": 0,
+                    "missing_runtimes_at": [],
+                }
+            )
+    return out
+
+
 def min_tier_for_features_at_batch(
     perspective_tier: str, bundles
 ) -> list[dict] | None:
