@@ -7590,7 +7590,7 @@ var _channelIcons = {
   'googlechat': '🔵', 'matrix': '🔢', 'msteams': '🏢', 'mattermost': '⚡',
   'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
   'feishu': '🟠', 'zalo': '🩵', 'tlon': '🟤', 'synologychat': '🟦',
-  'nextcloudtalk': '☁️', 'clickclack': '🗨️', 'buzz': '🐝',
+  'nextcloudtalk': '☁️', 'clickclack': '🗨️', 'buzz': '🐝', 'fishaudio': '🎤',
   'cli': '🖥️', 'tui': '⌨️', 'cron': '⏰'
 };
 var _channelColors = {
@@ -7599,7 +7599,7 @@ var _channelColors = {
   'googlechat': '#1A73E8', 'matrix': '#0DBD8B', 'msteams': '#4B53BC', 'mattermost': '#0072C6',
   'line': '#06C755', 'nostr': '#9333ea', 'twitch': '#9146FF', 'bluebubbles': '#3478F6',
   'feishu': '#00D6B9', 'zalo': '#0068FF', 'tlon': '#A78BFA', 'synologychat': '#1A73E8',
-  'nextcloudtalk': '#0082C9', 'clickclack': '#FF6B35', 'buzz': '#F59E0B',
+  'nextcloudtalk': '#0082C9', 'clickclack': '#FF6B35', 'buzz': '#F59E0B', 'fishaudio': '#FF5A36',
   'cli': '#94a3b8', 'tui': '#94a3b8', 'cron': '#6B7280'
 };
 // Display-name overrides for channels whose snake/lower-case key isn't a

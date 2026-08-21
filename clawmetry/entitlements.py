@@ -256,6 +256,7 @@ ALL_CHANNELS: tuple[str, ...] = (
     "nextcloudtalk",
     "clickclack",
     "buzz",
+    "fishaudio",
 )
 
 # Display labels for every known chat-channel adapter. Fallback for an
@@ -284,6 +285,7 @@ CHANNEL_LABELS = {
     "nextcloudtalk": "Nextcloud Talk",
     "clickclack": "ClickClack",
     "buzz": "Buzz",
+    "fishaudio": "Fish Audio",
 }
 
 _TIER_ORDER = (
