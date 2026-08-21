@@ -66,6 +66,29 @@ desktop users get a working `clawmetry` in any new terminal without a
 separate pip install. The NSIS uninstaller removes the shim and its
 PATH entry.
 
+**Uninstall contract (founder directive 2026-08-10):** uninstalling
+removes every file ClawMetry created. The mandatory section removes the
+program, the whole `%LOCALAPPDATA%\ClawMetry` tree (venv, onboarding
+stamp, logs, shim, private WebView profile), shortcuts, registry entry,
+and the user-PATH entry (with a `WM_SETTINGCHANGE` broadcast). A
+checked-by-default components-page section removes all account data:
+`~/.clawmetry`, the `clawmetry` section of `~/.openclaw/openclaw.json`
+(surgical — OpenClaw's own config survives), ClawMetry's DuckDB store in
+`~/.openclaw`, and the OS-keychain workspace key. The checkbox warns
+that deleting the E2E key makes already-synced cloud snapshots
+permanently unreadable. The only deliberate leftover is the per-user
+Python runtime the installer may have auto-installed (a shared
+dependency, disclosed in the section description).
+
+**Fresh installs always ask to sign in.** The installer purges a stale
+onboarding stamp / instance file when Windows has no ClawMetry
+registered (debris from a broken or manual uninstall — e.g. a
+Smart-App-Control-blocked uninstaller); upgrades keep both, so they
+never re-onboard. At boot the shell re-validates stored credentials:
+an explicit 401/403 re-shows the sign-in pane, network failure keeps
+the dashboard available, and self-host/nocloud installs never phone
+home. Only an explicit "Skip for now" suppresses future prompts.
+
 **Why this shape and not "freeze clawmetry into the bundle":**
 
 - The bundled version would drift the moment PyPI ships a new
