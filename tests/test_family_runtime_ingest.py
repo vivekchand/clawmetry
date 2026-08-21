@@ -281,3 +281,16 @@ def test_family_high_water_legacy_plain_ts_reingests_once(sync_with_isolated_sto
          patch.object(sync, "_family_ingest_rev", return_value="0.4.1"):
         n2 = sync.sync_family_runtimes(config, state, {})
     assert n2 > 0, "legacy plain-ts marks must not suppress re-ingest"
+
+
+def test_family_sessions_persist_cwd_from_metadata(sync_with_isolated_store):
+    """2026-08-19: family session rows must persist cwd/git_branch (the
+    kill/pause pid resolution reads sessions.cwd; it was always NULL). The
+    alias walk covers per-runtime spellings — this exercises _session_cwd
+    over the merged metadata exactly as the upsert does."""
+    sync, ls = sync_with_isolated_store
+    assert sync._session_cwd({"workingDir": "/proj/demo"}) == "/proj/demo"      # goose
+    assert sync._session_cwd({"directory": "/proj/demo"}) == "/proj/demo"       # opencode
+    assert sync._session_cwd({"cwd": "/proj/demo"}) == "/proj/demo"             # pi
+    assert sync._session_cwd({"metadata": {"workingDir": "/x"}}) == "/x"        # nested
+    assert sync._session_cwd({"displayName": "n"}) is None

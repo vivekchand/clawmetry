@@ -250,43 +250,135 @@ function clawmetryOauthLogin(provider){
       if(err){ err.textContent = 'Network error. Try again in a moment.'; err.style.display='block'; }
     });
 }
-// Email OTP: swap the login card into a two-step (email → code) inline flow.
-// Uses /api/auth/email-otp (same endpoint `clawmetry onboard` and the
-// desktop pane hit). On success the returned cm_key is saved server-side
-// and the page reloads to pick up the fresh gateway token via auto-signin.
-function clawmetryEmailOtpStart(){
+// Email OTP: a two-step (email → code) flow rendered INSIDE the login card.
+//
+// Routes through the LOCAL proxy pair /api/cloud-cta/send-otp and
+// /api/cloud-cta/verify-otp — the same seam the cloud modal uses. They
+// forward to app.clawmetry.com and, on verify, pair this machine by
+// persisting the returned cm_ key. verify-otp also picks a rail: on a
+// local-only install we send mode=selfhost so signing in cannot switch
+// cloud egress on behind the operator's back.
+//
+// This used to POST /api/auth/email-otp, which is a CLOUD-only route: the
+// CLI and the desktop pane hit it on https://ingest.clawmetry.com, but the
+// relative URL here resolved against the local dashboard, which has no such
+// route. Flask answered 404 with an HTML body, r.json() threw, and the
+// catch below painted "Network error. Try again." on every attempt — the
+// email button was dead on every install (founder report 2026-08-19).
+//
+// The steps are card-inline rather than window.prompt() for two reasons: a
+// prompt blocks the entire webview in the desktop shell, which has no
+// browser chrome to recover with, and a raw JS dialog is not something we
+// ask a first-time user to trust with their email address.
+var _cmOtpEmail = '';
+
+function _cmLoginErr(msg){
   var err = document.getElementById('login-error');
-  if(err){ err.style.display='none'; }
-  var email = prompt('Email address to send a sign-in code to:');
-  if(!email || email.indexOf('@') < 0){ return; }
-  fetch('/api/auth/email-otp', {
+  if(!err) return;
+  if(msg){ err.textContent = msg; err.style.display = 'block'; }
+  else { err.style.display = 'none'; }
+}
+function _cmShow(id, on){
+  var el = document.getElementById(id);
+  if(el) el.style.display = on ? '' : 'none';
+}
+// The local-recovery button owns its own visibility rule (revealed only when
+// the loopback probe answers), so remember whether it was up before hiding it.
+var _cmLocalBtnWasShown = false;
+
+function clawmetryEmailOtpStart(){
+  _cmLoginErr('');
+  var lb = document.getElementById('login-local-btn');
+  _cmLocalBtnWasShown = !!(lb && lb.style.display !== 'none');
+  if(lb) lb.style.display = 'none';
+  _cmShow('login-choices', false);
+  _cmShow('login-email-step', true);
+  _cmShow('login-email-back', true);
+  var el = document.getElementById('login-email-input');
+  if(el) el.focus();
+}
+
+function clawmetryEmailOtpCancel(){
+  _cmLoginErr('');
+  _cmShow('login-email-step', false);
+  _cmShow('login-otp-step', false);
+  _cmShow('login-email-back', false);
+  _cmShow('login-choices', true);
+  var lb = document.getElementById('login-local-btn');
+  if(lb && _cmLocalBtnWasShown) lb.style.display = '';
+}
+
+function clawmetryEmailOtpSend(){
+  var input = document.getElementById('login-email-input');
+  var email = input ? (input.value || '').trim() : '';
+  if(!email || email.indexOf('@') < 0){ _cmLoginErr('Enter a valid email address.'); return; }
+  _cmLoginErr('');
+  var btn = document.getElementById('login-email-send');
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  fetch('/api/cloud-cta/send-otp', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'send', email: email.trim()}),
+    body: JSON.stringify({email: email}),
   })
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if(!d || !d.ok){
-        if(err){ err.textContent = (d && d.error) || 'Could not send code.'; err.style.display='block'; }
-        return;
-      }
-      var code = prompt('Check ' + email + ' for a 6-digit code:');
-      if(!code){ return; }
-      return fetch('/api/auth/email-otp', {
+      if(!d || !d.ok){ _cmLoginErr((d && d.error) || 'Could not send code.'); return; }
+      _cmOtpEmail = email;
+      _cmShow('login-email-step', false);
+      _cmShow('login-otp-step', true);
+      var sent = document.getElementById('login-otp-sent');
+      if(sent) sent.textContent = 'We sent a code to ' + email;
+      var code = document.getElementById('login-otp-input');
+      if(code) code.focus();
+    })
+    .catch(function(){ _cmLoginErr('Network error. Try again.'); })
+    .finally(function(){
+      var b = document.getElementById('login-email-send');
+      if(b){ b.disabled = false; b.textContent = 'Send code'; }
+    });
+}
+
+function clawmetryEmailOtpVerify(){
+  var input = document.getElementById('login-otp-input');
+  var code = input ? (input.value || '').replace(/\s/g, '') : '';
+  if(code.length < 4){ _cmLoginErr('Enter the code from your email.'); return; }
+  _cmLoginErr('');
+  var btn = document.getElementById('login-otp-verify');
+  if(btn){ btn.disabled = true; btn.textContent = 'Verifying…'; }
+  // Same rail probe clawmetryOauthLogin does: on a self-hosted machine
+  // signing in must not flip egress on, so send mode=selfhost and let
+  // verify-otp take the identity-only path.
+  fetch('/api/cloud-cta/status')
+    .then(function(r){ return r.ok ? r.json() : {local_only: false}; })
+    .catch(function(){ return {local_only: false}; })
+    .then(function(status){
+      return fetch('/api/cloud-cta/verify-otp', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({action:'verify', email: email.trim(), otp: code.trim()}),
-      }).then(function(r){ return r.json(); }).then(function(v){
-        if(v && v.ok){
-          try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
-          location.reload();
-        } else {
-          if(err){ err.textContent = (v && v.error) || 'Invalid code.'; err.style.display='block'; }
-        }
+        body: JSON.stringify({
+          email: _cmOtpEmail,
+          code: code,
+          mode: (status && status.local_only) ? 'selfhost' : 'managed',
+        }),
       });
     })
+    .then(function(r){ return r.json(); })
+    .then(function(v){
+      if(v && v.ok && v.token){
+        // Clearing the marker re-arms zero-click auto-login, so the reload
+        // picks the on-disk gateway token back up and drops the wall.
+        try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
+        location.reload();
+        return;
+      }
+      _cmLoginErr((v && v.error) || 'Invalid code.');
+      var b = document.getElementById('login-otp-verify');
+      if(b){ b.disabled = false; b.textContent = 'Verify and open dashboard'; }
+    })
     .catch(function(){
-      if(err){ err.textContent = 'Network error. Try again.'; err.style.display='block'; }
+      _cmLoginErr('Network error. Try again.');
+      var b = document.getElementById('login-otp-verify');
+      if(b){ b.disabled = false; b.textContent = 'Verify and open dashboard'; }
     });
 }
 

@@ -52,3 +52,6 @@ desktop/installer/version_info.txt
 *.p12
 build/
 dist/
+
+# Stamped by CI at desktop-build time (see desktop-artifacts.yml)
+desktop/assets/version.txt
