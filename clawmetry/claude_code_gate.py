@@ -62,12 +62,15 @@ _SERVER_INFO_PATH = os.path.expanduser("~/.clawmetry/server.json")
 _MARKER_PATH = os.path.expanduser("~/.clawmetry/hooks_installed.json")
 
 # Any hook command containing this is OURS (the local-first gate).
-HOOK_CMD_MARKER = "-m clawmetry hook claude-code"
+# Form-agnostic: matches BOTH the legacy "<py> -m clawmetry hook claude-code"
+# written by older releases and the console-script form written now, so an
+# existing entry is replaced rather than stacked beside a second gate.
+HOOK_CMD_MARKER = "clawmetry hook claude-code"
 # …and this one is the MIRROR hook (PermissionRequest). Distinct marker so
 # each installer only ever removes its own entry. NOTE the ordering trap:
 # this string CONTAINS HOOK_CMD_MARKER, so any "is it ours?" test for the
 # PreToolUse gate must exclude mirror commands explicitly (_entry_is_ours).
-MIRROR_CMD_MARKER = "-m clawmetry hook claude-code-permission"
+MIRROR_CMD_MARKER = "clawmetry hook claude-code-permission"
 # Commands containing any of these belong to the CLOUD-path manual install
 # (hooks_claude_code.py). Their presence means claude_code is already
 # pre-tool gated — we must not stack a second gate.
@@ -285,9 +288,56 @@ def _windowless_python(py: str, is_windows: bool, exists=os.path.exists) -> str:
     return py
 
 
+def _console_script() -> "str | None":
+    """Absolute path of the installed ``clawmetry`` console script, if any.
+
+    Preferred over ``python -m clawmetry`` because Claude Code spawns the
+    hook with the AGENT'S working directory, which ``-m`` puts first on
+    ``sys.path``: any project containing a ``clawmetry/`` folder shadows the
+    installed package, the subcommand is rejected, and the hook errors. Claude
+    Code treats that as a non-blocking error, so the call proceeds ungated —
+    the gate silently does nothing, which is exactly the failure mode this
+    module's logging rule exists to prevent. A console script sets
+    ``sys.path[0]`` to its own bin directory, so the working directory can
+    never shadow the package. (The same defect DENIED calls on Copilot, where
+    a hook error is a refusal; see clawmetry/runtime_gates.py.)
+
+    None when no script sits next to the running interpreter (pipx / unusual
+    layouts), in which case the caller falls back to ``-m``.
+    """
+    exe = sys.executable or ""
+    if not exe:
+        return None
+    name = "clawmetry.exe" if os.name == "nt" else "clawmetry"
+    cand = os.path.join(os.path.dirname(exe), name)
+    try:
+        if os.path.isfile(cand) and (os.name == "nt" or os.access(cand, os.X_OK)):
+            return cand
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _launcher_prefix() -> str:
+    """Quoted launcher + any ``-m`` suffix, shared by both hook commands.
+
+    The path is quoted because ``sys.executable`` routinely contains a space
+    (``/Users/First Last/venv/bin/python``) and Claude Code shell-splits the
+    command."""
+    script = _console_script()
+    launcher = script or _windowless_python(
+        sys.executable or "python3", os.name == "nt")
+    if os.name == "nt":
+        import subprocess as _sp
+        quoted = _sp.list2cmdline([launcher])
+    else:
+        import shlex as _shlex
+        quoted = _shlex.quote(launcher)
+    return quoted if script else f"{quoted} -m clawmetry"
+
+
 def _hook_command(base: str) -> str:
-    py = _windowless_python(sys.executable or "python3", os.name == "nt")
-    return f"{py} -m clawmetry hook claude-code --base {base}"
+    return f"{_launcher_prefix()} hook claude-code --base {base}"
 
 
 def _ensure_marker() -> bool:
@@ -372,8 +422,7 @@ def _mirror_wanted() -> bool:
 
 
 def _mirror_command(base: str) -> str:
-    py = _windowless_python(sys.executable or "python3", os.name == "nt")
-    return f"{py} -m clawmetry hook claude-code-permission --base {base}"
+    return f"{_launcher_prefix()} hook claude-code-permission --base {base}"
 
 
 def mirror_timeout_s() -> int:
