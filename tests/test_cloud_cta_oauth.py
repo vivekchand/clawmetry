@@ -576,7 +576,12 @@ def test_full_connect_activates_trial(monkeypatch, tmp_path):
 def test_verify_otp_activates_trial(monkeypatch):
     """The dashboard cloud modal OTP path (/api/cloud-cta/verify-otp) must
     route through _full_connect_with_key so trial activation happens for
-    OTP signups the same way it happens for OAuth signups."""
+    OTP signups the same way it happens for OAuth signups.
+
+    Pins the MANAGED rail explicitly. verify-otp now picks its rail the way
+    /api/cloud-cta/oauth-start does — an omitted mode follows the install's
+    recorded intent, so on a self-host machine this used to depend on
+    ambient state (see tests/test_verify_otp_rail_selection.py)."""
     import dashboard as _d
     import routes.overview as _ov
     from flask import Flask
@@ -604,7 +609,8 @@ def test_verify_otp_activates_trial(monkeypatch):
 
     client = app.test_client()
     resp = client.post("/api/cloud-cta/verify-otp",
-                       json={"email": "user@test.com", "code": "123456"})
+                       json={"email": "user@test.com", "code": "123456",
+                             "mode": "managed"})
     body = resp.get_json()
 
     assert body.get("ok") is True

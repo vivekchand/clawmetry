@@ -6878,6 +6878,13 @@ def main() -> None:
         if len(sys.argv) > 2 and sys.argv[2] == "attention":
             from clawmetry.attention_hook import attention_main
             raise SystemExit(attention_main(sys.argv[3:]))
+        # `clawmetry hook cursor|copilot --base <url>` — same gate-client
+        # contract as claude-code (stdlib-only, fail-open, always exit 0)
+        # but speaking the runtime's own hook payload/response shapes. See
+        # clawmetry/runtime_gates.py.
+        if len(sys.argv) > 2 and sys.argv[2] in ("cursor", "copilot"):
+            from clawmetry.runtime_gates import hook_main as _rt_hook_cli
+            raise SystemExit(_rt_hook_cli(sys.argv[2:]))
         from clawmetry.claude_code_gate import hook_main as _hook_cli
         raise SystemExit(_hook_cli(sys.argv[2:]))
     # FAST PATH — agent-facing read CLI (`clawmetry sessions|activity|waste|

@@ -1929,7 +1929,11 @@ def cloud_cta_send_otp():
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            return jsonify({"ok": True, "error": result.get("error")})
+            # A 200 carrying an "error" field is still a failure — the cloud
+            # answers that way for rate limits and blocked addresses. Reporting
+            # ok=True there walked the caller on to the code prompt for a mail
+            # that was never sent.
+            return jsonify({"ok": not result.get("error"), "error": result.get("error")})
     except Exception as _ex:
         _sc = getattr(getattr(_ex, "code", None), "__class__", type(_ex)).__name__
         try:
@@ -1952,6 +1956,18 @@ def cloud_cta_verify_otp():
     code = (data.get("code") or "").strip()
     if not email or not code:
         return jsonify({"ok": False, "error": "Missing email or code"}), 400
+    # Same rail selection as /api/cloud-cta/oauth-start. Explicit mode wins;
+    # otherwise follow the install's recorded intent, because identity and
+    # egress are separate choices and signing in must never flip egress on
+    # by itself (founder report 2026-08-09, on the OAuth twin of this path).
+    mode = (data.get("mode") or "").strip().lower()
+    if mode not in ("managed", "selfhost"):
+        if mode:
+            return jsonify({"ok": False, "error": "Unsupported mode"}), 400
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
     try:
         from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "code": code}).encode()
@@ -1963,9 +1979,23 @@ def cloud_cta_verify_otp():
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            if result.get("token"):
-                # Route through _full_connect_with_key so this path is
-                # symmetric with the OAuth loopback bridge AND with
+            # The cloud mints the key under "api_key" (routes/auth.py
+            # api_otp_verify), which is also what the CLI and the desktop
+            # pane read. This proxy only ever looked for "token", so a
+            # SUCCESSFUL verify fell through to the error branch below and
+            # rendered "Invalid code" — after the cloud had already deleted
+            # the OTP. Every valid code was reported as invalid and burned,
+            # on this path and on the cloud modal that shares it. Accept
+            # every name the cloud has used rather than pinning one.
+            cm_key = (
+                result.get("api_key")
+                or result.get("token")
+                or result.get("key")
+                or ""
+            ).strip()
+            if cm_key:
+                # managed: route through _full_connect_with_key so this path
+                # is symmetric with the OAuth loopback bridge AND with
                 # `clawmetry connect --start-sync-now` — persist identity
                 # into ~/.clawmetry/config.json, mint-or-reuse the 7-day
                 # Pro trial, enable cloud egress, restart the sync daemon.
@@ -1974,25 +2004,49 @@ def cloud_cta_verify_otp():
                 # founder ask 2026-08-12: cloud users must get the same
                 # 7-day trial self-host gets, or they can't experience the
                 # full product before deciding to pay.
+                #
+                # selfhost: identity + the same trial, egress stays off. The
+                # nocloud marker is written BEFORE the key lands, so the
+                # daemon never observes a cm_ key without it.
                 trial = "unavailable"
                 try:
-                    _node_id, _enc_key, trial = _d._full_connect_with_key(result["token"])
+                    if mode == "selfhost":
+                        _node_id, trial = _d._selfhost_signin_with_key(cm_key)
+                    else:
+                        _node_id, _enc_key, trial = _d._full_connect_with_key(cm_key)
                 except Exception:
                     # If _full_connect_with_key fails, still persist the
                     # token — pairing is more important than daemon restart
                     # or trial activation, which recover naturally later.
                     try:
-                        _d._write_cloud_token(result["token"])
+                        _d._write_cloud_token(cm_key)
                     except Exception:
                         pass
-                return jsonify({"ok": True, "token": result["token"], "trial": trial})
-            return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
+                return jsonify({
+                    "ok": True,
+                    "token": cm_key,
+                    "trial": trial,
+                    "mode": mode,
+                })
+            # A 200 carrying neither a key nor an error is a shape we do not
+            # understand. Say that, rather than blaming the code the user
+            # typed — a wrong code comes back as a 401 and is handled below.
+            return jsonify({
+                "ok": False,
+                "error": result.get("error")
+                or "Signed in, but the server response was not understood. Try again.",
+            })
     except Exception as _ex:
         try:
             _eb = _jr.loads(_ex.read()) if hasattr(_ex, "read") else {}
         except Exception:
             _eb = {}
-        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+        # A rejected code is a 401 from the cloud, not a gateway failure —
+        # pass its status through so an API consumer can tell "you typed the
+        # wrong code" from "the cloud is unreachable".
+        _up = getattr(_ex, "code", None)
+        _status = _up if isinstance(_up, int) and 400 <= _up < 500 else 502
+        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), _status
 
 
 def _compute_device_summary() -> dict:

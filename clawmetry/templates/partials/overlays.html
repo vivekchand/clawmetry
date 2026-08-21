@@ -97,7 +97,7 @@
          dashboard as return-target; on completion the cloud page tells
          the user to paste the connect command in a terminal, which
          saves the gateway token and lets auto-signin work on reload. -->
-    <div style="display:flex;flex-direction:column;gap:10px;">
+    <div id="login-choices" style="display:flex;flex-direction:column;gap:10px;">
       <button onclick="clawmetryOauthLogin('github')" style="
         width:100%;padding:12px 16px;border-radius:8px;
         border:1px solid var(--border-color,#1f2937);
@@ -131,6 +131,43 @@
         <span data-i18n="login.oauth_email">Continue with email</span>
       </button>
     </div>
+
+    <!-- Email sign-in, in place. A two-step form rather than window.prompt():
+         the desktop shell has no browser chrome, a modal prompt blocks the
+         whole webview, and the card is where the user already is. Both steps
+         POST the local proxy pair (/api/cloud-cta/send-otp, then verify-otp),
+         never the cloud directly, so the machine ends up paired. -->
+    <div id="login-email-step" style="display:none;">
+      <input id="login-email-input" type="email" autocomplete="email"
+        data-i18n-placeholder="login.email_placeholder" placeholder="you@example.com" style="
+        width:100%;box-sizing:border-box;padding:12px 14px;margin-bottom:10px;
+        border-radius:8px;border:1px solid var(--border-color,#1f2937);
+        background:var(--bg-primary,#0f172a);color:#e2e8f0;font-size:14px;">
+      <button id="login-email-send" onclick="clawmetryEmailOtpSend()" style="
+        width:100%;padding:12px 16px;border-radius:8px;border:none;
+        background:#E94644;color:#fff;font-size:14px;font-weight:600;cursor:pointer;"
+        data-i18n="login.email_send">Send code</button>
+    </div>
+
+    <div id="login-otp-step" style="display:none;">
+      <p id="login-otp-sent" style="color:#94a3b8;margin:0 0 10px;font-size:12px;text-align:center;"></p>
+      <input id="login-otp-input" type="text" inputmode="numeric" autocomplete="one-time-code"
+        maxlength="6" data-i18n-placeholder="login.otp_placeholder" placeholder="6-digit code" style="
+        width:100%;box-sizing:border-box;padding:12px 14px;margin-bottom:10px;
+        border-radius:8px;border:1px solid var(--border-color,#1f2937);
+        background:var(--bg-primary,#0f172a);color:#e2e8f0;font-size:16px;
+        letter-spacing:4px;text-align:center;">
+      <button id="login-otp-verify" onclick="clawmetryEmailOtpVerify()" style="
+        width:100%;padding:12px 16px;border-radius:8px;border:none;
+        background:#E94644;color:#fff;font-size:14px;font-weight:600;cursor:pointer;"
+        data-i18n="login.otp_verify">Verify and open dashboard</button>
+    </div>
+
+    <p id="login-email-back" style="display:none;margin:12px 0 0;text-align:center;">
+      <a href="#" onclick="clawmetryEmailOtpCancel();return false;"
+        style="color:#64748b;font-size:12px;text-decoration:none;"
+        data-i18n="login.email_back">Back to sign-in options</a>
+    </p>
 
     <p id="login-error" style="color:#f87171;margin:14px 0 0;font-size:12px;display:none;text-align:center;" data-i18n="login.invalid_token">Sign-in failed. Try again.</p>
 
