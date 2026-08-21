@@ -78,6 +78,11 @@ _AGENT_TO_RUNTIME = {
     "kimi": "kimi",
     "kimi-cli": "kimi",
     "kimi-code": "kimi",
+    # The numbat installer writes devin-permission-request /
+    # devin-post-tool hooks into ~/.config/devin/config.json, so these
+    # findings arrive with source_agent="devin" already.
+    "devin": "devin",
+    "devin-cli": "devin",
 }
 
 _SEVERITIES = ("info", "low", "medium", "high", "critical")

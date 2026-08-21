@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ટ્રેસ ક્લસ્ટર",
   "usage.trace_clusters_hint": "વર્તન પેટર્ન પ્રમાણે સેશનને આપમેળે જૂથબદ્ધ કરો",
   "usage.trend": "વલણ",
-  "version_impact.title": "અપગ્રેડ અસર"
+  "version_impact.title": "અપગ્રેડ અસર",
+  "app.approve_for_session": "સેશન માટે મંજૂર કરો",
+  "app.always_allow": "હંમેશા મંજૂરી આપો",
+  "approvals.min_risk_label": "ન્યૂનતમ જોખમ સ્તર",
+  "approvals.min_risk_any": "કોઈપણ (ફક્ત કીવર્ડ્સ પર મેચ કરો)",
+  "approvals.min_risk_medium": "મધ્યમ અથવા તેથી વધુ",
+  "approvals.min_risk_high": "ઉચ્ચ અથવા તેથી વધુ",
+  "approvals.min_risk_critical": "ફક્ત ક્રિટિકલ",
+  "approvals.min_risk_hint": "ClawMetry દરેક ટૂલ કૉલનું સ્કોરિંગ કરે છે (રિકર્સિવ ડિલીટ, sudo, ક્રેડેન્શિયલ ઍક્સેસ...). કીવર્ડ્સ સાથે અથવા વગર જોખમ પ્રમાણે ગેટ કરવા માટે આ સેટ કરો."
 }

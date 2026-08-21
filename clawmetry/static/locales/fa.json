@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "خوشه‌های ردیابی",
   "usage.trace_clusters_hint": "گروه‌بندی خودکار نشست‌ها بر اساس الگوی رفتاری",
   "usage.trend": "روند",
-  "version_impact.title": "تأثیر ارتقا"
+  "version_impact.title": "تأثیر ارتقا",
+  "app.approve_for_session": "تأیید برای این نشست",
+  "app.always_allow": "همیشه مجاز باشد",
+  "approvals.min_risk_label": "حداقل سطح ریسک",
+  "approvals.min_risk_any": "هر سطحی (تطبیق فقط بر اساس کلیدواژه)",
+  "approvals.min_risk_medium": "متوسط یا بالاتر",
+  "approvals.min_risk_high": "بالا یا بالاتر",
+  "approvals.min_risk_critical": "فقط بحرانی",
+  "approvals.min_risk_hint": "ClawMetry هر فراخوانی ابزار را امتیازدهی می‌کند (حذف بازگشتی، sudo، دسترسی به اطلاعات ورود و غیره). این گزینه را برای فیلتر کردن بر اساس ریسک، با یا بدون کلیدواژه، تنظیم کنید."
 }

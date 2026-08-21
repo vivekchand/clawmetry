@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Mga Trace Cluster",
   "usage.trace_clusters_hint": "awtomatikong pagpangkat ng session ayon sa pattern ng gawi",
   "usage.trend": "Trend",
-  "version_impact.title": "Epekto ng Upgrade"
+  "version_impact.title": "Epekto ng Upgrade",
+  "app.approve_for_session": "Aprubahan para sa session",
+  "app.always_allow": "Laging payagan",
+  "approvals.min_risk_label": "Minimum na antas ng panganib",
+  "approvals.min_risk_any": "Kahit ano (batay sa keywords lang)",
+  "approvals.min_risk_medium": "Medium pataas",
+  "approvals.min_risk_high": "High pataas",
+  "approvals.min_risk_critical": "Critical lang",
+  "approvals.min_risk_hint": "Sinusukat ng ClawMetry ang panganib ng bawat tool call (recursive deletes, sudo, pag-access sa credentials...). I-set ito para mag-gate base sa antas ng panganib, may keywords man o wala."
 }

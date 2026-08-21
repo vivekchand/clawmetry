@@ -41,12 +41,18 @@ def test_uninstaller_removes_runtime_dir_in_mandatory_section():
     sections = _uninstall_sections(_nsi_text())
     mandatory = [body for body in sections.values() if "SectionIn RO" in body]
     assert mandatory, "uninstaller must have a mandatory (SectionIn RO) section"
+    # Since 2026-08-10 the mandatory section removes the WHOLE app-data
+    # tree (runtime + bin + webview + legacy stray layouts), which
+    # subsumes the original runtime-dir requirement from 2026-08-08.
     assert any(
-        r'RMDir /r "$LOCALAPPDATA\ClawMetry\runtime"' in body for body in mandatory
+        r'RMDir /r "$LOCALAPPDATA\ClawMetry"' in body
+        or r'RMDir /r "$LOCALAPPDATA\ClawMetry\runtime"' in body
+        for body in mandatory
     ), (
         "the mandatory uninstall section must remove "
-        r"%LOCALAPPDATA%\ClawMetry\runtime - leaving it behind strands the "
-        "onboarding-completed.json stamp and a reinstall never re-onboards"
+        r"%LOCALAPPDATA%\ClawMetry (or at minimum its runtime\ subdir) - "
+        "leaving it behind strands the onboarding-completed.json stamp and "
+        "a reinstall never re-onboards"
     )
 
 

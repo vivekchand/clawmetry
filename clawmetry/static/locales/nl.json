@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Traceclusters",
   "usage.trace_clusters_hint": "sessies automatisch groeperen op gedragspatroon",
   "usage.trend": "Trend",
-  "version_impact.title": "Impact van upgrade"
+  "version_impact.title": "Impact van upgrade",
+  "app.approve_for_session": "Goedkeuren voor deze sessie",
+  "app.always_allow": "Altijd toestaan",
+  "approvals.min_risk_label": "Minimaal risiconiveau",
+  "approvals.min_risk_any": "Elk niveau (alleen op trefwoorden matchen)",
+  "approvals.min_risk_medium": "Gemiddeld of hoger",
+  "approvals.min_risk_high": "Hoog of hoger",
+  "approvals.min_risk_critical": "Alleen kritiek",
+  "approvals.min_risk_hint": "ClawMetry beoordeelt elke tool-aanroep op risico (recursief verwijderen, sudo, toegang tot inloggegevens...). Gebruik dit om te filteren op risico, met of zonder trefwoorden."
 }

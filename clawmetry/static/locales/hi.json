@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ट्रेस क्लस्टर",
   "usage.trace_clusters_hint": "व्यवहार पैटर्न के अनुसार सत्रों का स्वतः समूहन",
   "usage.trend": "रुझान",
-  "version_impact.title": "अपग्रेड प्रभाव"
+  "version_impact.title": "अपग्रेड प्रभाव",
+  "app.approve_for_session": "सत्र के लिए स्वीकृत करें",
+  "app.always_allow": "हमेशा अनुमति दें",
+  "approvals.min_risk_label": "न्यूनतम जोखिम स्तर",
+  "approvals.min_risk_any": "कोई भी (केवल कीवर्ड पर मिलान करें)",
+  "approvals.min_risk_medium": "मध्यम या उससे अधिक",
+  "approvals.min_risk_high": "उच्च या उससे अधिक",
+  "approvals.min_risk_critical": "केवल गंभीर",
+  "approvals.min_risk_hint": "ClawMetry हर टूल कॉल को स्कोर करता है (रिकर्सिव डिलीट, sudo, क्रेडेंशियल एक्सेस...). कीवर्ड के साथ या उनके बिना जोखिम के आधार पर सीमित करने के लिए इसे सेट करें।"
 }

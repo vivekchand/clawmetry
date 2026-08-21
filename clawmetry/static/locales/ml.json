@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ട്രേസ് ക്ലസ്റ്ററുകൾ",
   "usage.trace_clusters_hint": "സ്വഭാവ രീതി അനുസരിച്ച് സെഷനുകൾ സ്വയം ഗ്രൂപ്പ് ചെയ്യുക",
   "usage.trend": "പ്രവണത",
-  "version_impact.title": "അപ്ഗ്രേഡ് സ്വാധീനം"
+  "version_impact.title": "അപ്ഗ്രേഡ് സ്വാധീനം",
+  "app.approve_for_session": "സെഷനായി അംഗീകരിക്കുക",
+  "app.always_allow": "എപ്പോഴും അനുവദിക്കുക",
+  "approvals.min_risk_label": "കുറഞ്ഞ റിസ്ക് ലെവൽ",
+  "approvals.min_risk_any": "ഏതും (കീവേഡുകൾ മാത്രം അടിസ്ഥാനമാക്കി പൊരുത്തപ്പെടുത്തുക)",
+  "approvals.min_risk_medium": "ഇടത്തരം അല്ലെങ്കിൽ അതിനു മുകളിൽ",
+  "approvals.min_risk_high": "ഉയർന്നത് അല്ലെങ്കിൽ അതിനു മുകളിൽ",
+  "approvals.min_risk_critical": "ക്രിട്ടിക്കൽ മാത്രം",
+  "approvals.min_risk_hint": "ClawMetry ഓരോ ടൂൾ കോളിനും റിസ്ക് സ്കോർ നൽകുന്നു (റിക്കേഴ്‌സീവ് ഡിലീറ്റുകൾ, sudo, ക്രെഡൻഷ്യൽ ആക്‌സസ് എന്നിവ ഉൾപ്പെടെ). കീവേഡുകൾ ഉള്ളതോ ഇല്ലാത്തതോ ആയ റിസ്ക് അടിസ്ഥാനമാക്കി ഗേറ്റ് ചെയ്യാൻ ഇത് സെറ്റ് ചെയ്യുക."
 }

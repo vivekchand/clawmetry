@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Spårkluster",
   "usage.trace_clusters_hint": "gruppera sessioner automatiskt efter beteendemönster",
   "usage.trend": "Trend",
-  "version_impact.title": "Uppgraderingspåverkan"
+  "version_impact.title": "Uppgraderingspåverkan",
+  "app.approve_for_session": "Godkänn för sessionen",
+  "app.always_allow": "Tillåt alltid",
+  "approvals.min_risk_label": "Lägsta risknivå",
+  "approvals.min_risk_any": "Alla (matcha endast på nyckelord)",
+  "approvals.min_risk_medium": "Medel eller högre",
+  "approvals.min_risk_high": "Hög eller högre",
+  "approvals.min_risk_critical": "Endast kritisk",
+  "approvals.min_risk_hint": "ClawMetry riskbedömer varje verktygsanrop (rekursiva raderingar, sudo, åtkomst till autentiseringsuppgifter...). Ställ in detta för att filtrera efter risk, med eller utan nyckelord."
 }
