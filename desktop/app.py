@@ -344,6 +344,234 @@ def _win_subprocess_kwargs() -> dict:
     return {}
 
 
+# ── Open telemetry (shell stage) ──────────────────────────────────────────
+# The .app/.exe phones home once per launch so we can tell a download
+# apart from an actual open, and a first open apart from the nth. This
+# is the ONLY stage that fires when the Python bootstrap fails (no
+# system Python, PyPI unreachable, venv wedged) — exactly the installs
+# we would otherwise never hear about.
+#
+# The daemon fires a second, richer ping (`desktop_ready`) once the
+# dashboard is live; see clawmetry/telemetry.py. The two are correlated
+# by `session_id`, so "opened but never got a working daemon" is a
+# subtraction, not a guess.
+#
+# What we send: install_id (random uuid4, same file the CLI telemetry
+# uses), a per-launch session_id, the open counter, app/OS versions.
+# What we DO NOT send: hostname, username, IP (the server derives a
+# country and drops the IP), workspace paths, transcript content.
+#
+# Opt-out (any one disables it): CLAWMETRY_NO_TELEMETRY=1, DO_NOT_TRACK=1,
+# ~/.clawmetry/notelemetry, or an enterprise endpoint (a self-hosted
+# deployment must never phone the managed cloud).
+CONFIG_DIR = Path.home() / ".clawmetry"
+INSTALL_ID_FILE = CONFIG_DIR / "install_id"
+OPTOUT_MARKER = CONFIG_DIR / "notelemetry"
+NOCLOUD_MARKER = CONFIG_DIR / "nocloud"
+CONFIG_JSON = CONFIG_DIR / "config.json"
+OPEN_STATE_FILE = CONFIG_DIR / "desktop-opens.json"
+OPEN_PING_TIMEOUT_SECS = 4.0
+DEFAULT_APP_BASE = "https://app.clawmetry.com"
+
+
+def _desktop_version() -> str:
+    """Version stamped into the bundle at build time (assets/version.txt,
+    written by .github/workflows/desktop-artifacts.yml). Dev runs from a
+    checkout have no stamp — report "dev" rather than lying."""
+    try:
+        v = (_assets_dir() / "version.txt").read_text(encoding="utf-8").strip()
+        return v[:32] if v else "dev"
+    except OSError:
+        return "dev"
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip() not in ("", "0", "false", "False")
+
+
+def _telemetry_optout() -> bool:
+    if _truthy_env("CLAWMETRY_NO_TELEMETRY") or _truthy_env("DO_NOT_TRACK"):
+        return True
+    try:
+        return OPTOUT_MARKER.exists()
+    except OSError:
+        return False
+
+
+def _read_config() -> dict:
+    try:
+        data = json.loads(CONFIG_JSON.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _app_base(cfg: dict) -> Optional[str]:
+    """Where the open ping goes, or None when it must not be sent.
+
+    An enterprise/self-hosted endpoint (CLAWMETRY_ENDPOINT or the
+    `endpoint` key in config.json) means the deployment's data stays
+    inside the deployment — we skip the ping entirely rather than
+    redirect it at someone's private server."""
+    override = os.environ.get("CLAWMETRY_DESKTOP_PING_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    custom = (
+        os.environ.get("CLAWMETRY_ENDPOINT", "").strip()
+        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
+        or str(cfg.get("endpoint") or "").strip()
+    )
+    if custom:
+        return None
+    return DEFAULT_APP_BASE
+
+
+def _install_id() -> str:
+    """Read (or create) ~/.clawmetry/install_id — the same identity the
+    pip CLI's first-run ping uses, so a desktop open and a CLI install
+    are the same install, not two."""
+    try:
+        if INSTALL_ID_FILE.exists():
+            txt = INSTALL_ID_FILE.read_text(encoding="utf-8").strip()
+            if 16 < len(txt) <= 64 and all(c in "0123456789abcdef-" for c in txt):
+                return txt
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        import uuid
+
+        new = str(uuid.uuid4())
+        INSTALL_ID_FILE.write_text(new + "\n", encoding="utf-8")
+        return new
+    except Exception:
+        return ""
+
+
+def _bump_open_state(session_id: str) -> dict:
+    """Increment the local open counter and return the new state.
+
+    Kept on disk (not derived server-side) so opens that happen offline
+    still show up in the count on the next successful ping."""
+    state = {}
+    try:
+        state = json.loads(OPEN_STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    now = time.time()
+    count = int(state.get("open_count") or 0) + 1
+    state = {
+        "open_count": count,
+        "first_open_ts": float(state.get("first_open_ts") or now),
+        "last_open_ts": now,
+        "session_id": session_id,
+    }
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        OPEN_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+    return state
+
+
+def _sync_mode(cfg: dict) -> str:
+    """cloud | local | selfhosted | unknown — how this install is wired.
+
+    `local` is the `clawmetry disconnect` / nocloud state: the daemon
+    runs and stores everything on the machine, nothing leaves it."""
+    if (
+        os.environ.get("CLAWMETRY_ENDPOINT", "").strip()
+        or str(cfg.get("endpoint") or "").strip()
+    ):
+        return "selfhosted"
+    try:
+        if NOCLOUD_MARKER.exists():
+            return "local"
+    except OSError:
+        pass
+    if cfg.get("local_only"):
+        return "local"
+    if str(cfg.get("api_key") or "").startswith("cm_"):
+        return "cloud"
+    return "unknown"
+
+
+def _post_open_ping(payload: dict, base: str, api_key: str) -> None:
+    """Fire-and-forget POST. Every failure is swallowed — a launch must
+    never be slowed, blocked, or made to look broken by telemetry."""
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"clawmetry-desktop/{payload.get('desktop_version', '?')}",
+        }
+        if api_key.startswith("cm_"):
+            # Attribution only: lets the account page show this machine
+            # under "Desktop apps". Anonymous when the app isn't paired.
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(
+            base + "/api/desktop/open",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers=headers,
+        )
+        # A frozen bundle cannot verify public certs with the default
+        # context: OpenSSL looks for a trust store at build-machine paths
+        # that do not exist inside the .app/.exe, so every HTTPS call
+        # dies with CERTIFICATE_VERIFY_FAILED. That is what broke the
+        # onboarding "Send code" button on 2026-08-12, and the ladder
+        # built for it (OS trust store, then bundled certifi, then the
+        # default) is reused here rather than rediscovered. Without it
+        # the shell-stage ping fails silently in exactly the builds it
+        # exists to report on.
+        ctx = onboarding._ssl_context() if base.lower().startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=OPEN_PING_TIMEOUT_SECS, context=ctx) as r:
+            r.read()
+    except Exception:
+        pass
+
+
+def open_ping_state(session_id: str, attached: bool = False) -> dict:
+    """Bump the counter, ping in the background, hand the state back to
+    the caller so the daemon child can inherit the same session/count.
+
+    `attached` marks a window that joined a daemon another instance
+    already owns; those launches never spawn a daemon, so the server
+    must not score them as a failed startup."""
+    state = _bump_open_state(session_id)
+    if _telemetry_optout():
+        return state
+    cfg = _read_config()
+    base = _app_base(cfg)
+    if not base:
+        return state
+    install_id = _install_id()
+    if not install_id:
+        return state
+    payload = {
+        "install_id": install_id,
+        "event": "desktop_open",
+        "stage": "shell",
+        "session_id": session_id,
+        "open_count": state["open_count"],
+        "first_open": state["open_count"] == 1,
+        "days_since_first_open": round(
+            max(0.0, state["last_open_ts"] - state["first_open_ts"]) / 86400.0, 2
+        ),
+        "desktop_version": _desktop_version(),
+        "os": platform.system() or "unknown",
+        "os_version": platform.release() or "",
+        "arch": platform.machine() or "",
+        "mode": _sync_mode(cfg),
+        "attached": bool(attached),
+    }
+    threading.Thread(
+        target=_post_open_ping,
+        args=(payload, base, str(cfg.get("api_key") or "")),
+        daemon=True,
+        name="clawmetry-desktop-open-ping",
+    ).start()
+    return state
+
+
 def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
@@ -1485,6 +1713,25 @@ def main() -> int:
 
     runtime = _runtime_dir()
     existing = _check_existing_instance(runtime)
+
+    # Count and report this launch before anything can fail. Every path
+    # below (attach, orphan-kill, cold boot) is a user opening the app,
+    # so the ping fires first and carries whether this window attached to
+    # an already-running daemon — otherwise a second window would look
+    # like an open whose daemon never came up.
+    import uuid as _uuid
+
+    _session_id = str(_uuid.uuid4())
+    _open_state = open_ping_state(
+        _session_id, attached=bool(existing and existing[0] == "attach")
+    )
+    # Inherited by the daemon child (start_daemon copies os.environ), which
+    # fires the enriched `desktop_ready` ping under the same session_id.
+    os.environ["CLAWMETRY_LAUNCHER"] = "desktop"
+    os.environ["CLAWMETRY_DESKTOP_VERSION"] = _desktop_version()
+    os.environ["CLAWMETRY_DESKTOP_SESSION"] = _session_id
+    os.environ["CLAWMETRY_DESKTOP_OPEN_COUNT"] = str(_open_state.get("open_count", 0))
+
     if existing and existing[0] == "attach":
         # Another instance owns the daemon — open a window onto it and
         # get out of the way. No supervisor, no watcher, and closing
