@@ -65,11 +65,12 @@ jobs:
           COMMIT_SHA = os.environ["COMMIT_SHA"].strip()
           REPO = os.environ["REPO"]
           POLL_INTERVAL = 30   # seconds between checks
-          MAX_WAIT = 900       # 15 minutes -- oss-golden-path runs for up to
-                               # 12 min on cold runners (4.5 min Playwright
-                               # download + C1 9-tab sweep + C5 33-tab sweep).
-                               # The prior 8-min limit timed out before the
-                               # slowest underlying check could complete.
+          MAX_WAIT = 1500      # 25 minutes -- MOAT Keystone (13-endpoint bar)
+                               # takes 16-20 min on cold runners; oss-golden-path
+                               # takes up to 12 min (4.5 min Playwright download
+                               # + C1 9-tab sweep + C5 33-tab sweep). The prior
+                               # 15-min limit timed out before MOAT Keystone
+                               # could complete.
 
           # Keep in sync with REQUIRED_CHECKS in
           # scripts/apply_required_status_checks.py and c6-schedule-heal.yml.

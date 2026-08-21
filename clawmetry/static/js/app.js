@@ -18326,7 +18326,14 @@ async function loadTranscripts() {
         window._cmEvalScoresByRow = _byId;
       } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
     }
-    var data = await fetch('/api/transcripts').then(r => r.json());
+    // Scope the request to the active runtime so its 50-row cap belongs to
+    // that runtime alone. Unscoped, a 20-runtime box shares one global cap
+    // and a filtered Sessions tab renders 2-3 rows and looks empty.
+    var _rtFilter = '';
+    try { _rtFilter = (_cmRuntimeFilter && _cmRuntimeFilter()) || ''; } catch (_e) {}
+    var _tUrl = '/api/transcripts' +
+      (_rtFilter && _rtFilter !== 'all' ? '?runtime=' + encodeURIComponent(_rtFilter) : '');
+    var data = await fetch(_tUrl).then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
     // daemon shipped one in the snapshot), with the full session id demoted

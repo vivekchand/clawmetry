@@ -4268,9 +4268,22 @@ _TRANSCRIPT_LIST_LIMIT = 50
 _TRANSCRIPT_LIST_SCAN_LIMIT = 400
 
 
-def _try_local_store_transcripts():
+def _sid_runtime(sid: str) -> str:
+    """Runtime key for a session id: the ``<runtime>:`` prefix, else openclaw
+    (native OpenClaw sessions are bare UUIDs)."""
+    return sid.split(":", 1)[0] if ":" in sid else "openclaw"
+
+
+def _try_local_store_transcripts(runtime: str = ""):
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
+
+    ``runtime``: optional runtime key (``claude_code``, ``codex``, …,
+    ``openclaw``). When set, only that runtime's sessions fill the list.
+    Without it, the 50-row cap is shared across every runtime on the box —
+    on a many-runtime install the Sessions tab filtered to one runtime
+    showed only the 2-3 of its sessions that made the global top-50 and
+    looked near-empty (the rest existed but never left the store).
 
     Issue #1088: routes through the daemon HTTP proxy first (cross-process
     safe), with a direct ``get_store()`` fallback for single-process boots.
@@ -4301,6 +4314,8 @@ def _try_local_store_transcripts():
         # (clawmetry-fix / clawmetry-selfevolve / clawmetry-mem-probe …) so
         # our plumbing doesn't mix with the user's agent activity.
         if hide_clawmetry_session(sid):
+            continue
+        if runtime and _sid_runtime(sid) != runtime:
             continue
         # Coerce ts (ISO string) to ms-since-epoch for parity with the
         # legacy ``int(os.path.getmtime(fpath) * 1000)`` shape.
@@ -4361,6 +4376,59 @@ def _try_local_store_transcripts():
         })
         if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
             break
+    if runtime and len(transcripts) < _TRANSCRIPT_LIST_LIMIT:
+        # Event-light runtimes (e.g. Grok renders only model_change/error
+        # rows into the events table) aggregate to message_count 0 above and
+        # get ghost-filtered, leaving their filtered Sessions tab empty even
+        # though the typed ``sessions`` table knows the real turn counts the
+        # family adapter reported. Backfill from that table for the filtered
+        # runtime only — unfiltered behavior is unchanged.
+        have = {t["id"] for t in transcripts}
+        try:
+            rows2 = _ls_call("query_sessions_table", limit=500) or []
+        except Exception:
+            rows2 = []
+        for r in rows2:
+            sid = r.get("session_id") or ""
+            if (not sid or sid in have or _sid_runtime(sid) != runtime
+                    or hide_clawmetry_session(sid)):
+                continue
+            mc = int(r.get("message_count") or 0)
+            if mc <= 0:
+                continue
+            def _ms(v):
+                if not v:
+                    return 0
+                # Adapters persist either ISO strings or epoch numbers
+                # (grok stores epoch-ms) — accept both.
+                if isinstance(v, (int, float)):
+                    return int(v if v > 1e12 else v * 1000)
+                try:
+                    return int(datetime.fromisoformat(
+                        str(v).replace("Z", "+00:00")).timestamp() * 1000)
+                except Exception:
+                    try:
+                        f = float(v)
+                        return int(f if f > 1e12 else f * 1000)
+                    except Exception:
+                        return 0
+            _started = _ms(r.get("started_at"))
+            transcripts.append({
+                "id": sid,
+                "title": (r.get("title") or "").strip(),
+                "name": sid[:40],
+                "messages": mc,
+                "size": 0,
+                # last-activity: not every adapter persists updated_at —
+                # fall through so the list never renders "never" for a
+                # session that plainly has a start time.
+                "modified": (_ms(r.get("updated_at"))
+                             or _ms(r.get("ended_at")) or _started),
+                "started": _started,
+            })
+            if len(transcripts) >= _TRANSCRIPT_LIST_LIMIT:
+                break
+        transcripts.sort(key=lambda t: t.get("modified") or 0, reverse=True)
     _fill_family_titles(transcripts)
     _fill_attention(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
@@ -4378,7 +4446,7 @@ def _fill_attention(transcripts):
     which is the correct quiet default. Never fails the request.
     """
     try:
-        rows = _ls_call("query_sessions_table", limit=300) or []
+        rows = _ls_call("query_sessions_table", limit=500) or []
     except Exception:
         return
     state = {}
@@ -4422,7 +4490,7 @@ def _fill_family_titles(transcripts):
             return
         stored = {}
         try:
-            for r in (_ls_call("query_sessions_table", limit=200) or []):
+            for r in (_ls_call("query_sessions_table", limit=500) or []):
                 sid = r.get("session_id") or ""
                 title = (r.get("title") or "").strip()
                 if sid and title and not _st.looks_like_session_id(title, sid):
@@ -4444,14 +4512,27 @@ def _fill_family_titles(transcripts):
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
-    """List available session transcript .jsonl files."""
+    """List available session transcript .jsonl files.
+
+    ``?runtime=<key>`` scopes the list (and its 50-row cap) to one runtime,
+    matching the dashboard's runtime switcher.
+    """
     import dashboard as _d
+
+    runtime = (request.args.get("runtime") or "").strip()
+    if runtime == "all":
+        runtime = ""
 
     # Epic #964 — opt-in DuckDB fast path.
     if is_local_store_read_enabled():
-        fast = _try_local_store_transcripts()
+        fast = _try_local_store_transcripts(runtime=runtime)
         if fast is not None:
             return jsonify(fast)
+
+    # Legacy filesystem fallback lists native OpenClaw JSONLs only; any other
+    # runtime filter has no files here by definition.
+    if runtime and runtime != "openclaw":
+        return jsonify({"transcripts": []})
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
