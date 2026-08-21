@@ -35,6 +35,7 @@ EXPECTED_PAID_RUNTIMES = frozenset({
     "exo",
     "kimi",
     "devin",
+    "gemini_cli",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 

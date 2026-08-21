@@ -5039,7 +5039,7 @@ var _Q_RUNTIME_NAMES = {
   nemoclaw: 'NemoClaw', grok: 'Grok', pi: 'Pi', deepagents: 'DeepAgents',
   qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
   kimi: 'Kimi CLI',
-  devin: 'Devin'
+  devin: 'Devin', gemini_cli: 'Gemini CLI'
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -11225,7 +11225,7 @@ var _CM_RT_LABEL = {
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
   copilot: 'GitHub Copilot', grok: 'Grok', qm: 'QM',
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
-  devin: 'Devin'
+  devin: 'Devin', gemini_cli: 'Gemini CLI'
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11236,7 +11236,7 @@ var _CM_RT_PREFIXES = {
   cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
   n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
   kimi: 1,
-  devin: 1
+  devin: 1, gemini_cli: 1
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -11375,6 +11375,9 @@ var _CM_RT_CAPS = {
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Gemini CLI records a per-turn token split AND the model id, plus
+  // nested chats/<parentSessionId>/ transcripts for agent-tool children.
+  gemini_cli: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   // Devin CLI: tokens + ACUs per message, but no subagent lineage in the
   // local store, so no SUBAGENTS panel rather than an empty one.
   devin: ['SESSIONS','EVENTS','COST'],
@@ -22074,6 +22077,7 @@ var _RT_FLOW = {
   exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
   kimi: { label:'Kimi CLI', src:['⌨️','Terminal'], accent:'#0f172a', stroke:'#334155', tools:[['⚡','Shell'],['📖','ReadFile'],['📝','WriteFile'],['🔍','Grep']] },
   devin: { label:'Devin', src:['⌨️','Terminal'], accent:'#5b8def', stroke:'#3f6fd1', tools:[['⚡','Shell'],['📖','Read'],['📝','Edit'],['✅','Todo']] },
+  gemini_cli: { label:'Gemini CLI', src:['⌨️','Terminal'], accent:'#4285f4', stroke:'#1a73e8', tools:[['⚡','Shell'],['📖','ReadFile'],['📁','ReadFolder'],['🔍','SearchText']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -28003,6 +28007,7 @@ function _cmRuntimeIcon(id) {
     n8n: '🅽', grok: '🅶', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
     kimi: '🌙',
     devin: '🅓',
+    gemini_cli: '♊',
   };
   return map[id] || '•';
 }

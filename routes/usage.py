@@ -61,6 +61,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "exo",
     "kimi",
     "devin",
+    "gemini_cli",
 ))
 
 def _event_runtime(ev) -> str:
@@ -926,6 +927,7 @@ _RUNTIME_PREFIXES = frozenset({
     "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
     "kimi",
     "devin",
+    "gemini_cli",
 })
 
 

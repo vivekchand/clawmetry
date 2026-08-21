@@ -6888,6 +6888,7 @@ _LITE_RT_LABELS = {
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
     "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
+    "gemini_cli": "Gemini CLI",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -6898,6 +6899,25 @@ _LITE_RT_LABELS = {
 # node). We attach last_active + status so the Fleet can render honestly.
 _RT_ACTIVE_SECS = 7 * 86400     # used within a week -> active
 _RT_IDLE_SECS = 30 * 86400      # used within a month -> idle
+
+
+def _gemini_cli_store_paths() -> list:
+    """Gemini CLI session store: the per-project chat-recording tree.
+
+    ``CLAWMETRY_GEMINI_CLI_HOME`` points straight AT a ``.gemini`` dir;
+    ``GEMINI_CLI_HOME`` (the CLI's own override) names the dir that CONTAINS
+    it, so the leaf is appended. Only ``tmp`` is listed, never the ``.gemini``
+    root — Antigravity keeps its own trees beside it (antigravity-cli, jetski)
+    and pointing at the root would let one runtime claim the other's data.
+    """
+    direct = os.environ.get("CLAWMETRY_GEMINI_CLI_HOME", "").strip()
+    if direct:
+        roots = [os.path.expanduser(direct)]
+    else:
+        cli_home = os.environ.get("GEMINI_CLI_HOME", "").strip()
+        base = os.path.expanduser(cli_home) if cli_home else os.path.expanduser("~")
+        roots = [os.path.join(base, ".gemini")]
+    return [os.path.join(r, "tmp") for r in roots]
 
 
 def _kimi_store_paths() -> list:
@@ -6969,6 +6989,7 @@ def _runtime_data_paths(rid: str) -> list:
                   if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
             os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
             for ns in ("devin", "cognition", "chisel")],
+        "gemini_cli": _gemini_cli_store_paths(),
     }
     return _M.get(rid, [])
 
@@ -7116,6 +7137,7 @@ def _detect_runtimes_lite() -> list:
                   if os.environ.get("CLAWMETRY_DEVIN_DB", "").strip() else []) + [
             os.path.join(_xdg_data_home(), ns, "cli", "sessions.db")
             for ns in ("devin", "cognition", "chisel")],
+        "gemini_cli": _gemini_cli_store_paths(),
     }
     for rid, paths in _present.items():
         try:
@@ -13049,6 +13071,7 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
     ("clawmetry_pro.adapters.n8n", "N8nAdapter"),
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
+    ("clawmetry_pro.adapters.gemini_cli", "GeminiCliAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
     ("clawmetry_pro.adapters.grok", "GrokAdapter"),
     # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
@@ -14514,6 +14537,7 @@ _RUNTIME_PREFIXES = frozenset({
     "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
     "kimi",
     "devin",
+    "gemini_cli",
 })
 
 
