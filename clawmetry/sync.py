@@ -13017,11 +13017,19 @@ def _build_machine_info():
 # namespaced + tagged with the runtime. To add a runtime: ship its adapter and
 # add a (module, class) row here. Import is per-adapter + defensive so a missing
 # or broken adapter (e.g. an older wheel) never blocks the others.
-# The 12 paid runtime adapters live in the closed-source clawmetry-pro
-# package (moved in Phase 4 of the open-core split). ``_family_adapter_classes()``
+# The paid runtime adapters live in the closed-source clawmetry-pro package
+# (moved in Phase 4 of the open-core split). ``_family_adapter_classes()``
 # below imports them by absolute path; the import gracefully fails when
-# clawmetry-pro is not installed and the daemon proceeds with OpenClaw +
-# NeMo (the Free runtimes) only.
+# clawmetry-pro is not installed and the daemon proceeds with the Free
+# runtimes only.
+#
+# FREE adapters are bundled right here in OSS and carry a ``clawmetry.adapters.*``
+# import path, so `pip install clawmetry` alone observes them -- no account, no
+# licence, no wheel download. Goose (block/goose) is the first: its maintainers
+# will only take a ClawMetry tutorial into their docs if it works without a paid
+# plan, and it is an OSS runtime with no enterprise willingness-to-pay, so the
+# adapter belongs in the open package. See docs/ENTITLEMENTS.md for the rule
+# (open-source runtime -> free adapter; commercial vendor product -> paid).
 _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.picoclaw", "PicoClawAdapter"),
     ("clawmetry_pro.adapters.nanoclaw", "NanoClawAdapter"),
@@ -13030,7 +13038,11 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.codex", "CodexAdapter"),
     ("clawmetry_pro.adapters.cursor", "CursorAdapter"),
     ("clawmetry_pro.adapters.aider", "AiderAdapter"),
-    ("clawmetry_pro.adapters.goose", "GooseAdapter"),
+    # FREE + bundled in OSS (see the note above). A licensed install may also
+    # carry clawmetry-pro's own GooseAdapter; the registry override seam in
+    # dashboard.py keeps whichever registered first, and both read the same
+    # sessions.db, so there is no double-ingest either way.
+    ("clawmetry.adapters.goose", "GooseAdapter"),
     ("clawmetry_pro.adapters.opencode", "OpencodeAdapter"),
     ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
