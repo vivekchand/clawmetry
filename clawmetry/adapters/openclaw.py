@@ -1212,19 +1212,32 @@ def _discover_model_router_port() -> Optional[int]:
     return None
 
 
-def _model_router_health_ok(port: int) -> bool:
-    """True if the model-router ``/health`` endpoint answers 2xx on localhost.
+def _model_router_health_ok(port: int) -> tuple[bool, dict]:
+    """Return ``(running, health)`` for the model-router ``/health`` endpoint.
 
-    Falls back to a raw TCP connect (port accepting connections) when the HTTP
-    probe errors, so a wedged-but-listening router still reads as up. Short
-    timeouts keep detect() fast. Never raises.
+    ``running`` is based on the HTTP status or TCP fallback. ``health`` contains
+    optional healthy and unhealthy endpoint metadata when the JSON response
+    provides it. Never raises.
     """
     try:
         import urllib.request as _u
         req = _u.Request(f"http://127.0.0.1:{port}/health", method="GET")
         with _u.urlopen(req, timeout=0.3) as resp:  # nosec B310 - localhost only
             status = getattr(resp, "status", None) or resp.getcode()
-            return 200 <= int(status) < 300
+            running = 200 <= int(status) < 300
+            health: dict = {}
+            try:
+                body = json.loads(resp.read())
+                if isinstance(body, dict):
+                    healthy = body.get("healthy_endpoints")
+                    unhealthy = body.get("unhealthy_endpoints")
+                    if isinstance(healthy, list):
+                        health["modelRouterHealthyEndpoints"] = healthy
+                    if isinstance(unhealthy, list):
+                        health["modelRouterUnhealthyEndpoints"] = unhealthy
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            return running, health
     except Exception:
         pass
     try:
@@ -1233,9 +1246,9 @@ def _model_router_health_ok(port: int) -> bool:
         s.settimeout(0.2)
         rc = s.connect_ex(("127.0.0.1", port))
         s.close()
-        return rc == 0
+        return rc == 0, {}
     except Exception:
-        return False
+        return False, {}
 
 
 def _model_router_launch_log(tail_lines: int = 50) -> Optional[str]:
@@ -1300,8 +1313,9 @@ def _model_router_live() -> dict:
         if log is not None:
             result["modelRouterLaunchLog"] = log
         return result
-    running = _model_router_health_ok(port)
+    running, health = _model_router_health_ok(port)
     result = {"modelRouterPort": port, "modelRouterRunning": running}
+    result.update(health)
     if not running:
         log = _model_router_launch_log()
         if log is not None:

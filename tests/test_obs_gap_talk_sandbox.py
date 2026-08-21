@@ -165,7 +165,11 @@ def test_model_router_port_supports_equals_form(monkeypatch):
 def test_model_router_live_running_when_health_ok(monkeypatch):
     import clawmetry.adapters.openclaw as oc
     monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49000)
-    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: True)
+    monkeypatch.setattr(
+        oc,
+        "_model_router_health_ok",
+        lambda port: (True, {}),
+    )
     out = oc._model_router_live()
     assert out == {"modelRouterPort": 49000, "modelRouterRunning": True}
 
@@ -175,7 +179,11 @@ def test_model_router_live_crashed_router_is_distinguishable(monkeypatch):
     # crashed/wedged router reads as NOT running, the whole point of #2795.
     import clawmetry.adapters.openclaw as oc
     monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49001)
-    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: False)
+    monkeypatch.setattr(
+        oc,
+        "_model_router_health_ok",
+        lambda port: (False, {}),
+    )
     out = oc._model_router_live()
     assert out == {"modelRouterPort": 49001, "modelRouterRunning": False}
 
@@ -233,7 +241,11 @@ def test_model_router_live_running_omits_launch_log(tmp_path, monkeypatch):
     monkeypatch.setenv("NEMOCLAW_MODEL_ROUTER_LOG", str(log_file))
     import clawmetry.adapters.openclaw as oc
     monkeypatch.setattr(oc, "_discover_model_router_port", lambda: 49000)
-    monkeypatch.setattr(oc, "_model_router_health_ok", lambda port: True)
+    monkeypatch.setattr(
+        oc,
+        "_model_router_health_ok",
+        lambda port: (True, {}),
+    )
     out = oc._model_router_live()
     assert out == {"modelRouterPort": 49000, "modelRouterRunning": True}
     assert "modelRouterLaunchLog" not in out
@@ -260,7 +272,9 @@ def test_model_router_health_ok_probes_real_localhost_server():
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
-        assert _model_router_health_ok(port) is True
+        running, health = _model_router_health_ok(port)
+        assert running is True
+        assert health == {}
     finally:
         srv.shutdown()
 
@@ -268,7 +282,9 @@ def test_model_router_health_ok_probes_real_localhost_server():
 def test_model_router_health_ok_false_when_nothing_listening():
     from clawmetry.adapters.openclaw import _model_router_health_ok
     # Port 0 is never a live listener; probe must fail closed, not raise.
-    assert _model_router_health_ok(0) is False
+    running, health = _model_router_health_ok(0)
+    assert running is False
+    assert health == {}
 
 
 # -- #2960 model-router proxy-config model_list -----------------------------
