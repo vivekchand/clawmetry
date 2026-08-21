@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ٹریس کلسٹرز",
   "usage.trace_clusters_hint": "رویے کے انداز کے مطابق سیشنز کی خودکار گروپ بندی",
   "usage.trend": "رجحان",
-  "version_impact.title": "اپ گریڈ کا اثر"
+  "version_impact.title": "اپ گریڈ کا اثر",
+  "app.approve_for_session": "سیشن کے لیے منظور کریں",
+  "app.always_allow": "ہمیشہ اجازت دیں",
+  "approvals.min_risk_label": "کم از کم خطرے کی سطح",
+  "approvals.min_risk_any": "کوئی بھی (صرف کلیدی الفاظ پر مماثلت)",
+  "approvals.min_risk_medium": "درمیانہ یا اس سے زیادہ",
+  "approvals.min_risk_high": "زیادہ یا اس سے زیادہ",
+  "approvals.min_risk_critical": "صرف نازک",
+  "approvals.min_risk_hint": "ClawMetry ہر ٹول کال کا اسکور بناتا ہے (ری کرسیو ڈیلیٹس، sudo، کریڈینشل تک رسائی وغیرہ)۔ اسے کلیدی الفاظ کے ساتھ یا اُن کے بغیر خطرے کی بنیاد پر فلٹر کرنے کے لیے مقرر کریں۔"
 }

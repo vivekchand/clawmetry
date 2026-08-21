@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Συστάδες ιχνών",
   "usage.trace_clusters_hint": "αυτόματη ομαδοποίηση συνεδριών ανά μοτίβο συμπεριφοράς",
   "usage.trend": "Τάση",
-  "version_impact.title": "Επίπτωση Αναβάθμισης"
+  "version_impact.title": "Επίπτωση Αναβάθμισης",
+  "app.approve_for_session": "Έγκριση για τη συνεδρία",
+  "app.always_allow": "Να επιτρέπεται πάντα",
+  "approvals.min_risk_label": "Ελάχιστο επίπεδο κινδύνου",
+  "approvals.min_risk_any": "Οποιοδήποτε (αντιστοίχιση μόνο με λέξεις κλειδιά)",
+  "approvals.min_risk_medium": "Μεσαίο ή υψηλότερο",
+  "approvals.min_risk_high": "Υψηλό ή υψηλότερο",
+  "approvals.min_risk_critical": "Μόνο κρίσιμο",
+  "approvals.min_risk_hint": "Το ClawMetry βαθμολογεί κάθε κλήση εργαλείου (αναδρομικές διαγραφές, sudo, πρόσβαση σε διαπιστευτήρια...). Ορίστε αυτό για φιλτράρισμα βάσει κινδύνου, με ή χωρίς λέξεις κλειδιά."
 }

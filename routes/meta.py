@@ -313,6 +313,45 @@ def export_otlp_traces():
     )
 
 
+# ── Security contact (RFC 9116) ───────────────────────────────────────────────
+
+
+@bp_version.route("/.well-known/security.txt")
+def security_txt():
+    """Serve the RFC 9116 security contact.
+
+    Served by the dashboard itself, not just the marketing site, so a
+    self-hosted or on-prem instance can also answer "who do I tell?" — which
+    is exactly the deployment where a finder is least likely to know who runs
+    it. Unauthenticated by design: a vulnerability reporter has no credential.
+    """
+    import os
+
+    try:
+        # Resolve through the package rather than relative to this file: in a
+        # wheel `routes/` installs as its own top-level package alongside
+        # `clawmetry/`, so walking up from __file__ happens to work but breaks
+        # the moment routes/ moves.
+        import clawmetry
+
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(clawmetry.__file__)),
+            "static", ".well-known", "security.txt",
+        )
+        with open(path, encoding="utf-8") as fh:
+            body = fh.read()
+    except (OSError, ImportError, AttributeError):
+        # Never 500 on a missing file — fall back to the essentials inline so
+        # the contact is always reachable.
+        body = (
+            "Contact: mailto:security@clawmetry.com\n"
+            "Policy: https://github.com/vivekchand/clawmetry/blob/main/SECURITY.md\n"
+        )
+    resp = make_response(body, 200)
+    resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+    return resp
+
+
 # ── Version check & self-update routes ─────────────────────────────────────────────
 
 
@@ -1031,10 +1070,12 @@ def _anon_forward_cloud(payload: dict) -> None:
     OSS side starts feeding live data without another release.
     """
     try:
-        from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
-        if _is_custom_ep():
-            # Self-hosted / enterprise: anonymous analytics must not leave
-            # the deployment. The local JSONL remains the durable record.
+        # Self-hosted / enterprise / air-gapped: anonymous analytics must not
+        # leave the deployment. The local JSONL remains the durable record.
+        # egress_suppressed() rather than is_custom_endpoint() so SELF_HOSTED=true
+        # and CLAWMETRY_OFFLINE=1 also count, not just a repointed endpoint.
+        from clawmetry.endpoints import egress_suppressed as _egress_suppressed
+        if _egress_suppressed():
             return
         import urllib.request as _ur
         req = _ur.Request(

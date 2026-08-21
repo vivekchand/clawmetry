@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ट्रेस क्लस्टर्स",
   "usage.trace_clusters_hint": "वर्तन पॅटर्ननुसार सत्रे आपोआप गटबद्ध करा",
   "usage.trend": "कल",
-  "version_impact.title": "अपग्रेड परिणाम"
+  "version_impact.title": "अपग्रेड परिणाम",
+  "app.approve_for_session": "सेशनसाठी मंजूर करा",
+  "app.always_allow": "नेहमी अनुमती द्या",
+  "approvals.min_risk_label": "किमान जोखीम पातळी",
+  "approvals.min_risk_any": "कोणतीही (फक्त कीवर्डवर जुळवा)",
+  "approvals.min_risk_medium": "मध्यम किंवा त्यावरील",
+  "approvals.min_risk_high": "उच्च किंवा त्यावरील",
+  "approvals.min_risk_critical": "फक्त गंभीर",
+  "approvals.min_risk_hint": "ClawMetry प्रत्येक टूल कॉलला स्कोअर करते (रिकर्सिव्ह डिलीट, sudo, क्रेडेन्शियल अॅक्सेस...). कीवर्डसह किंवा त्याशिवाय जोखिमेनुसार गेट करण्यासाठी हे सेट करा."
 }

@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ਟ੍ਰੇਸ ਕਲੱਸਟਰ",
   "usage.trace_clusters_hint": "ਵਿਹਾਰ ਪੈਟਰਨ ਅਨੁਸਾਰ ਸੈਸ਼ਨ ਆਪਣੇ-ਆਪ ਗਰੁੱਪ ਕਰੋ",
   "usage.trend": "ਰੁਝਾਨ",
-  "version_impact.title": "ਅੱਪਗ੍ਰੇਡ ਪ੍ਰਭਾਵ"
+  "version_impact.title": "ਅੱਪਗ੍ਰੇਡ ਪ੍ਰਭਾਵ",
+  "app.approve_for_session": "ਸੈਸ਼ਨ ਲਈ ਮਨਜ਼ੂਰ ਕਰੋ",
+  "app.always_allow": "ਹਮੇਸ਼ਾ ਇਜਾਜ਼ਤ ਦਿਓ",
+  "approvals.min_risk_label": "ਘੱਟੋ-ਘੱਟ ਜੋਖਮ ਪੱਧਰ",
+  "approvals.min_risk_any": "ਕੋਈ ਵੀ (ਸਿਰਫ਼ ਕੀਵਰਡਸ 'ਤੇ ਮੇਲ)",
+  "approvals.min_risk_medium": "ਦਰਮਿਆਨਾ ਜਾਂ ਵੱਧ",
+  "approvals.min_risk_high": "ਉੱਚਾ ਜਾਂ ਵੱਧ",
+  "approvals.min_risk_critical": "ਸਿਰਫ਼ ਨਾਜ਼ੁਕ",
+  "approvals.min_risk_hint": "ClawMetry ਹਰ ਟੂਲ ਕਾਲ ਨੂੰ ਸਕੋਰ ਕਰਦਾ ਹੈ (ਰੀਕਰਸਿਵ ਡਿਲੀਟ, sudo, ਕ੍ਰੈਡੈਂਸ਼ੀਅਲ ਐਕਸੈਸ...)। ਕੀਵਰਡਸ ਦੇ ਨਾਲ ਜਾਂ ਬਿਨਾਂ ਜੋਖਮ ਦੇ ਆਧਾਰ 'ਤੇ ਗੇਟ ਕਰਨ ਲਈ ਇਸਨੂੰ ਸੈੱਟ ਕਰੋ।"
 }

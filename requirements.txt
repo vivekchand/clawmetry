@@ -5,7 +5,7 @@ certifi>=2024.2.2  # CA bundle: the trust-store fallback for 3.8/3.9 and for any
 
 # Testing dependencies
 pytest>=9.1.1
-pytest-playwright>=0.8.0
+pytest-playwright>=0.9.0
 requests>=2.34.2
 
 # Optional: enables real-time OTLP metrics from OpenClaw

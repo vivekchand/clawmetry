@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "مجموعات التتبع",
   "usage.trace_clusters_hint": "تجميع الجلسات تلقائيًا حسب نمط السلوك",
   "usage.trend": "الاتجاه",
-  "version_impact.title": "أثر الترقية"
+  "version_impact.title": "أثر الترقية",
+  "app.approve_for_session": "الموافقة لهذه الجلسة",
+  "app.always_allow": "السماح دائمًا",
+  "approvals.min_risk_label": "الحد الأدنى لمستوى الخطورة",
+  "approvals.min_risk_any": "أي مستوى (المطابقة حسب الكلمات المفتاحية فقط)",
+  "approvals.min_risk_medium": "متوسط فأعلى",
+  "approvals.min_risk_high": "مرتفع فأعلى",
+  "approvals.min_risk_critical": "حرج فقط",
+  "approvals.min_risk_hint": "يقيّم ClawMetry مستوى خطورة كل استدعاء أداة (الحذف المتكرر، sudo، الوصول إلى بيانات الاعتماد...). اضبط هذا الخيار للتصفية حسب الخطورة، مع الكلمات المفتاحية أو بدونها."
 }

@@ -1,4 +1,3 @@
-from __future__ import annotations
 import sys
 import os
 from pathlib import Path
@@ -2000,7 +1999,13 @@ def _cmd_disconnect(args) -> None:
         _kill_sync_daemon()  # also kill any bare subprocess daemon
         print("✅  Stopped sync daemon")
 
+    _node_id_dc = ""
     if CONFIG_FILE.exists():
+        try:
+            import json as _json_dc
+            _node_id_dc = _json_dc.loads(CONFIG_FILE.read_text()).get("node_id", "")
+        except Exception:
+            pass
         CONFIG_FILE.unlink()
         print(f"✅  Removed config ({CONFIG_FILE})")
     if STATE_FILE.exists():
@@ -2034,6 +2039,16 @@ def _cmd_disconnect(args) -> None:
     except Exception as _e:
         print(f"⚠️  Could not write opt-out marker: {_e}")
 
+    # Clear the cloud token mirrored into ~/.openclaw/openclaw.json and
+    # the OS-keychain workspace key.  Neither lives under ~/.clawmetry so
+    # they survive a config-delete; explicit cleanup prevents a later
+    # install from silently re-adopting the old identity (founder bug
+    # 2026-08-10: fresh desktop install landed on the dashboard signed-in).
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        print("✅  Removed cloud token from OpenClaw config")
+    if _node_id_dc:
+        delete_workspace_keychain_entry(_node_id_dc)
     print("Disconnected from ClawMetry Cloud.")
 
 
@@ -2453,6 +2468,7 @@ def _cmd_uninstall(args=None) -> None:
 
     # Execute uninstall
     # 0. Purge server-side registration (node_registry + node data)
+    _node_id = ""
     try:
         import json as _json_u
         cfg_path = home / ".clawmetry" / "config.json"
@@ -2715,9 +2731,11 @@ def _cmd_uninstall(args=None) -> None:
     # — a stale token in a file OpenClaw owns. We only remove our own key;
     # the rest of openclaw.json is preserved (or the file is deleted if our
     # key was the only thing in it).
-    _stripped, _oc_json_path = _strip_clawmetry_from_openclaw_json()
-    if _stripped:
-        _say(f"  ✅  Stripped clawmetry section from {_oc_json_path}")
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        _say(f"  ✅  Stripped clawmetry section from ~/.openclaw/openclaw.json")
+    if _node_id:
+        delete_workspace_keychain_entry(_node_id)
 
     # 10. Desktop thin-shell runtime dir (~/Library/Application Support/ClawMetry
     # on macOS, %LOCALAPPDATA%/ClawMetry on Windows, ~/.local/share/ClawMetry
@@ -4681,6 +4699,21 @@ def _unattended_update_target(current: str):
             "Unattended updates disabled "
             "(CLAWMETRY_AUTO_UPDATE kill switch or CI environment)"
         )
+    # A deployment that declared itself private (self-hosted, air-gapped, or
+    # repointed at a customer-run server) must not reach pypi.org. On a network
+    # with no route out the call can only time out; on a monitored one it is
+    # unexplained egress during a security review. Upgrades in these
+    # deployments belong to the operator's change process, not to us.
+    try:
+        from clawmetry.endpoints import egress_suppressed
+        if egress_suppressed():
+            return None, (
+                "Unattended updates disabled (self-hosted / offline deployment "
+                "— upgrade through your own change process)"
+            )
+    except Exception:
+        # Fail closed: no policy module means no unattended network call.
+        return None, "Update policy unavailable; skipping unattended update"
     try:
         req = urllib.request.Request(
             "https://pypi.org/pypi/clawmetry/json",

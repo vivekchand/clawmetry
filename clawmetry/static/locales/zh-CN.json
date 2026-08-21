@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "追踪聚类",
   "usage.trace_clusters_hint": "按行为模式自动分组会话",
   "usage.trend": "趋势",
-  "version_impact.title": "升级影响"
+  "version_impact.title": "升级影响",
+  "app.approve_for_session": "在本次会话中批准",
+  "app.always_allow": "始终允许",
+  "approvals.min_risk_label": "最低风险等级",
+  "approvals.min_risk_any": "任意（仅按关键词匹配）",
+  "approvals.min_risk_medium": "中等及以上",
+  "approvals.min_risk_high": "高及以上",
+  "approvals.min_risk_critical": "仅严重",
+  "approvals.min_risk_hint": "ClawMetry 会对每次工具调用进行风险评分（递归删除、sudo、凭证访问等）。设置此项可按风险等级进行拦截，无论是否配合关键词使用。"
 }

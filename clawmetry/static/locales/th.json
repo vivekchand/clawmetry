@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "กลุ่มเทรซ",
   "usage.trace_clusters_hint": "จัดกลุ่มเซสชันอัตโนมัติตามรูปแบบพฤติกรรม",
   "usage.trend": "แนวโน้ม",
-  "version_impact.title": "ผลกระทบจากการอัปเกรด"
+  "version_impact.title": "ผลกระทบจากการอัปเกรด",
+  "app.approve_for_session": "อนุมัติสำหรับเซสชันนี้",
+  "app.always_allow": "อนุญาตเสมอ",
+  "approvals.min_risk_label": "ระดับความเสี่ยงขั้นต่ำ",
+  "approvals.min_risk_any": "ทั้งหมด (จับคู่ด้วยคีย์เวิร์ดเท่านั้น)",
+  "approvals.min_risk_medium": "ปานกลางขึ้นไป",
+  "approvals.min_risk_high": "สูงขึ้นไป",
+  "approvals.min_risk_critical": "วิกฤตเท่านั้น",
+  "approvals.min_risk_hint": "ClawMetry ให้คะแนนความเสี่ยงของการเรียกใช้เครื่องมือทุกครั้ง (การลบแบบเรียกซ้ำ, sudo, การเข้าถึงข้อมูลรับรอง...) ตั้งค่านี้เพื่อกรองตามความเสี่ยง จะใช้ร่วมกับคีย์เวิร์ดหรือไม่ก็ได้"
 }

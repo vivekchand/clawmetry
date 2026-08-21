@@ -64,6 +64,9 @@ def _config_endpoint() -> str:
     return value
 
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
 def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
@@ -101,6 +104,36 @@ def is_custom_endpoint() -> bool:
     funnel analytics) so a self-hosted deployment's data never leaves it.
     """
     return ingest_url() != DEFAULT_INGEST_URL
+
+
+def egress_suppressed() -> bool:
+    """True when this install must not make discretionary outbound calls.
+
+    "Discretionary" means anything that is not the deployment's own configured
+    ingest endpoint: install telemetry, anonymous funnel analytics, public-IP
+    lookup, update checks. The deliberate, configured push to a self-hosted
+    ingest URL is unaffected — that traffic is the product.
+
+    True when ANY of these hold:
+
+    * ``is_custom_endpoint()`` — traffic is repointed at a customer-run server.
+    * ``SELF_HOSTED`` / ``CLAWMETRY_SELF_HOSTED`` — this process IS the
+      customer's server. Checked separately because a self-hosted server
+      container does not necessarily set ``CLAWMETRY_ENDPOINT`` (it *is* the
+      endpoint), so keying only off the endpoint left the server itself
+      phoning home.
+    * ``CLAWMETRY_OFFLINE`` — explicit air-gapped operation.
+
+    Callers must treat this as binding: check before the call and degrade
+    quietly rather than erroring. Every destination governed by this function
+    is listed in docs/EGRESS.md.
+    """
+    if _env("CLAWMETRY_OFFLINE").lower() in _TRUTHY:
+        return True
+    for name in ("SELF_HOSTED", "CLAWMETRY_SELF_HOSTED"):
+        if _env(name).lower() in _TRUTHY:
+            return True
+    return is_custom_endpoint()
 
 
 def endpoint_hosts() -> set[str]:

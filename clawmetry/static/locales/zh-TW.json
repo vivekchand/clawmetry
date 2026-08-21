@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "追蹤分群",
   "usage.trace_clusters_hint": "依行為模式自動分群工作階段",
   "usage.trend": "趨勢",
-  "version_impact.title": "升級影響"
+  "version_impact.title": "升級影響",
+  "app.approve_for_session": "核准此工作階段",
+  "app.always_allow": "永遠允許",
+  "approvals.min_risk_label": "最低風險等級",
+  "approvals.min_risk_any": "任何等級（僅比對關鍵字）",
+  "approvals.min_risk_medium": "中度以上",
+  "approvals.min_risk_high": "高度以上",
+  "approvals.min_risk_critical": "僅限重大",
+  "approvals.min_risk_hint": "ClawMetry 會為每次工具呼叫評分（遞迴刪除、sudo、憑證存取等）。設定此項即可依風險等級搭配或不搭配關鍵字進行過濾。"
 }

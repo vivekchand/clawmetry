@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ಟ್ರೇಸ್ ಕ್ಲಸ್ಟರ್‌ಗಳು",
   "usage.trace_clusters_hint": "ವರ್ತನೆಯ ಮಾದರಿಯ ಪ್ರಕಾರ ಸೆಷನ್‌ಗಳ ಸ್ವಯಂ ಗುಂಪು",
   "usage.trend": "ಪ್ರವೃತ್ತಿ",
-  "version_impact.title": "ಅಪ್‌ಗ್ರೇಡ್ ಪರಿಣಾಮ"
+  "version_impact.title": "ಅಪ್‌ಗ್ರೇಡ್ ಪರಿಣಾಮ",
+  "app.approve_for_session": "ಸೆಷನ್‌ಗಾಗಿ ಅನುಮೋದಿಸಿ",
+  "app.always_allow": "ಯಾವಾಗಲೂ ಅನುಮತಿಸಿ",
+  "approvals.min_risk_label": "ಕನಿಷ್ಠ ಅಪಾಯದ ಮಟ್ಟ",
+  "approvals.min_risk_any": "ಯಾವುದಾದರೂ (ಕೀವರ್ಡ್‌ಗಳ ಆಧಾರದ ಮೇಲೆ ಮಾತ್ರ ಹೊಂದಾಣಿಕೆ)",
+  "approvals.min_risk_medium": "ಮಧ್ಯಮ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹೆಚ್ಚು",
+  "approvals.min_risk_high": "ಹೆಚ್ಚಿನ ಅಥವಾ ಅದಕ್ಕಿಂತ ಹೆಚ್ಚು",
+  "approvals.min_risk_critical": "ನಿರ್ಣಾಯಕ ಮಾತ್ರ",
+  "approvals.min_risk_hint": "ClawMetry ಪ್ರತಿ ಟೂಲ್ ಕರೆಗೆ ಸ್ಕೋರ್ ನೀಡುತ್ತದೆ (ಪುನರಾವರ್ತಿತ ಡಿಲೀಟ್‌ಗಳು, sudo, ಕ್ರೆಡೆನ್ಷಿಯಲ್ ಪ್ರವೇಶ...). ಕೀವರ್ಡ್‌ಗಳ ಜೊತೆ ಅಥವಾ ಇಲ್ಲದೆ ಅಪಾಯದ ಆಧಾರದ ಮೇಲೆ ಗೇಟ್ ಮಾಡಲು ಇದನ್ನು ಹೊಂದಿಸಿ."
 }
