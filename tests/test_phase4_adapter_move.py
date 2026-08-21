@@ -68,7 +68,7 @@ def test_family_adapter_specs_split_by_tier():
     from clawmetry.entitlements import FREE_RUNTIMES
 
     specs = _s._FAMILY_ADAPTER_SPECS
-    assert len(specs) == 23, f"expected 23 family adapters, got {len(specs)}"
+    assert len(specs) == 24, f"expected 24 family adapters, got {len(specs)}"
 
     free_specs = [s for s in specs if s[0].startswith("clawmetry.adapters.")]
     paid_specs = [s for s in specs if s[0].startswith("clawmetry_pro.adapters.")]

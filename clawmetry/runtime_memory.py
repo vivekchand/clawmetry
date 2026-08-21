@@ -1072,6 +1072,25 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── OpenHands (github.com/OpenHands/OpenHands) ──────────────────
+    # Repo instructions are AGENTS.md (and the legacy .openhands/microagents
+    # tree, which OpenHands still reads). Skills and MCP config live under the
+    # user home; hooks.json is the CLI's hook config.
+    oh_home = _env_root("OPENHANDS_PERSISTENCE_DIR",
+                        os.path.expanduser("~/.openhands"))
+    catalog.append(RuntimeCatalogEntry(
+        id="openhands", label="OpenHands", roots=(
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".openhands", "microagents"),
+                     ("**/*.md",), "Project microagents", "project"),
+            RootSpec("skills", os.path.join(oh_home, "cache", "skills"),
+                     label="Cached skills", scope="global"),
+            RootSpec("hooks", os.path.join(oh_home, "hooks.json"),
+                     label="hooks.json", scope="global"),
+        ),
+    ))
+
     # ── Cline (github.com/cline/cline) ──────────────────────────────
     # Rules are .clinerules -- a FILE or a DIRECTORY of .md files, both
     # supported by Cline -- project-local and global. Workflows live beside
@@ -1473,7 +1492,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 25 runtimes would be a wall of
+    because listing every absent root for 26 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime

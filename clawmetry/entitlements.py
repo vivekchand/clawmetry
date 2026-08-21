@@ -117,6 +117,7 @@ PAID_RUNTIMES = frozenset(
         "devin",
         "gemini_cli",
         "cline",
+        "openhands",
     }
 )
 
@@ -157,6 +158,7 @@ RUNTIME_LABELS = {
     "kimi": "Kimi CLI",
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
+    "openhands": "OpenHands",
     "devin": "Devin",
 }
 
@@ -194,6 +196,7 @@ RUNTIME_LANDING_PATHS = {
     "devin": "/runtimes/devin",
     "gemini_cli": "/runtimes/gemini-cli",
     "cline": "/runtimes/cline",
+    "openhands": "/runtimes/openhands",
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
@@ -309,6 +312,10 @@ RUNTIME_ALIASES = {
     "gemini": "gemini_cli",
     "cline-cli": "cline",
     "clinebot": "cline",
+    # OpenDevin was renamed to OpenHands in 2024; old hook clients still say it.
+    "open-hands": "openhands",
+    "opendevin": "openhands",
+    "open_devin": "openhands",
 }
 
 TIER_LABELS = {

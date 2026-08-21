@@ -76,6 +76,11 @@ def _js_map(var_decl: str) -> set:
 @pytest.mark.parametrize("var_decl,label", [
     ("var _CM_RT_PREFIXES = {", "session-id prefix set"),
     ("var _Q_RUNTIME_NAMES = {", "quality-tab label map"),
+    # _CM_RT_LABEL renders the runtime name in the UI. It was missed twice in a
+    # row (gemini_cli, then openhands) because it shares its trailing line with
+    # _Q_RUNTIME_NAMES, so a search-and-replace lands on whichever comes first
+    # and the other silently keeps rendering a raw slug.
+    ("var _CM_RT_LABEL = {", "runtime label map"),
 ])
 def test_js_runtime_map_covers_every_catalogue_runtime(var_decl, label):
     missing = sorted(_expected() - _js_map(var_decl))

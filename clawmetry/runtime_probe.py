@@ -125,6 +125,14 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("cline", "Cline",
                  ("~/.cline/data/db/sessions.db", "~/.cline/data/sessions"),
                  env="CLAWMETRY_CLINE_DATA_DIR"),
+    # OpenHands persists one directory per conversation. The probe requires the
+    # conversations dir rather than the ~/.openhands root, because the CLI
+    # creates ~/.openhands/profiles and ~/.openhands/cache on first launch even
+    # when the persistence dir points elsewhere -- so the root existing is not
+    # evidence that any conversation was ever recorded.
+    RuntimeProbe("openhands", "OpenHands",
+                 ("~/.openhands/conversations/*/base_state.json",),
+                 env="CLAWMETRY_OPENHANDS_HOME"),
     # qm (github.com/yc-software/qm) has no on-disk session store — it's a
     # Node service backed by Postgres — so the probe looks for the npm
     # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME

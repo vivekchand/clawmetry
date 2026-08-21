@@ -6890,6 +6890,7 @@ _LITE_RT_LABELS = {
     "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
+    "openhands": "OpenHands",
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -13074,6 +13075,7 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.antigravity", "AntigravityAdapter"),
     ("clawmetry_pro.adapters.gemini_cli", "GeminiCliAdapter"),
     ("clawmetry_pro.adapters.cline", "ClineAdapter"),
+    ("clawmetry_pro.adapters.openhands", "OpenHandsAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
     ("clawmetry_pro.adapters.grok", "GrokAdapter"),
     # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
@@ -14541,6 +14543,7 @@ _RUNTIME_PREFIXES = frozenset({
     "devin",
     "gemini_cli",
     "cline",
+    "openhands",
 })
 
 
