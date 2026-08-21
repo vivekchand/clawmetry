@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "ట్రేస్ క్లస్టర్‌లు",
   "usage.trace_clusters_hint": "ప్రవర్తన నమూనా ప్రకారం సెషన్‌లను స్వయంచాలకంగా సమూహపరచు",
   "usage.trend": "ట్రెండ్",
-  "version_impact.title": "అప్‌గ్రేడ్ ప్రభావం"
+  "version_impact.title": "అప్‌గ్రేడ్ ప్రభావం",
+  "app.approve_for_session": "సెషన్ కోసం ఆమోదించండి",
+  "app.always_allow": "ఎల్లప్పుడూ అనుమతించండి",
+  "approvals.min_risk_label": "కనీస రిస్క్ స్థాయి",
+  "approvals.min_risk_any": "ఏదైనా (కీవర్డ్‌ల ఆధారంగా మాత్రమే సరిపోల్చండి)",
+  "approvals.min_risk_medium": "మధ్యస్థం లేదా అంతకంటే ఎక్కువ",
+  "approvals.min_risk_high": "అధికం లేదా అంతకంటే ఎక్కువ",
+  "approvals.min_risk_critical": "క్రిటికల్ మాత్రమే",
+  "approvals.min_risk_hint": "ClawMetry ప్రతి టూల్ కాల్‌కు స్కోర్ ఇస్తుంది (రికర్సివ్ డిలీట్‌లు, sudo, క్రెడెన్షియల్ యాక్సెస్ వంటివి). కీవర్డ్‌లతో లేదా వాటి లేకుండా రిస్క్ ఆధారంగా గేట్ చేయడానికి దీన్ని సెట్ చేయండి."
 }

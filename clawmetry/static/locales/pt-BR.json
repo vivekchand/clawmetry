@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Clusters de traces",
   "usage.trace_clusters_hint": "agrupar sessões automaticamente por padrão de comportamento",
   "usage.trend": "Tendência",
-  "version_impact.title": "Impacto da Atualização"
+  "version_impact.title": "Impacto da Atualização",
+  "app.approve_for_session": "Aprovar para a sessão",
+  "app.always_allow": "Sempre permitir",
+  "approvals.min_risk_label": "Nível mínimo de risco",
+  "approvals.min_risk_any": "Qualquer (buscar apenas por palavras-chave)",
+  "approvals.min_risk_medium": "Médio ou acima",
+  "approvals.min_risk_high": "Alto ou acima",
+  "approvals.min_risk_critical": "Somente crítico",
+  "approvals.min_risk_hint": "O ClawMetry pontua cada chamada de ferramenta (exclusões recursivas, sudo, acesso a credenciais...). Defina esta opção para filtrar por risco, com ou sem palavras-chave."
 }

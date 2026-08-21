@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "トレースクラスタ",
   "usage.trace_clusters_hint": "動作パターンでセッションを自動グループ化",
   "usage.trend": "トレンド",
-  "version_impact.title": "アップグレードの影響"
+  "version_impact.title": "アップグレードの影響",
+  "app.approve_for_session": "セッション中は許可",
+  "app.always_allow": "常に許可",
+  "approvals.min_risk_label": "最小リスクレベル",
+  "approvals.min_risk_any": "すべて(キーワードのみで判定)",
+  "approvals.min_risk_medium": "中以上",
+  "approvals.min_risk_high": "高以上",
+  "approvals.min_risk_critical": "重大のみ",
+  "approvals.min_risk_hint": "ClawMetryはすべてのツール呼び出し(再帰的な削除、sudo、認証情報へのアクセスなど)にリスクスコアを付けます。キーワードの有無にかかわらず、リスクで絞り込むにはこの設定を使用してください。"
 }

@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "İzleme Kümeleri",
   "usage.trace_clusters_hint": "oturumları davranış desenine göre otomatik gruplandır",
   "usage.trend": "Eğilim",
-  "version_impact.title": "Yükseltme Etkisi"
+  "version_impact.title": "Yükseltme Etkisi",
+  "app.approve_for_session": "Oturum için onayla",
+  "app.always_allow": "Her zaman izin ver",
+  "approvals.min_risk_label": "Minimum risk seviyesi",
+  "approvals.min_risk_any": "Herhangi biri (yalnızca anahtar kelimelerle eşleştir)",
+  "approvals.min_risk_medium": "Orta ve üzeri",
+  "approvals.min_risk_high": "Yüksek ve üzeri",
+  "approvals.min_risk_critical": "Yalnızca kritik",
+  "approvals.min_risk_hint": "ClawMetry her araç çağrısını puanlar (özyinelemeli silmeler, sudo, kimlik bilgisi erişimi...). Anahtar kelimelerle birlikte veya onlar olmadan riske göre filtrelemek için bunu ayarlayın."
 }

@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Trace-Cluster",
   "usage.trace_clusters_hint": "Sitzungen automatisch nach Verhaltensmuster gruppieren",
   "usage.trend": "Trend",
-  "version_impact.title": "Upgrade-Auswirkung"
+  "version_impact.title": "Upgrade-Auswirkung",
+  "app.approve_for_session": "Für diese Sitzung genehmigen",
+  "app.always_allow": "Immer erlauben",
+  "approvals.min_risk_label": "Mindest-Risikostufe",
+  "approvals.min_risk_any": "Beliebig (nur nach Schlüsselwörtern abgleichen)",
+  "approvals.min_risk_medium": "Mittel oder höher",
+  "approvals.min_risk_high": "Hoch oder höher",
+  "approvals.min_risk_critical": "Nur kritisch",
+  "approvals.min_risk_hint": "ClawMetry bewertet jeden Tool-Aufruf (rekursive Löschungen, sudo, Zugriff auf Zugangsdaten...). Damit lässt sich der Zugriff nach Risikostufe steuern, mit oder ohne Schlüsselwörter."
 }

@@ -1167,5 +1167,13 @@
   "usage.trace_clusters": "Кластери трасування",
   "usage.trace_clusters_hint": "автоматичне групування сесій за моделлю поведінки",
   "usage.trend": "Тенденція",
-  "version_impact.title": "Вплив оновлення"
+  "version_impact.title": "Вплив оновлення",
+  "app.approve_for_session": "Дозволити для сесії",
+  "app.always_allow": "Завжди дозволяти",
+  "approvals.min_risk_label": "Мінімальний рівень ризику",
+  "approvals.min_risk_any": "Будь-який (перевірка лише за ключовими словами)",
+  "approvals.min_risk_medium": "Середній і вище",
+  "approvals.min_risk_high": "Високий і вище",
+  "approvals.min_risk_critical": "Лише критичний",
+  "approvals.min_risk_hint": "ClawMetry оцінює ризик кожного виклику інструменту (рекурсивне видалення, sudo, доступ до облікових даних...). Використовуйте цю настройку, щоб фільтрувати за рівнем ризику, з ключовими словами або без них."
 }
