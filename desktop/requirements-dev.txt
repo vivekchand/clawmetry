@@ -35,7 +35,7 @@ PyGObject==3.56.3; sys_platform == "linux"
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
 # check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
 # kept in-tree only for the day py2app catches up.
-pyinstaller>=6.21.0
+pyinstaller>=6.22.0
 # TLS trust for the frozen shell's outbound HTTPS (onboarding OTP,
 # OAuth exchange). certifi ships Mozilla's CA bundle and is the
 # guaranteed fallback; truststore hooks the OS-native trust store
