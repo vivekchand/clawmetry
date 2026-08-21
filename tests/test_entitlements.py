@@ -280,11 +280,12 @@ def test_paid_runtimes_exact_membership(ent):
             "devin",
             "gemini_cli",
             "cline",
+            "openhands",
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 22
-    assert len(ent.ALL_RUNTIMES) == 25
+    assert len(ent.PAID_RUNTIMES) == 23
+    assert len(ent.ALL_RUNTIMES) == 26
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):
