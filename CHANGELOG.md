@@ -1112,6 +1112,14 @@
 
 ## [Unreleased]
 
+### Fix: you can tell which machine is which again (2026-08-22)
+- **Why:** with more than a couple of machines connected, the fleet list stopped being readable. Every card showed an identifier and little else, so working out which physical machine a card meant was guesswork. That matters most in the moment you need it: to read a machine's secret key you have to go to that machine, and nothing on the screen told you which one to go to.
+- **What:** each machine now says what it is. A card reads like "Ubuntu 24.04 - x86_64 - 8 cores - 16 GB" next to the machine's own name, so you can recognise your own laptop, your server and your spare box at a glance. The operating system is named the way you would say it, not as a kernel version, because those are near enough identical on every machine and tell you nothing.
+- **What:** where a runtime runs on several machines, the card now names them instead of only counting them. "6 nodes" became the actual machines, with the rest a click away.
+- **What:** network addresses are deliberately NOT part of this. They stay encrypted on your machine and are shown only on that machine's own page, which already needs its key. What travels is the sort of thing you could read off a sticker on the case, and nothing that says where the machine is or how to reach it.
+- **What:** a machine that cannot report one of these details simply leaves it out. Nothing shows "unknown" or a zero in its place, and a machine still running an older version looks exactly as it did before.
+- **Verified:** in a real browser against a rendered fleet, both that the details appear and that no address does.
+
 ### Fix: set up from the terminal, then asked to set up again in the browser (2026-08-22)
 - **Why:** someone who installed ClawMetry and connected their account from the terminal opened the dashboard and was met by the first-run welcome screen, asked to choose how ClawMetry should run and to sign in a second time. The terminal knew perfectly well who they were: running `clawmetry status` on the same machine printed their account and their plan. Two answers to the same question on one machine, and the wrong one is the one you are looking at.
 - **What:** every way of finishing setup now leaves the same mark. Connecting your account, signing in, running the setup wizard, activating a licence key, or completing setup in the desktop app all record the choice you made, so the browser only ever asks the question when nothing on the machine has answered it. A plain install that has never chosen still sees the welcome screen, which is the whole point of it.
