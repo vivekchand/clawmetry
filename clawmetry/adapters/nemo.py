@@ -1155,12 +1155,14 @@ class NemoClawAdapter(AgentAdapter):
         try:
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
-            rows = store._fetch(
-                "SELECT COUNT(*) FROM events WHERE agent_type = ?",
-                ["nemoclaw"],
-            )
-            if rows:
-                n = int(rows[0][0])
+            # MUST be a query_* shape, not ``_fetch``. Outside the daemon
+            # process this is a ``_ProxyStore``, which refuses private helpers
+            # and returns None, so the raw-SQL form made ``detected`` False on
+            # every standard install (the daemon holds the writer lock) while
+            # logging a warning into ``clawmetry status``. NemoClaw is one of
+            # the two FREE runtimes, so it silently vanished from the runtime
+            # list for anyone not running single-process.
+            n = int(store.query_event_count(runtime="nemoclaw") or 0)
         except Exception as exc:
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
