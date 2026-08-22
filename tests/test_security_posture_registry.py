@@ -333,3 +333,164 @@ def test_route_default_runtime_is_openclaw(client, fake_home, monkeypatch):
     assert r.status_code == 200
     d = r.get_json()
     assert d["runtime"] == "openclaw"
+
+
+# ── cursor + copilot providers ─────────────────────────────────────────────
+# Both runtimes are CLOSED SOURCE, so no check here may FAIL on the strength
+# of a documented setting alone: only filesystem facts earn a fail. The
+# governing near-miss (2026-08-18): a proposed Cline check keyed on
+# `executeAllCommands`, a field that runtime's code never reads, would have
+# failed every clean install. A check that fails on a healthy machine teaches
+# the operator to ignore the grade, which is worse than shipping no check.
+
+
+def _cursor_home(tmp_path, monkeypatch):
+    home = tmp_path / "cursor"
+    home.mkdir()
+    monkeypatch.setenv("CURSOR_HOME", str(home))
+    return home
+
+
+def _copilot_home(tmp_path, monkeypatch):
+    home = tmp_path / "copilot"
+    home.mkdir()
+    monkeypatch.setenv("COPILOT_HOME", str(home))
+    return home
+
+
+def test_cursor_absent_is_not_available(tmp_path, monkeypatch):
+    monkeypatch.setenv("CURSOR_HOME", str(tmp_path / "nope"))
+    assert sp.get_posture("cursor")["status"] == "not_available"
+
+
+def test_copilot_absent_is_not_available(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "nope"))
+    assert sp.get_posture("copilot")["status"] == "not_available"
+
+
+def test_clean_install_never_fails(tmp_path, monkeypatch):
+    """THE rule for both providers: a bare, untouched install produces zero
+    failures. Warnings are fine; a red X on a clean machine is not."""
+    _cursor_home(tmp_path, monkeypatch)
+    _copilot_home(tmp_path, monkeypatch)
+    for rt in ("cursor", "copilot"):
+        d = sp.get_posture(rt)
+        assert d["status"] == "ok", (rt, d)
+        assert d["failed"] == 0, (rt, [c for c in d["checks"] if c["status"] == "fail"])
+
+
+def test_cursor_unmeasurable_auto_run_carries_no_weight(tmp_path, monkeypatch):
+    """Cursor's auto-run level has no documented on-disk key. We report that
+    honestly rather than inventing one, and it must not move the grade."""
+    _cursor_home(tmp_path, monkeypatch)
+    check = _by_id(sp.get_posture("cursor"))["auto_run_level"]
+    assert check["weight"] == 0
+    assert "cannot be verified" in check["detail"]
+
+
+def test_cursor_flags_secret_written_into_mcp_config(tmp_path, monkeypatch):
+    home = _cursor_home(tmp_path, monkeypatch)
+    (home / "mcp.json").write_text(json.dumps({"mcpServers": {
+        "gh": {"env": {"GITHUB_TOKEN": "ghp_realsecretvalue123456"}},
+        "ok": {"env": {"API_KEY": "$FROM_ENV"}},
+    }}))
+    c = _by_id(sp.get_posture("cursor"))["mcp_secrets_inline"]
+    assert c["status"] == "fail"
+    assert "gh.env.GITHUB_TOKEN" in c["detail"]
+    # The $-reference form is a reference, not a secret, and must not be named.
+    assert "ok.env.API_KEY" not in c["detail"]
+
+
+def test_cursor_flags_invisible_unicode_in_rules(tmp_path, monkeypatch):
+    home = _cursor_home(tmp_path, monkeypatch)
+    rules = home / "rules"
+    rules.mkdir()
+    # A Unicode tag character: invisible in every editor, still read by the model.
+    (rules / "team.mdc").write_text("Be helpful.\U000E0041\n")
+    (rules / "clean.mdc").write_text("Be concise.\n")
+    c = _by_id(sp.get_posture("cursor"))["rules_invisible_unicode"]
+    assert c["status"] == "fail"
+    assert "team.mdc" in c["detail"]
+    assert "clean.mdc" not in c["detail"]
+
+
+def test_cursor_hooks_present_passes(tmp_path, monkeypatch):
+    home = _cursor_home(tmp_path, monkeypatch)
+    (home / "hooks.json").write_text(json.dumps(
+        {"hooks": {"beforeShellExecution": [{"command": "numbat"}]}, "version": 1}))
+    assert _by_id(sp.get_posture("cursor"))["pre_exec_hooks"]["status"] == "pass"
+
+
+def test_cursor_empty_hooks_object_warns(tmp_path, monkeypatch):
+    """An empty `hooks: {}` is the shape a reset leaves behind. It reads as
+    configured to a naive check, but nothing inspects anything."""
+    home = _cursor_home(tmp_path, monkeypatch)
+    (home / "hooks.json").write_text(json.dumps({"hooks": {}, "version": 1}))
+    assert _by_id(sp.get_posture("cursor"))["pre_exec_hooks"]["status"] == "warn"
+
+
+def test_cursor_sandbox_never_fails_on_closed_source(tmp_path, monkeypatch):
+    """insecure_none is the documented no-sandbox value, but we cannot read
+    the code that honours it, so it warns and never fails."""
+    home = _cursor_home(tmp_path, monkeypatch)
+    (home / "sandbox.json").write_text(json.dumps({"type": "insecure_none"}))
+    assert _by_id(sp.get_posture("cursor"))["sandbox_mode"]["status"] == "warn"
+
+
+def test_copilot_blanket_write_grant_warns_but_home_wide_fails(tmp_path, monkeypatch):
+    """A standing write grant is documented, not observable, so it warns. A
+    grant over the whole home directory is indefensible whatever the client
+    does with it, so that one fails."""
+    home = _copilot_home(tmp_path, monkeypatch)
+    (home / "permissions-config.json").write_text(json.dumps({"locations": {
+        "/Users/someone/projects/app": {"tool_approvals": [{"kind": "write"}]}}}))
+    assert _by_id(sp.get_posture("copilot"))["blanket_write_grant"]["status"] == "warn"
+
+    (home / "permissions-config.json").write_text(json.dumps({"locations": {
+        os.path.expanduser("~"): {"tool_approvals": [{"kind": "write"}]}}}))
+    c = _by_id(sp.get_posture("copilot"))["blanket_write_grant"]
+    assert c["status"] == "fail"
+
+
+def test_copilot_relative_path_grant_warns(tmp_path, monkeypatch):
+    """Documented footgun: a relative path matches by trailing components, so
+    a grant for `.env` covers a file of that name in any directory."""
+    home = _copilot_home(tmp_path, monkeypatch)
+    (home / "permissions-config.json").write_text(json.dumps({"locations": {
+        "/p": {"tool_approvals": [{"kind": "write", "paths": [".env"]}]}}}))
+    assert _by_id(sp.get_posture("copilot"))["relative_path_grants"]["status"] == "warn"
+
+
+def test_copilot_root_trusted_folder_fails(tmp_path, monkeypatch):
+    home = _copilot_home(tmp_path, monkeypatch)
+    (home / "config.json").write_text(json.dumps({"trustedFolders": ["/"]}))
+    assert _by_id(sp.get_posture("copilot"))["trusted_folders"]["status"] == "fail"
+
+
+def test_copilot_jsonc_config_is_parsed(tmp_path, monkeypatch):
+    """Copilot ships config.json with // comments. A strict json.loads returns
+    None and every downstream check silently reads an empty config."""
+    home = _copilot_home(tmp_path, monkeypatch)
+    (home / "config.json").write_text(
+        "// User settings belong in settings.json.\n"
+        "// This file is managed automatically.\n"
+        '{"trustedFolders": ["/tmp/proj"]}\n')
+    d = sp.get_posture("copilot")
+    assert "config.json" in _by_id(d)["config_found"]["detail"]
+    assert _by_id(d)["trusted_folders"]["status"] == "pass"
+
+
+def test_copilot_allow_all_in_shell_profile_fails(tmp_path, monkeypatch):
+    """Text in a file is a fact, so this one earns a fail. Commented-out lines
+    must not count."""
+    _copilot_home(tmp_path, monkeypatch)
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    (fake_home / ".zshrc").write_text("# COPILOT_ALLOW_ALL=1 was here\nexport PATH=$PATH\n")
+    monkeypatch.setenv("HOME", str(fake_home))
+    assert _by_id(sp.get_posture("copilot"))["allow_all_switch"]["status"] == "pass"
+
+    (fake_home / ".zshrc").write_text("export COPILOT_ALLOW_ALL=1\n")
+    c = _by_id(sp.get_posture("copilot"))["allow_all_switch"]
+    assert c["status"] == "fail"
+    assert ".zshrc" in c["detail"]

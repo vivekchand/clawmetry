@@ -1159,8 +1159,470 @@ def codex_posture() -> dict:
     return _score_envelope(checks, runtime="codex", config_path=config_path)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Cursor provider.
+#
+# GRADING DISCIPLINE (read before adding a check here): Cursor is CLOSED
+# SOURCE. We cannot read the code that consumes any of its settings, so a
+# setting's presence never proves the behaviour is enforced. Checks split
+# into two grades:
+#
+#   FAIL-grade  — a filesystem FACT, where "is it honored?" does not arise:
+#                 a file exists or not, a mode bit, a literal byte in a file.
+#   WARN-grade  — documented or observed-on-disk only. Never fail these.
+#
+# A posture check that fails on a clean install is worse than no check at
+# all: it teaches the operator to ignore the grade. (Near miss, 2026-08-18:
+# a proposed Cline check keyed on ``executeAllCommands``, a field the code
+# never reads, which would have failed every clean install.)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Unicode tag block + zero-width/bidi characters. Tag chars (U+E0000-U+E007F)
+# are invisible in every editor and are the standard carrier for instructions
+# smuggled into an agent rules file.
+_INVISIBLE_RANGES = (
+    (0xE0000, 0xE007F),  # Unicode tag characters
+    (0x200B, 0x200F),    # zero-width space/non-joiner/joiner, LRM/RLM
+    (0x202A, 0x202E),    # bidi embedding/override
+    (0x2060, 0x2064),    # word joiner, invisible operators
+)
+
+_SECRET_KEY_HINT = re.compile(
+    r"(token|api[_-]?key|secret|password|passwd|credential|authorization|bearer)",
+    re.I,
+)
+
+
+def _cursor_home() -> str:
+    return os.environ.get("CURSOR_HOME") or os.path.expanduser("~/.cursor")
+
+
+def _read_json(path: str):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    # Cursor writes JSONC (the CLI's own config.json ships with // comments).
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("//")]
+    try:
+        return json.loads("\n".join(lines))
+    except (ValueError, TypeError):
+        return None
+
+
+def _invisible_hits(text: str) -> int:
+    n = 0
+    for ch in text:
+        cp = ord(ch)
+        for lo, hi in _INVISIBLE_RANGES:
+            if lo <= cp <= hi:
+                n += 1
+                break
+    return n
+
+
+def _looks_like_literal_secret(value) -> bool:
+    """True when a config value carries a secret inline rather than by
+    reference. ``$FOO``/``${FOO}``/``env:FOO`` are references, not secrets."""
+    if not isinstance(value, str) or len(value.strip()) < 8:
+        return False
+    v = value.strip()
+    if v.startswith("$") or v.startswith("env:") or v.startswith("${"):
+        return False
+    return True
+
+
+def cursor_posture() -> dict:
+    """Security posture for Cursor.
+
+    Leans on filesystem facts (hook wiring, secrets written literally into
+    MCP config, invisible Unicode in rules files) because those hold true
+    whatever the closed-source client does with its settings.
+    """
+    home = _cursor_home()
+    cli_cfg = _read_json(os.path.join(home, "cli-config.json"))
+    hooks = _read_json(os.path.join(home, "hooks.json"))
+    mcp = _read_json(os.path.join(home, "mcp.json"))
+    sandbox = _read_json(os.path.join(home, "sandbox.json"))
+
+    found = [
+        name for name, data in (
+            ("cli-config.json", cli_cfg), ("hooks.json", hooks),
+            ("mcp.json", mcp), ("sandbox.json", sandbox),
+        ) if data is not None
+    ]
+    if not os.path.isdir(home):
+        return _not_available("cursor")
+
+    checks: list[dict] = []
+    checks.append(_check(
+        "config_found", "Configuration",
+        "pass" if found else "warn",
+        "Read {} from {}".format(", ".join(found), home) if found
+        else "Cursor directory exists at {} but no readable config files.".format(home),
+        None if found else "Run Cursor once so it writes its configuration.",
+        "low", 20,
+    ))
+
+    # (a) Hook wiring. FAIL-grade: the file either declares a pre-execution
+    # hook or it does not. Nothing about enforcement is assumed.
+    hook_map = (hooks or {}).get("hooks") if isinstance(hooks, dict) else None
+    hook_names = sorted(hook_map) if isinstance(hook_map, dict) else []
+    pre_exec = [h for h in hook_names if h in ("beforeShellExecution", "beforeMCPExecution")]
+    if pre_exec:
+        checks.append(_check(
+            "pre_exec_hooks", "Pre-execution hooks", "pass",
+            "Hooks inspect actions before they run: {}.".format(", ".join(pre_exec)),
+            None, "medium", 15,
+        ))
+    else:
+        checks.append(_check(
+            "pre_exec_hooks", "Pre-execution hooks", "warn",
+            "No beforeShellExecution or beforeMCPExecution hook, so nothing "
+            "inspects a shell command or MCP call before it runs."
+            + ("" if hooks is None else " (hooks.json is present but declares none.)"),
+            "Add a beforeShellExecution hook, or run `clawmetry secure enable` "
+            "to install monitor-only agent-EDR hooks.",
+            "medium", 15,
+        ))
+
+    # (b) Secrets written literally into MCP server config. FAIL-grade: the
+    # bytes are either in the file or they are not.
+    literal_secrets = []
+    servers = (mcp or {}).get("mcpServers") if isinstance(mcp, dict) else None
+    if isinstance(servers, dict):
+        for sname, sconf in servers.items():
+            if not isinstance(sconf, dict):
+                continue
+            for block in ("env", "headers"):
+                blk = sconf.get(block)
+                if not isinstance(blk, dict):
+                    continue
+                for k, v in blk.items():
+                    if _SECRET_KEY_HINT.search(str(k)) and _looks_like_literal_secret(v):
+                        literal_secrets.append("{}.{}.{}".format(sname, block, k))
+    if literal_secrets:
+        checks.append(_check(
+            "mcp_secrets_inline", "Secrets in MCP config", "fail",
+            "Credential values are written directly into mcp.json: {}.".format(
+                ", ".join(literal_secrets[:5])),
+            "Replace the literal values with environment references such as "
+            "\"$MY_TOKEN\" so the secret is not stored in a config file.",
+            "critical", 20,
+        ))
+    else:
+        checks.append(_check(
+            "mcp_secrets_inline", "Secrets in MCP config", "pass",
+            "No credential values written directly into mcp.json."
+            if servers else "No MCP servers configured.",
+            None, "critical", 20,
+        ))
+
+    # (c) Invisible Unicode in rules files. FAIL-grade byte-level fact. One
+    # occurrence is enough: these characters have no legitimate use in a
+    # human-authored rules file.
+    rule_files = []
+    rules_dir = os.path.join(home, "rules")
+    if os.path.isdir(rules_dir):
+        try:
+            rule_files += [
+                os.path.join(rules_dir, f) for f in sorted(os.listdir(rules_dir))
+                if f.endswith((".mdc", ".md"))
+            ]
+        except OSError:
+            pass
+    legacy = os.path.expanduser("~/.cursorrules")
+    if os.path.isfile(legacy):
+        rule_files.append(legacy)
+    tainted = []
+    for rf in rule_files[:200]:
+        try:
+            with open(rf, encoding="utf-8", errors="replace") as fh:
+                hits = _invisible_hits(fh.read())
+        except OSError:
+            continue
+        if hits:
+            tainted.append("{} ({} char{})".format(
+                os.path.basename(rf), hits, "" if hits == 1 else "s"))
+    if tainted:
+        checks.append(_check(
+            "rules_invisible_unicode", "Hidden text in rules", "fail",
+            "Invisible characters found in {}. Text you cannot see in an "
+            "editor is instructing the agent.".format(", ".join(tainted[:5])),
+            "Open the file, strip the invisible characters, and confirm the "
+            "visible text is all the agent is being told.",
+            "critical", 20,
+        ))
+    else:
+        checks.append(_check(
+            "rules_invisible_unicode", "Hidden text in rules", "pass",
+            "No invisible characters in {} rules file(s).".format(len(rule_files))
+            if rule_files else "No rules files found.",
+            None, "critical", 20,
+        ))
+
+    # (d) CLI permission grants.
+    perms = (cli_cfg or {}).get("permissions") if isinstance(cli_cfg, dict) else None
+    allow = [str(r) for r in (perms or {}).get("allow", []) if isinstance(perms, dict)]
+    deny = [str(r) for r in (perms or {}).get("deny", []) if isinstance(perms, dict)]
+    wild = sorted({r for r in allow if r.strip().lower() in _CC_DANGEROUS_ALLOW
+                   or r.strip() in ("Shell(*)", "*")})
+    if wild:
+        checks.append(_check(
+            "cli_wildcard_allow", "Blanket command grants", "warn",
+            "Unrestricted grant(s) in cli-config.json: {}.".format(", ".join(wild)),
+            "Replace blanket grants with scoped rules, e.g. \"Shell(git status)\".",
+            "high", 15,
+        ))
+    elif not deny:
+        checks.append(_check(
+            "cli_wildcard_allow", "Blanket command grants", "warn",
+            "{} allow rule(s) and no deny rules in cli-config.json.".format(len(allow)),
+            "Add deny rules for sensitive paths and destructive commands.",
+            "high", 15,
+        ))
+    else:
+        checks.append(_check(
+            "cli_wildcard_allow", "Blanket command grants", "pass",
+            "{} allow rule(s), {} deny rule(s), no blanket grants.".format(
+                len(allow), len(deny)),
+            None, "high", 15,
+        ))
+
+    # (e) Sandbox. WARN-grade: documented, but we cannot confirm the closed
+    # client applies it, so this never fails.
+    stype = (sandbox or {}).get("type") if isinstance(sandbox, dict) else None
+    if stype == "insecure_none":
+        checks.append(_check(
+            "sandbox_mode", "Sandbox", "warn",
+            "sandbox.json sets type \"insecure_none\", which the documentation "
+            "describes as no sandbox at all.",
+            "Choose a sandbox type other than \"insecure_none\".",
+            "high", 10,
+        ))
+    elif stype:
+        checks.append(_check(
+            "sandbox_mode", "Sandbox", "pass",
+            "sandbox.json sets type \"{}\".".format(stype), None, "high", 10,
+        ))
+    else:
+        checks.append(_check(
+            "sandbox_mode", "Sandbox", "warn",
+            "No sandbox.json, so the sandbox is whatever Cursor defaults to. "
+            "An unset value is unmeasured, not proven safe.",
+            "Write a sandbox.json with an explicit type so the setting is "
+            "pinned rather than inherited.",
+            "high", 10,
+        ))
+
+    # (f) Honest unknown, weight 0. Cursor's auto-run / Run Mode level has no
+    # documented on-disk key: a dump of state.vscdb turned up telemetry flags
+    # only. Saying so beats inventing a key, and weight 0 keeps an unmeasured
+    # thing out of the grade entirely.
+    checks.append(_check(
+        "auto_run_level", "Auto-run level", "pass",
+        "Cursor does not record its auto-run (Run Mode) level anywhere "
+        "ClawMetry can read, so this cannot be verified from disk. Check it "
+        "in Cursor's own settings.",
+        None, "low", 0,
+    ))
+
+    return _score_envelope(checks, runtime="cursor", config_path=home)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GitHub Copilot CLI provider.
+#
+# Same grading discipline as the Cursor provider above: the CLI ships as a
+# closed bundled package, so a grant's presence in the file is a fact but its
+# enforcement is not observable. Blanket grants therefore WARN; only the
+# indefensible cases (trusting "/" or the whole home directory, an
+# allow-everything switch wired into a shell profile) FAIL.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_COPILOT_ALLOW_ALL_RE = re.compile(
+    r"(COPILOT_ALLOW_ALL\s*=\s*[\"']?(1|true|yes)|copilot\b[^\n|;]*--(yolo|allow-all))",
+    re.I,
+)
+
+
+def _copilot_home() -> str:
+    return os.environ.get("COPILOT_HOME") or os.path.expanduser("~/.copilot")
+
+
+def copilot_posture() -> dict:
+    """Security posture for GitHub Copilot CLI."""
+    home = _copilot_home()
+    if not os.path.isdir(home):
+        return _not_available("copilot")
+
+    perms = _read_json(os.path.join(home, "permissions-config.json"))
+    cfg = _read_json(os.path.join(home, "config.json"))
+    settings = _read_json(os.path.join(home, "settings.json"))
+    found = [n for n, d in (("permissions-config.json", perms),
+                            ("config.json", cfg),
+                            ("settings.json", settings)) if d is not None]
+
+    checks: list[dict] = []
+    checks.append(_check(
+        "config_found", "Configuration",
+        "pass" if found else "warn",
+        "Read {} from {}".format(", ".join(found), home) if found
+        else "Copilot directory exists at {} but no readable config.".format(home),
+        None if found else "Run Copilot CLI once so it writes its configuration.",
+        "low", 20,
+    ))
+
+    home_dir = os.path.expanduser("~")
+    locations = (perms or {}).get("locations") if isinstance(perms, dict) else None
+    blanket_write = []
+    indefensible = []
+    relative_grants = []
+    if isinstance(locations, dict):
+        for loc, conf in locations.items():
+            approvals = (conf or {}).get("tool_approvals") if isinstance(conf, dict) else None
+            if not isinstance(approvals, list):
+                continue
+            for ap in approvals:
+                if not isinstance(ap, dict):
+                    continue
+                if ap.get("kind") == "write" and not ap.get("paths"):
+                    # A write grant with no path restriction: every file under
+                    # this location, for every future session.
+                    if str(loc).rstrip("/") in ("", home_dir):
+                        indefensible.append(str(loc))
+                    else:
+                        blanket_write.append(str(loc))
+                for pth in (ap.get("paths") or []):
+                    if isinstance(pth, str) and not pth.startswith("/"):
+                        relative_grants.append("{} -> {}".format(loc, pth))
+
+    if indefensible:
+        checks.append(_check(
+            "blanket_write_grant", "Standing write access", "fail",
+            "An unrestricted write grant covers {}, which is the whole home "
+            "directory or the filesystem root.".format(", ".join(indefensible[:3])),
+            "Revoke the grant and re-approve writes for a specific project "
+            "directory instead.",
+            "critical", 25,
+        ))
+    elif blanket_write:
+        checks.append(_check(
+            "blanket_write_grant", "Standing write access", "warn",
+            "A standing write grant with no path restriction covers {}. Every "
+            "future session can write anywhere under it without asking.".format(
+                ", ".join(blanket_write[:3])),
+            "Remove the {\"kind\": \"write\"} entry so writes are approved per "
+            "file, or scope it with an explicit paths list.",
+            "high", 25,
+        ))
+    else:
+        checks.append(_check(
+            "blanket_write_grant", "Standing write access", "pass",
+            "No unrestricted standing write grants."
+            if locations else "No stored tool approvals.",
+            None, "high", 25,
+        ))
+
+    # Documented footgun: a relative path matches by trailing components, so
+    # a grant for ".env" matches a file named .env in ANY directory.
+    if relative_grants:
+        checks.append(_check(
+            "relative_path_grants", "Relative path grants", "warn",
+            "Grant(s) use a relative path: {}. A relative path matches by "
+            "trailing components, so it applies to a file of that name in any "
+            "directory.".format(", ".join(relative_grants[:3])),
+            "Re-approve using absolute paths.",
+            "medium", 10,
+        ))
+    else:
+        checks.append(_check(
+            "relative_path_grants", "Relative path grants", "pass",
+            "No relative-path grants.", None, "medium", 10,
+        ))
+
+    trusted = (cfg or {}).get("trustedFolders") if isinstance(cfg, dict) else None
+    trusted = [str(t) for t in trusted] if isinstance(trusted, list) else []
+    broad = [t for t in trusted if t.rstrip("/") in ("", home_dir)]
+    if broad:
+        checks.append(_check(
+            "trusted_folders", "Trusted folders", "fail",
+            "Trusted folders include {}, which trusts everything below it.".format(
+                ", ".join(broad)),
+            "Trust individual project directories instead of the home "
+            "directory or the filesystem root.",
+            "critical", 20,
+        ))
+    elif trusted:
+        checks.append(_check(
+            "trusted_folders", "Trusted folders", "pass",
+            "{} project folder(s) trusted, none of them broad.".format(len(trusted)),
+            None, "high", 20,
+        ))
+    else:
+        checks.append(_check(
+            "trusted_folders", "Trusted folders", "pass",
+            "No folders trusted yet.", None, "high", 20,
+        ))
+
+    # Sandbox. WARN-grade: documented as shipping disabled, enforcement not
+    # observable. Copilot's own help text: shell commands run directly on your
+    # machine with the same access your user account has.
+    sbox = (settings or {}).get("sandbox") if isinstance(settings, dict) else None
+    enabled = (sbox or {}).get("enabled") if isinstance(sbox, dict) else None
+    if enabled is True:
+        checks.append(_check(
+            "sandbox_enabled", "Sandbox", "pass",
+            "Sandbox is enabled in settings.json.", None, "high", 15,
+        ))
+    else:
+        checks.append(_check(
+            "sandbox_enabled", "Sandbox", "warn",
+            "Sandbox is not enabled, so shell commands run directly on this "
+            "machine with your user account's access.",
+            "Set sandbox.enabled to true in Copilot's settings.json.",
+            "high", 15,
+        ))
+
+    # Allow-everything switch wired into a shell profile. FAIL-grade: this is
+    # text in a file, not a behaviour we have to trust the client about.
+    rc_hits = []
+    for rc in ("~/.zshrc", "~/.bashrc", "~/.bash_profile", "~/.zprofile", "~/.profile"):
+        path = os.path.expanduser(rc)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if line.lstrip().startswith("#"):
+                        continue
+                    if _COPILOT_ALLOW_ALL_RE.search(line):
+                        rc_hits.append(rc)
+                        break
+        except OSError:
+            continue
+    if rc_hits:
+        checks.append(_check(
+            "allow_all_switch", "Approval bypass in shell profile", "fail",
+            "An allow-everything switch is set in {}, so approvals are "
+            "bypassed for every session started from that shell.".format(
+                ", ".join(rc_hits)),
+            "Remove the setting and approve actions per session instead.",
+            "critical", 10,
+        ))
+    else:
+        checks.append(_check(
+            "allow_all_switch", "Approval bypass in shell profile", "pass",
+            "No allow-everything switch in your shell profiles.",
+            None, "critical", 10,
+        ))
+
+    return _score_envelope(checks, runtime="copilot", config_path=home)
+
+
 # ── built-in provider registration ─────────────────────────────────────────
 
 register_posture_provider("openclaw", openclaw_posture)
 register_posture_provider("claude_code", claude_code_posture)
 register_posture_provider("codex", codex_posture)
+register_posture_provider("cursor", cursor_posture)
+register_posture_provider("copilot", copilot_posture)
