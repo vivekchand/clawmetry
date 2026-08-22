@@ -16272,6 +16272,37 @@ def _backfill_benign_errors_once(store) -> None:
         log.debug("benign-error backfill failed: %s", _e)
 
 
+def _resolve_spending(daily_usage, state_spending):
+    """Pick the today/week/month spend triple from ONE source.
+
+    A real $0.00 is a FACT, not a missing value. The pre-fix expression was
+
+        "today": float(_du.get("todayCost") or _state.get("today") or 0)
+
+    which treats 0.0 as falsy, so a genuinely-idle window silently rendered
+    the stale ``state.json`` number instead of zero. Each key also fell back
+    INDEPENDENTLY, so one payload could carry a live ``week`` beside a stale
+    ``today`` and the cloud hero card showed three numbers from three
+    different eras (reported 2026-08-22: today and month byte-identical,
+    week not).
+
+    ``_build_daily_usage()`` returns {} on failure, so "absent" IS
+    distinguishable from "zero": key on presence, and take the whole triple
+    from one source so the payload is internally consistent. ``source`` is
+    surfaced so the cloud can tell a real $0 from a degraded read.
+    """
+    live = daily_usage or {}
+    stale = state_spending or {}
+    keys = (("today", "todayCost"), ("week", "weekCost"), ("month", "monthCost"))
+    if all(live.get(src_key) is not None for _, src_key in keys):
+        out = {out_key: float(live.get(src_key)) for out_key, src_key in keys}
+        out["source"] = "live"
+        return out
+    out = {out_key: float(stale.get(out_key) or 0) for out_key, _ in keys}
+    out["source"] = "state"
+    return out
+
+
 def _build_daily_usage(days=14):
     """14-day token/cost history for the cloud Cost tab.
 
@@ -19421,11 +19452,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # the real four-figure month — trust-destroying. Computing dailyUsage
     # once here and reusing it bounds the cost.
     _du = _build_daily_usage()
-    spending = {
-        "today": float(_du.get("todayCost") or state.get("spending", {}).get("today") or 0),
-        "week":  float(_du.get("weekCost")  or state.get("spending", {}).get("week")  or 0),
-        "month": float(_du.get("monthCost") or state.get("spending", {}).get("month") or 0),
-    }
+    spending = _resolve_spending(_du, state.get("spending", {}))
 
     # LLM Context Inspector parity (2026-05-23): expose the SAME fields
     # the OSS /api/overview now adds so the Context tab reads one value

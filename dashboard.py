@@ -58,6 +58,7 @@ import time
 import threading
 import select
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from flask import (
     Flask,
     render_template_string,
@@ -899,7 +900,7 @@ def _otel_cost_is_fresh(since_ts: float) -> bool:
     return False
 
 
-def _duckdb_cost_since(since_iso: str) -> float:
+def _duckdb_cost_since(since_iso: str) -> Optional[float]:
     """Sum billable-turn USD over the ``events`` table since ``since_iso``.
 
     Reuses the v3-aware helpers from ``clawmetry.local_store`` so every
@@ -936,7 +937,13 @@ def _duckdb_cost_since(since_iso: str) -> float:
             store = local_store.get_store(read_only=True)
             rows = store.query_aggregates(since=since_iso)
         except Exception:
-            return 0.0
+            # A read that FAILED is not a window that cost $0.00. Returning
+            # 0.0 here made a transient daemon-proxy timeout or writer-lock
+            # contention indistinguishable from a genuinely idle window, and
+            # the caller then published that zero as fact. Signal absence.
+            return None
+    if rows is None:
+        return None
     total = 0.0
     for r in rows or []:
         try:
@@ -996,10 +1003,18 @@ def _get_budget_status():
             duck_daily   = _duckdb_cost_since(daily_iso)
             duck_weekly  = _duckdb_cost_since(weekly_iso)
             duck_monthly = _duckdb_cost_since(monthly_iso)
+            # These are three INDEPENDENT reads. Pre-fix each one degraded to
+            # 0.0 on failure, so a transient timeout on the daily call while
+            # the monthly call succeeded published daily=$0.00 next to a real
+            # month -- a triple mixing fact and failure, flipping back on the
+            # next poll. That is the "numbers change every few seconds" a
+            # customer reported on 2026-08-22. Promote all three or none.
+            _duck = (duck_daily, duck_weekly, duck_monthly)
+            _duck_ok = all(v is not None for v in _duck)
             # Only switch sources when DuckDB has *something* to report.
             # An empty store on a brand-new install should look the same as
             # an empty OTLP buffer (daily_spent=0), not crash the evaluator.
-            if duck_monthly > 0 or duck_weekly > 0 or duck_daily > 0:
+            if _duck_ok and any(v > 0 for v in _duck):
                 daily_spent   = duck_daily
                 weekly_spent  = duck_weekly
                 monthly_spent = duck_monthly
