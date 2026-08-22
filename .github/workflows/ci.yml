@@ -83,8 +83,16 @@ jobs:
 
       - name: Install ruff (fast linter)
         run: pip install ruff
+      # `W503` is a flake8 code that ruff does not implement, so ruff exited
+      # with "invalid value 'W503' for '--ignore <RULE_CODE>'" on every run
+      # since this step was added. `|| true` swallowed the usage error, so the
+      # step reported success while linting exactly nothing. Dropping the
+      # invalid code makes it run; it reports ~143 findings on dashboard.py
+      # (89 E402 from the documented late-import pattern, the rest whitespace
+      # inside the embedded HTML string literals), so it stays advisory rather
+      # than becoming a gate that would fail main on day one.
       - name: Lint (warnings only, don't fail)
-        run: ruff check dashboard.py --select E,W --ignore E501,W503 || true
+        run: ruff check dashboard.py --select E,W --ignore E501,E402 || true
 
       # The advertised runtime count lives in prose across the README, its
       # translations, FLYWHEEL.md, the CLI and the desktop copy, and every one
