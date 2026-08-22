@@ -158,6 +158,15 @@ jobs:
       - name: Guard census (verification surface may not shrink)
         run: python3 -m pytest tests/test_guard_census.py -q
 
+      # Every merge-blocking check must have a path to green WITHOUT privileged
+      # secrets. A gated check that requires one leaves forks, outside
+      # contributors, and everyone with an open PR at credential-rotation time
+      # with no way to go green, and the only escapes are weakening the gate or
+      # normalising red. A job may read a secret if it detects the absence and
+      # still produces a verdict; those are listed explicitly with evidence.
+      - name: Merge gate is reachable without privileged secrets
+        run: python3 -m pytest tests/test_gate_needs_no_secrets.py -q
+
       # Silent-CLI class guard (#3791): rebinding sys.stdout/sys.stderr to a
       # new TextIOWrapper over the same buffer orphans the previous wrapper;
       # its GC finalizer closes the SHARED buffer, and every later print(),

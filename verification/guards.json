@@ -85,6 +85,11 @@
       "path": "scripts/check_action_refs.py",
       "why": "ossf/scorecard-action@v2 does not exist, so the OpenSSF Scorecard job failed at 'Set up job' on every run since it was written. An unresolvable action never executes a step, so the workflow reads as ran-and-failed rather than never-started.",
       "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_gate_needs_no_secrets.py",
+      "why": "A merge-blocking check that REQUIRES a privileged secret leaves forks, outside contributors, and everyone affected by a credential rotation with no path to green. Exceptions are listed with evidence rather than exempted wholesale.",
+      "min_bytes": 4000
     }
   ],
   "ratchets": {
