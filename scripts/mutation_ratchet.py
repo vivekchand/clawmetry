@@ -204,6 +204,19 @@ def run_target(target: dict, limit: int, timeout: int, verbose: bool = False) ->
         _build_sandbox(tmp_root)
         sandbox_path = os.path.join(tmp_root, target["module"])
 
+        # Sanity check the sandbox BEFORE measuring anything. If the unmutated
+        # suite does not pass here, every mutant would also "fail" and be
+        # counted as killed, producing a triumphant 100% that means nothing.
+        # A silently meaningless ratchet is worse than no ratchet, because it
+        # reports success while enforcing nothing.
+        if not _run_tests(target["test_command"], tmp_root, timeout):
+            raise RuntimeError(
+                f"Baseline suite for {target['module']} FAILS in the mutation "
+                "sandbox before any mutation is applied. Every mutant would be "
+                "scored as killed, so the result would be a meaningless 100%. "
+                "Check that _SANDBOX_TREES copies everything the tests need."
+            )
+
         tree = ast.parse(original)
         total_possible = _count_mutations(tree)
         indices = list(range(total_possible))[:limit]
