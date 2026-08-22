@@ -109,7 +109,22 @@ def _live_ratchets() -> dict:
     ) as fh:
         mutation_config = json.load(fh)
 
+    import importlib.util
+
+    ac_spec = importlib.util.spec_from_file_location(
+        "check_ac_coverage",
+        os.path.join(REPO_ROOT, "scripts", "check_ac_coverage.py"),
+    )
+    ac_gate = importlib.util.module_from_spec(ac_spec)
+    ac_spec.loader.exec_module(ac_gate)
+    ac_declared, _ac_mentioned = ac_gate.scan_tests()
+    ac_manifest = ac_gate.load_manifest()
+    ac_covered = sum(
+        1 for c in ac_manifest["criteria"] if c["id"] in ac_declared
+    )
+
     return {
+        "acceptance_criteria_covered": ac_covered,
         "e2e_gate_required_specs": len(e2e_gate.REQUIRED_SPECS),
         "pip_install_matrix_legs": pip_spec.min_count if pip_spec else 0,
         "workflow_files_parsed": len(workflows),

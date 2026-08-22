@@ -85,6 +85,11 @@
       "path": "scripts/check_action_refs.py",
       "why": "ossf/scorecard-action@v2 does not exist, so the OpenSSF Scorecard job failed at 'Set up job' on every run since it was written. An unresolvable action never executes a step, so the workflow reads as ran-and-failed rather than never-started.",
       "min_bytes": 3000
+    },
+    {
+      "path": "scripts/check_ac_coverage.py",
+      "why": "AC-OBS-CEA-001.2 forbade a $0.00 cost window before #5079 shipped one; the criterion existed and nothing could fail on it. This file is what makes an acceptance criterion failable.",
+      "min_bytes": 5000
     }
   ],
   "ratchets": {
@@ -111,6 +116,10 @@
     "mutation_targets": {
       "value": 2,
       "why": "Modules under mutation testing. Dropping a target removes the only measurement that can see a weakened assertion."
+    },
+    "acceptance_criteria_covered": {
+      "value": 9,
+      "why": "Acceptance criteria (of 77) declared by at least one test. Was 0 across 964 test files. A criterion no test references is prose, not a guard: that is how #5079 shipped a $0.00 cost window that AC-OBS-CEA-001.2 had forbidden for months."
     }
   }
 }
