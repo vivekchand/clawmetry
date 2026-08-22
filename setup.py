@@ -41,7 +41,23 @@ setup(
     # existing import-paths keep working. routes/ and helpers/ are top-level
     # packages it imports at module load; they must ship in the wheel.
     py_modules=["dashboard"],
-    packages=find_packages() + ["routes", "helpers"],
+    # The repo's own test suite is EXCLUDED from the distribution. It was 39%
+    # of the wheel (11.3 MB uncompressed, 958 of 1299 entries in 0.12.756) that
+    # every `pip install clawmetry` downloaded and unpacked, and nothing in the
+    # shipped code imports it.
+    #
+    # It was also a correctness problem, which is the part that actually
+    # matters. Several suites resolve repo-relative paths -- `verification/`,
+    # `scripts/`, `.github/workflows/` -- that are deliberately NOT packaged.
+    # Shipped inside a wheel those tests cannot pass no matter what a user
+    # does, and a check with no path to green is a trap: it teaches people that
+    # red is normal, or invites someone to weaken the assertion instead.
+    # The compliant fix is to stop shipping them, not to loosen them.
+    #
+    # CI is unaffected: the eval gate installs with `pip install -e .` and
+    # reads `tests/...` from the checkout, and the wheel-asset gate asserts
+    # runtime assets and imports, never the test package.
+    packages=find_packages(exclude=["tests", "tests.*"]) + ["routes", "helpers"],
     # static/ and templates/ now live INSIDE the clawmetry package so they
     # ship via package_data (wheel-safe). Flask is configured in dashboard.py
     # to find them via os.path.dirname(clawmetry.__file__).

@@ -699,6 +699,22 @@ jobs:
           from routes.sessions import bp_sessions
           from helpers.gateway import _gw_ws_rpc
           print('wheel ships all runtime assets; dashboard imports clean')
+
+          # The repo test suite must NOT be in the wheel. It was 39% of
+          # 0.12.756 (958 of 1299 entries, 11.3 MB) and nothing shipped
+          # imports it. It was also unrunnable there: several suites read
+          # verification/, scripts/ and .github/workflows/, none of which are
+          # packaged, so those tests could never pass from an installed wheel.
+          # A check with no path to green invites someone to weaken it.
+          try:
+              import tests
+              raise SystemExit(
+                  'FAIL: the repo test package is still installed from the wheel '
+                  '(setup.py find_packages exclude regressed, or a MANIFEST / '
+                  'include_package_data change put it back)'
+              )
+          except ImportError:
+              print('repo test package correctly absent from the wheel')
           "
       - name: Start dashboard from installed wheel & hit /static/js/app.js
         run: |
