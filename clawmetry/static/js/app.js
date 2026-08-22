@@ -7844,15 +7844,37 @@ function toggleBrainSequence(el) {
   if (chev) chev.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
 }
 
+// The event's session identity, across every feed shape. Read all three keys
+// or the cloud feed silently loses its identity:
+//   local  (routes/brain.py)  -> sessionId + src, BOTH namespaced `claude_code:<uuid>`
+//   cloud  (transformEvents)  -> `source` only, and the daemon already stripped
+//                                the namespace (sync.py _rows_to_brain_events
+//                                stamps the BARE uuid so the desk device can
+//                                match it), plus an explicit `runtime` field.
+// Reading only sessionId/src left every cloud event with an empty id, which is
+// how the hosted Brain labelled real Claude Code runs "OpenClaw \u00b7 ?" and
+// bucketed every session into one fake "unknown" run (founder screenshot,
+// 2026-08-22).
+function _brainSeqSid(ev) {
+  return (ev && (ev.sessionId || ev.src || ev.source)) || '';
+}
+
 // Human label for one block: the runtime + short session id, so a feed mixing
 // Claude Code with Antigravity says which is which.
 function _brainSeqLabel(ev) {
-  var sid = (ev && (ev.sessionId || ev.src)) || '';
-  var rt = 'openclaw', native = sid;
+  var sid = _brainSeqSid(ev);
+  // Runtime comes from the ONE canonical resolver (_cmRuntimeOf), never a
+  // local re-parse: the namespace only survives on the local feed, so a
+  // prefix-only rule defaults every cloud event to openclaw. _cmRuntimeOf
+  // falls back to the explicit runtime/agent_type field the cloud does send.
+  var rt = (typeof _cmRuntimeOf === 'function')
+    ? _cmRuntimeOf({sessionId: sid, runtime: (ev && (ev.runtime || ev.agent_type)) || ''})
+    : 'openclaw';
+  var native = sid;
   var i = sid.indexOf(':');
   if (i > 0 && sid.charAt(i + 1) !== ':') {
     var pfx = sid.slice(0, i).toLowerCase();
-    if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { rt = pfx; native = sid.slice(i + 1); }
+    if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { native = sid.slice(i + 1); }
   }
   var label = (_CM_RT_LABEL && _CM_RT_LABEL[rt]) || rt;
   // Orchestration children are namespaced "<parent>::wf_<run>::agent-<id>"
@@ -7906,7 +7928,7 @@ function _brainLoadOrchSummaries(events) {
   if (nowMs - _brainOrchLastFetch < 10000) return;  // poll at most every 10s
   var seen = {}, ids = [];
   (events || []).forEach(function(ev) {
-    var sid = ev.sessionId || ev.src || '';
+    var sid = _brainSeqSid(ev);
     if (!sid || sid.indexOf('::') >= 0 || seen[sid]) return;
     seen[sid] = 1;
     ids.push(sid);
@@ -7934,7 +7956,7 @@ function _brainGroupSequences(rows) {
   var order = [], buckets = {}, turnOf = {};
   rows.forEach(function(row) {
     var ev = row.ev || {};
-    var sess = (ev.sessionId || ev.src || 'unknown');
+    var sess = _brainSeqSid(ev) || 'unknown';
     if (turnOf[sess] === undefined) turnOf[sess] = 0;
     var key = sess + '#' + turnOf[sess];
     if (!buckets[key]) { buckets[key] = []; order.push(key); }
@@ -7976,7 +7998,7 @@ function _brainGroupSequences(rows) {
     var errBadge = errs
       ? '<span class="brain-seq-errs" title="' + errs + ' failed tool call' + (errs === 1 ? '' : 's') + ' in this run">\u26a0 ' + errs + '</span>'
       : '';
-    var seqSid = ((g[0].ev || {}).sessionId || (g[0].ev || {}).src || '');
+    var seqSid = _brainSeqSid(g[0].ev);
     out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '" data-sess="' + escHtml(seqSid) + '">'
         +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
         +  '<span class="brain-seq-chevron">\u203a</span>'
