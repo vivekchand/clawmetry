@@ -90,6 +90,21 @@
       "path": "scripts/check_ac_coverage.py",
       "why": "AC-OBS-CEA-001.2 forbade a $0.00 cost window before #5079 shipped one; the criterion existed and nothing could fail on it. This file is what makes an acceptance criterion failable.",
       "min_bytes": 5000
+    },
+    {
+      "path": "docs/acceptance_criteria.json",
+      "why": "The mirror of the 77 acceptance criteria this repo implements. Emptying it makes the AC gate pass vacuously: zero criteria means zero uncovered, and the ratchet reports success while enforcing nothing.",
+      "min_bytes": 12000
+    },
+    {
+      "path": "docs/ac_coverage_baseline.json",
+      "why": "The AC ratchet itself. Repopulating it with every criterion re-opens every door the gate closed, silently, because the gate would still report OK.",
+      "min_bytes": 1500
+    },
+    {
+      "path": "tests/test_ac_coverage_guard.py",
+      "why": "Pins the AC gate's declaration rule. Without it the first draft's loophole returns, where a file naming a criterion it does NOT cover marks that criterion covered.",
+      "min_bytes": 3000
     }
   ],
   "ratchets": {
