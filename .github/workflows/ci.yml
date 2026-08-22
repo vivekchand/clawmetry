@@ -706,15 +706,22 @@ jobs:
           # verification/, scripts/ and .github/workflows/, none of which are
           # packaged, so those tests could never pass from an installed wheel.
           # A check with no path to green invites someone to weaken it.
-          try:
-              import tests
-              raise SystemExit(
-                  'FAIL: the repo test package is still installed from the wheel '
-                  '(setup.py find_packages exclude regressed, or a MANIFEST / '
-                  'include_package_data change put it back)'
-              )
-          except ImportError:
-              print('repo test package correctly absent from the wheel')
+          #
+          # Inspect site-packages rather than attempting an import. This step
+          # runs from the repo checkout, so cwd is on sys.path and
+          # \`import tests\` resolves the SOURCE tree whether or not the wheel
+          # contains it. The first version of this assertion did exactly that
+          # and failed on a wheel that was already correct.
+          import os, sysconfig
+          site = sysconfig.get_paths()['purelib']
+          leaked = os.path.isdir(os.path.join(site, 'tests'))
+          print('site-packages:', site)
+          assert not leaked, (
+              'FAIL: the repo test package is installed in ' + site +
+              ' (setup.py find_packages exclude regressed, or a MANIFEST / '
+              'include_package_data change put it back)'
+          )
+          print('repo test package correctly absent from the wheel')
           "
       - name: Start dashboard from installed wheel & hit /static/js/app.js
         run: |

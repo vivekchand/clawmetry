@@ -87,7 +87,15 @@ def test_ci_asserts_the_test_package_is_absent_from_a_real_wheel() -> None:
     slow new job here.
     """
     source = _read(CI_WORKFLOW)
-    assert "the repo test package is still installed" in source, (
+    assert "purelib" in source, (
+        "ci.yml's wheel-asset job must inspect site-packages directly.\n\n"
+        "An import-based check does not work here: the step runs from the repo "
+        "checkout and `python -c` puts cwd on sys.path, so `import tests` "
+        "resolves the SOURCE tree whether or not the wheel contains it. The "
+        "first version of this assertion did exactly that and failed a wheel "
+        "that was already correct."
+    )
+    assert "the repo test package is installed in" in source, (
         "ci.yml's wheel-asset job no longer asserts that `import tests` fails "
         "inside an installed wheel. Without it, only the declaration is "
         "checked, and a packaging change elsewhere (MANIFEST.in, "
