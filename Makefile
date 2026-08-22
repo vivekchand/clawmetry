@@ -77,7 +77,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-js lint-daemon-allowlist lint-runtime-count
+lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -87,6 +87,14 @@ lint: lint-py lint-js lint-daemon-allowlist lint-runtime-count
 # legacy paths; surfaced as 6 s timeouts).
 lint-daemon-allowlist:
 	@python3 scripts/lint_daemon_allowlist.py
+
+# PEP 604 (`str | None`) parses on Python 3.9 but the 3.9 runtime raises
+# TypeError when a signature is evaluated at def time, so lint-py's ast.parse
+# rides right past it. 0.12.753 shipped one at clawmetry/cli.py module scope
+# and every `clawmetry` subcommand died at import on 3.9, `clawmetry
+# uninstall` included.
+lint-py39:
+	@python3 scripts/check_py39_annotations.py
 
 # The advertised runtime count must match FREE_RUNTIMES | PAID_RUNTIMES.
 # Fix drift with: python3 scripts/sync_runtime_count.py

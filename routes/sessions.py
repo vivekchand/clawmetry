@@ -16,6 +16,8 @@ Pure mechanical move — zero behaviour change from the previous in-file
 definitions.
 """
 
+from __future__ import annotations
+
 import collections
 import json
 import os

@@ -31,6 +31,8 @@ stay in ``dashboard.py`` and are reached via late ``import dashboard as _d``.
 Pure mechanical move — zero behaviour change.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import time
