@@ -230,3 +230,66 @@ def server(base_url, token):
     yield base_url
 
     proc.terminate()
+
+
+# ── Guard the developer's real ~/.clawmetry identity files ────────────────
+#
+# Hit for real on 2026-08-22: a `-k "license or connect or onboard or activate
+# or entitle"` run over the whole suite DELETED the developer's real
+# ~/.clawmetry/nocloud marker, silently taking a deliberately local-only
+# install out of local-only mode — the daemon would have started pushing to
+# cloud on its next pass. No single test file does it (each one passes in
+# isolation); it is an ordering interaction between a test that patches the
+# marker path and one that resolves it afresh, which is exactly the kind of
+# leak that only shows up on a machine that HAS a real install.
+#
+# Same class as the DuckDB leak guarded at the top of this file: a unit test
+# must never be able to change how the developer's own install behaves. These
+# four files are the ones whose presence or content changes product behaviour
+# (cloud egress, entitlement, first-run onboarding, account identity), so they
+# are snapshotted around every test and restored if a test disturbs them. The
+# warning names the offender so the interaction can be fixed at the source.
+#
+# Deliberately a restore-and-warn, not a failure: the leak is pre-existing and
+# a hard failure would turn an unrelated red into a merge blocker, while the
+# damage — which is the part that matters — is already undone by then.
+_GUARDED_HOME_FILES = tuple(
+    Path(os.path.expanduser("~/.clawmetry")) / name
+    for name in ("nocloud", "onboarding.json", "license.key", "config.json")
+)
+
+
+def _snapshot_guarded_files():
+    snap = {}
+    for path in _GUARDED_HOME_FILES:
+        try:
+            snap[path] = path.read_bytes() if path.is_file() else None
+        except OSError:
+            snap[path] = None
+    return snap
+
+
+@pytest.fixture(autouse=True)
+def _protect_real_clawmetry_home(request):
+    before = _snapshot_guarded_files()
+    yield
+    after = _snapshot_guarded_files()
+    for path, original in before.items():
+        if after.get(path) == original:
+            continue
+        try:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(original)
+        except OSError:
+            pass
+        import warnings
+
+        warnings.warn(
+            f"{request.node.nodeid} modified the real {path} — restored. "
+            "A test must never touch the developer's own ClawMetry install; "
+            "point the path at tmp_path or monkeypatch HOME.",
+            stacklevel=1,
+        )
