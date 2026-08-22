@@ -241,7 +241,24 @@ def test_gw_setup_modal_retired_not_just_suppressed():
     assert "_gwApplyRuntimeDetection" not in src
 
 
-def test_no_agent_banner_suppressed_for_entitled_runtimes():
+def test_no_agent_banner_retired_not_just_suppressed():
+    """The two-runtime "No OpenClaw or NVIDIA NemoClaw detected" banner was
+    removed outright by #4415 (2026-08-02), along with its
+    ``checkAgentPresence`` poller: it framed the world as OpenClaw-or-NemoClaw
+    while ClawMetry observes 20+ runtimes, so it told a user running Claude
+    Code to go install a different agent, and it rendered on cloud node pages
+    where the pod can never filesystem-detect anything.
+
+    This guard used to pin the SUPPRESSION logic (that an all-entitled
+    detection set counted as agent-present). That literal went away with the
+    banner, so the guard has been red on main ever since while asserting a
+    behaviour the product no longer has. Pin the retirement instead, the same
+    way ``test_gw_setup_modal_retired_not_just_suppressed`` above does for the
+    setup modal: a suppressed banner can come back, a deleted one cannot.
+    """
     src = _read("clawmetry/static/js/app.js")
-    assert "_detected.every(function(r){ return r && r.entitled; })" in src, \
-        "checkAgentPresence must treat all-entitled detected runtimes as agent-present"
+    assert "checkAgentPresence" not in src, \
+        "the checkAgentPresence poller is back; #4415 removed it"
+    assert "_detected.every(function(r){ return r && r.entitled; })" not in src, \
+        "the no-agent banner's suppression logic is back, which means the " \
+        "banner is back; it must stay retired (#4415)"
