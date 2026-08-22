@@ -80,6 +80,11 @@
       "path": "tests/test_guard_census.py",
       "why": "This census. Listed here so removing the enforcement is itself caught.",
       "min_bytes": 2000
+    },
+    {
+      "path": "scripts/check_action_refs.py",
+      "why": "ossf/scorecard-action@v2 does not exist, so the OpenSSF Scorecard job failed at 'Set up job' on every run since it was written. An unresolvable action never executes a step, so the workflow reads as ran-and-failed rather than never-started.",
+      "min_bytes": 3000
     }
   ],
   "ratchets": {
