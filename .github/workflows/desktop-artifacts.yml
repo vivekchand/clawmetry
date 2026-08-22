@@ -32,6 +32,16 @@ jobs:
       HAS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
     steps:
       - uses: actions/checkout@v7
+
+      # Same rule as the Windows job: signing is optional everywhere except
+      # a release tag. An unsigned .dmg is refused by Gatekeeper outright,
+      # so shipping one is a broken download, not a degraded one.
+      - name: Require signing on release tags
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGN != 'true'
+        shell: bash
+        run: |
+          echo "::error::${{ github.ref_name }} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
+          exit 1
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -246,6 +256,19 @@ jobs:
       HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && !(secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '') }}
     steps:
       - uses: actions/checkout@v7
+      # A tag build that quietly produces an UNSIGNED artifact is worse
+      # than a failed build: it reaches users as "unknown publisher", and
+      # on Windows an unsigned uninstaller stub is blocked by Smart App
+      # Control, leaving the app impossible to remove from Settings > Apps.
+      # Signing config is optional everywhere EXCEPT a release tag, where
+      # it is mandatory. Runs before the build so a misconfiguration costs
+      # seconds, not a full compile.
+      - name: Require signing on release tags
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_AZ_SIGN != 'true' && env.HAS_WIN_CERT != 'true'
+        shell: bash
+        run: |
+          echo "::error::${{ github.ref_name }} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
+          exit 1
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
