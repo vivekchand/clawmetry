@@ -136,15 +136,37 @@ def _mutate(source: str, index: int) -> tuple[str, str] | None:
 # Runner
 # ---------------------------------------------------------------------------
 
-def _run_tests(test_command: list, cwd: str, timeout: int) -> bool:
-    """True when the suite PASSES (which, for a mutant, means it survived).
+def _run_tests(test_command: list, cwd: str, timeout: int) -> str:
+    """Classify a mutant: "survived", "killed", or "indeterminate".
 
-    The timeout must stay tight. A guard suite runs in seconds, but a mutant
-    can push code into a slow path -- breaking the gate's credential check, for
-    instance, drops it into a 30-second polling loop. With a generous timeout
-    each such mutant costs minutes and the whole run stops being viable in CI.
-    A hang is treated as a kill: the mutant changed behaviour enough to matter.
+    A timeout is INDETERMINATE, not a kill. Counting a hang as a kill made the
+    score depend on machine speed, because a mutant that pushes code into a
+    slow path might finish under load on one run and trip the timeout on the
+    next. The same commit measured 53%, 50% and 47% across three runs and the
+    ratchet failed a pull request that had not touched the mutated file. A gate
+    that can go red for reasons unrelated to test quality has no reliable path
+    to green, which is exactly the trap these ratchets exist to prevent.
+
+    A hang is also not evidence: "the suite did not finish" says nothing about
+    whether any assertion objected to the change. Indeterminates are excluded
+    from both sides of the ratio and reported, so they are visible rather than
+    silently inflating the score.
     """
+    # PYTHONDONTWRITEBYTECODE is load-bearing, not hygiene. CPython invalidates
+    # a cached .pyc by (mtime, size). The sandbox is reused across mutants, and
+    # a same-LENGTH mutation -- `min_count=3` becoming `min_count=4` is the
+    # canonical one -- rewrites the file with an identical size. When the two
+    # writes land within the same mtime granularity, the interpreter decides
+    # the cache is still valid and executes the PREVIOUS bytecode. The mutation
+    # silently does not apply, the suite passes, and the mutant is recorded as
+    # surviving.
+    #
+    # That was the whole source of the nondeterminism: the same commit scored
+    # 53%, 50% and 47%, and `line 92: constant 3 -> 4` was the only mutant that
+    # ever flipped, because it is the only one whose source length is unchanged.
+    # Writing no bytecode at all forces every run to parse the source it was
+    # actually given.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     try:
         proc = subprocess.run(
             test_command,
@@ -152,10 +174,25 @@ def _run_tests(test_command: list, cwd: str, timeout: int) -> bool:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
-        return proc.returncode == 0
+        return "survived" if proc.returncode == 0 else "killed"
     except subprocess.TimeoutExpired:
-        return False
+        return "indeterminate"
+
+
+def _purge_pycache(root: str) -> None:
+    """Remove every __pycache__ under the sandbox.
+
+    See the note in _run_tests: a same-length mutation plus a same-second
+    mtime lets CPython reuse cached bytecode, which silently un-applies the
+    mutation and reports a false survivor.
+    """
+    for dirpath, dirnames, _ in os.walk(root):
+        for name in list(dirnames):
+            if name == "__pycache__":
+                shutil.rmtree(os.path.join(dirpath, name), ignore_errors=True)
+                dirnames.remove(name)
 
 
 # Subtrees copied into the sandbox. Small enough to copy in well under a
@@ -199,6 +236,7 @@ def run_target(target: dict, limit: int, timeout: int, verbose: bool = False) ->
     killed = 0
     survived: list = []
     skipped = 0
+    indeterminate: list = []
 
     try:
         _build_sandbox(tmp_root)
@@ -209,7 +247,7 @@ def run_target(target: dict, limit: int, timeout: int, verbose: bool = False) ->
         # counted as killed, producing a triumphant 100% that means nothing.
         # A silently meaningless ratchet is worse than no ratchet, because it
         # reports success while enforcing nothing.
-        if not _run_tests(target["test_command"], tmp_root, timeout):
+        if _run_tests(target["test_command"], tmp_root, timeout) != "survived":
             raise RuntimeError(
                 f"Baseline suite for {target['module']} FAILS in the mutation "
                 "sandbox before any mutation is applied. Every mutant would be "
@@ -233,16 +271,27 @@ def run_target(target: dict, limit: int, timeout: int, verbose: bool = False) ->
 
             with open(sandbox_path, "w", encoding="utf-8") as fh_:
                 fh_.write(mutated_source)
+            # Belt and braces alongside PYTHONDONTWRITEBYTECODE: clear any
+            # cache a previous tool left behind, so a same-length mutation
+            # cannot be masked by stale bytecode.
+            _purge_pycache(tmp_root)
 
-            tests_passed = _run_tests(target["test_command"], tmp_root, timeout)
-            if tests_passed:
+            verdict = _run_tests(target["test_command"], tmp_root, timeout)
+            if verdict == "survived":
                 survived.append(description)
                 if verbose:
                     print(f"    SURVIVED  {description}")
-            else:
+            elif verdict == "killed":
                 killed += 1
                 if verbose:
                     print(f"    killed    {description}")
+            else:
+                # Timed out. Not evidence either way, so excluded from the
+                # ratio rather than counted as a kill, which is what made the
+                # score depend on machine speed.
+                indeterminate.append(description)
+                if verbose:
+                    print(f"    TIMEOUT   {description}")
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
@@ -261,6 +310,7 @@ def run_target(target: dict, limit: int, timeout: int, verbose: bool = False) ->
         "killed": killed,
         "survived": survived,
         "skipped": skipped,
+        "indeterminate": indeterminate,
         "score": round(score, 4),
     }
 
@@ -295,9 +345,12 @@ def main() -> int:
         result = run_target(target, limit, timeout, verbose=args.verbose)
         result["baseline"] = target.get("baseline_score", 0.0)
         results.append(result)
+        note = ""
+        if result.get("indeterminate"):
+            note = f"  [{len(result['indeterminate'])} timed out, excluded]"
         print(
             f"    {result['killed']}/{result['evaluated']} killed "
-            f"= {result['score']:.0%}  (baseline {result['baseline']:.0%})"
+            f"= {result['score']:.0%}  (baseline {result['baseline']:.0%}){note}"
         )
 
     if args.update_baseline:
