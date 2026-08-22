@@ -1,4 +1,4 @@
-<!-- i18n-src:6795052055e2 -->
+<!-- i18n-src:c111f32e69a5 -->
 > فارسی translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -13,62 +13,59 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**ذهن عامل خود را ببینید.** قابلیت مشاهده در لحظه (real‑time) برای **۲۶ زمان اجرای عامل هوش مصنوعی**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و ۲۲ مورد دیگر. یک داشبورد برای کل ناوگان عامل‌های شما.
+**ببینید عامل هوشمند شما چگونه فکر می‌کند.** رصد بلادرنگ برای **۲۶ محیط اجرای عامل هوش مصنوعی**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و ۲۲ مورد دیگر. یک داشبورد برای کل ناوگان عامل‌های شما.
 
-> 🌐 **این را به این زبان‌ها هم بخوانید:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [بیشتر →](docs/i18n/)
+> 🌐 **این را به این زبان‌ها بخوانید:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [بیشتر ←](docs/i18n/)
 
-یک دستور. بدون تنظیمات. تشخیص خودکار همه‌چیز.
+یک دستور. بدون پیکربندی. تشخیص خودکار همه‌چیز.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-در **http://localhost:8900** باز می‌شود. بدون تنظیمات: زمان‌های اجرای عاملی را که از قبل روی سیستم دارید پیدا می‌کند،
-آن‌ها را فقط به‌صورت خواندنی می‌خواند و هیچ تغییری در نحوه اجرای آن‌ها ایجاد نمی‌کند.
+در **http://localhost:8900** باز می‌شود. بدون پیکربندی: محیط‌های اجرای عامل‌هایی را که از قبل دارید پیدا می‌کند، آن‌ها را فقط برای خواندن می‌خواند و هیچ چیزی در نحوه‌ی اجرای آن‌ها تغییر نمی‌دهد.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## سازگار با ۲۶ زمان اجرای عامل
+## با ۲۶ محیط اجرای عامل کار می‌کند
 
-**رایگان در برنامه متن‌باز:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
+**رایگان در برنامه‌ی متن‌باز:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-**در پلن پولی:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · **[Aider](https://clawmetry.com/runtimes/aider)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · **[Grok](https://clawmetry.com/runtimes/grok)** · **[QM](https://clawmetry.com/runtimes/qm)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)**
+**در طرح پولی:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok](https://clawmetry.com/runtimes/grok)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-هر زمان اجرا از همان داشبورد استفاده می‌کند. چند مورد را همزمان اجرا کنید و کلید تعویض در هدر
-هر تب را به‌سمت یکی از آن‌ها بازتنظیم می‌کند.
+هر محیط اجرا همان داشبورد را دریافت می‌کند. چند مورد را همزمان اجرا کنید و کلید انتخاب در سربرگ، هر تب را روی یکی از آن‌ها دوباره تنظیم می‌کند.
 
-عامل خودتان را روی یک SDK ساخته‌اید؟ این interceptor فراخوانی‌های LLM آن را هم ردیابی می‌کند.
-به [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md) مراجعه کنید.
+عامل خودتان را روی یک SDK ساخته‌اید؟ رهگیر (interceptor) فراخوانی‌های LLM آن را هم پیگیری می‌کند. ببینید [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
-## چه چیزی به‌دست می‌آورید
+## چه چیزی به دست می‌آورید
 
-- **نشست‌ها و رونوشت‌ها**: اینکه هر عامل چه کاری انجام داده، نوبت‌به‌نوبت، با قابلیت پخش مجدد (replay)
-- **هزینه و توکن**: به‌ازای هر زمان اجرا، مدل، نشست و روز، همراه با پرچم‌های ناهنجاری
-- **Flow**: نمودار زنده حرکت پیام‌ها میان کانال‌ها، مدل‌ها و ابزارها
-- **Brain**: جریان رویدادهای استدلال و فراخوانی ابزار، همان لحظه‌ای که رخ می‌دهند
-- **حافظه و مهارت‌ها**: فایل‌ها و مهارت‌هایی که هر زمان اجرا واقعاً بارگذاری کرده
-- **سلامت و لاگ‌ها**: دیسک، حافظه، نرخ خطا، محدودیت نرخ، جریان زنده لاگ
-- **هشدارها**: سقف بودجه، جهش‌های خطا، آفلاین‌شدن عامل، ارسال به Slack، Discord، PagerDuty، Telegram، ایمیل
-- **تأییدها (Approvals)**: توقف فراخوانی‌های ابزار پرریسک *پیش از* اجرا و تأیید آن‌ها از گوشی خود ([نحوه کار](docs/APPROVALS.md))
+- **نشست‌ها و رونوشت‌ها**: هر عامل چه کاری انجام داد، نوبت به نوبت، همراه با پخش مجدد
+- **هزینه و توکن‌ها**: بر اساس محیط اجرا، مدل، نشست و روز، همراه با پرچم‌های ناهنجاری
+- **جریان (Flow)**: نمودار زنده‌ی حرکت پیام‌ها میان کانال‌ها، مدل‌ها و ابزارها
+- **مغز (Brain)**: جریان رویدادهای استدلال و فراخوانی ابزار، همان‌گونه که رخ می‌دهد
+- **حافظه و مهارت‌ها**: فایل‌ها و مهارت‌هایی که هر محیط اجرا واقعاً بارگذاری کرده است
+- **سلامت و گزارش‌ها (logs)**: دیسک، حافظه، نرخ خطا، محدودیت‌های نرخ، جریان زنده‌ی گزارش
+- **هشدارها**: سقف بودجه، جهش خطا، آفلاین‌شدن عامل، ارسال به Slack، Discord، PagerDuty، Telegram، ایمیل
+- **تأییدها**: توقف فراخوانی‌های پرریسک ابزار *پیش از* اجرا و تأیید از گوشی خود ([چگونه](docs/APPROVALS.md))
 
 ## قیمت‌گذاری
 
-| پلن | چه چیزی را پوشش می‌دهد | قیمت |
+| طرح | چه چیزی را پوشش می‌دهد | قیمت |
 |---|---|---|
-| **Free** | OpenClaw + NVIDIA NemoClaw + Goose، داشبورد کامل، فقط محلی | ۰ دلار |
-| **Starter** | تمام زمان‌های اجرای دیگر بالا، نمای ناوگان، همگام‌سازی ابری | ۹ دلار به‌ازای هر نود / ماه |
-| **Pro** | Starter + حاکمیت (governance): تأییدها، سیاست‌های ریسک ابزار، ارزیابی‌ها، تشخیص ناهنجاری، بهینه‌ساز هزینه، خروجی OTel | ۱۹ دلار به‌ازای هر نود / ماه |
+| **رایگان** | OpenClaw + NVIDIA NemoClaw + Goose، داشبورد کامل، فقط محلی | ۰ دلار |
+| **استارتر** | تمام محیط‌های اجرای دیگر بالا، نمای ناوگان، همگام‌سازی ابری | ۹ دلار به ازای هر گره در ماه |
+| **Pro** | استارتر + حاکمیت: تأییدها، سیاست‌های ریسک ابزار، ارزیابی‌ها، تشخیص ناهنجاری، بهینه‌ساز هزینه، خروجی OTel | ۱۹ دلار به ازای هر گره در ماه |
 
-پلن‌های سالانه، Enterprise و اعداد فعلی در
-**[clawmetry.com/pricing](https://clawmetry.com/pricing)** موجود است. کلیدهای مجوز خوداستقرار (self‑hosted)
-بدون نیاز به ابر کار می‌کنند (`clawmetry license`). تفکیک دقیق رایگان/پولی
+طرح‌های سالانه، Enterprise و ارقام فعلی در
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)** موجود است. کلیدهای مجوز خودمیزبانی
+بدون ابر کار می‌کنند (`clawmetry license`). تفکیک دقیق رایگان/پولی
 در [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) آمده است.
 
 ## داده‌های شما روی دستگاه خودتان می‌ماند
 
-ClawMetry فایل‌های نشست و لاگ‌های محلی را می‌خواند. چیزی از دستگاه شما خارج نمی‌شود مگر آنکه
-`clawmetry connect` را اجرا کنید. حتی در آن صورت هم، اسنپ‌شات به‌صورت سرتاسر رمزگذاری‌شده (end‑to‑end encrypted)
-با کلیدی است که هرگز از دستگاه شما خارج نمی‌شود، و در مرورگر شما رمزگشایی می‌شود.
+ClawMetry فایل‌های نشست و گزارش‌های محلی را می‌خواند. تا زمانی که
+`clawmetry connect` را اجرا نکنید، چیزی از دستگاه شما خارج نمی‌شود. حتی در آن صورت هم، عکس‌لحظه‌ای (snapshot) با رمزنگاری سرتاسر
+با کلیدی که هرگز از دستگاه شما خارج نمی‌شود رمزنگاری شده و در مرورگر شما رمزگشایی می‌شود.
 
 ## نصب
 
@@ -76,38 +73,38 @@ ClawMetry فایل‌های نشست و لاگ‌های محلی را می‌خ�
 pip install clawmetry     # سپس: clawmetry
 ```
 
-یا این دستور تک‌خطی: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
+یا دستور یک‌خطی: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-نیازمند Python نسخه ۳.۸ به بالا روی macOS، Linux یا Windows است، و حداقل یک زمان اجرای عامل روی
-همان دستگاه. راهنمای Docker: [docs/DOCKER.md](docs/DOCKER.md).
+به Python 3.8+ روی macOS، Linux یا Windows، و حداقل یک محیط اجرای عامل روی
+همان دستگاه نیاز دارد. راهنمای Docker: [docs/DOCKER.md](docs/DOCKER.md).
 
 ## مستندات
 
 | | |
 |---|---|
-| [سازگاری زمان‌های اجرا](docs/compatibility.md) | هر آداپتور چه چیزی می‌خواند، و چگونه یک زمان اجرا اضافه کنیم |
-| [Entitlements](docs/ENTITLEMENTS.md) | رایگان در برابر پولی، ماتریس ردیف‌ها، CLI مجوز |
+| [سازگاری محیط‌های اجرا](docs/compatibility.md) | هر تطبیق‌دهنده چه می‌خواند، و چگونه یک محیط اجرا اضافه کنیم |
+| [استحقاق‌ها (Entitlements)](docs/ENTITLEMENTS.md) | رایگان در برابر پولی، ماتریس ردیف‌ها، CLI مجوز |
 | [تأییدها و سیاست‌ها](docs/APPROVALS.md) | دروازه‌بانی پیش از اجرا، امتیازدهی ریسک، تأیید از گوشی |
-| [OpenTelemetry](docs/OPENTELEMETRY.md) | خروجی trace به هر جا، دریافت OTLP از هر منبعی |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | ردهای (traces) خود را هرجا خواستید صادر کنید، OTLP را از هر جایی دریافت کنید |
 | [ردیابی SDK](docs/SDK_TRACKING.md) | انتساب هزینه برای عامل‌هایی که خودتان ساخته‌اید |
-| [کانال‌های چت](docs/CHANNELS.md) | آداپتورهای چتی که در Flow نمایش داده می‌شوند |
-| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | راه‌اندازی‌های sandbox‑شده NVIDIA NemoClaw |
-| [Docker](docs/DOCKER.md) | ایمیج، compose، mount حجم‌ها |
-| [معماری](ARCHITECTURE.md) · [توسعه](docs/DEVELOPMENT.md) | نحوه کارکرد داخلی؛ اجرا از سورس |
-| [تله‌متری](docs/TELEMETRY.md) | پینگ‌های ناشناس نصب و باز شدن دسکتاپ، و نحوه خاموش کردن آن‌ها |
+| [کانال‌های چت](docs/CHANNELS.md) | تطبیق‌دهنده‌های چتی که در Flow نمایش داده می‌شوند |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | راه‌اندازی‌های ایزوله‌شده‌ی NVIDIA NemoClaw |
+| [Docker](docs/DOCKER.md) | تصویر (image)، compose، اتصال حجم‌ها (volume mounts) |
+| [معماری](ARCHITECTURE.md) · [توسعه](docs/DEVELOPMENT.md) | نحوه‌ی عملکرد داخلی؛ اجرا از سورس |
+| [تله‌متری](docs/TELEMETRY.md) | پینگ‌های ناشناس نصب و باز شدن دسکتاپ، و نحوه‌ی غیرفعال کردن آن‌ها |
 
 ## اسکرین‌شات‌ها
 
 | | |
 |---|---|
 | ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: توکن‌ها، نشست‌ها، سلامت | **Brain**: جریان زنده رویدادهای عامل |
+| **نمای کلی**: توکن‌ها، نشست‌ها، سلامت | **مغز**: جریان زنده‌ی رویدادهای عامل |
 | ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
-| **Cost**: بر اساس مدل و نشست | **Approvals**: دروازه‌بانی فراخوانی‌های ابزار پرریسک |
+| **هزینه**: بر اساس مدل و نشست | **تأییدها**: دروازه‌بانی فراخوانی‌های پرریسک ابزار |
 
-موارد بیشتر، به‌ازای هر زمان اجرا: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+بیشتر، به ازای هر محیط اجرا: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
-## تاریخچه ستاره‌ها
+## تاریخچه‌ی ستاره‌ها
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
