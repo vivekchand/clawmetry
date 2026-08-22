@@ -378,7 +378,11 @@ SESSIONS_DIR = None
 USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
-CET = timezone(timedelta(hours=1))
+# Removed: a fixed UTC+1 with no DST handling. It was wrong for Europe half
+# the year and for everyone else all year, and it made this file's cost
+# windows disagree with every other cost surface. Use
+# clawmetry.cost_windows.now_local() for windows and .astimezone() for
+# display. Guarded by tests/test_cost_windows_one_definition.py.
 # SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
 # Stream-slot caps + state moved to helpers/streams.py (re-exported above)
 # _active_brain_stream_clients moved to helpers/streams.py
@@ -956,19 +960,11 @@ def _get_budget_status():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
     now = time.time()
-    today_start = (
-        datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    )
-    week_start = (
-        (datetime.now() - timedelta(days=datetime.now().weekday()))
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
-    month_start = (
-        datetime.now()
-        .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
+    # Same calendar-local windows every other cost surface uses. Sampling
+    # datetime.now() three separate times could also straddle midnight.
+    from clawmetry.cost_windows import window_start_epochs
+
+    today_start, week_start, month_start = window_start_epochs()
 
     daily_spent = 0.0
     weekly_spent = 0.0
@@ -8927,7 +8923,11 @@ SESSIONS_DIR = None
 USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
-CET = timezone(timedelta(hours=1))
+# Removed: a fixed UTC+1 with no DST handling. It was wrong for Europe half
+# the year and for everyone else all year, and it made this file's cost
+# windows disagree with every other cost surface. Use
+# clawmetry.cost_windows.now_local() for windows and .astimezone() for
+# display. Guarded by tests/test_cost_windows_one_definition.py.
 # SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
 # Stream-slot caps + state moved to helpers/streams.py (re-exported above)
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
@@ -17730,18 +17730,29 @@ def _generate_savings_opportunities():
 
 
 def _get_cost_summary():
-    """Calculate cost summary from metrics store."""
-    now = datetime.now(CET)
-    today = now.strftime("%Y-%m-%d")
-    week_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    month_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    """Calculate cost summary from metrics store.
+
+    Windows come from ``clawmetry.cost_windows`` so this panel agrees with
+    the budget panel, the cost-optimization route and the cloud snapshot.
+    It used to compute its own: a fixed ``UTC+1`` "today" (no DST, wrong for
+    every non-European user) plus ROLLING 7/30-day weeks and months, while
+    every other cost surface used calendar windows. On a Saturday that alone
+    made this panel's "week" span 8 calendar days against the cloud's 6.
+    """
+    from clawmetry.cost_windows import now_local, window_start_days
+
+    now = now_local()
+    today, week_start, month_start = window_start_days(now)
 
     costs = {"today": 0, "week": 0, "month": 0, "projected": 0}
 
     with _metrics_lock:
         for entry in metrics_store.get("cost", []):
+            # Same timezone as the window boundaries above, or entries near
+            # midnight land in a different day than the window they are being
+            # compared against.
             entry_date = datetime.fromtimestamp(
-                entry.get("timestamp", 0) / 1000, CET
+                entry.get("timestamp", 0) / 1000, now.tzinfo
             ).strftime("%Y-%m-%d")
             entry_cost = entry.get("usd", 0)
 
@@ -17754,13 +17765,15 @@ def _get_cost_summary():
 
     # Project monthly cost based on current daily average
     if costs["month"] > 0:
-        days_in_period = min(
-            30,
-            (now - datetime.strptime(month_start, "%Y-%m-%d").replace(tzinfo=CET)).days
-            + 1,
-        )
+        # Project from month-to-date over the days actually elapsed in THIS
+        # calendar month, then scale to the month's real length. The old form
+        # divided by a rolling-30 window and multiplied by a flat 30.
+        from calendar import monthrange
+        from clawmetry.cost_windows import days_elapsed_in_month
+
+        days_in_period = days_elapsed_in_month(now)
         daily_avg = costs["month"] / days_in_period
-        costs["projected"] = daily_avg * 30
+        costs["projected"] = daily_avg * monthrange(now.year, now.month)[1]
 
     return costs
 
@@ -17929,7 +17942,7 @@ def _get_expensive_operations():
                             break
 
                 tokens = token_entry.get("total", 0) if token_entry else 0
-                time_ago = datetime.fromtimestamp(timestamp / 1000, CET).strftime(
+                time_ago = datetime.fromtimestamp(timestamp / 1000).astimezone().strftime(
                     "%H:%M"
                 )
 
