@@ -6,6 +6,35 @@ FLYWHEEL — these don't claim a user-facing feature works E2E). All expected
 dollar values are recomputed IN the tests from clawmetry.providers_pricing
 (``_get_rates`` / the cache multipliers / ``default_auto_downgrade_map``) so
 the tests can't drift from the pricing table.
+
+Acceptance criteria proven here (docs/acceptance_criteria.json, mirrored from
+the "Cost and Efficiency Analytics" requirement in 8090 Software Factory):
+
+* AC-OBS-CEA-001.1 -- cost/usage is presented with its runtime scope:
+  ``test_by_runtime_scopes_each_runtime_to_its_own_rows``,
+  ``test_endpoint_runtime_scoped``.
+* AC-OBS-CEA-002.2 -- when the supporting activity is unavailable the signal
+  says so rather than presenting a confident grade:
+  ``test_empty_rows_yield_honest_empty_shape``,
+  ``test_insufficient_data_under_10_calls``,
+  ``test_endpoint_unknown_runtime_is_honest_empty``.
+* AC-OBS-CEA-002.3 -- cache hit rate is surfaced with the amount already saved
+  and a conservative estimate of what is left: ``test_cache_warm_math``,
+  ``test_cache_saved_monthly_and_scaling``,
+  ``test_savings_capped_at_90pct_of_projected_proportionally`` (the
+  conservatism cap).
+* AC-OBS-CEA-002.4 -- a cheaper same-provider sibling produces a routing
+  recommendation, gated on suitability: ``test_model_downgrade_savings_exact``,
+  ``test_model_downgrade_gates``.
+* AC-OBS-CEA-002.5 -- already-realised savings are reported alongside, and not
+  conflated with, potential savings: ``test_cache_saved_monthly_and_scaling``
+  asserts ``cache_saved_monthly_usd`` (realised) separately from the
+  ``actions[].savings_monthly_usd`` recommendations (potential).
+
+Deliberately NOT claimed here: AC-OBS-CEA-001.2 (an undeterminable cost must
+read as unavailable, never as zero) and AC-OBS-CEA-001.3 (one definition of a
+time scope across surfaces). Both are still uncovered -- see
+docs/ac_coverage_baseline.json.
 """
 from __future__ import annotations
 

@@ -1,4 +1,22 @@
-"""Unit tests for the tamper-evident hash chain (Issue #2200)."""
+"""Unit tests for the tamper-evident hash chain (Issue #2200).
+
+Acceptance criteria proven here (docs/acceptance_criteria.json, mirrored from
+the "Local Audit and Data Control" requirement in 8090 Software Factory):
+
+* AC-OBS-LADC-001.1 -- verification reports pass or fail for the retained
+  records: ``test_integrity_on_by_default``,
+  ``test_batched_dedup_redelivery_keeps_chain_valid``.
+* AC-OBS-LADC-001.2 -- an unexpected record change is reported as failure:
+  ``test_verify_still_catches_a_deleted_event``.
+* AC-OBS-LADC-001.3 -- a chain that cannot be ordered, but whose every record
+  still matches its own fingerprint, reports a third outcome distinct from
+  pass and fail and states that nothing was altered or removed:
+  ``test_forked_chain_is_degraded_not_tampered``.
+* AC-OBS-LADC-001.4 -- failure is reported ONLY for altered content or a
+  missing predecessor; incomplete ordering alone is not failure:
+  ``test_forked_chain_is_degraded_not_tampered`` (ordering is not failure) and
+  ``test_two_batches_in_one_millisecond_are_not_reported_as_tampering``.
+"""
 
 from __future__ import annotations
 
