@@ -7,13 +7,22 @@ const endMarker = '\n// Reasoning Chain Viewer';
 const endBlock = src.indexOf(endMarker, start);
 const code = src.slice(start, endBlock);
 const escHtml = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const _CM_RT_PREFIXES = {claude_code:1, codex:1, s:1};
-const _CM_RT_LABEL = {claude_code:'Claude Code', codex:'Codex', s:'S'};
+const _CM_RT_PREFIXES = {openclaw:1, claude_code:1, codex:1, s:1};
+const _CM_RT_LABEL = {openclaw:'OpenClaw', claude_code:'Claude Code', codex:'Codex', s:'S'};
+const _CM_OTLP_RT = {};
 const brainSourceColor = () => '#888';
 const t = (k, _a, d) => d;
 const document = undefined;
-const fn = new Function('escHtml', '_CM_RT_PREFIXES', '_CM_RT_LABEL', 'brainSourceColor', 't', code + '; return {_brainGroupSequences, _brainSeqDuration};');
-const {_brainGroupSequences, _brainSeqDuration} = fn(escHtml, _CM_RT_PREFIXES, _CM_RT_LABEL, brainSourceColor, t);
+// Pull the REAL runtime resolver out of app.js rather than stubbing it: the
+// bug this suite guards was _brainSeqLabel re-implementing runtime detection
+// instead of deferring to _cmRuntimeOf, so a stub would hide the regression.
+const rtStart = src.indexOf('function _cmRuntimeOf(');
+const rtEnd = src.indexOf('\n}', rtStart) + 2;
+const rtCode = src.slice(rtStart, rtEnd);
+const fn = new Function('escHtml', '_CM_RT_PREFIXES', '_CM_RT_LABEL', '_CM_OTLP_RT', 'brainSourceColor', 't',
+  rtCode + '\n' + code + '; return {_brainGroupSequences, _brainSeqDuration, _brainSeqLabel, _cmRuntimeOf};');
+const {_brainGroupSequences, _brainSeqDuration, _brainSeqLabel, _cmRuntimeOf} =
+  fn(escHtml, _CM_RT_PREFIXES, _CM_RT_LABEL, _CM_OTLP_RT, brainSourceColor, t);
 
 const T = (min) => new Date(Date.UTC(2026, 7, 1, 0, min, 0)).toISOString();
 let pass = 0, fail = 0;
@@ -96,6 +105,50 @@ check('exactly one block is badged', (eout.match(/brain-seq-errs/g)||[]).length 
 check('error lane gets the red ring', (eout.match(/brain-lane-bar-err/g)||[]).length === 1);
 check('lane tooltip carries the error count', eout.includes('2 errors'));
 check('clean feed has no error chrome', !out.includes('brain-seq-errs') && !out.includes('brain-lane-bar-err'));
+
+// ── Cloud feed shape (regression: "OpenClaw \u00b7 ?") ──────────────────────
+// The hosted Brain gets its events from clawmetry-cloud's transformEvents,
+// which emits {time, source, sourceLabel, type, detail, color, runtime} and
+// NO sessionId/src — and the daemon already stripped the `claude_code:`
+// namespace off the id (sync.py _rows_to_brain_events). Reading only
+// sessionId/src therefore produced an empty id and the hardcoded openclaw
+// default, so every Claude Code run on app.clawmetry.com rendered as
+// "OpenClaw \u00b7 ?" and all runs collapsed into one bogus lane.
+// Founder screenshot 2026-08-22, node Macbook-Pro.local, ?runtime=claude_code.
+const C = (uuid, min, html, type) =>
+  ({ev:{source:uuid, sourceLabel:uuid, runtime:'claude_code', time:T(min), type:type}, html:html});
+const cloudRows = [
+  C('42d6441e-c368-4956-a385-25454d56d94e', 10, '<c4>'),
+  C('07e1bba1-1c79-4230-b28e-000000000000', 9, '<d3>'),
+  C('42d6441e-c368-4956-a385-25454d56d94e', 8, '<c3>'),
+  C('07e1bba1-1c79-4230-b28e-000000000000', 6, '<d2>'),
+  C('42d6441e-c368-4956-a385-25454d56d94e', 4, '<c2>'),
+  C('42d6441e-c368-4956-a385-25454d56d94e', 0, '<c1>'),
+  C('07e1bba1-1c79-4230-b28e-000000000000', 0, '<d1>'),
+];
+const cout = _brainGroupSequences(cloudRows);
+check('cloud shape: runtime label is the real runtime, not openclaw',
+  cout.includes('Claude Code') && !cout.includes('OpenClaw'));
+check('cloud shape: session id rendered, never "?"',
+  cout.includes('42d6441e') && cout.includes('07e1bba1') && !cout.includes('\u00b7 ?'));
+check('cloud shape: one block per SESSION, not one "unknown" bucket',
+  (cout.match(/class="brain-seq"/g)||[]).length === 2);
+check('cloud shape: one swimlane lane per session',
+  (cout.match(/class="brain-lane"/g)||[]).length === 2);
+check('cloud shape: blocks anchor to their session id',
+  (cout.match(/data-sess="42d6441e-c368-4956-a385-25454d56d94e"/g)||[]).length === 1);
+
+// Single-event label unit checks across all three feed shapes.
+check('label: local namespaced sessionId',
+  _brainSeqLabel({sessionId:'claude_code:42d6441e-c368-4956'}) === 'Claude Code \u00b7 42d6441e');
+check('label: cloud bare source + runtime field',
+  _brainSeqLabel({source:'42d6441e-c368-4956', runtime:'claude_code'}) === 'Claude Code \u00b7 42d6441e');
+check('label: truncated src still resolves the runtime',
+  _brainSeqLabel({src:'codex:9f1c2b3a-dead'}) === 'Codex \u00b7 9f1c2b3a');
+check('label: a genuine bare-uuid OpenClaw session is still OpenClaw',
+  _brainSeqLabel({sessionId:'682c73e4-aaaa-bbbb'}) === 'OpenClaw \u00b7 682c73e4');
+check('label: no identity at all degrades safely',
+  _brainSeqLabel({}) === 'OpenClaw \u00b7 ?');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
