@@ -1,0 +1,111 @@
+{
+  "_comment": [
+    "The guard census: the verification surface, recorded so it cannot shrink quietly.",
+    "",
+    "Every entry here exists because a specific regression reached real users.",
+    "Deleting one, or emptying it out, re-opens that door -- and line coverage",
+    "will not notice, because a guard weakened into a tautology still executes.",
+    "",
+    "RATCHET RULE: the numbers in 'ratchets' may only ever increase. CI fails when",
+    "a live value drops below its recorded baseline. Raising a baseline is a normal",
+    "commit; LOWERING one is a deliberate, reviewable act that must state why in the",
+    "PR description. That is the point -- the goal is not to make weakening",
+    "impossible, it is to make it impossible to do SILENTLY.",
+    "",
+    "Adding a new guard: add its path here in the same PR. tests/test_guard_census.py",
+    "fails if a file listed here is missing, and the ratchets keep the rest honest."
+  ],
+  "guard_files": [
+    {
+      "path": "scripts/e2e_gate.py",
+      "why": "IS the merge gate. The single required context aggregates whatever this file lists.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "scripts/check_py39_annotations.py",
+      "why": "0.12.753 shipped a PEP 604 union at module scope; every CLI subcommand died at import on Python 3.9, including 'clawmetry uninstall'.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "scripts/sync_runtime_count.py",
+      "why": "Runtime count drifted to 20/14/12 across README, PyPI and FLYWHEEL while the catalogue said something else.",
+      "min_bytes": 1000
+    },
+    {
+      "path": "scripts/c6_required_checks_status.py",
+      "why": "Watchdog for required-check configuration. Its predecessor was unparseable YAML and never ran.",
+      "min_bytes": 2000
+    },
+    {
+      "path": "scripts/verification_matrix.py",
+      "why": "Declares every product x platform x python x runtime cell that must work, so holes cannot open silently.",
+      "min_bytes": 2000
+    },
+    {
+      "path": "scripts/mutation_ratchet.py",
+      "why": "Measures whether the guards actually catch bugs. Without it, a test weakened into a tautology is invisible -- line coverage cannot see it.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "verification/matrix.json",
+      "why": "The declared product surface. Deleting it makes every coverage claim unverifiable.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "verification/mutation_targets.json",
+      "why": "Mutation-score baselines. Removing it silently disables the ratchet.",
+      "min_bytes": 800
+    },
+    {
+      "path": "tests/test_verification_matrix.py",
+      "why": "Proves the matrix checker actually catches drift, rather than rubber-stamping it.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_store_invariants.py",
+      "why": "Property tests over the DuckDB store: idempotent ingest, no loss under interleaved flush (issue #1590), clean rejection of torn records.",
+      "min_bytes": 6000
+    },
+    {
+      "path": "tests/test_workflow_yaml_valid.py",
+      "why": "c6-schedule-heal.yml had two YAML faults and failed at startup on every run for months.",
+      "min_bytes": 1500
+    },
+    {
+      "path": "tests/test_e2e_gate.py",
+      "why": "Proves the merge gate actually blocks what it claims to block.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_guard_census.py",
+      "why": "This census. Listed here so removing the enforcement is itself caught.",
+      "min_bytes": 2000
+    }
+  ],
+  "ratchets": {
+    "e2e_gate_required_specs": {
+      "value": 11,
+      "why": "Number of checks aggregated by the merge gate. Was 4 before L0, which let a red CI merge. Adding checks is good; removing them re-opens the hole."
+    },
+    "pip_install_matrix_legs": {
+      "value": 4,
+      "why": "3 OS on 3.11 plus the ubuntu 3.9 leg. Dropping the 3.9 leg is exactly how 0.12.753 escaped."
+    },
+    "workflow_files_parsed": {
+      "value": 32,
+      "why": "Workflows under .github/workflows that must parse. Guards against quietly deleting a workflow to make CI green."
+    },
+    "declared_matrix_cells": {
+      "value": 19,
+      "why": "Cells declared in verification/matrix.json. Deleting a cell is how you make a coverage problem disappear without fixing it."
+    },
+    "gated_matrix_cells": {
+      "value": 9,
+      "why": "Cells whose failure blocks a merge. The number that actually protects main."
+    },
+    "mutation_targets": {
+      "value": 2,
+      "why": "Modules under mutation testing. Dropping a target removes the only measurement that can see a weakened assertion."
+    }
+  }
+}
