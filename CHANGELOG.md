@@ -1112,6 +1112,13 @@
 
 ## [Unreleased]
 
+### Fix: set up from the terminal, then asked to set up again in the browser (2026-08-22)
+- **Why:** someone who installed ClawMetry and connected their account from the terminal opened the dashboard and was met by the first-run welcome screen, asked to choose how ClawMetry should run and to sign in a second time. The terminal knew perfectly well who they were: running `clawmetry status` on the same machine printed their account and their plan. Two answers to the same question on one machine, and the wrong one is the one you are looking at.
+- **What:** every way of finishing setup now leaves the same mark. Connecting your account, signing in, running the setup wizard, activating a licence key, or completing setup in the desktop app all record the choice you made, so the browser only ever asks the question when nothing on the machine has answered it. A plain install that has never chosen still sees the welcome screen, which is the whole point of it.
+- **What:** a paid account is now recognised as set up even when the plan lives in your ClawMetry account rather than in a licence file on the machine, which is the normal shape for anyone on a Cloud plan who keeps their data local. An account that signed in but never got a plan is still asked, because that case genuinely is unfinished and re-asking is how it gets fixed.
+- **What:** a setup attempt that fails partway through records nothing, so the welcome screen stays available for a second try instead of quietly closing behind a sign-in that did not work.
+- **Verified:** on the machine that hit this, with a paid account and data kept local, the dashboard went from the welcome screen to the dashboard itself, and the state it reports now names the account's plan as the reason.
+
 ### Fix: the needs-you strip said "can't tell" on machines it could answer for (2026-08-16)
 - **Why:** the strip decided whether it could answer by looking at how long ago the background service last checked in. That is an indirect test, and a real machine showed why it fails: the service was running and answering queries normally while its last check-in was ten hours old, so the page said it could not tell about a machine it could have answered for perfectly well. Being cautious is the right way to be wrong, but any machine whose check-in has stalled would have shown that message forever, which makes the feature useless in exactly the case where nothing else looks broken.
 - **What:** the page now asks the direct question, whether the background service is actually running, and answers from that. The time since the last check-in is still shown, because a large number there is a real sign that something has stalled, but it no longer decides whether you get an answer.
