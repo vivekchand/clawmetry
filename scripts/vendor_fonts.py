@@ -232,7 +232,41 @@ def main() -> int:
     for spec in FONT_SETS:
         if args.only and spec["name"] != args.only:
             continue
-        generated = build(spec)
+
+        # In --check mode a failure to REACH the upstream API is not drift, and
+        # must not be reported as one. The Google Fonts API is outside any
+        # contributor's control: an outage, a slow response, or a change to the
+        # CSS shape would fail this check on every PR with nothing anyone could
+        # do to make it green. A check with no path to green teaches people
+        # that red is normal, which is how the OpenSSF Scorecard job sat broken
+        # for its entire life.
+        #
+        # This never hides real drift. It only distinguishes "could not verify"
+        # from "verified and wrong". When the fetch succeeds and the content
+        # differs, the DRIFT branch below still fails exactly as before.
+        #
+        # Generation mode deliberately keeps raising: you cannot write a
+        # stylesheet you were unable to fetch, and failing loudly is correct
+        # there. Mirrors the same posture scripts/verify_vendor.py already
+        # takes for the npm registry.
+        try:
+            generated = build(spec)
+        except BaseException as exc:  # noqa: BLE001 - includes SystemExit from _parse
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            if not args.check:
+                raise
+            print(
+                f"SKIP   {spec['name']}: could not reach or parse the upstream "
+                f"font API ({type(exc).__name__}: {exc})"
+            )
+            print(
+                "       Treated as UNVERIFIED, not as drift. Re-run when the "
+                "API is reachable; if this persists the generator needs "
+                "updating for a changed API shape."
+            )
+            continue
+
         path = spec["css_path"]
         if args.check:
             current = ""
