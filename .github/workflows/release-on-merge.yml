@@ -421,6 +421,25 @@ jobs:
             --ref "$NEW_TAG" \
             || echo "⚠ desktop-artifacts dispatch failed (non-blocking)"
 
+          # release-canary.yml declares `on: workflow_run:` against this
+          # workflow, and that trigger DID NOT FIRE for 0.12.757 (zero runs
+          # created). GITHUB_TOKEN-driven activity does not cascade into new
+          # workflow runs, which is the same rule that made the tag dispatch
+          # above necessary. The workflow_run trigger is left in place as
+          # belt-and-braces; THIS dispatch is the path that actually works.
+          #
+          # Non-blocking on purpose: the release is already on PyPI by now, so
+          # a failed dispatch must not fail the release. It does mean a silent
+          # 403 looks like success, which is exactly how the desktop-artifacts
+          # dispatch broke on v0.12.658, so tests/test_release_canary_reachable.py
+          # asserts this dispatch still exists.
+          echo "▸ Dispatching release-canary.yml for ${{ steps.bump.outputs.new }}"
+          gh workflow run release-canary.yml \
+            --repo ${{ github.repository }} \
+            --ref main \
+            -f version="${{ steps.bump.outputs.new }}" \
+            || echo "⚠ release-canary dispatch failed (non-blocking)"
+
       - name: Open PR for version bump
         # Branch protection on main blocks direct pushes. The wheel is
         # already on PyPI + the release tag exists, so this step just keeps

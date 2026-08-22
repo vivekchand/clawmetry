@@ -1111,6 +1111,27 @@ def activate(key: str, node_id: str | None = None, actor: str = "") -> tuple[boo
     install_status = _download_and_install_pro(payload)
     tier = str(payload.get("tier", "pro")).lower()
     nodes = payload.get("nodes", 1)
+    # Activating a key IS a completed self-host onboarding, whichever door
+    # it came through (`clawmetry activate`, `clawmetry license activate`,
+    # the onboard wizard, the browser gate). Recorded here rather than in
+    # each caller so no future entry point can forget and leave the machine
+    # facing the first-run gate again with a live licence on disk.
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        # Derived from LICENSE_PATH, not from ``~``: both files live in
+        # ~/.clawmetry on a real install, but LICENSE_PATH is the knob the
+        # test suite redirects. Resolving ``~`` here instead made a unit
+        # test that activates a fake key write the gate file into the
+        # DEVELOPER's (and CI runner's) real home — caught locally before
+        # this shipped.
+        _obs.record_choice(
+            "selfhost_trial" if tier == "trial" else "selfhost_license",
+            source="license:activate",
+            path=os.path.join(os.path.dirname(LICENSE_PATH), "onboarding.json"),
+        )
+    except Exception:
+        pass
     _audit_license_event(
         "license.activate", result="activated", actor=actor, payload=payload,
     )

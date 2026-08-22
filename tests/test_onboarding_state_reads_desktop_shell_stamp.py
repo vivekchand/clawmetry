@@ -51,6 +51,7 @@ def isolated(tmp_path, monkeypatch):
     # By default: no license, no cloud token, cloud enabled (no nocloud).
     monkeypatch.setattr(m, "_license_state", lambda: "")
     monkeypatch.setattr(m, "_cloud_connected", lambda: False)
+    monkeypatch.setattr(m, "_paid_entitlement_state", lambda: "")
 
     yield m, gate_state, shell_runtime
 

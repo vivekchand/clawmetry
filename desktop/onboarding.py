@@ -193,6 +193,18 @@ def _record_dashboard_gate_choice(mode: str) -> None:
         choice = "managed"
     else:
         return
+    # One writer for this file across the CLI, the shell and the browser
+    # gate (clawmetry/onboarding_state.py) — it writes atomically and knows
+    # the accepted values. The inline fallback stays for the bundled-app
+    # case where the packaged wheel predates that module.
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        if _obs.record_choice(choice, source="desktop_shell",
+                              path=str(_DASHBOARD_GATE_STATE_PATH)):
+            return
+    except Exception:
+        pass
     try:
         _DASHBOARD_GATE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _DASHBOARD_GATE_STATE_PATH.write_text(json.dumps({
