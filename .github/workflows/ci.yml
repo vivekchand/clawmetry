@@ -60,6 +60,27 @@ jobs:
               sys.exit(1)
           print(f'✅ Syntax OK ({len(checked)} files)')
           "
+      # PEP 604 (`str | None`) parses on 3.9 but the 3.9 *runtime* raises
+      # TypeError when the signature is evaluated at def time -- so the
+      # ast.parse gate above rides straight past it. 0.12.753 shipped one
+      # such return annotation at clawmetry/cli.py module scope and every
+      # `clawmetry` subcommand, `clawmetry uninstall` included, died before
+      # main() on the desktop bundle's 3.9 venv and on any 3.9 pip install.
+      # The 3.9 test leg below only runs tests/test_api.py (never imports the
+      # CLI) and install-test.yml smoke-tests `clawmetry --version` on 3.12
+      # only, so nothing else in CI had eyes on this.
+      - name: Ban py3.9-fatal PEP 604 unions (class guard, 0.12.753)
+        run: python3 scripts/check_py39_annotations.py
+
+      # Empirical backstop for the same class: the CLI entry point is
+      # stdlib-only at import time, so a bare 3.9 interpreter can prove it
+      # loads. Catches anything the AST gate cannot see (3.10+ syntax in a
+      # transitively imported module, a runtime-evaluated type alias, ...).
+      - name: CLI imports on Python 3.9
+        run: |
+          python3 -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
+          python3 -c "import sys, clawmetry.cli; print('clawmetry.cli imports on', sys.version.split()[0])"
+
       - name: Install ruff (fast linter)
         run: pip install ruff
       - name: Lint (warnings only, don't fail)
@@ -498,18 +519,29 @@ jobs:
 
   # ── pip install smoke test across platforms ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   pip-install:
-    name: pip install (${{ matrix.os }})
+    name: pip install (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+        include:
+          # setup.py advertises python_requires=">=3.8" and the macOS desktop
+          # bundle ships a Python 3.9 venv, so the console script the user
+          # actually runs has to work on 3.9. This leg is exactly the gate
+          # 0.12.753 needed: a `-> str | None` at clawmetry/cli.py module
+          # scope killed every subcommand at import on 3.9 (`clawmetry
+          # uninstall` included) while all three legs here stayed green on
+          # 3.11. One extra Linux leg, no matrix explosion.
+          - os: ubuntu-latest
+            python-version: "3.9"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Install from source
         run: pip install flask .
       # These used to be continue-on-error with a `|| echo` fallback, which

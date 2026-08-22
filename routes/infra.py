@@ -24,6 +24,8 @@ Module-level helpers (``_find_log_file``, ``_tail_lines``, ``_ext_emit``,
 mechanical move — zero behaviour change.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
