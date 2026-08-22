@@ -6851,17 +6851,143 @@ def _pick_heartbeat_interval(resp_json: dict | None) -> int:
     )
 
 
+def _machine_specs() -> dict:
+    """Which machine is this? — hostname, OS, arch, RAM, cores.
+
+    Deliberately EXCLUDES network addresses. Local IPs stay in the
+    E2E-encrypted snapshot (machineInfo) where the cloud cannot read them;
+    these five fields are what a person needs to recognise their own machine
+    in a fleet list, and none of them is an address anything can be reached at.
+
+    Every value is best effort and omitted rather than guessed: a fleet card
+    showing "Ubuntu 24.04 - 16 GB" is useful, one showing "unknown - 0 GB" is
+    worse than showing nothing at all.
+    """
+    import socket as _socket
+
+    specs: dict = {}
+    try:
+        specs["hostname"] = _socket.gethostname() or ""
+    except Exception:
+        pass
+    # OS as a PERSON names it ("Ubuntu 24.04", "macOS 15.3"), not as the kernel
+    # does ("Linux 6.8.0-45-generic"). The kernel string is the wrong answer to
+    # "which of my machines is this" — every Linux box gives roughly the same one.
+    system = ""
+    try:
+        system = platform.system()
+    except Exception:
+        pass
+    try:
+        if system == "Linux":
+            name = version = ""
+            with open("/etc/os-release", encoding="utf-8") as fh:
+                for line in fh:
+                    key, _, val = line.partition("=")
+                    val = val.strip().strip('"')
+                    if key == "NAME":
+                        name = val
+                    elif key == "VERSION_ID":
+                        version = val
+            specs["os"] = name or "Linux"
+            specs["os_release"] = version
+        elif system == "Darwin":
+            specs["os"] = "macOS"
+            specs["os_release"] = (platform.mac_ver() or ("",))[0] or ""
+        elif system == "Windows":
+            specs["os"] = "Windows"
+            specs["os_release"] = (platform.win32_ver() or ("",))[0] or ""
+        elif system:
+            specs["os"] = system
+            specs["os_release"] = platform.release()
+    except Exception:
+        if system:
+            specs["os"] = system
+    try:
+        specs["arch"] = platform.machine() or ""
+    except Exception:
+        pass
+    try:
+        import multiprocessing as _mp
+
+        specs["cpu_count"] = int(_mp.cpu_count())
+    except Exception:
+        pass
+    ram = _total_ram_gb()
+    if ram:
+        specs["ram_gb"] = ram
+    return {k: v for k, v in specs.items() if v not in ("", None)}
+
+
+def _total_ram_gb() -> float:
+    """Installed RAM in GB, or 0.0 when it cannot be read.
+
+    Three platform paths and no dependency on psutil, which is optional here.
+    """
+    try:
+        system = platform.system()
+        if system == "Linux":
+            with open("/proc/meminfo", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        return round(int(line.split()[1]) / 1024 / 1024, 1)
+        elif system == "Darwin":
+            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
+            return round(int(out.strip()) / 1024 / 1024 / 1024, 1)
+        elif system == "Windows":
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            st = _MemStatus()
+            st.dwLength = ctypes.sizeof(_MemStatus)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+            return round(st.ullTotalPhys / 1024 / 1024 / 1024, 1)
+    except Exception:
+        pass
+    return 0.0
+
+
 def _build_node_meta() -> dict:
     """Routing-safe node metadata for the PLAINTEXT heartbeat.
 
-    The machine fingerprint (os, arch, ram_gb, cpu_count, local_ips) used to
-    live here and the cloud stored it in cleartext. It now rides the
-    E2E-encrypted snapshot (machineInfo, see _build_machine_info); only
-    routing/entitlement fields the cloud legitimately needs in cleartext stay
-    here. Best-effort: failures yield an empty value rather than raising — the
+    Carries what the cloud needs to ROUTE and ENTITLE a node, plus the machine
+    specs that let a person tell their own machines apart (see
+    :func:`_machine_specs`).
+
+    History, because this line moved once already: the full machine
+    fingerprint used to live here in cleartext, and was moved wholesale into
+    the E2E-encrypted snapshot. That took the network addresses out of the
+    cloud's reach, which was the point — and it also took away every way to
+    tell which physical machine a fleet card meant, because the snapshot can
+    only be decrypted with THAT node's key, which is the very thing you go to
+    the machine to fetch. Founder live-hit 2026-08-22, on an account with 18
+    nodes: "it's really confusing to know who owns this instance".
+
+    So the split is now drawn where the risk actually is: identity you would
+    read off a sticker on the case (hostname, OS, arch, RAM, cores) rides the
+    plaintext heartbeat; network addresses stay E2E-encrypted in machineInfo
+    and surface only in a view whose key the viewer already holds.
+
+    Best-effort: failures yield an empty value rather than raising — the
     heartbeat MUST keep flowing even on weird platforms.
     """
     meta: dict = {}
+    try:
+        meta.update(_machine_specs())
+    except Exception:
+        pass
     # Pro-adapter + auto-update status so the cloud Fleet can show whether an
     # entitled node is actually running clawmetry-pro (the paid runtime
     # adapters) and keeping itself current — turning the "I'm on Pro but Claude
@@ -12999,23 +13125,18 @@ def _build_machine_info():
             )
         # Kernel
         items.append({"label": "Kernel", "value": platform.release(), "status": "ok"})
-        # RAM + all local IPs. These moved here from the plaintext heartbeat's
-        # node_meta: the machine fingerprint is now E2E-encrypted in the snapshot
-        # and never sent in cleartext. The "Local IPs" label contains "IP" so the
-        # cloud Network-modal interceptor picks it up too.
+        # RAM (shared reader with the heartbeat's machine specs, so the two
+        # surfaces can never disagree about how much memory this box has).
+        #
+        # The LOCAL IPS below are the part that stays E2E-only: the heartbeat
+        # now carries the machine's specs in cleartext so a person can pick
+        # their own machine out of a fleet list, but nothing the machine can be
+        # REACHED at ever leaves here unencrypted. That line is drawn in
+        # _build_node_meta; keep both sides of it in sync.
         try:
-            _ramgb = ""
-            if platform.system() == "Linux":
-                with open("/proc/meminfo") as _mf:
-                    for _line in _mf:
-                        if _line.startswith("MemTotal:"):
-                            _ramgb = str(round(int(_line.split()[1]) / 1024 / 1024, 1))
-                            break
-            elif platform.system() == "Darwin":
-                _mem = subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2)
-                _ramgb = str(round(int(_mem.strip()) / 1024 / 1024 / 1024, 1))
+            _ramgb = _total_ram_gb()
             if _ramgb:
-                items.append({"label": "RAM", "value": _ramgb + " GB", "status": "ok"})
+                items.append({"label": "RAM", "value": f"{_ramgb} GB", "status": "ok"})
         except Exception:
             pass
         try:
