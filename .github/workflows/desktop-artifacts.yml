@@ -214,8 +214,36 @@ jobs:
     # Without them every step NO-OPs, so forks and dev builds stay green
     # and simply produce unsigned artifacts (SmartScreen warns; Smart App
     # Control blocks the uninstaller - see the .nsi comment).
+    # OIDC token for azure/login (Artifact Signing path). Harmless when
+    # the Azure secrets are absent; `contents: read` restores the default
+    # that declaring any permission block would otherwise drop.
+    permissions:
+      id-token: write
+      contents: read
+    # Federated-credential subjects cannot contain wildcards, and this
+    # workflow fires on `v*.*.*` tags - an unbounded set no exact subject
+    # can match. Declaring an environment pins the OIDC `sub` claim to the
+    # stable `repo:<owner>/<repo>:environment:release`, covering tag pushes
+    # and workflow_dispatch alike. No protection rules are set, so this
+    # neither gates nor delays the job.
+    environment: release
     env:
-      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+      # Two mutually exclusive signing backends, both optional:
+      #   HAS_AZ_SIGN   Azure Artifact Signing - Microsoft-managed FIPS
+      #                 140-3 Level 3 HSM, OIDC auth, no key material ever
+      #                 on the runner. PREFERRED.
+      #   HAS_WIN_CERT  legacy OV/EV .pfx export. Kept as a fallback.
+      # Azure wins when both are configured. Gate on the certificate
+      # profile too, not just the credential: the profile is the last
+      # resource to exist (it is blocked on identity validation), so
+      # credential-only gating would arm the Azure path while
+      # metadata.json still had an empty CertificateProfileName, turning a
+      # green unsigned build into a hard signtool failure for anyone who
+      # pushed a tag in the meantime.
+      # Downstream steps gate on SIGN_ENABLED, which whichever prep step
+      # ran writes to $GITHUB_ENV.
+      HAS_AZ_SIGN: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '' }}
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && !(secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '') }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -252,6 +280,65 @@ jobs:
       - name: Smoke test the built .exe
         run: python desktop/smoke_test.py dist\ClawMetry\ClawMetry.exe
 
+      # --- Azure Artifact Signing (preferred) ---
+      # Why a signtool wrapper instead of azure/artifact-signing-action:
+      # windows.nsi's !uninstfinalize hook needs a command makensis can
+      # invoke PER FILE mid-build to sign the embedded uninstaller stub.
+      # A workflow-step action only signs a folder after the fact, and the
+      # stub is regenerated inside makensis, so the action can never reach
+      # it - and an unsigned stub is exactly what Smart App Control blocks.
+      # Same SIGN_CMD contract as the .pfx path below, so windows.nsi and
+      # every downstream step stay untouched.
+      - name: Azure login (OIDC)
+        if: env.HAS_AZ_SIGN == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare Artifact Signing dlib + wrapper
+        if: env.HAS_AZ_SIGN == 'true'
+        shell: pwsh
+        env:
+          AZ_SIGN_ENDPOINT: ${{ secrets.AZ_SIGN_ENDPOINT }}
+          AZ_SIGN_ACCOUNT: ${{ secrets.AZ_SIGN_ACCOUNT }}
+          AZ_SIGN_PROFILE: ${{ secrets.AZ_SIGN_PROFILE }}
+        run: |
+          # The dlib needs signtool >= 10.0.2261.755; the SDK preinstalled
+          # on the runner image is not reliably that new, so pull both from
+          # NuGet rather than probing C:\Program Files (x86)\Windows Kits.
+          nuget install Microsoft.ArtifactSigning.Client -Version 1.0.128 `
+            -OutputDirectory $Env:RUNNER_TEMP\ts -ExcludeVersion -NonInteractive
+          nuget install Microsoft.Windows.SDK.BuildTools `
+            -OutputDirectory $Env:RUNNER_TEMP\ts -ExcludeVersion -NonInteractive
+          $dlib = "$Env:RUNNER_TEMP\ts\Microsoft.ArtifactSigning.Client\bin\x64\Azure.CodeSigning.Dlib.dll"
+          if (-not (Test-Path $dlib)) { throw "Artifact Signing dlib not found at $dlib" }
+          $signtool = Get-ChildItem "$Env:RUNNER_TEMP\ts\Microsoft.Windows.SDK.BuildTools\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found in SDK BuildTools package" }
+
+          # Endpoint MUST match the signing account's region or every sign
+          # call 403s.
+          $meta = Join-Path $Env:RUNNER_TEMP "signing-metadata.json"
+          @{
+            Endpoint               = $Env:AZ_SIGN_ENDPOINT
+            CodeSigningAccountName = $Env:AZ_SIGN_ACCOUNT
+            CertificateProfileName = $Env:AZ_SIGN_PROFILE
+          } | ConvertTo-Json | Set-Content -Path $meta -Encoding ascii
+
+          # Artifact Signing certificates are valid for THREE DAYS by
+          # design, so the RFC 3161 countersignature is what keeps shipped
+          # binaries valid after the cert expires. It is not optional here.
+          $cmd = Join-Path $Env:RUNNER_TEMP "sign.cmd"
+          @(
+            '@echo off'
+            "`"$signtool`" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib `"$dlib`" /dmdf `"$meta`" %1"
+          ) | Set-Content -Path $cmd -Encoding ascii
+          "SIGN_CMD=$cmd" >> $Env:GITHUB_ENV
+          "SIGNTOOL=$signtool" >> $Env:GITHUB_ENV
+          "SIGN_ENABLED=true" >> $Env:GITHUB_ENV
+
       # --- Authenticode signing setup ---
       # Decodes the cert and writes a sign.cmd wrapper that both this
       # workflow AND makensis (via /DSIGN_CMD + !finalize/!uninstfinalize
@@ -276,12 +363,14 @@ jobs:
             "`"$signtool`" sign /f `"$pfx`" /p %CLAWMETRY_SIGN_PW% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 %1"
           ) | Set-Content -Path $cmd -Encoding ascii
           "SIGN_CMD=$cmd" >> $Env:GITHUB_ENV
+          "SIGNTOOL=$signtool" >> $Env:GITHUB_ENV
+          "SIGN_ENABLED=true" >> $Env:GITHUB_ENV
 
       # Sign the app exe BEFORE the zip + installer steps so both the
       # portable .zip and the NSIS-packed install tree ship a signed
       # ClawMetry.exe (Smart App Control evaluates it at launch too).
       - name: Sign ClawMetry.exe
-        if: env.HAS_WIN_CERT == 'true'
+        if: env.SIGN_ENABLED == 'true'
         shell: pwsh
         env:
           CLAWMETRY_SIGN_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
@@ -341,7 +430,7 @@ jobs:
           # the script's 0.0.0.0 default by passing nothing).
           $nsisArgs = @("/DVERSION=${{ steps.ver.outputs.version }}")
           if ("${{ steps.ver.outputs.version }}" -match '^\d+\.\d+\.\d+$') { $nsisArgs += "/DVIVERSION=${{ steps.ver.outputs.version }}.0" }
-          if ($Env:HAS_WIN_CERT -eq 'true') { $nsisArgs += "/DSIGN_CMD=$Env:SIGN_CMD" }
+          if ($Env:SIGN_ENABLED -eq 'true') { $nsisArgs += "/DSIGN_CMD=$Env:SIGN_CMD" }
           $nsisArgs += @("/DSRC_DIR=$PWD\dist\ClawMetry", "desktop\installer\windows.nsi")
           & $makensis @nsisArgs
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
@@ -354,16 +443,20 @@ jobs:
       # app exe, or the SAC uninstall fix silently didn't ship. Also
       # removes the decoded cert so it never lands in an artifact.
       - name: Verify signatures + scrub cert
-        if: env.HAS_WIN_CERT == 'true'
+        if: env.SIGN_ENABLED == 'true'
         shell: pwsh
         run: |
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          & $signtool verify /pa "dist\ClawMetry-windows-setup.exe"
-          if ($LASTEXITCODE -ne 0) { throw "setup exe is not validly signed" }
-          & $signtool verify /pa "dist\ClawMetry\ClawMetry.exe"
-          if ($LASTEXITCODE -ne 0) { throw "ClawMetry.exe is not validly signed" }
-          Remove-Item (Join-Path $Env:RUNNER_TEMP "codesign.pfx") -Force
+          # /pa = Authenticode chain policy. /tw fails the step when the
+          # RFC 3161 countersignature is missing, which under Artifact
+          # Signing's three-day certificates would mean shipping a binary
+          # that goes invalid in users' hands within the week.
+          & $Env:SIGNTOOL verify /pa /tw "dist\ClawMetry-windows-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw "setup exe is not validly signed + timestamped" }
+          & $Env:SIGNTOOL verify /pa /tw "dist\ClawMetry\ClawMetry.exe"
+          if ($LASTEXITCODE -ne 0) { throw "ClawMetry.exe is not validly signed + timestamped" }
+          # Only the .pfx backend leaves key material on the runner.
+          $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
+          if (Test-Path $pfx) { Remove-Item $pfx -Force }
 
       - uses: actions/upload-artifact@v4
         with:
