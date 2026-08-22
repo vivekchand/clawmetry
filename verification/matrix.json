@@ -1,0 +1,259 @@
+{
+  "_comment": [
+    "THE PRODUCT TRUTH MATRIX.",
+    "",
+    "Coverage today is IMPLIED -- it is whatever tests happen to exist. That is how",
+    "holes open without anyone noticing: Python 3.9 was tested on Linux only, the 3.9",
+    "leg ran only tests/test_api.py and never imported the CLI, and the API leg",
+    "installed four dependencies (no duckdb, no cryptography) so it validated a",
+    "degraded install. Each hole was invisible until a user fell through it.",
+    "",
+    "This file makes coverage DECLARED instead. Every cell below is a promise the",
+    "product makes to a user. scripts/verification_matrix.py checks that each cell",
+    "names a verifier that actually exists, and CI fails when one does not.",
+    "",
+    "Same principle scripts/sync_runtime_count.py already proves for one dimension:",
+    "derive from a single declaration, fail on drift. This generalises it.",
+    "",
+    "STATUS values:",
+    "  gated      -- verified on every PR; a failure blocks the merge",
+    "  continuous -- verified on a schedule by the conformance heartbeat (L2)",
+    "  manual     -- no automation yet. An honest, COUNTED admission, not a hiding",
+    "                place: open_holes below tracks these and the count may only fall."
+  ],
+
+  "products": {
+    "oss_cli": {
+      "label": "clawmetry CLI + dashboard (PyPI)",
+      "cells": [
+        {
+          "id": "pip-install-linux-py311",
+          "what": "pip install clawmetry, CLI runs, imports clean",
+          "platform": "ubuntu-latest",
+          "python": "3.11",
+          "status": "gated",
+          "verifier": "ci.yml::pip-install"
+        },
+        {
+          "id": "pip-install-macos-py311",
+          "what": "pip install clawmetry, CLI runs, imports clean",
+          "platform": "macos-latest",
+          "python": "3.11",
+          "status": "gated",
+          "verifier": "ci.yml::pip-install"
+        },
+        {
+          "id": "pip-install-windows-py311",
+          "what": "pip install clawmetry, CLI runs, imports clean",
+          "platform": "windows-latest",
+          "python": "3.11",
+          "status": "gated",
+          "verifier": "ci.yml::pip-install"
+        },
+        {
+          "id": "pip-install-linux-py39",
+          "what": "pip install on the oldest supported Python; CLI must IMPORT, not just resolve",
+          "platform": "ubuntu-latest",
+          "python": "3.9",
+          "status": "gated",
+          "verifier": "ci.yml::pip-install",
+          "note": "The exact cell 0.12.753 fell through. python_requires is >=3.8 and the macOS desktop bundle ships a 3.9 venv."
+        },
+        {
+          "id": "pypi-install-published-wheel",
+          "what": "Install the PUBLISHED wheel from PyPI and boot it (not the local build)",
+          "platform": "all",
+          "python": "3.11",
+          "status": "continuous",
+          "verifier": "conformance-heartbeat.yml::pypi-install"
+        },
+        {
+          "id": "api-tests-3os",
+          "what": "HTTP API surface across all three operating systems",
+          "platform": "all",
+          "python": "3.11",
+          "status": "gated",
+          "verifier": "ci.yml::api-tests"
+        }
+      ]
+    },
+
+    "installers": {
+      "label": "One-click desktop installers",
+      "cells": [
+        {
+          "id": "install-sh-linux",
+          "what": "install.sh, plus ghost-install self-heal",
+          "platform": "ubuntu-latest",
+          "python": "n/a",
+          "status": "continuous",
+          "verifier": "install-test.yml::test-linux",
+          "note": "Path-filtered on PRs, so it does not run for a setup.py change. The heartbeat covers it unconditionally."
+        },
+        {
+          "id": "install-sh-macos",
+          "what": "install.sh on macOS, plus ghost-install self-heal",
+          "platform": "macos-latest",
+          "python": "n/a",
+          "status": "continuous",
+          "verifier": "install-test.yml::test-macos"
+        },
+        {
+          "id": "install-ps1-windows",
+          "what": "install.ps1 on Windows",
+          "platform": "windows-latest",
+          "python": "3.12",
+          "status": "continuous",
+          "verifier": "install-test.yml::test-windows-ps"
+        },
+        {
+          "id": "desktop-exe-windows",
+          "what": ".exe installer builds and is a real installer, not a zip",
+          "platform": "windows-latest",
+          "python": "n/a",
+          "status": "continuous",
+          "verifier": "desktop-artifacts.yml",
+          "note": "Tag-triggered only, so a break is discovered at release time. The heartbeat builds it nightly instead."
+        },
+        {
+          "id": "desktop-dmg-macos",
+          "what": ".dmg builds with a drag-to-Applications affordance",
+          "platform": "macos-latest",
+          "python": "n/a",
+          "status": "continuous",
+          "verifier": "desktop-artifacts.yml"
+        },
+        {
+          "id": "desktop-appimage-linux",
+          "what": ".AppImage builds and is self-contained",
+          "platform": "ubuntu-latest",
+          "python": "n/a",
+          "status": "continuous",
+          "verifier": "desktop-artifacts.yml"
+        }
+      ]
+    },
+
+    "daemon": {
+      "label": "Sync daemon + DuckDB store",
+      "cells": [
+        {
+          "id": "sync-daemon-e2e",
+          "what": "Daemon ingests to DuckDB and heartbeats",
+          "platform": "all",
+          "python": "3.11",
+          "status": "continuous",
+          "verifier": "sync-test.yml::sync-test",
+          "note": "Path-filtered on PRs."
+        },
+        {
+          "id": "daemon-invariants",
+          "what": "Store invariants under generated operation sequences",
+          "platform": "ubuntu-latest",
+          "python": "3.11",
+          "status": "gated",
+          "verifier": "tests/test_store_invariants.py"
+        }
+      ]
+    },
+
+    "cloud": {
+      "label": "Hosted dashboard (app.clawmetry.com)",
+      "cells": [
+        {
+          "id": "cloud-golden-path",
+          "what": "Hosted dashboard renders real data, no blank cards",
+          "platform": "n/a",
+          "python": "n/a",
+          "status": "gated",
+          "verifier": "ci.yml::moat-keystone"
+        },
+        {
+          "id": "cross-repo-handoff",
+          "what": "OSS snapshot keys the cloud reads still exist",
+          "platform": "n/a",
+          "python": "n/a",
+          "status": "gated",
+          "verifier": "cross-repo-handoff.yml"
+        }
+      ]
+    },
+
+    "runtimes": {
+      "label": "Agent runtime adapters",
+      "note": "The catalogue of record is FREE_RUNTIMES | PAID_RUNTIMES in clawmetry/entitlements.py. Per-runtime conformance lives in clawmetry-pro/runtime-conformance.yml. Tracked here as one cell; the per-runtime detail is checked by verification_matrix.py against the catalogue.",
+      "cells": [
+        {
+          "id": "runtime-catalogue-parity",
+          "what": "Every catalogue runtime is advertised and reachable on public surfaces",
+          "platform": "n/a",
+          "python": "n/a",
+          "status": "gated",
+          "verifier": "tests/test_advertised_runtimes_match_catalogue.py"
+        },
+        {
+          "id": "runtime-real-fixtures",
+          "what": "Every paid adapter parses a REAL captured fixture, not a synthetic one",
+          "platform": "n/a",
+          "python": "n/a",
+          "status": "manual",
+          "verifier": "clawmetry-pro/tests/fixtures/runtimes/<rt>/REAL",
+          "note": "16 of 24 have a REAL capture. Missing: aider, claude_code, cursor, goose, grok, hermes, openclaw, opencode -- including the two most used."
+        }
+      ]
+    },
+
+    "device": {
+      "label": "ClawMetry desk device (ESP32)",
+      "cells": [
+        {
+          "id": "firmware-host-kats",
+          "what": "Crypto + summary-parse known-answer tests on host",
+          "platform": "ubuntu-latest",
+          "python": "n/a",
+          "status": "manual",
+          "verifier": "clawmetry-hardware/firmware-tests.yml",
+          "note": "Lives in another repo; not reachable from this repo's gate."
+        }
+      ]
+    }
+  },
+
+  "open_holes": [
+    {
+      "id": "runtime-real-fixtures",
+      "detail": "8 of 24 paid adapters have no REAL/ fixture capture.",
+      "impact": "An upstream format change in Claude Code or OpenClaw passes against synthetic fixtures.",
+      "owner": "clawmetry-pro"
+    },
+    {
+      "id": "api-tests-degraded-deps",
+      "detail": "ci.yml::api-tests installs flask/pytest/requests/waitress only -- no duckdb, no cryptography.",
+      "impact": "The API matrix validates a degraded install, so DuckDB-path regressions are invisible to it.",
+      "owner": "clawmetry"
+    },
+    {
+      "id": "py39-not-on-macos-windows",
+      "detail": "Python 3.9 is exercised on Linux only.",
+      "impact": "A Windows- or macOS-specific 3.9 break ships unseen; the macOS desktop bundle ships a 3.9 venv.",
+      "owner": "clawmetry"
+    },
+    {
+      "id": "device-cross-repo",
+      "detail": "Firmware verification is not reachable from this repo's gate.",
+      "impact": "A snapshot-schema change here can break the device with nothing failing in this repo.",
+      "owner": "clawmetry-hardware"
+    }
+  ],
+
+  "ratchets": {
+    "max_open_holes": {
+      "value": 4,
+      "why": "Known, counted gaps. This number may only fall. Adding a hole without fixing one fails CI, which stops 'manual' from becoming a dumping ground."
+    },
+    "min_gated_cells": {
+      "value": 8,
+      "why": "Cells whose failure blocks a merge. May only rise."
+    }
+  }
+}
