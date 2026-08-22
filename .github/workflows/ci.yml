@@ -100,8 +100,13 @@ jobs:
       # so a failure here actually blocks the merge. Before that, guards like
       # these could go red on a PR that merged anyway -- which is how 0.12.753
       # shipped a CLI that was dead on Python 3.9.
+      # `requests` is needed because tests/conftest.py imports it at module
+      # scope, so pytest cannot even collect without it. This job runs on
+      # Python 3.9 deliberately: it is the floor setup.py advertises, and
+      # running the guards there means they are exercised on the interpreter
+      # 0.12.753 broke on.
       - name: Install verification test deps
-        run: pip install pytest pyyaml
+        run: pip install pytest pyyaml requests
 
       # A malformed workflow fails at STARTUP, before any step runs, and shows
       # up named after its own file path. c6-schedule-heal.yml carried two such
