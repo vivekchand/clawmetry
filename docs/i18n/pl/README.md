@@ -1,4 +1,4 @@
-<!-- i18n-src:6795052055e2 -->
+<!-- i18n-src:c111f32e69a5 -->
 > Polski translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
@@ -13,59 +13,62 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Zobacz, jak myśli twój agent.** Obserwowalność w czasie rzeczywistym dla **26 środowisk uruchomieniowych agentów AI**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex i 22 innych. Jeden panel dla całej floty agentów.
+**Zobacz, jak myśli twój agent.** Obserwowalność w czasie rzeczywistym dla **26 środowisk uruchomieniowych agentów AI**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex i 22 innych. Jeden panel dla całej twojej floty agentów.
 
-> 🌐 **Przeczytaj to w:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [więcej →](docs/i18n/)
+> 🌐 **Czytaj to w:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [więcej →](docs/i18n/)
 
-Jedna komenda. Zero konfiguracji. Wykrywa wszystko automatycznie.
+Jedna komenda. Zero konfiguracji. Automatyczne wykrywanie wszystkiego.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-Otwiera się pod adresem **http://localhost:8900**. Zero konfiguracji: znajduje środowiska uruchomieniowe agentów, które już masz, odczytuje je w trybie tylko do odczytu i niczego nie zmienia w ich działaniu.
+Otwiera się pod adresem **http://localhost:8900**. Zero konfiguracji: znajduje środowiska uruchomieniowe agentów,
+które już masz, odczytuje je w trybie tylko do odczytu i niczego nie zmienia w sposobie ich działania.
 
 ![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
-## Współpracuje z 26 środowiskami uruchomieniowymi agentów
+## Działa z 26 środowiskami uruchomieniowymi agentów
 
-**Bezmy w aplikacji open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
+**Bezpłatne w aplikacji open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-**W planie płatnym:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · **[Aider](https://clawmetry.com/runtimes/aider)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · **[Grok](https://clawmetry.com/runtimes/grok)** · **[QM](https://clawmetry.com/runtimes/qm)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)**
+**W planie płatnym:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok](https://clawmetry.com/runtimes/grok)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-Każde środowisko uruchomieniowe otrzymuje ten sam panel. Uruchom kilka naraz, a przełącznik w nagłówku przeskaluje każdą zakładkę do jednego z nich.
+Każde środowisko uruchomieniowe otrzymuje ten sam panel. Uruchom kilka jednocześnie, a przełącznik
+w nagłówku zmieni zakres każdej zakładki na wybrane z nich.
 
-Zbudowałeś własnego agenta na SDK zamiast tego? Interceptor śledzi też jego wywołania LLM. Zobacz [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
+Zbudowałeś własnego agenta na bazie SDK zamiast? Interceptor śledzi również jego wywołania LLM.
+Zobacz [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
 ## Co otrzymujesz
 
-- **Sesje i transkrypcje**: co robił każdy agent, krok po kroku, z możliwością odtworzenia
-- **Koszty i tokeny**: według środowiska uruchomieniowego, modelu, sesji i dnia, z flagami anomalii
-- **Flow**: diagram na żywo pokazujący przepływ wiadomości między kanałami, modelami i narzędziami
+- **Sesje i transkrypcje**: co zrobił każdy agent, krok po kroku, z możliwością odtworzenia
+- **Koszty i tokeny**: według środowiska uruchomieniowego, modelu, sesji i dnia, z oznaczeniami anomalii
+- **Flow**: diagram na żywo przedstawiający wiadomości przepływające przez kanały, modele i narzędzia
 - **Brain**: strumień zdarzeń rozumowania i wywołań narzędzi na żywo
-- **Pamięć i umiejętności**: pliki i umiejętności, które faktycznie wczytało każde środowisko uruchomieniowe
+- **Pamięć i umiejętności**: pliki i umiejętności rzeczywiście wczytane przez każde środowisko uruchomieniowe
 - **Zdrowie i logi**: dysk, pamięć, wskaźniki błędów, limity zapytań, strumień logów na żywo
-- **Alerty**: limity budżetu, skoki błędów, agent offline, kierowane do Slack, Discord, PagerDuty, Telegram, Email
-- **Zatwierdzenia**: wstrzymaj ryzykowne wywołania narzędzi *zanim* się wykonają i zatwierdź je z telefonu ([jak to działa](docs/APPROVALS.md))
+- **Alerty**: limity budżetu, skoki błędów, agent offline, kierowane do Slacka, Discorda, PagerDuty, Telegramu, e-maila
+- **Zatwierdzenia**: wstrzymaj ryzykowne wywołania narzędzi *zanim* zostaną wykonane i zatwierdzaj z telefonu ([jak](docs/APPROVALS.md))
 
 ## Cennik
 
 | Plan | Co obejmuje | Cena |
 |---|---|---|
-| **Darmowy** | OpenClaw + NVIDIA NemoClaw + Goose, pełny panel, tylko lokalnie | $0 |
-| **Starter** | Każde inne środowisko uruchomieniowe powyżej, widok floty, synchronizacja w chmurze | $9 za węzeł / miesiąc |
-| **Pro** | Starter + governance: zatwierdzenia, polityki ryzyka narzędzi, ewaluacje, wykrywanie anomalii, optymalizator kosztów, eksport OTel | $19 za węzeł / miesiąc |
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, pełny panel, tylko lokalnie | 0 USD |
+| **Starter** | Wszystkie pozostałe środowiska uruchomieniowe powyżej, widok floty, synchronizacja w chmurze | 9 USD za węzeł / miesiąc |
+| **Pro** | Starter + governance: zatwierdzenia, polityki ryzyka narzędzi, ewaluacje, wykrywanie anomalii, optymalizator kosztów, eksport OTel | 19 USD za węzeł / miesiąc |
 
 Plany roczne, Enterprise i aktualne ceny znajdują się na stronie
-**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Klucze licencyjne do samodzielnego hostowania
-działają bez chmury (`clawmetry license`). Dokładny podział darmowe/płatne znajduje się
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Klucze licencyjne do samodzielnego hostingu
+działają bez chmury (`clawmetry license`). Dokładny podział na funkcje bezpłatne i płatne znajduje się
 w [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
 
 ## Twoje dane pozostają na twoim komputerze
 
-ClawMetry odczytuje lokalne pliki sesji i logi. Nic nie opuszcza twojego komputera, chyba że
-uruchomisz `clawmetry connect`. Nawet wtedy migawka jest szyfrowana end-to-end
-kluczem, który nigdy nie opuszcza twojej maszyny, i odszyfrowywana w twojej przeglądarce.
+ClawMetry odczytuje lokalne pliki sesji i logi. Nic nie opuszcza twojego urządzenia, chyba że
+uruchomisz `clawmetry connect`. Nawet wtedy zrzut danych jest szyfrowany end-to-end kluczem,
+który nigdy nie opuszcza twojego komputera, a odszyfrowanie następuje w twojej przeglądarce.
 
 ## Instalacja
 
@@ -73,25 +76,25 @@ kluczem, który nigdy nie opuszcza twojej maszyny, i odszyfrowywana w twojej prz
 pip install clawmetry     # następnie: clawmetry
 ```
 
-Lub jednolinijkowiec: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
+Lub jedna linijka: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-Wymaga Pythona 3.8+ na macOS, Linuksie lub Windowsie oraz co najmniej jednego środowiska uruchomieniowego agenta na
-tej samej maszynie. Instrukcje dotyczące Dockera: [docs/DOCKER.md](docs/DOCKER.md).
+Wymaga Python 3.8+ na macOS, Linuksie lub Windows oraz co najmniej jednego środowiska uruchomieniowego
+agenta na tym samym komputerze. Instrukcje dla Dockera: [docs/DOCKER.md](docs/DOCKER.md).
 
 ## Dokumentacja
 
 | | |
 |---|---|
-| [Zgodność środowisk uruchomieniowych](docs/compatibility.md) | Co odczytuje każdy adapter i jak dodać nowe środowisko uruchomieniowe |
-| [Uprawnienia](docs/ENTITLEMENTS.md) | Darmowe vs płatne, macierz poziomów, CLI licencji |
+| [Zgodność środowisk uruchomieniowych](docs/compatibility.md) | Co odczytuje każdy adapter i jak dodać środowisko uruchomieniowe |
+| [Uprawnienia](docs/ENTITLEMENTS.md) | Bezpłatne vs płatne, macierz poziomów, CLI licencji |
 | [Zatwierdzenia i polityki](docs/APPROVALS.md) | Bramkowanie przed wykonaniem, ocena ryzyka, zatwierdzenia z telefonu |
-| [OpenTelemetry](docs/OPENTELEMETRY.md) | Eksportuj ślady wszędzie, pobieraj OTLP z dowolnego źródła |
-| [Śledzenie SDK](docs/SDK_TRACKING.md) | Przypisanie kosztów dla agentów zbudowanych samodzielnie |
-| [Kanały czatu](docs/CHANNELS.md) | Adaptery czatu widoczne we Flow |
-| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Konfiguracje NVIDIA NemoClaw w piaskownicy |
-| [Docker](docs/DOCKER.md) | Obraz, compose, montowanie woluminów |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | Eksportuj ślady dowolnie, przyjmuj OTLP z dowolnego źródła |
+| [Śledzenie SDK](docs/SDK_TRACKING.md) | Przypisywanie kosztów dla agentów zbudowanych samodzielnie |
+| [Kanały czatu](docs/CHANNELS.md) | Adaptery czatu widoczne w Flow |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Piaskownicowe konfiguracje NVIDIA NemoClaw |
+| [Docker](docs/DOCKER.md) | Obraz, compose, montowanie wolumenów |
 | [Architektura](ARCHITECTURE.md) · [Rozwój](docs/DEVELOPMENT.md) | Jak to działa w środku; uruchamianie ze źródeł |
-| [Telemetria](docs/TELEMETRY.md) | Anonimowe zgłoszenia instalacji i otwarcia aplikacji desktopowej oraz jak je wyłączyć |
+| [Telemetria](docs/TELEMETRY.md) | Anonimowe sygnały instalacji i otwarcia aplikacji desktopowej oraz jak je wyłączyć |
 
 ## Zrzuty ekranu
 
@@ -100,9 +103,9 @@ tej samej maszynie. Instrukcje dotyczące Dockera: [docs/DOCKER.md](docs/DOCKER.
 | ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
 | **Overview**: tokeny, sesje, zdrowie | **Brain**: strumień zdarzeń agenta na żywo |
 | ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
-| **Cost**: według modelu i sesji | **Approvals**: bramkowanie ryzykownych wywołań narzędzi |
+| **Koszt**: według modelu i sesji | **Zatwierdzenia**: bramkowanie ryzykownych wywołań narzędzi |
 
-Więcej, według środowiska uruchomieniowego: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+Więcej, dla każdego środowiska uruchomieniowego: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
 ## Historia gwiazdek
 
