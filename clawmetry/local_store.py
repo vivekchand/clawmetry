@@ -6713,6 +6713,33 @@ class LocalStore:
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
+    def query_event_count(self, *, runtime: str | None = None) -> int:
+        """Count events, optionally for one runtime. Proxyable by design.
+
+        Callers outside the daemon process reach LocalStore through
+        ``_ProxyStore``, which forwards ``query_*`` methods over the daemon's
+        HTTP proxy and REFUSES private helpers: ``_fetch`` would be arbitrary
+        SQL over the RPC. A caller that reached for ``store._fetch("SELECT
+        COUNT(*) ...")`` therefore got a warning and ``None`` on every standard
+        install, where the daemon holds the writer lock. ``NemoClawAdapter.
+        detect()`` did exactly that, so NemoClaw, one of the two FREE runtimes,
+        was never detected outside single-process boots (found 2026-08-22 in
+        `clawmetry status` output). Counting is the whole need, so expose it as
+        a first-class shape instead.
+        """
+        sql = "SELECT COUNT(*) FROM events"
+        params: list = []
+        if runtime:
+            sql += " WHERE agent_type = ?"
+            params.append(str(runtime))
+        rows = self._fetch(sql, params)
+        if not rows:
+            return 0
+        try:
+            return int(rows[0][0])
+        except (TypeError, ValueError, IndexError):
+            return 0
+
     def query_events_by_ingest(
         self,
         *,
