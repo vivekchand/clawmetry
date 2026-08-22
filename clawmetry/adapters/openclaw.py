@@ -517,6 +517,35 @@ def _read_logging_file_config() -> str:
         return ""
 
 
+def _read_logging_level_config() -> str:
+    """Read ``logging.level`` from openclaw.json and return the level string.
+
+    openclaw.json can set a minimum severity for the file transport via
+    ``{"logging": {"level": "warn"}}``.  Returns the level string (lower-cased)
+    when present, empty string otherwise.  Never raises (#5060).
+    """
+    try:
+        home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+        cfg_path = os.path.join(home, "openclaw.json")
+        if not os.path.isfile(cfg_path):
+            alt = os.path.expanduser("~/.clawdbot/openclaw.json")
+            if os.path.isfile(alt):
+                cfg_path = alt
+            else:
+                return ""
+        with open(cfg_path) as _fh:
+            cfg = json.load(_fh)
+        if not isinstance(cfg, dict):
+            return ""
+        logging_cfg = cfg.get("logging")
+        if not isinstance(logging_cfg, dict):
+            return ""
+        level = logging_cfg.get("level")
+        return str(level).lower() if level else ""
+    except Exception:
+        return ""
+
+
 def _gateway_log_files() -> list:
     """Return the newest-5 rotating gateway log files across known candidate dirs.
 
@@ -586,6 +615,9 @@ def _gateway_log_meta() -> dict:
             )
         except OSError:
             pass
+        level = _read_logging_level_config()
+        if level:
+            result["gatewayLogLevel"] = level
         return result
     except Exception:
         return {}
