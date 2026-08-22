@@ -446,7 +446,6 @@ def _try_local_store_cost_optimization():
     ``test_cost_optimizer_local_store_v3``).
     """
     from routes.sessions import _ls_call  # late import to avoid cycle
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 
     # Sibling handles today + projected + expensiveOps from the same
     # query_aggregates + query_events rows; reuse it so the two
@@ -457,9 +456,13 @@ def _try_local_store_cost_optimization():
 
     # Compute the week + month rollups the sibling doesn't surface.
     agg_rows = _ls_call("query_aggregates") or []
-    now = _dt.now(_tz.utc)
-    week_start = (now - _td(days=7)).date().isoformat()
-    month_start = (now - _td(days=30)).date().isoformat()
+    # Canonical calendar windows in the node's local timezone. This used to
+    # compute a UTC day plus ROLLING 7/30-day spans, so the same events gave
+    # this route a different "week" and "month" than the budget panel and the
+    # cloud snapshot. See clawmetry/cost_windows.py.
+    from clawmetry.cost_windows import window_start_days
+
+    _today_start, week_start, month_start = window_start_days()
     week_cost = 0.0
     month_cost = 0.0
     for r in agg_rows:

@@ -47,9 +47,23 @@ bp_onboarding = Blueprint("onboarding", __name__)
 
 log = logging.getLogger(__name__)
 
-_STATE_PATH = os.path.expanduser("~/.clawmetry/onboarding.json")
+# The path, the postable choices and the writer all live in
+# clawmetry/onboarding_state.py now, so the CLI (`connect`, `onboard`,
+# `activate`) and the desktop shell record the SAME file this gate reads —
+# the 2026-08-22 re-prompt bug was nothing but three writers' worth of
+# missing writes. Imported defensively: the gate must still boot if the
+# package half of a partial upgrade is older than the routes half.
+try:
+    from clawmetry import onboarding_state as _obs
 
-_CHOICES = ("managed", "selfhost_license", "selfhost_trial")
+    _STATE_PATH = _obs.state_path()
+    _CHOICES = _obs.CHOICES
+    _RECORDED_CHOICES = _obs.RECORDED_CHOICES
+except Exception:  # pragma: no cover - defensive, package/routes skew only
+    _obs = None
+    _STATE_PATH = os.path.expanduser("~/.clawmetry/onboarding.json")
+    _CHOICES = ("managed", "selfhost_license", "selfhost_trial")
+    _RECORDED_CHOICES = _CHOICES + ("selfhost_free",)
 
 
 def _read_choice_file() -> dict:
@@ -216,16 +230,61 @@ def _shell_stamp_choice() -> str:
     return "managed"
 
 
+def _paid_entitlement_state() -> str:
+    """``''`` | ``'selfhost_license'`` | ``'managed'`` — derived from the
+    RESOLVED entitlement, which is strictly more than the local key file
+    ``_license_state()`` reads.
+
+    Closes the founder live-hit of 2026-08-22: a machine connected with
+    ``clawmetry connect`` to a paying ``cloud_pro`` account, then switched
+    to local-only (``--turn-off-cloud-sync``), was shown this gate again and
+    asked to sign in a second time. Every check missed it — no gate file
+    (the CLI never wrote one, now fixed in ``clawmetry/onboarding_state.py``),
+    no ``license.key`` (a cloud plan does not mint one), no shell stamp, and
+    ``_cloud_connected()`` deliberately returns False under the self-host
+    marker. Yet ``clawmetry status`` on the same box read ``cloud_pro``,
+    because ``entitlements`` resolves the daemon's ``cloud_plan.json`` cache
+    that ``license.load_license()`` knows nothing about.
+
+    A PAID entitlement is proof the account finished onboarding somewhere —
+    nobody pays before choosing. The free tier is deliberately not proof:
+    that is exactly the "linked account, plan free, trial mint failed"
+    limbo ``_cloud_connected`` documents, which must still be re-asked.
+
+    Self-host intent still decides the *label*: a paid plan under the
+    nocloud marker is someone running their own box on a cloud
+    subscription, not a managed install.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        ent = _ent.get_entitlement()
+        if not ent or not getattr(ent, "is_paid", False) or getattr(ent, "expired", False):
+            return ""
+    except Exception:
+        return ""
+    try:
+        from clawmetry.config import is_cloud_disabled as _icd
+
+        return "selfhost_license" if _icd() else "managed"
+    except Exception:
+        return "managed"
+
+
 def _resolve_state() -> dict:
     """The single source of truth the gate JS renders from.
 
     Precedence, most-authoritative first:
-      1. Explicit choice recorded in the browser gate's own file.
+      1. Explicit choice recorded in the browser gate's own file — written
+         by this gate AND by every CLI/desktop onboarding path (see
+         ``clawmetry/onboarding_state.py``).
       2. Active local license (trial or paid).
       3. Explicit choice recorded by the DESKTOP SHELL's onboarding pane
          (see ``_shell_stamp_choice`` — pip-wheel-side mirror of #4758,
          reaches users regardless of installer age).
-      4. Cloud token with no self-host intent recorded anywhere.
+      4. A paid entitlement resolved from anywhere, including the cloud
+         plan cache the local key file cannot see (``_paid_entitlement_state``).
+      5. Cloud token with no self-host intent recorded anywhere.
 
     The shell check sits BELOW the local license check on purpose: a
     live license is a stronger signal than "user clicked something in
@@ -234,7 +293,10 @@ def _resolve_state() -> dict:
     when the two disagree."""
     recorded = _read_choice_file()
     choice = str(recorded.get("choice", "")).strip().lower()
-    if choice in _CHOICES:
+    # _RECORDED_CHOICES, not _CHOICES: the CLI wizard's "no account, no
+    # cloud" answer (selfhost_free) is a real choice that must close this
+    # gate, even though no browser flow can POST it.
+    if choice in _RECORDED_CHOICES:
         return {"required": False, "state": choice, "source": "gate"}
     lic = _license_state()
     if lic:
@@ -243,6 +305,9 @@ def _resolve_state() -> dict:
     if shell_choice:
         return {"required": False, "state": shell_choice,
                 "source": "desktop_shell"}
+    paid = _paid_entitlement_state()
+    if paid:
+        return {"required": False, "state": paid, "source": "entitlement"}
     if _cloud_connected():
         return {"required": False, "state": "managed", "source": "cloud"}
     return {"required": True, "state": "none", "source": "none"}

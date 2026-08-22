@@ -1,0 +1,262 @@
+name: Conformance Heartbeat
+
+# Re-verifies the product on a SCHEDULE, independent of what anyone changed.
+#
+# The problem this solves, stated plainly: CI is change-triggered, so working on
+# one thing stops verifying everything else. install-test.yml only fires on
+# `paths: [install.sh, install.ps1, install.cmd]`, so a setup.py or dependency
+# change can break `pip install clawmetry` without ever running an install test.
+# desktop-artifacts.yml only fires on `tags: v*.*.*`, so an installer break is
+# discovered at release time. Spend a week on the Windows app and nothing
+# re-proves the pip path -- until a user does it for you.
+#
+# So this workflow ignores the diff entirely. It installs the PUBLISHED artifact
+# the way a real user would and asserts it works. It is the L2 layer of
+# verification/matrix.json: every cell marked "continuous" is covered here.
+#
+# Cadence is chosen for cost, not enthusiasm (Actions minutes are real money):
+#   every 2h  -- the critical path: pip install from PyPI on Linux
+#   every 6h  -- the same across all three operating systems
+#   nightly   -- installers, desktop artifacts, and the full matrix report
+#
+# A failure here means the SHIPPED product is broken for real users right now,
+# which is more urgent than any red PR check.
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"    # critical path, every 2 hours
+    - cron: "37 */6 * * *"    # 3-OS sweep, every 6 hours
+    - cron: "47 3 * * *"      # full sweep, nightly 03:47 UTC
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Which sweep to run"
+        required: false
+        default: "full"
+        type: choice
+        options: [critical, three-os, full]
+
+concurrency:
+  group: conformance-heartbeat-${{ github.event.schedule || inputs.scope }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Decide which legs run, so one workflow serves three cadences.
+  # ---------------------------------------------------------------------
+  scope:
+    name: Resolve sweep scope
+    runs-on: ubuntu-latest
+    outputs:
+      three_os: ${{ steps.pick.outputs.three_os }}
+      full: ${{ steps.pick.outputs.full }}
+    steps:
+      - name: Pick scope
+        id: pick
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          MANUAL: ${{ inputs.scope }}
+        run: |
+          THREE_OS=false
+          FULL=false
+          case "$SCHEDULE" in
+            "37 */6 * * *") THREE_OS=true ;;
+            "47 3 * * *")   THREE_OS=true; FULL=true ;;
+          esac
+          case "$MANUAL" in
+            three-os) THREE_OS=true ;;
+            full)     THREE_OS=true; FULL=true ;;
+          esac
+          echo "three_os=$THREE_OS" >> "$GITHUB_OUTPUT"
+          echo "full=$FULL"         >> "$GITHUB_OUTPUT"
+          echo "three_os=$THREE_OS full=$FULL (schedule='$SCHEDULE' manual='$MANUAL')"
+
+  # ---------------------------------------------------------------------
+  # THE cell the founder's complaint is about: does `pip install clawmetry`
+  # work RIGHT NOW, from PyPI, as a real user would run it?
+  # ---------------------------------------------------------------------
+  pypi-install:
+    name: pypi-install (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: scope
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11"]
+        include:
+          # 3.9 is the floor setup.py advertises, and the macOS desktop bundle
+          # ships a 3.9 venv. 0.12.753 imported fine on 3.11 and was dead on 3.9.
+          - os: ubuntu-latest
+            python-version: "3.9"
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the PUBLISHED wheel from PyPI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir clawmetry
+          python -m pip show clawmetry | head -3
+
+      # A resolvable install is not a working one. 0.12.753 installed
+      # perfectly and then died at import, so import the console script's
+      # module graph explicitly rather than trusting pip's exit code.
+      - name: CLI must actually import and run
+        run: |
+          python -c "import clawmetry, clawmetry.cli; print('import ok', clawmetry.__file__)"
+          clawmetry --version
+          clawmetry --help > /dev/null
+          echo "CLI OK on ${{ matrix.os }} py${{ matrix.python-version }}"
+
+      - name: Every shipped subcommand must reach its parser
+        run: |
+          for sub in status sync connect uninstall; do
+            if clawmetry "$sub" --help > /dev/null 2>&1; then
+              echo "  ok: clawmetry $sub --help"
+            else
+              echo "::error::clawmetry $sub --help failed on py${{ matrix.python-version }}"
+              echo "A subcommand that cannot even print help is dead at import."
+              echo "This is exactly the 0.12.753 failure: uninstall was broken too,"
+              echo "so affected users had no supported way off the product."
+              exit 1
+            fi
+          done
+
+  # ---------------------------------------------------------------------
+  # Same, across all three operating systems.
+  # ---------------------------------------------------------------------
+  pypi-install-3os:
+    name: pypi-install-3os (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.three_os == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install from PyPI and smoke the CLI
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir clawmetry
+          python -c "import clawmetry, clawmetry.cli; print('import ok')"
+          clawmetry --version
+
+  # ---------------------------------------------------------------------
+  # Installer scripts, run unconditionally -- not only when someone edits them.
+  # ---------------------------------------------------------------------
+  installers:
+    name: installers (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run install script
+        run: bash install.sh
+      - name: Verify binary
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.clawmetry/bin:/opt/clawmetry/bin:$PATH"
+          clawmetry --version
+
+  installers-windows:
+    name: installers (windows)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Run PowerShell install
+        shell: pwsh
+        env:
+          CLAWMETRY_SKIP_ONBOARD: "1"
+        run: .\install.ps1
+
+  # ---------------------------------------------------------------------
+  # Does the declared surface still match reality?
+  # ---------------------------------------------------------------------
+  matrix-report:
+    name: Verification matrix report
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Report the matrix
+        run: |
+          python3 scripts/verification_matrix.py --report | tee /tmp/matrix.txt
+      - name: Publish to job summary
+        if: always()
+        run: |
+          {
+            echo "## Verification matrix"
+            echo ""
+            echo '```'
+            cat /tmp/matrix.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # A broken heartbeat means the SHIPPED product is broken. Say so loudly.
+  # ---------------------------------------------------------------------
+  alarm:
+    name: Raise the alarm
+    needs: [pypi-install, pypi-install-3os, installers, installers-windows, matrix-report]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: File or update the alarm issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[heartbeat] The published product is failing verification"
+          BODY=$(printf '%s\n' \
+            "The conformance heartbeat failed against the PUBLISHED artifact." \
+            "" \
+            "This is not a red PR check. It means the product a user installs" \
+            "right now is broken, independent of anything currently being worked on." \
+            "" \
+            "Run: ${RUN_URL}" \
+            "" \
+            "Triage order:" \
+            "1. Is 'pip install clawmetry' + import broken? Yank or hotfix first." \
+            "2. Is an installer broken? The download page is serving it now." \
+            "3. Is it matrix drift? A declared cell lost its verifier.")
+
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --search "\"$TITLE\" in:title state:open" --json number --jq '.[0].number' || echo "")
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
+            echo "Commented on existing alarm issue #$EXISTING"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY" || echo "could not open issue"
+          fi

@@ -1228,6 +1228,23 @@ def _cmd_connect(args) -> None:
         config["encryption_key"] = enc_key
     save_config(config)
 
+    # Record the choice the dashboard's first-run gate reads, so a machine
+    # onboarded from the terminal is never asked to onboard AGAIN in the
+    # browser (founder live-hit 2026-08-22: `clawmetry status` showed the
+    # linked cloud_pro account while http://localhost:8900 showed the
+    # "Welcome to ClawMetry" modal and a second sign-in). The keep-local
+    # sign-in is self-host by definition — the marker staying put is that
+    # path's whole point — and the trial it mints is what unlocks runtimes.
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        _obs.record_choice(
+            "selfhost_trial" if _keep_local_signin else "managed",
+            source="cli:connect",
+        )
+    except Exception:
+        pass  # never let gate bookkeeping fail a successful connect
+
     # Explicit connect is an opt-in to cloud: clear any local-only marker so the
     # daemon actually pushes (otherwise a prior local-only install / disconnect
     # leaves it ingesting to DuckDB only and the node never appears in cloud).
@@ -3808,6 +3825,25 @@ def _instant_register(BOLD, GREEN, DIM):
     return result
 
 
+def _record_gate_choice(choice: str) -> None:
+    """Tell the dashboard's first-run gate that onboarding finished here.
+
+    The wizard's branches each end in a different place, so this is called
+    at the branch, not at a shared exit: the paths where sign-in FAILED and
+    we fall back to local ("No account connected. Running local-only") must
+    NOT record anything — the user tried to choose and the flow broke, so
+    the browser gate is their second chance, not noise.
+
+    Best-effort by contract; see clawmetry/onboarding_state.py.
+    """
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        _obs.record_choice(choice, source="cli:onboard")
+    except Exception:
+        pass
+
+
 def _cmd_onboard(args) -> None:
     """clawmetry onboard / setup -- interactive first-time setup wizard."""
     import os as _os
@@ -4010,6 +4046,7 @@ def _cmd_onboard(args) -> None:
         print(f"  {GREEN(BOLD('Local only.'))} {DIM('No account, no cloud.')}")
         print()
         _write_nocloud_marker()
+        _record_gate_choice("selfhost_free")
         _post_onboard_offers(_input, BOLD, CYAN, DIM)
         _finish_local()
         return
@@ -4083,6 +4120,10 @@ def _cmd_onboard(args) -> None:
         else:
             _pricing_url = "https://clawmetry.com/pricing?deploy=self"
             print(f"  {DIM('Get one at')} {CYAN(_pricing_url)} {DIM('then run')} {CYAN('clawmetry activate <key>')}")
+            # Self-host WAS chosen; the key just arrives later. Record it so
+            # the browser gate doesn't re-ask a question already answered
+            # (activation itself upgrades the record to selfhost_license).
+            _record_gate_choice("selfhost_free")
         print()
         _post_onboard_offers(_input, BOLD, CYAN, DIM)
         _finish_local()
@@ -4099,6 +4140,7 @@ def _cmd_onboard(args) -> None:
         print()
     print()
     if _want_trial in ("n", "no"):
+        _record_gate_choice("selfhost_free")
         print(f"  {DIM('Free plan: OpenClaw + NeMo at http://localhost:8900.')}")
         print(f"  {DIM('Trial or license anytime:')} {CYAN('clawmetry onboard')} {DIM('·')} {CYAN('https://clawmetry.com/pricing?deploy=self')}")
         print()

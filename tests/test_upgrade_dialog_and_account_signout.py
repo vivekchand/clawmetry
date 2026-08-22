@@ -78,6 +78,10 @@ def signout(monkeypatch, tmp_path):
     progress.write_text("{}")
     monkeypatch.setattr(mod, "_license_state", lambda: "")
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
+    # The entitlement step resolves the REAL machine's plan cache unless
+    # stubbed — on a dev box with a paid account the post-signout assertion
+    # ("gate re-opens") would read the developer's own plan and fail.
+    monkeypatch.setattr(mod, "_paid_entitlement_state", lambda: "")
     monkeypatch.setattr(mod.threading, "Thread", _SyncThread)
     monkeypatch.delenv("CLAWMETRY_CLOUD", raising=False)
 

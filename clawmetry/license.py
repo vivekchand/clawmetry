@@ -660,6 +660,89 @@ def _unzip_wheel_into_site(wheel_path: str) -> tuple[bool, str]:
         return False, f"unzip install failed: {exc}"
 
 
+def _wheel_runtime_requires(wheel_path: str) -> list:
+    """``Requires-Dist`` entries the wheel needs at RUNTIME, minus clawmetry.
+
+    The pro wheel is installed with ``--no-deps`` (it is served by the license
+    server, not PyPI, and pip must not be allowed to touch clawmetry itself),
+    but clawmetry-pro DOES declare runtime dependencies. Nothing installed
+    them, so on a provisioned install:
+
+        clawmetry_pro/compliance/engine.py   import yaml    (Compliance Pack)
+        clawmetry_pro/adapters/deepagents.py import msgpack (DeepAgents)
+        clawmetry_pro/routes/nemoclaw.py     import yaml    (NeMo governance)
+
+    all raised ImportError behind a broad except, so three PAID features were
+    silently dead on an entitled account (found 2026-08-22: pip's own resolver
+    warned "clawmetry-pro 0.7.9 requires msgpack>=1.0, which is not installed"
+    during an unrelated upgrade).
+
+    Extras-gated requirements (``; extra == "x"``) are skipped: nothing
+    requests an extra here. Never raises -> [].
+    """
+    import re
+    import zipfile
+
+    out = []
+    try:
+        with zipfile.ZipFile(wheel_path) as zf:
+            meta = next(
+                (n for n in zf.namelist()
+                 if n.endswith(".dist-info/METADATA")), None,
+            )
+            if not meta:
+                return []
+            for line in zf.read(meta).decode("utf-8", "replace").splitlines():
+                if not line.startswith("Requires-Dist:"):
+                    continue
+                req = line.split(":", 1)[1].strip()
+                if not req or "extra ==" in req:
+                    continue
+                name = re.split(r"[<>=!~;\[ ]", req, 1)[0].strip()
+                # Never let pip resolve clawmetry itself: the whole point of
+                # --no-deps is that this interpreter's clawmetry is managed
+                # separately (and may be a pre-release the index lacks).
+                if name.lower().replace("_", "-") == "clawmetry":
+                    continue
+                if name:
+                    out.append((req, name))
+    except Exception:
+        return []
+    return out
+
+
+def _install_missing_requires(wheel_path: str) -> str:
+    """Install the wheel's declared runtime deps that are actually missing.
+
+    Best-effort and never raises: a pro pack with a missing optional dep is
+    degraded, but a provisioner that crashes here would block the pack
+    entirely. Returns a short status for the caller's detail string.
+    """
+    reqs = _wheel_runtime_requires(wheel_path)
+    if not reqs:
+        return ""
+    try:
+        from importlib import metadata as _md
+    except Exception:  # pragma: no cover - stdlib since 3.8
+        return ""
+    missing = []
+    for req, name in reqs:
+        try:
+            _md.version(name)
+        except Exception:
+            missing.append(req)
+    if not missing:
+        return ""
+    ok, detail = _pip_run(
+        ["install", "--disable-pip-version-check", *missing]
+    )
+    if ok:
+        return f"; deps installed ({', '.join(missing)})"
+    # Honest floor: say which deps are still missing rather than implying the
+    # pack is whole.
+    return f"; deps MISSING ({', '.join(missing)}: {detail})"
+
+
 def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
     """Install ``wheel_path`` into THIS interpreter's environment (the same venv
     the daemon/dashboard run from — ``sys.executable``). The daemon picks the
@@ -686,7 +769,7 @@ def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
     try:
         ok, detail = _pip_run(args)
         if ok:
-            return True, detail
+            return True, detail + _install_missing_requires(wheel_path)
         # pip absent? bootstrap it via ensurepip, then retry once.
         if "No module named pip" in detail or "No module named 'pip'" in detail:
             try:
@@ -696,7 +779,7 @@ def _pip_install_wheel(wheel_path: str) -> tuple[bool, str]:
                 )
                 ok2, detail2 = _pip_run(args)
                 if ok2:
-                    return True, detail2
+                    return True, detail2 + _install_missing_requires(wheel_path)
                 detail = detail2
             except Exception as ee:
                 detail = f"{detail}; ensurepip: {ee}"
@@ -1028,6 +1111,27 @@ def activate(key: str, node_id: str | None = None, actor: str = "") -> tuple[boo
     install_status = _download_and_install_pro(payload)
     tier = str(payload.get("tier", "pro")).lower()
     nodes = payload.get("nodes", 1)
+    # Activating a key IS a completed self-host onboarding, whichever door
+    # it came through (`clawmetry activate`, `clawmetry license activate`,
+    # the onboard wizard, the browser gate). Recorded here rather than in
+    # each caller so no future entry point can forget and leave the machine
+    # facing the first-run gate again with a live licence on disk.
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        # Derived from LICENSE_PATH, not from ``~``: both files live in
+        # ~/.clawmetry on a real install, but LICENSE_PATH is the knob the
+        # test suite redirects. Resolving ``~`` here instead made a unit
+        # test that activates a fake key write the gate file into the
+        # DEVELOPER's (and CI runner's) real home — caught locally before
+        # this shipped.
+        _obs.record_choice(
+            "selfhost_trial" if tier == "trial" else "selfhost_license",
+            source="license:activate",
+            path=os.path.join(os.path.dirname(LICENSE_PATH), "onboarding.json"),
+        )
+    except Exception:
+        pass
     _audit_license_event(
         "license.activate", result="activated", actor=actor, payload=payload,
     )
