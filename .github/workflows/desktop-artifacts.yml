@@ -446,14 +446,28 @@ jobs:
         if: env.SIGN_ENABLED == 'true'
         shell: pwsh
         run: |
-          # /pa = Authenticode chain policy. /tw fails the step when the
-          # RFC 3161 countersignature is missing, which under Artifact
-          # Signing's three-day certificates would mean shipping a binary
-          # that goes invalid in users' hands within the week.
-          & $Env:SIGNTOOL verify /pa /tw "dist\ClawMetry-windows-setup.exe"
-          if ($LASTEXITCODE -ne 0) { throw "setup exe is not validly signed + timestamped" }
-          & $Env:SIGNTOOL verify /pa /tw "dist\ClawMetry\ClawMetry.exe"
-          if ($LASTEXITCODE -ne 0) { throw "ClawMetry.exe is not validly signed + timestamped" }
+          foreach ($t in @("dist\ClawMetry-windows-setup.exe", "dist\ClawMetry\ClawMetry.exe")) {
+            # /pa = Authenticode chain policy.
+            & $Env:SIGNTOOL verify /pa $t
+            if ($LASTEXITCODE -ne 0) { throw "$t is not validly signed" }
+
+            # Assert the RFC 3161 countersignature explicitly rather than
+            # via /tw, whose failure semantics are documented only as
+            # "generates a warning" - unclear whether that sets a nonzero
+            # exit code, and a gate you cannot reason about is not a gate.
+            # Artifact Signing certificates last three days, so an
+            # un-countersigned binary would go invalid in users' hands
+            # within the week; this is the one property most worth
+            # asserting. Printing both subjects also makes the build log
+            # self-evidencing instead of merely "Successfully verified".
+            $sig = Get-AuthenticodeSignature $t
+            if (-not $sig.TimeStamperCertificate) {
+              throw "$t has no RFC 3161 countersignature; it would go invalid when the three-day certificate expires"
+            }
+            Write-Host "OK  $t"
+            Write-Host "    signer:    $($sig.SignerCertificate.Subject)"
+            Write-Host "    timestamp: $($sig.TimeStamperCertificate.Subject)"
+          }
           # Only the .pfx backend leaves key material on the runner.
           $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfx) { Remove-Item $pfx -Force }
