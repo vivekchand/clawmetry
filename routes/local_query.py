@@ -587,6 +587,12 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # Runtime event counts. NemoClawAdapter.detect() used to run
+    # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
+    # (private helpers would be arbitrary SQL over the RPC), so on every
+    # standard install -- where the daemon owns the writer lock -- the call
+    # returned None and NemoClaw, a FREE runtime, was never detected.
+    "query_event_count",
     # Emergency-stop cwd lookup: routes/sessions.py:api_session_stop routes
     # family sids through process_control and needs the session's working
     # directory (sessions.cwd) to resolve the pid — read via the daemon so

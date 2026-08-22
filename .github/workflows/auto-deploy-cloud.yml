@@ -8,6 +8,16 @@ on:
       - 'clawmetry/**'
       - 'setup.py'
       - 'CHANGELOG.md'
+  # The push trigger alone CANNOT pin a release. A `[RELEASE]` merge fires it
+  # while PyPI still serves the PREVIOUS version, so it re-pins the old one and
+  # goes green; the `chore: bump to vX [skip ci]` commit that actually creates
+  # the new version is skip-ci and can never re-trigger it. Net effect: the
+  # cloud silently stays a version behind until someone dispatches this by hand
+  # (2026-08-22: 0.12.755 shipped and cloud sat on 0.12.754). Re-run once
+  # release-on-merge has finished so the pin sees the version it published.
+  workflow_run:
+    workflows: ["Auto-release on [RELEASE] merge"]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
@@ -41,11 +51,22 @@ jobs:
       - name: Wait for version on PyPI
         run: |
           V="${{ steps.oss_version.outputs.version }}"
+          # Poll what PIP reads, not the JSON API. pypi.org/pypi/<v>/json goes
+          # live minutes BEFORE the simple index that pip resolves against, so
+          # this wait used to pass while `pip install clawmetry==$V` still
+          # failed with "No matching distribution found" -- which is exactly
+          # how the cloud pin PR for 0.12.755 went red on the MOAT roundtrip
+          # and API v1 E2E jobs and had to be re-run by hand (2026-08-22).
+          # `pip index versions` resolves through the same index pip installs
+          # from, so a pass here means the pin PR's CI can actually install it.
           for i in $(seq 1 30); do
-            if curl -fsSL "https://pypi.org/pypi/clawmetry/$V/json" >/dev/null 2>&1; then
-              echo "clawmetry==$V is on PyPI"; exit 0
+            # Prove installability the same way the cloud PR's CI will, so a
+            # pass here cannot mean anything weaker. A substring grep would
+            # also match 0.12.75 inside 0.12.755.
+            if pip download "clawmetry==$V" --no-deps --dest /tmp/_pinwait >/dev/null 2>&1; then
+              echo "clawmetry==$V is installable from the index"; exit 0
             fi
-            echo "waiting for clawmetry==$V on PyPI (attempt $i)..."; sleep 20
+            echo "waiting for clawmetry==$V on the pip index (attempt $i)..."; sleep 20
           done
           echo "::warning::clawmetry==$V not on PyPI after wait; continuing (cloud CI will gate the merge)"
 

@@ -90,6 +90,25 @@ jobs:
           path: clawmetry-sbom.json
           retention-days: 90
 
+  action-refs:
+    name: Action references resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      # An unresolvable action fails its job at "Set up job" before any step
+      # runs, so the workflow looks like it ran and failed when it never
+      # started. ossf/scorecard-action@v2 was exactly that, permanently, from
+      # the day the job was written. This belongs in the supply-chain workflow
+      # because an action reference IS a supply-chain dependency.
+      - name: Resolve every `uses:` reference against the GitHub API
+        env:
+          CLAWMETRY_LIVE_CHECKS: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_action_refs.py
+
   scorecard:
     name: OpenSSF Scorecard
     runs-on: ubuntu-latest
@@ -105,7 +124,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@v2
+      # Pinned to the v2.4.4 commit, not a floating tag. Two reasons:
+      #
+      # 1. `ossf/scorecard-action@v2` DOES NOT EXIST. The project publishes
+      #    v2.4.4, v2.4.3, ... but no floating `v2`, so this job failed at
+      #    "Set up job" with "Unable to resolve action" on every run since it
+      #    was written. Nothing downstream ever executed.
+      # 2. Scorecard grades repositories on whether they pin their own actions
+      #    by digest, so a floating tag here would be this workflow failing the
+      #    check it exists to run.
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: scorecard-results.sarif
           results_format: sarif

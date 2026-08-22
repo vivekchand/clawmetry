@@ -26,6 +26,11 @@ def ob(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_STATE_PATH", str(tmp_path / "onboarding.json"))
     monkeypatch.setattr(mod, "_license_state", lambda: "")
     monkeypatch.setattr(mod, "_cloud_connected", lambda: False)
+    # Same isolation reason as _license_state: on a dev box (or any
+    # machine with a real paid plan cached) the entitlement step would
+    # resolve the REAL account and the fresh-install cases below would
+    # see an already-onboarded machine.
+    monkeypatch.setattr(mod, "_paid_entitlement_state", lambda: "")
     # Isolate the desktop shell stamp path too: on a dev box with the
     # real .app installed, ``_desktop_shell_stamp`` would read the real
     # user's onboarding-completed.json and the fresh-install tests here
