@@ -4510,6 +4510,52 @@ def _cmd_reports(args) -> None:
     webbrowser.open(url)
 
 
+def _cmd_trace(args) -> int:
+    """`clawmetry trace` -- commit stamping for PR-trace attribution.
+
+    See PRD-pr-trace.md. `stamp` is what git's prepare-commit-msg hook calls;
+    it must never fail in a way that blocks a commit, so it always exits 0.
+    """
+    from clawmetry import trace_stamp
+
+    sub = getattr(args, "trace_cmd", None)
+
+    if sub == "stamp":
+        trace_stamp.stamp_file(args.message_file)
+        return 0  # always: a stamping failure must not block the commit
+
+    if sub == "init":
+        res = trace_stamp.install(getattr(args, "repo", None))
+        if res.get("status") == "installed":
+            print(f"Installed commit stamping -> {res['path']}")
+            print("Agent commits from now on carry a Clawmetry-Session trailer.")
+            print("Commits made before now cannot be backfilled (PRD-pr-trace 3a).")
+        elif res.get("status") == "already-installed":
+            print(f"Already installed -> {res['path']}")
+        elif res.get("status") == "foreign-hook":
+            print(f"A different prepare-commit-msg hook exists: {res['path']}")
+            print(f"Hint: {res.get('hint', '')}")
+            return 1
+        else:
+            print(f"Could not install: {res.get('error')}")
+            return 1
+        return 0
+
+    if sub == "uninstall":
+        res = trace_stamp.uninstall(getattr(args, "repo", None))
+        print(res.get("status", "unknown"))
+        return 0 if res.get("ok") else 1
+
+    # default: status
+    st = trace_stamp.status(getattr(args, "repo", None))
+    print(f"hook installed : {'yes' if st['hook_installed'] else 'no'}")
+    print(f"hook path      : {st['hook_path']}")
+    print(f"session now    : {st['session_id'] or '(no agent runtime detected)'}")
+    if not st["hook_installed"]:
+        print("\nRun `clawmetry trace init` to start stamping commits.")
+    return 0
+
+
 def _cmd_eval(args) -> None:
     """Run a golden eval suite (Phase 2 evals, refs #1619).
 
@@ -7333,6 +7379,25 @@ def main() -> None:
         "--port", type=int, default=8900, help="Dashboard port (default: 8900)"
     )
 
+    # trace — commit stamping so a PR can resolve to the session that built it
+    p_trace = sub.add_parser(
+        "trace",
+        help="Link commits to the agent session that produced them",
+    )
+    trace_sub = p_trace.add_subparsers(dest="trace_cmd")
+    p_trace_init = trace_sub.add_parser(
+        "init", help="Install the prepare-commit-msg hook in this repo")
+    p_trace_init.add_argument("--repo", help="Repo path (default: cwd)")
+    p_trace_stamp = trace_sub.add_parser(
+        "stamp", help="Stamp a commit-message file (called by the git hook)")
+    p_trace_stamp.add_argument("message_file", help="Path to COMMIT_EDITMSG")
+    p_trace_status = trace_sub.add_parser(
+        "status", help="Show whether stamping is active")
+    p_trace_status.add_argument("--repo", help="Repo path (default: cwd)")
+    p_trace_un = trace_sub.add_parser(
+        "uninstall", help="Remove the hook")
+    p_trace_un.add_argument("--repo", help="Repo path (default: cwd)")
+
     # eval — run a golden test suite (Phase 2 evals, refs #1619)
     p_eval = sub.add_parser(
         "eval",
@@ -7962,6 +8027,8 @@ def main() -> None:
             _cmd_reports(args)
         elif args.cmd == "eval":
             _cmd_eval(args)
+        elif args.cmd == "trace":
+            sys.exit(_cmd_trace(args))
         elif args.cmd == "mcp":
             _cmd_mcp(args)
         elif args.cmd == "update":
