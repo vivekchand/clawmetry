@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "Mutation-score baselines. See scripts/mutation_ratchet.py.",
+    "",
+    "A mutant is a small deliberate break in the SOURCE (>= becomes >, and becomes",
+    "or, a constant is bumped). A mutant that SURVIVES is a behaviour change no test",
+    "objected to. score = killed / evaluated.",
+    "",
+    "RATCHET: live score must be >= baseline_score. Raising a baseline is a normal",
+    "commit. LOWERING one is a deliberate act that must be justified in the PR --",
+    "which is the whole point, since a weakened assertion is otherwise invisible in",
+    "a diff and completely invisible to line coverage.",
+    "",
+    "Targets are the small modules that decide what can merge. Mutating all of",
+    "dashboard.py would take hours and gate nothing; these run in seconds and gate",
+    "everything.",
+    "",
+    "Baselines below were measured, not guessed. Re-measure with:",
+    "  python3 scripts/mutation_ratchet.py --update-baseline"
+  ],
+  "max_mutants_per_target": 30,
+  "per_mutant_timeout_seconds": 60,
+  "targets": [
+    {
+      "module": "scripts/e2e_gate.py",
+      "why": "IS the merge gate. A weakened gate lets every other guard through red.",
+      "test_command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_e2e_gate.py",
+        "-q",
+        "-x"
+      ],
+      "baseline_score": 0.5
+    },
+    {
+      "module": "scripts/verification_matrix.py",
+      "why": "Decides whether declared coverage is real. If it stops catching drift, the matrix becomes decoration.",
+      "test_command": [
+        "python3",
+        "-m",
+        "pytest",
+        "tests/test_verification_matrix.py",
+        "-q",
+        "-x"
+      ],
+      "baseline_score": 0.8
+    }
+  ]
+}

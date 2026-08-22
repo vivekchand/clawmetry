@@ -16359,7 +16359,9 @@ def _build_daily_usage(days=14):
                     daily_cost[d] = float(s.get("cost_usd"))
         except Exception:
             pass
-        now = datetime.now()
+        from clawmetry.cost_windows import now_local
+
+        now = now_local()
         out_days = []
         for i in range(days - 1, -1, -1):
             ds = (now - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -16372,9 +16374,10 @@ def _build_daily_usage(days=14):
                 "cacheReadTokens": dcr.get(ds, 0),
                 "cacheWriteTokens": dcw.get(ds, 0),
             })
-        tstr = now.strftime("%Y-%m-%d")
-        wk = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-        mo = now.strftime("%Y-%m-01")
+        # Same calendar-local windows every other cost surface uses.
+        from clawmetry.cost_windows import window_start_days
+
+        tstr, wk, mo = window_start_days(now)
         # Per-runtime daily series (#3004) so the cloud Cost 14-day chart can
         # render purely from the encrypted snapshot when scoped to a runtime,
         # instead of falling back to the scoped server path. Sourced from the

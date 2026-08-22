@@ -1,0 +1,176 @@
+name: Release Canary
+
+# Verifies a release AFTER it is on PyPI, against the real index, on every
+# platform -- then shouts if the artifact users are installing right now is
+# broken.
+#
+# Why this exists even though release-on-merge.yml already smoke-tests:
+# that smoke tests the wheel it just BUILT, on ONE interpreter, on Linux. This
+# tests what users actually RECEIVE. The gap between those two is real and has
+# teeth -- upload corruption, index propagation lag, a dependency that resolves
+# differently on a clean machine, a platform wheel that never got built, and
+# the 0.12.753 case where pip install succeeded and every entry point then died
+# at import on Python 3.9.
+#
+# At 5.4 releases a day, each going to 100% of users on upload, escapes are
+# arithmetic rather than bad luck. The goal is not zero escapes; it is to make
+# the window minutes instead of "whenever someone complains".
+#
+# It does NOT auto-yank. FLYWHEEL makes yanking a deliberate human decision and
+# that is correct: an automated yank on a false positive is worse than the bad
+# release. This gets a human the evidence and the exact link in minutes.
+
+on:
+  workflow_run:
+    workflows: ["Auto-release on [RELEASE] merge"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to verify (blank = whatever PyPI calls latest)"
+        required: false
+        type: string
+
+concurrency:
+  group: release-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  wait-for-propagation:
+    name: Wait for PyPI propagation
+    # Only chase a release that actually published.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Resolve the version to verify
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            echo "version=$REQUESTED" >> "$GITHUB_OUTPUT"
+          else
+            V=$(python3 -c "import sys; sys.path.insert(0,'scripts'); import canary_verify as c; print(c.latest_version())")
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The JSON API shows a version before the simple index serves it, which
+      # is the same race that breaks cloud Docker builds right after a release.
+      # Poll until pip can actually resolve it before declaring anything broken.
+      - name: Wait until pip can resolve it
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          for attempt in $(seq 1 20); do
+            if pip download --no-deps --no-cache-dir -d /tmp/probe "clawmetry==${VERSION}" > /dev/null 2>&1; then
+              echo "clawmetry==${VERSION} is resolvable (attempt ${attempt})."
+              exit 0
+            fi
+            echo "  [${attempt}/20] not on the simple index yet; waiting 30s"
+            sleep 30
+          done
+          echo "::error::clawmetry==${VERSION} never became installable after 10 minutes."
+          echo "The release workflow reported success, so this is a publish or index problem."
+          exit 1
+
+  canary:
+    name: canary (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: wait-for-propagation
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+        include:
+          # The floor setup.py advertises, and what the macOS desktop bundle
+          # ships. 0.12.753 was green on 3.11 and dead on 3.9.
+          - os: ubuntu-latest
+            python-version: "3.9"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the published release and exercise every entry point
+        shell: bash
+        env:
+          VERSION: ${{ needs.wait-for-propagation.outputs.version }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir "clawmetry==${VERSION}"
+          python -c "import clawmetry, clawmetry.cli; print('import ok')"
+          clawmetry --version
+          clawmetry --help > /dev/null
+          for sub in status sync connect uninstall; do
+            if clawmetry "$sub" --help > /dev/null 2>&1; then
+              echo "  ok: clawmetry $sub --help"
+            else
+              echo "::error::clawmetry $sub --help failed on ${{ matrix.os }} py${{ matrix.python-version }}"
+              exit 1
+            fi
+          done
+
+  alarm:
+    name: Bad release alarm
+    needs: [wait-for-propagation, canary]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open a P0 issue with the decision and the link
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.wait-for-propagation.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="[P0] Published release ${VERSION} fails canary verification"
+          BODY=$(printf '%s\n' \
+            "\`clawmetry==${VERSION}\` is live on PyPI and failed post-publish verification." \
+            "" \
+            "**Every new \`pip install clawmetry\` is getting this version right now.**" \
+            "" \
+            "Canary run: ${RUN_URL}" \
+            "" \
+            "### Decide" \
+            "" \
+            "1. **Hotfix forward** - fastest when the fix is small and obvious." \
+            "2. **Yank** - stops NEW installs resolving this version:" \
+            "   https://pypi.org/manage/project/clawmetry/release/${VERSION}/" \
+            "" \
+            "A yank does not repair machines that already installed it, so ship the" \
+            "hotfix either way." \
+            "" \
+            "### Before closing" \
+            "" \
+            "Add the guard that would have caught this to the SAME PR as the fix," \
+            "and prove it fails on the un-fixed code. If the escape got past the" \
+            "merge gate, it belongs in \`scripts/e2e_gate.py\`; if it got past the" \
+            "declared surface, add the cell to \`verification/matrix.json\`.")
+
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --search "\"$TITLE\" in:title state:open" --json number --jq '.[0].number' || echo "")
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY" --label "bug" || \
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY"
+          fi
