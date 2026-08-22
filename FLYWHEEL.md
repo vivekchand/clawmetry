@@ -312,9 +312,134 @@ gh pr create --title "feat: …" --body "…"    # explain WHY + the verificatio
 - **Never push directly to `main`. No exceptions.** Not for empty re-trigger commits. Not for `Dockerfile` cache-bust comments. Not for one-line CI tweaks. Not for typo fixes. Not even for reverts. Every change goes through a branch + PR + CI, including changes whose only purpose is to nudge CI itself. The 30 seconds a one-line PR costs is the price of every other agent and human being able to trust `main`. If a deploy is stuck and you think the fix is "obvious," that means it is a perfect 1-line PR, not a justification to bypass review. Burned 2026-05-28 on `clawmetry-landing`: I pushed two commits straight to `main` (`a2cfb7b` empty re-trigger and `acfa10e` 2-line Dockerfile cache-bust) framing the urgency of a stuck Cloud Run deploy as license to skip the rule. Both would have taken 30 seconds as PRs. The user rightly called it out.
 - End commit messages with the `Co-Authored-By` trailer; end PR bodies with the Claude Code footer.
 - **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **`drift-bot`** (Software Factory blueprint/requirement sync, §1f — fix the doc gap, it is not a flaky check to retry).
-- A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it.
+- A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it. **§4a is the full triage: which of the four causes it is, how to decide, and why weakening the check is never one of them.**
 - Merge with `gh pr merge <n> --squash --delete-branch`.
 - After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green." This is the same rule as the rebase-before-PR one above, applied to PRs that were already open when `main` moved.
+
+## 4a. Red pipeline: resolve it, do not report it
+
+**A failing check is work to start now, not a notification to relay.** Do not
+stop at "CI is red, what would you like me to do." Diagnose it, fix the actual
+cause, push the fix, and keep going until the pipeline is green. Waiting for a
+human to authorise an obvious fix is the slow path, and it teaches the next
+agent that red is somebody else's problem.
+
+Every red check resolves to exactly one of four causes. Three are fixable by
+you; the fourth is forbidden.
+
+### 1. The code is wrong -> fix the code
+
+The check is right and the product is not. This is the common case and needs no
+discussion: fix the behaviour, and ship the guard that catches the class in the
+SAME PR (§3 ruthless-verify).
+
+### 2. The test is wrong -> fix the test
+
+Only when a HIGHER AUTHORITY says the code is right. The order of authority,
+highest first:
+
+1. the Requirement's acceptance criteria in Software Factory,
+2. the Blueprint's `System Contracts`,
+3. the declared behaviour in the code (docstring, type, documented contract),
+4. the test's expectation.
+
+A test that contradicts something above it is wrong and gets corrected. A test
+that contradicts nothing is right, and the code is wrong. Never decide this by
+which is easier to change.
+
+Worked example, 2026-08-22: a new property test asserted `store.ingest({})`
+must not raise. It raises `ValueError`. The instinct was "found a bug", but
+`ingest`'s own docstring declares four required keys, so authority level 3 said
+the code was right and the test was wrong. CLAUDE.md's "never crash on bad
+input" binds the DAEMON, whose job is to catch that and continue, not the
+library primitive beneath it. The test was rewritten to assert what actually
+matters: the rejection is the declared type, prior data survives, and one torn
+record cannot poison the rest of a backfill.
+
+### 3. The pipeline itself is wrong -> fix the pipeline, then guard it
+
+The code and the test are both right and the harness is broken. Treat this as a
+real bug, not an annoyance, because a broken harness fails in ways that look
+exactly like working. Three of these were live in this repo simultaneously:
+
+* `c6-schedule-heal.yml` had two YAML faults and failed at STARTUP on every run,
+  so the watchdog over required-status-checks had never once executed;
+* `e2e-gate.yml` had no `actions/checkout`, so the merge gate itself died with
+  "No such file or directory";
+* `ossf/scorecard-action@v2` does not exist, so the OpenSSF Scorecard job died
+  at "Set up job" on every run since it was written.
+
+All three appeared in the Actions list, so each read as "ran and failed" rather
+than "never started". Each fix shipped an auto-discovering guard
+(`tests/test_workflow_yaml_valid.py`, `scripts/check_action_refs.py`) rather
+than a one-off correction.
+
+### 4. Weakening the check -> NEVER
+
+Not `xfail`, not `skip`, not `continue-on-error`, not quarantine, not deleting
+the assertion, not loosening `assert x == 5` to `assert x is not None`, not
+removing a matrix leg, not lowering a ratchet in `verification/guards.json` or
+`verification/mutation_targets.json` to make the number pass.
+
+This is the one path that is never available, because it is always the cheapest
+and it destroys the thing the pipeline is for. The mutation ratchet
+(`scripts/mutation_ratchet.py`, documented in `docs/VERIFICATION_ARCHITECTURE.md`)
+exists specifically to detect it: a weakened assertion lowers the score and the
+build goes red, with no human needing to spot the diff.
+
+If a ratchet genuinely must come down, that is an explicit edit to the baseline
+file plus a stated reason in the PR description. Visible, reviewable, deliberate.
+
+### Drift is cause 3's sibling: fix Software Factory, not the code
+
+**`drift-bot` red means the code now says something the Blueprints and
+Requirements do not.** When the change is legitimate new behaviour, the
+resolution is to update Software Factory so the records describe reality. Do not
+contort the code to fit a stale document, and do not merge past the check
+(§1f).
+
+Before writing anything, VERIFY the drift is real rather than assuming:
+
+```
+list_blueprints(content_pattern="<the capability you added>")
+list_requirements(content_pattern="<the behaviour you changed>")
+```
+
+Worked example, 2026-08-22: #5082 added a six-layer verification architecture
+and drift-bot reported 8 findings with no readable detail. A regex sweep across
+all 36 Blueprints for merge gating, required checks, mutation testing and
+release gating returned exactly one hit, and it was the word "mutation" used in
+an unrelated sense. The drift was real, so a Component Blueprint (`Release
+Verification and Merge Gating`) was written per the 8090 blueprint guide, and
+the next PR touching that area went green.
+
+Which record to write follows the 8090 taxonomy, and the skill is the reference,
+not guesswork:
+
+```
+npx skills add 8090-inc/software-factory-plugin
+```
+
+then read `guides/blueprint-writing-guide.md` before creating anything. Container
+for a deployable or runnable unit; Component for a reusable capability that spans
+containers; Feature for a composition satisfying one FRD. Required sections and
+`component` / `model` block syntax are non-negotiable, and every Blueprint needs
+`System Contracts` and numbered ADRs.
+
+Blueprint-to-code links only resolve for files already on `main`, because the
+index is built from the default branch. Create the Blueprint with the PR, link
+the code after the merge.
+
+### Escalate only when the fix is genuinely not yours
+
+Keep going without asking for: a failing test, a broken workflow, a missing
+dependency, a stale assertion, a documentation gap, a drift finding. Stop and
+say so, plainly and with evidence, only when the fix requires something you
+cannot reach: a credential or OAuth grant, a repository setting, a paid service,
+a decision that changes product scope, or an irreversible action such as
+withdrawing a published release. Then name exactly which of those it is and what
+you need, rather than handing back the whole problem.
+
 
 ## 5. Release to PyPI (`[RELEASE]`)
 
