@@ -102,6 +102,20 @@ jobs:
       - name: Runtime count matches the entitlement catalogue
         run: python3 scripts/sync_runtime_count.py --check
 
+      # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
+      # this diff contradict a Blueprint?"; it is a changed-code check and has
+      # no opinion on whether untouched code still SATISFIES a criterion
+      # written months ago. That gap is not theoretical: AC-OBS-CEA-001.2 has
+      # required "a cost that cannot be determined reads as unavailable, never
+      # as zero" since the requirement was written, and #5079 ("a failed DuckDB
+      # read is not a window that cost $0.00") shipped violating it verbatim --
+      # found by a founder report in production, not by CI.
+      #
+      # Enforced as a one-way ratchet, not a 100% bar: coverage may never
+      # regress, and a new criterion must arrive with a test.
+      - name: Acceptance criteria are traceable to tests
+        run: python3 scripts/check_ac_coverage.py --check
+
       # ---- Verification architecture (L0/L1/L4) -------------------------
       # These run in the lint job because they are fast, need no services, and
       # "Syntax & Lint" is now aggregated by the merge gate (scripts/e2e_gate.py),

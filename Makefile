@@ -77,7 +77,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count
+lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -98,6 +98,15 @@ lint-py39:
 
 # The advertised runtime count must match FREE_RUNTIMES | PAID_RUNTIMES.
 # Fix drift with: python3 scripts/sync_runtime_count.py
+lint-ac-coverage:
+	@python3 scripts/check_ac_coverage.py --check
+
+ac-report:
+	@python3 scripts/check_ac_coverage.py --report
+
+ac-baseline:
+	@python3 scripts/check_ac_coverage.py --update-baseline
+
 lint-runtime-count:
 	@python3 scripts/sync_runtime_count.py --check
 
@@ -120,4 +129,4 @@ lint-js:
 	    echo "WARN: node not installed — skipping JS syntax check (CI installs node automatically)"; \
 	fi
 
-.PHONY: lint lint-py lint-js lint-daemon-allowlist
+.PHONY: lint lint-py lint-js lint-daemon-allowlist lint-ac-coverage ac-report ac-baseline
