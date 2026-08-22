@@ -16,7 +16,9 @@
     "everything.",
     "",
     "Baselines below were measured, not guessed. Re-measure with:",
-    "  python3 scripts/mutation_ratchet.py --update-baseline"
+    "  python3 scripts/mutation_ratchet.py --update-baseline",
+    "",
+    "Baselines sit slightly BELOW the measured score on purpose. scripts/e2e_gate.py measures 53% deterministically (three consecutive runs, identical survivor lists) and is pinned at 50%. CI runs a different interpreter on different hardware, and a baseline pinned exactly to the live score turns a one-mutant difference into a red PR that nobody can fix. The floor still catches a real regression. Raise it deliberately when the gap grows."
   ],
   "max_mutants_per_target": 30,
   "per_mutant_timeout_seconds": 60,

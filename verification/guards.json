@@ -95,6 +95,11 @@
       "path": "tests/test_vendor_fonts_degrades.py",
       "why": "The Google Fonts API is outside any contributor's control, so an outage or an API-shape change must read as unverified rather than as drift, or every PR goes red with no path to green. Equally important in the other direction: a real difference must still fail, so the tolerance cannot become a way to hide bugs.",
       "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_mutation_ratchet_is_deterministic.py",
+      "why": "A ratchet that moves on its own fails PRs that changed nothing relevant, and the only escapes are lowering the baseline or re-running until it passes. The score really did move (53/50/47 on one commit) because a same-length mutation could execute stale .pyc bytecode.",
+      "min_bytes": 3500
     }
   ],
   "ratchets": {

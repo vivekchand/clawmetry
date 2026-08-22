@@ -249,10 +249,26 @@ def test_main_refuses_to_run_without_credentials():
     mutation makes the gate skip its own check and fall through -- the worst
     possible failure mode for a merge gate, since it would report success
     without ever looking at a single check run.
+
+    A mutant that breaks the guard makes main() fall through into the polling
+    loop, and that used to reach the real network and a 30s sleep. Whether the
+    mutation harness's per-mutant timeout tripped first was then a race with
+    machine speed, which made the mutation score NONDETERMINISTIC: the same
+    commit measured 53%, 50% and 47% on three runs, and the ratchet failed a PR
+    that had not touched this file. A gate that can go red for reasons
+    unrelated to test quality has no reliable path to green.
+
+    So the fall-through is made fast and offline: `list_check_runs` is stubbed
+    so no request is issued, and `--max-wait 0` makes the loop exit on its
+    first pass. A broken guard now returns 1 instead of 2 and is killed by the
+    ASSERTION, deterministically, rather than by a timeout race.
     """
     argv, env = sys.argv[:], os.environ.get("GITHUB_TOKEN")
+    real_list = e2e_gate.list_check_runs
+    e2e_gate.list_check_runs = lambda repo, sha, token: []
+
     os.environ.pop("GITHUB_TOKEN", None)
-    sys.argv = ["e2e_gate.py", "--repo", "o/r", "--sha", "abc123"]
+    sys.argv = ["e2e_gate.py", "--repo", "o/r", "--sha", "abc123", "--max-wait", "0"]
     try:
         assert e2e_gate.main() == 2, "missing GITHUB_TOKEN must exit 2"
     finally:
@@ -262,11 +278,12 @@ def test_main_refuses_to_run_without_credentials():
 
     argv = sys.argv[:]
     os.environ["GITHUB_TOKEN"] = "t"
-    sys.argv = ["e2e_gate.py", "--sha", "abc123"]
+    sys.argv = ["e2e_gate.py", "--sha", "abc123", "--max-wait", "0"]
     try:
         assert e2e_gate.main() == 2, "missing --repo must exit 2"
     finally:
         sys.argv = argv
+        e2e_gate.list_check_runs = real_list
         if env is None:
             os.environ.pop("GITHUB_TOKEN", None)
         else:
