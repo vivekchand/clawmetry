@@ -47,6 +47,12 @@ jobs:
     timeout-minutes: 18
 
     steps:
+      # Required because the gate logic is a repo script now. This job had no
+      # checkout while the logic was an inline heredoc, which needs nothing
+      # from the working tree -- converting it to a script call silently broke
+      # that assumption and the gate died with "No such file or directory".
+      - uses: actions/checkout@v7
+
       # The gate logic lives in scripts/e2e_gate.py so it can be unit-tested
       # (tests/test_e2e_gate.py) instead of only being exercised in anger on a
       # real PR. That file is the merge gate: a check not listed in its

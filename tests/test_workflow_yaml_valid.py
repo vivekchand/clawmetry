@@ -192,6 +192,83 @@ def test_pytest_jobs_install_what_conftest_needs(entry) -> None:
     )
 
 
+import re as _re
+
+# A repo file being INVOKED, not merely mentioned. The distinction matters:
+# several workflows print "Or: bash scripts/close-c6.sh" inside an issue body
+# or help text while running only inline `python3 - <<'EOF'`, which needs
+# nothing from the working tree. Matching bare "scripts/" flagged three such
+# jobs as broken when they are correct.
+_INVOCATION_PATTERNS = (
+    _re.compile(r"^\s*(python3?|bash|sh)\s+[^\s|]*(scripts|tests)/\S+"),
+    _re.compile(r"^\s*(python3?)\s+-m\s+pytest\b"),
+    _re.compile(r"^\s*\./(scripts|install)\S*"),
+    _re.compile(r"^\s*make\s+\w"),
+)
+
+
+def _is_repo_file_invocation(line: str) -> bool:
+    """Does this shell line execute a file that must exist in the checkout?"""
+    # Strip a leading `run: |` artefact and skip obvious string content.
+    stripped = line.strip()
+    if stripped.startswith(("#", "echo ", "printf ", '"', "'")):
+        return False
+    return any(p.match(line) for p in _INVOCATION_PATTERNS)
+
+
+def _jobs_using_repo_files() -> list:
+    """(workflow, job_id, has_checkout) for jobs that run a file from the repo."""
+    out = []
+    for path in _workflow_files():
+        with open(path, encoding="utf-8") as fh:
+            try:
+                doc = yaml.safe_load(fh)
+            except yaml.YAMLError:
+                continue
+        if not isinstance(doc, dict):
+            continue
+        for job_id, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict) or "uses" in job:
+                continue
+            steps = job.get("steps") or []
+            has_checkout = any(
+                isinstance(s, dict) and "checkout" in str(s.get("uses", ""))
+                for s in steps
+            )
+            run_lines = []
+            for step in steps:
+                if isinstance(step, dict) and step.get("run"):
+                    run_lines.extend(str(step["run"]).split("\n"))
+
+            if any(_is_repo_file_invocation(line) for line in run_lines):
+                out.append((os.path.basename(path), job_id, has_checkout))
+    return out
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _jobs_using_repo_files(),
+    ids=lambda e: f"{e[0]}::{e[1]}",
+)
+def test_jobs_that_use_repo_files_check_out_the_repo(entry) -> None:
+    """A job running a repo script must actually have the repo.
+
+    Burned in this PR: e2e-gate.yml had no checkout, because for years its
+    logic was an inline heredoc that needs nothing from the working tree.
+    Converting it to `python3 scripts/e2e_gate.py` silently broke that
+    assumption, and the merge gate itself died with "No such file or
+    directory" -- the one job whose failure blocks every merge.
+
+    Auto-discovered, so a future job that starts calling a repo script is
+    covered without anyone remembering to add it here.
+    """
+    workflow, job_id, has_checkout = entry
+    assert has_checkout, (
+        f"{workflow} job {job_id!r} runs a file from the repository but has no "
+        "actions/checkout step, so that file will not exist on the runner."
+    )
+
+
 @pytest.mark.parametrize("path", _workflow_files(), ids=os.path.basename)
 def test_every_job_declares_runs_on(path: str) -> None:
     """A job without runs-on is a startup failure too."""
