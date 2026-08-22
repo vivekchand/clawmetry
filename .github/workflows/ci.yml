@@ -94,6 +94,43 @@ jobs:
       - name: Runtime count matches the entitlement catalogue
         run: python3 scripts/sync_runtime_count.py --check
 
+      # ---- Verification architecture (L0/L1/L4) -------------------------
+      # These run in the lint job because they are fast, need no services, and
+      # "Syntax & Lint" is now aggregated by the merge gate (scripts/e2e_gate.py),
+      # so a failure here actually blocks the merge. Before that, guards like
+      # these could go red on a PR that merged anyway -- which is how 0.12.753
+      # shipped a CLI that was dead on Python 3.9.
+      - name: Install verification test deps
+        run: pip install pytest pyyaml
+
+      # A malformed workflow fails at STARTUP, before any step runs, and shows
+      # up named after its own file path. c6-schedule-heal.yml carried two such
+      # faults and never ran once -- so the watchdog for required-check config
+      # was itself dead, silently, for months.
+      - name: Every workflow file must parse
+        run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+
+      # The declared product surface must match reality: every cell names a
+      # verifier that exists, and nothing claims to be "gated" while sitting
+      # behind a path-filtered workflow that stays silent on most PRs.
+      - name: Verification matrix has no drift
+        run: |
+          python3 scripts/verification_matrix.py --report
+          python3 -m pytest tests/test_verification_matrix.py -q
+
+      # The merge gate must still block what it claims to block.
+      - name: Merge gate self-test
+        run: |
+          python3 scripts/e2e_gate.py --list
+          python3 -m pytest tests/test_e2e_gate.py -q
+
+      # Guard files must exist, must not be hollowed out, and the ratchets may
+      # only move upward. This is the mechanical half of agent-proofing: it
+      # needs no second reviewer, which matters on a single-maintainer repo
+      # where GitHub cannot require code-owner approval of your own PR.
+      - name: Guard census (verification surface may not shrink)
+        run: python3 -m pytest tests/test_guard_census.py -q
+
       # Silent-CLI class guard (#3791): rebinding sys.stdout/sys.stderr to a
       # new TextIOWrapper over the same buffer orphans the previous wrapper;
       # its GC finalizer closes the SHARED buffer, and every later print(),
@@ -275,6 +312,40 @@ jobs:
   # gateway, no network. Runtime ~8-16min on CI runners (suite has grown
   # as stacked PRs added test files; timeout raised 5 -> 10 -> 20 to stop
   # mid-suite cancellations). HARD-FAIL: no continue-on-error.
+  # Property-based tests over the DuckDB store (L3). Every other suite checks
+  # an example someone thought of; this one states invariants and lets
+  # Hypothesis search for a sequence that breaks them. The invariants come from
+  # real burns: idempotent ingest (adapters replay journals), no loss under
+  # interleaved ingest/flush (issue #1590, where two concurrent flushes evicted
+  # each other's batches), and clean non-destructive rejection of a torn record.
+  #
+  # CI MUST install duckdb and hypothesis. Without them the suite importorskips
+  # into a silent no-op while verification/matrix.json still declares this cell
+  # gated -- so the suite asserts their presence when CI=true.
+  store-invariants:
+    name: Store invariants (property-based)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest hypothesis
+      - name: Run store invariants
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_store_invariants.py -q
+
+      # Mutation testing: does the suite actually catch bugs, or has it been
+      # weakened into a tautology? Line coverage cannot tell the difference.
+      # The score ratchets -- it may rise freely, and a drop fails the build.
+      - name: Mutation ratchet
+        run: python3 scripts/mutation_ratchet.py --report
+
   entitlement-tests:
     name: Entitlement API tests
     needs: lint
