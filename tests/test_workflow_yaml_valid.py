@@ -96,6 +96,102 @@ def test_workflow_has_required_top_level_keys(path: str) -> None:
     )
 
 
+def _conftest_module_level_imports() -> set:
+    """Third-party modules tests/conftest.py imports at module scope.
+
+    pytest imports conftest before collecting anything, so a missing one of
+    these is not a test failure -- it is exit code 4, "could not collect", with
+    zero tests run. A job that installs an incomplete set therefore reports a
+    hard failure that looks nothing like the thing it was meant to check.
+    """
+    conftest = os.path.join(REPO_ROOT, "tests", "conftest.py")
+    if not os.path.isfile(conftest):
+        return set()
+
+    import ast
+
+    with open(conftest, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    stdlib_ish = {
+        "os", "sys", "re", "json", "time", "glob", "shutil", "socket",
+        "signal", "typing", "pathlib", "tempfile", "subprocess", "threading",
+        "datetime", "urllib", "collections", "contextlib", "functools",
+        "itertools", "warnings", "logging", "uuid", "base64", "hashlib",
+        "random", "string", "textwrap", "traceback", "pytest", "clawmetry",
+        "dashboard", "sqlite3", "csv", "io", "math", "copy", "ast",
+    }
+
+    found = set()
+    for node in tree.body:  # module scope only
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module.split(".")[0])
+    return {m for m in found if m not in stdlib_ish}
+
+
+def _jobs_running_pytest() -> list:
+    """(workflow, job_id, install_text) for every job that invokes pytest."""
+    out = []
+    for path in _workflow_files():
+        with open(path, encoding="utf-8") as fh:
+            try:
+                doc = yaml.safe_load(fh)
+            except yaml.YAMLError:
+                continue
+        if not isinstance(doc, dict):
+            continue
+        for job_id, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            steps = job.get("steps") or []
+            runs = " ".join(
+                str(s.get("run", "")) for s in steps if isinstance(s, dict)
+            )
+            if "pytest" in runs:
+                out.append((os.path.basename(path), job_id, runs))
+    return out
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _jobs_running_pytest(),
+    ids=lambda e: f"{e[0]}::{e[1]}",
+)
+def test_pytest_jobs_install_what_conftest_needs(entry) -> None:
+    """A job that runs pytest must install conftest's module-scope imports.
+
+    Burned twice in one pull request: both new verification jobs installed a
+    minimal dependency set, and because tests/conftest.py imports `requests` at
+    module scope, pytest exited 4 before collecting a single test. The job went
+    red for a reason unrelated to what it was checking.
+
+    Auto-discovered from conftest rather than hard-coded, so adding an import
+    there surfaces every job that now needs it, instead of waiting for CI to
+    fail one job at a time.
+    """
+    workflow, job_id, runs = entry
+    needed = _conftest_module_level_imports()
+    if not needed:
+        pytest.skip("conftest has no third-party module-scope imports")
+
+    # Jobs that install from a requirements file or the package itself pull
+    # dependencies transitively; only explicit `pip install a b c` lines are
+    # checked, since those are the ones that can silently omit something.
+    if "-r " in runs or "pip install ." in runs or "pip install -e" in runs:
+        pytest.skip("installs from a requirements file or the package itself")
+
+    missing = [m for m in sorted(needed) if m not in runs]
+    assert not missing, (
+        f"{workflow} job {job_id!r} runs pytest but never installs "
+        f"{missing}, which tests/conftest.py imports at module scope. "
+        "pytest will exit 4 (collection error) before running a single test, "
+        "so the job fails for a reason unrelated to what it checks."
+    )
+
+
 @pytest.mark.parametrize("path", _workflow_files(), ids=os.path.basename)
 def test_every_job_declares_runs_on(path: str) -> None:
     """A job without runs-on is a startup failure too."""

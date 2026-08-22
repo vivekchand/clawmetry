@@ -338,8 +338,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      # requests is required because tests/conftest.py imports it at module
+      # scope, so pytest cannot collect without it.
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest hypothesis
+        run: pip install flask waitress cryptography duckdb pytest hypothesis requests
       - name: Run store invariants
         env:
           CI: "true"

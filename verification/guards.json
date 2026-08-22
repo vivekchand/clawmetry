@@ -15,7 +15,6 @@
     "Adding a new guard: add its path here in the same PR. tests/test_guard_census.py",
     "fails if a file listed here is missing, and the ratchets keep the rest honest."
   ],
-
   "guard_files": [
     {
       "path": "scripts/e2e_gate.py",
@@ -83,7 +82,6 @@
       "min_bytes": 2000
     }
   ],
-
   "ratchets": {
     "e2e_gate_required_specs": {
       "value": 11,
@@ -94,7 +92,7 @@
       "why": "3 OS on 3.11 plus the ubuntu 3.9 leg. Dropping the 3.9 leg is exactly how 0.12.753 escaped."
     },
     "workflow_files_parsed": {
-      "value": 30,
+      "value": 32,
       "why": "Workflows under .github/workflows that must parse. Guards against quietly deleting a workflow to make CI green."
     },
     "declared_matrix_cells": {
