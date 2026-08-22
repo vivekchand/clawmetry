@@ -2641,6 +2641,39 @@ def _maybe_emit_change(ent: Entitlement) -> None:
         logger.debug("entitlements: change-emit skipped: %s", exc)
 
 
+def _resolve_best_entitlement() -> Entitlement:
+    """Pick the entitlement this install actually holds, newest evidence wins
+    over stale evidence. Never raises.
+
+    Precedence used to be a plain ``license or cloud_plan or free``, which had
+    one sharp edge: :func:`_read_local_license` returns an Entitlement even
+    when it has passed its ``expiry`` (``Entitlement.expired`` existed but
+    nothing consulted it), so a DEAD license key permanently shadowed a LIVE
+    cloud plan. That is not hypothetical: ``clawmetry connect`` writes a 7-day
+    signup-trial key to ``~/.clawmetry/license.key`` for every account, so a
+    customer who then bought a cloud plan kept resolving on the trial key, and
+    once it lapsed :func:`trial_enforcement._resolver_says_unpaid_or_expired`
+    reported unpaid and the (default-ON) hard block paywalled someone who had
+    already paid. The heartbeat license refresh papers over this within a day,
+    but only for installs that are online, syncing, and recent enough to
+    understand the ``license_key`` field.
+
+    Order:
+
+    1. a LIVE local license (unchanged: the signed key is the strongest claim)
+    2. a LIVE PAID cloud plan, which is what an expired license must yield to
+    3. otherwise the old fallback chain, so the paywall copy for a genuinely
+       lapsed install is exactly what it was before
+    """
+    lic = _read_local_license()
+    if lic is not None and not lic.expired:
+        return lic
+    cloud = _read_cloud_plan()
+    if cloud is not None and cloud.is_paid and not cloud.expired:
+        return cloud
+    return lic or cloud or _oss_free()
+
+
 def get_entitlement(force: bool = False) -> Entitlement:
     """Resolve (and cache) the current entitlement. Never raises."""
     try:
@@ -2654,7 +2687,7 @@ def get_entitlement(force: bool = False) -> Entitlement:
             )
             if fresh:
                 return _cache["ent"]
-        ent = _read_local_license() or _read_cloud_plan() or _oss_free()
+        ent = _resolve_best_entitlement()
         with _lock:
             _cache.update(ent=ent, ts=time.time(), enforce=enforce)
         _maybe_emit_change(ent)
