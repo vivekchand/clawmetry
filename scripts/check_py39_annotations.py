@@ -44,11 +44,15 @@ import json
 import os
 import sys
 
-# Every .py the installed wheel imports at runtime. Keep in step with the
-# `files` list in the ci.yml "Check Python syntax" gate.
+# Every .py the installed wheel ships and imports at runtime. `setup.py`
+# declares py_modules=["dashboard"] plus find_packages() + routes/helpers, so
+# desktop/ and helpers/ land in site-packages alongside clawmetry/ and are
+# just as fatal on 3.9. tests/ ships too but is never imported by the app.
 TARGET_GLOBS = (
     "clawmetry/**/*.py",
     "routes/**/*.py",
+    "helpers/**/*.py",
+    "desktop/**/*.py",
 )
 TARGET_FILES = ("dashboard.py", "dashboard_claudecode.py", "history.py")
 
