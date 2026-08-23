@@ -4646,9 +4646,30 @@ def _trace_capture(rest) -> int:
     print(f"  bundle  {json_path}")
     print(f"  review  {html_path}")
     print()
-    print("  Nothing was published. Open the HTML, confirm it is safe to share,")
-    print("  then publish once the cloud endpoint exists (PRD 4e).")
-    return 0
+
+    if "--publish" not in rest:
+        print("  Nothing was published. Open the review page, confirm it is safe")
+        print("  to share, then re-run with --publish.")
+        return 0
+
+    # Publication is a separate, explicit step: the thing being written is a
+    # public web page containing the contents of somebody's terminal.
+    if not pr:
+        print("  --publish needs --pr <number> so the trace has a URL.")
+        return 1
+    print("  Publishing…")
+    res = trace_capture.publish(bundle)
+    if res.get("ok"):
+        print(f"  LIVE  {res.get('url')}")
+        print()
+        print("  Anyone with the link can read it, with no account.")
+        print("  Re-running capture --publish for the same PR replaces it.")
+        return 0
+    print(f"  Publish failed: {res.get('error')}")
+    if res.get("detail"):
+        print(f"  {res['detail']}")
+    print("  The bundle is still on disk; nothing was sent.")
+    return 1
 
 
 def trace_main(argv) -> int:
