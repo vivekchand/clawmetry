@@ -52,7 +52,7 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 logger = logging.getLogger("clawmetry.entitlements")
 
@@ -2526,6 +2526,25 @@ def _oss_free() -> Entitlement:
     return _build(TIER_OSS, "oss", node_limit=1, expiry=None)
 
 
+def _fail_open_free() -> Entitlement:
+    """Fallback entitlement used only when :func:`get_entitlement` catches an
+    unexpected exception. ``grace`` is forced ``True`` regardless of
+    :func:`is_enforced`, so every ``allows_*`` check returns ``True`` and a
+    resolver bug cannot paywall a paying customer's agent after the enforce
+    date lands. The ``source`` string is distinct from ``"oss"`` so telemetry
+    and support can tell a real OSS install apart from a fail-open fallback.
+
+    See ``CLAUDE.md`` -- "Fail open on entitlement, closed on policy. If a
+    licence/entitlement lookup errors or is ambiguous, the agent KEEPS
+    RUNNING -- only a policy the user actually declared may block or kill.
+    A billing bug must never stop a customer's agent."
+    """
+    ent = _build(TIER_OSS, "resolver_error", node_limit=1, expiry=None)
+    if not ent.grace:
+        ent = replace(ent, grace=True)
+    return ent
+
+
 def _read_local_license() -> Entitlement | None:
     try:
         if not os.path.isfile(_LICENSE_PATH):
@@ -2693,8 +2712,12 @@ def get_entitlement(force: bool = False) -> Entitlement:
         _maybe_emit_change(ent)
         return ent
     except Exception as exc:
-        logger.warning("entitlements: resolution failed, defaulting to OSS free: %s", exc)
-        return _oss_free()
+        logger.warning(
+            "entitlements: resolution failed, failing open (grace) so the "
+            "agent keeps running: %s",
+            exc,
+        )
+        return _fail_open_free()
 
 
 def invalidate() -> None:

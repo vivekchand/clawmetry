@@ -132,7 +132,11 @@ def test_installed_cloud_plan_visible_after_invalidate(ent, tmp_path):
 
 
 def test_resolver_failure_falls_back_to_oss_free(ent, monkeypatch):
-    """If the resolver raises, get_entitlement returns an OSS-free entitlement."""
+    """If the resolver raises, get_entitlement returns an OSS-tier entitlement
+    that FAILS OPEN: ``grace`` is forced ``True`` even under
+    ``CLAWMETRY_ENFORCE``, and the ``source`` is ``"resolver_error"`` so a
+    real OSS install is distinguishable from a transient billing bug in
+    telemetry. See ``clawmetry/entitlements.py::_fail_open_free``."""
     def _boom():
         raise RuntimeError("simulated license read explosion")
 
@@ -142,7 +146,7 @@ def test_resolver_failure_falls_back_to_oss_free(ent, monkeypatch):
 
     en = ent.get_entitlement()
     assert en.tier == ent.TIER_OSS
-    assert en.source == "oss"
+    assert en.source == "resolver_error"
     assert en.grace is True
 
 
