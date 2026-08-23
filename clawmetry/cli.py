@@ -4552,6 +4552,172 @@ def _cmd_reports(args) -> None:
     webbrowser.open(url)
 
 
+def _trace_capture(rest) -> int:
+    """`clawmetry trace capture` — build a publishable bundle (PRD §4b).
+
+    Local half only. Upload lives in clawmetry-cloud (§4j); until it exists
+    this writes the bundle and a self-contained HTML page you can open, which
+    is also the review artefact §4f requires before any publish.
+    """
+    import json as _json
+    import os as _os
+    from clawmetry import trace_capture, trace_viewer
+
+    def _opt(name, default=None):
+        return rest[rest.index(name) + 1] if name in rest[:-1] else default
+
+    repo = _opt("--repo") or _os.getcwd()
+    commit_range = _opt("--range") or "HEAD~1..HEAD"
+    pr = _opt("--pr")
+    out_dir = _opt("--out") or "."
+
+    commits = trace_capture.read_commits(repo, commit_range)
+    if not commits:
+        print(f"No commits in range {commit_range!r}.")
+        return 1
+
+    try:
+        from clawmetry.cli_cmds._common import get_read_store
+        store, source = get_read_store()
+    except Exception as exc:
+        print(f"Cannot read the local store: {exc}")
+        print("Run `clawmetry sync` (or start the dashboard) and retry.")
+        return 1
+
+    try:
+        sessions = store.query_sessions(limit=1000) or []
+    except Exception as exc:
+        print(f"Session query failed: {exc}")
+        return 1
+    sessions = [dict(r) for r in sessions]
+
+    session_ids, attribution = trace_capture.resolve_sessions(commits, sessions)
+    if not session_ids:
+        print(f"No sessions resolved for {commit_range}.")
+        print("If these commits predate `clawmetry trace init`, they cannot be")
+        print("backfilled -- see PRD-pr-trace.md 3a.")
+        return 1
+
+    meta = {s["session_id"]: s for s in sessions if s.get("session_id")}
+    events = {}
+    for sid in session_ids:
+        try:
+            # shape "transcript" -> LocalStore.query_events (routes/local_query
+            # _SHAPES is the source of truth). A wrong method name here does
+            # NOT raise on the proxy store -- it returns [] -- so the guard
+            # below is what catches a rename.
+            events[sid] = [dict(r) for r in (store.query_events(
+                session_id=sid, limit=5000) or [])]
+        except Exception as exc:
+            print(f"  ! transcript unavailable for {sid}: {exc}")
+            events[sid] = []
+
+    if not any(events.values()):
+        print(f"Resolved {len(session_ids)} session(s) but no events came back.")
+        print("Nothing to publish. This usually means the sessions aged out of")
+        print("the local store (CLAWMETRY_FAMILY_SESSION_LIMIT, PRD 3a).")
+        return 1
+
+    bundle = trace_capture.build_bundle(
+        repo=repo, commit_range=commit_range, commits=commits,
+        session_ids=session_ids, attribution=attribution,
+        events_by_session=events, sessions_meta=meta, pr=pr,
+    )
+
+    stem = f"trace-{pr or commits[-1]['short_sha']}"
+    json_path = _os.path.join(out_dir, stem + ".json")
+    html_path = _os.path.join(out_dir, stem + ".html")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        fh.write(trace_viewer.render_json(bundle))
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(trace_viewer.render_html(bundle))
+
+    sm = bundle["summary"]
+    print(f"  project      {bundle.get('project') or '(no remote)'}"
+          + (f"  #{pr}" if pr else ""))
+    print(f"  range        {commit_range}  ({len(commits)} commits, source={source})")
+    print(f"  sessions     {len(session_ids)}  attribution={bundle['attribution']}")
+    print(f"  captured     {sm['prompts']} prompts · {sm['turns']} turns · "
+          f"{sm['tools']} tools")
+    print(f"  cost         ${sm['cost_usd']:.2f}"
+          + ("  (upper bound)" if sm["cost_is_upper_bound"] else "")
+          + f" · {sm['tokens']:,} tokens")
+    print()
+    print(f"  bundle  {json_path}")
+    print(f"  review  {html_path}")
+    print()
+    print("  Nothing was published. Open the HTML, confirm it is safe to share,")
+    print("  then publish once the cloud endpoint exists (PRD 4e).")
+    return 0
+
+
+def trace_main(argv) -> int:
+    """`clawmetry trace …` — commit stamping for PR-trace attribution.
+
+    Stdlib-only and dispatched from the FAST PATH in :func:`main`, for the
+    same reason `hooks` is: ``trace stamp`` runs on EVERY commit, and paying
+    the ~300ms dashboard import there would be felt on every `git commit`.
+
+    ``stamp`` always exits 0 — a stamping failure must never block a commit.
+    See PRD-pr-trace.md §4a.
+    """
+    from clawmetry import trace_stamp
+
+    sub = argv[0] if argv else "status"
+    rest = argv[1:]
+
+    def _opt(name):
+        return rest[rest.index(name) + 1] if name in rest[:-1] else None
+
+    if sub == "capture":
+        return _trace_capture(rest)
+
+    if sub == "stamp":
+        if rest:
+            trace_stamp.stamp_file(rest[0])
+        return 0  # always
+
+    repo = _opt("--repo")
+
+    if sub == "init":
+        res = trace_stamp.install(repo)
+        status = res.get("status")
+        if status == "installed":
+            print(f"Installed commit stamping -> {res['path']}")
+            print("Agent commits from now on carry a Clawmetry-Session trailer.")
+            print("Earlier commits cannot be backfilled (PRD-pr-trace.md §3a).")
+        elif status == "already-installed":
+            print(f"Already installed -> {res['path']}")
+        elif status == "foreign-hook":
+            print(f"A different prepare-commit-msg hook exists: {res['path']}")
+            print(f"Hint: {res.get('hint', '')}")
+            return 1
+        else:
+            print(f"Could not install: {res.get('error')}")
+            return 1
+        return 0
+
+    if sub == "uninstall":
+        res = trace_stamp.uninstall(repo)
+        print(res.get("status", "unknown"))
+        return 0 if res.get("ok") else 1
+
+    if sub in ("status", "--help", "-h", "help"):
+        if sub in ("--help", "-h", "help"):
+            print("usage: clawmetry trace [init|status|uninstall|stamp <file>|\n                    capture --range A..B [--pr N] [--out DIR]] [--repo PATH]")
+            return 0
+        st = trace_stamp.status(repo)
+        print(f"hook installed : {'yes' if st['hook_installed'] else 'no'}")
+        print(f"hook path      : {st['hook_path']}")
+        print(f"session now    : {st['session_id'] or '(no agent runtime detected)'}")
+        if not st["hook_installed"]:
+            print("\nRun `clawmetry trace init` to start stamping commits.")
+        return 0
+
+    print(f"unknown: trace {sub}")
+    return 2
+
+
 def _cmd_eval(args) -> None:
     """Run a golden eval suite (Phase 2 evals, refs #1619).
 
@@ -6920,6 +7086,11 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "hooks":
         from clawmetry.hooks_claude_code import cli_main as _hooks_cli
         raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # FAST PATH — `clawmetry trace …`: `trace stamp` is invoked by the
+    # prepare-commit-msg hook on EVERY commit, so it must not pay the
+    # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
+    if len(sys.argv) > 1 and sys.argv[1] == "trace":
+        raise SystemExit(trace_main(sys.argv[2:]))
     # FAST PATH — `clawmetry hook claude-code --base <url>`: the LOCAL-first
     # PreToolUse gate client (auto-installed by the policy watcher — see
     # clawmetry/claude_code_gate.py). Runs on every gated Claude Code tool
