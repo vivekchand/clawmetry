@@ -28,6 +28,20 @@ def _clear_runtime_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _assume_current_binary(monkeypatch):
+    """Default the hook-runnability check to True.
+
+    `install()` refuses to write a hook the PATH binary cannot run. That is
+    correct behaviour and it depends on the MACHINE, so leaving it live would
+    make every install test pass or fail according to which clawmetry the
+    developer happens to have installed. The tests that care about the check
+    override this fixture explicitly.
+    """
+    monkeypatch.setattr(trace_stamp, "hook_command_works",
+                        lambda cmd="clawmetry": True)
+
+
 # ── detection ──────────────────────────────────────────────────────────────
 
 def test_detects_claude_code_session_and_prefixes_it(monkeypatch):
@@ -190,3 +204,40 @@ def test_stamp_file_round_trip(tmp_path, monkeypatch):
 
 def test_stamp_file_on_missing_path_does_not_raise():
     assert trace_stamp.stamp_file("/nonexistent/COMMIT_EDITMSG") is False
+
+
+# ── the hook must be able to run ───────────────────────────────────────────
+
+def test_install_refuses_when_the_binary_has_no_trace_command(tmp_path, monkeypatch):
+    """Found by dogfooding, not by review.
+
+    `trace init` wrote a hook calling `clawmetry trace stamp` on a machine
+    whose PATH clawmetry was an older release. The hook ends in `|| true`, so
+    every commit succeeded and no trailer was ever written. Silence is the
+    worst shape this failure can take: coverage cannot be backfilled, so the
+    traces lost while nobody noticed are lost for good.
+    """
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": False)
+    repo = _git_repo(tmp_path)
+    res = trace_stamp.install(repo)
+    assert res["ok"] is False and res["status"] == "stale-binary"
+    assert "pip install -U clawmetry" in res["hint"]
+    assert not os.path.exists(os.path.join(repo, ".git", "hooks", "prepare-commit-msg"))
+
+
+def test_install_proceeds_when_the_binary_is_current(tmp_path, monkeypatch):
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": True)
+    res = trace_stamp.install(_git_repo(tmp_path))
+    assert res["ok"] is True and res["status"] == "installed"
+
+
+def test_verify_can_be_skipped_for_callers_that_know_better(tmp_path, monkeypatch):
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": False)
+    res = trace_stamp.install(_git_repo(tmp_path), verify_binary=False)
+    assert res["ok"] is True
+
+
+def test_hook_command_works_is_false_for_a_missing_binary(monkeypatch):
+    # This one tests the real probe, so step out of the autouse stub above.
+    monkeypatch.undo()
+    assert trace_stamp.hook_command_works("clawmetry-does-not-exist") is False

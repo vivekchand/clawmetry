@@ -4709,6 +4709,12 @@ def trace_main(argv) -> int:
             print("Earlier commits cannot be backfilled (PRD-pr-trace.md §3a).")
         elif status == "already-installed":
             print(f"Already installed -> {res['path']}")
+        elif status == "stale-binary":
+            print("Not installing: the `clawmetry` on your PATH has no `trace`")
+            print("command, so the hook would be written and then silently do")
+            print("nothing on every commit.")
+            print(f"  {res.get('hint', '')}")
+            return 1
         elif status == "foreign-hook":
             print(f"A different prepare-commit-msg hook exists: {res['path']}")
             print(f"Hint: {res.get('hint', '')}")

@@ -179,6 +179,27 @@ exit 0
 """
 
 
+def hook_command_works(cmd: str = "clawmetry") -> bool:
+    """Can the binary the hook will call actually run ``trace stamp``?
+
+    Found by dogfooding: `trace init` happily wrote a hook calling `clawmetry
+    trace stamp` on a machine whose PATH `clawmetry` was an older release with
+    no `trace` command. The hook ends in `|| true` so a commit is never
+    blocked, which is correct, and it meant the hook silently did nothing.
+    Every commit looked fine and no trailer was written, which is the worst
+    shape a failure can take here: coverage cannot be backfilled, so the
+    traces lost while it went unnoticed are lost permanently.
+    """
+    try:
+        out = subprocess.run(
+            [cmd, "trace", "--help"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        return "trace" in (out.stdout or "") and out.returncode == 0
+    except Exception:
+        return False
+
+
 def _hooks_dir(repo: str) -> str:
     out = subprocess.run(
         ["git", "rev-parse", "--git-path", "hooks"],
@@ -188,13 +209,23 @@ def _hooks_dir(repo: str) -> str:
     return rel if os.path.isabs(rel) else os.path.join(repo, rel)
 
 
-def install(repo: str | None = None) -> dict:
+def install(repo: str | None = None, *, verify_binary: bool = True) -> dict:
     """Install the ``prepare-commit-msg`` hook in ``repo``.
 
     Refuses to clobber an unrelated existing hook — chaining someone else's
-    hook script is their call, not ours.
+    hook script is their call, not ours — and refuses to install a hook that
+    cannot run, which is a quieter and worse failure (see
+    :func:`hook_command_works`).
     """
     repo = repo or os.getcwd()
+    if verify_binary and not hook_command_works():
+        return {
+            "ok": False,
+            "status": "stale-binary",
+            "hint": ("the `clawmetry` on your PATH has no `trace` command, so the "
+                     "hook would silently do nothing. Upgrade with "
+                     "`pip install -U clawmetry` and re-run."),
+        }
     try:
         hooks = _hooks_dir(repo)
         os.makedirs(hooks, exist_ok=True)
