@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Release: PR Trace, the local half (carries #5115) (2026-08-23)
+- Ships `clawmetry trace init` and `clawmetry trace capture` to PyPI. See the feature entry below for what they do and what they deliberately do not do yet.
+- Nothing publishes anywhere. Capture writes a bundle and a review page to disk and tells you where. The hosted resolver and viewer are separate work in the cloud repo.
+
 ### Feature: link a pull request to the agent session that produced it (2026-08-23)
 - **Who this reaches:** anyone whose pull requests are written with help from an AI agent, and anyone who reviews those pull requests. It is opt in per repository and changes nothing until you run one command.
 - **What you can do now:** `clawmetry trace init` installs a commit hook, and from then on every commit made inside an agent session carries a `Clawmetry-Session` trailer naming that session. `clawmetry trace capture --range A..B --pr 123` then turns a commit range into a bundle of what the agent actually did, plus a single self contained HTML page you can open in a browser. The default view is the list of prompts a human typed, in order, because that is the question a reviewer actually has.
