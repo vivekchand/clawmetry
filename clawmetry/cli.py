@@ -4749,7 +4749,11 @@ def trace_main(argv) -> int:
     repo = _opt("--repo")
 
     if sub == "init":
-        auto = "--auto" in rest
+        # Automatic by DEFAULT. `trace init` is itself the explicit act, and
+        # requiring a second flag on top of it was the same mistake as asking
+        # for a revision range: a manual step the product's own conventions
+        # say should not exist. --no-publish is the escape hatch.
+        auto = "--no-publish" not in rest
         res = trace_stamp.install(repo)
         status = res.get("status")
         if status == "installed":
@@ -4772,25 +4776,34 @@ def trace_main(argv) -> int:
             print(f"Could not install: {res.get('error')}")
             return 1
 
+        from clawmetry import trace_auto
+        pp = trace_stamp.install_prepush(repo)
+        if pp.get("status") == "foreign-hook":
+            print()
+            print(f"A different pre-push hook exists: {pp['path']}")
+            print(f"Hint: {pp.get('hint', '')}")
+            print("Commit stamping is on; automatic publishing is not.")
+            return 0
+        trace_auto.set_policy(repo, publish=auto, comment=auto)
+        print()
         if auto:
-            from clawmetry import trace_auto
-            pp = trace_stamp.install_prepush(repo)
-            if pp.get("status") == "foreign-hook":
-                print()
-                print(f"A different pre-push hook exists: {pp['path']}")
-                print(f"Hint: {pp.get('hint', '')}")
-                return 1
-            trace_auto.set_policy(repo, publish=True, comment=True)
+            print("That is the only setup step. From now on, `git push` will:")
+            print("  1. capture what the agent was asked to do")
+            print("  2. publish it to trace.clawmetry.com")
+            print("  3. comment on the pull request with the link")
             print()
-            print("Automatic tracing is ON for this repository.")
-            print("  On every push: capture, publish, and comment on the pull")
-            print("  request with the link. No further commands.")
+            print("Published pages are PUBLIC and contain the prompts and tool")
+            print("output the agent saw. Removed automatically: API keys and")
+            print("tokens, private keys, home paths, emails, IP addresses and")
+            print("provider ids. NOT removed, because no pattern can find it:")
+            print("pricing, roadmap or anything else you would not put in the")
+            print("repository itself.")
             print()
-            print("  This publishes a PUBLIC page containing what the agent was")
-            print("  asked to do and the tool output it saw. Secrets, home paths,")
-            print("  emails and provider ids are removed; commercially sensitive")
-            print("  discussion is NOT something redaction can detect.")
-            print("  Turn it off with: git config clawmetry.autopublish false")
+            print("  publish only when you ask :  clawmetry trace init --no-publish")
+            print("  stop publishing entirely  :  git config clawmetry.autopublish false")
+        else:
+            print("Commit stamping is on; nothing will be published.")
+            print("Capture a trace yourself with `clawmetry trace capture`.")
         return 0
 
     if sub == "uninstall":

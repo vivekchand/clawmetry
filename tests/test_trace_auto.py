@@ -149,3 +149,46 @@ def test_comment_degrades_when_gh_is_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(trace_auto, "_gh_available", lambda: False)
     res = trace_auto.post_comment(str(tmp_path), "42", "body")
     assert res["ok"] is False and "gh" in res["error"]
+
+
+# ── the default is automatic ───────────────────────────────────────────────
+
+def test_plain_init_turns_everything_on(tmp_path, monkeypatch):
+    """`trace init` and nothing else. Requiring a second flag on top of an
+    already-explicit command was the same mistake as asking for a revision
+    range: a manual step the project's conventions say should not exist."""
+    from clawmetry import cli, trace_stamp
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": True)
+    repo = _repo(tmp_path)
+    assert cli.trace_main(["init", "--repo", repo]) == 0
+    assert trace_auto._flag(repo, trace_auto.CFG_AUTO) is True
+    assert trace_auto._flag(repo, trace_auto.CFG_COMMENT) is True
+    import os
+    assert os.path.exists(os.path.join(repo, ".git", "hooks", "pre-push"))
+    assert os.path.exists(os.path.join(repo, ".git", "hooks", "prepare-commit-msg"))
+
+
+def test_no_publish_opts_out_but_still_stamps(tmp_path, monkeypatch):
+    from clawmetry import cli, trace_stamp
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": True)
+    repo = _repo(tmp_path)
+    assert cli.trace_main(["init", "--no-publish", "--repo", repo]) == 0
+    assert trace_auto._flag(repo, trace_auto.CFG_AUTO) is False
+    import os
+    assert os.path.exists(os.path.join(repo, ".git", "hooks", "prepare-commit-msg"))
+
+
+def test_a_foreign_prepush_hook_is_never_clobbered(tmp_path, monkeypatch):
+    """Stamping should still work even if we cannot own the push hook."""
+    from clawmetry import cli, trace_stamp
+    import os
+    monkeypatch.setattr(trace_stamp, "hook_command_works", lambda cmd="clawmetry": True)
+    repo = _repo(tmp_path)
+    hooks = os.path.join(repo, ".git", "hooks")
+    os.makedirs(hooks, exist_ok=True)
+    with open(os.path.join(hooks, "pre-push"), "w") as fh:
+        fh.write("#!/bin/sh\necho someone elses hook\n")
+    assert cli.trace_main(["init", "--repo", repo]) == 0
+    with open(os.path.join(hooks, "pre-push")) as fh:
+        assert "someone elses hook" in fh.read()
+    assert trace_auto._flag(repo, trace_auto.CFG_AUTO) is False
