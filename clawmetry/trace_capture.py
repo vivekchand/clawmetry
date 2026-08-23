@@ -279,3 +279,63 @@ def build_bundle(
             "workflows": [],
         },
     }
+
+
+# ── publish (PRD §4b step 4) ───────────────────────────────────────────────
+
+def publish(bundle: dict, *, app_url: str | None = None,
+            api_key: str | None = None, timeout: int = 60) -> dict:
+    """Upload a bundle and return ``{"ok", "url"}`` or ``{"ok": False, "error"}``.
+
+    Publishing is deliberately a SEPARATE step from capture. Capture writes to
+    disk and stops; a human looks at the review page and decides. Publication
+    is a write in the CLAUDE.md sense (user-initiated, scoped, reversible,
+    attributed), and the thing being written is a public web page containing
+    the contents of somebody's terminal.
+
+    Requires an account key: the server rejects anonymous publishes because
+    otherwise anyone could put a fabricated trace at any pull request's URL.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    if not isinstance(bundle, dict) or not bundle.get("project") or not bundle.get("pr"):
+        return {"ok": False, "error": "bundle needs a project and a pr to publish"}
+
+    if api_key is None:
+        try:
+            with open(os.path.expanduser("~/.clawmetry/config.json")) as fh:
+                api_key = (_json.load(fh) or {}).get("api_key")
+        except Exception:
+            api_key = None
+    if not api_key:
+        return {"ok": False,
+                "error": "no account key found; run `clawmetry connect` first"}
+
+    if app_url is None:
+        try:
+            from clawmetry.endpoints import app_url as _au
+            app_url = _au()
+        except Exception:
+            app_url = "https://app.clawmetry.com"
+
+    body = _json.dumps(bundle, default=str).encode("utf-8")
+    req = urllib.request.Request(
+        app_url.rstrip("/") + "/api/pr-trace/publish",
+        data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + api_key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        return {"ok": False, "error": f"HTTP {exc.code}", "detail": detail}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}

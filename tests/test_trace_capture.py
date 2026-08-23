@@ -280,3 +280,71 @@ def test_guard_catches_a_real_external_resource():
     """Revert-proof: the guard must fail on the thing it claims to prevent."""
     injected = '<html><head><script src="https://cdn.example.com/x.js"></script></head></html>'
     assert _external_resource_loads(injected) == ["https://cdn.example.com/x.js"]
+
+
+# ── publish ────────────────────────────────────────────────────────────────
+
+def test_publish_refuses_without_an_account_key(monkeypatch, tmp_path):
+    """AC-TRACE-002.2 -- publication is never anonymous.
+
+    The server rejects keyless publishes because otherwise anyone could put a
+    fabricated trace at any pull request's URL. The client refuses first so the
+    bundle never leaves the machine on a doomed request.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    b = _build([_commit(session="claude_code:s1")], ["claude_code:s1"],
+               tc.ATTR_EXACT, {"claude_code:s1": []}, pr="42")
+    res = tc.publish(b, api_key=None)
+    assert res["ok"] is False
+    assert "connect" in res["error"]
+
+
+def test_publish_refuses_a_bundle_with_no_target():
+    """A bundle with no project or pr has no URL to live at."""
+    assert tc.publish({}, api_key="cm_x")["ok"] is False
+    assert tc.publish({"project": "o/r"}, api_key="cm_x")["ok"] is False
+
+
+def test_publish_posts_to_the_pr_trace_endpoint(monkeypatch):
+    """Pins the endpoint and the auth header.
+
+    /api/pr-trace/, NOT /api/trace/ -- the latter is the Tracing tab's
+    /api/trace/<session_id> and colliding there would shadow a shipped route.
+    """
+    seen = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"ok":true,"url":"https://trace.clawmetry.com/x"}'
+
+    def _fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["auth"] = req.headers.get("Authorization")
+        seen["body"] = req.data
+        return _Resp()
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    b = _build([_commit(session="claude_code:s1")], ["claude_code:s1"],
+               tc.ATTR_EXACT, {"claude_code:s1": []}, pr="42")
+    res = tc.publish(b, app_url="https://app.example.com", api_key="cm_test")
+    assert res["ok"] is True
+    assert seen["url"] == "https://app.example.com/api/pr-trace/publish"
+    assert seen["auth"] == "Bearer cm_test"
+    assert b"owner/repo" in seen["body"]
+
+
+def test_publish_surfaces_an_http_error_without_raising(monkeypatch):
+    """A failed publish must report and leave the bundle on disk, never crash."""
+    import urllib.error, urllib.request, io
+
+    def _boom(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{"error":"no key"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    b = _build([_commit(session="claude_code:s1")], ["claude_code:s1"],
+               tc.ATTR_EXACT, {"claude_code:s1": []}, pr="42")
+    res = tc.publish(b, app_url="https://app.example.com", api_key="cm_test")
+    assert res["ok"] is False and "401" in res["error"]
