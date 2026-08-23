@@ -5,7 +5,7 @@ yet" for a machine whose own dashboard showed an A over 119 graded runs, same
 node, same runtime. Two faults, one screen:
 
   1. The grade never rode the encrypted snapshot, so the cloud had nothing to
-     render — the cloud-parity gate every data card is supposed to pass.
+     render -- the cloud-parity gate every data card is supposed to pass.
   2. The hosted container answered anyway, from its OWN DuckDB. That file
      exists and is empty, so the query succeeded with zero rows and the tab
      reported a working machine as having produced nothing. "Nothing to
@@ -14,6 +14,8 @@ node, same runtime. Two faults, one screen:
 
 These tests pin both: the daemon emits the slice (node-wide and per runtime),
 and the hosted process refuses to answer from its own empty store.
+
+Blueprint: docs/blueprints/quality-cloud-parity.md
 """
 from __future__ import annotations
 
@@ -71,9 +73,15 @@ def daemon_store(monkeypatch):
     return _install
 
 
-# ── the daemon emits it ────────────────────────────────────────────────
+# -- the daemon emits it -------------------------------------------------------
+# Blueprint contract: QualitySnapshotBuilder responsibilities + Key Contracts
 
 def test_snapshot_carries_node_wide_and_per_runtime_cards(daemon_store):
+    """The quality slice carries node-wide and per-runtime cards.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Key Contracts >
+    quality slice shape {window_hours, all, byRuntime, thresholds}.
+    """
     from clawmetry import sync
 
     daemon_store([_row("s1", "claude_code"), _row("s2", "claude_code"),
@@ -88,8 +96,11 @@ def test_snapshot_carries_node_wide_and_per_runtime_cards(daemon_store):
 
 
 def test_per_runtime_card_never_carries_another_runtimes_runs(daemon_store):
-    """The honesty rule for the runtime switcher: a grade shown under one
-    runtime must be that runtime's, not the node's total wearing its name."""
+    """A per-runtime card is scoped exclusively to its own runtime.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Key Contracts >
+    byRuntime values never contain sessions belonging to a different runtime.
+    """
     from clawmetry import sync
 
     daemon_store([_row("a", "claude_code"), _row("b", "codex"), _row("c", "codex")])
@@ -100,8 +111,12 @@ def test_per_runtime_card_never_carries_another_runtimes_runs(daemon_store):
 
 
 def test_runtime_quiet_this_week_still_gets_its_own_card(daemon_store):
-    """Otherwise the hosted tab falls back to the node-wide card and shows
-    another runtime's grade under this runtime's filter."""
+    """A runtime active in the last 30 days gets its own card even if quiet now.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Key Contracts >
+    Every runtime that appears in either the current window rows or the 30-day
+    history rows gets its own entry in byRuntime.
+    """
     from clawmetry import sync
 
     daemon_store([_row("a", "claude_code")],
@@ -113,7 +128,11 @@ def test_runtime_quiet_this_week_still_gets_its_own_card(daemon_store):
 
 
 def test_calibration_is_carried_once_not_per_card(daemon_store):
-    """It is identical in every card; inline it was a quarter of the slice."""
+    """Thresholds are hoisted to the slice root, absent from every per-card.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > ADR-003 and
+    Key Contracts > thresholds hoisted once to the slice root.
+    """
     from clawmetry import sync
 
     daemon_store([_row("a", "claude_code"), _row("b", "codex")])
@@ -125,8 +144,11 @@ def test_calibration_is_carried_once_not_per_card(daemon_store):
 
 
 def test_store_is_read_once_regardless_of_runtime_count(daemon_store):
-    """Per-runtime cards must cost no extra queries — the daemon runs this
-    every snapshot cycle and has a CPU budget."""
+    """The daemon reads the store exactly 3 times per snapshot cycle.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Key Contracts >
+    The store is read exactly three times per _build_quality_snapshot() call.
+    """
     from clawmetry import sync
 
     store = daemon_store([_row(f"s{i}", rt) for i, rt in
@@ -139,7 +161,11 @@ def test_store_is_read_once_regardless_of_runtime_count(daemon_store):
 
 
 def test_snapshot_slice_never_raises(monkeypatch):
-    """A snapshot must not fail to build over one optional slice."""
+    """A broken store must not prevent the snapshot from being emitted.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Key Contracts >
+    The quality slice returns {} on any exception.
+    """
     from clawmetry import local_store as ls
     from clawmetry import sync
 
@@ -150,7 +176,8 @@ def test_snapshot_slice_never_raises(monkeypatch):
     assert sync._build_quality_snapshot() == {}
 
 
-# ── the hosted process refuses to answer from its own empty store ──────
+# -- the hosted process refuses to answer from its own empty store -------------
+# Blueprint contract: Integration Contracts
 
 def _app():
     from routes.quality import bp_quality
@@ -160,6 +187,12 @@ def _app():
 
 
 def test_hosted_dashboard_says_where_the_grade_lives(monkeypatch):
+    """The hosted process returns store_available:false, not an empty grade.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Integration Contracts >
+    GET /api/quality/report-card with CLAWMETRY_CLOUD=1 always returns
+    store_available:false. store_available:false must not say 'Nothing to grade'.
+    """
     from routes import quality as qmod
 
     monkeypatch.setenv("CLAWMETRY_CLOUD", "1")
@@ -171,13 +204,17 @@ def test_hosted_dashboard_says_where_the_grade_lives(monkeypatch):
     assert "your own machine" in body["headline"].lower()
     assert "nothing to grade" not in body["headline"].lower(), (
         "the hosted tab must not report a working machine as having produced "
-        "nothing — that is the bug this closes"
+        "nothing -- that is the bug this closes"
     )
 
 
 def test_local_dashboard_still_reports_a_real_empty_week(monkeypatch):
-    """Off the hosted dashboard, an empty store IS the answer: this machine
-    genuinely has not run anything this week."""
+    """Off the hosted dashboard, an empty store IS the answer.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Integration Contracts >
+    GET /api/quality/report-card without CLAWMETRY_CLOUD reads from the daemon
+    query path and returns store_available:true when the store answers.
+    """
     from routes import quality as qmod
 
     monkeypatch.delenv("CLAWMETRY_CLOUD", raising=False)
@@ -189,6 +226,11 @@ def test_local_dashboard_still_reports_a_real_empty_week(monkeypatch):
 
 
 def test_unreachable_store_is_not_an_empty_grade(monkeypatch):
+    """An unreachable store (None) is distinct from an empty store ([]).
+
+    Contract: docs/blueprints/quality-cloud-parity.md > Integration Contracts >
+    An unreachable store is not an empty grade -- store_available:false.
+    """
     from routes import quality as qmod
 
     monkeypatch.delenv("CLAWMETRY_CLOUD", raising=False)
@@ -200,8 +242,12 @@ def test_unreachable_store_is_not_an_empty_grade(monkeypatch):
 
 
 def test_precomputed_assessments_match_the_request_path(daemon_store):
-    """The daemon reuses one assessment map across cards; that must not change
-    the grade a card reports."""
+    """Shared assessment map gives identical grade to a fresh per-request assessment.
+
+    Contract: docs/blueprints/quality-cloud-parity.md > ADR-001 >
+    compose_report_card is the single canonical builder; the daemon's
+    precomputed-assessment path must produce the same grade as the request path.
+    """
     from routes.quality import _assess_rows, compose_report_card
     from clawmetry import quality_thresholds as qt
 
