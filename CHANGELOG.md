@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Release: publish a PR trace to a public URL (carries #5123) (2026-08-23)
+- **What you can do now:** `clawmetry trace capture --range A..B --pr 123 --publish` uploads the bundle and prints a link anyone can open, with no account and no install. The page lives at an address built from the pull request's own address, so `trace.clawmetry.com/github.com/owner/repo/pull/123` is where a trace for that pull request goes, and changing the number in the bar looks up a different one.
+- **Publishing stays a separate step.** Without `--publish` nothing changes: capture writes the bundle and the review page to disk and sends nothing. What gets written when you do pass it is a public page containing the contents of your terminal, so it asks for the extra word rather than happening quietly.
+- **It needs an account key.** The server turns away publishes that carry none, because otherwise anyone could put an invented trace at any pull request's address. A key does not prove you own the repository, but it ties every published page to an account that can be revoked.
+- **A pull request with no trace is not an error.** It gets a page naming the repository and the pull request, saying what a trace would show and the two commands that produce one. That is the common case today and will be for a while, since traces cannot be backfilled.
+- **Verified:** published from the wheel this release builds, read back over the public internet with no credentials, and checked for the things that must not be there. Reads need no key, publishing without one is refused, and a private repository and a repository that does not exist come back identical, because the lookup never asks the forge anything and only ever consults what was published.
+
 ### Release: PR Trace, the local half (carries #5115) (2026-08-23)
 - Ships `clawmetry trace init` and `clawmetry trace capture` to PyPI. See the feature entry below for what they do and what they deliberately do not do yet.
 - Nothing publishes anywhere. Capture writes a bundle and a review page to disk and tells you where. The hosted resolver and viewer are separate work in the cloud repo.
