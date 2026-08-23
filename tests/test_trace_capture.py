@@ -14,6 +14,8 @@ worse than no bundle at all.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from clawmetry import trace_capture as tc
@@ -197,6 +199,31 @@ def test_data_field_accepts_dict_json_and_repr():
     assert tc._as_dict(None) == {}
 
 
+
+# ── self-containment ───────────────────────────────────────────────────────
+
+_RESOURCE_LOAD = re.compile(
+    r"""<(?:script|link|img|iframe|source|video|audio|embed|object)\b[^>]*"""
+    r"""\b(?:src|href)\s*=\s*["']?(https?://[^"'\s>]+)""",
+    re.IGNORECASE,
+)
+
+
+def _external_resource_loads(page: str) -> list:
+    """URLs the page would actually FETCH, ignoring URLs that are merely text.
+
+    The earlier version of this guard asserted ``"http://" not in page``, which
+    reads like a self-containment check and is not one: it passed only because
+    the fixture happened to contain no URLs. A real bundle carries URLs inside
+    prompts and tool output all the time (a captured trace of this very repo has
+    98 of them), and those are inert escaped text, not network dependencies.
+    Asserting on the raw substring would therefore have to be deleted the first
+    time someone traced a session that mentioned a link, taking the actual guard
+    with it. Match the tag that would do the fetching instead.
+    """
+    return _RESOURCE_LOAD.findall(page or "")
+
+
 # ── viewer ─────────────────────────────────────────────────────────────────
 
 def test_viewer_renders_a_self_contained_page():
@@ -210,9 +237,7 @@ def test_viewer_renders_a_self_contained_page():
     assert page.startswith("<!doctype html>")
     assert "do the thing" in page
     assert "attribution: exact" in page
-    # no network dependency -- §4g requires the page stand alone
-    assert "http://" not in page and "https://" not in page
-    assert "<script src" not in page
+    assert _external_resource_loads(page) == []
 
 
 def test_viewer_escapes_prompt_html():
@@ -230,3 +255,28 @@ def test_viewer_escapes_prompt_html():
     page = trace_viewer.render_html(b)
     assert "<img src=x" not in page
     assert "&lt;img" in page
+
+def test_urls_inside_prompt_text_are_not_resource_loads():
+    """A prompt that mentions a link must not count as a network dependency.
+
+    This is the case that made the old `"http://" not in page` assertion
+    untenable: real traces are full of URLs in prompts and tool output. They
+    must render as inert escaped text, and the page must still fetch nothing.
+    """
+    from clawmetry import trace_viewer
+    import datetime
+    ts = int(datetime.datetime(2026, 8, 22, 9, 0,
+                               tzinfo=datetime.timezone.utc).timestamp())
+    evs = _events("claude_code:s1")
+    evs[0]["data"]["content"] = "read https://github.com/openclaw/openclaw and fix it"
+    b = _build([_commit(ts=ts, session="claude_code:s1")], ["claude_code:s1"],
+               tc.ATTR_EXACT, {"claude_code:s1": evs})
+    page = trace_viewer.render_html(b)
+    assert "github.com/openclaw/openclaw" in page, "the URL should still be readable"
+    assert _external_resource_loads(page) == [], "but nothing may be fetched"
+
+
+def test_guard_catches_a_real_external_resource():
+    """Revert-proof: the guard must fail on the thing it claims to prevent."""
+    injected = '<html><head><script src="https://cdn.example.com/x.js"></script></head></html>'
+    assert _external_resource_loads(injected) == ["https://cdn.example.com/x.js"]
