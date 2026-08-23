@@ -114,11 +114,29 @@ jobs:
           VERSION: ${{ needs.wait-for-propagation.outputs.version }}
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --no-cache-dir "clawmetry==${VERSION}"
+          # wait-for-propagation verifies from one runner; parallel canary
+          # matrix jobs run on different instances that may be in different
+          # CDN regions and may not have received PyPI propagation yet.
+          # Retry up to 5 times (2.5 min) before treating a not-found as a
+          # real failure. Root cause of 0.12.758 and 0.12.760 false P0 alarms
+          # (2026-08-23): ubuntu-latest py3.11 saw "No matching distribution
+          # found" while all other matrix jobs resolved the same version.
+          for attempt in 1 2 3 4 5; do
+            if python -m pip install --no-cache-dir "clawmetry==${VERSION}"; then
+              echo "  installed on attempt ${attempt}"
+              break
+            fi
+            if [ "${attempt}" = "5" ]; then
+              echo "::error::pip install clawmetry==${VERSION} failed after 5 attempts (CDN lag or real publish failure)"
+              exit 1
+            fi
+            echo "  [${attempt}/5] version not visible on this runner yet; waiting 30s for CDN propagation"
+            sleep 30
+          done
           python -c "import clawmetry, clawmetry.cli; print('import ok')"
           clawmetry --version
           clawmetry --help > /dev/null
-          for sub in status sync connect uninstall; do
+          for sub in status sync connect uninstall trace; do
             if clawmetry "$sub" --help > /dev/null 2>&1; then
               echo "  ok: clawmetry $sub --help"
             else
