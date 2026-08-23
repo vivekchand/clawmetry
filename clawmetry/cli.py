@@ -3336,10 +3336,16 @@ def _cmd_status(args) -> None:
             # Mirroring the live plan here makes the gate reflect the real plan
             # immediately and seeds the entitlement resolver so paid runtimes
             # flip on without waiting for the daemon. Best-effort; never raises.
+            # ``allow_provision=False``: mirroring the plan must stay a local
+            # file write. Without it this line reached auto_provision_pro and
+            # a plain `clawmetry status` spent ~80s downloading the pro wheel
+            # (20s entitlement probe + 60s wheel GET) whenever the first
+            # resolved address was unreachable — the daemon, not a status
+            # read, owns provisioning.
             if _acct_plan:
                 try:
                     from clawmetry.sync import _persist_cloud_plan_to_disk as _pcp
-                    _pcp(_acct_plan)
+                    _pcp(_acct_plan, allow_provision=False)
                 except Exception:
                     pass
             if _acct_email:
