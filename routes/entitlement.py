@@ -13715,6 +13715,184 @@ def api_entitlement_required_tier_breakdown():
         )
 
 
+@bp_entitlement.route("/api/entitlement/has-all-breakdown")
+def api_entitlement_has_all_breakdown():
+    """``GET /api/entitlement/has-all-breakdown?features=a,b&runtimes=x,y
+    &channels=N&retention_days=K&nodes=M`` -- per-axis boolean-fold
+    breakdown sibling of ``/api/entitlement/required-tier-breakdown``.
+
+    Wraps :func:`entitlements.has_all_breakdown`. Where the reverse-
+    lookup breakdown identifies which axis (or axes, on a tie) is
+    *binding* the aggregate min-tier floor, this endpoint identifies
+    which axis (or axes) is *blocking* the LIVE aggregate grant -- so
+    a paywall diagnostics tile can render "denied here BECAUSE of
+    channels (Starter caps at 5, you asked for 8)" off ONE round-trip
+    instead of five ``/api/entitlement/has-*`` calls + a client-side
+    which-axis-is-false walk. Pairs directly with
+    ``/required-tier-breakdown`` on the same query args so a UI can
+    render "denied because axis Y" alongside "cheapest tier that
+    would grant it is Z because axis W".
+
+    At least one of ``features=`` / ``runtimes=`` / ``channels=`` /
+    ``retention_days=`` / ``nodes=`` must be supplied (non-empty /
+    parseable after normalisation) -- otherwise 400. The three
+    capacity axes accept a single int each; a blank or non-int value
+    still surfaces the axis in the response (with ``has=false`` and
+    the raw input in ``value`` so the caller can flag the typo in a
+    tooltip), matching the never-crash posture of the singular
+    ``/has-*`` endpoints. ``retention_days=`` mirrors the strict
+    :func:`has_all` posture: an unset param is *unset*, NOT
+    *unlimited* -- asking about the unlimited-retention live grant is
+    the singular ``/api/entitlement/has-retention-window`` call's job.
+
+    Response body::
+
+        {
+          "features":       [<normalised csv>],
+          "runtimes":       [<normalised csv>],
+          "channels":       <int> | null,
+          "retention_days": <int> | null,
+          "nodes":          <int> | null,
+          "has_all":        <bool>,
+          "current_tier":       <resolved-tier>,
+          "current_tier_rank":  <int>,
+          "grace":              <bool>,
+          "enforced":           <bool>,
+          "axes":          { <axis row per supplied kwarg> | null },
+          "blocking_axes": ["channels"]   # ordered; empty when has_all=true
+        }
+
+    ``axes`` and ``blocking_axes`` come straight from
+    :func:`has_all_breakdown`; see that helper's docstring for the
+    row shape. The ``current_tier*`` / ``grace`` / ``enforced``
+    fields match the sibling ``/has-*`` endpoints so a caller
+    migrating from the singular endpoints can adopt the breakdown
+    without reshaping its diagnostics payload.
+
+    Never 5xxs: the OSS-fallback shape is returned on any resolver
+    failure (``has_all=false``, empty ``blocking_axes``, every axis
+    ``null``).
+    """
+    try:
+        from clawmetry import entitlements as _ent
+
+        features = _parse_csv_arg("features")
+        runtimes = _parse_csv_arg("runtimes")
+        (channels_present, channels_ok, channels_n, channels_raw) = _parse_capacity_arg(
+            "channels"
+        )
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (nodes_present, nodes_ok, nodes_n, nodes_raw) = _parse_capacity_arg("nodes")
+
+        if (
+            not features
+            and not runtimes
+            and not channels_present
+            and not retention_present
+            and not nodes_present
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "supply at least one of features=<csv>, "
+                            "runtimes=<csv>, channels=<int>, "
+                            "retention_days=<int>, or nodes=<int>"
+                        )
+                    }
+                ),
+                400,
+            )
+
+        # A capacity arg that is present-but-unparseable still routes to
+        # the helper (as the raw string) so the axis row surfaces with
+        # ``has=false`` and ``value=<raw>``. Matches the never-crash
+        # posture of the singular ``/has-*`` endpoints: a typo returns
+        # a shape a UI can render, not a 400 wall.
+        def _capacity_kw(present: bool, ok: bool, n: int | None, raw: str):
+            if not present:
+                return None
+            if ok:
+                return n
+            return raw
+
+        breakdown = _ent.has_all_breakdown(
+            features=features or None,
+            runtimes=runtimes or None,
+            channels=_capacity_kw(channels_present, channels_ok, channels_n, channels_raw),
+            retention_days=_capacity_kw(
+                retention_present, retention_ok, retention_n, retention_raw
+            ),
+            nodes=_capacity_kw(nodes_present, nodes_ok, nodes_n, nodes_raw),
+        )
+
+        ent = _ent.get_entitlement()
+        cur_rank = _ent.tier_rank(ent.tier)
+
+        return jsonify(
+            {
+                "features": features,
+                "runtimes": runtimes,
+                "channels": channels_n if channels_ok else (channels_raw if channels_present else None),
+                "retention_days": retention_n if retention_ok else (retention_raw if retention_present else None),
+                "nodes": nodes_n if nodes_ok else (nodes_raw if nodes_present else None),
+                "has_all": bool(breakdown.get("has_all")),
+                "current_tier": ent.tier,
+                "current_tier_rank": cur_rank,
+                "grace": bool(getattr(ent, "grace", False)),
+                "enforced": not bool(getattr(ent, "grace", False)),
+                "axes": breakdown.get("axes")
+                or {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "blocking_axes": breakdown.get("blocking_axes") or [],
+            }
+        )
+    except Exception as exc:
+        logger.warning("api_entitlement_has_all_breakdown: error: %s", exc)
+        (channels_present, channels_ok, channels_n, channels_raw) = _parse_capacity_arg(
+            "channels"
+        )
+        (
+            retention_present,
+            retention_ok,
+            retention_n,
+            retention_raw,
+        ) = _parse_capacity_arg("retention_days")
+        (nodes_present, nodes_ok, nodes_n, nodes_raw) = _parse_capacity_arg("nodes")
+        return jsonify(
+            {
+                "features": _parse_csv_arg("features"),
+                "runtimes": _parse_csv_arg("runtimes"),
+                "channels": channels_n if channels_ok else (channels_raw if channels_present else None),
+                "retention_days": retention_n if retention_ok else (retention_raw if retention_present else None),
+                "nodes": nodes_n if nodes_ok else (nodes_raw if nodes_present else None),
+                "has_all": False,
+                "current_tier": "oss",
+                "current_tier_rank": 0,
+                "grace": True,
+                "enforced": False,
+                "axes": {
+                    "features": None,
+                    "runtimes": None,
+                    "channels": None,
+                    "retention_days": None,
+                    "nodes": None,
+                },
+                "blocking_axes": [],
+            }
+        )
+
+
 @bp_entitlement.route("/api/entitlement/feature-catalog-at")
 def api_entitlement_feature_catalog_at():
     """``GET /api/entitlement/feature-catalog-at?tier=<id>`` -- what-if
