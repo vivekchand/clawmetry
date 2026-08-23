@@ -144,7 +144,7 @@ setup(
         "Topic :: Software Development :: Quality Assurance",
         "Topic :: System :: Monitoring",
     ],
-    keywords="clawmetry openclaw moltbot dashboard observability ai agent monitoring opentelemetry",
+    keywords="clawmetry openclaw moltbot dashboard observability ai agent runtime monitoring opentelemetry",
     license="MIT",
     project_urls={
         "Homepage": "https://clawmetry.com",
