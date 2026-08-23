@@ -4650,6 +4650,14 @@ def _trace_capture(rest) -> int:
     if "--publish" not in rest:
         print("  Nothing was published. Open the review page, confirm it is safe")
         print("  to share, then re-run with --publish.")
+        print()
+        print("  Redaction removed: API keys and tokens, private keys, home paths,")
+        print("  email addresses, IP addresses, and provider ids (Stripe and the")
+        print("  like). It does NOT know what is commercially sensitive. An agent")
+        print("  session sees everything your terminal saw, so read the page for:")
+        print("    - pricing, revenue or roadmap discussion")
+        print("    - internal hostnames, ticket ids, customer names")
+        print("    - anything you would not put in the repository itself")
         return 0
 
     # Publication is a separate, explicit step: the thing being written is a

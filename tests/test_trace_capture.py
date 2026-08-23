@@ -348,3 +348,37 @@ def test_publish_surfaces_an_http_error_without_raising(monkeypatch):
                tc.ATTR_EXACT, {"claude_code:s1": []}, pr="42")
     res = tc.publish(b, app_url="https://app.example.com", api_key="cm_test")
     assert res["ok"] is False and "401" in res["error"]
+
+
+# ── vendor identifiers ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw,gone", [
+    ("STRIPE_PRICE_MONTHLY=price_1TcBFeEj3JIGZB1MtqWYDF59", "price_1TcBFe"),
+    ("sk_live_" + "A" * 24, "sk_live_"),
+    ("pk_test_" + "B" * 24, "pk_test_"),
+    ("cus_" + "C" * 16, "cus_"),
+    ("sub_" + "D" * 16, "sub_"),
+    ("acct_" + "E" * 20, "acct_"),
+    ("prod_" + "F" * 16, "prod_"),
+])
+def test_provider_identifiers_are_removed_before_publication(raw, gone):
+    """Found on the first real publish attempt.
+
+    A trace of a session that had merely READ deploy.yml carried eight live
+    Stripe price ids. Secret redaction had nothing to say about them because
+    they are not credentials, and an agent session sees everything the
+    developer's terminal saw.
+    """
+    assert gone not in tc.redact_for_publication(raw)
+
+
+def test_redaction_does_not_guess_at_commercial_sensitivity():
+    """Deliberate boundary.
+
+    Prices, roadmaps and strategy are not pattern-matchable, and a regex that
+    tried would create false confidence in exactly the place a human must
+    look. That judgement belongs to the review gate, which is why capture
+    prints what redaction does and does not cover.
+    """
+    text = "we should charge $19 per seat and give it free to OSS maintainers"
+    assert tc.redact_for_publication(text) == text
