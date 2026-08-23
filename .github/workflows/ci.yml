@@ -158,6 +158,15 @@ jobs:
       - name: Guard census (verification surface may not shrink)
         run: python3 -m pytest tests/test_guard_census.py -q
 
+      # Which checks block a merge was written down in three places, each with a
+      # "keep in sync" comment on top: the script that applies them, the script
+      # that reports them, and the workflow that alerts on them. This repo has
+      # already paid for that arrangement once, when three cost surfaces each
+      # defined "this week" for themselves (#5080). A merge gate that disagrees
+      # with its own health report is the same bug aimed at what reaches main.
+      - name: Required-checks list has one source of truth
+        run: python3 -m pytest tests/test_c6_required_checks_single_source.py -q
+
       # Every merge-blocking check must have a path to green WITHOUT privileged
       # secrets. A gated check that requires one leaves forks, outside
       # contributors, and everyone with an open PR at credential-rotation time
