@@ -234,3 +234,57 @@ and it is the only version of this question with a deadline attached.
 register the candidate PyPI name and the domain defensively, and land the
 `is_custom_endpoint()` set-membership fix from §3 — that one is a latent
 bug regardless of whether a rename ever happens.
+
+---
+
+## 6. Appendix — candidate names (availability checked 2026-08-23)
+
+**Finding that shapes the whole shortlist:** of ~65 names with any semantic
+content tested, **the `.com` was registered for every single one** — 65/65,
+including obscure coinages like `orbimetry.com` and `vantris.com`. The
+method was validated against controls (`google.com` → registered,
+`zzqxwvunlkj7.com` → free), and pronounceable *nonsense* of the same shape
+(`zelmetry`, `quorbimetry`) came back free. So the result is real: any name
+a person would recognise as a word is already held, mostly by drop-catchers.
+A `.com` therefore means an aftermarket purchase (typically low-to-mid four
+figures for a parked coinage), or shipping on `.dev` / `.io`, as Pydantic
+(`pydantic.dev`) and Braintrust (`braintrust.dev`) already do.
+
+PyPI is the looser constraint — every plain English word is squatted there
+too, but coinages and compounds are largely free.
+
+| Candidate | PyPI | .dev | .app | Notes |
+|---|---|---|---|---|
+| **runmetry** | FREE | FREE | FREE | Keeps the `-metry` DNA; "run" is the noun the product measures |
+| **lumetry** | FREE | FREE | FREE | lumen + -metry; prettier, vaguer |
+| **clarimetry** | FREE | FREE | — | clarity + -metry; slightly corporate |
+| **telemetron** | FREE | FREE | FREE | Memorable, instrument-flavoured |
+| **agentdeck** | FREE | taken | — | Flight-deck framing fits the control plane |
+| **agentgauge** | FREE | taken | FREE | Plain, instantly legible |
+| **metrion** / **vantris** / **lumeta** | FREE | — | mixed | Blank-slate coinages; no free association to trade on |
+
+### Recommendation: `RunMetry`
+
+Beyond reading well, it is the only candidate that makes the §1–§4 work
+materially cheaper. The rename becomes a **morpheme swap of identical
+shape** — `s/claw/run/` preserves every capitalisation convention in the
+codebase in one pass:
+
+```
+ClawMetry     → RunMetry
+clawmetry     → runmetry
+CLAWMETRY_*   → RUNMETRY_*        (all 257 env vars)
+~/.clawmetry/ → ~/.runmetry/
+com.clawmetry.desktop → com.runmetry.desktop
+```
+
+CLI length and rhythm are unchanged, so docs, muscle memory and every
+screenshot in the README survive. A shape-changing rename (`clawmetry` →
+`agentdeck`) turns Tier 0 and Tier 1 from a reviewable mechanical diff into
+a hand-audited one across 949 test files. Nothing about the Tier 3 costs
+changes — PyPI, domains and signing reputation are indifferent to which name
+you pick — but the cheap tiers get meaningfully cheaper and safer.
+
+**Not checked, and required before committing to any of these:** a real
+trademark search in the relevant classes. Availability on PyPI and in DNS
+says nothing about whether a mark is already registered.
