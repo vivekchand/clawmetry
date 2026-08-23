@@ -215,7 +215,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -2146,6 +2146,68 @@ class LocalStore:
                         log.exception(
                             "local store: v11 rollup wipe FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 12:
+                    # v11 -> v12: SESSION runtime re-attribution. v11 fixed the
+                    # EVENT side (rollup tokens/cost) but left the sessions
+                    # table, whose agent_type came from
+                    # ``s.get("agent_type") or "openclaw"`` in
+                    # ``sync._local_ingest_sessions_batch``. The family
+                    # adapters never set agent_type, so every Claude Code /
+                    # Codex / Cursor session was stored as 'openclaw'.
+                    # ``_refresh_runtime_day_session_counts_locked`` filters
+                    # ``WHERE agent_type = ?``, so those runtimes rolled up
+                    # with sessions=0 and the Fleet card showed them stuck on
+                    # "detected here / syncing to cloud" forever, even though
+                    # their events (split by session-id prefix) rendered fine
+                    # in Brain/Activity.
+                    #
+                    # Re-stamp from the authoritative ``<runtime>:<uuid>``
+                    # session_id prefix, then wipe the rollups so the standard
+                    # startup backfill recomputes the session counts.
+                    try:
+                        _prefix_list = ", ".join(
+                            "'" + p + "'" for p in _NON_OPENCLAW_RUNTIME_PREFIXES
+                        )
+                        self._conn.execute(
+                            f"""
+                            UPDATE sessions
+                               SET agent_type = split_part(session_id, ':', 1)
+                             WHERE agent_type = 'openclaw'
+                               AND split_part(session_id, ':', 1)
+                                   IN ({_prefix_list})
+                            """
+                        )
+                        _n = self._conn.execute(
+                            "SELECT COUNT(*) FROM sessions WHERE agent_type <>"
+                            " 'openclaw'"
+                        ).fetchone()[0]
+                        # Wipe ALL THREE rollup tables, not just the two this
+                        # migration dirties. Blueprint "Runtime and Session
+                        # Observability" states this as a contract: correcting
+                        # stored attribution and clearing the derived rollups
+                        # are ONE step. ``backfill_rollups`` gates on
+                        # ``COUNT(model_daily) + COUNT(runtime_daily) +
+                        # COUNT(session)`` and skips with "rollups_populated"
+                        # if that sum is non-zero — so leaving
+                        # rollup_model_daily behind means the startup backfill
+                        # never runs and the runtime/session rollups stay
+                        # EMPTY forever. v11 wiped all three for this reason.
+                        self._conn.execute("DELETE FROM rollup_model_daily")
+                        self._conn.execute("DELETE FROM rollup_runtime_daily")
+                        self._conn.execute("DELETE FROM rollup_session")
+                        log.info(
+                            "local store: v12 re-attributed session runtimes "
+                            "from the session-id prefix (%d non-openclaw "
+                            "session row(s)); rollups wiped for rebuild", _n,
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v12 session re-attribution FAILED — "
+                            "schema version will NOT be stamped; next boot "
+                            "will retry"
                         )
                         migration_failed = True
                         _migration_err = str(exc)
