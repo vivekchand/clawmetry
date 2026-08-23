@@ -144,7 +144,13 @@ setup(
         "Topic :: Software Development :: Quality Assurance",
         "Topic :: System :: Monitoring",
     ],
-    keywords="clawmetry openclaw moltbot dashboard observability ai agent monitoring opentelemetry",
+    keywords=(
+        "clawmetry observability governance monitoring dashboard "
+        "ai agent llm llm-observability opentelemetry cost-tracking "
+        "claude-code codex cursor github-copilot gemini-cli cline openhands "
+        "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "
+        "hermes exo openclaw nemoclaw nanoclaw picoclaw moltbot"
+    ),
     license="MIT",
     project_urls={
         "Homepage": "https://clawmetry.com",
