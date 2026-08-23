@@ -149,7 +149,9 @@ This repo (and `clawmetry-cloud` / `clawmetry-pro` / `clawmetry-mac` / `clawmetr
 - The dashboard's "Sync Blueprint with Code" agent action (or the Software Factory MCP skill, `npx skills add 8090-inc/software-factory-plugin`) can do this for you; point it at the specific PR/CHANGELOG entry rather than asking for a blanket sync of everything.
 - A red `drift-bot` check is a real signal like any other CI failure (§4) — fix the documentation gap, don't merge past it.
 
-Separately, **check [Pending Work Orders](https://factory.8090.ai) regularly**, not just when drift-bot fires. Work Orders are the actual tickets Software Factory queues from Requirements/Blueprints; picking them up (not just reacting to drift after the fact) is how the docs and the code stay one thing instead of drifting apart again next week.
+**Work Orders are a strategic backlog, not the work queue.** The factory holds 23 of them. As of 2026-08-22, zero are completed and zero of the last 60 commits reference one; what actually ships is cost fixes, compat fixes and signing guards that nobody wrote a ticket for. That is not a discipline failure to correct, it is how a solo repo with a fast flywheel really works, and this file used to instruct you to "check Pending Work Orders regularly" which nobody did and nothing broke.
+
+So: read the board when you want to know what the product is *supposed* to become next. Do not treat it as a queue you are behind on, and do not open a Work Order for routine work. Open one when a piece of work is genuinely the next thing you intend to build and you want it specified before you start. Requirements and Blueprints are the parts of the factory that carry their weight (see §1f and §1g); the ticket layer is optional and currently unused.
 
 ## 1g. Every acceptance criterion is traceable to a test
 
