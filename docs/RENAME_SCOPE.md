@@ -375,3 +375,35 @@ describing, cheap-to-migrate name whose `.com` is gone (`RunMetry`) and an
 ownable one with a real story and a free `.com` that has to be taught
 (`Rangehead`). Either is defensible; the `head` collision is the only thing
 that would give me pause. A trademark search is still required.
+
+### 6.3 Decision
+
+`runmetry.com` is registered and not practically acquirable: created
+2026-05-26 on a one-year term, parked on a registrar default page
+(Websupport.sk), with no Afternic/Sedo/Dan listing and no reachable owner
+contact. There is no price to negotiate, only a cold approach through a
+registrar. `runmetry.io` and `runmetry.ai` are free, so `RunMetry` could
+still ship — but on a name whose `.com` sits parked and could be pointed at
+anything once we have traction.
+
+That removes `RunMetry`'s only advantage that `Rangehead` lacked. Weighing
+what is left:
+
+| | RunMetry | Rangehead |
+|---|---|---|
+| `.com` | parked, unavailable | **free** |
+| PyPI / .ai / .dev / .io | free | free |
+| Migration cost | same-shape `s/claw/run/` | +2–4 eng-days |
+| Self-describing | yes (`-metry`) | no, needs teaching |
+| Story | none | range telemetry / range safety |
+| Ambiguity | none | `head` (attention heads, `git HEAD`) |
+
+**Recommendation: `Rangehead`**, if the rename happens at all. The 2–4 extra
+engineer-days are noise against a 25–45 day total, and owning the `.com`
+outright is worth more than a mechanically cheaper diff. The name has to be
+taught, but so does any name that is not already the category word.
+
+**Cheap hedge, valid either way (~$20, under an hour):** register
+`rangehead.com` and reserve `rangehead` on PyPI now. Both are free today and
+neither commits us to the rename. A trademark search remains a precondition
+to actually adopting it.
