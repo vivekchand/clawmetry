@@ -339,3 +339,66 @@ def publish(bundle: dict, *, app_url: str | None = None,
         return {"ok": False, "error": f"HTTP {exc.code}", "detail": detail}
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:200]}
+
+
+# ── inference: nobody should type a revision range ─────────────────────────
+
+def default_branch(repo: str) -> str:
+    """The branch a pull request would target. Asks the remote, not a guess."""
+    head = _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD").strip()
+    if head:
+        return head.rsplit("/", 1)[-1]
+    for cand in ("main", "master"):
+        if _git(repo, "rev-parse", "--verify", f"origin/{cand}").strip():
+            return cand
+    return "main"
+
+
+def infer_range(repo: str) -> str | None:
+    """The commits this branch adds, as a pull request would see them.
+
+    Uses the merge base rather than ``origin/main..HEAD`` so a branch that has
+    not been rebased does not sweep in everything that landed on the default
+    branch meanwhile.
+    """
+    base = default_branch(repo)
+    ref = f"origin/{base}"
+    if not _git(repo, "rev-parse", "--verify", ref).strip():
+        ref = base
+    mb = _git(repo, "merge-base", ref, "HEAD").strip()
+    if not mb:
+        return None
+    if _git(repo, "rev-parse", "HEAD").strip() == mb:
+        return None  # nothing on this branch yet
+    return f"{mb}..HEAD"
+
+
+def infer_pr(repo: str, timeout: int = 15) -> str | None:
+    """The open pull request for this branch, if there is one.
+
+    Asks the forge's public API for the branch's PR. Unauthenticated, because
+    this must work before anyone has connected anything; a private repo simply
+    returns nothing and the caller falls back to asking.
+    """
+    import json as _json
+    import urllib.request
+
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    project = project_from_remote(repo)
+    if not branch or branch == "HEAD" or not project or "/" not in project:
+        return None
+    owner = project.split("/")[0]
+    url = (f"https://api.github.com/repos/{project}/pulls"
+           f"?head={owner}:{branch}&state=open&per_page=1")
+    try:
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "clawmetry-trace",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            rows = _json.loads(resp.read().decode("utf-8", "replace"))
+        if isinstance(rows, list) and rows:
+            return str(rows[0].get("number") or "") or None
+    except Exception as exc:
+        logger.debug("PR lookup failed: %s", exc)
+    return None
