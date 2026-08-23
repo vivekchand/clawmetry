@@ -2185,7 +2185,10 @@ class LocalStore:
                             " 'openclaw'"
                         ).fetchone()[0]
                         # Wipe ALL THREE rollup tables, not just the two this
-                        # migration dirties. ``backfill_rollups`` gates on
+                        # migration dirties. Blueprint "Runtime and Session
+                        # Observability" states this as a contract: correcting
+                        # stored attribution and clearing the derived rollups
+                        # are ONE step. ``backfill_rollups`` gates on
                         # ``COUNT(model_daily) + COUNT(runtime_daily) +
                         # COUNT(session)`` and skips with "rollups_populated"
                         # if that sum is non-zero — so leaving

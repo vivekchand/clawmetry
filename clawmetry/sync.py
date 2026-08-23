@@ -1324,6 +1324,9 @@ def _sync_auto_update_with_plan(
                 auto_provision_pro as _app2,
                 ensure_pro_on_path as _epop2,
             )
+            # Blueprint "Extended Runtime Support": provisioning is
+            # idempotent against an already-installed package, including one in
+            # the user-owned fallback location.
             # A prior install may live in the HOME-owned fallback dir (used
             # when the interpreter's site-packages is read-only, e.g. a
             # root-owned /opt install driven by a --user daemon). That dir is
