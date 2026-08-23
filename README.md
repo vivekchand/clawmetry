@@ -111,12 +111,6 @@ thinking), and $35,572/mo already saved by cache reuse.
 
 ![Cost: efficiency grade B with itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
 
-**It shows every step, across every runtime.**
-Messages, reasoning, tool calls and their results, streaming live, filterable
-by runtime and by event type.
-
-![Activity: live unified event stream across runtimes](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
-
 **Detection runs without you configuring anything.**
 The built-in detectors are on from install: agent went quiet, telemetry feed
 stopped, cost spike, stalled session, repeated tool failure. Your own rules
