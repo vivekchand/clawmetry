@@ -288,3 +288,45 @@ you pick — but the cheap tiers get meaningfully cheaper and safer.
 **Not checked, and required before committing to any of these:** a real
 trademark search in the relevant classes. Availability on PyPI and in DNS
 says nothing about whether a mark is already registered.
+
+### 6.1 On short numeric names (the `8090.ai` shape)
+
+`8090.ai` itself is unavailable for a reason worth stating plainly: **8090 is
+our own vendor.** `.mcp.json` points at `api.factory.8090.dev`, FLYWHEEL.md
+tracks this repo in 8090 Software Factory at `factory.8090.ai`, and the
+plugin ships as `8090-inc/software-factory-plugin`. Naming the product after
+the toolchain vendor is a trademark problem and guarantees confusion in our
+own docs.
+
+The *style* has three concrete problems for this product specifically:
+
+1. **A leading digit is not a legal Python identifier.** `import 8090` is a
+   `SyntaxError`. Our import path is `clawmetry.*` across 175 files and the
+   `setup.py` `package_data` keys *are* the package name, so a numeric brand
+   permanently forces dist-name ≠ import-name (the `pillow`/`PIL` split).
+   That makes the §2 pivot shim and the `package_data` seam more fragile,
+   which is the opposite of what we want during a migration.
+2. **This product is already saturated with port numbers** — 8900 dashboard,
+   4100 proxy, 18789 gateway. "Run 8090 on port 8900" is a sentence we would
+   have to write in the docs and say in support.
+3. **Numerics are the most speculated domain category, not the least.**
+   Every numeric checked (`1090`, `8090`, `8900`, `406`, `121`) is registered
+   on both `.ai` and `.com`.
+
+What is right about the instinct is the blank slate: no morpheme to defend,
+no association to shed. If we want that, the shape to use is **letter+digit**
+(`k6`, `k9s`, `s3`), which stays a valid identifier and a sane CLI:
+
+| Candidate | Identifier | PyPI | .ai | .com |
+|---|---|---|---|---|
+| **obs9** | yes | FREE | taken | **FREE** |
+| tel9 | yes | FREE | FREE | taken |
+| t1090 / r1090 | yes | FREE | FREE | FREE |
+
+`obs9.com` was the only free `.com` in ~70 names checked. The best-motivated
+numeric is **1090** — the frequency (MHz) on which every aircraft broadcasts
+its telemetry to ground stations, which is precisely what the daemon does —
+but the identifier and port-collision problems still apply.
+
+**Recommendation is unchanged: `RunMetry`.** Note that `runmetry.ai` is also
+free, so it satisfies the `.ai` preference without any of the above.
