@@ -36,14 +36,29 @@ import sys
 
 OWNER = os.environ.get("OWNER", "vivekchand")
 
-# Keep in sync with REQUIRED_CHECKS in scripts/apply_required_status_checks.py
-# and c6-health.yml. "E2E Gate (required)" aggregates the underlying OSS
-# checks (see scripts/e2e_gate.py), so one entry here replaces the whole list.
-EXPECTED = {
-    "clawmetry": ["E2E Gate (required)"],
-    "clawmetry-cloud": ["Cloud golden-path browser E2E"],
-    "clawmetry-landing": ["Landing golden path (C3)"],
-}
+# DERIVED, not duplicated. This list used to be a hand-maintained copy of
+# REQUIRED_CHECKS with a "keep in sync" comment on top, which is the same
+# arrangement that let three cost surfaces disagree about what a week is. A
+# comment is not a mechanism. Importing the real list means adding a required
+# check in one place cannot leave this reporter quietly describing the old set.
+#
+# "E2E Gate (required)" aggregates the underlying OSS checks (scripts/e2e_gate.py),
+# so one entry covers that whole family.
+def _expected_from_source():
+    import importlib.util
+
+    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "apply_required_status_checks.py")
+    spec = importlib.util.spec_from_file_location("_c6_required", src_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    grouped: dict = {}
+    for repo, check in mod.REQUIRED_CHECKS:
+        grouped.setdefault(repo, []).append(check)
+    return grouped
+
+
+EXPECTED = _expected_from_source()
 
 AUTHORITATIVE = ["clawmetry"]
 CROSS_REPO = ["clawmetry-cloud", "clawmetry-landing"]

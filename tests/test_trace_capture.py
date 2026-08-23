@@ -348,3 +348,62 @@ def test_publish_surfaces_an_http_error_without_raising(monkeypatch):
                tc.ATTR_EXACT, {"claude_code:s1": []}, pr="42")
     res = tc.publish(b, app_url="https://app.example.com", api_key="cm_test")
     assert res["ok"] is False and "401" in res["error"]
+
+
+# ── inference: no revision ranges in the interface ─────────────────────────
+
+def _repo_with_commits(tmp_path):
+    import subprocess
+    r = str(tmp_path)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=r, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=r, check=True)
+    (tmp_path / "a.txt").write_text("1")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=r, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=r, check=True)
+    (tmp_path / "a.txt").write_text("2")
+    subprocess.run(["git", "commit", "-q", "-am", "work"], cwd=r, check=True)
+    return r
+
+
+def test_range_is_inferred_from_the_merge_base(tmp_path):
+    """CLAUDE.md: users should never need to configure anything manually.
+
+    A revision range is the most manual thing an interface can ask for, and
+    the first person to run this hit exactly that: they were on a branch where
+    `origin/main..HEAD` meant something they did not intend.
+    """
+    repo = _repo_with_commits(tmp_path)
+    rng = tc.infer_range(repo)
+    assert rng and rng.endswith("..HEAD")
+    commits = tc.read_commits(repo, rng)
+    assert [c["subject"] for c in commits] == ["work"], "only this branch's work"
+
+
+def test_inferred_range_uses_merge_base_not_branch_tip(tmp_path):
+    """A branch behind the default must not sweep in what landed meanwhile."""
+    import subprocess
+    repo = _repo_with_commits(tmp_path)
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    (tmp_path / "b.txt").write_text("x")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "landed on main"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "feature"], cwd=repo, check=True)
+    commits = tc.read_commits(repo, tc.infer_range(repo))
+    assert [c["subject"] for c in commits] == ["work"]
+
+
+def test_no_range_when_the_branch_adds_nothing(tmp_path):
+    import subprocess
+    repo = _repo_with_commits(tmp_path)
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    assert tc.infer_range(repo) is None
+
+
+def test_default_branch_falls_back_without_a_remote(tmp_path):
+    assert tc.default_branch(_repo_with_commits(tmp_path)) in ("main", "master")
+
+
+def test_pr_inference_never_raises_without_a_remote(tmp_path):
+    assert tc.infer_pr(_repo_with_commits(tmp_path)) is None

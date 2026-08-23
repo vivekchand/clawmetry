@@ -4567,9 +4567,25 @@ def _trace_capture(rest) -> int:
         return rest[rest.index(name) + 1] if name in rest[:-1] else default
 
     repo = _opt("--repo") or _os.getcwd()
-    commit_range = _opt("--range") or "HEAD~1..HEAD"
-    pr = _opt("--pr")
     out_dir = _opt("--out") or "."
+
+    # Zero-arg by default. CLAUDE.md: "users should never need to configure
+    # anything manually." A revision range is the most manual thing there is,
+    # and the first person to run this hit exactly that -- they were on a
+    # branch where `origin/main..HEAD` meant something they did not intend.
+    commit_range = _opt("--range")
+    if not commit_range:
+        commit_range = trace_capture.infer_range(repo)
+        if not commit_range:
+            print("Nothing to trace: this branch has no commits of its own yet.")
+            print("Commit something, then run `clawmetry trace capture` again.")
+            return 1
+        print(f"  branch       {trace_capture._git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}"
+              f"  (vs {trace_capture.default_branch(repo)})")
+
+    pr = _opt("--pr")
+    if not pr and "--no-pr" not in rest:
+        pr = trace_capture.infer_pr(repo)
 
     commits = trace_capture.read_commits(repo, commit_range)
     if not commits:
@@ -4593,9 +4609,17 @@ def _trace_capture(rest) -> int:
 
     session_ids, attribution = trace_capture.resolve_sessions(commits, sessions)
     if not session_ids:
+        stamped = sum(1 for c in commits if c.get("session_id"))
+        branch = trace_capture._git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
         print(f"No sessions resolved for {commit_range}.")
-        print("If these commits predate `clawmetry trace init`, they cannot be")
-        print("backfilled -- see PRD-pr-trace.md 3a.")
+        print(f"  examined {len(commits)} commit(s) on {branch}; "
+              f"{stamped} carried a Clawmetry-Session trailer")
+        if stamped == 0:
+            print("  Those commits were made before `clawmetry trace init` ran here.")
+            print("  Coverage starts at install and cannot be backfilled: transcripts")
+            print("  rotate and the store keeps only recent sessions (PRD 3a).")
+        else:
+            print("  The trailers name sessions the local store no longer has.")
         return 1
 
     meta = {s["session_id"]: s for s in sessions if s.get("session_id")}

@@ -66,9 +66,15 @@ jobs:
           }
 
           # All 3 repos and their required checks.
-          # Keep in sync with REQUIRED_CHECKS in scripts/apply_required_status_checks.py.
+          # This is inline YAML and cannot import the Python source, so it is a
+          # genuine copy. tests/test_c6_required_checks_single_source.py asserts
+          # it matches REQUIRED_CHECKS in scripts/apply_required_status_checks.py
+          # and fails when they drift, because a "keep in sync" comment is not a
+          # mechanism.
           # "E2E Gate (required)" is the aggregator job from e2e-gate.yml (PR #4111,
           # merged 2026-07-27); it polls the 4 underlying OSS E2E workflows.
+          # drift-bot is required too, but aggregated inside "E2E Gate (required)"
+          # (scripts/e2e_gate.py), not named separately here.
           ALL_CHECKS = {
               "clawmetry": [
                   "E2E Gate (required)",
