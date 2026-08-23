@@ -23,7 +23,7 @@ pip install clawmetry && clawmetry
 Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
 you already have, reads them read-only, and changes nothing about how they run.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry catching a spending anomaly and a stalled agent live](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
 ## Works with 26 agent runtimes
 
@@ -95,12 +95,34 @@ the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 
 ## Screenshots
 
-| | |
-|---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: tokens, sessions, health | **Brain**: live agent event stream |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
-| **Cost**: by model and session | **Approvals**: gate risky tool calls |
+Every number below is from one real machine, read-only, with nothing seeded.
+
+**It tells you when something is wrong, not just what happened.**
+Two anomaly banners at the top: spend running 7x the daily average, and a
+4.2x cost spike. Below them, 324 of 667 recent sessions carrying a waste
+signal, itemised by cause.
+
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+
+**It shows you the money you can get back.**
+$4,058.92 spent this month, about $3,668/mo of it itemised as recoverable
+(trim long conversations, route short tasks to a smaller model, trim
+thinking), and $35,572/mo already saved by cache reuse.
+
+![Cost: efficiency grade B with itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+
+**It shows every step, across every runtime.**
+Messages, reasoning, tool calls and their results, streaming live, filterable
+by runtime and by event type.
+
+![Activity: live unified event stream across runtimes](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+
+**Detection runs without you configuring anything.**
+The built-in detectors are on from install: agent went quiet, telemetry feed
+stopped, cost spike, stalled session, repeated tool failure. Your own rules
+are optional on top.
+
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
 More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
