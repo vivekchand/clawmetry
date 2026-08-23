@@ -30,6 +30,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -39,7 +40,8 @@ PYPI_JSON = "https://pypi.org/pypi/clawmetry/json"
 # when 0.12.753 died at import, it took uninstall with it, so affected users had
 # no supported way OFF the product. A release that cannot be uninstalled is a
 # strictly worse failure than one that merely does not work.
-SUBCOMMANDS = ("status", "sync", "connect", "uninstall")
+# `trace` added 2026-08-23: shipped in 0.12.760 (clawmetry trace init / capture).
+SUBCOMMANDS = ("status", "sync", "connect", "uninstall", "trace")
 
 
 def latest_version(timeout: int = 30) -> str:
@@ -72,6 +74,11 @@ def verify(version: str, verbose: bool = True) -> list:
     """Install the published version into a throwaway venv and exercise it.
 
     Returns a list of failure strings; empty means the release is healthy.
+
+    The pip install step retries up to 5 times (2.5 min) to handle CDN
+    propagation lag: the same version can be resolvable from one IP/region
+    while not yet visible from another. This mirrors the fix applied to
+    release-canary.yml on 2026-08-23 after two false P0 alarms.
     """
     failures: list = []
 
@@ -86,11 +93,25 @@ def verify(version: str, verbose: bool = True) -> list:
 
         if verbose:
             print(f"  installing clawmetry=={version} from PyPI ...")
-        code, out = _run(
-            [py, "-m", "pip", "install", "--no-cache-dir", f"clawmetry=={version}"],
-            timeout=900,
-        )
-        if code != 0:
+
+        # Retry install up to 5 times for CDN propagation lag.
+        install_ok = False
+        for attempt in range(1, 6):
+            code, out = _run(
+                [py, "-m", "pip", "install", "--no-cache-dir", f"clawmetry=={version}"],
+                timeout=900,
+            )
+            if code == 0:
+                install_ok = True
+                break
+            if attempt < 5 and "No matching distribution" in out:
+                if verbose:
+                    print(f"    [{attempt}/5] not available yet; waiting 30s for CDN propagation")
+                time.sleep(30)
+            else:
+                break
+
+        if not install_ok:
             return [f"pip install clawmetry=={version} FAILED:\n{out[-1200:]}"]
 
         # A resolvable install is not a working one. This is the exact gap
