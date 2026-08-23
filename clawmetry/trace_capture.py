@@ -161,6 +161,23 @@ _HOME = re.compile(r"/(?:home|Users)/[^/\s\"']+")
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
+#: Identifiers that are not secrets but should not be handed out. Found on the
+#: first real publish attempt: a trace of a session that had merely READ
+#: deploy.yml carried eight live Stripe price ids, because an agent session
+#: sees everything the developer's terminal saw. Secret redaction had nothing
+#: to say about them -- they are not credentials -- and that is the gap this
+#: closes. The rule is narrow on purpose: provider-issued identifiers with a
+#: recognisable shape, not an attempt to guess at commercial sensitivity,
+#: which is what the human review gate is for.
+_VENDOR_IDS = (
+    re.compile(r"\bprice_1[A-Za-z0-9]{16,}"),          # Stripe price
+    re.compile(r"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"),  # Stripe key
+    re.compile(r"\bcus_[A-Za-z0-9]{14,}"),             # Stripe customer
+    re.compile(r"\bsub_[A-Za-z0-9]{14,}"),             # Stripe subscription
+    re.compile(r"\bacct_[A-Za-z0-9]{16,}"),            # Stripe account
+    re.compile(r"\bprod_[A-Za-z0-9]{14,}"),            # Stripe product
+)
+
 
 def redact_for_publication(text: str) -> str:
     """Scrub secrets (via :mod:`clawmetry.redaction`) then private detail."""
@@ -168,6 +185,8 @@ def redact_for_publication(text: str) -> str:
         return text
     try:
         out = redaction.redact_text(text)
+        for pat in _VENDOR_IDS:
+            out = pat.sub("[vendor-id]", out)
         out = _HOME.sub("~", out)
         out = _EMAIL.sub("[email]", out)
         out = _IPV4.sub("[ip]", out)
