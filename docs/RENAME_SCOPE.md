@@ -330,3 +330,48 @@ but the identifier and port-collision problems still apply.
 
 **Recommendation is unchanged: `RunMetry`.** Note that `runmetry.ai` is also
 free, so it satisfies the `.ai` preference without any of the above.
+
+### 6.2 `Rangehead`
+
+**Availability — the only clean sweep found in ~75 names checked:**
+
+| | identifier | PyPI | .com | .ai | .dev | .io |
+|---|---|---|---|---|---|---|
+| **rangehead** | yes | FREE | **FREE** | FREE | FREE | FREE |
+
+A free `.com` is worth real money here: every other semantically meaningful
+candidate would mean an aftermarket purchase (low-to-mid four figures for a
+parked coinage) or launching on `.dev`. `rangehead` also happens to be nine
+characters, exactly `clawmetry`'s length, so CLI rhythm, docs layout and
+screenshots survive unchanged.
+
+**It has a true story, and a better one than the current name has.** In
+aerospace a *range* is the instrumented test corridor — range telemetry,
+range safety. The Range Safety Officer is the one person who can terminate a
+vehicle in flight when it leaves its envelope. That is precisely this
+product: observe everything by default, terminate on a policy the user
+declared. It explains both halves — the dashboard and the control plane —
+which "ClawMetry" never did.
+
+**Two real costs:**
+
+1. **`head` is overloaded in exactly our space.** Attention heads, `git
+   HEAD`, HTTP `HEAD`, the head of a stream. A share of first-contact
+   readers in AI infra will parse it as something about transformer heads.
+2. **It does not self-describe.** `-metry` at least said *measurement*.
+   Rangehead needs a sentence of explanation in every headline, bio and
+   Show HN title, forever. The story is good, but stories need airtime.
+
+It also forfeits the `s/claw/run/` mechanical-migration argument from §6 —
+Tier 0/1 returns to a hand-audited diff across 949 test files, roughly 2–4
+engineer-days more than `RunMetry`. Against a 25–45 day total that is noise.
+
+The rest of the range family is unavailable (`downrange` taken on all TLDs;
+`rangesafe.com`, `rangeops.com` taken), so `rangehead` is the one that is
+actually free.
+
+**Verdict:** it clears the bar. The choice is between a safe, self-
+describing, cheap-to-migrate name whose `.com` is gone (`RunMetry`) and an
+ownable one with a real story and a free `.com` that has to be taught
+(`Rangehead`). Either is defensible; the `head` collision is the only thing
+that would give me pause. A trademark search is still required.
