@@ -8,10 +8,15 @@
 #   bash scripts/close-c6.sh
 #
 # What this does:
-#   Adds 3 required status checks to main branch protection across 3 repos:
+#   Applies the required status checks declared in REQUIRED_CHECKS in
+#   scripts/apply_required_status_checks.py, which is the single source of
+#   truth. That currently means:
 #     clawmetry         : E2E Gate (required)
 #     clawmetry-cloud   : Cloud golden-path browser E2E
 #     clawmetry-landing : Landing golden path (C3)
+#   "E2E Gate (required)" aggregates the rest, drift-bot included.
+#   This comment is illustrative; the script reads the Python list, so it
+#   cannot apply something different from what is declared there.
 #
 #   "E2E Gate (required)" is an aggregator (e2e-gate.yml, PR #4111) that
 #   polls the 4 underlying OSS E2E workflows and reports one conclusion.

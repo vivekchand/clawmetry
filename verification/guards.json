@@ -124,8 +124,8 @@
   ],
   "ratchets": {
     "e2e_gate_required_specs": {
-      "value": 11,
-      "why": "Number of checks aggregated by the merge gate. Was 4 before L0, which let a red CI merge. Adding checks is good; removing them re-opens the hole."
+      "value": 12,
+      "why": "Number of checks aggregated by the merge gate. Was 4 before L0, which let a red CI merge. Raised to 12 when drift-bot joined: it is a commit status, not a check run, so the gate had to learn to read both surfaces before it could block on it. Adding checks is good; removing them re-opens the hole."
     },
     "pip_install_matrix_legs": {
       "value": 4,
