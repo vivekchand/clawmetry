@@ -3915,7 +3915,7 @@ DASHBOARD_HTML = r"""
   .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
   .theme-toggle:active { transform: scale(0.98); }
-  
+
   /* === Zoom Controls === */
   .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
@@ -4343,7 +4343,7 @@ DASHBOARD_HTML = r"""
   .usage-table th { text-align: left; font-size: 12px; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
   .usage-table td { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-secondary); }
   .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: var(--text-accent); }
-  
+
   /* === Cost Warnings === */
   .cost-warning { padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
   /* === Markdown Rendered Content === */
@@ -4528,7 +4528,7 @@ DASHBOARD_HTML = r"""
   .comp-modal-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
   .comp-modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
   .comp-modal-close:hover { background: var(--bg-error); color: var(--text-error); }
-  
+
   /* Time Travel Controls */
   .time-travel-bar { display: none; padding: 12px 20px; border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
   .time-travel-bar.active { display: block; }
@@ -4774,18 +4774,18 @@ DASHBOARD_HTML = r"""
     .heatmap-grid { min-width: 500px; }
     .chat-msg { max-width: 95%; }
     .usage-chart { height: 150px; }
-    
+
     /* Enhanced Flow mobile optimizations */
-    .flow-container { 
-      padding-bottom: 20px; 
-      overflow: visible; 
+    .flow-container {
+      padding-bottom: 20px;
+      overflow: visible;
     }
     #flow-svg text { font-size: 11px !important; }
     .flow-label { font-size: 7px !important; }
     .flow-node rect { stroke-width: 1 !important; }
     .flow-node.active rect { stroke-width: 1.5 !important; }
     .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
-    
+
     /* Mobile zoom controls */
     .zoom-controls { margin-left: 8px; gap: 2px; }
     .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
@@ -4824,7 +4824,7 @@ DASHBOARD_HTML = r"""
     .card { padding: 12px 14px; }
     .card-label { font-size: 10px; }
     .card-value { font-size: 20px; }
-    
+
     /* Overview grid already 1-col, just tighten gap */
     .grid { gap: 8px; }
 
@@ -5515,7 +5515,7 @@ function clawmetryLogout(){
     <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
     <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
   </div>
-  
+
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
 
@@ -6131,7 +6131,7 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      
+
     </div>
     <!-- Source filter chips -->
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
@@ -7452,7 +7452,7 @@ function toggleTheme() {
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
   const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
-  
+
   if (isLight) {
     body.setAttribute('data-theme', 'dark');
     toggle.innerHTML = _sunSVG;
@@ -7470,7 +7470,7 @@ function initTheme() {
   const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
-  
+
   if (savedTheme === 'dark') {
     body.setAttribute('data-theme', 'dark');
     if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
@@ -7497,14 +7497,14 @@ function initZoom() {
 function applyZoom() {
   const wrapper = document.getElementById('zoom-wrapper');
   const levelDisplay = document.getElementById('zoom-level');
-  
+
   if (wrapper) {
     wrapper.style.transform = `scale(${currentZoom})`;
   }
   if (levelDisplay) {
     levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
   }
-  
+
   // Save to localStorage
   localStorage.setItem('openclaw-zoom', currentZoom.toString());
 }
@@ -8077,12 +8077,12 @@ async function loadContextAnatomy() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker 
+  // 💰 Cost Ticker
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
   document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
-  
+
   var trend = '';
   if (usage.trend && usage.trend.trend) {
     var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
@@ -8155,15 +8155,15 @@ async function loadMiniWidgets(overview, usage) {
     if (burnFallback) burnFallback.textContent = '--';
     if (projFallback) projFallback.textContent = '--';
   }
-  
+
   // ⚡ Tool Activity (load from logs)
   loadToolActivity();
-  
+
   // 📊 Token Burn Rate
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
-  
+
   // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
@@ -8181,7 +8181,7 @@ async function loadMiniWidgets(overview, usage) {
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
-  
+
   // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
   var modelLabel = document.getElementById('main-activity-model');
@@ -8203,10 +8203,10 @@ async function loadMiniWidgets(overview, usage) {
     modelBreakdown = 'Primary model';
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
-  
+
   // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
-  
+
 }
 
 async function loadSubAgents() {
@@ -8214,10 +8214,10 @@ async function loadSubAgents() {
     var data = await fetch('/api/subagents').then(r => r.json());
     var counts = data.counts;
     var subagents = data.subagents;
-    
+
     // Update main counter
     document.getElementById('subagents-count').textContent = counts.total;
-    
+
     // Update status text
     var statusText = '';
     if (counts.active > 0) {
@@ -8230,7 +8230,7 @@ async function loadSubAgents() {
       statusText = 'All idle/stale';
     }
     document.getElementById('subagents-status').textContent = statusText;
-    
+
     // Update preview with top sub-agents (human-readable)
     var previewHtml = '';
     if (subagents.length === 0) {
@@ -8249,14 +8249,14 @@ async function loadSubAgents() {
         previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
         previewHtml += '</div>';
       });
-      
+
       if (subagents.length > 3) {
         previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
       }
     }
-    
+
     document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
+
   } catch(e) {
     document.getElementById('subagents-count').textContent = '?';
     document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
@@ -8379,28 +8379,28 @@ async function loadToolActivity() {
     var logs = await fetch('/api/logs?lines=100').then(r => r.json());
     var toolCounts = { exec: 0, browser: 0, search: 0, other: 0 };
     var recentTools = [];
-    
+
     logs.lines.forEach(function(line) {
       var msg = line.toLowerCase();
       if (msg.includes('tool') || msg.includes('invoke')) {
-        if (msg.includes('exec') || msg.includes('shell')) { 
-          toolCounts.exec++; recentTools.push('exec'); 
-        } else if (msg.includes('browser') || msg.includes('screenshot')) { 
-          toolCounts.browser++; recentTools.push('browser'); 
-        } else if (msg.includes('web_search') || msg.includes('web_fetch')) { 
-          toolCounts.search++; recentTools.push('search'); 
+        if (msg.includes('exec') || msg.includes('shell')) {
+          toolCounts.exec++; recentTools.push('exec');
+        } else if (msg.includes('browser') || msg.includes('screenshot')) {
+          toolCounts.browser++; recentTools.push('browser');
+        } else if (msg.includes('web_search') || msg.includes('web_fetch')) {
+          toolCounts.search++; recentTools.push('search');
         } else {
           toolCounts.other++;
         }
       }
     });
-    
+
     document.getElementById('tools-active').textContent = recentTools.slice(0, 3).join(', ') || 'Idle';
     document.getElementById('tools-recent').textContent = 'Last ' + Math.min(logs.lines.length, 100) + ' log entries';
-    
+
     var sparks = document.querySelectorAll('.tool-spark span');
     sparks[0].textContent = toolCounts.exec;
-    sparks[1].textContent = toolCounts.browser;  
+    sparks[1].textContent = toolCounts.browser;
     sparks[2].textContent = toolCounts.search;
   } catch(e) {
     document.getElementById('tools-active').textContent = '--';
@@ -8411,26 +8411,26 @@ async function loadActivityStream() {
   try {
     var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
-    
+
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
         var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
-        
+
         recentMessages.forEach(function(msg) {
           if (msg.role === 'assistant' && msg.content) {
             var content = msg.content.toLowerCase();
             var activity = '';
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
-            
+
             if (content.includes('searching') || content.includes('search')) {
               activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
               activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
-              activity = time + ' ✏️ Editing files'; 
+              activity = time + ' ✏️ Editing files';
             } else if (content.includes('exec') || content.includes('command')) {
               activity = time + ' ⚡ Running commands';
             } else if (content.includes('browser') || content.includes('screenshot')) {
@@ -8439,24 +8439,24 @@ async function loadActivityStream() {
               var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
               activity = time + ' 💭 ' + preview + '...';
             }
-            
+
             if (activity) activities.push(activity);
           }
         });
       } catch(e) {}
     }
-    
+
     if (activities.length === 0) {
       activities = [
         new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
         new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
       ];
     }
-    
+
     var html = activities.slice(-8).map(function(a) {
       return '<div style="padding:4px 0; border-bottom:1px solid #1a1a30; color:#ccc;">' + escHtml(a) + '</div>';
     }).join('');
-    
+
     document.getElementById('activity-stream').innerHTML = html;
   } catch(e) {
     document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">Error loading activity stream</div>';
@@ -12579,11 +12579,11 @@ def validate_configuration():
         path = os.path.join(WORKSPACE, f)
         if os.path.exists(path):
             found_files.append(f)
-    
+
     if not found_files:
         warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
         tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
-    
+
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
@@ -12591,17 +12591,17 @@ def validate_configuration():
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [f for f in glob.glob(log_pattern) 
+        recent_logs = [f for f in glob.glob(log_pattern)
                       if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
         if not recent_logs:
             warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
             tips.append("[tip] Start your OpenClaw agent to see real-time data")
-    
+
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
+
     return warnings, tips
 
 
@@ -12679,13 +12679,14 @@ def detect_config(args=None):
     else:
         # Auto-detect: check common locations including Docker volumes
         data_dir = _auto_detect_data_dir()
-    
+
     if data_dir and os.path.isdir(data_dir):
         # Auto-set workspace, sessions, crons from data dir
         ws = os.path.join(data_dir, 'workspace')
         if os.path.isdir(ws) and not (args and args.workspace):
             if not args:
-                import argparse; args = argparse.Namespace()
+                import argparse
+                args = argparse.Namespace()
             args.workspace = ws
         sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
         if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
