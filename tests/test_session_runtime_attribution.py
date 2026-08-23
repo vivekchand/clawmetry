@@ -21,6 +21,12 @@ so claude_code rolled up with sessions=0 and the Fleet card had nothing to
 mark synced. The event side was fine because it splits on the session_id
 prefix, which is why Activity worked and Fleet did not.
 
+Specification: the "Runtime and Session Observability" blueprint now states the
+resolution order this module enforces, and states that the session-side and
+event-side runtime splits must agree. That second contract is the one this bug
+broke: events were attributed correctly while sessions were not, so the two
+per-runtime views disagreed instead of failing visibly.
+
 Acceptance criteria covered:
 
 * AC-OBS-003.1 -- when the system recognizes a supported runtime, it associates
