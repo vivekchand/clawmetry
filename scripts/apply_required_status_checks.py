@@ -78,26 +78,11 @@ REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "E2E Gate (required)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
-    # drift-bot: the Software Factory Blueprint/Requirement sync check.
-    #
-    # FLYWHEEL 1f has called a red drift-bot non-negotiable for months, and it
-    # was enforced by nothing: #5089 merged with it red on 2026-08-22, and
-    # clawmetry-cloud #2089 merged with it red the day after. A rule that lives
-    # only in prose gets broken by whoever is in a hurry.
-    #
-    # It is a COMMIT STATUS posted by the 8090-software-factory GitHub App, not
-    # an Actions workflow, so there is no re-run button. That is precisely why
-    # it must block BEFORE the merge: red is permanent once merged, and fixing
-    # the Blueprint afterwards never turns that PR green.
-    #
-    # Safe to require, unlike visual-diff below: verified 2026-08-23 that the
-    # app posts a status on every PR rather than a filtered subset (30/30 most
-    # recent clawmetry PRs, 10/10 clawmetry-cloud). So it cannot strand a PR on
-    # "Expected -- Waiting for status to be reported", and the path to green
-    # belongs to the author: fix the Blueprint or the code, push, the app
-    # re-evaluates.
-    ("clawmetry",         "drift-bot"),
-    ("clawmetry-cloud",   "drift-bot"),
+    # drift-bot is deliberately NOT here. It is required, but it is aggregated
+    # behind "E2E Gate (required)" in scripts/e2e_gate.py rather than named as a
+    # second branch-protection context, because ADR-001 says protection names
+    # exactly one context. Adding a second would make the merge gate and its own
+    # architecture disagree, which is the quiet kind of drift.
 ]
 
 # Checks previously added as required that must be actively removed.

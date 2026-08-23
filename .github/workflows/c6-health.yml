@@ -73,15 +73,14 @@ jobs:
           # mechanism.
           # "E2E Gate (required)" is the aggregator job from e2e-gate.yml (PR #4111,
           # merged 2026-07-27); it polls the 4 underlying OSS E2E workflows.
-          # "drift-bot" is a commit status from the 8090-software-factory app.
+          # drift-bot is required too, but aggregated inside "E2E Gate (required)"
+          # (scripts/e2e_gate.py), not named separately here.
           ALL_CHECKS = {
               "clawmetry": [
                   "E2E Gate (required)",
-                  "drift-bot",
               ],
               "clawmetry-cloud": [
                   "Cloud golden-path browser E2E",
-                  "drift-bot",
               ],
               "clawmetry-landing": [
                   "Landing golden path (C3)",

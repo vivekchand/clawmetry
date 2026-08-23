@@ -11,9 +11,10 @@
 #   Applies the required status checks declared in REQUIRED_CHECKS in
 #   scripts/apply_required_status_checks.py, which is the single source of
 #   truth. That currently means:
-#     clawmetry         : E2E Gate (required), drift-bot
-#     clawmetry-cloud   : Cloud golden-path browser E2E, drift-bot
+#     clawmetry         : E2E Gate (required)
+#     clawmetry-cloud   : Cloud golden-path browser E2E
 #     clawmetry-landing : Landing golden path (C3)
+#   "E2E Gate (required)" aggregates the rest, drift-bot included.
 #   This comment is illustrative; the script reads the Python list, so it
 #   cannot apply something different from what is declared there.
 #

@@ -98,6 +98,20 @@ REQUIRED_SPECS = [
     # Property tests over the store, plus the mutation ratchet that keeps the
     # rest of these guards from decaying into tautologies.
     Spec("Store invariants", "Store invariants (property-based)"),
+
+    # Blueprint/Requirement sync with 8090 Software Factory. FLYWHEEL 1f has
+    # called a red drift-bot non-negotiable for months while nothing enforced
+    # it: #5089 merged with it red, and clawmetry-cloud #2089 the day after.
+    #
+    # It belongs HERE rather than as a second branch-protection context. ADR-001
+    # says protection names exactly one context and this file aggregates behind
+    # it; adding a second name would have been a quieter kind of drift, where
+    # the merge gate and its own architecture disagree.
+    #
+    # Unlike everything above, drift-bot is a COMMIT STATUS from the
+    # 8090-software-factory GitHub App, not an Actions check run. It never
+    # appears in /check-runs, which is why list_commit_statuses exists.
+    Spec("Drift Bot", "drift-bot"),
 ]
 
 
@@ -230,6 +244,55 @@ def list_check_runs(repo, sha, token):
     return runs
 
 
+# A commit status carries `state`, a check run carries `status` + `conclusion`.
+# Normalising the former into the latter lets evaluate() stay one code path.
+# "error" is GitHub's transport-level failure and blocks exactly like "failure";
+# treating it as anything softer would let a broken reporter merge.
+_STATUS_STATE_TO_CONCLUSION = {
+    "success": "success",
+    "failure": "failure",
+    "error": "failure",
+}
+
+
+def list_commit_statuses(repo, sha, token):
+    """Fetch commit statuses for a SHA, shaped like check runs.
+
+    Commit statuses are a different API from check runs and do not appear in
+    /check-runs at all. drift-bot is posted this way by the
+    8090-software-factory app, so a gate that only reads check runs cannot see
+    it -- which is precisely how it stayed unenforceable while FLYWHEEL called
+    it non-negotiable.
+
+    The combined endpoint already collapses to the most recent status per
+    context, so no extra de-duplication is needed here.
+    """
+    url = f"https://api.github.com/repos/{repo}/commits/{sha}/status?per_page=100"
+    req = urllib.request.Request(url, headers=_headers(token))
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        print(f"  warn: commit-status API {exc.code}: {exc.read()[:200]!r}")
+        return []
+
+    shaped = []
+    for status in data.get("statuses", []):
+        context = status.get("context") or ""
+        if not context:
+            continue
+        state = status.get("state")
+        conclusion = _STATUS_STATE_TO_CONCLUSION.get(state)
+        if conclusion is None:
+            # "pending", or anything GitHub adds later: not yet decided. Report
+            # it as still running so the gate WAITS instead of passing on a
+            # status that has not been posted yet.
+            shaped.append({"name": context, "status": "in_progress", "conclusion": None})
+        else:
+            shaped.append({"name": context, "status": "completed", "conclusion": conclusion})
+    return shaped
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default=os.environ.get("REPO", ""))
@@ -273,7 +336,11 @@ def main():
     while True:
         elapsed = int(time.monotonic() - start)
         try:
+            # Both surfaces, because the required set spans both: Actions
+            # report as check runs, the Software Factory app as a commit
+            # status. Reading only one is how drift-bot went unenforced.
             runs = list_check_runs(args.repo, sha, token)
+            runs += list_commit_statuses(args.repo, sha, token)
         except Exception as exc:  # noqa: BLE001 - keep polling through blips
             print(f"  [{elapsed}s] warn: fetch failed: {exc}")
             time.sleep(POLL_INTERVAL)
