@@ -373,7 +373,8 @@ prevent.
 
 ### 4j. What the GitHub App can and cannot do
 
-The App is a real surface — it carries verification (§5a), the PR comment and
+The App is a real surface: it carries repo-admin verification for the grant
+(clawmetry-cloud `docs/PRD_PR_TRACE_OSS_PROGRAM.md`), the PR comment and
 check-run (§4h), and repo metadata for the directory (§4i). It is not, and cannot
 become, the thing that produces a trace.
 
@@ -405,7 +406,7 @@ the un-traced landing page, not a synthesised approximation.
 
 ### 4k. Contributor onboarding — one command, per project
 
-A maintainer installs the App once (§5a). Every *contributor* gets set up with a single
+A maintainer installs the App once. Every *contributor* gets set up with a single
 command the project can paste into its `CONTRIBUTING.md`:
 
 ```
@@ -487,7 +488,7 @@ What is in scope here, because it is a code contract rather than a commercial on
 | **P2** | GitHub Action, PR comment, check-run, badge. Dogfood on this repo. | |
 | **P2b** | `trace.clawmetry.com/i/<owner>/<repo>` installer endpoint (§4k) — one static script, one line of variance, published hash. | Cheap, and it is what a maintainer actually pastes into CONTRIBUTING.md. |
 | **P3** | `iter_replay_events` for `claude_code` + `openclaw` → unlocks Trace / Workflows / Agent-graph lenses. | **The bulk of the work.** |
-| **P4** | GitHub App + `oss_grant` entitlement source (§5a), ranked behind both paid sources, with activity renewal + warning (§5c). | |
+| **P4** | GitHub App + `oss_grant` entitlement source, ranked behind both paid sources, with activity renewal and warning. Rules in clawmetry-cloud `docs/PRD_PR_TRACE_OSS_PROGRAM.md`. | |
 | **P5** | Discovery directory (§4i) — search, coverage view, shared cache. | |
 | **P6** | Jira/GitLab adapters; cost-attribution split refinement. | |
 
