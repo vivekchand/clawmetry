@@ -4725,6 +4725,22 @@ def trace_main(argv) -> int:
     if sub == "capture":
         return _trace_capture(rest)
 
+    if sub == "autopublish":
+        # Driven by the pre-push hook. ALWAYS exits 0: an observability tool
+        # must never be the reason a push fails.
+        from clawmetry import trace_auto
+        res = trace_auto.run(_opt("--repo"))
+        if res.get("skipped"):
+            return 0
+        if res.get("url"):
+            print(f"  ClawMetry trace: {res['url']}")
+        elif res.get("bundle") and not res.get("published"):
+            print("  ClawMetry captured a trace but did not publish it.")
+            print(f"  {res.get('hint', '')}")
+        elif res.get("error"):
+            print(f"  ClawMetry trace failed: {res['error']}")
+        return 0
+
     if sub == "stamp":
         if rest:
             trace_stamp.stamp_file(rest[0])
@@ -4733,6 +4749,7 @@ def trace_main(argv) -> int:
     repo = _opt("--repo")
 
     if sub == "init":
+        auto = "--auto" in rest
         res = trace_stamp.install(repo)
         status = res.get("status")
         if status == "installed":
@@ -4754,6 +4771,26 @@ def trace_main(argv) -> int:
         else:
             print(f"Could not install: {res.get('error')}")
             return 1
+
+        if auto:
+            from clawmetry import trace_auto
+            pp = trace_stamp.install_prepush(repo)
+            if pp.get("status") == "foreign-hook":
+                print()
+                print(f"A different pre-push hook exists: {pp['path']}")
+                print(f"Hint: {pp.get('hint', '')}")
+                return 1
+            trace_auto.set_policy(repo, publish=True, comment=True)
+            print()
+            print("Automatic tracing is ON for this repository.")
+            print("  On every push: capture, publish, and comment on the pull")
+            print("  request with the link. No further commands.")
+            print()
+            print("  This publishes a PUBLIC page containing what the agent was")
+            print("  asked to do and the tool output it saw. Secrets, home paths,")
+            print("  emails and provider ids are removed; commercially sensitive")
+            print("  discussion is NOT something redaction can detect.")
+            print("  Turn it off with: git config clawmetry.autopublish false")
         return 0
 
     if sub == "uninstall":

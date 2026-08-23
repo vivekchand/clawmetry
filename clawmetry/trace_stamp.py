@@ -282,3 +282,37 @@ def status(repo: str | None = None) -> dict:
         "session_id": detect_session_id(),
         "runtime_detected": detect_session_id() is not None,
     }
+
+# ── pre-push hook: the trigger for automatic tracing ───────────────────────
+
+_PREPUSH_MARKER = "# clawmetry trace autopublish"
+_PREPUSH_BODY = f"""#!/bin/sh
+{_PREPUSH_MARKER} -- see PRD-pr-trace.md. Removing this line disables it.
+# Captures a trace for the pushed branch and, where this repository opted in,
+# publishes it and comments on the pull request.
+# Exits 0 unconditionally: an observability tool must never block a push.
+clawmetry trace autopublish >/dev/null 2>&1 || true
+exit 0
+"""
+
+
+def install_prepush(repo: str | None = None) -> dict:
+    """Install the ``pre-push`` hook that drives automatic tracing."""
+    repo = repo or os.getcwd()
+    try:
+        hooks = _hooks_dir(repo)
+        os.makedirs(hooks, exist_ok=True)
+        path = os.path.join(hooks, "pre-push")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                current = fh.read()
+            if _PREPUSH_MARKER in current:
+                return {"ok": True, "status": "already-installed", "path": path}
+            return {"ok": False, "status": "foreign-hook", "path": path,
+                    "hint": f"add `clawmetry trace autopublish` to {path} yourself"}
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_PREPUSH_BODY)
+        os.chmod(path, 0o755)
+        return {"ok": True, "status": "installed", "path": path}
+    except Exception as exc:
+        return {"ok": False, "status": "error", "error": str(exc)[:200]}
