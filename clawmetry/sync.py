@@ -1266,7 +1266,9 @@ _HEARTBEAT_PLAN_TO_TIER = {
 }
 
 
-def _sync_auto_update_with_plan(tier: str | None) -> None:
+def _sync_auto_update_with_plan(
+    tier: str | None, *, allow_provision: bool = True,
+) -> None:
     """Entitled accounts (Trial / Starter / Pro / Enterprise) keep the node
     current automatically: enable the opt-in ``auto_update`` flag so the
     daemon's update-check worker installs new releases (riding the 48h
@@ -1276,7 +1278,12 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
     Safety: respects an explicit opt-out (``CLAWMETRY_AUTO_UPDATE`` in
     0/false/no/off), only ever ENABLES (never auto-disables, so a user's manual
     choice survives a downgrade), and no-ops for free / inactive plans. Best
-    effort — never raises."""
+    effort — never raises.
+
+    ``allow_provision=False`` keeps this side-effect-free over the network:
+    the local auto-update flag is still reconciled, but the clawmetry-pro
+    wheel download is skipped. Read-only callers (``clawmetry status``) must
+    pass it."""
     try:
         if not tier or tier == "cloud_free":
             return
@@ -1301,12 +1308,35 @@ def _sync_auto_update_with_plan(tier: str | None) -> None:
     # clawmetry-pro IMMEDIATELY rather than waiting up to ~30 min for the
     # entitlement watcher, so the paid runtimes (Claude Code, Codex, …) start
     # syncing within a cycle or two of the upgrade — no daemon restart needed.
+    if not allow_provision:
+        # Read-only caller (e.g. ``clawmetry status``): mirroring the plan must
+        # not turn into a wheel download. ``auto_provision_pro`` does a 20s
+        # entitlement probe plus a 60s wheel GET, so on a node whose first
+        # resolved address is unreachable (broken IPv6 is the common one —
+        # glibc prefers AAAA and ``socket.create_connection`` has no Happy
+        # Eyeballs, so it burns the FULL timeout before trying IPv4) a plain
+        # status read blocked for ~85s (founder live-hit 2026-08-23).
+        return
     try:
         if tier and tier != "cloud_free":
             from clawmetry.license import (
                 _pro_installed_version as _pv2,
                 auto_provision_pro as _app2,
+                ensure_pro_on_path as _epop2,
             )
+            # Blueprint "Extended Runtime Support": provisioning is
+            # idempotent against an already-installed package, including one in
+            # the user-owned fallback location.
+            # A prior install may live in the HOME-owned fallback dir (used
+            # when the interpreter's site-packages is read-only, e.g. a
+            # root-owned /opt install driven by a --user daemon). That dir is
+            # only on sys.path if something put it there, and the daemon's
+            # startup call runs BEFORE the first provision creates it — so
+            # without this, ``_pv2()`` returned None on every heartbeat and the
+            # daemon re-provisioned pro forever, logging "provisioned … will
+            # sync on the next cycle" every cycle under one PID (founder
+            # live-hit 2026-08-23).
+            _epop2()
             if not _pv2():
                 _cfg2 = load_config() or {}
                 _ak2 = _cfg2.get("api_key", "")
@@ -1366,6 +1396,8 @@ def _persist_cloud_plan_to_disk(
     trial_days_left=None,
     trial_end=None,
     trial_used=None,
+    *,
+    allow_provision: bool = True,
 ) -> None:
     """Mirror the heartbeat plan into ``~/.clawmetry/cloud_plan.json`` so the
     dashboard process (which runs ``clawmetry.entitlements.get_entitlement``)
@@ -1382,10 +1414,16 @@ def _persist_cloud_plan_to_disk(
     optimisation, the daemon still works without it. When ``plan`` is unknown
     or signals an inactive state (``trial_expired``, ``None``) the cache file
     is removed instead of written, so the resolver falls back to OSS-free
-    rather than granting a dead plan."""
+    rather than granting a dead plan.
+
+    ``allow_provision=False`` makes the call network-free (see
+    ``_sync_auto_update_with_plan``); ``clawmetry status`` uses it so a status
+    read can never block on fetching the pro wheel."""
     tier = _HEARTBEAT_PLAN_TO_TIER.get(str(plan or "").strip().lower())
     # Entitled plan → keep this node current automatically (opt-out + 48h rail).
-    _sync_auto_update_with_plan(tier)
+    # ``allow_provision`` is forwarded so a read-only caller can mirror the plan
+    # without triggering a blocking clawmetry-pro wheel download.
+    _sync_auto_update_with_plan(tier, allow_provision=allow_provision)
     # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
     # plan change), so short-circuit when the on-disk cache already reflects this
     # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
@@ -4146,6 +4184,44 @@ def _session_git_branch(row: dict) -> str | None:
     return _first_alias(row, _GIT_BRANCH_ALIASES)
 
 
+def _session_agent_type(row: dict, session_id: str) -> str:
+    """Which runtime a session belongs to, for the ``sessions.agent_type``
+    column.
+
+    This used to be ``row.get("agent_type") or "openclaw"``. The family
+    adapters (Claude Code, Codex, Cursor, …) don't set ``agent_type`` — they
+    carry the runtime in ``runtime`` and, authoritatively, in the
+    ``<runtime>:<uuid>`` ``session_id`` prefix that ``local_store`` already
+    keys its event-side runtime split on. So every paid-runtime session was
+    stamped ``openclaw``, which made
+    ``_refresh_runtime_day_session_counts_locked`` (``WHERE agent_type = ?``)
+    count zero sessions for those runtimes. The Brain/Activity tabs looked
+    fine — they group events by the ``session_id`` prefix — while the Fleet
+    card, which reads the session counts, showed the runtime stuck on
+    "detected here / syncing to cloud" forever (founder live-hit
+    2026-08-23: Claude Code · 537 pending on Linux while the Mac's 49 synced).
+
+    Resolution order: explicit ``agent_type`` → ``runtime`` → the
+    ``session_id`` prefix when it names a known non-OpenClaw runtime →
+    ``openclaw``. The prefix is checked against
+    ``local_store._NON_OPENCLAW_RUNTIME_PREFIXES`` so a genuine OpenClaw
+    session id containing a colon can never be mistaken for a runtime.
+    """
+    for key in ("agent_type", "runtime"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    prefix = str(session_id or "").split(":", 1)[0].strip().lower()
+    if prefix:
+        try:
+            from clawmetry.local_store import _NON_OPENCLAW_RUNTIME_PREFIXES
+            if prefix in _NON_OPENCLAW_RUNTIME_PREFIXES:
+                return prefix
+        except Exception:
+            pass
+    return "openclaw"
+
+
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
     """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
     into the local DuckDB ``sessions`` table. Batched: ONE
@@ -4177,7 +4253,7 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             and v
         }
         session_rows.append({
-            "agent_type": s.get("agent_type") or "openclaw",
+            "agent_type": _session_agent_type(s, sid),
             "session_id": sid,
             "node_id": node_id,
             "agent_id": s.get("agent_id") or "main",
