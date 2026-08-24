@@ -1088,13 +1088,20 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
             _in_flight[key] = result
         return result
 
+    # SECURITY (2026-08-24 review, finding 2): this request carries NO tool
+    # arguments. It used to POST `args` and a `context` string built from the
+    # command preview as plain JSON, outside the AES-GCM envelope — for a Bash
+    # gate that was the literal shell command, and for Write/Edit the file path
+    # and its contents. The approval detail the operator actually reads reaches
+    # the cloud inbox through the encrypted `cache_push` rail below
+    # (`_build_approvals_cache_pushes` in sync.py), which fails closed without
+    # a key. What stays here is the routing envelope: which node, which
+    # session, which tool, which policy, how long to wait.
     req = {
         "id": approval_id,
         "node_id": node_id,
         "session_id": session_id,
         "tool_name": tool_name,
-        "args": args_with_risk,
-        "context": f"Policy '{policy['name']}' fired on {tool_name}: {cmd_preview}",
         "policy_name": policy["name"],
         "timeout": policy["timeout"],
     }

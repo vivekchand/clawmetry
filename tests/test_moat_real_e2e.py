@@ -426,9 +426,12 @@ def live(tmp_path, monkeypatch):
 
 
 def _drive_daemon(sync_mod, sessions_dir: str, store) -> int:
+    # A real key: the cloud wire only carries content when one is
+    # configured — a keyless node skips the upload rather than sending
+    # cleartext (2026-08-24 security review, finding 3).
     config = {
         "api_key": "cm_test_moat_real",
-        "encryption_key": None,
+        "encryption_key": sync_mod.generate_encryption_key(),
         "node_id": NODE_ID,
     }
     state = {"last_event_ids": {}}
