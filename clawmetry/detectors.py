@@ -93,6 +93,30 @@ import os
 import re
 from typing import Any, Iterable, Optional
 
+# What this module detects, declared once and up front rather than derived at
+# the bottom of the file. Two reasons it is a literal:
+#
+#   * a reader (or a reviewer, or a tool) can learn the module's surface from
+#     its head instead of executing it;
+#   * it makes the registry guard real. Deriving this FROM ``_ALL_DETECTORS``
+#     and then asserting the two agree is a tautology that cannot catch a
+#     detector dropped from the registry. With a literal, that test compares
+#     two independently maintained facts, which is the only version of it
+#     worth running.
+DETECTOR_KINDS = (
+    # Trajectory: is this agent stuck?
+    "stuck_loop",
+    "no_progress",
+    "repeated_tool_failure",
+    "action_discrepancy",
+    # Behaviour: is it doing something it does not normally do?
+    "file_blast_radius",
+    "credential_access",
+    "network_egress",
+    "privilege_change",
+)
+
+
 # ── Tunable thresholds (env-overridable) ─────────────────────────────────────
 # How many newest events any detector will look at. Bounds CPU per session.
 DETECT_EVENT_WINDOW = int(os.environ.get("CLAWMETRY_DETECT_WINDOW", "200"))
@@ -1817,10 +1841,6 @@ _ALL_DETECTORS = (
 # top of the list meaningless.
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
-# Kinds every consumer should know about (the UI labels them, the policy form
-# offers them). Exported so a new detector cannot be added without the surfaces
-# that render it noticing.
-DETECTOR_KINDS = tuple(d.__name__ for d in _ALL_DETECTORS)
 
 
 def run_all(events: Iterable[dict], session_id: str,

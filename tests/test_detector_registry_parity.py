@@ -49,6 +49,10 @@ def test_expected_detectors_are_all_registered():
 
 
 def test_registry_and_exported_kinds_agree():
+    # Two independently maintained facts: the literal at the head of the module
+    # and the tuple of function objects at its foot. When DETECTOR_KINDS was
+    # derived from _ALL_DETECTORS this comparison could not fail, which is the
+    # exact shape of guard this file exists to argue against.
     assert {d.__name__ for d in detectors._ALL_DETECTORS} == set(detectors.DETECTOR_KINDS)
     # No duplicates: a detector registered twice would emit twice.
     assert len(detectors._ALL_DETECTORS) == len(set(detectors._ALL_DETECTORS))
