@@ -3566,6 +3566,164 @@ class LocalStore:
             }
         return out
 
+    # Stable prefix for a derived agent principal id. Short, greppable, and
+    # obviously not a session id when it shows up in an audit row.
+    _PRINCIPAL_PREFIX = "ap_"
+
+    @staticmethod
+    def principal_id(node_id: str, runtime: str, agent_id: str) -> str:
+        """Deterministic id for the agent identified by this triple.
+
+        Pure and stable: the same agent yields the same id on every node, in
+        every process, across restarts, with no lookup and nothing to persist.
+        That is what lets an audit row, a policy and an inventory row all name
+        the same principal without a shared table to join through.
+
+        Derived rather than minted on purpose. ClawMetry watches agents nobody
+        instrumented -- there is no enrolment step we could hang a generated id
+        off, so identity has to fall out of what we already observe.
+        """
+        import hashlib as _hl
+
+        parts = (
+            str(node_id or "").strip().lower(),
+            str(runtime or "").strip().lower(),
+            str(agent_id or "main").strip().lower(),
+        )
+        digest = _hl.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+        return f"{LocalStore._PRINCIPAL_PREFIX}{digest[:16]}"
+
+    def query_agent_principals(
+        self,
+        *,
+        node_id: str | None = None,
+        runtime: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """One row per distinct AGENT, not per runtime.
+
+        The Agent Inventory rolls up one row per runtime, so ownership attaches
+        to "claude_code on this box" rather than to an agent. A policy cannot
+        say *this agent may not do that* without a principal, RBAC has no
+        subject, and the audit chain has no actor beyond a session id. This is
+        that missing primitive.
+
+        Derived from ``sessions``, which already carries every field the
+        identity needs -- so this adds no ingestion and works retroactively on
+        history already in the store. Runtime comes from the session-id prefix
+        (the same rule as ``sync._runtime_of_session`` / the frontend's
+        ``_cmRuntimeOf``), falling back to ``agent_type`` for rows whose id
+        carries no prefix.
+
+        Governance fields (owner / notes) are overlaid from ``agent_meta``,
+        keyed by principal id. That table's key is a free-form VARCHAR, so
+        principal-level ownership needs no migration and reuses the existing
+        ``set_agent_meta`` write path. A runtime-level label and an agent-level
+        label therefore coexist without colliding.
+
+        Each row::
+
+            {principal_id, node_id, runtime, agent_id, sessions, first_seen,
+             last_seen, total_tokens, cost_usd, owner, notes, owner_source}
+
+        ``owner_source`` is ``"agent"`` when this principal has its own label,
+        ``"runtime"`` when it inherits the runtime's, and ``""`` when nobody
+        has claimed it -- so the UI can show inherited ownership honestly
+        instead of implying someone named this agent specifically.
+
+        Never raises: any failure yields ``[]``.
+        """
+        try:
+            sql = """
+                SELECT
+                    COALESCE(node_id, '')                       AS node_id,
+                    CASE
+                        WHEN strpos(session_id, ':') > 1
+                        THEN lower(split_part(session_id, ':', 1))
+                        ELSE ''
+                    END                                          AS sid_prefix,
+                    lower(COALESCE(agent_type, ''))              AS agent_type,
+                    COALESCE(NULLIF(TRIM(agent_id), ''), 'main') AS agent_id,
+                    COUNT(DISTINCT session_id)                   AS sessions,
+                    MIN(started_at)                              AS first_seen,
+                    MAX(last_active_at)                          AS last_seen,
+                    COALESCE(SUM(total_tokens), 0)               AS total_tokens,
+                    COALESCE(SUM(cost_usd), 0.0)                 AS cost_usd
+                FROM sessions
+                WHERE session_id IS NOT NULL
+                GROUP BY 1, 2, 3, 4
+            """
+            rows = self._fetch(sql, [])
+        except Exception:
+            return []
+
+        # Resolve the prefix to a real runtime name. Unknown prefixes are not
+        # runtimes (a session id may contain a colon for other reasons), so
+        # they fall back to agent_type and finally to the openclaw default
+        # bucket -- the same precedence the rest of the codebase uses.
+        try:
+            from clawmetry import entitlements as _ent
+            known = set(_ent.ALL_RUNTIMES)
+        except Exception:
+            known = set()
+
+        try:
+            meta = self.query_agent_meta() or {}
+        except Exception:
+            meta = {}
+
+        want_node = (node_id or "").strip().lower() or None
+        want_rt = (runtime or "").strip().lower() or None
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            (r_node, sid_prefix, agent_type, r_agent, sessions,
+             first_seen, last_seen, tokens, cost) = r
+            rt = ""
+            if sid_prefix and (not known or sid_prefix in known):
+                rt = sid_prefix
+            elif agent_type and (not known or agent_type in known):
+                rt = agent_type
+            if not rt:
+                rt = "openclaw"
+
+            if want_node is not None and str(r_node).lower() != want_node:
+                continue
+            if want_rt is not None and rt != want_rt:
+                continue
+
+            pid = self.principal_id(r_node, rt, r_agent)
+            own = meta.get(pid) or {}
+            source = "agent" if own else ""
+            if not own:
+                # Fall back to the runtime-level label the Agent Inventory
+                # already writes, so an agent inherits its runtime's owner
+                # rather than rendering as unowned.
+                own = meta.get(rt) or {}
+                source = "runtime" if own else ""
+
+            out.append({
+                "principal_id": pid,
+                "node_id": str(r_node or ""),
+                "runtime": rt,
+                "agent_id": str(r_agent or "main"),
+                "sessions": int(sessions or 0),
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "total_tokens": int(tokens or 0),
+                "cost_usd": float(cost or 0.0),
+                "owner": own.get("owner") or "",
+                "notes": own.get("notes") or "",
+                "owner_source": source,
+            })
+
+        out.sort(key=lambda d: (d.get("last_seen") or "", d["sessions"]), reverse=True)
+        try:
+            n = max(1, min(2000, int(limit)))
+        except (TypeError, ValueError):
+            n = 500
+        return out[:n]
+
     def ingest_cron(self, cron: dict[str, Any]) -> None:
         """Upsert one cron-job row. Required: cron_id.
 

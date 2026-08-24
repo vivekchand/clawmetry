@@ -865,6 +865,11 @@ _DAEMON_METHODS = frozenset({
     "delete_ownership_rule",
     "restamp_ownership",
     "query_ownership_summary",
+    # Agent identity: one principal per AGENT (node + runtime + agent_id),
+    # derived from sessions and overlaid with the agent_meta labels above.
+    # Read-only; the daemon owns the writer, and ownership writes reuse
+    # set_agent_meta (already allowlisted) keyed by principal id.
+    "query_agent_principals",
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",
