@@ -13001,6 +13001,239 @@ def min_tier_for_all_breakdown(
         return empty
 
 
+def has_all_breakdown(
+    *,
+    features=None,
+    runtimes=None,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-axis breakdown of :func:`has_all` with the *blocking* axis
+    (or axes) called out.
+
+    Boolean-fold twin of :func:`min_tier_for_all_breakdown`. Where the
+    aggregate scalar :func:`has_all` collapses the answer to a single
+    ``has_all`` bool, this helper preserves the per-axis contribution
+    and identifies which axis (or axes) is *blocking* the grant. A
+    diagnostics tile can then render an honest "you can't have this
+    because your Starter tier caps channels at 5 (you asked for 8)"
+    tooltip off ONE round-trip instead of five ``has_*`` calls + a
+    client-side which-axis-is-false walk.
+
+    Pairs directly with :func:`min_tier_for_all_breakdown` on the same
+    input: a UI wiring the paywall CTA can render "denied here BECAUSE
+    of axis Y" (from this helper's ``blocking_axes``) alongside "the
+    cheapest tier that would grant it is Z BECAUSE of axis W" (from
+    the reverse-lookup breakdown's ``binding_axes``). The two calls
+    accept identical kwargs and echo the axes on parallel row shapes.
+
+    Same input semantics as :func:`has_all` (same five-axis kwargs,
+    same per-axis ``None`` "not supplied" sentinel, same
+    ``retention_days=None means unset, not unlimited`` posture, same
+    never-raise contract).
+
+    Response shape::
+
+        {
+          "has_all": <bool>,                     # matches has_all(**kwargs)
+          "axes": {
+            "features":       <axis_row> | None,   # None iff axis unsupplied
+            "runtimes":       <axis_row> | None,
+            "channels":       <axis_row> | None,
+            "retention_days": <axis_row> | None,
+            "nodes":          <axis_row> | None,
+          },
+          "blocking_axes": ["channels"] | [],     # axis ids whose per-axis
+                                                  # ``has`` is False when
+                                                  # the aggregate is False
+        }
+
+    Each ``<axis_row>`` carries ``kind``, ``supplied`` (``True`` -- an
+    unsupplied axis short-circuits to ``None`` at the envelope level),
+    ``has`` (the per-axis singular scalar's answer), and ``blocking``
+    (``True`` iff the aggregate ``has_all`` is ``False`` AND this
+    axis' ``has`` is ``False``). Grant axes additionally carry
+    ``items`` (the normalised known ids the fold saw) and ``unknown``
+    (typo tokens the fold saw -- the singular
+    :func:`has_features` / :func:`has_runtimes` scalars collapse the
+    axis to ``False`` on any unknown, and the split lets a tooltip
+    render "typo *Fleeet*" instead of a bare denial). Capacity axes
+    additionally carry ``value`` (the parsed int, or the raw input if
+    it did not parse, mirroring :func:`min_tier_for_all_breakdown`).
+
+    ``blocking_axes`` is the list of axis keys (``"features"`` /
+    ``"runtimes"`` / ``"channels"`` / ``"retention_days"`` /
+    ``"nodes"``) whose per-axis ``has`` is ``False``, in envelope order
+    (``features``, ``runtimes``, ``channels``, ``retention_days``,
+    ``nodes``). When ``has_all`` is ``True`` -- every supplied axis
+    grants -- ``blocking_axes`` is the empty list and every axis row's
+    ``blocking`` is ``False``. When no axes are supplied at all,
+    :func:`has_all` collapses to ``False`` (its empty-``False`` typo
+    posture) BUT no axis is *blocking* since none was asked about;
+    ``blocking_axes`` is the empty list on that branch too and every
+    axis in ``axes`` is ``None``.
+
+    Grace posture mirrors :func:`has_all` byte-for-byte: while
+    ``ent.grace`` is ``True`` every singular ``has_*`` delegate
+    returns ``True`` for its fully-known input, so this helper reports
+    ``has_all=True`` and empty ``blocking_axes`` for every
+    fully-known bundle. Wiring this into a paywall diagnostics tile
+    today surfaces NOTHING (matches the ``has_all=True`` grace
+    answer on the same bundle). Unknown grant tokens, empty grant
+    axes, and non-int capacity axes still collapse the fold to
+    ``False`` even in grace (matches the singular scalars' strict
+    callsite-typo posture), and the corresponding axis is surfaced
+    in ``blocking_axes``.
+
+    Post-enforcement: for every supplied axis, the row's ``has`` is
+    the exact answer the resolved entitlement's live grant would give
+    to the singular ``has_*`` call, and ``blocking_axes`` names every
+    axis the live grant denies.
+
+    Never raises: any delegate failure logs a warning and short-
+    circuits to the empty envelope (``has_all=False``, every axis
+    ``None``, empty ``blocking_axes``) so a caller can bind this into
+    a diagnostics dict without a try/except.
+    """
+    empty = {
+        "has_all": False,
+        "axes": {
+            "features": None,
+            "runtimes": None,
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        },
+        "blocking_axes": [],
+    }
+    try:
+        axes: dict = {
+            "features": None,
+            "runtimes": None,
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+        if features is not None:
+            feats = _normalise_csv(features)
+            known = [f for f in feats if f in ALL_FEATURES]
+            unknown = [f for f in feats if f not in ALL_FEATURES]
+            # Delegate the axis-level fold to the singular scalar so
+            # the empty-[] and unknown-token postures inherit
+            # ``has_features``'s strict-``False`` typo semantics
+            # (feats == [] -> False; any unknown -> False even under
+            # grace) without a divergent code path here.
+            axis_has = bool(has_features(feats))
+            axes["features"] = {
+                "kind": "features",
+                "supplied": True,
+                "items": known,
+                "unknown": unknown,
+                "has": axis_has,
+                "blocking": False,
+            }
+
+        if runtimes is not None:
+            raw_rts = _normalise_csv(runtimes)
+            seen: set[str] = set()
+            canon_rts: list[str] = []
+            unknown_rts: list[str] = []
+            for raw in raw_rts:
+                rt = canonical_runtime(raw)
+                key = rt if rt else raw
+                if key in seen:
+                    continue
+                seen.add(key)
+                if rt and rt in ALL_RUNTIMES:
+                    canon_rts.append(rt)
+                else:
+                    unknown_rts.append(raw)
+            axis_has = bool(has_runtimes(raw_rts))
+            axes["runtimes"] = {
+                "kind": "runtimes",
+                "supplied": True,
+                "items": canon_rts,
+                "unknown": unknown_rts,
+                "has": axis_has,
+                "blocking": False,
+            }
+
+        def _capacity_row(kind: str, raw, gate) -> dict:
+            try:
+                n = int(raw)
+                parsed = True
+            except (TypeError, ValueError):
+                n = None
+                parsed = False
+            if parsed:
+                axis_has = bool(gate(n))
+            else:
+                # Non-int capacity input collapses the axis-level gate
+                # to False -- matches the singular capacity scalars'
+                # strict-``False`` typo posture (and matches
+                # :func:`has_all` which folds the same input to False).
+                axis_has = False
+            return {
+                "kind": kind,
+                "supplied": True,
+                "value": n if parsed else raw,
+                "has": axis_has,
+                "blocking": False,
+            }
+
+        if channels is not None:
+            axes["channels"] = _capacity_row(
+                "channels", channels, has_channel_count
+            )
+        if retention_days is not None:
+            axes["retention_days"] = _capacity_row(
+                "retention_days", retention_days, has_retention_window
+            )
+        if nodes is not None:
+            axes["nodes"] = _capacity_row(
+                "nodes", nodes, has_node_count
+            )
+
+        # Aggregate fold matches :func:`has_all` byte-for-byte on the
+        # SAME kwargs, but resolved off the per-axis rows we already
+        # built (rather than a second round of delegate calls) so the
+        # scalar seat and the axis seats cannot drift.
+        supplied_rows = [axis for axis in axes.values() if axis is not None]
+        if not supplied_rows:
+            # Nothing supplied. :func:`has_all` collapses to False on
+            # this branch (its empty-``False`` typo posture), but no
+            # axis is *blocking* because none was asked about -- so
+            # ``blocking_axes`` stays empty and every axis row stays
+            # None. Diverges from ``has_all_bundle`` and friends only
+            # in that we surface the aggregate scalar directly (False)
+            # so a paired call to ``has_all`` on the same kwargs sees
+            # byte-identical fold answers.
+            return empty
+        aggregate = all(row["has"] for row in supplied_rows)
+        if aggregate:
+            return {
+                "has_all": True,
+                "axes": axes,
+                "blocking_axes": [],
+            }
+        blocking_axes: list[str] = []
+        for key in ("features", "runtimes", "channels", "retention_days", "nodes"):
+            axis = axes[key]
+            if axis and not axis["has"]:
+                axis["blocking"] = True
+                blocking_axes.append(key)
+        return {
+            "has_all": False,
+            "axes": axes,
+            "blocking_axes": blocking_axes,
+        }
+    except Exception as exc:
+        logger.warning("entitlements: has_all_breakdown failed: %s", exc)
+        return empty
+
+
 def affordable_tiers(
     *,
     features=None,
