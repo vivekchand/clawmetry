@@ -74,9 +74,14 @@ def test_body_required_tier_enterprise_feature(ent_grace):
     ``enterprise`` so the UI renders the Enterprise CTA, not the Pro one."""
     from clawmetry._paywall import upgrade_required_body
 
-    for key in ("audit_logs", "sso", "siem_export"):
+    # audit_logs + rbac moved to Pro on 2026-08-25; the keys left here are
+    # the genuinely enterprise-shaped ones.
+    for key in ("sso", "siem_export", "custom_data_residency"):
         body = upgrade_required_body(key)
         assert body["required_tier"] == ent_grace.TIER_ENTERPRISE, key
+    for key in ("audit_logs", "rbac"):
+        body = upgrade_required_body(key)
+        assert body["required_tier"] == ent_grace.TIER_CLOUD_PRO, key
 
 
 def test_body_required_tier_free_feature_is_none(ent_grace):
@@ -235,10 +240,13 @@ def test_stub_blueprint_402_carries_required_tier(
 
 
 def test_audit_stub_402_uses_paywall_shape(ent_grace, monkeypatch):
-    """``routes/audit.py`` gates on the Enterprise-only ``audit_logs``
-    feature; forcing the entitlement check to deny exercises the 402 path
-    and the shared body builder. ``required_tier`` must be
-    ``enterprise`` (not ``cloud_pro``) so the UI offers the right plan."""
+    """``routes/audit.py`` gates on ``audit_logs``; forcing the entitlement
+    check to deny exercises the 402 path and the shared body builder.
+
+    ``audit_logs`` moved Enterprise -> Pro on 2026-08-25, so ``required_tier``
+    must now be ``cloud_pro`` -- a Free install being told to buy Enterprise
+    for a feature Pro already unlocks is the exact mis-CTA this test exists
+    to catch, just in the other direction."""
     monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
     # Reload so is_enforced() picks up the env change.
     import clawmetry.entitlements as e
@@ -254,7 +262,7 @@ def test_audit_stub_402_uses_paywall_shape(ent_grace, monkeypatch):
         assert r.status_code == 402
         body = r.get_json()
         assert body["feature"] == "audit_logs"
-        assert body["required_tier"] == e.TIER_ENTERPRISE
+        assert body["required_tier"] == e.TIER_CLOUD_PRO
         assert body["tier"] in (e.TIER_OSS, e.TIER_CLOUD_FREE)
 
     e.invalidate()
