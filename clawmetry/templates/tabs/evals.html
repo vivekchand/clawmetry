@@ -33,6 +33,16 @@
     </div>
   </section>
 
+  {# ── The marks line: did it finish the job, and what did that cost.
+     Reads /api/outcomes/trend, which needs no judge key and no API spend,
+     so it works on every plan — the grade above is the opinion, this is
+     the record. Set in the card's own serif so the two read as one
+     document rather than a stat row bolted underneath. ── #}
+  <section class="q-outcomes" id="q-outcomes" aria-label="Outcomes this week" hidden>
+    <div class="q-oc-cells" id="q-oc-cells"></div>
+    <p class="q-oc-note" id="q-oc-note"></p>
+  </section>
+
   {# ── Two panels: patterns + rough runs. Both read from the same fetch. ── #}
   <div class="q-below">
 
@@ -60,5 +70,17 @@
     </div>
     <a href="#" onclick="openEvalRubricModal();return false;" data-i18n="quality.footer_cta">Grade the writing too →</a>
   </footer>
+
+  {# ── Export. Deliberately not a pitch: if you already run an evaluation
+     platform, sending these runs there beats a second opinion here. Always
+     visible — unlike the judge nudge above, this doesn't go away once a key
+     is set. ── #}
+  <p class="q-export">
+    <span data-i18n="quality.export_lead">Already using an evaluation platform?</span>
+    <span data-i18n="quality.export_body">Point it at this endpoint to pull every run with its outcome, cost and tokens:</span>
+    <code id="q-export-url">/api/otel/export?shape=sessions&amp;window=7d</code>
+    <button type="button" class="q-copy" onclick="qCopyExportUrl(this)"
+            data-i18n="quality.export_copy">Copy</button>
+  </p>
 
 </div>{# end page-evals #}

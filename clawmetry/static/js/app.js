@@ -4879,6 +4879,11 @@ function loadEvalsTab() {
 
 // ── Quality tab renderer ───────────────────────────────────────────────────
 async function loadQualityTab() {
+  // Independent of the grade fetch below, deliberately: different endpoint,
+  // different failure mode. Chaining it behind the report card meant one
+  // slow /api/quality/report-card blanked the outcome line too.
+  _qLoadOutcomeTrend();
+
   var qs = new URLSearchParams();
   qs.set('window', '7d');
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
@@ -4917,6 +4922,154 @@ async function loadQualityTab() {
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);
   _qRenderFooter(data);
+}
+
+// ── The marks line: completion, cost, errors ───────────────────────────
+//
+// Deliberately NOT a second opinion on the grade above. The grade judges the
+// runs with enough activity to judge (56 of 177 in the audit window); this
+// line counts every run that reached a terminal state, and reports the three
+// facts that need no judgement at all: how many completed, what each one
+// cost, how many ended in an error.
+//
+// Keeping those separate matters. An earlier cut of this line published
+// "100% finished the job" directly beneath "7 rough ones cost you $122.50",
+// because sessions.outcome and the quality verdicts measure different things.
+// Two numbers about "did it work" disagreeing on one screen costs more trust
+// than either one buys. The scope note below says which is which.
+//
+// Free on every plan: no judge key, no rubric, no API spend.
+async function _qLoadOutcomeTrend() {
+  var sec = document.getElementById('q-outcomes');
+  var cells = document.getElementById('q-oc-cells');
+  var note = document.getElementById('q-oc-note');
+  if (!sec || !cells) return;
+
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var data = null;
+  try {
+    var r = await fetch('/api/outcomes/trend?' + qs.toString());
+    if (r.ok) data = await r.json();
+  } catch (e) { data = null; }
+
+  // Unreachable store (the hosted dashboard has no local DuckDB until the
+  // snapshot slice is served) — stay hidden. The tab already says once,
+  // above, that it reads local run history, and a row of dashes would read
+  // as zero rather than as unknown.
+  if (!data || data.available === false) { sec.setAttribute('hidden', ''); return; }
+
+  var cur = data.current || {};
+  var delta = data.delta || {};
+  if (!cur.finished) { sec.setAttribute('hidden', ''); return; }
+  sec.removeAttribute('hidden');
+
+  function cell(value, label, deltaHtml) {
+    return '<div class="q-oc">' +
+      '<span class="q-oc-n">' + escHtml(value) + '</span>' +
+      '<span class="q-oc-l">' + escHtml(label) + '</span>' +
+      (deltaHtml || '') + '</div>';
+  }
+  // A delta is only drawn when both periods cleared the comparability bar.
+  // Below it the counts still show; the comparison does not, because one
+  // busy week over one thin week is not a direction.
+  function deltaSpan(text, favourable) {
+    if (!data.comparable || text == null) return '';
+    var cls = favourable === null ? '' : (favourable ? ' up' : ' down');
+    return '<span class="q-oc-d' + cls + '">' + escHtml(text) + '</span>';
+  }
+  function vsWeek(n, sign) {
+    if (n === 0) return t('quality.oc_flat', null, 'same as the week before');
+    return (sign && n > 0 ? '+' : '') + n + ' ' +
+           t('quality.oc_vs_week', null, 'vs the week before');
+  }
+
+  var html = cell(
+    String(cur.finished),
+    t('quality.oc_completed', null, 'tasks completed'),
+    deltaSpan(vsWeek(delta.finished, true), null)
+  );
+
+  // Cost cell only when we actually know the cost. A runtime with no pricing
+  // table sums to $0, and "$0.00 per task" reads as free.
+  if (cur.cost_per_finished != null) {
+    var cd = delta.cost_per_finished;
+    html += cell(
+      _qMoney(cur.cost_per_finished),
+      t('quality.oc_cost', null, 'per completed task'),
+      deltaSpan(
+        cd == null || Math.abs(cd) < 0.005
+          ? t('quality.oc_cost_flat', null, 'about the same')
+          : (cd < 0 ? '−' : '+') + _qMoney(Math.abs(cd)) + ' ' +
+            t('quality.oc_vs_week', null, 'vs the week before'),
+        cd == null ? null : cd < 0
+      )
+    );
+  }
+
+  // Everything that ended badly, not just the "failed" label: an agent stuck
+  // in a loop or on a tool call that never returned burned the budget too.
+  function bad(p) {
+    return (p.failed || 0) + (p.cognitive_loop || 0) + (p.tool_call_stuck || 0);
+  }
+  var errs = bad(cur);
+  var errDelta = errs - bad(data.previous || {});
+  html += cell(
+    String(errs),
+    t('quality.oc_errored', null, 'ended in an error'),
+    deltaSpan(vsWeek(errDelta, true), errDelta === 0 ? null : errDelta < 0)
+  );
+  cells.innerHTML = html;
+
+  if (note) {
+    // Always present. This sentence is what keeps the line from reading as a
+    // contradiction of the grade above it.
+    var scope = t(
+      'quality.oc_scope', null,
+      'Counted from every run that finished, including the ones with too ' +
+      'little activity to grade.'
+    );
+    if (!data.comparable) {
+      scope += ' ' + t(
+        'quality.oc_not_comparable', { n: data.min_finished || 3 },
+        'Not enough finished tasks yet to compare weeks. Both need at least {n}.'
+      );
+    } else if (data.direction === 'regressing') {
+      scope += ' ' + t(
+        'quality.oc_regressing', null,
+        'More of them ended in an error than last week.'
+      );
+    }
+    note.textContent = scope;
+  }
+}
+
+// Money the way a person reads it: cents below a dollar, two decimals above.
+function _qMoney(v) {
+  var n = Number(v) || 0;
+  if (n > 0 && n < 0.01) return '<1¢';
+  if (n < 1) return Math.round(n * 100) + '¢';
+  return '$' + n.toFixed(2);
+}
+
+// Copy the export endpoint. Absolute, so pasting it into a collector config
+// on another machine works without the reader reconstructing the host.
+function qCopyExportUrl(btn) {
+  var el = document.getElementById('q-export-url');
+  if (!el) return;
+  var url = window.location.origin + el.textContent.trim();
+  var done = function() {
+    if (!btn) return;
+    var was = btn.textContent;
+    btn.textContent = t('quality.export_copied', null, 'Copied');
+    setTimeout(function() { btn.textContent = was; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function() {});
+  }
 }
 
 function _qRenderCard(data) {
@@ -11326,6 +11479,24 @@ function _cmSetRuntimeFilter(v, reload) {
   if (typeof reload === 'function') reload();
 }
 function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
+
+// Empty-state copy for a runtime-scoped cost surface.
+//
+// Three empty states look identical on screen and mean opposite things:
+//   * the runtime keeps no cost record   -> the number will NEVER arrive
+//   * we have not verified this runtime  -> we should claim nothing
+//   * the runtime was simply idle        -> zero is the true answer
+// The server attaches `coverage` (clawmetry/runtime_records.py) so the UI
+// stops saying "yet" to the first two. Falls back to the old wording when
+// coverage is absent (older daemon, or a node-wide request).
+function _cmCoverageNoteHtml(cov, rtLabel) {
+  if (cov && cov.suppress_zero) {
+    var head = '<strong>' + escHtml(cov.headline || '') + '</strong>';
+    var why = cov.detail ? '<div style="margin-top:3px;">' + escHtml(cov.detail) + '</div>' : '';
+    return head + why;
+  }
+  return 'No cost data recorded for <strong>' + escHtml(rtLabel) + '</strong> yet.';
+}
 // Runtime to use for CLIENT-SIDE prefix filtering of a node-wide blob (Brain
 // list/chart, Tracing, model attribution, active tasks, transcripts). A foreign
 // OTLP app has no session-id prefix, so a prefix filter would empty the view —
@@ -16841,6 +17012,18 @@ function _renderEfficiencyCardInner(card, eff) {
   }
   if (eff.insufficient_data || !eff.grade) {
     card.style.display = '';
+    // The grade is computed from per-call cost. A runtime that never records
+    // per-call cost cannot ever produce one, so "collecting… appears after
+    // about a day" would be a promise we can't keep. eff.coverage says which
+    // case this is; it is absent for node-wide (mixed-runtime) requests.
+    var _cvE = eff.coverage;
+    if (_cvE && _cvE.suppress_zero) {
+      card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">'
+        + '<div style="font-weight:600;color:var(--text-secondary);margin-bottom:4px;">'
+        + escHtml(_cvE.headline || '') + '</div>'
+        + escHtml(_cvE.detail || '') + '</div>';
+      return;
+    }
     card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⏳ '
       + escHtml(t('efficiency.collecting', null, 'Collecting efficiency data. Your grade appears after about a day of activity.')) + '</div>';
     return;
@@ -17137,7 +17320,12 @@ async function loadUsage() {
     var _uEmptyEl = document.getElementById('usage-runtime-empty-note');
     if (_uRt && _uRt !== 'all' && !data.today && !data.week && !data.month) {
       var _uRtLabel = _cmRuntimeLabel(_uRt);
-      var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">No cost data recorded for <strong>' + escHtml(_uRtLabel) + '</strong> yet.</div>';
+      // "yet" is only true for a runtime that DOES record cost and happened
+      // to be idle. For a runtime that never writes per-call cost, "yet"
+      // promises a number that will never arrive. data.coverage knows which.
+      var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">'
+        + _cmCoverageNoteHtml(data.coverage, _uRtLabel)
+        + '</div>';
       // Anchor on the section title (not the chart div) so the note stays
       // visible when QW4 hides the empty chart section below it.
       var _uAnchor = document.getElementById('usage-chart-title') || document.getElementById('usage-chart');

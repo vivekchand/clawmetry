@@ -253,12 +253,16 @@ def test_adjacent_step_is_one_row(ent):
 
 def test_descending_path_loses_enterprise_at_top_step(ent):
     """The first rung of an enterprise -> oss descent is the one that
-    sheds the enterprise-only features (``sso`` + ``audit_logs``)."""
+    sheds the enterprise-only features (``sso`` + ``siem_export``).
+
+    ``audit_logs`` moved to Pro on 2026-08-25, so it is no longer shed at
+    this rung -- an Enterprise -> Pro downgrade keeps it."""
     path = ent.tier_locks_path(ent.TIER_ENTERPRISE, ent.TIER_OSS)
     first = path[0]
     assert first["next_tier"] == ent.TIER_ENTERPRISE
     assert "sso" in first["lost_features"]
-    assert "audit_logs" in first["lost_features"]
+    assert "siem_export" in first["lost_features"]
+    assert "audit_logs" not in first["lost_features"]
 
 
 def test_ascending_path_terminates_at_to_but_losses_are_empty(ent):

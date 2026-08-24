@@ -159,6 +159,61 @@ ROLLUP_BACKFILL_CHUNK = int(os.environ.get("CLAWMETRY_ROLLUP_BACKFILL_CHUNK", "5
 # makes any replay a no-op.
 FLUSH_MAX_ATTEMPTS = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_MAX_ATTEMPTS", "3"))
 FLUSH_RETRY_BASE_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_RETRY_BASE_SECS", "0.05"))
+
+# Burned 2026-08-24: a corrupt DuckDB index made every flush raise, and the
+# retry path logged ``%s`` of the exception. A DuckDB constraint error embeds
+# the ENTIRE failing chunk in its message (30 columns x 258 rows), so each
+# failure wrote tens of KB, three attempts per tick, forever. sync.log reached
+# **3.3 GB** in 12 hours on a founder machine before anyone noticed. Log lines
+# must be bounded no matter what an exception chooses to put in its message.
+_EXC_LOG_LIMIT = 400
+
+
+def _brief_exc(exc: BaseException, limit: int = _EXC_LOG_LIMIT) -> str:
+    """One bounded line for ``exc``, safe to log on a hot retry path."""
+    try:
+        text = " ".join(str(exc).split())
+    except Exception:
+        return exc.__class__.__name__
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [+{len(text) - limit} chars truncated]"
+
+
+def _is_fatal_db_state(exc: BaseException) -> bool:
+    """True when DuckDB has invalidated the connection.
+
+    Once DuckDB reports "database has been invalidated", every subsequent
+    statement on that handle fails the same way -- retrying is pure noise, and
+    the daemon burned 12 hours in that loop. The caller stops retrying and
+    reports the (one-line) recovery instead.
+    """
+    try:
+        return "has been invalidated" in str(exc)
+    except Exception:
+        return False
+
+
+# Log the invalidated-database recovery once per process, not once per tick.
+_fatal_db_reported = False
+
+
+def _report_fatal_db_once(exc: BaseException) -> None:
+    global _fatal_db_reported
+    if _fatal_db_reported:
+        return
+    _fatal_db_reported = True
+    log.error(
+        "local store: DuckDB has invalidated this connection and every write "
+        "will now fail (%s). This is almost always a corrupt index, not lost "
+        "data -- the table rows are intact. Recover with: stop the daemon "
+        "(launchctl bootout / systemctl stop), then in a standalone python: "
+        "con = duckdb.connect(<db>); con.execute('CHECKPOINT'); DROP INDEX "
+        "each name from duckdb_indexes(); con.execute('CHECKPOINT'); then "
+        "start the daemon -- migrations recreate the indexes clean.",
+        _brief_exc(exc),
+    )
+
 LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
@@ -5946,13 +6001,18 @@ class LocalStore:
                 break
             except Exception as exc:  # noqa: BLE001 — surface any DuckDB error
                 last_exc = exc
+                if _is_fatal_db_state(exc):
+                    # The handle is dead; the next two attempts would fail
+                    # identically and each would log the whole failing chunk.
+                    _report_fatal_db_once(exc)
+                    break
                 if attempt + 1 < FLUSH_MAX_ATTEMPTS:
                     # Exponential backoff: 0.05s, 0.10s, 0.20s, ... capped at 1s.
                     delay = min(FLUSH_RETRY_BASE_SECS * (2 ** attempt), 1.0)
                     log.warning(
                         "local store: flush attempt %d/%d failed (%s); "
                         "retrying in %.2fs (ring keeps batch)",
-                        attempt + 1, FLUSH_MAX_ATTEMPTS, exc, delay,
+                        attempt + 1, FLUSH_MAX_ATTEMPTS, _brief_exc(exc), delay,
                     )
                     time.sleep(delay)
         if last_exc is not None:
@@ -5963,7 +6023,7 @@ class LocalStore:
             log.error(
                 "local store: flush failed after %d attempts; %d events stay "
                 "queued for next tick (err=%s)",
-                FLUSH_MAX_ATTEMPTS, len(batch), last_exc,
+                FLUSH_MAX_ATTEMPTS, len(batch), _brief_exc(last_exc),
             )
             raise last_exc
         with self._ring_lock:
