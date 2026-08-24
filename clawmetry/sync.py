@@ -21454,27 +21454,29 @@ def run_daemon() -> None:
             interval_secs = max(60.0, interval_hours * 3600.0)
             while not _retention_stop.is_set():
                 try:
-                    from clawmetry import entitlements as _ent
                     from clawmetry import local_store as _ls
+                    from clawmetry import retention as _ret
 
-                    # effective_retention_days() folds in the
-                    # CLAWMETRY_RETENTION_DAYS env override (shrink-only —
-                    # never extends past the tier cap). Single source of truth
-                    # so /api/entitlement and the prune loop report the same
-                    # number.
-                    days = _ent.get_entitlement().effective_retention_days()
+                    # One resolver for the whole product: the tier cap, the
+                    # operator's own setting, and the env override, folded
+                    # shrink-only. The daemon prunes to the same number the
+                    # settings panel shows, because both call this — a
+                    # retention control the prune loop ignored would be worse
+                    # than no control at all.
+                    store = _ls.get_store()
+                    _rr = _ret.resolve(store=store)
+                    days = _rr.get("effective_days")
                     if days is None or days <= 0:
                         # Enterprise / unlimited — nothing to do.
-                        log.debug("retention prune: tier=unlimited, skip")
+                        log.debug("retention prune: unlimited, skip")
                     else:
-                        store = _ls.get_store()
                         if store is not None:
                             res = store.prune_events_by_age(days)
                             if res.get("deleted_rows"):
                                 log.info(
                                     "retention prune: deleted %d events older than %d days "
-                                    "(before=%d after=%d)",
-                                    res["deleted_rows"], days,
+                                    "[%s] (before=%d after=%d)",
+                                    res["deleted_rows"], days, _rr.get("source"),
                                     res.get("before_rows", 0),
                                     res.get("after_rows", 0),
                                 )

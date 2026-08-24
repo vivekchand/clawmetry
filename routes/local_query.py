@@ -857,6 +857,12 @@ _DAEMON_METHODS = frozenset({
     # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
     "query_agent_meta",
     "set_agent_meta",
+    # Node settings. Retention is the one that matters: the daemon prunes to
+    # this value, so the dashboard has to write it through the daemon rather
+    # than into a store the daemon never reads.
+    "get_node_setting",
+    "set_node_setting",
+    "list_node_settings",
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",
