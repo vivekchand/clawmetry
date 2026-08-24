@@ -12,7 +12,7 @@
   "tick": "2026-08-24"
  },
  "3": {
-  "note": "Genuinely unstarted: branch had 0 commits, plan sat unexecuted since Aug 1. Implemented all 6 steps + fixed a _db() NameError the change exposed. 248 tests pass. in_review pending CI.",
+  "note": "Genuinely unstarted: branch had 0 commits, plan sat unexecuted since Aug 1. Implemented all 6 steps + fixed a _db() NameError the change exposed. 248 tests pass; landing#669 CI fully green and mergeable. Left at in_review because merge deploys to the live site and changes Vivek's own admin access path.",
   "pr": "https://github.com/vivekchand/clawmetry-landing/pull/669",
   "state": "in_flight",
   "tick": "2026-08-24"
