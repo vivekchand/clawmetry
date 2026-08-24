@@ -77,10 +77,25 @@ line. Every destination, what it carries and how to switch it off is listed in
 [docs/EGRESS.md](docs/EGRESS.md); self-hosted, repointed and air-gapped installs
 make no discretionary outbound calls at all.
 
-One limit worth stating plainly: the JavaScript that decrypts your snapshot is
-served by `app.clawmetry.com`. The key stays in your browser and is never sent
-to us, but you are trusting code we serve to keep it that way. Self-hosting or
-staying local-only removes that dependency entirely.
+The decryption happens in your browser, in code we serve you. That used to be
+a promise; it is now something you can check. Every line that touches your key
+lives in one readable file, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js),
+which ships inside the wheel and is served verbatim, pinned with a Subresource
+Integrity hash. To confirm the browser runs what we published:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+What that does not prove: we serve the page that loads the file, so we could
+serve a different page. Integrity hashes protect you from a compromised CDN,
+not from the vendor. What you gain is that any substitution has to be
+deliberate, visible in the page source, and different from an artifact on PyPI
+that anyone can fetch. Self-hosting or staying local-only removes the
+dependency entirely.
 
 ## Install
 
