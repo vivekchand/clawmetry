@@ -4879,6 +4879,11 @@ function loadEvalsTab() {
 
 // ── Quality tab renderer ───────────────────────────────────────────────────
 async function loadQualityTab() {
+  // Independent of the grade fetch below, deliberately: different endpoint,
+  // different failure mode. Chaining it behind the report card meant one
+  // slow /api/quality/report-card blanked the outcome line too.
+  _qLoadOutcomeTrend();
+
   var qs = new URLSearchParams();
   qs.set('window', '7d');
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
@@ -4917,6 +4922,154 @@ async function loadQualityTab() {
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);
   _qRenderFooter(data);
+}
+
+// ── The marks line: completion, cost, errors ───────────────────────────
+//
+// Deliberately NOT a second opinion on the grade above. The grade judges the
+// runs with enough activity to judge (56 of 177 in the audit window); this
+// line counts every run that reached a terminal state, and reports the three
+// facts that need no judgement at all: how many completed, what each one
+// cost, how many ended in an error.
+//
+// Keeping those separate matters. An earlier cut of this line published
+// "100% finished the job" directly beneath "7 rough ones cost you $122.50",
+// because sessions.outcome and the quality verdicts measure different things.
+// Two numbers about "did it work" disagreeing on one screen costs more trust
+// than either one buys. The scope note below says which is which.
+//
+// Free on every plan: no judge key, no rubric, no API spend.
+async function _qLoadOutcomeTrend() {
+  var sec = document.getElementById('q-outcomes');
+  var cells = document.getElementById('q-oc-cells');
+  var note = document.getElementById('q-oc-note');
+  if (!sec || !cells) return;
+
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var data = null;
+  try {
+    var r = await fetch('/api/outcomes/trend?' + qs.toString());
+    if (r.ok) data = await r.json();
+  } catch (e) { data = null; }
+
+  // Unreachable store (the hosted dashboard has no local DuckDB until the
+  // snapshot slice is served) — stay hidden. The tab already says once,
+  // above, that it reads local run history, and a row of dashes would read
+  // as zero rather than as unknown.
+  if (!data || data.available === false) { sec.setAttribute('hidden', ''); return; }
+
+  var cur = data.current || {};
+  var delta = data.delta || {};
+  if (!cur.finished) { sec.setAttribute('hidden', ''); return; }
+  sec.removeAttribute('hidden');
+
+  function cell(value, label, deltaHtml) {
+    return '<div class="q-oc">' +
+      '<span class="q-oc-n">' + escHtml(value) + '</span>' +
+      '<span class="q-oc-l">' + escHtml(label) + '</span>' +
+      (deltaHtml || '') + '</div>';
+  }
+  // A delta is only drawn when both periods cleared the comparability bar.
+  // Below it the counts still show; the comparison does not, because one
+  // busy week over one thin week is not a direction.
+  function deltaSpan(text, favourable) {
+    if (!data.comparable || text == null) return '';
+    var cls = favourable === null ? '' : (favourable ? ' up' : ' down');
+    return '<span class="q-oc-d' + cls + '">' + escHtml(text) + '</span>';
+  }
+  function vsWeek(n, sign) {
+    if (n === 0) return t('quality.oc_flat', null, 'same as the week before');
+    return (sign && n > 0 ? '+' : '') + n + ' ' +
+           t('quality.oc_vs_week', null, 'vs the week before');
+  }
+
+  var html = cell(
+    String(cur.finished),
+    t('quality.oc_completed', null, 'tasks completed'),
+    deltaSpan(vsWeek(delta.finished, true), null)
+  );
+
+  // Cost cell only when we actually know the cost. A runtime with no pricing
+  // table sums to $0, and "$0.00 per task" reads as free.
+  if (cur.cost_per_finished != null) {
+    var cd = delta.cost_per_finished;
+    html += cell(
+      _qMoney(cur.cost_per_finished),
+      t('quality.oc_cost', null, 'per completed task'),
+      deltaSpan(
+        cd == null || Math.abs(cd) < 0.005
+          ? t('quality.oc_cost_flat', null, 'about the same')
+          : (cd < 0 ? '−' : '+') + _qMoney(Math.abs(cd)) + ' ' +
+            t('quality.oc_vs_week', null, 'vs the week before'),
+        cd == null ? null : cd < 0
+      )
+    );
+  }
+
+  // Everything that ended badly, not just the "failed" label: an agent stuck
+  // in a loop or on a tool call that never returned burned the budget too.
+  function bad(p) {
+    return (p.failed || 0) + (p.cognitive_loop || 0) + (p.tool_call_stuck || 0);
+  }
+  var errs = bad(cur);
+  var errDelta = errs - bad(data.previous || {});
+  html += cell(
+    String(errs),
+    t('quality.oc_errored', null, 'ended in an error'),
+    deltaSpan(vsWeek(errDelta, true), errDelta === 0 ? null : errDelta < 0)
+  );
+  cells.innerHTML = html;
+
+  if (note) {
+    // Always present. This sentence is what keeps the line from reading as a
+    // contradiction of the grade above it.
+    var scope = t(
+      'quality.oc_scope', null,
+      'Counted from every run that finished, including the ones with too ' +
+      'little activity to grade.'
+    );
+    if (!data.comparable) {
+      scope += ' ' + t(
+        'quality.oc_not_comparable', { n: data.min_finished || 3 },
+        'Not enough finished tasks yet to compare weeks. Both need at least {n}.'
+      );
+    } else if (data.direction === 'regressing') {
+      scope += ' ' + t(
+        'quality.oc_regressing', null,
+        'More of them ended in an error than last week.'
+      );
+    }
+    note.textContent = scope;
+  }
+}
+
+// Money the way a person reads it: cents below a dollar, two decimals above.
+function _qMoney(v) {
+  var n = Number(v) || 0;
+  if (n > 0 && n < 0.01) return '<1¢';
+  if (n < 1) return Math.round(n * 100) + '¢';
+  return '$' + n.toFixed(2);
+}
+
+// Copy the export endpoint. Absolute, so pasting it into a collector config
+// on another machine works without the reader reconstructing the host.
+function qCopyExportUrl(btn) {
+  var el = document.getElementById('q-export-url');
+  if (!el) return;
+  var url = window.location.origin + el.textContent.trim();
+  var done = function() {
+    if (!btn) return;
+    var was = btn.textContent;
+    btn.textContent = t('quality.export_copied', null, 'Copied');
+    setTimeout(function() { btn.textContent = was; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function() {});
+  }
 }
 
 function _qRenderCard(data) {

@@ -6876,6 +6876,49 @@ def _outcomes_slice_for_snapshot(runtime: str | None = None) -> dict:
         return {}
 
 
+def _outcomes_trend_slice_for_snapshot(runtime: str | None = None) -> dict:
+    """7d-over-7d outcome + cost trend for the Quality tab's "is it getting
+    better?" line on the hosted dashboard.
+
+    Mirrors ``routes/sessions.api_outcomes_trend``: ONE 14-day read split into
+    two 7-day periods, compared by
+    ``clawmetry.outcome_classifier.outcome_trend``. Without this slice the
+    hosted card fetches an /api/outcomes/trend the cloud container cannot
+    answer (no local DuckDB) and renders blank — the failure mode FLYWHEEL
+    §0a.1 exists to stop.
+
+    Best-effort; ``{}`` on any error so the snapshot never fails.
+    """
+    try:
+        from clawmetry import local_store as _ls_tr
+        from clawmetry.outcome_classifier import outcome_trend
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        now = _dt.now(_tz.utc)
+
+        def _iso(delta_days):
+            return (now - _td(days=delta_days)).isoformat().replace("+00:00", "Z")
+
+        cur_since = _iso(7)
+        rows = _ls_tr.get_store().query_outcomes(
+            agent_type="openclaw", since=_iso(14), runtime=runtime,
+            limit=4000) or []
+        current, previous = [], []
+        for r in rows:
+            ts = (r or {}).get("last_active_at") or (r or {}).get("ended_at") or ""
+            if not ts:
+                continue
+            (current if ts >= cur_since else previous).append(r)
+        payload = outcome_trend(current, previous)
+        payload["window"] = "7d"
+        payload["runtime"] = runtime or "all"
+        payload["available"] = True
+        return payload
+    except Exception as e:
+        log.debug("snapshot: outcomes trend slice failed: %s", e)
+        return {}
+
+
 def _collect_activity_counters_today(runtime: str | None = None) -> dict | None:
     """Plaintext activity counters for the heartbeat envelope (issue #1652).
 
@@ -20020,6 +20063,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # ?runtime= and serve byRuntime[rt], falling back to the node-wide slice.
     _runtime_summary = _build_runtime_summary()
     _outcomes_by_rt: dict = {}
+    _outcomes_trend_by_rt: dict = {}
     _activity_by_rt: dict = {}
     try:
         _rt_keys = list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []
@@ -20028,6 +20072,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 _o = _outcomes_slice_for_snapshot(runtime=_rtk)
                 if _o:
                     _outcomes_by_rt[_rtk] = _o
+                _ot = _outcomes_trend_slice_for_snapshot(runtime=_rtk)
+                if _ot:
+                    _outcomes_trend_by_rt[_rtk] = _ot
                 _a = _collect_activity_counters_today(runtime=_rtk)
                 if _a:
                     _activity_by_rt[_rtk] = _a
@@ -20185,6 +20232,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "activityTodayByRuntime": _activity_by_rt,
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
+        # 7d-over-7d trend behind the Quality tab's "is it getting better?"
+        # line. Read by the cloud cm-cloud-outcomes-trend interceptor, which
+        # serves trendByRuntime[rt] for ?runtime= and falls back to node-wide.
+        "outcomesTrend": _outcomes_trend_slice_for_snapshot(),
+        "outcomesTrendByRuntime": _outcomes_trend_by_rt,
         # Agent Inventory roster: node-wide roster (one row per runtime) + a
         # per-runtime slice the cloud cm-cloud-inventory interceptor returns for
         # ?runtime=<rt> (only that runtime's row — the no-leak contract).
