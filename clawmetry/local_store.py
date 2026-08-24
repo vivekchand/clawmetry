@@ -1985,6 +1985,88 @@ _DEDUPED_EVENTS_CTE = """
 """
 
 
+# ── Ownership resolution (who owns this agent, which team pays) ─────────────
+#
+# Enterprise asks two questions on the first call: who owns this agent, and
+# which team is paying for it. Before this, a session row answered neither.
+# It carried ``agent_id`` and ``node_id``; ownership existed only as a
+# runtime->team label that ONE cost endpoint applied at query time, and a
+# runtime->owner chip on ONE tab. Nothing else could scope by either, so
+# every pillar downstream of Observe had no owner to route an alert to, no
+# team to bill, and no way to answer "show me only my team's agents".
+#
+# The fix is to resolve ownership ONCE, at ingest, and stamp it on the
+# session. A rule maps a scope to an owner and/or a team; the most specific
+# matching scope wins. Specificity is deliberate and fixed:
+#
+#   agent      an agent_id, the narrowest thing a person actually owns
+#   workspace  a workspace/project, for teams organised by repo
+#   node       a machine, for "everything on the build box is Platform's"
+#   runtime    the coarsest, and what the old team_mapping could express
+#
+# owner and team resolve INDEPENDENTLY: a node rule naming a team and an
+# agent rule naming an owner both apply, each winning its own field. That
+# matters because the two questions genuinely have different granularity —
+# a team owns a machine, a person owns an agent on it.
+_OWNERSHIP_SCOPE_ORDER = ("agent", "workspace", "node", "runtime")
+
+
+def _ownership_scope_values(*, runtime, agent_id, node_id, workspace_id):
+    """The candidate ``(scope_type, scope_value)`` keys for one session, most
+    specific first."""
+    return [
+        ("agent", agent_id),
+        ("workspace", workspace_id),
+        ("node", node_id),
+        ("runtime", runtime),
+    ]
+
+
+def _resolve_ownership(rules, *, runtime, agent_id, node_id, workspace_id):
+    """``(owner, team)`` for one session given a ``{(scope_type, scope_value):
+    {"owner","team"}}`` rule map.
+
+    Pure and never raises — ownership must never be the reason an ingest
+    fails. Returns ``(None, None)`` when nothing matches, which readers show
+    as unassigned. A blank owner in a rule does NOT shadow a coarser rule
+    that sets one, so clearing a field falls back rather than erasing.
+    """
+    owner = None
+    team = None
+    try:
+        for scope_type, scope_value in _ownership_scope_values(
+            runtime=runtime, agent_id=agent_id,
+            node_id=node_id, workspace_id=workspace_id,
+        ):
+            if not scope_value:
+                continue
+            rule = rules.get((scope_type, str(scope_value)))
+            if not rule:
+                continue
+            if owner is None and rule.get("owner"):
+                owner = str(rule["owner"])
+            if team is None and rule.get("team"):
+                team = str(rule["team"])
+            if owner is not None and team is not None:
+                break
+    except Exception:  # pragma: no cover - defensive, never-crash rule
+        return (owner, team)
+    return (owner, team)
+
+
+def _runtime_of_session_id(session_id, agent_type=None):
+    """Runtime bucket for a session id — the prefix before ':' when it is a
+    known non-OpenClaw runtime, else the stored agent_type (default
+    ``openclaw``). Mirrors ``sync._runtime_of_session`` and the UI's
+    ``_cmRuntimeOf``; ownership must bucket the same way the runtime switcher
+    does or a rule would silently miss."""
+    sid = str(session_id or "")
+    i = sid.find(":")
+    if i > 0 and sid[:i].lower() in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        return sid[:i].lower()
+    return str(agent_type or "openclaw")
+
+
 class LocalStore:
     """Thread-safe local event store with a background batched flusher.
 
@@ -13414,88 +13496,6 @@ _BILLABLE_TURN_EVENT_TYPES = (
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
 )
-
-# ── Ownership resolution (who owns this agent, which team pays) ─────────────
-#
-# Enterprise asks two questions on the first call: who owns this agent, and
-# which team is paying for it. Before this, a session row answered neither.
-# It carried ``agent_id`` and ``node_id``; ownership existed only as a
-# runtime->team label that ONE cost endpoint applied at query time, and a
-# runtime->owner chip on ONE tab. Nothing else could scope by either, so
-# every pillar downstream of Observe had no owner to route an alert to, no
-# team to bill, and no way to answer "show me only my team's agents".
-#
-# The fix is to resolve ownership ONCE, at ingest, and stamp it on the
-# session. A rule maps a scope to an owner and/or a team; the most specific
-# matching scope wins. Specificity is deliberate and fixed:
-#
-#   agent      an agent_id, the narrowest thing a person actually owns
-#   workspace  a workspace/project, for teams organised by repo
-#   node       a machine, for "everything on the build box is Platform's"
-#   runtime    the coarsest, and what the old team_mapping could express
-#
-# owner and team resolve INDEPENDENTLY: a node rule naming a team and an
-# agent rule naming an owner both apply, each winning its own field. That
-# matters because the two questions genuinely have different granularity —
-# a team owns a machine, a person owns an agent on it.
-_OWNERSHIP_SCOPE_ORDER = ("agent", "workspace", "node", "runtime")
-
-
-def _ownership_scope_values(*, runtime, agent_id, node_id, workspace_id):
-    """The candidate ``(scope_type, scope_value)`` keys for one session, most
-    specific first."""
-    return [
-        ("agent", agent_id),
-        ("workspace", workspace_id),
-        ("node", node_id),
-        ("runtime", runtime),
-    ]
-
-
-def _resolve_ownership(rules, *, runtime, agent_id, node_id, workspace_id):
-    """``(owner, team)`` for one session given a ``{(scope_type, scope_value):
-    {"owner","team"}}`` rule map.
-
-    Pure and never raises — ownership must never be the reason an ingest
-    fails. Returns ``(None, None)`` when nothing matches, which readers show
-    as unassigned. A blank owner in a rule does NOT shadow a coarser rule
-    that sets one, so clearing a field falls back rather than erasing.
-    """
-    owner = None
-    team = None
-    try:
-        for scope_type, scope_value in _ownership_scope_values(
-            runtime=runtime, agent_id=agent_id,
-            node_id=node_id, workspace_id=workspace_id,
-        ):
-            if not scope_value:
-                continue
-            rule = rules.get((scope_type, str(scope_value)))
-            if not rule:
-                continue
-            if owner is None and rule.get("owner"):
-                owner = str(rule["owner"])
-            if team is None and rule.get("team"):
-                team = str(rule["team"])
-            if owner is not None and team is not None:
-                break
-    except Exception:  # pragma: no cover - defensive, never-crash rule
-        return (owner, team)
-    return (owner, team)
-
-
-def _runtime_of_session_id(session_id, agent_type=None):
-    """Runtime bucket for a session id — the prefix before ':' when it is a
-    known non-OpenClaw runtime, else the stored agent_type (default
-    ``openclaw``). Mirrors ``sync._runtime_of_session`` and the UI's
-    ``_cmRuntimeOf``; ownership must bucket the same way the runtime switcher
-    does or a rule would silently miss."""
-    sid = str(session_id or "")
-    i = sid.find(":")
-    if i > 0 and sid[:i].lower() in _NON_OPENCLAW_RUNTIME_PREFIXES:
-        return sid[:i].lower()
-    return str(agent_type or "openclaw")
-
 
 # ── Runtime filtering by session_id prefix ──────────────────────────────────
 # The global runtime switcher in the dashboard scopes views by runtime; runtime
