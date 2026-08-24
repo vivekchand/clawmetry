@@ -11,6 +11,7 @@ passes before the fix guards nothing.
 """
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -244,24 +245,57 @@ def test_dispatcher_refuses_a_prompt_action_when_not_opted_in(monkeypatch):
 # ── Finding 11: the key travels in the fragment, and nowhere else ────────────
 
 
-def test_key_is_delivered_only_in_the_url_fragment():
-    """A refactor from ``#key=`` to ``&key=`` would hand the key to the server
-    with no test failing — this is that test."""
+def _dashboard_handoff_url():
+    """The hand-off URL as one string, however it is spelled in source.
+
+    Reads the ``_dashboard_url = ...`` assignment and joins it, so an
+    f-string split across several lines (which is how it is written now)
+    cannot make this guard silently match nothing and pass.
+    """
     src = open(
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "clawmetry", "cli.py"),
         encoding="utf-8",
     ).read()
-    urls = [
-        line for line in src.splitlines()
-        if "{enc_key}" in line and "/cloud" in line
-    ]
-    assert urls, "expected the dashboard hand-off URL to be present"
-    for line in urls:
-        before_fragment = line.split("#")[0]
-        assert "{enc_key}" not in before_fragment, (
-            f"the encryption key must sit after '#', never in the query or path: {line}"
+    marker = "_dashboard_url = "
+    i = src.index(marker)
+    chunk = src[i:i + 600]
+    # Keep only the quoted pieces, which is where the URL actually lives.
+    parts = re.findall(r'f?"([^"]*)"', chunk)
+    joined = "".join(parts)
+    assert "/cloud" in joined, f"could not recover the hand-off URL from: {chunk[:200]}"
+    return joined
+
+
+def test_credentials_are_delivered_only_in_the_url_fragment():
+    """Both secrets must sit after ``#``.
+
+    A fragment is never transmitted. A refactor from ``#key=`` to ``&key=``,
+    or from ``#token=`` back to ``?token=``, hands a live credential to the
+    server, its access log and the browser's history — and would otherwise
+    ship with a green suite. That is not hypothetical: the account key rode in
+    the query string until 2026-08-24 and was measured landing in Cloud
+    Logging about 180 times a day.
+    """
+    url = _dashboard_handoff_url()
+    assert "#" in url, f"the hand-off URL has no fragment at all: {url}"
+    before_fragment, fragment = url.split("#", 1)
+
+    for secret in ("{enc_key}", "{api_key}"):
+        assert secret in url, f"{secret} is no longer in the hand-off URL: {url}"
+        assert secret not in before_fragment, (
+            f"{secret} must sit after '#', never in the query or path: {url}"
         )
+        assert secret in fragment
+
+
+def test_handoff_url_has_no_query_string_at_all():
+    """Nothing in the query string means nothing to leak or to audit later."""
+    url = _dashboard_handoff_url()
+    before_fragment = url.split("#", 1)[0]
+    assert "?" not in before_fragment, (
+        f"the hand-off URL grew a query string again: {url}"
+    )
 
 
 def test_browser_handoff_keeps_the_key_out_of_argv():
