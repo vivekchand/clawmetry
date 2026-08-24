@@ -164,3 +164,54 @@ def test_unattended_update_never_checks_pypi_when_private(monkeypatch, env):
     target, reason = cli._unattended_update_target("0.0.1")
     assert target is None
     assert "self-hosted" in reason or "offline" in reason
+
+
+# ── The path that actually runs (2026-08-24 review, finding 6) ───────────────
+#
+# `test_unattended_update_never_checks_pypi_when_private` above asserts on
+# `cli._unattended_update_target`. That is not the code that polls PyPI on a
+# running install — `routes/update_check.py::_check_for_update` is, on a thread
+# started by the dashboard and the daemon. It contained no reference to
+# `egress_suppressed`, `SELF_HOSTED` or `CLAWMETRY_OFFLINE`, so a self-hosted
+# node beaconed pypi.org every 60s while this file reported the promise kept.
+#
+# A test asserting on the wrong path is worse than no test: it converts an open
+# hole into a documented guarantee.
+
+
+@pytest.mark.parametrize("env", PRIVATE_ENVS)
+def test_dashboard_update_thread_never_checks_pypi_when_private(monkeypatch, env):
+    import routes.update_check as update_check
+
+    for key in ALL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(endpoints, "_cfg_cache", None)
+    monkeypatch.setattr(endpoints, "CONFIG_PATH", "/nonexistent/clawmetry/config.json")
+
+    def _fail(*a, **kw):  # pragma: no cover - must never run
+        raise AssertionError("the dashboard update thread reached pypi.org")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fail)
+    assert update_check._check_for_update() is None
+
+
+def test_dashboard_update_thread_still_checks_on_a_managed_install(monkeypatch):
+    """The gate must suppress private installs only — not disable updates."""
+    import routes.update_check as update_check
+
+    for key in ALL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(endpoints, "_cfg_cache", None)
+    monkeypatch.setattr(endpoints, "CONFIG_PATH", "/nonexistent/clawmetry/config.json")
+
+    reached = []
+
+    def _record(*a, **kw):
+        reached.append(a)
+        raise RuntimeError("stop here — reaching the call is the assertion")
+
+    monkeypatch.setattr("urllib.request.urlopen", _record)
+    update_check._check_for_update()
+    assert reached, "a managed install must still be told about new versions"

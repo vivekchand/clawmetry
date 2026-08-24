@@ -255,12 +255,15 @@ function openE2eKeyModal() {
   document.getElementById('e2e-key-regen-confirm').style.display = 'none';
   document.getElementById('e2e-key-regen-btn').style.display = '';
   _e2eKeyRevealed = false;
+  _e2eKeyValue = '';
+  // The GET only reports whether a key exists — it never carries the key.
+  // The real value is fetched on demand by _e2eKeyFetch() when the user
+  // reveals or copies it.
   fetch('/api/local/e2e-key').then(function (r) { return r.json(); }).then(function (d) {
-    if (!d.configured || !d.key) {
+    if (!d.configured) {
       document.getElementById('e2e-key-empty').style.display = '';
       return;
     }
-    _e2eKeyValue = d.key;
     document.getElementById('e2e-key-body').style.display = '';
     _e2eKeyRender();
   }).catch(function () {
@@ -275,17 +278,35 @@ function _e2eKeyMask(k) {
   if (!k || k.length < 10) return '••••••••';
   return k.slice(0, 6) + '…' + k.slice(-4);
 }
+
+// Fetch the real key on demand. POST (not GET) so the dashboard's
+// cross-origin write guard applies — see dashboard.py:_cross_origin_write_blocked.
+function _e2eKeyFetch() {
+  if (_e2eKeyValue) return Promise.resolve(_e2eKeyValue);
+  return fetch('/api/local/e2e-key/reveal', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _e2eKeyValue = (d && d.key) || ''; return _e2eKeyValue; });
+}
 function _e2eKeyRender() {
   var el = document.getElementById('e2e-key-value');
   if (!el) return;
-  el.textContent = _e2eKeyRevealed ? _e2eKeyValue : _e2eKeyMask(_e2eKeyValue);
+  if (_e2eKeyRevealed && _e2eKeyValue) { el.textContent = _e2eKeyValue; return; }
+  el.textContent = _e2eKeyMask(_e2eKeyValue || '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022');
 }
 function e2eKeyToggleReveal() {
-  _e2eKeyRevealed = !_e2eKeyRevealed;
+  if (!_e2eKeyRevealed) {
+    _e2eKeyFetch().then(function () { _e2eKeyRevealed = true; _e2eKeyRender(); })
+      .catch(function () {
+        var errEl = document.getElementById('e2e-key-error');
+        if (errEl) { errEl.textContent = 'Could not read the key. Try again.'; errEl.style.display = ''; }
+      });
+    return;
+  }
+  _e2eKeyRevealed = false;
   _e2eKeyRender();
 }
 function e2eKeyCopy() {
-  if (!_e2eKeyValue) return;
+  if (!_e2eKeyValue) { _e2eKeyFetch().then(function (k) { if (k) e2eKeyCopy(); }); return; }
   var done = function () {
     var msg = document.getElementById('e2e-key-copied');
     if (msg) { msg.style.display = ''; setTimeout(function () { msg.style.display = 'none'; }, 2000); }

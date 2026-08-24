@@ -1111,7 +1111,19 @@ def _cmd_connect(args) -> None:
         # Self-hosted servers may answer {"e2e": false} — data stays inside the
         # customer deployment, so blob encryption is optional there and the
         # server needs plaintext to serve fleet views / audit export.
+        #
+        # SECURITY (2026-08-24 review, finding 1): this flag is only ever
+        # honoured for a CUSTOM endpoint. The managed cloud answering
+        # {"e2e": false} used to downgrade any client to plaintext ingest —
+        # a remote kill switch on the product's headline privacy guarantee,
+        # signalled by one line in a log file. `is_custom_endpoint()` is the
+        # same resolver every other client call already routes through, so
+        # "self-hosted" now means what the comment always claimed it meant.
         _server_e2e = result.get("e2e") if isinstance(result, dict) else None
+        if _server_e2e is False:
+            from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep2
+            if not _is_custom_ep2():
+                _server_e2e = None  # managed cloud cannot turn E2E off
         print("✅")
     except Exception as e:
         err = str(e)
@@ -1154,9 +1166,26 @@ def _cmd_connect(args) -> None:
     # A self-hosted server answering {"e2e": false} opts this node into
     # plaintext ingest (data never leaves the deployment; the server needs
     # plaintext for fleet views + audit export). An explicit --enc-key wins.
+    #
+    # SECURITY (2026-08-24 review, finding 1): a node that ALREADY has a key
+    # is never downgraded. `save_config` is a whole-file overwrite that only
+    # re-adds `encryption_key` when it is non-empty, so accepting e2e:false on
+    # a reconnect used to destroy the existing key with no keychain fallback —
+    # turning a working E2E node into a plaintext one and orphaning everything
+    # it had already synced. Opting an existing node into plaintext is now an
+    # explicit act: re-run with --enc-key "" after clearing the key.
+    _existing_key = _kc_key or _saved_enc_key
     _server_plaintext = (
-        _server_e2e is False and not _enc_key_arg and not _keep_local_signin
+        _server_e2e is False
+        and not _enc_key_arg
+        and not _keep_local_signin
+        and not _existing_key
     )
+    if _server_e2e is False and _existing_key and not _enc_key_arg and not _keep_local_signin:
+        print(
+            "  This server asked for plaintext ingest, but this node already "
+            "has an encryption key — keeping it. Your data stays encrypted."
+        )
     print()
     if not _keep_local_signin and not _server_plaintext:
         print("🔐 Encryption key protects your data end-to-end.")
@@ -1185,7 +1214,12 @@ def _cmd_connect(args) -> None:
         pass  # enc_key already chosen above, silently
     elif _server_plaintext:
         enc_key = ""
-        print("🔓 Server requested plaintext ingest (self-hosted, E2E off).")
+        print("🔓 This self-hosted server stores your data unencrypted.")
+        from clawmetry.endpoints import ingest_url as _resolve_ingest_url_pt
+        print(f"     Endpoint: {_resolve_ingest_url_pt()}")
+        print("     Session content — prompts, replies, tool arguments — is")
+        print("     readable by whoever runs that server. End-to-end")
+        print("     encryption is off for this node.")
     elif _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
@@ -1417,9 +1451,60 @@ def _cmd_connect(args) -> None:
     # discover a silent "0 nodes" later. No-op (+ skipped) for a keyed connect.
     _warn_if_placeholder_account(api_key)
 
+    _open_url_without_argv(_dashboard_url)
+
+
+def _quiet_unlink(path):
     try:
-        import webbrowser
-        webbrowser.open(_dashboard_url)
+        os.unlink(path)
+    except Exception:
+        pass
+
+
+def _open_url_without_argv(url):
+    """Open ``url`` in the browser without putting it in any process's argv.
+
+    SECURITY (2026-08-24 review, finding 11): ``webbrowser.open`` shells out —
+    ``open`` on macOS, ``xdg-open`` on Linux — so the full URL, encryption-key
+    fragment included, is visible to every other process on the machine for as
+    long as that command runs (``ps``, ``/proc/<pid>/cmdline``). Handing the
+    browser a local redirect page instead keeps the key out of argv entirely.
+
+    Falls back to a direct open if the temp file cannot be written — a browser
+    that opens beats a dead end, and the fallback is what we always did.
+    """
+    import webbrowser
+
+    try:
+        import html as _html
+        import json as _json
+        import tempfile
+        import threading
+
+        fd, path = tempfile.mkstemp(suffix=".html", prefix="clawmetry-open-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(
+                "<!doctype html><meta charset='utf-8'>"
+                "<title>Opening ClawMetry\u2026</title>"
+                "<script>location.replace(%s)</script>"
+                "<p>Opening your dashboard\u2026 "
+                "<a href='%s'>continue</a></p>"
+                % (_json.dumps(url), _html.escape(url, quote=True))
+            )
+        os.chmod(path, 0o600)  # mkstemp already does this; be explicit
+        if webbrowser.open("file://" + path):
+            # The redirect page holds the key too, so it does not outlive the
+            # hand-off. 0600 keeps it to this user in the meantime — the same
+            # user can already read ~/.clawmetry/config.json, so this exposes
+            # nothing new, whereas argv is visible to every user on the box.
+            _t = threading.Timer(30.0, lambda: _quiet_unlink(path))
+            _t.daemon = True
+            _t.start()
+            return
+    except Exception:
+        pass
+    try:
+        webbrowser.open(url)
     except Exception:
         pass
 

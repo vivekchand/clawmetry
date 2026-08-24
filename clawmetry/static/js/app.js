@@ -18502,6 +18502,14 @@ async function loadTranscripts() {
         viewTranscript(m.session);
         history.replaceState(null, '', window.location.pathname + window.location.search);
       }
+      // SECURITY (2026-08-24 review, finding 11): the scrubber above only
+      // fired for #session=, so a #key=... fragment stayed in the address bar
+      // and in browser history — and got uploaded by browser sync when the
+      // user has it on. Any fragment carrying a key is removed on sight,
+      // whether or not this page was the one that consumed it.
+      if (m.key) {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
     } catch (e) {}
   } catch(e) {
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">' + t("app.failed_to_load_transcripts", null, "Failed to load transcripts") + '</div>';

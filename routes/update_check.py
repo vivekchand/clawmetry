@@ -612,6 +612,21 @@ def _check_for_update():
     latest = current
     update_available = False
 
+    # SECURITY (2026-08-24 review, finding 6): docs/EGRESS.md promises that
+    # self-hosted, repointed and air-gapped installs do not contact pypi.org.
+    # This module had no reference to the gate at all — and the test that
+    # asserted the promise exercised `cli._unattended_update_target`, a
+    # different code path, so it passed while THIS thread beaconed every 60s.
+    # tests/test_egress_suppression.py now covers this function directly.
+    try:
+        from clawmetry.endpoints import egress_suppressed as _egress_suppressed
+
+        if _egress_suppressed():
+            log.debug("update check suppressed (self-hosted / offline / repointed)")
+            return None
+    except Exception:
+        pass
+
     try:
         req = _ur.Request(
             "https://pypi.org/pypi/clawmetry/json",
