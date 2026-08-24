@@ -14904,6 +14904,38 @@ def _runtime_of_session(sid: str) -> str:
     return "openclaw"
 
 
+def _build_runtime_records():
+    """Per-runtime "what does this runtime record" verdicts for the snapshot.
+
+    The Cost tab and the Efficiency card are call-event driven: with no
+    per-call cost rows they render $0.00 / "grade appears after about a day".
+    For a runtime that never writes per-call cost, both are false. Locally the
+    handlers attach the verdict themselves; on cloud there are no handlers, so
+    the verdict has to travel in the snapshot for the interceptor to attach.
+
+    Static (a declared table, not a measurement) and small. Best-effort: any
+    failure yields ``{}`` and the UI keeps its older, vaguer wording.
+    """
+    try:
+        from clawmetry.runtime_records import RUNTIME_RECORDS, SIGNALS, coverage_payload
+        out = {}
+        for rt in RUNTIME_RECORDS:
+            base = coverage_payload(rt, has_data=False)
+            out[rt] = {
+                "runtime_label": base["runtime_label"],
+                "records": {s: base["records"][s] for s in SIGNALS},
+                "headline": base["headline"],
+                "detail": base["detail"],
+                "suppress_zero": base["suppress_zero"],
+                "cost_is_estimate": base["cost_is_estimate"],
+                "status_when_empty": base["status"],
+            }
+        return out
+    except Exception as _e:
+        log.debug("runtimeRecords slice failed: %s", _e)
+        return {}
+
+
 def _build_runtime_summary(limit: int = 20000):
     """Per-runtime rollup so the cloud Models / Cost / Overview tabs can scope
     aggregates to the selected runtime for real (not just show a note).
@@ -20229,6 +20261,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "runtimeSummary": _runtime_summary,
+        # What each runtime actually records (clawmetry/runtime_records.py).
+        # Rides the snapshot so the HOSTED dashboard can tell "this runtime
+        # was idle" apart from "this runtime keeps no cost record" — without
+        # it the cloud goes back to promising a number that will never
+        # arrive. Static, tiny (26 short entries), and content-free.
+        "runtimeRecords": _build_runtime_records(),
         "transcripts": _build_transcripts(
             extra_sids=[
                 s["sessionId"]

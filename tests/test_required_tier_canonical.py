@@ -125,8 +125,11 @@ def test_gate_required_tier_enterprise_feature_resolves_to_enterprise(ent_grace)
     drives the right CTA (not the Pro one)."""
     from clawmetry._gate import _required_tier
 
-    for key in ("audit_logs", "sso", "siem_export"):
+    for key in ("sso", "siem_export", "custom_data_residency"):
         assert _required_tier(key) == ent_grace.TIER_ENTERPRISE, key
+    # Moved to Pro 2026-08-25 -- pinned here so the CTA follows the tier map.
+    for key in ("audit_logs", "rbac"):
+        assert _required_tier(key) == ent_grace.TIER_CLOUD_PRO, key
 
 
 def test_gate_required_tier_swallows_resolver_errors(monkeypatch):
