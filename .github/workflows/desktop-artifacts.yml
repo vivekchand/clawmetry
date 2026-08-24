@@ -314,7 +314,7 @@ jobs:
       # every downstream step stay untouched.
       - name: Azure login (OIDC)
         if: env.HAS_AZ_SIGN == 'true'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
