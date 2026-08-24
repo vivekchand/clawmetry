@@ -113,8 +113,9 @@ thinking), and $35,572/mo already saved by cache reuse.
 
 **Detection runs without you configuring anything.**
 The built-in detectors are on from install: agent went quiet, telemetry feed
-stopped, cost spike, stalled session, repeated tool failure. Your own rules
-are optional on top.
+stopped, cost spike, token burst, errors climbing, error spike, threat
+signature matched, security tool finding, security posture changed. Your own
+rules are optional on top.
 
 ![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
