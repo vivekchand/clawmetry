@@ -8,6 +8,15 @@ default bucket), enriched with the local owner label.
   GET  /api/inventory                  — the node-wide roster (or a single
                                          runtime's row when ?runtime=<rt> is set)
   POST /api/inventory/<agent_key>/owner — set the owner/notes label (local only)
+  GET  /api/ownership/rules            — the ownership rules on this node
+  POST /api/ownership/rules            — create/update one rule (local only)
+  DELETE /api/ownership/rules/<t>/<v>  — remove one rule (local only)
+  GET  /api/ownership/summary          — cost/sessions by owner and by team
+
+Ownership rules map a scope (agent / workspace / node / runtime) to an owner
+and/or a team. They are resolved AT INGEST and stamped on the session row
+(``clawmetry/local_store.py``), so every other surface can scope by owner or
+team with a plain filter instead of re-deriving the mapping itself.
 
 The roster is composed from the SAME rollups the daemon ships in the snapshot
 (``sync._build_runtime_summary`` + ``sync._build_agent_inventory``), so the
@@ -27,6 +36,9 @@ from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_inventory = Blueprint("inventory", __name__)
+# Separate blueprint so ownership can be registered (or not) independently of
+# the inventory tab, and so the URL prefix reads as its own feature.
+bp_ownership = Blueprint("ownership", __name__)
 
 
 def _ls_call(method_name, **kwargs):
@@ -255,3 +267,100 @@ def api_inventory_set_owner(agent_key: str):
     except Exception:
         return jsonify({"ok": False, "error": "write failed"}), 200
     return jsonify({"ok": True, "agentKey": key, "owner": owner})
+
+
+# ── ownership: who owns this agent, which team pays ─────────────────────
+#
+# The write endpoints inherit the global cross-origin guard in
+# dashboard.py::_check_auth, so a page in another tab cannot reassign
+# ownership. They return HTTP 200 with ``ok:false`` on a store-less cloud
+# container rather than an error, matching this module's cloud contract.
+
+_SCOPE_TYPES = ("agent", "workspace", "node", "runtime")
+
+
+@bp_ownership.route("/api/ownership/rules", methods=["GET"])
+def api_ownership_rules_list():
+    """Every ownership rule on this node, most-specific scope first."""
+    rows = _ls_call("list_ownership_rules")
+    if not isinstance(rows, list):
+        rows = []
+    return jsonify({"rules": rows, "total": len(rows), "scopeTypes": list(_SCOPE_TYPES)})
+
+
+@bp_ownership.route("/api/ownership/rules", methods=["POST"])
+def api_ownership_rules_upsert():
+    """Create or update one rule, then re-stamp the sessions it affects.
+
+    Body: ``{scopeType, scopeValue, owner?, team?}``. Omitting a field leaves
+    it alone; sending an empty string clears it. Re-stamping happens in the
+    store so the roster the operator is looking at updates immediately rather
+    than only for sessions ingested after the edit.
+    """
+    if not is_local_store_read_enabled():
+        return jsonify({"ok": False, "error": "local store disabled"}), 200
+    body = request.get_json(silent=True) or {}
+    scope_type = str(body.get("scopeType") or body.get("scope_type") or "").strip().lower()
+    scope_value = str(body.get("scopeValue") or body.get("scope_value") or "").strip()
+    if scope_type not in _SCOPE_TYPES:
+        return jsonify({
+            "ok": False,
+            "error": f"scopeType must be one of {list(_SCOPE_TYPES)}",
+        }), 400
+    if not scope_value:
+        return jsonify({"ok": False, "error": "missing scopeValue"}), 400
+    owner = body.get("owner")
+    team = body.get("team")
+    if owner is None and team is None:
+        return jsonify({"ok": False, "error": "set at least one of owner / team"}), 400
+    if owner is not None:
+        owner = str(owner).strip()
+    if team is not None:
+        team = str(team).strip()
+    res = _ls_call(
+        "set_ownership_rule", scope_type=scope_type, scope_value=scope_value,
+        owner=owner, team=team,
+    )
+    if res is None:
+        return jsonify({"ok": False, "error": "write failed"}), 200
+    return jsonify({"ok": True, **(res if isinstance(res, dict) else {})})
+
+
+@bp_ownership.route(
+    "/api/ownership/rules/<scope_type>/<path:scope_value>", methods=["DELETE"]
+)
+def api_ownership_rules_delete(scope_type: str, scope_value: str):
+    """Remove a rule. Sessions fall back to the next coarser rule, or to
+    unassigned — never to a stale owner."""
+    if not is_local_store_read_enabled():
+        return jsonify({"ok": False, "error": "local store disabled"}), 200
+    res = _ls_call(
+        "delete_ownership_rule",
+        scope_type=(scope_type or "").strip().lower(),
+        scope_value=(scope_value or "").strip(),
+    )
+    if res is None:
+        return jsonify({"ok": False, "error": "write failed"}), 200
+    return jsonify({"ok": True, **(res if isinstance(res, dict) else {})})
+
+
+@bp_ownership.route("/api/ownership/summary", methods=["GET"])
+def api_ownership_summary():
+    """Cost, tokens and session counts grouped by owner and by team.
+
+    Reports the unassigned remainder explicitly. "Who owns what" is only half
+    the enterprise question; the other half is "what is not accounted for",
+    and a summary that quietly drops unmatched sessions makes its own totals
+    wrong.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(365, days))
+    res = _ls_call("query_ownership_summary", window_days=days)
+    if not isinstance(res, dict):
+        res = {"window_days": days, "by_owner": [], "by_team": [],
+               "sessions_total": 0, "sessions_assigned": 0,
+               "sessions_unassigned": 0}
+    return jsonify(res)

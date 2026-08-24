@@ -857,6 +857,14 @@ _DAEMON_METHODS = frozenset({
     # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
     "query_agent_meta",
     "set_agent_meta",
+    # Ownership rules (who owns this agent / which team pays). The write
+    # methods re-stamp sessions, so they MUST run in the daemon process that
+    # holds the DuckDB writer lock — the dashboard proxies them here.
+    "list_ownership_rules",
+    "set_ownership_rule",
+    "delete_ownership_rule",
+    "restamp_ownership",
+    "query_ownership_summary",
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",

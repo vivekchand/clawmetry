@@ -327,6 +327,13 @@ _DDL = [
         attention_since         BIGINT,
         attention_signal        VARCHAR,
         attention_tool          VARCHAR,
+        -- Ownership, resolved at ingest from ``ownership_rules`` (see that
+        -- table). Stamped onto the row rather than joined on read so every
+        -- later reader -- including pillars that never heard of the rules
+        -- table -- can scope by owner/team with a plain WHERE. NULL means no
+        -- rule matched, which renders as unassigned, never as a guess.
+        owner                   VARCHAR,
+        team                    VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -405,6 +412,30 @@ _DDL = [
         key_value  VARCHAR NOT NULL,
         team_label VARCHAR NOT NULL,
         PRIMARY KEY (key_type, key_value)
+    )
+    """,
+    # Ownership: who owns an agent, and which team pays for it.
+    #
+    # Enterprise buyers ask both on the first call, and until now a session
+    # carried agent_id + node_id and nothing else — ownership existed only as
+    # a runtime->team label applied at QUERY time by one cost endpoint, and a
+    # runtime->owner chip on one tab. Nothing else on the node could scope by
+    # it, so Guard/Control/Evaluate/Govern had no owner to route to.
+    #
+    # A rule maps a scope to an owner and/or a team. ``scope_type`` is one of
+    # ``agent`` / ``workspace`` / ``node`` / ``runtime``; the most specific
+    # matching rule wins (see _OWNERSHIP_SCOPE_ORDER). Resolution happens at
+    # INGEST and is stamped onto sessions.owner / sessions.team, so every
+    # later reader gets ownership from a plain column instead of re-deriving
+    # it — and so a pillar that never heard of this table still inherits it.
+    """
+    CREATE TABLE IF NOT EXISTS ownership_rules (
+        scope_type  VARCHAR NOT NULL,
+        scope_value VARCHAR NOT NULL,
+        owner       VARCHAR,
+        team        VARCHAR,
+        updated_at  BIGINT,
+        PRIMARY KEY (scope_type, scope_value)
     )
     """,
     """
@@ -1264,6 +1295,11 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Ownership resolved at ingest (ownership_rules -> sessions.owner/team).
+    # Existing stores gain the columns empty and fill in on the next ingest
+    # or on the first restamp_ownership() call.
+    ("sessions", "owner", "VARCHAR"),
+    ("sessions", "team",  "VARCHAR"),
     # Content-grounded faithfulness evaluator (compute in clawmetry-pro).
     # Idempotent column-adds so existing stores pick up the column without a
     # fresh DB. The DDL above carries the same columns for fresh stores.
@@ -2415,12 +2451,29 @@ class LocalStore:
                     f" FROM sessions WHERE session_id IN ({ph})", chunk,
                 ).fetchall():
                     prev_map[(str(r[0]), str(r[1]))] = (r[2], r[3])
-            upsert_params = [
-                [
+            # Ownership is resolved HERE, once per batch, and stamped onto
+            # the row. Doing it at ingest (rather than joining ownership_rules
+            # on every read) is what lets a later pillar scope by owner with a
+            # plain WHERE, without knowing the rules table exists. One read of
+            # the rules for the whole batch; no per-session lookup.
+            _own_rules = self._read_ownership_rules()
+            upsert_params = []
+            for atype, sid, session in prepared:
+                _agent_id = session.get("agent_id") or "main"
+                _node_id = session.get("node_id")
+                _workspace_id = session.get("workspace_id")
+                _owner, _team = _resolve_ownership(
+                    _own_rules,
+                    runtime=_runtime_of_session_id(sid, atype),
+                    agent_id=_agent_id,
+                    node_id=_node_id,
+                    workspace_id=_workspace_id,
+                )
+                upsert_params.append([
                     atype, sid,
-                    session.get("node_id"),
-                    session.get("agent_id") or "main",
-                    session.get("workspace_id"),
+                    _node_id,
+                    _agent_id,
+                    _workspace_id,
                     session.get("title"),
                     session.get("started_at"),
                     session.get("last_active_at"),
@@ -2433,9 +2486,9 @@ class LocalStore:
                     now_ms,
                     _clean_str(session.get("cwd")),
                     _clean_str(session.get("git_branch")),
-                ]
-                for atype, sid, session in prepared
-            ]
+                    _owner,
+                    _team,
+                ])
             with _txn(self._conn):
                 # Upsert: replace if (agent_type, session_id) exists.
                 self._conn.executemany("""
@@ -2443,8 +2496,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, owner, team
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -2463,7 +2516,15 @@ class LocalStore:
                         -- the field keeps what we already knew, but an agent
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
-                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch)
+                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        -- Ownership is re-resolved on every ingest, so a rule
+                        -- edit reaches live sessions on their next tick even
+                        -- without the explicit restamp. Assignment (not
+                        -- COALESCE) on purpose: DELETING a rule has to be able
+                        -- to clear the field, or an owner could never be
+                        -- removed once stamped.
+                        owner          = excluded.owner,
+                        team           = excluded.team
                 """, upsert_params)
                 try:
                     self._mirror_session_rollups_locked(prepared, prev_map)
@@ -3330,6 +3391,20 @@ class LocalStore:
                 notes,
                 now_iso,
             ])
+            # Mirror the owner into ownership_rules and re-stamp, so the
+            # Agent Inventory chip is not a label that lives on one tab —
+            # setting it there now scopes sessions everywhere. ``notes`` is
+            # inventory-only and deliberately does not travel.
+            if owner:
+                self._conn.execute(
+                    "INSERT INTO ownership_rules"
+                    " (scope_type, scope_value, owner, team, updated_at)"
+                    " VALUES ('runtime', ?, ?, NULL, ?)"
+                    " ON CONFLICT (scope_type, scope_value) DO UPDATE SET"
+                    "   owner = excluded.owner, updated_at = excluded.updated_at",
+                    [agent_key, str(owner), int(time.time() * 1000)],
+                )
+                self._restamp_ownership_locked()
 
     def query_agent_meta(self) -> dict[str, dict[str, Any]]:
         """Return ``{agent_key: {owner, notes, updated_at}}`` for every labeled
@@ -6694,7 +6769,12 @@ class LocalStore:
         return [{"key_type": r[0], "key_value": r[1], "team_label": r[2]} for r in rows]
 
     def upsert_team_mapping(self, key_type: str, key_value: str, team_label: str) -> None:
-        """Insert or replace a team_mapping row."""
+        """Insert or replace a team_mapping row.
+
+        Also mirrors into ``ownership_rules`` and re-stamps, so a team set
+        through the older by-team screen lands on the session rows too. Two
+        write paths that mean the same thing must not be able to disagree.
+        """
         with self._write_lock:
             self._conn.execute(
                 "INSERT INTO team_mapping (key_type, key_value, team_label)"
@@ -6702,6 +6782,224 @@ class LocalStore:
                 " ON CONFLICT (key_type, key_value) DO UPDATE SET team_label = excluded.team_label",
                 [str(key_type), str(key_value), str(team_label)],
             )
+            if str(key_type) in _OWNERSHIP_SCOPE_ORDER:
+                self._conn.execute(
+                    "INSERT INTO ownership_rules (scope_type, scope_value, owner, team, updated_at)"
+                    " VALUES (?, ?, NULL, ?, ?)"
+                    " ON CONFLICT (scope_type, scope_value) DO UPDATE SET"
+                    "   team = excluded.team, updated_at = excluded.updated_at",
+                    [str(key_type), str(key_value), str(team_label),
+                     int(time.time() * 1000)],
+                )
+                self._restamp_ownership_locked()
+
+    # ── ownership (who owns this agent, which team pays) ────────────────
+
+    def _read_ownership_rules(self) -> dict:
+        """``{(scope_type, scope_value): {"owner","team"}}``. Direct conn read
+        — callers already hold ``_write_lock`` where it matters, and ``_fetch``
+        would re-enter it."""
+        rules: dict = {}
+        try:
+            for st, sv, owner, team in self._conn.execute(
+                "SELECT scope_type, scope_value, owner, team FROM ownership_rules"
+            ).fetchall():
+                rules[(str(st), str(sv))] = {"owner": owner, "team": team}
+        except Exception:
+            return {}
+        return rules
+
+    def list_ownership_rules(self) -> list[dict[str, Any]]:
+        """Every ownership rule, most-specific scope first then by value."""
+        rows = self._fetch(
+            "SELECT scope_type, scope_value, owner, team, updated_at"
+            " FROM ownership_rules", [],
+        )
+        out = [
+            {"scope_type": r[0], "scope_value": r[1], "owner": r[2],
+             "team": r[3], "updated_at": r[4]}
+            for r in rows
+        ]
+        order = {t: i for i, t in enumerate(_OWNERSHIP_SCOPE_ORDER)}
+        return sorted(
+            out,
+            key=lambda r: (order.get(r["scope_type"], 99), str(r["scope_value"])),
+        )
+
+    def set_ownership_rule(
+        self,
+        scope_type: str,
+        scope_value: str,
+        *,
+        owner: str | None = None,
+        team: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update one ownership rule, then re-stamp the sessions it
+        affects.
+
+        ``owner``/``team`` use COALESCE semantics: ``None`` means "leave this
+        field alone", so setting a team does not silently wipe an owner set
+        earlier. Pass an empty string to clear a field.
+
+        Re-stamping is the part that is easy to forget and expensive to skip:
+        without it a rule only applies to sessions ingested AFTER the edit,
+        so the roster the operator is looking at while they type stays wrong
+        and they conclude the feature is broken.
+        """
+        st = str(scope_type or "").strip().lower()
+        sv = str(scope_value or "").strip()
+        if st not in _OWNERSHIP_SCOPE_ORDER:
+            raise ValueError(
+                f"scope_type must be one of {list(_OWNERSHIP_SCOPE_ORDER)}, got {st!r}"
+            )
+        if not sv:
+            raise ValueError("scope_value must not be empty")
+        if owner is None and team is None:
+            raise ValueError("set at least one of owner / team")
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT INTO ownership_rules (scope_type, scope_value, owner, team, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT (scope_type, scope_value) DO UPDATE SET"
+                "   owner      = COALESCE(excluded.owner, ownership_rules.owner),"
+                "   team       = COALESCE(excluded.team,  ownership_rules.team),"
+                "   updated_at = excluded.updated_at",
+                [st, sv, owner, team, now_ms],
+            )
+            # Keep the two older, narrower surfaces in step so the Agent
+            # Inventory chip and the by-team cost rollup cannot disagree with
+            # the rule the operator just wrote.
+            if st == "runtime":
+                if team:
+                    self._conn.execute(
+                        "INSERT INTO team_mapping (key_type, key_value, team_label)"
+                        " VALUES ('runtime', ?, ?)"
+                        " ON CONFLICT (key_type, key_value) DO UPDATE SET"
+                        " team_label = excluded.team_label",
+                        [sv, str(team)],
+                    )
+                if owner:
+                    self._conn.execute(
+                        "INSERT INTO agent_meta (agent_key, owner, notes, updated_at)"
+                        " VALUES (?, ?, NULL, ?)"
+                        " ON CONFLICT (agent_key) DO UPDATE SET"
+                        "   owner      = excluded.owner,"
+                        "   updated_at = excluded.updated_at",
+                        [sv, str(owner), str(now_ms)],
+                    )
+            stamped = self._restamp_ownership_locked()
+        return {"scope_type": st, "scope_value": sv, "sessions_restamped": stamped}
+
+    def delete_ownership_rule(self, scope_type: str, scope_value: str) -> dict[str, Any]:
+        """Remove a rule and re-stamp, so sessions fall back to the next
+        coarser rule (or to unassigned) instead of keeping a stale owner."""
+        st = str(scope_type or "").strip().lower()
+        sv = str(scope_value or "").strip()
+        with self._write_lock:
+            n = self._conn.execute(
+                "SELECT COUNT(*) FROM ownership_rules"
+                " WHERE scope_type = ? AND scope_value = ?", [st, sv],
+            ).fetchone()[0]
+            if n:
+                self._conn.execute(
+                    "DELETE FROM ownership_rules"
+                    " WHERE scope_type = ? AND scope_value = ?", [st, sv],
+                )
+                if st == "runtime":
+                    self._conn.execute(
+                        "DELETE FROM team_mapping"
+                        " WHERE key_type = 'runtime' AND key_value = ?", [sv],
+                    )
+            stamped = self._restamp_ownership_locked()
+        return {"deleted": int(n), "sessions_restamped": stamped}
+
+    def restamp_ownership(self) -> int:
+        """Re-resolve owner/team for every session row. Returns rows changed."""
+        with self._write_lock:
+            return self._restamp_ownership_locked()
+
+    def _restamp_ownership_locked(self, chunk: int = 1000) -> int:
+        """Caller holds ``_write_lock``. Only rows whose resolved ownership
+        actually CHANGED are written, so a no-op edit costs one read."""
+        try:
+            rules = self._read_ownership_rules()
+            rows = self._conn.execute(
+                "SELECT agent_type, session_id, agent_id, node_id, workspace_id,"
+                " owner, team FROM sessions"
+            ).fetchall()
+        except Exception:
+            return 0
+        updates = []
+        for atype, sid, agent_id, node_id, workspace_id, cur_owner, cur_team in rows:
+            runtime = _runtime_of_session_id(sid, atype)
+            owner, team = _resolve_ownership(
+                rules, runtime=runtime, agent_id=agent_id,
+                node_id=node_id, workspace_id=workspace_id,
+            )
+            if owner != cur_owner or team != cur_team:
+                updates.append([owner, team, atype, sid])
+        if not updates:
+            return 0
+        try:
+            with _txn(self._conn):
+                for off in range(0, len(updates), chunk):
+                    self._conn.executemany(
+                        "UPDATE sessions SET owner = ?, team = ?"
+                        " WHERE agent_type = ? AND session_id = ?",
+                        updates[off:off + chunk],
+                    )
+        except Exception:
+            log.exception("local store: ownership restamp failed")
+            return 0
+        return len(updates)
+
+    def query_ownership_summary(self, *, window_days: int = 30) -> dict[str, Any]:
+        """Cost/tokens/sessions grouped by owner and by team.
+
+        Rows with no rule are reported under an explicit ``unassigned`` label
+        rather than dropped — an enterprise buyer's first question after "who
+        owns what" is "what is NOT accounted for", and silently omitting the
+        remainder makes the totals lie.
+        """
+        import time as _time
+        cutoff = _time.strftime(
+            "%Y-%m-%dT%H:%M:%S",
+            _time.gmtime(_time.time() - max(1, int(window_days)) * 86400),
+        )
+
+        def _group(col):
+            rows = self._fetch(
+                f"""
+                SELECT COALESCE(NULLIF({col}, ''), 'unassigned') AS label,
+                       ROUND(SUM(COALESCE(cost_usd, 0)), 6) AS cost_usd,
+                       SUM(COALESCE(total_tokens, 0))       AS tokens,
+                       COUNT(*)                             AS sessions
+                FROM sessions
+                WHERE COALESCE(last_active_at, started_at, '') >= ?
+                GROUP BY 1
+                ORDER BY cost_usd DESC
+                """,
+                [cutoff],
+            )
+            return [
+                {"label": r[0], "cost_usd": float(r[1] or 0.0),
+                 "tokens": int(r[2] or 0), "sessions": int(r[3] or 0)}
+                for r in rows
+            ]
+
+        by_owner = _group("owner")
+        by_team = _group("team")
+        assigned = sum(r["sessions"] for r in by_owner if r["label"] != "unassigned")
+        total = sum(r["sessions"] for r in by_owner)
+        return {
+            "window_days": int(window_days),
+            "by_owner": by_owner,
+            "by_team": by_team,
+            "sessions_total": total,
+            "sessions_assigned": assigned,
+            "sessions_unassigned": max(0, total - assigned),
+        }
 
     def delete_team_mapping(self, key_type: str, key_value: str) -> int:
         """Delete a team_mapping row. Returns 1 if deleted, 0 if not found."""
@@ -10317,6 +10615,8 @@ class LocalStore:
         self,
         *,
         agent_type: str | None = None,
+        owner: str | None = None,
+        team: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Read rows directly from the typed ``sessions`` table.
@@ -10345,6 +10645,23 @@ class LocalStore:
         if agent_type:
             clauses.append("s.agent_type = ?")
             params.append(str(agent_type))
+        # Ownership scoping: "show me only my team's agents". Reads the
+        # column stamped at ingest, so no join and no re-derivation — that
+        # is the whole point of resolving ownership once. The literal
+        # "unassigned" selects rows no rule matched, which is what an
+        # operator auditing coverage actually wants to see.
+        if owner:
+            if str(owner) == "unassigned":
+                clauses.append("(s.owner IS NULL OR s.owner = '')")
+            else:
+                clauses.append("s.owner = ?")
+                params.append(str(owner))
+        if team:
+            if str(team) == "unassigned":
+                clauses.append("(s.team IS NULL OR s.team = '')")
+            else:
+                clauses.append("s.team = ?")
+                params.append(str(team))
         # Exclude sub-agent child sessions from the top-level list. Family
         # adapters (e.g. Claude Code) ingest each spawned sub-agent's
         # transcript as its OWN session row so its events reconcile cost in
@@ -10433,7 +10750,8 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata, s.cwd, s.git_branch,
                    s.attention_state, s.attention_since, s.attention_signal,
-                   s.attention_tool
+                   s.attention_tool,
+                   s.owner, s.team
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -10447,7 +10765,7 @@ class LocalStore:
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
-                "attention_tool"]
+                "attention_tool", "owner", "team"]
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))
@@ -13096,6 +13414,88 @@ _BILLABLE_TURN_EVENT_TYPES = (
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
 )
+
+# ── Ownership resolution (who owns this agent, which team pays) ─────────────
+#
+# Enterprise asks two questions on the first call: who owns this agent, and
+# which team is paying for it. Before this, a session row answered neither.
+# It carried ``agent_id`` and ``node_id``; ownership existed only as a
+# runtime->team label that ONE cost endpoint applied at query time, and a
+# runtime->owner chip on ONE tab. Nothing else could scope by either, so
+# every pillar downstream of Observe had no owner to route an alert to, no
+# team to bill, and no way to answer "show me only my team's agents".
+#
+# The fix is to resolve ownership ONCE, at ingest, and stamp it on the
+# session. A rule maps a scope to an owner and/or a team; the most specific
+# matching scope wins. Specificity is deliberate and fixed:
+#
+#   agent      an agent_id, the narrowest thing a person actually owns
+#   workspace  a workspace/project, for teams organised by repo
+#   node       a machine, for "everything on the build box is Platform's"
+#   runtime    the coarsest, and what the old team_mapping could express
+#
+# owner and team resolve INDEPENDENTLY: a node rule naming a team and an
+# agent rule naming an owner both apply, each winning its own field. That
+# matters because the two questions genuinely have different granularity —
+# a team owns a machine, a person owns an agent on it.
+_OWNERSHIP_SCOPE_ORDER = ("agent", "workspace", "node", "runtime")
+
+
+def _ownership_scope_values(*, runtime, agent_id, node_id, workspace_id):
+    """The candidate ``(scope_type, scope_value)`` keys for one session, most
+    specific first."""
+    return [
+        ("agent", agent_id),
+        ("workspace", workspace_id),
+        ("node", node_id),
+        ("runtime", runtime),
+    ]
+
+
+def _resolve_ownership(rules, *, runtime, agent_id, node_id, workspace_id):
+    """``(owner, team)`` for one session given a ``{(scope_type, scope_value):
+    {"owner","team"}}`` rule map.
+
+    Pure and never raises — ownership must never be the reason an ingest
+    fails. Returns ``(None, None)`` when nothing matches, which readers show
+    as unassigned. A blank owner in a rule does NOT shadow a coarser rule
+    that sets one, so clearing a field falls back rather than erasing.
+    """
+    owner = None
+    team = None
+    try:
+        for scope_type, scope_value in _ownership_scope_values(
+            runtime=runtime, agent_id=agent_id,
+            node_id=node_id, workspace_id=workspace_id,
+        ):
+            if not scope_value:
+                continue
+            rule = rules.get((scope_type, str(scope_value)))
+            if not rule:
+                continue
+            if owner is None and rule.get("owner"):
+                owner = str(rule["owner"])
+            if team is None and rule.get("team"):
+                team = str(rule["team"])
+            if owner is not None and team is not None:
+                break
+    except Exception:  # pragma: no cover - defensive, never-crash rule
+        return (owner, team)
+    return (owner, team)
+
+
+def _runtime_of_session_id(session_id, agent_type=None):
+    """Runtime bucket for a session id — the prefix before ':' when it is a
+    known non-OpenClaw runtime, else the stored agent_type (default
+    ``openclaw``). Mirrors ``sync._runtime_of_session`` and the UI's
+    ``_cmRuntimeOf``; ownership must bucket the same way the runtime switcher
+    does or a rule would silently miss."""
+    sid = str(session_id or "")
+    i = sid.find(":")
+    if i > 0 and sid[:i].lower() in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        return sid[:i].lower()
+    return str(agent_type or "openclaw")
+
 
 # ── Runtime filtering by session_id prefix ──────────────────────────────────
 # The global runtime switcher in the dashboard scopes views by runtime; runtime
