@@ -31,9 +31,12 @@ the "Cost and Efficiency Analytics" requirement in 8090 Software Factory):
   asserts ``cache_saved_monthly_usd`` (realised) separately from the
   ``actions[].savings_monthly_usd`` recommendations (potential).
 
+AC-OBS-CEA-001.3 (one definition of a time scope across surfaces) is covered
+in tests/test_day_bucket_local.py, which pins the day BUCKETS to the same
+node-local clock the window helpers use.
+
 Deliberately NOT claimed here: AC-OBS-CEA-001.2 (an undeterminable cost must
-read as unavailable, never as zero) and AC-OBS-CEA-001.3 (one definition of a
-time scope across surfaces). Both are still uncovered -- see
+read as unavailable, never as zero) -- still uncovered, see
 docs/ac_coverage_baseline.json.
 """
 from __future__ import annotations

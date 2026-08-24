@@ -48,7 +48,6 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
-from datetime import date as _dt_date
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -215,7 +214,22 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
+
+# Day buckets are node-local calendar days, matching the cost windows that
+# filter them (clawmetry/cost_windows.py, ADR-046). Before v13 a day was the
+# first ten characters of whatever timestamp string the runtime wrote, so a
+# runtime writing UTC put a California user's evening spend on tomorrow while
+# the window asking for "today" was local. The two disagreed by design.
+#
+# ``_DAY_EXPR`` is the SQL half; ``cost_windows.local_day`` is the Python half
+# used by the rollup writers. They must produce the same key for the same
+# input or the rollups and the live aggregate part ways — which is the bug
+# class ADR-046 exists to close, so a test pins them against each other.
+from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
+from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
+
+_DAY_EXPR = _day_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -353,8 +367,10 @@ _DDL = [
     # ── Query Spine P2 (#2988): materialized rollups, written incrementally
     # at ingest by the daemon's own store handle (never a read-only re-open).
     # Upserts are O(events ingested per flush); a one-time chunked backfill
-    # (backfill_rollups) rebuilds them on upgrade. Day keys are derived from
-    # the event/session timestamp's date part (ts[:10], no tz conversion).
+    # (backfill_rollups) rebuilds them on upgrade. Day keys are the NODE-LOCAL
+    # calendar day (cost_windows.local_day), matching the windows that filter
+    # them; before schema v13 they were the timestamp string's first ten
+    # characters, which followed whatever timezone each runtime wrote.
     # Rows survive event pruning on purpose: they are the durable summary.
     """
     CREATE TABLE IF NOT EXISTS rollup_model_daily (
@@ -2208,6 +2224,43 @@ class LocalStore:
                             "local store: v12 session re-attribution FAILED — "
                             "schema version will NOT be stamped; next boot "
                             "will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 13:
+                    # v12 -> v13: day buckets move to the NODE-LOCAL calendar
+                    # day (cost_windows.local_day / _DAY_EXPR). They used to be
+                    # the timestamp string's first ten characters, which
+                    # followed whatever timezone each runtime wrote — so a
+                    # runtime stamping UTC put a California user's 5pm spend on
+                    # tomorrow, while the window asking for "today" was local.
+                    #
+                    # Every rollup row already stored carries the OLD key. New
+                    # writes carry the new one, and the two would sum into the
+                    # same day cell — a day that is partly local and partly
+                    # UTC, which is worse than either. So wipe and rebuild.
+                    #
+                    # All THREE tables, for the reason v11 and v12 spell out:
+                    # ``backfill_rollups`` gates on the SUM of their counts and
+                    # skips when it is non-zero, so leaving one populated means
+                    # the rebuild never runs and the others stay empty forever.
+                    try:
+                        _rb = self._conn.execute(
+                            "SELECT (SELECT COUNT(*) FROM rollup_model_daily)"
+                            " + (SELECT COUNT(*) FROM rollup_runtime_daily)"
+                            " + (SELECT COUNT(*) FROM rollup_session)"
+                        ).fetchone()[0]
+                        self._conn.execute("DELETE FROM rollup_model_daily")
+                        self._conn.execute("DELETE FROM rollup_runtime_daily")
+                        self._conn.execute("DELETE FROM rollup_session")
+                        log.info(
+                            "local store: v13 day buckets are now node-local; "
+                            "wiped %d rollup row(s) for rebuild", _rb,
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v13 rollup wipe FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
                         )
                         migration_failed = True
                         _migration_err = str(exc)
@@ -11532,7 +11585,7 @@ class LocalStore:
                 # the same event_type net but no usage payload.
                 continue
 
-            day = (ts or "")[:10]
+            day = _local_day(ts)
             if not day:
                 continue
 
@@ -11696,7 +11749,7 @@ class LocalStore:
             splits = _extract_usage_splits(data)
             if splits["input_tokens"] <= 0 and splits["output_tokens"] <= 0:
                 continue
-            day = (ts or "")[:10]
+            day = _local_day(ts)
             if not day:
                 continue
 
@@ -11839,7 +11892,7 @@ class LocalStore:
               SELECT
                 id, session_id, agent_id, ts, cost_usd, token_count,
                 event_type,
-                substr(ts, 1, 10) AS day,
+                {_DAY_EXPR} AS day,
                 CASE event_type
                   WHEN 'assistant'        THEN 2
                   WHEN 'message'          THEN 2
@@ -12771,18 +12824,13 @@ def _extract_event_usage(e: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_day(ts: Any) -> str | None:
-    """Day key ('YYYY-MM-DD') for a rollup row, derived from the timestamp
-    string's date part — no timezone conversion, matching how the rest of
-    the store buckets days (substr(ts,1,10)). Returns None (event skipped
-    from rollups) when the prefix is not a valid calendar date."""
-    s = str(ts or "")[:10]
-    if len(s) != 10:
-        return None
-    try:
-        _dt_date.fromisoformat(s)
-    except ValueError:
-        return None
-    return s
+    """Day key ('YYYY-MM-DD') for a rollup row, in the node's local calendar
+    day — matching how the rest of
+    the store buckets days in SQL (``_DAY_EXPR``): the node-local calendar
+    day, so a rollup row lands in the same bucket the live aggregate would
+    put it in. Returns None (event skipped from rollups) when no day can be
+    derived — an underivable bucket must not silently become today."""
+    return _local_day(ts)
 
 
 def _rollup_deltas(

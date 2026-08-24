@@ -154,10 +154,22 @@ def _ls_get_store():
 
 
 def _ls_iso_day(ts_str):
-    """Pull YYYY-MM-DD off an ISO timestamp. Tolerates None / short strings."""
+    """Node-local calendar day for an ISO timestamp. ``""`` when undecidable.
+
+    This used to be ``ts_str[:10]``, which is the timestamp's day in whatever
+    timezone the runtime wrote. Every caller compares the result against a day
+    axis built from ``date.today()`` — a LOCAL axis — so a runtime stamping
+    UTC dropped a user's evening activity into a bucket the axis did not
+    contain, and the row silently vanished from the chart. Same clock on both
+    sides now (ADR-046, clawmetry/cost_windows).
+    """
     if not ts_str or not isinstance(ts_str, str) or len(ts_str) < 10:
         return ""
-    return ts_str[:10]
+    try:
+        from clawmetry.cost_windows import local_day
+        return local_day(ts_str) or ""
+    except Exception:
+        return ts_str[:10]
 
 
 def _ls_event_plugin(ev):
