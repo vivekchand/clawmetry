@@ -209,7 +209,7 @@ jobs:
             desktop/sign_mac.sh "$dmg"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawmetry-macos
           path: dist/*.dmg
@@ -495,7 +495,7 @@ jobs:
           $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfx) { Remove-Item $pfx -Force }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawmetry-windows
           path: |
@@ -657,7 +657,7 @@ jobs:
       - name: Smoke test the AppImage
         run: python3 desktop/smoke_test.py dist/clawmetry-linux.AppImage
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawmetry-linux
           path: |
