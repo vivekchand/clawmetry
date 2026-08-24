@@ -32,6 +32,13 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
   ``test_unassigned_is_selectable``.
 * AC-OBS-004.7 -- a summary reports the unassigned remainder explicitly:
   ``test_summary_reports_the_unassigned_remainder``.
+* AC-OBS-RSO-004.1 -- the session record carries the resolved owner and team:
+  ``test_rule_stamps_owner_and_team_onto_sessions``,
+  ``test_reingest_preserves_ownership``.
+* AC-OBS-RSO-004.2 -- views scope by owner or team without re-deriving it:
+  ``test_sessions_can_be_filtered_by_team``, ``test_unassigned_is_selectable``.
+* AC-OBS-RSO-004.3 -- an unmatched session carries neither field:
+  ``test_sessions_start_unassigned``, ``test_no_match_is_unassigned_not_a_guess``.
 """
 from __future__ import annotations
 
