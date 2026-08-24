@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-08-22",
+    "synced_at": "2026-08-25",
     "synced_by": "claude-code"
   },
   "_scope": [
@@ -41,6 +41,13 @@
     {"id": "AC-OBS-003.1", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When the system recognizes a supported runtime, the system shall associate its activity with that runtime."},
     {"id": "AC-OBS-003.2", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When runtime-specific information is unavailable, the system shall preserve the activity that it can identify without inventing missing values."},
     {"id": "AC-OBS-003.3", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "Where an extended runtime integration requires the paid extension, the system shall communicate the availability boundary before the operator relies on it."},
+    {"id": "AC-OBS-004.1", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When the operator defines an ownership rule for a scope, the system shall attribute matching activity to that owner and that team."},
+    {"id": "AC-OBS-004.2", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "Where more than one rule matches, the system shall apply the most specific scope, and shall resolve the owner and the team independently so a broader rule may supply one while a narrower rule supplies the other."},
+    {"id": "AC-OBS-004.3", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When an ownership rule changes, the system shall re-attribute activity already recorded, not only activity recorded afterwards."},
+    {"id": "AC-OBS-004.4", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When every rule matching an activity record is removed, the system shall clear that record's attribution rather than retaining the last value."},
+    {"id": "AC-OBS-004.5", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "If no rule matches, then the system shall report the activity as unassigned rather than attributing it to a default."},
+    {"id": "AC-OBS-004.6", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "The operator shall be able to scope activity views to a single owner or team, and to the unassigned remainder."},
+    {"id": "AC-OBS-004.7", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When the system summarises cost or activity by owner or team, it shall report the unassigned remainder explicitly so the summary's totals account for everything measured."},
 
     {"id": "AC-OBS-CEA-001.1", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When cost or usage is available, the system shall present it with its associated runtime, session, or time scope."},
     {"id": "AC-OBS-CEA-001.2", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When a cost value cannot be determined, the system shall identify it as unavailable rather than report a zero value."},

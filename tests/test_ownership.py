@@ -8,10 +8,30 @@ so nothing else on the node could scope by either.
 These tests use a real DuckDB store (isolated by the conftest scratch path),
 not a mock, because the thing under test is the stamping and the re-stamping.
 
-No acceptance criterion in docs/acceptance_criteria.json covers ownership —
-the requirement set has nothing about owner or team attribution. That is the
-gap this closes, so the guarantees are pinned here directly rather than
-against an AC id that does not exist.
+Acceptance criteria proven here (docs/acceptance_criteria.json):
+
+* AC-OBS-004.1 -- a rule attributes matching activity to an owner and a team:
+  ``test_rule_stamps_owner_and_team_onto_sessions``,
+  ``test_a_new_session_is_stamped_on_arrival``.
+* AC-OBS-004.2 -- most specific scope wins, and owner and team resolve
+  independently: ``test_most_specific_scope_wins``,
+  ``test_owner_and_team_resolve_independently``,
+  ``test_blank_field_falls_through_instead_of_erasing``.
+* AC-OBS-004.3 -- a rule change re-attributes activity already recorded:
+  ``test_existing_sessions_are_restamped_not_just_future_ones``,
+  ``test_legacy_team_mapping_write_reaches_the_session_rows``,
+  ``test_inventory_owner_edit_reaches_the_session_rows``.
+* AC-OBS-004.4 -- removing every matching rule clears the attribution:
+  ``test_removing_every_rule_clears_the_stamp``,
+  ``test_deleting_a_rule_falls_back_rather_than_keeping_a_stale_owner``.
+* AC-OBS-004.5 -- no match reads as unassigned, never a default:
+  ``test_no_match_is_unassigned_not_a_guess``,
+  ``test_sessions_start_unassigned``.
+* AC-OBS-004.6 -- views scope to one owner or team, and to the unassigned
+  remainder: ``test_sessions_can_be_filtered_by_team``,
+  ``test_unassigned_is_selectable``.
+* AC-OBS-004.7 -- a summary reports the unassigned remainder explicitly:
+  ``test_summary_reports_the_unassigned_remainder``.
 """
 from __future__ import annotations
 
