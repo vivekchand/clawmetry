@@ -9951,8 +9951,10 @@ function loopMoney(n) {
 }
 
 function loopBasisHint(basis) {
-  if (basis === 'burn_rate') return 'Estimated from this session spend rate over the time it has been off track.';
-  if (basis === 'window_fraction') return 'Rough estimate: session cost shared across the flagged part of the window.';
+  if (basis === 'burn_rate') return 'Measured: this session spend rate over the time it has been off track.';
+  // Say plainly that this one is rough, because it is the reason the row is
+  // not marked critical however large the number looks.
+  if (basis === 'window_fraction') return 'Rough guide only: the session cost shared across the flagged part of the window. Too approximate to raise the alert level on its own.';
   return 'We do not have cost data for this session.';
 }
 
