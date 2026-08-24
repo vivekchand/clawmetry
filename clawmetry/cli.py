@@ -1571,6 +1571,12 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
             # stable across venv rebuilds (#4297).
             _launchd_cmd = [sys.executable, "-m", "clawmetry", "--port", str(port)]
             _args_xml = "\n".join(f"        <string>{a}</string>" for a in _launchd_cmd)
+            # launchd starts agents with cwd="/" and does not always export
+            # HOME. dashboard.py's workspace auto-detect ends in os.getcwd(),
+            # so cwd="/" made WORKSPACE="/" and the fleet DB resolve to
+            # "/.clawmetry-fleet.db" -- unwritable, so the dashboard exited(1)
+            # on every boot and the user saw no dashboard at all. Pin both.
+            _home_dir = str(_P.home())
             plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -1580,6 +1586,11 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
     <array>
 {_args_xml}
     </array>
+    <key>WorkingDirectory</key>  <string>{_home_dir}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>          <string>{_home_dir}</string>
+    </dict>
     <key>RunAtLoad</key>         <true/>
     <key>KeepAlive</key>         <true/>
     <key>StandardOutPath</key>   <string>{log_path}</string>
