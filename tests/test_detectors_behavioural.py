@@ -321,6 +321,18 @@ def test_money_promotes_a_warning_to_critical_but_never_an_info():
     assert by_kind["action_discrepancy"]["severity"] == "info"
 
 
+def test_a_rough_estimate_cannot_escalate_to_critical():
+    """window_fraction assumes even spend across the window. On real sessions
+    that attributed most of a $100 session to "Bash failed 4 times" and made 11
+    of 12 incidents critical. It stays as context; it does not escalate."""
+    inc = {"kind": "repeated_tool_failure", "severity": "warning",
+           "first_bad_step": 0, "evidence": {}}
+    out = detectors.annotate_spend([inc], cost_usd=100.0, window_steps=10)
+    assert out[0]["spend_basis"] == "window_fraction"
+    assert out[0]["spend_at_risk_usd"] > detectors.CRITICAL_SPEND_USD
+    assert out[0]["severity"] == "warning"
+
+
 def test_incidents_sort_by_what_ignoring_them_costs():
     cheap_warning = {"kind": "stuck_loop", "severity": "warning",
                      "spend_at_risk_usd": 0.02, "evidence": {}}
@@ -500,3 +512,36 @@ def test_daemon_tick_does_not_double_count_a_session_across_ticks(real_store):
     for _ in range(3):
         sync._emit_detector_incidents(fake, {})
     assert real_store.query_guard_baseline("runtime:codex")["sessions"] == 1
+
+
+def test_runtime_comes_from_the_session_id_not_the_agent_type_column(
+        real_store, monkeypatch):
+    """A real install stores ``agent_type='openclaw'`` on every session row,
+    including Claude Code ones whose id says otherwise. Trusting that column
+    labels the incident with the wrong runtime, applies the wrong write
+    vocabulary, and files every runtime under one cohort, which makes a
+    per-runtime baseline meaningless. The session-id prefix is the identity.
+    """
+    from clawmetry import waste_flags as wf
+    monkeypatch.setattr(
+        wf, "runtime_from_session_id",
+        lambda sid: str(sid).split(":", 1)[0] if ":" in str(sid) else "openclaw")
+
+    sid = "claude_code:runtime-truth"
+    chrono = [_shell("rm -rf ~/", 1)]
+    fake = _FakeStore(
+        # agent_type deliberately disagrees with the session id, exactly as the
+        # real sessions table does.
+        [dict(_active_session(sid, "openclaw", cost=5.0), agent_type="openclaw")],
+        {sid: chrono}, real_store)
+
+    assert sync._emit_detector_incidents(fake, {}) >= 1
+
+    # The cohort is the REAL runtime, not the column's.
+    assert real_store.query_guard_baseline("agent:claude_code:main")["sessions"] == 1
+    assert real_store.query_guard_baseline("runtime:claude_code")["sessions"] == 1
+    assert real_store.query_guard_baseline("runtime:openclaw") == {}
+
+    # ...and so is the incident's label.
+    sigs = real_store.query_recent_loop_signals(limit=10, since_minutes=30)
+    assert sigs and all(s["agent_type"] == "claude_code" for s in sigs)

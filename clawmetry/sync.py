@@ -18985,7 +18985,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
             "cost_usd": cost,
             "bad_for_seconds": max(0.0, now - started) if started else 0.0,
             "session_seconds": session_seconds,
-            "runtime": str(s.get("agent_type") or ""),
+            "runtime": _detector_runtime(sid, s.get("agent_type") or ""),
             "cwd": cwd,
             "agent_id": str(s.get("agent_id") or ""),
         }
@@ -19002,6 +19002,30 @@ def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
 # most agents have not run enough sessions to have a distribution, so we fall
 # back to the runtime. Read once per tick per cohort, not per session.
 _BASELINE_PRUNE_INTERVAL_SEC = 6 * 3600
+
+
+def _detector_runtime(session_id: str, agent_type: str) -> str:
+    """Which runtime is this session, really?
+
+    The ``sessions`` table's ``agent_type`` is NOT it. On a real install every
+    row reads ``openclaw`` while the session id says ``claude_code:...``, so
+    trusting the column would label a Claude Code incident "openclaw looping",
+    give it OpenClaw's write vocabulary, and file every runtime under one
+    ``runtime:openclaw`` cohort, which quietly destroys the point of a
+    per-runtime baseline.
+
+    The session-id prefix is the identity the rest of the product uses
+    (memory: prefix = runtime), and it is what ``detectors._runtime_of``
+    already uses to label the incident, so deriving it the same way here keeps
+    the label and the cohort in agreement. ``agent_type`` remains the fallback
+    for a resolver failure.
+    """
+    try:
+        from clawmetry import waste_flags as _wf
+        rt = str(_wf.runtime_from_session_id(session_id) or "").strip().lower()
+    except Exception:
+        rt = ""
+    return rt or str(agent_type or "").strip().lower()
 
 
 def _guard_cohorts(runtime: str, agent_id: str) -> tuple:
@@ -19130,7 +19154,10 @@ def _emit_detector_incidents(store, state: dict) -> int:
             continue
 
         facts = facts_by_session.get(sid) or {}
-        runtime = str(s.get("agent_type") or "") or None
+        # Derived from the session id, not from agent_type: see
+        # _detector_runtime. Getting this wrong silently merges every runtime
+        # into one cohort.
+        runtime = _detector_runtime(sid, s.get("agent_type") or "") or None
         baseline = _guard_baseline_for(store, baseline_cache, runtime or "",
                                        facts.get("agent_id") or "")
         try:

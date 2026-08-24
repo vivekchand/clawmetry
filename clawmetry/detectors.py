@@ -613,6 +613,63 @@ def _iter_str_values(value, depth: int = 0):
                     yield s
 
 
+# ``cat > f <<'EOF' ... EOF`` writes a document. The document is not something
+# the agent RAN, and reading it as one is how a script that merely contains the
+# string "csrutil disable" gets reported as having disabled a system
+# protection. Found on real sessions: the detectors flagged the very patch
+# scripts that define their own patterns.
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _strip_heredocs(cmd: str) -> str:
+    """Drop heredoc BODIES, keep the command lines around them.
+
+    ``cat > x.py <<'PY'`` keeps its redirect and target (the blast radius still
+    sees the write); only the document between the marker and its terminator is
+    removed. Never raises: on anything unexpected the original text is
+    returned, which is the pre-existing behaviour."""
+    try:
+        out = []
+        lines = cmd.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            m = _HEREDOC_RE.search(line)
+            out.append(line)
+            i += 1
+            if not m:
+                continue
+            delim = m.group(2)
+            # Skip to the terminator (a line that is just the delimiter).
+            while i < len(lines) and lines[i].strip() != delim:
+                i += 1
+            i += 1  # drop the terminator line too
+        return "\n".join(out)
+    except Exception:
+        return cmd
+
+
+# Commands that INSPECT text rather than act on it. A privilege pattern found
+# inside one of these is a mention, not an action: ``grep -r sudoers docs/``
+# changes nothing. Credential access is deliberately NOT filtered this way,
+# because for a secret file the reading IS the action.
+_READONLY_CMD_RE = re.compile(
+    r"^\s*(?:sudo\s+)?(?:grep|rg|ag|ack|find|locate|man|less|more|head|tail|"
+    r"echo|printf|type|which|whereis|history|diff|comm|wc|awk|jq|"
+    r"git\s+(?:log|show|diff|grep|blame|status))\b", re.I)
+
+
+def _is_inspect_only(cmd: str) -> bool:
+    """True when every segment of the command line only reads or prints."""
+    try:
+        segments = [seg.strip() for seg in re.split(r"[;&|]+", cmd) if seg.strip()]
+        if not segments:
+            return False
+        return all(_READONLY_CMD_RE.match(seg) for seg in segments)
+    except Exception:
+        return False
+
+
 def _is_shell_tool(tool: str) -> bool:
     t = (tool or "").lower()
     return any(sub in t for sub in _SHELL_TOOL_SUBSTRINGS)
@@ -689,7 +746,7 @@ def _action_surface(tool: str, args) -> tuple:
                 cmd_parts.append(joined)
     except Exception:
         pass
-    cmd = " ".join(cmd_parts)[:_MAX_CMD_CHARS]
+    cmd = _strip_heredocs(" ".join(cmd_parts))[:_MAX_CMD_CHARS]
     if cmd:
         paths.extend(_paths_from_command(cmd))
     hosts = _hosts_from_text(cmd)
@@ -1297,13 +1354,24 @@ _CREDENTIAL_PATTERNS = (
     ("keychain / secret store", re.compile(r"\bsecurity\s+find-(?:generic|internet)-password|"
                                            r"\bkeyring\b|\bvault\s+(?:read|kv)\b|"
                                            r"\bkubectl\s+get\s+secret", re.I)),
-    ("environment dump", re.compile(r"(?:^|[;&|]\s*)(?:env|printenv|set)\s*(?:\||$)|"
-                                    r"\bprintenv\b|\bos\.environ\b", re.I)),
+    # Deliberately narrow: a bare ``env``/``printenv`` as its own command.
+    # ``os.environ`` inside a script is source code, and matching it made every
+    # Python heredoc look like a secret dump on real sessions.
+    ("environment dump", re.compile(r"(?:^|[;&|]\s*)(?:env|printenv)\s*(?:\||$)", re.I)),
     ("cloud metadata endpoint", re.compile(r"169\.254\.169\.254|metadata\.google\.internal", re.I)),
 )
 # ``.env.example`` / ``id_rsa.pub`` are templates and public halves, not secrets.
 _CREDENTIAL_BENIGN = re.compile(r"\.env\.(?:example|sample|template)|\.pub\b|"
                                 r"example\.pem|\.env\.d/", re.I)
+
+# Categories that name a specific secret-bearing artefact. Only these justify
+# the exfiltration reading when egress follows; an environment dump on its own
+# is too common in ordinary shell work to escalate on.
+_CREDENTIAL_STRONG = frozenset({
+    "ssh private key", "cloud credentials", "environment file",
+    "private certificate", "stored token file", "keychain / secret store",
+    "cloud metadata endpoint",
+})
 
 
 def credential_access(events: Iterable[dict], session_id: str,
@@ -1353,16 +1421,36 @@ def credential_access(events: Iterable[dict], session_id: str,
         egress_after = sorted(set(egress_after))
 
         labels = sorted(categories)
+        strong = [c for c in labels if c in _CREDENTIAL_STRONG]
         evidence = {
             "categories": labels,
+            "strong_categories": strong,
             "accesses": sum(categories.values()),
             "egress_after": egress_after[:5],
             "observed": "tool_arguments",
             # No paths, no commands. The category IS the finding.
             "redacted": "paths and commands are deliberately not recorded",
         }
-        head = labels[0]
+        # Rank a named secret above a generic environment dump in the headline.
+        head = (strong or labels)[0]
         more = f" and {len(labels) - 1} more" if len(labels) > 1 else ""
+        if egress_after and not strong:
+            # Egress after a bare `env` is not the exfiltration shape; say what
+            # was seen without the escalation.
+            return _incident(
+                "credential_access", session_id, runtime, "info",
+                f"{runtime}: dumped the environment",
+                f"The agent printed its environment variables and later "
+                f"contacted {len(egress_after)} external host(s). Common in "
+                f"ordinary shell work, surfaced so it is not invisible. "
+                + _stop_hint(),
+                evidence, first_idx)
+        if not strong:
+            return _incident(
+                "credential_access", session_id, runtime, "info",
+                f"{runtime}: dumped the environment",
+                "The agent printed its environment variables. " + _stop_hint(),
+                evidence, first_idx)
         if egress_after:
             return _incident(
                 "credential_access", session_id, runtime, "critical",
@@ -1518,8 +1606,8 @@ def privilege_change(events: Iterable[dict], session_id: str,
             if st.get("kind") != "tool_call":
                 continue
             cmd = st.get("cmd") or ""
-            if not cmd:
-                continue
+            if not cmd or _is_inspect_only(cmd):
+                continue  # a mention inside a search is not an escalation
             for label, rx, is_crit in _PRIVILEGE_PATTERNS:
                 if rx.search(cmd):
                     found[label] = found.get(label, 0) + 1
@@ -1578,11 +1666,21 @@ def privilege_change(events: Iterable[dict], session_id: str,
 # fabricated number, because a fabricated dollar figure is the one thing that
 # would make this list worse than sorting by severity.
 
-def _severity_promote(severity: str, spend_at_risk: float) -> str:
-    """Money can raise a warning to critical; it never lowers a severity, and
-    it never promotes an ``info`` (a low-precision signal stays low-precision
-    no matter how expensive the session is)."""
-    if severity == "warning" and spend_at_risk >= CRITICAL_SPEND_USD:
+def _severity_promote(severity: str, spend_at_risk: float, basis: str) -> str:
+    """Money can raise a warning to critical, under two restrictions.
+
+    It never promotes an ``info``: a low-precision signal stays low-precision
+    no matter how expensive the session is.
+
+    And it only promotes on a MEASURED figure. ``window_fraction`` assumes
+    spend is spread evenly across the window, which on real sessions attributes
+    most of a $100 session to "Bash failed 4 times" and turned eleven of twelve
+    real incidents critical. An estimate that rough is useful as context and
+    has no business escalating anything, so only ``burn_rate`` (a real clock
+    over a stretch we actually watched go wrong) can.
+    """
+    if (severity == "warning" and basis == "burn_rate"
+            and spend_at_risk >= CRITICAL_SPEND_USD):
         return "critical"
     return severity
 
@@ -1624,8 +1722,8 @@ def annotate_spend(incidents: list, *, cost_usd: float = 0.0,
         inc["spend_basis"] = basis
         inc["burn_rate_usd_per_min"] = round(burn, 4)
         inc["session_cost_usd"] = round(cost, 4)
-        inc["severity"] = _severity_promote(str(inc.get("severity") or "warning"),
-                                            risk)
+        inc["severity"] = _severity_promote(
+            str(inc.get("severity") or "warning"), risk, basis)
     return sort_incidents(incidents or [])
 
 
