@@ -927,6 +927,13 @@ _DAEMON_METHODS = frozenset({
     # reads the per-team rollup through the daemon proxy. Every other method
     # the agent CLI calls was already allowlisted; guards-in-same-PR rule.
     "query_usage_by_team",
+    # Guard baselines (learned normal per cohort). The daemon writes them on
+    # every detector tick and a dashboard read needs the same proxy, because
+    # the daemon holds the DuckDB writer lock
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "record_guard_observation",
+    "query_guard_baseline",
+    "prune_guard_baseline",
 })
 
 

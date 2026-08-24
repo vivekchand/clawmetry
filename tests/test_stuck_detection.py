@@ -59,6 +59,18 @@ def _tool_ev(offset_s: int, et: str = "tool_call") -> dict:
     return {"event_type": et, "ts": _ts(offset_s), "data": {"name": "Bash"}}
 
 
+def _varied_tool_ev(offset_s: int, i: int) -> dict:
+    """A tool call with DIFFERENT input each time.
+
+    ``_tool_ev`` repeats one identical ``Bash`` call, which the n-gram loop
+    detector correctly reads as a circular loop. Tests that mean "a healthy
+    busy session" need calls that actually differ, or they are asserting that
+    repeating one command forever is fine.
+    """
+    return {"event_type": "tool_call", "ts": _ts(offset_s),
+            "data": {"name": "Bash", "input": {"command": f"echo step-{i}"}}}
+
+
 def _assistant_text_ev(offset_s: int, text: str = "Here is the result.") -> dict:
     return {
         "event_type": "assistant",
@@ -286,9 +298,13 @@ def test_emit_writes_signal_and_message():
 
     n = sync._emit_stuck_signals(store, state)
 
-    assert n == 1
-    assert len(store.ingested) == 1
-    sig = store.ingested[0]
+    # 40 identical Bash calls trip BOTH detectors: the streak detector (long
+    # run with no progress) and the n-gram detector (the same call repeating).
+    # Both are true, so assert on the stuck signal rather than on the count.
+    assert n >= 1
+    stuck_sigs = [g for g in store.ingested if g["signature"] == "daemon_stuck"]
+    assert len(stuck_sigs) == 1
+    sig = stuck_sigs[0]
     assert sig["session_id"] == sid
     assert sig["signature"] == "daemon_stuck"
     assert sig["repeat_count"] == 40
@@ -303,15 +319,20 @@ def test_emit_dedupes_within_window():
     store = _FakeStore([_active_session(sid)], {sid: evs})
     state: dict = {}
 
-    assert sync._emit_stuck_signals(store, state) == 1
-    # Immediate re-run: within the re-emit window -> no new write.
+    first = sync._emit_stuck_signals(store, state)
+    assert first >= 1
+    # Immediate re-run: within the re-emit window -> no new write, for every
+    # detector that fired the first time.
     assert sync._emit_stuck_signals(store, state) == 0
-    assert len(store.ingested) == 1
+    assert len(store.ingested) == first
 
 
 def test_emit_no_stuck_is_noop():
     sid = "openclaw:fine"
-    evs = [_tool_ev(i) for i in range(10)]  # short + fast
+    # Short, fast, and each call does something DIFFERENT: a genuinely healthy
+    # session. (Ten identical calls would be a loop, and the n-gram detector is
+    # right to say so.)
+    evs = [_varied_tool_ev(i, i) for i in range(10)]
     store = _FakeStore([_active_session(sid)], {sid: evs})
     state: dict = {}
     assert sync._emit_stuck_signals(store, state) == 0

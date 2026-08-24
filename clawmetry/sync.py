@@ -18905,7 +18905,7 @@ DETECT_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_DETECT_INTERVAL", "60")
 # Map detector severity to a count that clears that gate so an incident actually
 # surfaces; the count is illustrative (it is the alert's "how loud", not a tool
 # tally for the discrepancy/failure kinds).
-_DETECT_SEVERITY_COUNT = {"warning": 8, "info": 5}
+_DETECT_SEVERITY_COUNT = {"critical": 12, "warning": 8, "info": 5}
 
 
 def _candidate_active_sessions(store) -> list[dict]:
@@ -18932,6 +18932,153 @@ def _candidate_active_sessions(store) -> list[dict]:
             break  # ordered most-recent-active first -> tail is all stale
         out.append(s)
     return out
+
+
+# ── What the detectors cannot see for themselves ───────────────────────────
+# A detector is pure: it reads a session's event sequence and nothing else. It
+# therefore cannot know what the session cost, how long it has been off track,
+# or where its workspace root is — and all three change what an incident MEANS.
+# The daemon already touches every candidate session on this tick, so gathering
+# them here is free, where a per-session store read would not be.
+def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
+    """``session_id -> {cost_usd, bad_for_seconds, session_seconds, cwd,
+    runtime, agent_id}``.
+
+    ``bad_for_seconds`` comes from a first-sighting memo in daemon state rather
+    than a DuckDB read: we only need "since when has this looked wrong", and
+    the tick that first saw it is the cheapest possible answer.
+    """
+    first_seen = state.setdefault("detector_first_seen", {})
+    if not isinstance(first_seen, dict):
+        first_seen = {}
+        state["detector_first_seen"] = first_seen
+    facts: dict = {}
+    for s in sessions or []:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("session_id") or "")
+        if not sid:
+            continue
+        meta = s.get("metadata")
+        meta = meta if isinstance(meta, dict) else {}
+        cwd = ""
+        for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
+            val = meta.get(key)
+            if isinstance(val, str) and val.strip():
+                cwd = val.strip()
+                break
+        try:
+            cost = float(s.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        # How long the SESSION has run, for the burn rate. Distinct from
+        # bad_for_seconds, which is how long it has been off track: pricing a
+        # stuck stretch needs both (dollars per minute x minutes stuck).
+        session_seconds = 0.0
+        try:
+            if s.get("started_at"):
+                session_seconds = max(0.0, float(_seconds_since(s.get("started_at"))))
+        except Exception:
+            session_seconds = 0.0
+        started = first_seen.get(sid)
+        facts[sid] = {
+            "cost_usd": cost,
+            "bad_for_seconds": max(0.0, now - started) if started else 0.0,
+            "session_seconds": session_seconds,
+            "runtime": str(s.get("agent_type") or ""),
+            "cwd": cwd,
+            "agent_id": str(s.get("agent_id") or ""),
+        }
+    return facts
+
+
+# ── Learned baselines: what "normal" looks like for this cohort ────────────
+# Thresholds stop being constants here. Each session contributes its own shape
+# (tool calls, files mutated, hosts reached) to a COHORT, and the cohort's
+# measured mean/stddev is what the next tick's thresholds are derived from.
+#
+# Cohort choice is deliberately two-tier: an individual agent is the sharpest
+# comparison ("this agent normally makes 12 tool calls, it has made 300"), but
+# most agents have not run enough sessions to have a distribution, so we fall
+# back to the runtime. Read once per tick per cohort, not per session.
+_BASELINE_PRUNE_INTERVAL_SEC = 6 * 3600
+
+
+def _guard_cohorts(runtime: str, agent_id: str) -> tuple:
+    """``(preferred, fallback)`` cohort keys for one session."""
+    rt = (runtime or "unknown").strip().lower()
+    aid = (agent_id or "").strip().lower()
+    runtime_cohort = f"runtime:{rt}"
+    if aid:
+        return (f"agent:{rt}:{aid}", runtime_cohort)
+    return (runtime_cohort, "")
+
+
+def _guard_baseline_for(store, cache: dict, runtime: str,
+                        agent_id: str) -> dict:
+    """The cohort baseline to judge one session against, most specific first.
+
+    Falls back from the agent to the runtime when the agent has not run enough
+    sessions to have a distribution, and to ``{}`` (static thresholds) when
+    neither has. Cached per tick and per COHORT — a fleet of 40 sessions on one
+    runtime would otherwise run the same aggregate 40 times.
+
+    A session therefore appears in the baseline it is judged against, from its
+    second tick onward. That is deliberate and bounded: the cohort needs
+    ``BASELINE_MIN_SESSIONS`` members before it moves a threshold at all, one
+    member can shift a mean by at most 1/n, and ``_clamp_learned`` caps the
+    total movement either way. The alternative — a per-session exclusion —
+    would turn one cheap aggregate per cohort into one per session per tick to
+    buy a correction smaller than the clamp.
+    """
+    try:
+        from clawmetry import detectors as _det
+        min_sessions = _det.BASELINE_MIN_SESSIONS
+    except Exception:
+        min_sessions = 20
+    preferred, fallback = _guard_cohorts(runtime, agent_id)
+    for cohort in (preferred, fallback):
+        if not cohort:
+            continue
+        if cohort not in cache:
+            try:
+                cache[cohort] = store.query_guard_baseline(cohort) or {}
+            except Exception as e:  # noqa: BLE001
+                log.debug("guard: baseline read failed for %s: %s", cohort, e)
+                cache[cohort] = {}
+        base = cache[cohort]
+        if base and int(base.get("sessions") or 0) >= min_sessions:
+            return base
+    # Nothing qualifies: static thresholds, and the incident says so.
+    return {}
+
+
+def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
+                              profile: dict) -> None:
+    """Teach this session's cohorts what it looked like.
+
+    Written on EVERY tick: the row upserts on session_id, so re-reading an
+    active session updates it rather than duplicating, and the baseline stays
+    current even for sessions that never end cleanly. Both cohorts are fed —
+    the agent-scoped one is the sharp comparison, but it is also the one most
+    likely to be too small to use.
+    """
+    cohort, runtime_cohort = _guard_cohorts(runtime, agent_id)
+    try:
+        store.record_guard_observation(
+            sid, cohort, runtime=runtime, agent_id=agent_id,
+            tool_calls=profile["tool_calls"], write_files=profile["write_files"],
+            wrote=profile["wrote"], hosts=profile["hosts"])
+        if runtime_cohort and runtime_cohort != cohort:
+            # A composite key: one session contributes a row to each cohort,
+            # and the PK is the session id, so the second row needs its own.
+            store.record_guard_observation(
+                f"{runtime_cohort}|{sid}", runtime_cohort, runtime=runtime,
+                agent_id=agent_id, tool_calls=profile["tool_calls"],
+                write_files=profile["write_files"], wrote=profile["wrote"],
+                hosts=profile["hosts"])
+    except Exception as e:  # noqa: BLE001
+        log.debug("guard: baseline observation failed for %s: %s", sid, e)
 
 
 def _emit_detector_incidents(store, state: dict) -> int:
@@ -18961,6 +19108,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
     reemit = max(30, STUCK_MIN_SECONDS // 2)
 
     heartbeat_items: list[dict] = []
+    # Facts (spend, how long it has been bad, workspace root) are built BEFORE
+    # the loop so a detector can price an incident and judge a path escape on
+    # the same tick it finds it.
+    facts_by_session = _detector_session_facts(candidates, state, now)
+    first_seen_memo = state.setdefault("detector_first_seen", {})
+    if not isinstance(first_seen_memo, dict):
+        first_seen_memo = {}
+        state["detector_first_seen"] = first_seen_memo
+    baseline_cache: dict = {}
+    bad_sessions: set = set()
     emitted = 0
     for s in candidates:
         sid = s.get("session_id") or ""
@@ -18971,16 +19128,39 @@ def _emit_detector_incidents(store, state: dict) -> int:
         except Exception as e:  # noqa: BLE001
             log.warning("detectors: query_events failed for %s: %s", sid, e)
             continue
+
+        facts = facts_by_session.get(sid) or {}
+        runtime = str(s.get("agent_type") or "") or None
+        baseline = _guard_baseline_for(store, baseline_cache, runtime or "",
+                                       facts.get("agent_id") or "")
         try:
-            incidents = _det.run_all(events, sid) or []
+            thresholds = _det.resolve_thresholds(runtime or "", baseline)
+            steps = _det.normalize_events(events)
+        except Exception as e:  # noqa: BLE001
+            log.warning("detectors: normalize failed for %s: %s", sid, e)
+            continue
+
+        _record_guard_observation(
+            store, sid, runtime or "", facts.get("agent_id") or "",
+            _det.session_profile(steps, thresholds.get("write_tools")))
+
+        try:
+            incidents = _det.run_all(events, sid, runtime, facts=facts,
+                                     thresholds=thresholds, steps=steps) or []
         except Exception as e:  # noqa: BLE001
             log.warning("detectors: run_all errored for %s: %s", sid, e)
             continue
         if not incidents:
             continue
 
-        # Fold the highest-severity incident (run_all sorts warning-first) into
-        # the heartbeat slice so the device alert shows the loudest one.
+        # Remember when this session FIRST looked wrong, so the next tick can
+        # say how long it has been that way (and price the stretch).
+        bad_sessions.add(sid)
+        first_seen_memo.setdefault(sid, now)
+
+        # Fold the LOUDEST incident into the heartbeat slice. run_all orders by
+        # spend at risk first and severity second, so on a session with a known
+        # cost this is the most expensive finding, not merely the most severe.
         top = incidents[0]
         heartbeat_items.append({
             "runtime": str(top.get("runtime") or "openclaw"),
@@ -18988,6 +19168,9 @@ def _emit_detector_incidents(store, state: dict) -> int:
             "tool_calls": int((top.get("evidence") or {}).get("total_tool_calls")
                               or (top.get("evidence") or {}).get("tool_calls") or 0),
             "since_seconds": 0,
+            # What ignoring this costs, so the device alert can rank too.
+            "spend_at_risk_usd": float(top.get("spend_at_risk_usd") or 0),
+            "severity": str(top.get("severity") or "warning"),
             "message": str(top.get("title") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
         })
 
@@ -19007,7 +19190,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
                     # up; distinct from the stuck detector's "daemon_stuck".
                     signature=f"daemon_detect_{kind}",
                     repeat_count=count,
-                    severity="warning" if sev == "warning" else "info",
+                    severity=sev if sev in _DETECT_SEVERITY_COUNT else "info",
                     agent_type=str(inc.get("runtime") or "openclaw"),
                     details={
                         "source": "daemon_detector",
@@ -19016,6 +19199,11 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         "detail": inc.get("detail"),
                         "evidence": inc.get("evidence"),
                         "first_bad_step": inc.get("first_bad_step"),
+                        # Money, so every consumer can rank by what it costs to
+                        # ignore rather than by which detector spoke last.
+                        "spend_at_risk_usd": inc.get("spend_at_risk_usd"),
+                        "spend_basis": inc.get("spend_basis"),
+                        "burn_rate_usd_per_min": inc.get("burn_rate_usd_per_min"),
                     },
                 )
                 memo[memo_key] = now
@@ -19025,6 +19213,25 @@ def _emit_detector_incidents(store, state: dict) -> int:
                 log.warning("detectors: ingest_loop_signal failed for %s: %s",
                             sid, e)
                 continue
+
+    # A session that recovered drops out of the memo so its "bad for" clock
+    # restarts if it goes wrong again later. This also bounds the memo: it can
+    # never grow past the set of currently-bad sessions.
+    for stale_sid in [k for k in first_seen_memo if k not in bad_sessions]:
+        first_seen_memo.pop(stale_sid, None)
+
+    # The baseline is a rolling memory, not an archive. Pruned on a slow clock
+    # (every 6h) rather than per tick: it is a DELETE over a small table and
+    # nothing downstream needs it to be prompt.
+    try:
+        last_prune = float(state.get("guard_baseline_pruned_at") or 0)
+        if (now - last_prune) > _BASELINE_PRUNE_INTERVAL_SEC:
+            state["guard_baseline_pruned_at"] = now
+            dropped = store.prune_guard_baseline()
+            if dropped:
+                log.info("guard: pruned %d stale baseline row(s)", dropped)
+    except Exception as _pe:  # noqa: BLE001
+        log.debug("guard: baseline prune skipped: %s", _pe)
 
     # Fold detector incidents into the heartbeat slice WITHOUT clobbering a
     # fresh stuck-detector result: only append (the stuck detector owns the
