@@ -10,8 +10,29 @@ always ask for LESS retention and can never grant themselves more than the
 plan allows. Half these tests exist to pin that, because the failure that
 matters is the one where a settings box quietly extends retention.
 
-No acceptance criterion in docs/acceptance_criteria.json covers retention, so
-the guarantees are pinned here directly.
+Acceptance criteria proven here (docs/acceptance_criteria.json):
+
+* AC-OBS-LADC-004.1 -- the period in force is presented with what is setting
+  it: ``test_the_answer_says_which_thing_is_setting_it``,
+  ``test_unlimited_says_so_rather_than_showing_a_blank``,
+  ``test_env_sourced_window_names_the_env_var``.
+* AC-OBS-LADC-004.2 -- the operator can shorten it and the choice persists:
+  ``test_asking_for_less_than_the_plan_allows_works``,
+  ``test_the_setting_round_trips_through_the_store``.
+* AC-OBS-LADC-004.3 -- retention is never lengthened past the ceiling, and
+  both numbers are reported:
+  ``test_asking_for_more_than_the_plan_allows_changes_nothing``,
+  ``test_the_smallest_binding_value_wins``,
+  ``test_env_var_still_binds_when_it_is_the_smallest``.
+* AC-OBS-LADC-004.4 -- a bad value is rejected, not defaulted:
+  ``test_a_bad_value_is_rejected_not_reinterpreted``,
+  ``test_a_bad_value_does_not_overwrite_a_good_one``,
+  ``test_coerce_rejects_everything_that_is_not_a_positive_whole_number``.
+* AC-OBS-LADC-004.5 -- the deletion worker uses the reported period:
+  ``test_the_daemon_prune_loop_reads_this_resolver``.
+* AC-OBS-LADC-004.6 -- the choice can be cleared:
+  ``test_clearing_falls_back_to_the_plan``,
+  ``test_clearing_removes_the_row_rather_than_writing_a_sentinel``.
 """
 from __future__ import annotations
 
