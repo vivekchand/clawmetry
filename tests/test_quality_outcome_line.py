@@ -62,7 +62,7 @@ def test_trend_slice_splits_the_fourteen_day_read_into_two_weeks(
 
     slice_ = sync_mod._outcomes_trend_slice_for_snapshot()
 
-    assert slice_["available"] is True
+    assert slice_["store_available"] is True
     assert slice_["window"] == "7d"
     assert slice_["current"]["finished"] == 10
     assert slice_["previous"]["finished"] == 10

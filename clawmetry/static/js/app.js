@@ -4977,14 +4977,14 @@ async function _qLoadOutcomeTrend() {
 
   var data = await _qFetchStore(
     '/api/outcomes/trend?' + qs.toString(),
-    function(d) { return d.available === false; }
+    function(d) { return d.store_available === false; }
   );
 
   // Unreachable store (the hosted dashboard has no local DuckDB until the
   // snapshot slice is served) — stay hidden. The tab already says once,
   // above, that it reads local run history, and a row of dashes would read
   // as zero rather than as unknown.
-  if (!data || data.available === false) { sec.setAttribute('hidden', ''); return; }
+  if (!data || data.store_available === false) { sec.setAttribute('hidden', ''); return; }
 
   var cur = data.current || {};
   var delta = data.delta || {};
