@@ -65,16 +65,23 @@ def test_flush_session_batch_writes_to_local_store(sync_with_isolated_store):
         },
     ]
     fname = "session-abc.jsonl"
+    # A key is configured, because that is the only state in which a cloud
+    # upload happens at all — a keyless node skips it rather than sending
+    # cleartext (2026-08-24 security review, finding 3).
+    enc_key = sync.generate_encryption_key()
     with patch.object(sync, "_post") as mock_post:
         sync._flush_session_batch(
-            batch, fname, api_key="cm_x", enc_key=None, node_id="agent+test", subagent_id=None
+            batch, fname, api_key="cm_x", enc_key=enc_key, node_id="agent+test",
+            subagent_id=None,
         )
-    # Cloud path still fires:
+    # Cloud path still fires, as ciphertext:
     mock_post.assert_called_once()
     cloud_args = mock_post.call_args[0]
     assert cloud_args[0] == "/ingest/events"
     assert cloud_args[1]["node_id"] == "agent+test"
-    assert len(cloud_args[1]["events"]) == 2
+    assert cloud_args[1]["encrypted"] is True
+    assert "events" not in cloud_args[1], "the batch must be inside the blob"
+    assert len(sync.decrypt_payload(cloud_args[1]["blob"], enc_key)["events"]) == 2
 
     # Local store path also fires:
     store = ls.get_store()
@@ -96,9 +103,29 @@ def test_local_store_failure_does_not_block_cloud_post(sync_with_isolated_store)
     with patch.object(sync, "_local_ingest_session_batch", side_effect=RuntimeError("disk full")):
         with patch.object(sync, "_post") as mock_post:
             sync._flush_session_batch(
-                batch, "s.jsonl", api_key="cm_x", enc_key=None, node_id="agent+test"
+                batch, "s.jsonl", api_key="cm_x",
+                enc_key=sync.generate_encryption_key(), node_id="agent+test",
             )
     mock_post.assert_called_once()
+
+
+def test_no_key_skips_the_cloud_post_but_still_writes_locally(sync_with_isolated_store):
+    """The keyless node keeps a complete local view and uploads nothing.
+
+    Before 2026-08-24 this POSTed the batch — prompts, replies, tool arguments
+    — as plaintext.
+    """
+    sync, ls = sync_with_isolated_store
+    batch = [{"id": "ev-nokey", "type": "tool_call", "timestamp": "2026-05-11T10:00:00Z"}]
+    with patch.object(sync, "_post") as mock_post:
+        sync._flush_session_batch(
+            batch, "nokey.jsonl", api_key="cm_x", enc_key=None, node_id="agent+test"
+        )
+    mock_post.assert_not_called()
+
+    store = ls.get_store()
+    _wait_for_flush(store)
+    assert len(store.query_events(session_id="nokey")) == 1
 
 
 def test_subagent_id_used_as_session_id(sync_with_isolated_store):

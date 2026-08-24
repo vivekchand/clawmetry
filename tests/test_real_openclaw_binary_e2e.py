@@ -255,9 +255,12 @@ def real_openclaw(tmp_path, monkeypatch):
 
 def _drive_real_pipeline(sync_mod, sessions_dir: str, store) -> int:
     """Run the REAL daemon entry point against the OpenClaw-written JSONL."""
+    # A real key: the cloud wire only carries content when one is
+    # configured — a keyless node skips the upload rather than sending
+    # cleartext (2026-08-24 security review, finding 3).
     config = {
         "api_key":        "cm_test_real_binary_fake",
-        "encryption_key": None,
+        "encryption_key": sync_mod.generate_encryption_key(),
         "node_id":        NODE_ID,
     }
     state = {"last_event_ids": {}}
@@ -501,7 +504,9 @@ def test_real_jsonl_idempotent_re_ingest(real_openclaw):
     store = real_openclaw["ls"].get_store()
 
     config = {
-        "api_key": "cm_test", "encryption_key": None, "node_id": NODE_ID,
+        "api_key": "cm_test",
+        "encryption_key": sync_mod.generate_encryption_key(),
+        "node_id": NODE_ID,
     }
     state = {"last_event_ids": {}}
     paths = {"sessions_dir": real_openclaw["sessions_dir"]}

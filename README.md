@@ -63,9 +63,24 @@ in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
 
 ## Your data stays on your machine
 
-ClawMetry reads local session files and logs. Nothing leaves your box unless
-you run `clawmetry connect`. Even then the snapshot is end-to-end encrypted
-with a key that never leaves your machine, and decrypted in your browser.
+ClawMetry reads local session files and logs. **No session data leaves your box
+unless you run `clawmetry connect`** — no prompts, replies, tool arguments, file
+contents or log lines. When you do connect, the snapshot is end-to-end encrypted
+with a key that never leaves your machine, and decrypted in your browser. If a
+node has no key, the upload is skipped rather than sent in the clear, and no
+server response can turn that off.
+
+Two things do run by default before you connect, both opt-out and neither
+carrying session data: an anonymous install ping and a version check against
+PyPI. A default install also looks up your public IP once for a startup banner
+line. Every destination, what it carries and how to switch it off is listed in
+[docs/EGRESS.md](docs/EGRESS.md); self-hosted, repointed and air-gapped installs
+make no discretionary outbound calls at all.
+
+One limit worth stating plainly: the JavaScript that decrypts your snapshot is
+served by `app.clawmetry.com`. The key stays in your browser and is never sent
+to us, but you are trusting code we serve to keep it that way. Self-hosting or
+staying local-only removes that dependency entirely.
 
 ## Install
 

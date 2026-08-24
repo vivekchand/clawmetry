@@ -482,9 +482,13 @@ def live(tmp_path, monkeypatch):
 def _drive_daemon(sync_mod, sessions_dir: str, store) -> int:
     """Run ``sync_sessions_recent`` (real daemon entry). Mock cloud post
     but still assert it was called — silent cloud-drop is a regression."""
+    # A real key: the cloud wire only carries content when one is configured.
+    # A keyless node skips the upload rather than sending cleartext
+    # (2026-08-24 security review, finding 3), so asserting the wire fired
+    # requires a keyed node.
     config = {
         "api_key": "cm_test_moat_live_e2e",
-        "encryption_key": None,
+        "encryption_key": sync_mod.generate_encryption_key(),
         "node_id": NODE_ID,
     }
     state = {"last_event_ids": {}}
@@ -722,7 +726,9 @@ def test_re_running_ingest_is_idempotent(live):
     sync_mod = live["sync"]
     store = live["ls"].get_store()
     config = {
-        "api_key": "cm_test", "encryption_key": None, "node_id": NODE_ID,
+        "api_key": "cm_test",
+        "encryption_key": sync_mod.generate_encryption_key(),
+        "node_id": NODE_ID,
     }
     paths = {"sessions_dir": live["sessions_dir"]}
     state = {"last_event_ids": {}}

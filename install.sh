@@ -918,9 +918,15 @@ os.system('chown -R sandbox:sandbox /sandbox/.clawmetry 2>/dev/null')
 PYEOF
 " 2>/dev/null || true
 
-            # Connect non-interactively (OTP skipped — key matches saved config)
-            if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-              clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" --no-daemon >/dev/null 2>&1; then
+            # Connect non-interactively (OTP skipped — key matches saved config).
+            # SECURITY (2026-08-24 review, finding 11): the encryption key goes
+            # through the CM_KEY env var, not --enc-key. An argv string is
+            # readable by every other process on both the host and the pod for
+            # as long as the command runs (`ps`, /proc/<pid>/cmdline); an env
+            # var passed by `kubectl exec --env` is not.
+            if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" \
+              --env="CM_KEY=$HOST_ENC_KEY" -- \
+              clawmetry connect --key "$HOST_API_KEY" --node-id "$sb" --no-daemon >/dev/null 2>&1; then
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
               # Ensure daemon survives kubectl exec session end via supervisord if available
               docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \

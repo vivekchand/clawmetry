@@ -116,7 +116,9 @@ package), the call is suppressed rather than allowed. Covered by
 
 | Host | Purpose | When | Sends | Disable |
 |---|---|---|---|---|
-| `ingest.clawmetry.com` | Encrypted snapshot upload | After `clawmetry connect`, managed cloud only | AES-256-GCM ciphertext; key never transmitted | Don't connect, or set `CLAWMETRY_ENDPOINT` |
+| `ingest.clawmetry.com` | Encrypted snapshot upload | After `clawmetry connect`, managed cloud only | AES-256-GCM ciphertext; key never transmitted. A node with no key skips the upload — content is never sent in the clear | Don't connect, or set `CLAWMETRY_ENDPOINT` |
+| `ingest.clawmetry.com/ingest/heartbeat` | Node liveness + the fleet card's machine identity | Every few seconds after `clawmetry connect` | **Not encrypted**, by design — the cloud needs it to find the machine: hostname, OS name and version, CPU/RAM class, ClawMetry version, whether a key is configured. No prompts, replies, tool arguments or file contents | Don't connect, or set `CLAWMETRY_ENDPOINT` |
+| `ingest.clawmetry.com/ingest/sessions` | Session rows for the cloud sessions list | After `clawmetry connect` | Structural fields in cleartext (ids, timestamps, token counts, cost, model, runtime) so the server can query them. The session **title** is content and travels encrypted alongside them | Don't connect, or set `CLAWMETRY_ENDPOINT` |
 | `app.clawmetry.com` | OAuth/device claim, entitlement + tier resolution, pro wheel download | Managed cloud only | Account identifiers, license subject, version | `CLAWMETRY_ENDPOINT`, `SELF_HOSTED`, or `CLAWMETRY_OFFLINE` |
 | `app.clawmetry.com/api/install` | First-run install counter | Once per version, managed cloud only | Anonymous install ID, version, OS, Python version, CI flag | `DO_NOT_TRACK=1`, `CLAWMETRY_NO_TELEMETRY=1`, `~/.clawmetry/notelemetry`, or any suppression condition |
 | `app.clawmetry.com/api/admin/anon-event` | Anonymous funnel analytics | Managed cloud only | Anonymous event names | Any suppression condition |
@@ -133,6 +135,14 @@ Third-party telemetry inside optional integrations is forced off rather than
 merely left unconfigured. The DeepEval evaluation bridge, for example, phones
 PostHog by default upstream; `clawmetry/deepeval_bridge.py` disables that
 before importing it.
+
+### Not egress, but adjacent: the local write API
+
+The dashboard on `localhost:8900` trusts loopback callers without a token. It
+rejects state-changing requests that carry an `Origin` header from another
+site, so a page you happen to have open in another tab cannot drive it.
+`CLAWMETRY_ALLOW_CROSS_ORIGIN_WRITES=1` removes that check for embedders that
+genuinely need it.
 
 ### Configured by you, off by default
 
