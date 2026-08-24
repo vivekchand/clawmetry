@@ -236,7 +236,12 @@ def _drive_real_pipeline(sync, sessions_dir, store):
     """Run the REAL daemon ingest function over the real turn's workspace.
     Cloud HTTP is mocked so we don't hit ingest.clawmetry.com; every other
     layer runs. Returns the number of events the daemon processed."""
-    config = {"api_key": "cm_test_e2e_fake", "encryption_key": None,
+    # A real key: the daemon-to-cloud wire only carries content when one is
+    # configured. A keyless node skips the upload rather than sending
+    # cleartext (2026-08-24 security review, finding 3), so asserting the wire
+    # fired requires a keyed node.
+    config = {"api_key": "cm_test_e2e_fake",
+              "encryption_key": sync.generate_encryption_key(),
               "node_id": NODE_ID}
     state = {"last_event_ids": {}}
     paths = {"sessions_dir": str(sessions_dir)}
@@ -443,7 +448,9 @@ def test_re_running_sync_is_idempotent(pipeline):
     must not duplicate rows (INSERT OR IGNORE on id + cursor advancement)."""
     sync = pipeline["sync"]
     store = pipeline["ls"].get_store()
-    config = {"api_key": "cm_test", "encryption_key": None, "node_id": NODE_ID}
+    config = {"api_key": "cm_test",
+              "encryption_key": sync.generate_encryption_key(),
+              "node_id": NODE_ID}
     state = {"last_event_ids": {}}
     paths = {"sessions_dir": str(pipeline["sessions_dir"])}
     # Idempotency is about the DuckDB row count being STABLE across re-runs,
