@@ -1427,12 +1427,24 @@ def _cmd_connect(args) -> None:
                 pass
         return
 
-    # Open browser with encryption key in URL fragment (never sent to server)
-    # The #key=... fragment stays client-side — true E2E encryption
+    # Hand off to the browser entirely in the URL FRAGMENT. A fragment is
+    # never transmitted, so nothing here reaches a server log, a Referer
+    # header, or an intermediary.
+    #
+    # SECURITY (2026-08-24 review, finding 11): the account key used to ride
+    # in the query string as `/cloud?token=<key>`. A `cm_` key is a whole
+    # account credential and the server records the request line, so every
+    # connect wrote one into Cloud Logging in plaintext, where it stayed for
+    # the retention window; it also sat in the user's browser history. The
+    # cloud page's setup bridge now reads `#token=` and hands it to the
+    # one-step-onboarding claim in a POST body instead.
     _node_id = config.get("node_id", "")
     from clawmetry.endpoints import app_url as _resolve_app_url2
     _app_base_done = _resolve_app_url2()
-    _dashboard_url = f"{_app_base_done}/cloud?token={api_key}#key={enc_key}&node={_node_id}"
+    _dashboard_url = (
+        f"{_app_base_done}/cloud"
+        f"#token={api_key}&key={enc_key}&node={_node_id}"
+    )
 
     # Cloud includes the local dashboard too (the onboard copy promises
     # BOTH app.clawmetry.com and localhost:8900) — make it true, best-effort.
