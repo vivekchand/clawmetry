@@ -1,50 +1,89 @@
-"""clawmetry/detectors.py — research-backed, judge-free, CPU-cheap trajectory
-anomaly detectors over a session's recent event sequence (issue #2999).
+"""clawmetry/detectors.py: research-backed, judge-free, CPU-cheap anomaly
+detectors over a session's recent event sequence (issue #2999, extended #5168).
 
 Design basis (the agent-observability deep-research memo + TrajAD / TRAIL /
 MAST taxonomies): zero-shot LLM judges are near-useless at localizing the bad
 step and 17-27x slower; naive embedding-outlier heuristics dilute the single
 anomalous step. What is load-bearing is *sequence structure*. So this module is
 a set of small, explainable, bounded heuristics over the ordered tool/result
-stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
+stream, NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-The four detectors map to the honest failure classes the landing page promises:
+EIGHT detectors, in two families that ask different questions.
 
-1. ``stuck_loop``       — TrajAD Type II (circular loops / repeated identical
-                          tool calls): K consecutive identical
-                          ``(tool, args-hash)`` calls OR a short repeating
-                          n-gram cycle of tool names.
-2. ``no_progress``      — busy-but-not-advancing: >= N tool calls in the window
-                          with zero file writes/edits and no completion marker.
-3. ``repeated_tool_failure`` — the SAME tool errors >= M times in the window.
-4. ``action_discrepancy``    — TRAIL tool-related hallucination, NARROW form: a
-                          failed tool result immediately followed by the agent
-                          continuing (another tool call / a completion) WITHOUT
-                          a retry of the same tool or an acknowledgement of the
-                          error. Lower precision -> lower severity, honest
-                          wording ("agent continued after a failed command").
+**Trajectory: is this agent stuck?** (the shape of the tool stream)
+
+1. ``stuck_loop``       TrajAD Type II (circular loops / repeated identical
+                        tool calls): K consecutive identical
+                        ``(tool, args-hash)`` calls OR a short repeating
+                        n-gram cycle of tool names.
+2. ``no_progress``      busy-but-not-advancing: >= N tool calls in the window
+                        with zero file mutations and no completion marker.
+3. ``repeated_tool_failure``  the SAME tool errors >= M times in the window.
+4. ``action_discrepancy``     TRAIL tool-related hallucination, NARROW form: a
+                        failed tool result immediately followed by the agent
+                        continuing (another tool call / a completion) WITHOUT
+                        a retry of the same tool or an acknowledgement of the
+                        error. Lower precision -> lower severity, honest
+                        wording ("agent continued after a failed command").
+
+**Behaviour: is this agent doing something it does not normally do?** (what the
+calls actually DID, read from their arguments)
+
+5. ``file_blast_radius``  more distinct files mutated than the cohort's normal,
+                        or a destructive command (recursive delete at a home or
+                        system root, hard reset, force push, mirror delete).
+6. ``credential_access``  an ssh key, cloud credential, ``.env``, certificate or
+                        stored token file is opened, or the environment dumped.
+7. ``network_egress``   a host absent from the cohort's learned host set,
+                        fan-out across many hosts, or a bare IP literal.
+8. ``privilege_change`` sudo, an edited sudoers file, a setuid bit,
+                        world-writable permissions, a disabled protection.
+
+THE HONESTY BOUND on family two, repeated in every incident as
+``evidence.observed = "tool_arguments"``: these read tool-call ARGUMENTS, not
+syscalls. An agent that shells out to a program which itself opens ``~/.ssh``
+is invisible here. Two rules keep that bound from becoming noise: heredoc
+bodies are stripped before matching (a script that merely CONTAINS the text
+``csrutil disable`` is not an escalation) and privilege patterns are ignored
+inside inspect-only commands such as ``grep`` or ``git log``.
 
 Each detector returns an incident dict (or ``None``):
 
     {
-      "kind":          "stuck_loop" | "no_progress" | "repeated_tool_failure"
-                       | "action_discrepancy",
+      "kind":          one of DETECTOR_KINDS,
       "session_id":    str,
       "runtime":       str,
-      "severity":      "warning" | "info",
-      "title":         plain-words headline ("codex looping: 38 tool calls, ..."),
+      "severity":      "info" | "warning" | "critical",
+      "title":         plain-words headline ("codex looping: 38 tool calls..."),
       "detail":        one-sentence explanation incl. the Stop/Pause hint,
-      "evidence":      small dict of the numbers behind the call,
-      "first_bad_step": int | None,   # 0-based index into ``events`` of the
-                                       # first event implicated (for localization
-                                       # -> proxy pause/rollback later).
+      "evidence":      small dict of the numbers behind the call, including
+                       the threshold crossed and where that threshold came
+                       from; REDACTED (categories not paths, program not
+                       command line) because this travels to the cloud,
+      "first_bad_step": int | None,   # 0-based index into ``events``
+      # attached by annotate_spend:
+      "spend_at_risk_usd":    float,  # cost of the FLAGGED STRETCH, estimated
+      "spend_basis":          "burn_rate" | "window_fraction" | "unknown",
+      "burn_rate_usd_per_min": float,
+      "session_cost_usd":      float,
     }
 
-``run_all`` runs every enabled detector and returns the incidents found, ordered
-by severity (warning before info). Thresholds are module constants overridable
-by env so the daemon can tune them without a code change.
+``run_all(events, session_id, runtime, facts=, baseline=, thresholds=, steps=)``
+normalizes ONCE, shares the parse with every detector, and returns the
+incidents ordered by what ignoring them costs.
+
+**Thresholds are resolved, not hard-coded.** ``resolve_thresholds`` layers four
+sources, each overriding the last: module defaults, then the runtime profile
+(write-tool vocabulary, a checkable fact about the adapter), then the cohort's
+learned baseline, then a per-runtime env override
+(``CLAWMETRY_NOPROG_TOOLS__CODEX=40``). It reports which layer set each value.
+
+**Money decides the order.** ``annotate_spend`` prices the flagged stretch and
+says on what basis. Only a measured ``burn_rate`` may promote a warning to
+``critical``; a ``window_fraction`` apportionment is context only, and where
+nothing is known the figure is 0.0 with basis ``unknown``, never invented.
 """
 from __future__ import annotations
 
