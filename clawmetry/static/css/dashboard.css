@@ -2366,6 +2366,63 @@ body.has-profile-menu #logout-btn { display: none !important; }
 }
 .q-oc-note:empty { display: none; }
 
+/* ── Spot-check ────────────────────────────────────────────────────────
+   Full width under the two panels, and quiet: it borrows .q-panel's shell
+   so it reads as a third panel rather than a new region. The only colour
+   is on the verdict a person has already given. */
+.q-spot { margin-top: 20px; }
+.q-spot[hidden] { display: none; }
+.q-spot-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.q-spot-score {
+  font-size: 13px; color: var(--text-secondary);
+}
+.q-spot-score b {
+  font-family: Georgia, "Iowan Old Style", "Palatino", serif;
+  font-weight: 700; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.q-spot-list { list-style: none; padding: 0; margin: 14px 0 0; }
+.q-spot-list > li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 16px;
+  padding: 12px 0; border-top: 1px solid var(--border-primary);
+}
+.q-spot-list > li:first-child { border-top: none; }
+.q-spot-when {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; color: var(--text-muted);
+}
+.q-spot-title {
+  font-size: 14px; color: var(--text-primary); line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.q-spot-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.q-spot-actions button {
+  padding: 4px 12px; font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-primary); border-radius: 999px;
+}
+.q-spot-actions button:hover {
+  color: var(--text-primary); border-color: var(--text-muted);
+}
+.q-spot-verdict {
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+}
+.q-spot-verdict.right { color: #4fb37a; }
+.q-spot-verdict.wrong { color: #d33528; }
+.q-spot-empty {
+  padding: 18px 0 4px; font-size: 13px; color: var(--text-muted);
+  line-height: 1.55;
+}
+.q-spot-empty button {
+  margin-left: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-primary); border-radius: 999px;
+}
+
 /* Export line. Sits below the judge nudge and never hides — the whole
    point is that it stays findable. */
 .q-export {
@@ -2596,6 +2653,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
   .q-week { justify-content: center; }
   .q-below { grid-template-columns: 1fr; }
   .q-outcomes { grid-template-columns: 1fr; grid-gap: 12px; }
+  .q-spot-list > li { grid-template-columns: 1fr; gap: 8px; }
   .q-oc { padding-left: 0; border-left: none; }
   .q-export code { white-space: normal; word-break: break-all; }
 }

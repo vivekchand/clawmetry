@@ -4883,6 +4883,7 @@ async function loadQualityTab() {
   // different failure mode. Chaining it behind the report card meant one
   // slow /api/quality/report-card blanked the outcome line too.
   _qLoadOutcomeTrend();
+  _qLoadSpotCheck();
 
   var qs = new URLSearchParams();
   qs.set('window', '7d');
@@ -4924,6 +4925,30 @@ async function loadQualityTab() {
   _qRenderFooter(data);
 }
 
+// A DuckDB-backed read that misses is usually TRANSIENT: the daemon proxy
+// times out under the dashboard's boot fan-out (many panels fetching at
+// once), and the handler answers 200 with the store flagged unavailable.
+// Reproduced 2026-08-25 on a real install: the first call returned rows, the
+// next four came back unavailable while the page was still booting, then
+// recovered. Hiding a panel on that first miss hides it for the whole
+// session, so give it one more chance once the storm has passed.
+//
+// Deliberately one retry, only on the miss path: the happy path stays a
+// single request, so this cannot become a request storm of its own.
+async function _qFetchStore(url, isMiss) {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise(function(r) { setTimeout(r, 1200); });
+    var data = null;
+    try {
+      var r = await fetch(url);
+      if (r.ok) data = await r.json();
+    } catch (e) { data = null; }
+    if (data && !isMiss(data)) return data;
+    if (attempt) return data;   // second miss: report it, the caller decides
+  }
+  return null;
+}
+
 // ── The marks line: completion, cost, errors ───────────────────────────
 //
 // Deliberately NOT a second opinion on the grade above. The grade judges the
@@ -4950,17 +4975,16 @@ async function _qLoadOutcomeTrend() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
   if (rt) qs.set('runtime', rt);
 
-  var data = null;
-  try {
-    var r = await fetch('/api/outcomes/trend?' + qs.toString());
-    if (r.ok) data = await r.json();
-  } catch (e) { data = null; }
+  var data = await _qFetchStore(
+    '/api/outcomes/trend?' + qs.toString(),
+    function(d) { return d.store_available === false; }
+  );
 
   // Unreachable store (the hosted dashboard has no local DuckDB until the
   // snapshot slice is served) — stay hidden. The tab already says once,
   // above, that it reads local run history, and a row of dashes would read
   // as zero rather than as unknown.
-  if (!data || data.available === false) { sec.setAttribute('hidden', ''); return; }
+  if (!data || data.store_available === false) { sec.setAttribute('hidden', ''); return; }
 
   var cur = data.current || {};
   var delta = data.delta || {};
@@ -5045,6 +5069,142 @@ async function _qLoadOutcomeTrend() {
     }
     note.textContent = scope;
   }
+}
+
+// ── Spot-check ────────────────────────────────────────────────────────
+//
+// Since issue #1615 the daemon has picked a few runs at random every night
+// and written them to a review queue, and tracked how often the operator
+// agreed. It tracked zero for months: the endpoints shipped, the sampler
+// ran, and no screen ever rendered them, so nobody could answer. This is
+// the smallest surface that makes that work reachable.
+//
+// Loaded on the Quality tab only, unchained from the grade fetch.
+async function _qLoadSpotCheck() {
+  var sec = document.getElementById('q-spot');
+  var list = document.getElementById('q-spot-list');
+  var score = document.getElementById('q-spot-score');
+  if (!sec || !list) return;
+
+  var acc = null;
+  var queue = await _qFetchStore(
+    '/api/review/queue?limit=6',
+    function(d) { return d.store_available === false; }
+  );
+
+  // An unreadable store is not an empty queue. Saying "nothing waiting" to a
+  // hosted user who simply has no local DuckDB would be a wrong answer
+  // dressed as good news, so the panel stays hidden instead.
+  if (!queue || queue.store_available === false) {
+    sec.setAttribute('hidden', '');
+    return;
+  }
+  sec.removeAttribute('hidden');
+
+  try {
+    var a = await fetch('/api/review/accuracy?window=30');
+    if (a.ok) acc = await a.json();
+  } catch (e) { acc = null; }
+
+  if (score) {
+    var g = (acc && acc.global) || {};
+    var judged = (g.correct || 0) + (g.wrong || 0) + (g.borderline || 0);
+    score.innerHTML = judged
+      ? t('quality.spot_score', { right: g.correct || 0, n: judged },
+          'You said the agent was right on <b>{right} of {n}</b> runs you checked.')
+      : '';
+  }
+
+  var rows = (queue.rows || []).filter(function(x) { return x && x.session_id; });
+  if (!rows.length) {
+    list.innerHTML =
+      '<li class="q-spot-empty">' +
+      escHtml(t('quality.spot_empty', null,
+                'Nothing waiting. A few runs are picked each night.')) +
+      '<button type="button" onclick="qSampleNow(this)">' +
+      escHtml(t('quality.spot_sample_now', null, 'Pick some now')) +
+      '</button></li>';
+    return;
+  }
+
+  var VERDICTS = [
+    ['reviewed_correct',    t('quality.spot_right', null, 'Right'),    'right'],
+    ['reviewed_wrong',      t('quality.spot_wrong', null, 'Wrong'),    'wrong'],
+    ['reviewed_borderline', t('quality.spot_unsure', null, 'Not sure'), '']
+  ];
+  var html = '';
+  rows.forEach(function(row) {
+    var sum = row.session_summary || {};
+    var title = sum.title || row.session_id;
+    var when = row.sampled_at ? String(row.sampled_at).slice(0, 10) : '';
+    var cost = (sum.cost_usd != null) ? ' · ' + _qMoney(sum.cost_usd) : '';
+    var sid = String(row.session_id);
+    html += '<li data-sid="' + escHtml(sid) + '">' +
+      '<div>' +
+        '<div class="q-spot-when">' + escHtml(when + cost) + '</div>' +
+        '<div class="q-spot-title" title="' + escHtml(title) + '">' +
+          escHtml(title) + '</div>' +
+      '</div>';
+    if (row.status && row.status !== 'pending') {
+      var done = VERDICTS.filter(function(v) { return v[0] === row.status; })[0];
+      html += '<span class="q-spot-verdict ' + (done ? done[2] : '') + '">' +
+              escHtml(done ? done[1] : row.status) + '</span>';
+    } else {
+      html += '<div class="q-spot-actions">';
+      VERDICTS.forEach(function(v) {
+        html += '<button type="button" onclick="qReview(this, ' +
+                JSON.stringify(sid).replace(/"/g, '&quot;') + ', ' +
+                JSON.stringify(v[0]).replace(/"/g, '&quot;') + ')">' +
+                escHtml(v[1]) + '</button>';
+      });
+      html += '</div>';
+    }
+    html += '</li>';
+  });
+  list.innerHTML = html;
+}
+
+// Record one verdict. Replaces the row's buttons in place rather than
+// re-rendering the list, so the rows a person is working through don't
+// reshuffle under the cursor.
+async function qReview(btn, sessionId, status) {
+  var li = btn && btn.closest ? btn.closest('li') : null;
+  var actions = li ? li.querySelector('.q-spot-actions') : null;
+  if (actions) actions.innerHTML =
+    '<span class="q-spot-verdict">' +
+    escHtml(t('quality.spot_saving', null, 'Saving…')) + '</span>';
+  var ok = false;
+  try {
+    var r = await fetch('/api/review/' + encodeURIComponent(sessionId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status })
+    });
+    ok = r.ok;
+  } catch (e) { ok = false; }
+  if (!ok) {
+    // Say what happened and leave the row usable, rather than a dead spinner.
+    if (actions) actions.innerHTML =
+      '<span class="q-spot-verdict wrong">' +
+      escHtml(t('quality.spot_save_failed', null, "Didn't save. Try again.")) +
+      '</span>';
+    return;
+  }
+  _qLoadSpotCheck();
+}
+
+// Manual trigger for the nightly picker, so a new install can see the
+// workflow without waiting until midnight.
+async function qSampleNow(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await fetch('/api/review/sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+  } catch (e) {}
+  _qLoadSpotCheck();
 }
 
 // Money the way a person reads it: cents below a dollar, two decimals above.

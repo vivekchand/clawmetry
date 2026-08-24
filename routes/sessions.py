@@ -7509,9 +7509,11 @@ def api_outcomes_trend():
       ``runtime`` — scope to one runtime (session-id prefix). Omitted =
         node-wide, and the response says which via ``runtime``.
 
-    Always 200. When the store is unreachable we return ``available: false``
-    with a zeroed trend so the card renders an honest "no data yet" instead
-    of throwing — same contract as /api/outcomes (issue #1127 lesson).
+    Always 200. When the store is unreachable we return
+    ``store_available: false`` with a zeroed trend so the card renders an
+    honest "no data yet" instead of throwing — same contract as
+    /api/outcomes (issue #1127 lesson). The field is named to match
+    /api/quality/report-card and /api/review/*, which report the same fact.
     """
     from clawmetry.outcome_classifier import outcome_trend
 
@@ -7547,7 +7549,11 @@ def api_outcomes_trend():
         payload.update({
             "window": window,
             "runtime": runtime or "all",
-            "available": False,
+            # ``store_available``, not ``available``: this is the same fact
+            # /api/quality/report-card and /api/review/* report under that
+            # name -- whether the local DuckDB could be read at all. One name
+            # for one fact, so a caller does not need a per-endpoint branch.
+            "store_available": False,
             "_source": "unavailable",
         })
         return jsonify(payload)
@@ -7566,7 +7572,7 @@ def api_outcomes_trend():
     payload.update({
         "window": window,
         "runtime": runtime or "all",
-        "available": True,
+        "store_available": True,
         "_source": "local_store",
     })
     return jsonify(payload)
