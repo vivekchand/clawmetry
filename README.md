@@ -54,7 +54,7 @@ too. See [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 |---|---|---|
 | **Free** | OpenClaw + NVIDIA NemoClaw + Goose, full dashboard, local only | $0 |
 | **Starter** | Every other runtime above, fleet view, cloud sync | $9 per node / month |
-| **Pro** | Starter + governance: approvals, tool-risk policies, evals, anomaly detection, cost optimizer, OTel export | $19 per node / month |
+| **Pro** | Starter + control and evaluation: approvals, tool-risk policies, evals, anomaly detection, cost optimizer, OTel export, tamper-evident audit log | $19 per node / month |
 
 Annual plans, Enterprise and the current numbers live at
 **[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Self-hosted license

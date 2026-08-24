@@ -445,6 +445,25 @@ PRO_ONLY_FEATURES = frozenset(
         "anomaly_detection",
         "cost_optimizer",
         "compliance_pack",
+        # ── Governance, moved down from Enterprise 2026-08-25 ────────────
+        # Pro was sold as "the governance layer" while every governance
+        # primitive sat in Enterprise; a buyer who read that, clicked in and
+        # found cost-waste flags discounted the rest of the page. Auth0's
+        # shape is the precedent: RBAC and audit logs at the paid tier,
+        # Enterprise reserved for residency, private deploy and SLA.
+        #
+        # ``audit_logs`` is a real capability and moves with a working
+        # surface behind it: the append-only hash chain in clawmetry/audit.py,
+        # producers in sync.py / approvals.py / license.py, /api/audit-log +
+        # /api/security/audit, and the Security-tab activity feed.
+        #
+        # ``rbac`` does NOT yet have an implementation. It is tiered here so
+        # the tier map stops contradicting the pricing copy, but it must not
+        # be advertised on the pricing page until there is something to sell
+        # -- there is no principal to attach a role to yet (agent identity is
+        # the prerequisite). Ship the capability, then the claim.
+        "audit_logs",
+        "rbac",
     }
 )
 
@@ -454,8 +473,9 @@ ENTERPRISE_FEATURES = frozenset(
     {
         "siem_export",
         "sso",
-        "audit_logs",
-        "rbac",
+        # ``audit_logs`` and ``rbac`` moved to PRO_ONLY_FEATURES on
+        # 2026-08-25 -- see the note there. Enterprise keeps the genuinely
+        # enterprise-shaped keys: SSO, SIEM, air-gapped licensing, residency.
         "air_gapped_license",
         "custom_data_residency",
         # Org-wide Claude coverage: the day-level rollup for Claude surfaces
