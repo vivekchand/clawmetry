@@ -9,7 +9,7 @@ Pins the parts that would silently mislead if they drifted:
 - the two periods are split by timestamp, not by fetch order;
 - rows with no usable timestamp are dropped rather than charged to the
   current window, which would manufacture a trend out of undated backfill;
-- an unreachable store degrades to ``available: false`` and a 200, never a
+- an unreachable store degrades to ``store_available: false`` and a 200, never a
   500 (the issue #1127 lesson the sibling /api/outcomes route already learnt).
 """
 from __future__ import annotations
@@ -70,7 +70,7 @@ def test_rows_land_in_the_period_their_timestamp_belongs_to(store_rows):
     ]
     with _app().test_client() as c:
         body = c.get("/api/outcomes/trend?window=7d").get_json()
-    assert body["available"] is True
+    assert body["store_available"] is True
     assert body["current"]["finished"] == 4
     assert body["previous"]["finished"] == 4
     assert body["current"]["success_rate"] == 0.75
@@ -152,6 +152,6 @@ def test_unreachable_store_is_a_200_with_available_false(monkeypatch):
         r = c.get("/api/outcomes/trend")
         assert r.status_code == 200
         body = r.get_json()
-    assert body["available"] is False
+    assert body["store_available"] is False
     assert body["direction"] == "unknown"
     assert body["current"]["total"] == 0

@@ -7464,10 +7464,16 @@ def api_outcomes_timeline():
         limit=5000,
     ) or []
 
+    # Node-local calendar day, the one definition every other surface uses
+    # (ADR-046, clawmetry/cost_windows). A day series bucketed by the raw
+    # timestamp prefix would draw its boundaries wherever the runtime's clock
+    # happened to be, so the same session could sit on a different day here
+    # than on the Cost tab.
+    from clawmetry.cost_windows import local_day as _local_day
     by_day: dict[str, list[dict]] = {}
     for r in rows:
         ts = r.get("last_active_at") or r.get("ended_at") or ""
-        day = ts[:10] if len(ts) >= 10 else ""
+        day = _local_day(ts) or ""
         if not day:
             continue
         by_day.setdefault(day, []).append(r)
@@ -7503,9 +7509,11 @@ def api_outcomes_trend():
       ``runtime`` — scope to one runtime (session-id prefix). Omitted =
         node-wide, and the response says which via ``runtime``.
 
-    Always 200. When the store is unreachable we return ``available: false``
-    with a zeroed trend so the card renders an honest "no data yet" instead
-    of throwing — same contract as /api/outcomes (issue #1127 lesson).
+    Always 200. When the store is unreachable we return
+    ``store_available: false`` with a zeroed trend so the card renders an
+    honest "no data yet" instead of throwing — same contract as
+    /api/outcomes (issue #1127 lesson). The field is named to match
+    /api/quality/report-card and /api/review/*, which report the same fact.
     """
     from clawmetry.outcome_classifier import outcome_trend
 
@@ -7541,7 +7549,11 @@ def api_outcomes_trend():
         payload.update({
             "window": window,
             "runtime": runtime or "all",
-            "available": False,
+            # ``store_available``, not ``available``: this is the same fact
+            # /api/quality/report-card and /api/review/* report under that
+            # name -- whether the local DuckDB could be read at all. One name
+            # for one fact, so a caller does not need a per-endpoint branch.
+            "store_available": False,
             "_source": "unavailable",
         })
         return jsonify(payload)
@@ -7560,7 +7572,7 @@ def api_outcomes_trend():
     payload.update({
         "window": window,
         "runtime": runtime or "all",
-        "available": True,
+        "store_available": True,
         "_source": "local_store",
     })
     return jsonify(payload)

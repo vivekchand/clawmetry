@@ -60,6 +60,22 @@
 
   </div>
 
+  {# ── Spot-check. The daemon has been picking a few runs at random every
+     night since #1615 and writing them to a review queue -- with no surface
+     anywhere, so the accuracy it tracks stayed at zero because no human
+     could ever answer. This is that surface: the smallest thing that makes
+     the nightly work reachable, not a review product. ── #}
+  <section class="q-panel q-spot" id="q-spot" aria-label="Spot-check" hidden>
+    <div class="q-spot-head">
+      <div>
+        <h3 data-i18n="quality.spot_title">Spot-check</h3>
+        <p class="q-sub" data-i18n="quality.spot_sub">A few runs picked at random each night. Was the agent right?</p>
+      </div>
+      <span class="q-spot-score" id="q-spot-score"></span>
+    </div>
+    <ul class="q-spot-list" id="q-spot-list"></ul>
+  </section>
+
   {# ── Footer strip: judge upgrade path. Hidden once a key is set. ── #}
   <footer class="q-footer" id="q-footer" hidden>
     <div>

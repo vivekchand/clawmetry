@@ -6912,7 +6912,7 @@ def _outcomes_trend_slice_for_snapshot(runtime: str | None = None) -> dict:
         payload = outcome_trend(current, previous)
         payload["window"] = "7d"
         payload["runtime"] = runtime or "all"
-        payload["available"] = True
+        payload["store_available"] = True
         return payload
     except Exception as e:
         log.debug("snapshot: outcomes trend slice failed: %s", e)
