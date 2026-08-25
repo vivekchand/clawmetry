@@ -46,6 +46,8 @@ import shlex
 import sys
 import time
 
+from clawmetry import hook_ownership
+
 from clawmetry.claude_code_gate import (
     _post_json,
     _read_json,
@@ -135,7 +137,9 @@ def _timeout_from_policies(policies) -> int:
             continue
     if longest <= 0:
         longest = 604800
-    return longest + _HOOK_TIMEOUT_BUFFER_S
+    # Bounded — this one lands on Copilot, whose preToolUse gate is
+    # FAIL-CLOSED on crash/non-zero exit. See hook_ownership.
+    return hook_ownership.clamp_hook_timeout(longest + _HOOK_TIMEOUT_BUFFER_S)
 
 
 def _policies_gate_reads(policies) -> bool:

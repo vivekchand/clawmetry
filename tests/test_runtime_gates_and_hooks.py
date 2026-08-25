@@ -535,7 +535,11 @@ def test_cc_gate_matcher_and_timeout_derivation(cc_gate):
         [P(tool="web", action="monitor"), P(tool="exec")]) == "Bash"
     assert ccg._timeout_from_policies(
         [P(timeout=30), P(timeout=90)]) == 90 + 60
-    assert ccg._timeout_from_policies([]) == 604800 + 60
+    # Clamped to the bounded ceiling (WO-8): the 7-day engine default is
+    # the policy window, not something we make the runtime wait for.
+    from clawmetry import hook_ownership
+    assert ccg._timeout_from_policies([]) == \
+        hook_ownership.clamp_hook_timeout(604800 + 60)
 
 
 def test_cc_gate_dashboard_base_discovery(cc_gate, monkeypatch):
