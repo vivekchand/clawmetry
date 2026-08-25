@@ -163,6 +163,16 @@ coverage is the thing this page exists to avoid:
 
 ## Reproducing
 
+The harness ships inside the package, so an install is enough. No clone
+required:
+
+```bash
+pip install clawmetry requests
+python -m benchmarks.overhead --json my-machine.json
+```
+
+Or from a checkout, if you want to benchmark a change:
+
 ```bash
 git clone https://github.com/clawmetry/clawmetry && cd clawmetry
 pip install -e . requests

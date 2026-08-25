@@ -90,7 +90,7 @@ to print a number when the rounds disagree on its sign**. Run it on your own
 machine in a minute:
 
 ```bash
-python -m benchmarks.overhead
+pip install clawmetry && python -m benchmarks.overhead
 ```
 
 The raw JSON, the method, and the paths we have *not* measured yet (hook
