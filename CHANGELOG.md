@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Release: session titles now travel encrypted, like the rest of your conversation (carries #5213) (2026-08-25)
+- **Who this reaches:** anyone syncing to the cloud whose agents run through Claude Code, Codex, Cursor, Pi, opencode, Antigravity or Hermes. Nothing you do changes; this is about which path your data takes.
+- **A session title is your words.** When an agent runtime gives a session no title of its own, ClawMetry falls back to the text of the session itself, which is often the first thing you typed. That is content, in the same sense your transcript is content, and content belongs on the encrypted path.
+- **So that is where it goes now.** Titles are sealed on your machine, with the same key as everything else we cannot read, and carried inside the encrypted snapshot. Your browser matches them back to their sessions after it decrypts. The totals we have always shown in readable form (cost, tokens, timings, status) are unchanged and still readable, because that is what they are for.
+- **Nothing looks different yet.** This release only puts the titles on the encrypted path. The hosted dashboard starts reading them from there in a following change, and the older path is retired after that, in that order, so no screen is ever left blank in between.
+- **Verified:** 5 new tests covering the shape of the slice, that an identifier is never dressed up as a title, and that a database problem costs you the titles rather than the whole snapshot.
+
 ### Release: your agent is watched for more than loops, and the list is sorted by what it costs you (carries #5168) (2026-08-25)
 - **Who this reaches:** everyone. The detection that used to notice a stuck agent now also notices one behaving unlike itself, and the list you look at is ordered by money rather than by whichever check spoke last.
 - **Four new things get noticed.** Until now the only questions asked were about repetition: is it looping, is it stalling, is the same tool failing, did it plough on after an error. Four more are asked now. Did it change an unusual number of files, or run something destructive like a recursive delete at your home folder. Did it open a password or key file, a `.env`, a certificate, a stored token. Did it contact somewhere it has never contacted before. Did it ask for admin rights or turn off a system protection.
