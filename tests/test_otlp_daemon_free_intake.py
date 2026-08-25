@@ -650,3 +650,53 @@ def test_the_docs_state_the_two_limits_this_path_is_sold_on():
             f"{rel} must name the runtimes this path actually covers")
         assert "plaintext" in text or "unencrypted" in text, (
             f"{rel} must say records arrive unencrypted on this path")
+
+
+def test_the_batch_write_never_nests_a_read_inside_the_write_lock(store):
+    """The trap this work order was warned about by name.
+
+    ``LocalStore._write_lock`` is a plain ``threading.Lock``, not an RLock, and
+    ``_fetch`` takes it. So a read placed inside the write-lock block does not
+    fail: it DEADLOCKS the daemon, and a deadlocked daemon stops ingesting
+    everything, not just this path. The batch writer therefore closes its write
+    block before it probes for daemon-owned sessions.
+
+    Asserted on a daemon thread with a join timeout, because the failure mode
+    is a hang: a test that reproduces the bug by hanging forever is not a test,
+    it is an outage in CI.
+    """
+    import threading
+
+    done = threading.Event()
+    error = []
+
+    def _run():
+        try:
+            store.put_otlp_batch(
+                records=[{
+                    "record_id": "lock-probe",
+                    "ts": time.time(),
+                    "session_id": "sess-lock",
+                    "cost_usd": 1.0,
+                }],
+                events=[{
+                    "id": "otlp:lock-probe",
+                    "node_id": "n",
+                    "session_id": "sess-lock",
+                    "event_type": "tool_call",
+                    "ts": "2026-08-25T10:00:00+00:00",
+                    "data": {"tool": "Bash", "args": {}},
+                }],
+            )
+        except Exception as exc:  # pragma: no cover - a real failure, not a hang
+            error.append(exc)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    assert done.wait(timeout=20), (
+        "put_otlp_batch did not return: a read is nested inside the write lock"
+    )
+    assert not error, error
+    assert store.query_otlp_records(session_id="sess-lock")
