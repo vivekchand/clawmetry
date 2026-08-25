@@ -150,3 +150,40 @@ def test_never_raises_on_junk_input():
 def test_observed_tokens_junk_is_survivable():
     assert resolve_context_window("gpt-5", None).tokens == 400_000  # type: ignore[arg-type]
     assert resolve_context_window("gpt-5", -5).tokens == 400_000
+
+
+# ── the 1M marker must not fire on a coincidence ─────────────────────────
+
+@pytest.mark.parametrize("model", [
+    "some-model-21m-x",   # "21m" contains "1m" but is not a marker
+    "model-1mb-variant",  # "1mb" likewise
+    "a1m",                # no separator on the left
+    "llama-31m-x",        # digit-run collision inside a real family
+])
+def test_1m_marker_does_not_fire_on_a_substring_coincidence(model):
+    """The marker is matched inside a free-text model string, so it has to
+    require a separator or a string edge on both sides. A naive ``"1m" in m``
+    would size several of these at 1M and silently make every utilisation
+    reading on them a fifth of the truth."""
+    assert resolve_context_window(model).source != "explicit_marker"
+
+
+@pytest.mark.parametrize("model", [
+    "claude-opus-4-7[1m]",
+    "claude-opus-4-7-1m",
+    "claude_opus_4_7_1m",
+    "ds-v3-1m",
+    "qwen-1m-preview",
+])
+def test_1m_marker_fires_on_every_separator_style(model):
+    cw = resolve_context_window(model)
+    assert cw.source == "explicit_marker"
+    assert cw.tokens == 1_000_000
+
+
+def test_gpt_4_1_mini_is_not_shadowed_into_the_4o_window():
+    """``gpt-4.1-mini`` normalises to ``gpt-4-1-mini`` and must match the
+    1M GPT-4.1 entry, not fall through to a smaller one."""
+    assert resolve_context_window("gpt-4.1-mini").tokens == 1_000_000
+    # ...while 4o-mini keeps its own, genuinely smaller window.
+    assert resolve_context_window("gpt-4o-mini").tokens == 128_000
