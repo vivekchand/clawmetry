@@ -97,8 +97,12 @@ machine in a minute:
 pip install clawmetry && python -m benchmarks.overhead
 ```
 
-The raw JSON, the method, and the paths we have *not* measured yet (hook
-gates, the enforcement proxy) are in [docs/OVERHEAD.md](docs/OVERHEAD.md).
+Every path is measured, including the hook gates and the enforcement proxy,
+and the harness runs on Linux, macOS and Windows in CI. Two results worth
+knowing: the proxy costs about seven times more on Windows than on Linux, and
+the daemon currently sustains about 12% of one core, over our own 5-10%
+budget. The raw JSON, the method, and what is still unmeasured are in
+[docs/OVERHEAD.md](docs/OVERHEAD.md).
 
 ## Pricing
 

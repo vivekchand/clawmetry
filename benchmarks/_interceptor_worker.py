@@ -142,7 +142,17 @@ def main() -> int:
     # on the box, so the CPU figure is the reproducible one and the wall
     # figure is the honest upper bound. Report both rather than picking the
     # flattering one.
-    sys.stdout.write(json.dumps({"samples_s": samples, "cpu_s": cpu}))
+    # Report the CPU clock's granularity alongside the samples. On Windows
+    # process_time() ticks at roughly 15.6ms, which is far coarser than the
+    # per-call cost being measured, so nearly every sample reads as exactly
+    # zero and the delta comes out at a confident, meaningless 0.00ms. The
+    # parent uses this to say "not resolvable on this platform" instead of
+    # publishing a free lunch.
+    sys.stdout.write(json.dumps({
+        "samples_s": samples,
+        "cpu_s": cpu,
+        "cpu_clock_resolution_s": time.get_clock_info("process_time").resolution,
+    }))
     return 0
 
 

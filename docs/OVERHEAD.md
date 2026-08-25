@@ -225,18 +225,52 @@ python -m benchmarks.overhead --daemon-window 120
 It reads `ps` and never signals anything. If no daemon is running it says so
 rather than inventing a figure.
 
+## Cross-platform
+
+The numbers above are from one Apple M2 Pro. The `Instrumentation overhead`
+workflow runs the same harness on Linux, macOS and Windows and publishes each
+result as an artifact. From a run on shared GitHub runners, which are slower
+and noisier than a laptop you own:
+
+| | ubuntu (EPYC 7763, 4c) | macOS (M1 virt, 3c) | windows (Intel, 4c) |
+|---|---|---|---|
+| Interceptor, wall p50 | +0.16 ms | +0.14 ms | +0.47 ms |
+| Enforcement proxy, p50 | +3.6 ms | +4.6 ms | **+30.2 ms** |
+| Hook: interpreter floor | 24 ms | 46 ms | 38 ms |
+| Hook: warm cache, over floor | +25 ms | +3 ms | +26 ms |
+| Hook: cold cache, over floor | +281 ms | +295 ms | +470 ms |
+| Ingest | 3,183/sec | 3,346/sec | 2,610/sec |
+| Disk | 770 B/event | 770 B/event | 770 B/event |
+
+Two things stand out, and both are the point of running this anywhere but the
+author's laptop:
+
+- **The proxy costs roughly seven times more on Windows** than on Linux or
+  macOS. Loopback networking and process scheduling differ enough there that a
+  figure measured on a Mac does not transfer. If you run the enforcement proxy
+  on Windows, budget for tens of milliseconds per call rather than single
+  digits.
+- **The cold-cache hook path costs 281-470 ms from CI**, against 189 ms from
+  a laptop on a good connection. That is the point about it being bounded by
+  the network rather than by us, demonstrated rather than asserted.
+
+The interceptor's CPU figure is reported as **not resolvable on Windows**:
+`time.process_time()` there ticks at roughly 15.6 ms, which is far coarser
+than the sub-millisecond cost being measured, so every sample rounds to zero
+and a naive reading produces a confident, meaningless "+0.00 ms". The harness
+compares the delta against the clock's own granularity and declines to publish
+a number it cannot actually see. Wall clock is unaffected and is reported
+normally.
+
 ## Still not measured
 
-- **Windows and Linux.** Every figure above is from one Apple M2 Pro. The
-  `Instrumentation overhead` workflow runs the harness on Linux, macOS and
-  Windows and publishes each result as an artifact, so these numbers can be
-  replaced with a real cross-platform table. It is deliberately not a pass/fail
-  gate: shared CI runners are noisy, a latency threshold would flap, and a
-  check that flaps is a check everyone learns to ignore.
 - **Cloud sync.** Snapshot encryption and upload run in the daemon, off the
-  agent path. They are inside the daemon CPU figure above but are not broken
-  out, so how much of that 12% is AES-256-GCM over a large snapshot is not yet
-  known. That is the obvious first place to look.
+  agent path. They sit inside the daemon CPU figure above but are not broken
+  out, so how much of that 12% is AES-256-GCM over a large snapshot is not
+  yet known. Given the `os.stat` result, that is the second place to look.
+- **Steady-state daemon CPU on Linux and Windows.** The 12% figure is one
+  macOS install. The daemon sampler needs a running daemon, which a CI runner
+  does not have, so it is not in the cross-platform table.
 - **Streaming responses.** Both the interceptor and the proxy were measured on
   a single non-streaming completion. A long SSE stream is parsed chunk by
   chunk, and that per-chunk cost is not in these numbers.

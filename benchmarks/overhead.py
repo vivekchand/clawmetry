@@ -206,11 +206,16 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
     try:
         wall = {"baseline": [], "patched": []}
         cpu = {"baseline": [], "patched": []}
+        cpu_resolutions: list[float] = []
         per_round: list[dict[str, Any]] = []
 
         for r in range(rounds):
             order = ("baseline", "patched") if r % 2 == 0 else ("patched", "baseline")
             got = {mode: _run_worker(mode, n, warmup, home) for mode in order}
+            for _m in order:
+                _res = got[_m].get("cpu_clock_resolution_s")
+                if _res:
+                    cpu_resolutions.append(float(_res))
             for mode in ("baseline", "patched"):
                 wall[mode].extend(got[mode]["samples_s"])
                 cpu[mode].extend(got[mode]["cpu_s"])
@@ -227,6 +232,13 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
 
         wb, wp = _summarise(wall["baseline"]), _summarise(wall["patched"])
         cb, cp = _summarise(cpu["baseline"]), _summarise(cpu["patched"])
+        # A CPU delta smaller than the clock that measured it is not a
+        # measurement. Windows' process_time() ticks at ~15.6ms against a
+        # per-call cost near 0.4ms, so the raw answer there is a confident
+        # 0.00ms, i.e. a free lunch that does not exist.
+        cpu_res_us = max(cpu_resolutions or [0.0]) * 1_000_000
+        cpu_added = round(cp["p50_us"] - cb["p50_us"], 2)
+        cpu_resolvable = cpu_res_us <= abs(cpu_added) or cpu_res_us <= 1000
         deltas = [rd["wall_delta_p50_us"] for rd in per_round]
         consistent = all(d > 0 for d in deltas) or all(d < 0 for d in deltas)
 
@@ -241,8 +253,12 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
             "wall": {"baseline": wb, "instrumented": wp,
                      "added_p50_us": added_wall,
                      "added_p95_us": round(wp["p95_us"] - wb["p95_us"], 2)},
-            "cpu": {"baseline": cb, "instrumented": cp,
-                    "added_p50_us": round(cp["p50_us"] - cb["p50_us"], 2)},
+            "cpu": {
+                "baseline": cb, "instrumented": cp,
+                "added_p50_us": cpu_added if cpu_resolvable else None,
+                "clock_resolution_us": round(cpu_res_us, 2),
+                "resolvable": cpu_resolvable,
+            },
             # The only comparison that means anything to a user: what share of
             # a REAL model call this is. Expressing it against the stub call
             # instead would inflate it into a scary-looking percentage of a
@@ -830,9 +846,13 @@ def _render(report: dict[str, Any]) -> str:
     else:
         w, c = ic["wall"], ic["cpu"]
         pct = ic["as_pct_of_real_call"]
+        _cpu_txt = (
+            f"+{c['added_p50_us'] / 1000:.2f} ms CPU" if c.get("resolvable")
+            else f"CPU not resolvable (clock ticks at {c['clock_resolution_us'] / 1000:.1f} ms)"
+        )
         out.append(
             f"  HTTP interceptor (opt-in)   +{w['added_p50_us'] / 1000:.2f} ms per call "
-            f"(wall p50)   +{c['added_p50_us'] / 1000:.2f} ms CPU"
+            f"(wall p50)   {_cpu_txt}"
         )
         out.append(
             f"                              = {pct['typical_5s']:.3f}% of a 5s model call, "
