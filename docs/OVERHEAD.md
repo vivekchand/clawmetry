@@ -203,6 +203,19 @@ agents, and its store is correspondingly large. A quiet laptop will cost less.
 But the budget as written does not carve out heavy installs, so on this machine
 the daemon is out of budget and that is a bug to chase, not a footnote.
 
+### Where it goes
+
+FLYWHEEL says to profile before shipping anything on the ingest path, so:
+`sample <pid> 8` on the running daemon puts **2,480 of 6,408 main-thread
+samples (39%) inside `os.stat`**. The steady-state cost is dominated by
+re-stat'ing the filesystem to find out what changed, which is what a
+poll-based collector does and also the obvious thing to attack: fewer stats
+per tick, a coarser scan for directories that have not moved, or a
+change-notification API instead of polling.
+
+That is a lead, not a diagnosis. It says where the time goes on this machine
+and this workload; it does not yet say which scan is responsible.
+
 Reproduce it on your own install with:
 
 ```bash
