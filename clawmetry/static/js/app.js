@@ -4646,21 +4646,24 @@ async function loadMiniWidgets(overview, usage) {
   } else {
     window._cmCostTodayRaw = Number(usage.todayCost || 0);
   }
-  var _setCost = function (id, value, label) {
+  var _setCost = function (id, key, label) {
     var el = document.getElementById(id);
     if (!el) return;
     if (window.cmProv) {
+      // Each window gets its OWN entry: they share a basis but not a period,
+      // and a week figure whose tooltip says "over today" is a new small lie
+      // in the place built to stop them.
       // noBadge: the tile's single label badge already says how, and the
       // figure keeps a plain textContent so the hero can read it back.
-      el.innerHTML = window.cmProv.figure(value, _costEntry,
-                                          { label: label, noBadge: true });
+      el.innerHTML = window.cmProv.money(usage, key,
+                                         { label: label, noBadge: true });
     } else {
-      el.textContent = fmtCost(value || 0);
+      el.textContent = fmtCost(usage[key] || 0);
     }
   };
-  _setCost('cost-today', usage.todayCost, 'Cost today');
-  _setCost('cost-week', usage.weekCost, 'Cost this week');
-  _setCost('cost-month', usage.monthCost, 'Cost this month');
+  _setCost('cost-today', 'todayCost', 'Cost today');
+  _setCost('cost-week', 'weekCost', 'Cost this week');
+  _setCost('cost-month', 'monthCost', 'Cost this month');
   
   var trend = '';
   if (usage.trend && usage.trend.trend) {
