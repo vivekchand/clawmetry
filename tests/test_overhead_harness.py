@@ -122,3 +122,53 @@ def test_hook_gate_reports_every_condition_against_a_floor():
     # would let a network figure be quoted as a per-call cost.
     assert out["conditions"]["cold_cache"]["network_dependent"] is True
     assert out["conditions"]["warm_cache"]["network_dependent"] is False
+
+
+# ── a clock that cannot see the signal must say so ──────────────────────
+
+def _cpu_resolvable(samples: list[float]) -> bool:
+    """The harness's rule, restated independently of how it is factored:
+    if most individual samples read exactly zero, the clock did not resolve a
+    single call and no amount of averaging makes it so."""
+    if not samples:
+        return False
+    return (sum(1 for v in samples if v <= 0.0) / len(samples)) < 0.5
+
+
+def test_a_clock_too_coarse_to_see_one_call_is_not_resolvable():
+    """Windows' process_time() advances only every ~15.6 ms against a
+    sub-millisecond per-call cost, so nearly every sample reads exactly zero
+    and the naive answer is a confident '+0.00 ms CPU'."""
+    windows_like = [0.0] * 95 + [0.0156] * 5
+    assert _cpu_resolvable(windows_like) is False
+
+
+def test_a_fine_clock_is_resolvable():
+    assert _cpu_resolvable([0.00035 + i * 1e-6 for i in range(100)]) is True
+
+
+def test_advertised_resolution_is_not_the_test():
+    """The first version of this guard trusted
+    ``time.get_clock_info('process_time').resolution``, which reports 1e-07 on
+    Windows because the counter is denominated in 100ns units even though its
+    value only changes on a scheduler tick. That guard passed and published
+    the zero anyway. The rule must be empirical."""
+    import time
+    advertised = time.get_clock_info("process_time").resolution
+    windows_like = [0.0] * 99 + [0.0156]
+    # A fine advertised resolution must not rescue a clock that plainly did
+    # not move during the measurement.
+    assert advertised < 1e-3
+    assert _cpu_resolvable(windows_like) is False
+
+
+def test_interceptor_reports_the_resolvability_verdict():
+    from benchmarks.overhead import bench_interceptor
+    out = bench_interceptor(n=80, warmup=20, rounds=2)
+    if out.get("skipped"):
+        pytest.skip(out["skipped"])
+    cpu = out["cpu"]
+    assert "resolvable" in cpu and "zero_sample_fraction" in cpu
+    # When it is not resolvable the figure must be withheld, not zeroed.
+    if not cpu["resolvable"]:
+        assert cpu["added_p50_us"] is None

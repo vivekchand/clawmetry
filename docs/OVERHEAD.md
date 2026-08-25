@@ -254,13 +254,22 @@ author's laptop:
   a laptop on a good connection. That is the point about it being bounded by
   the network rather than by us, demonstrated rather than asserted.
 
-The interceptor's CPU figure is reported as **not resolvable on Windows**:
-`time.process_time()` there ticks at roughly 15.6 ms, which is far coarser
-than the sub-millisecond cost being measured, so every sample rounds to zero
-and a naive reading produces a confident, meaningless "+0.00 ms". The harness
-compares the delta against the clock's own granularity and declines to publish
-a number it cannot actually see. Wall clock is unaffected and is reported
-normally.
+The interceptor's CPU figure is reported as **not resolvable on Windows**.
+`time.process_time()` there advances only on a scheduler tick, roughly every
+15.6 ms, against a sub-millisecond cost, so nearly every sample reads exactly
+zero and a naive reading produces a confident, meaningless "+0.00 ms". Wall
+clock is unaffected and is reported normally.
+
+Worth recording how that guard was itself wrong first. The obvious check is to
+compare the delta against `time.get_clock_info("process_time").resolution` —
+and on Windows that reports `1e-07`, because the counter is *denominated* in
+100 ns units even though its value only changes five orders of magnitude less
+often. The check passed and the harness published the zero anyway. It was
+caught on the Windows CI leg, by this harness, one commit after the "fix".
+
+The rule is now empirical rather than advertised: if most individual samples
+read exactly zero, the clock did not resolve a single call, and no amount of
+averaging makes it so.
 
 ## Still not measured
 

@@ -233,12 +233,27 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
         wb, wp = _summarise(wall["baseline"]), _summarise(wall["patched"])
         cb, cp = _summarise(cpu["baseline"]), _summarise(cpu["patched"])
         # A CPU delta smaller than the clock that measured it is not a
-        # measurement. Windows' process_time() ticks at ~15.6ms against a
-        # per-call cost near 0.4ms, so the raw answer there is a confident
-        # 0.00ms, i.e. a free lunch that does not exist.
+        # measurement. Windows' process_time() advances only every ~15.6ms
+        # against a per-call cost near 0.4ms, so nearly every sample reads
+        # exactly zero and the raw answer is a confident 0.00ms: a free lunch
+        # that does not exist.
+        #
+        # Do NOT trust the clock's ADVERTISED resolution for this.
+        # ``time.get_clock_info("process_time").resolution`` reports 1e-07 on
+        # Windows because the underlying counter is denominated in 100ns
+        # units, while the value it returns only actually changes on a
+        # scheduler tick five orders of magnitude coarser. Guarding on the
+        # advertised figure passed the check and published the zero anyway
+        # (caught on the Windows CI leg, by this harness, after the "fix").
+        #
+        # So measure the granularity instead of asking for it: if most
+        # individual samples came back as exactly zero, the clock did not
+        # resolve a single call and no amount of averaging makes it so.
         cpu_res_us = max(cpu_resolutions or [0.0]) * 1_000_000
+        _all_cpu = cpu["baseline"] + cpu["patched"]
+        zero_frac = (sum(1 for v in _all_cpu if v <= 0.0) / len(_all_cpu)) if _all_cpu else 1.0
         cpu_added = round(cp["p50_us"] - cb["p50_us"], 2)
-        cpu_resolvable = cpu_res_us <= abs(cpu_added) or cpu_res_us <= 1000
+        cpu_resolvable = zero_frac < 0.5
         deltas = [rd["wall_delta_p50_us"] for rd in per_round]
         consistent = all(d > 0 for d in deltas) or all(d < 0 for d in deltas)
 
@@ -257,6 +272,7 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
                 "baseline": cb, "instrumented": cp,
                 "added_p50_us": cpu_added if cpu_resolvable else None,
                 "clock_resolution_us": round(cpu_res_us, 2),
+                "zero_sample_fraction": round(zero_frac, 4),
                 "resolvable": cpu_resolvable,
             },
             # The only comparison that means anything to a user: what share of
@@ -848,7 +864,8 @@ def _render(report: dict[str, Any]) -> str:
         pct = ic["as_pct_of_real_call"]
         _cpu_txt = (
             f"+{c['added_p50_us'] / 1000:.2f} ms CPU" if c.get("resolvable")
-            else f"CPU not resolvable (clock ticks at {c['clock_resolution_us'] / 1000:.1f} ms)"
+            else ("CPU not resolvable on this platform "
+                  f"({c['zero_sample_fraction'] * 100:.0f}% of samples read exactly 0)")
         )
         out.append(
             f"  HTTP interceptor (opt-in)   +{w['added_p50_us'] / 1000:.2f} ms per call "
