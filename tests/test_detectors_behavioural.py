@@ -58,6 +58,10 @@ SID = "claude_code:abc123"
 
 # ── file_blast_radius ────────────────────────────────────────────────────────
 def test_blast_radius_flags_wide_edit():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.1
+    """
     chrono = [_tool_call("Write", {"file_path": f"/w/proj/f{n}.py"}, n)
               for n in range(30)]
     inc = detectors.file_blast_radius(_newest_first(chrono), SID, "claude_code")
@@ -73,6 +77,10 @@ def test_blast_radius_ignores_a_normal_edit_session():
 
 
 def test_blast_radius_root_delete_is_critical():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.1
+    """
     chrono = [_shell("rm -rf ~/", 1)]
     inc = detectors.file_blast_radius(_newest_first(chrono), SID, "claude_code")
     assert inc is not None
@@ -90,6 +98,10 @@ def test_blast_radius_does_not_call_node_modules_cleanup_critical():
 
 
 def test_blast_radius_evidence_never_carries_a_full_path():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.7
+    """
     chrono = [_tool_call("Write", {"file_path": f"/Users/dana/acme-secret/f{n}.py"}, n)
               for n in range(30)]
     inc = detectors.file_blast_radius(_newest_first(chrono), SID, "claude_code")
@@ -100,6 +112,10 @@ def test_blast_radius_evidence_never_carries_a_full_path():
 
 # ── credential_access ────────────────────────────────────────────────────────
 def test_credential_access_flags_env_file_read():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.2
+    """
     chrono = [_tool_call("Read", {"file_path": "/w/proj/.env"}, 1)]
     inc = detectors.credential_access(_newest_first(chrono), SID, "claude_code")
     assert inc is not None
@@ -130,6 +146,11 @@ def test_credential_access_egress_before_does_not_escalate():
 
 
 def test_credential_access_evidence_has_no_path_or_command():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.2
+    AC-OBS-RSO-030.7
+    """
     chrono = [_shell("cat /Users/dana/.ssh/id_rsa_prod_acme", 1)]
     inc = detectors.credential_access(_newest_first(chrono), SID, "claude_code")
     blob = repr(inc["evidence"])
@@ -138,12 +159,20 @@ def test_credential_access_evidence_has_no_path_or_command():
 
 # ── network_egress ───────────────────────────────────────────────────────────
 def test_egress_first_time_needs_a_baseline():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.3
+    """
     chrono = [_shell("curl https://api.example.com/v1", 1)]
     # No baseline: we have no memory, so we do not claim the host is new.
     assert detectors.network_egress(_newest_first(chrono), SID, "claude_code") is None
 
 
 def test_egress_flags_a_host_absent_from_the_baseline():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.3
+    """
     chrono = [_shell("curl https://pypi.org/simple", 1),
               _shell("curl https://weird.example.tk/x", 2)]
     th = detectors.resolve_thresholds(
@@ -172,6 +201,10 @@ def test_egress_flags_a_raw_ip_without_any_baseline():
 
 # ── privilege_change ─────────────────────────────────────────────────────────
 def test_privilege_change_flags_sudo():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.4
+    """
     chrono = [_shell("sudo apt-get install -y jq", 1)]
     inc = detectors.privilege_change(_newest_first(chrono), SID, "claude_code")
     assert inc is not None
@@ -179,6 +212,10 @@ def test_privilege_change_flags_sudo():
 
 
 def test_privilege_change_disabling_a_protection_is_critical():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.4
+    """
     chrono = [_shell("sudo spctl --master-disable", 1)]
     inc = detectors.privilege_change(_newest_first(chrono), SID, "claude_code")
     assert inc["severity"] == "critical"
@@ -192,6 +229,10 @@ def test_privilege_change_ignores_ordinary_commands():
 
 
 def test_privilege_change_sketch_drops_secret_bearing_tokens():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.7
+    """
     chrono = [_shell('sudo -S curl -H "Authorization: Bearer sk-live-abc" https://x', 1)]
     inc = detectors.privilege_change(_newest_first(chrono), SID, "claude_code")
     assert "sk-live-abc" not in repr(inc)
@@ -212,6 +253,10 @@ def test_runtime_profile_adds_the_runtimes_own_write_vocabulary():
 
 
 def test_shell_mediated_write_counts_as_progress():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.1
+    """
     # A codex session that writes a file through a heredoc must not look
     # identical to one that spun for an hour.
     chrono = [_shell(f"grep -n foo file{n}.py", n) for n in range(25)]
@@ -222,6 +267,10 @@ def test_shell_mediated_write_counts_as_progress():
 
 
 def test_per_runtime_env_override_beats_the_global_default(monkeypatch):
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.5
+    """
     monkeypatch.setenv("CLAWMETRY_NOPROG_TOOLS__CODEX", "3")
     th_codex = detectors.resolve_thresholds("codex")
     th_other = detectors.resolve_thresholds("claude_code")
@@ -231,6 +280,10 @@ def test_per_runtime_env_override_beats_the_global_default(monkeypatch):
 
 
 def test_env_override_wins_over_a_learned_baseline(monkeypatch):
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.5
+    """
     monkeypatch.setenv("CLAWMETRY_NOPROG_TOOLS__CODEX", "7")
     baseline = {"sessions": 40, "write_sessions": 40,
                 "tool_calls": {"n": 40, "mean": 100, "stddev": 10}}
@@ -240,6 +293,10 @@ def test_env_override_wins_over_a_learned_baseline(monkeypatch):
 
 # ── learned baselines ────────────────────────────────────────────────────────
 def test_baseline_moves_the_threshold_and_says_so():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.4
+    """
     baseline = {"sessions": 40, "write_sessions": 40,
                 "tool_calls": {"n": 40, "mean": 40.0, "stddev": 5.0}}
     th = detectors.resolve_thresholds("claude_code", baseline)
@@ -249,6 +306,10 @@ def test_baseline_moves_the_threshold_and_says_so():
 
 
 def test_thin_baseline_is_ignored():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.2
+    """
     baseline = {"sessions": 3, "write_sessions": 3,
                 "tool_calls": {"n": 3, "mean": 400.0, "stddev": 1.0}}
     th = detectors.resolve_thresholds("claude_code", baseline)
@@ -257,6 +318,10 @@ def test_thin_baseline_is_ignored():
 
 
 def test_a_pathological_cohort_cannot_blind_the_detector():
+    """Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.3
+    """
     # Every session in this cohort loops forever. Learning from it unclamped
     # would raise the threshold until nothing ever fired again.
     baseline = {"sessions": 100, "write_sessions": 100,
@@ -267,6 +332,10 @@ def test_a_pathological_cohort_cannot_blind_the_detector():
 
 
 def test_cohort_that_never_writes_disables_no_progress():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.3
+    """
     # A runtime whose edits we cannot see must not have every session flagged
     # as "no file changes" — that is a fact about our visibility.
     baseline = {"sessions": 40, "write_sessions": 0,
@@ -279,6 +348,10 @@ def test_cohort_that_never_writes_disables_no_progress():
 
 
 def test_session_profile_feeds_the_baseline():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.1
+    """
     chrono = [_shell("curl https://pypi.org/simple", 1),
               _tool_call("Write", {"file_path": "/w/a.py"}, 2),
               _tool_call("Read", {"file_path": "/w/b.py"}, 3)]
@@ -292,6 +365,10 @@ def test_session_profile_feeds_the_baseline():
 
 # ── severity that maps to money ──────────────────────────────────────────────
 def test_spend_at_risk_uses_the_burn_rate_when_the_clock_is_known():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.1
+    """
     incidents = [{"kind": "stuck_loop", "severity": "warning",
                   "first_bad_step": 0, "evidence": {}}]
     out = detectors.annotate_spend(incidents, cost_usd=60.0,
@@ -302,6 +379,10 @@ def test_spend_at_risk_uses_the_burn_rate_when_the_clock_is_known():
 
 
 def test_spend_at_risk_is_zero_and_honest_without_inputs():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.3
+    """
     incidents = [{"kind": "stuck_loop", "severity": "warning",
                   "first_bad_step": 0, "evidence": {}}]
     out = detectors.annotate_spend(incidents)
@@ -324,7 +405,12 @@ def test_money_promotes_a_warning_to_critical_but_never_an_info():
 def test_a_rough_estimate_cannot_escalate_to_critical():
     """window_fraction assumes even spend across the window. On real sessions
     that attributed most of a $100 session to "Bash failed 4 times" and made 11
-    of 12 incidents critical. It stays as context; it does not escalate."""
+    of 12 incidents critical. It stays as context; it does not escalate.
+
+    Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.5
+    """
     inc = {"kind": "repeated_tool_failure", "severity": "warning",
            "first_bad_step": 0, "evidence": {}}
     out = detectors.annotate_spend([inc], cost_usd=100.0, window_steps=10)
@@ -334,6 +420,10 @@ def test_a_rough_estimate_cannot_escalate_to_critical():
 
 
 def test_incidents_sort_by_what_ignoring_them_costs():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.4
+    """
     cheap_warning = {"kind": "stuck_loop", "severity": "warning",
                      "spend_at_risk_usd": 0.02, "evidence": {}}
     expensive_info = {"kind": "action_discrepancy", "severity": "info",
@@ -343,6 +433,10 @@ def test_incidents_sort_by_what_ignoring_them_costs():
 
 
 def test_run_all_prices_every_incident_it_returns():
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.2
+    """
     chrono = [_shell("cat /w/.env", n) for n in range(4)]
     out = detectors.run_all(_newest_first(chrono), SID, "claude_code",
                             facts={"cost_usd": 30.0, "session_seconds": 1800,
@@ -390,6 +484,10 @@ def real_store(tmp_path, monkeypatch):
 
 
 def test_baseline_round_trip_and_self_upsert(real_store):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.2
+    """
     for i in range(25):
         real_store.record_guard_observation(
             f"s{i}", "runtime:codex", runtime="codex", tool_calls=10 + i,
@@ -407,6 +505,10 @@ def test_baseline_round_trip_and_self_upsert(real_store):
 
 
 def test_baseline_counts_only_sessions_that_wrote(real_store):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.3
+    """
     for i in range(22):
         real_store.record_guard_observation(
             f"a{i}", "runtime:aider", runtime="aider", tool_calls=30,
@@ -422,6 +524,10 @@ def test_unknown_cohort_returns_empty_not_garbage(real_store):
 
 
 def test_prune_drops_only_stale_rows(real_store):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.4
+    """
     real_store.record_guard_observation("fresh", "runtime:codex", tool_calls=5)
     assert real_store.prune_guard_baseline(180) == 0
     assert real_store.query_guard_baseline("runtime:codex")["sessions"] == 1
@@ -477,6 +583,10 @@ def _active_session(sid, runtime, cost=0.0):
 
 
 def test_daemon_tick_records_the_baseline_and_prices_the_incident(real_store):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.1
+    """
     sid = "claude_code:tick1"
     chrono = [_shell("rm -rf ~/", 1),
               _shell("curl https://pypi.org/simple", 2)]
@@ -506,6 +616,10 @@ def test_daemon_tick_records_the_baseline_and_prices_the_incident(real_store):
 
 
 def test_daemon_tick_does_not_double_count_a_session_across_ticks(real_store):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-021.2
+    """
     sid = "codex:tick2"
     chrono = [_shell(f"grep -n foo f{n}.py", n) for n in range(5)]
     fake = _FakeStore([_active_session(sid, "codex")], {sid: chrono}, real_store)
@@ -521,6 +635,11 @@ def test_runtime_comes_from_the_session_id_not_the_agent_type_column(
     labels the incident with the wrong runtime, applies the wrong write
     vocabulary, and files every runtime under one cohort, which makes a
     per-runtime baseline meaningless. The session-id prefix is the identity.
+    
+
+    Acceptance criteria proven here:
+
+    AC-OBS-RSO-031.6
     """
     from clawmetry import waste_flags as wf
     monkeypatch.setattr(
@@ -545,3 +664,57 @@ def test_runtime_comes_from_the_session_id_not_the_agent_type_column(
     # ...and so is the incident's label.
     sigs = real_store.query_recent_loop_signals(limit=10, since_minutes=30)
     assert sigs and all(s["agent_type"] == "claude_code" for s in sigs)
+
+
+def test_every_behavioural_finding_states_that_it_read_tool_arguments():
+    """The bound has to travel with the finding, not live in a design doc.
+
+    These detectors read what a tool call CONTAINED. An agent that shells out
+    to a program which itself opens a key file is invisible to them, and a
+    reader who does not know that will over-trust a clean result.
+
+    Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.5
+    """
+    cases = [
+        [_shell("rm -rf ~/", 1)],
+        [_shell("cat ~/.ssh/id_ed25519", 1)],
+        [_shell("curl http://203.0.113.9/x", 1)],
+        [_shell("sudo spctl --master-disable", 1)],
+    ]
+    seen = set()
+    for chrono in cases:
+        for inc in detectors.run_all(_newest_first(chrono), SID, "claude_code"):
+            if inc["kind"] in ("stuck_loop", "no_progress", "repeated_tool_failure",
+                               "action_discrepancy"):
+                continue  # trajectory findings read shape, not arguments
+            seen.add(inc["kind"])
+            assert inc["evidence"].get("observed") == "tool_arguments", inc["kind"]
+    assert seen, "expected at least one behavioural finding across these cases"
+
+
+def test_a_document_the_agent_wrote_is_not_a_command_it_ran():
+    """Found on real sessions: the detectors flagged the patch scripts that
+    define their own pattern tables, because a heredoc body was being read as
+    a command. A script that merely CONTAINS the words is not an escalation,
+    and a search that merely mentions them is not one either.
+
+    Acceptance criteria proven here:
+
+    AC-OBS-RSO-030.6
+    """
+    heredoc = _shell("cat > patterns.py <<'PY'\nrx = 'csrutil disable'\n"
+                     "env_dump = 'printenv'\nPY", 1)
+    assert detectors.privilege_change(_newest_first([heredoc]), SID, "claude_code") is None
+    assert detectors.credential_access(_newest_first([heredoc]), SID, "claude_code") is None
+
+    for inspect_only in ("grep -rn 'csrutil disable' docs/",
+                         "git log --grep=sudoers",
+                         "rg --files-with-matches 'chmod 777'"):
+        assert detectors.privilege_change(
+            _newest_first([_shell(inspect_only, 1)]), SID, "claude_code") is None, inspect_only
+
+    # ...and the real thing is still caught, so this is precision, not silence.
+    assert detectors.privilege_change(
+        _newest_first([_shell("sudo csrutil disable", 1)]), SID, "claude_code") is not None

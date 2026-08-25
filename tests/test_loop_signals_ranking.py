@@ -57,6 +57,10 @@ def _serve(monkeypatch, rows, is_pro=True):
 
 
 def test_costliest_signal_sorts_first(monkeypatch, client):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.4
+    """
     rows = [
         _signal("cheap", "action_discrepancy", "info", 0.02,
                 last_seen="2026-06-11T12:00:00"),          # newest
@@ -70,6 +74,10 @@ def test_costliest_signal_sorts_first(monkeypatch, client):
 
 
 def test_severity_breaks_the_tie_when_no_cost_is_known(monkeypatch, client):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.4
+    """
     rows = [_signal("info-one", "action_discrepancy", "info", 0),
             _signal("warn-one", "stuck_loop", "warning", 0),
             _signal("crit-one", "privilege_change", "critical", 0)]
@@ -80,6 +88,10 @@ def test_severity_breaks_the_tie_when_no_cost_is_known(monkeypatch, client):
 
 
 def test_oss_teaser_row_is_the_costliest_not_the_newest(monkeypatch, client):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.6
+    """
     rows = [_signal("cheap-new", "stuck_loop", "warning", 0.05,
                     last_seen="2026-06-11T12:00:00"),
             _signal("expensive-old", "no_progress", "warning", 42.0,
@@ -93,6 +105,10 @@ def test_oss_teaser_row_is_the_costliest_not_the_newest(monkeypatch, client):
 
 
 def test_money_and_headline_are_flattened_for_the_renderer(monkeypatch, client):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.2
+    """
     _serve(monkeypatch, [_signal("s1", "credential_access", "critical", 3.5)])
     row = json.loads(client.get("/api/loop-signals").data)["signals"][0]
     assert row["kind"] == "credential_access"
@@ -110,6 +126,10 @@ def test_details_arriving_as_a_json_string_are_still_read(monkeypatch, client):
 
 
 def test_proxy_signals_without_details_survive(monkeypatch, client):
+    """Acceptance criteria proven here:
+
+    AC-OBS-CEA-020.3
+    """
     # clawmetry/proxy.py's LoopDetector writes rows with a different details
     # shape (and sometimes none). They must rank last, not crash.
     _serve(monkeypatch, [{"session_id": "proxy", "signature": "hash:abc",
