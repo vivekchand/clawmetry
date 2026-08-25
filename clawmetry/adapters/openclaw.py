@@ -1541,6 +1541,102 @@ def _model_router_live() -> dict:
     return result
 
 
+def _nemoclaw_onboard_trace() -> dict:
+    """Read NemoClaw onboarding OTel trace artifacts (#5193).
+
+    When ``NEMOCLAW_TRACE`` is set the harness writes OpenTelemetry-style spans
+    for each onboarding phase (e.g. ``nemoclaw.onboard.phase.gateway``,
+    ``nemoclaw.onboard.phase.inference``) including span status (OK/ERROR/UNSET),
+    duration_ms, events, sanitised attributes, and a ``summary.slowest_spans``
+    list.  ClawMetry surfaces the worst-case status, error phase names, and the
+    slowest-span summary so a failed or slow onboarding step is diagnosable from
+    the dashboard rather than silently invisible.
+
+    Path resolution (first match wins):
+    1. ``NEMOCLAW_TRACE_FILE`` env var.
+    2. ``NEMOCLAW_TRACE_DIR/trace.json``.
+    3. ``.e2e/traces/trace.json`` (harness default, relative to cwd).
+
+    Handles both the flat harness shape ``{spans:[...], summary:{...}}`` and the
+    standard OTel ``resource_spans`` export.  Returns ``{}`` when
+    ``NEMOCLAW_TRACE`` is unset/disabled or no file is found.  Never raises.
+    """
+    import json as _json
+
+    trace_env = os.environ.get("NEMOCLAW_TRACE", "")
+    if not trace_env or trace_env.lower() in ("0", "false", "no"):
+        return {}
+
+    candidates = []
+    tf = os.environ.get("NEMOCLAW_TRACE_FILE", "")
+    if tf:
+        candidates.append(tf)
+    td = os.environ.get("NEMOCLAW_TRACE_DIR", "")
+    if td:
+        candidates.append(os.path.join(td, "trace.json"))
+    candidates.append(os.path.join(".e2e", "traces", "trace.json"))
+
+    data = None
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                data = _json.load(fh)
+            break
+        except (OSError, ValueError):
+            continue
+        except Exception:
+            continue
+
+    if data is None or not isinstance(data, dict):
+        return {}
+
+    try:
+        spans: list = []
+        if "spans" in data:
+            raw = data["spans"]
+            if isinstance(raw, list):
+                spans = raw
+        elif "resource_spans" in data:
+            for rs in data.get("resource_spans", []):
+                for ss in (rs.get("scope_spans") or rs.get("scopeSpans") or []):
+                    spans.extend(ss.get("spans", []))
+
+        _STATUS_RANK = {"ERROR": 2, "UNSET": 1, "OK": 0}
+        worst_rank = -1
+        worst_status = "UNKNOWN"
+        error_names: list = []
+
+        for span in spans:
+            if not isinstance(span, dict):
+                continue
+            status = str(span.get("status", "UNSET")).upper()
+            rank = _STATUS_RANK.get(status, 0)
+            if rank > worst_rank:
+                worst_rank = rank
+                worst_status = status
+            if status == "ERROR":
+                name = span.get("name") or span.get("spanName") or ""
+                if name:
+                    error_names.append(str(name))
+
+        result: dict = {}
+        if spans:
+            result["nemoclawOnboardTraceStatus"] = worst_status
+            result["nemoclawOnboardTraceSpanCount"] = len(spans)
+        if error_names:
+            result["nemoclawOnboardTraceErrors"] = error_names[:10]
+
+        summary = data.get("summary")
+        if isinstance(summary, dict):
+            slow = summary.get("slowest_spans")
+            if isinstance(slow, list) and slow:
+                result["nemoclawOnboardSlowSpans"] = slow[:5]
+
+        return result
+    except Exception:
+        return {}
+
+
 def _parse_proxy_config_model_list(content: str) -> Optional[List[str]]:
     """Extract model names from a LiteLLM-style proxy-config YAML (#2960).
 
@@ -2451,6 +2547,13 @@ class OpenClawAdapter(AgentAdapter):
             # fleet views know whether autonomous skill actions are gated by
             # human approval.  Returns {} on installs without the key.
             meta.update(_workshop_approval_config())
+            # NemoClaw onboarding OTel trace artifacts (#5193): surfaces
+            # nemoclawOnboardTraceStatus/SpanCount/Errors/SlowSpans when
+            # NEMOCLAW_TRACE is set and the harness wrote a trace file.
+            # Returns {} when disabled or file absent — no guard needed.
+            _ot = _nemoclaw_onboard_trace()
+            if _ot:
+                meta.update(_ot)
             return DetectResult(
                 name=self.name,
                 display_name=self.display_name,
