@@ -7464,10 +7464,16 @@ def api_outcomes_timeline():
         limit=5000,
     ) or []
 
+    # Node-local calendar day, the one definition every other surface uses
+    # (ADR-046, clawmetry/cost_windows). A day series bucketed by the raw
+    # timestamp prefix would draw its boundaries wherever the runtime's clock
+    # happened to be, so the same session could sit on a different day here
+    # than on the Cost tab.
+    from clawmetry.cost_windows import local_day as _local_day
     by_day: dict[str, list[dict]] = {}
     for r in rows:
         ts = r.get("last_active_at") or r.get("ended_at") or ""
-        day = ts[:10] if len(ts) >= 10 else ""
+        day = _local_day(ts) or ""
         if not day:
             continue
         by_day.setdefault(day, []).append(r)
@@ -7481,6 +7487,95 @@ def api_outcomes_timeline():
         "series": series,
         "_source": "local_store" if rows else "empty",
     })
+
+
+# ── /api/outcomes/trend ────────────────────────────────────────────────
+#
+# "Is my agent getting better?" — the one Evaluate question a fleet tool is
+# actually positioned to answer, from data every install already has. Two
+# equal windows of the same query_outcomes rows, compared by
+# ``clawmetry.outcome_classifier.outcome_trend``.
+#
+# Outcome-first on purpose: "did it finish the job, and what did that cost"
+# needs no judge key, no rubric and no API spend, so it works on the free
+# tier. Judge scores stay supporting detail on the Quality tab.
+@bp_sessions.route("/api/outcomes/trend")
+def api_outcomes_trend():
+    """Period-over-period outcome + cost comparison.
+
+    Query params:
+      ``window`` — ``1d`` / ``7d`` (default) / ``30d``. The CURRENT period;
+        the previous period is the equally long window immediately before it.
+      ``runtime`` — scope to one runtime (session-id prefix). Omitted =
+        node-wide, and the response says which via ``runtime``.
+
+    Always 200. When the store is unreachable we return
+    ``store_available: false`` with a zeroed trend so the card renders an
+    honest "no data yet" instead of throwing — same contract as
+    /api/outcomes (issue #1127 lesson). The field is named to match
+    /api/quality/report-card and /api/review/*, which report the same fact.
+    """
+    from clawmetry.outcome_classifier import outcome_trend
+
+    window = (request.args.get("window") or "7d").lower()
+    secs = _OUTCOME_WINDOW_TO_SECS.get(window)
+    if not secs:
+        window, secs = "7d", _OUTCOME_WINDOW_TO_SECS["7d"]
+    agent_type = request.args.get("agent_type") or "openclaw"
+    runtime = request.args.get("runtime") or None
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt):
+        return dt.isoformat().replace("+00:00", "Z")
+
+    cur_since = _iso(now - timedelta(seconds=secs))
+    prev_since = _iso(now - timedelta(seconds=secs * 2))
+
+    # One read covering BOTH windows, split in Python. Two round-trips would
+    # double the daemon-proxy cost for a card that is not the headline
+    # (FLYWHEEL "performance is a feature").
+    rows = _ls_call(
+        "query_outcomes",
+        agent_type=agent_type,
+        since=prev_since,
+        runtime=runtime,
+        limit=int(request.args.get("limit") or 4000),
+    )
+    if rows is None:
+        payload = outcome_trend([], [])
+        payload.update({
+            "window": window,
+            "runtime": runtime or "all",
+            # ``store_available``, not ``available``: this is the same fact
+            # /api/quality/report-card and /api/review/* report under that
+            # name -- whether the local DuckDB could be read at all. One name
+            # for one fact, so a caller does not need a per-endpoint branch.
+            "store_available": False,
+            "_source": "unavailable",
+        })
+        return jsonify(payload)
+
+    current, previous = [], []
+    for r in rows:
+        ts = (r or {}).get("last_active_at") or (r or {}).get("ended_at") or ""
+        # Rows with no usable timestamp can't be placed in a period. Dropping
+        # them beats charging them to the current window, which would fake a
+        # trend out of undated backfill.
+        if not ts:
+            continue
+        (current if ts >= cur_since else previous).append(r)
+
+    payload = outcome_trend(current, previous)
+    payload.update({
+        "window": window,
+        "runtime": runtime or "all",
+        "store_available": True,
+        "_source": "local_store",
+    })
+    return jsonify(payload)
 
 
 @bp_sessions.route("/api/outcomes/sessions")
