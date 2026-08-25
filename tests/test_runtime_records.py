@@ -17,6 +17,11 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
   that a runtime which CAN report cost keeps its honest zero is
   ``test_idle_but_capable_runtime_keeps_its_zero`` -- "unavailable" must not
   swallow a real $0.
+* AC-OBS-CEA-001.4 -- a runtime that records cost for only PART of its work
+  shows the figure and is identified as a floor, not a total:
+  ``test_partial_runtime_keeps_its_number``,
+  ``test_partial_is_not_confused_with_complete``,
+  ``test_the_caveat_actually_renders``.
 """
 import re
 
@@ -235,3 +240,55 @@ def test_usage_endpoint_attaches_coverage_when_scoped():
     assert usage_mod._runtime_coverage("cursor", has_data=True)["status"] == "ok"
     assert usage_mod._runtime_coverage("", has_data=False) is None
     assert usage_mod._runtime_coverage("all", has_data=False) is None
+
+# ── PARTIAL: a number that is a floor, not a total ──────────────────────
+#
+# Added 2026-08-25 after review. n8n was declared ON_DISK from a doc row that
+# actually says "tokens + cost WHERE the model sub-node records usage" — a
+# conditional read as unconditional. That put an n8n total on the Cost tab as
+# if it were the bill, when steps whose model node stays quiet are silently
+# uncounted. Same overstatement this module exists to remove, pointed the
+# other way: not a zero claiming to be spend, but a partial claiming to be a
+# total.
+
+@pytest.mark.parametrize("runtime", sorted(rr.RUNTIME_RECORDS))
+def test_partial_cost_needs_at_least_partial_tokens(runtime):
+    """Cost cannot cover part of the work if no tokens were recorded at all."""
+    entry = rr.RUNTIME_RECORDS[runtime]
+    if entry["cost"] == rr.PARTIAL:
+        assert entry["tokens"] in (rr.ON_DISK, rr.PARTIAL), (
+            f"{runtime} claims partial cost with tokens={entry['tokens']}"
+        )
+
+
+def test_partial_runtime_keeps_its_number():
+    """Suppressing it would understate real spend. It is shown, with a caveat."""
+    p = rr.coverage_payload("n8n", has_data=True)
+    assert p["suppress_zero"] is False
+    assert p["cost_is_partial"] is True
+    assert p["partial_note"]
+    assert rr.is_recorded("n8n", "cost") is True
+
+
+def test_partial_is_not_confused_with_complete():
+    """The flag has to distinguish n8n from a runtime that records everything,
+    or the caveat never renders."""
+    assert rr.coverage_payload("opencode", has_data=True)["cost_is_partial"] is False
+    assert rr.coverage_payload("cursor", has_data=True)["cost_is_partial"] is False
+
+
+def test_the_caveat_actually_renders():
+    """Guard the wiring: cost_is_partial is useless if no surface reads it."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent.parent / "clawmetry" / "static"
+          / "js" / "app.js").read_text(encoding="utf-8")
+    i = js.index("function _cmCoverageNoteHtml(")
+    body = js[i:i + 1200]
+    assert "cost_is_partial" in body
+    assert "at least this much" in body
+
+
+def test_unknown_runtime_fallback_carries_the_new_keys():
+    p = rr.coverage_payload("no_such_runtime_at_all")
+    assert p["cost_is_partial"] is False
+    assert p["partial_note"] == ""

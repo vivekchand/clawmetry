@@ -10241,6 +10241,36 @@ var _loopSignalsExpanded = false;
 var _loopSignalsNotifiedSig = null;
 var _loopSignalsPermissionAsked = false;
 
+// Plain words for each detector kind. The stored signature is an internal id
+// ("daemon_detect_file_blast_radius"); nobody opening this for the first time
+// should have to decode it.
+var LOOP_KIND_LABEL = {
+  stuck_loop: 'Repeating itself',
+  no_progress: 'Busy but not finishing',
+  repeated_tool_failure: 'The same step keeps failing',
+  action_discrepancy: 'Carried on after a failure',
+  file_blast_radius: 'Changed a lot of files at once',
+  credential_access: 'Opened a password or key file',
+  network_egress: 'Contacted somewhere new',
+  privilege_change: 'Asked for admin rights'
+};
+
+// What ignoring this is estimated to cost. Blank when we do not know, because
+// a made-up number is worse than an honest gap.
+function loopMoney(n) {
+  var v = Number(n) || 0;
+  if (v <= 0) return '';
+  return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
+}
+
+function loopBasisHint(basis) {
+  if (basis === 'burn_rate') return 'Measured: this session spend rate over the time it has been off track.';
+  // Say plainly that this one is rough, because it is the reason the row is
+  // not marked critical however large the number looks.
+  if (basis === 'window_fraction') return 'Rough guide only: the session cost shared across the flagged part of the window. Too approximate to raise the alert level on its own.';
+  return 'We do not have cost data for this session.';
+}
+
 function _loopSignalsMaybeNotify(rows) {
   if (!rows || !rows.length) return;
   if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -10299,19 +10329,31 @@ async function loadLoopSignals() {
     // for an alerts upsell.
     _loopSignalsMaybeNotify(rows);
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
-    var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
-      + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';
+    // Ordered by what it costs to ignore (the API sorts; we just render).
+    var totalRisk = loopMoney(data && data.spend_at_risk_usd);
+    var head = '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
+      + '<div>Last seen</div><div>Session</div><div>What happened</div>'
+      + '<div style="text-align:right;" title="Estimated cost of the flagged stretch, not the whole session.">At risk</div>'
+      + '<div style="text-align:right;">Repeats</div></div>';
     var body = rows.map(function(r) {
       var ts = r.last_seen || r.first_seen || '';
       try { ts = new Date(ts).toLocaleString(); } catch (e) {}
       var sid = String(r.session_id || '').slice(0, 16);
-      var sig = String(r.signature || '');
-      if (sig.length > 60) sig = sig.slice(0, 57) + '...';
+      // Prefer the detector headline, then a plain-words kind label, and only
+      // fall back to the raw signature for proxy-emitted rows that have
+      // neither.
+      var what = String(r.title || '') || LOOP_KIND_LABEL[r.kind] || String(r.signature || '');
+      if (what.length > 70) what = what.slice(0, 67) + '...';
       var rc = r.repeat_count != null ? r.repeat_count : '-';
-      return '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
+      var risk = loopMoney(r.spend_at_risk_usd);
+      var riskCell = risk
+        ? '<span title="' + escHtml(loopBasisHint(r.spend_basis)) + '">' + escHtml(risk) + '</span>'
+        : '<span style="color:var(--text-muted);" title="' + escHtml(loopBasisHint('')) + '">no cost data</span>';
+      return '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
         + '<div style="color:var(--text-muted);">' + escHtml(ts) + '</div>'
         + '<div style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.session_id || '')) + '">' + escHtml(sid) + '</div>'
-        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.signature || '')) + '">' + escHtml(sig) + '</div>'
+        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.detail || r.signature || '')) + '">' + escHtml(what) + '</div>'
+        + '<div style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">' + riskCell + '</div>'
         + '<div style="text-align:right;color:#ef4444;font-weight:700;">' + escHtml(String(rc)) + '</div>'
         + '</div>';
     }).join('');
@@ -10330,7 +10372,13 @@ async function loadLoopSignals() {
         + '<a href="https://app.clawmetry.com/upgrade?ref=loops" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">Unlock loop history and alerts in Cloud-Pro</a>'
         + '</div>';
     }
-    tableEl.innerHTML = head + body + cta;
+    // Lead with the money when we have it: the first thing a reader wants to
+    // know is not how many loops there were, it is what they are costing.
+    var summary = totalRisk
+      ? '<div style="padding:6px 0 8px;font-size:12px;color:var(--text-secondary);">About ' + escHtml(totalRisk)
+        + ' of spend is tied up in what is listed below. Stopping an agent here stops that meter.</div>'
+      : '';
+    tableEl.innerHTML = summary + head + body + cta;
   } catch (e) {
     // Fail closed: hide the badge so we don't show a stale or wrong count.
     badge.style.display = 'none';
@@ -10940,6 +10988,10 @@ function _renderRetention(state) {
     return;
   }
   label.textContent = (state && state.explanation) || '';
+  // What is in force right now, so a later Save can tell shrinking from
+  // raising and only confirm the destructive direction.
+  window._cmRetentionEffectiveDays =
+    (state && typeof state.effective_days === 'number') ? state.effective_days : null;
   if (state && state.configured_days) {
     input.value = state.configured_days;
   } else if (state && state.effective_days) {
@@ -10980,6 +11032,26 @@ async function saveRetentionSetting(usePlanDefault) {
         status.textContent = 'Enter a whole number of days, 1 or more.';
         status.style.color = 'var(--danger, #dc2626)';
       }
+      return;
+    }
+  }
+  // Shortening retention DELETES history, within the hour, permanently. The
+  // shrink-only design makes the control safe against granting yourself more
+  // retention than you bought; it does nothing to protect you from deleting
+  // your own evidence by typing a smaller number. Those are different risks
+  // and the first one was mistaken for the second. So: say what will go, and
+  // ask. Only when the new period is SHORTER than what is in force -- raising
+  // it, or returning to the plan default, destroys nothing and should not
+  // nag.
+  var _cur = window._cmRetentionEffectiveDays;
+  if (!usePlanDefault && typeof _cur === 'number' && days < _cur) {
+    var _msg = 'Keep event history for ' + days + ' day'
+      + (days === 1 ? '' : 's') + ' instead of ' + _cur + '?\n\n'
+      + 'Everything older than ' + days + ' day' + (days === 1 ? '' : 's')
+      + ' is deleted from this machine within the hour, and cannot be '
+      + 'recovered.';
+    if (!window.confirm(_msg)) {
+      if (status) { status.textContent = 'Left unchanged.'; status.style.color = ''; }
       return;
     }
   }
@@ -11749,6 +11821,17 @@ function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
 // stops saying "yet" to the first two. Falls back to the old wording when
 // coverage is absent (older daemon, or a node-wide request).
 function _cmCoverageNoteHtml(cov, rtLabel) {
+  // A partial runtime HAS a number and it must not be hidden — hiding it
+  // would understate real spend. But it covers only part of the work, so it
+  // is a floor, and saying nothing would present it as a total. That is the
+  // same overstatement this whole surface exists to stop, pointed the other
+  // way.
+  if (cov && cov.cost_is_partial) {
+    return '<strong>' + escHtml(rtLabel) + ': at least this much</strong>'
+      + (cov.partial_note
+         ? '<div style="margin-top:3px;">' + escHtml(cov.partial_note) + '</div>'
+         : '');
+  }
   if (cov && cov.suppress_zero) {
     var head = '<strong>' + escHtml(cov.headline || '') + '</strong>';
     var why = cov.detail ? '<div style="margin-top:3px;">' + escHtml(cov.detail) + '</div>' : '';
