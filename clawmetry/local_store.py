@@ -470,6 +470,24 @@ _DDL = [
     # from a runtime (or future: node / cwd_prefix) to a friendly team label.
     # key_type='runtime' + key_value='claude_code' + team_label='Eng Team' maps
     # all claude_code sessions to "Eng Team" in /api/usage/by-team.
+    # Node settings: small, operator-set knobs that BOTH processes need.
+    #
+    # The daemon owns the DuckDB writer lock and runs the retention prune;
+    # the dashboard renders the control. A value they must agree on cannot
+    # live in the dashboard's SQLite (the daemon never reads it) or in an
+    # env var (the operator cannot set one from a UI, and it does not
+    # survive a reinstall). So it lives here, in the store both already
+    # read, and the dashboard writes through the daemon proxy.
+    #
+    # Deliberately a tiny key/value table, not a column per setting: these
+    # are node-local preferences, not a schema.
+    """
+    CREATE TABLE IF NOT EXISTS node_settings (
+        key        VARCHAR PRIMARY KEY,
+        value      VARCHAR,
+        updated_at BIGINT
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS team_mapping (
         key_type   VARCHAR NOT NULL,
@@ -6955,6 +6973,48 @@ class LocalStore:
             if runtime and runtime not in out[label]["runtimes"]:
                 out[label]["runtimes"].append(runtime)
         return sorted(out.values(), key=lambda r: r["cost_usd"], reverse=True)
+
+    # ── node settings (operator-set knobs both processes read) ──────────
+
+    def get_node_setting(self, key: str) -> str | None:
+        """One setting's raw string value, or None when unset."""
+        try:
+            rows = self._fetch(
+                "SELECT value FROM node_settings WHERE key = ?", [str(key)]
+            )
+        except Exception:
+            return None
+        if not rows:
+            return None
+        v = rows[0][0]
+        return None if v is None else str(v)
+
+    def set_node_setting(self, key: str, value: object) -> None:
+        """Upsert one setting. ``None`` deletes the row, which is how an
+        operator clears a preference and returns to the default — distinct
+        from setting it to 0, which is a value."""
+        k = str(key)
+        with self._write_lock:
+            if value is None:
+                self._conn.execute("DELETE FROM node_settings WHERE key = ?", [k])
+                return
+            self._conn.execute(
+                "INSERT INTO node_settings (key, value, updated_at)"
+                " VALUES (?, ?, ?)"
+                " ON CONFLICT (key) DO UPDATE SET"
+                "   value = excluded.value, updated_at = excluded.updated_at",
+                [k, str(value), int(time.time() * 1000)],
+            )
+
+    def list_node_settings(self) -> dict[str, str]:
+        """Every setting as ``{key: value}``. Never raises."""
+        try:
+            rows = self._fetch(
+                "SELECT key, value FROM node_settings ORDER BY key", []
+            )
+        except Exception:
+            return {}
+        return {str(r[0]): (None if r[1] is None else str(r[1])) for r in rows}
 
     def list_team_mappings(self) -> list[dict[str, Any]]:
         """Return all rows from team_mapping."""
