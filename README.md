@@ -79,10 +79,14 @@ ClawMetry can only see compaction events on some runtimes. So
 | Path | Added to your agent | Default? |
 |---|---|---|
 | Session-file tailing (all 26 runtimes) | **0**. Separate process, no ClawMetry code in your agent | on |
-| HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.45 ms** per LLM call, or 0.009% of a 5s call | off |
+| HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** per LLM call, or 0.009% of a 5s call | off |
+| Pre-tool hook gate (warm cache) | **+44 ms** per gated tool call, over a 36 ms interpreter floor | off |
+| Enforcement proxy | **+9.7 ms** per LLM call | off |
 
-Daemon host cost: **2,707 events/sec** ingest, **710 bytes/event** on disk
-(67.7 MB per 100k events), **161 MB** peak RSS.
+Daemon host cost: **2,762 events/sec** ingest, **710 bytes/event** on disk
+(67.7 MB per 100k events), and **~12% of one core** sustained on a busy
+install. That last number is over our own stated 5-10% budget, so it is
+published as a bug to chase rather than left off the page.
 
 Measured on an Apple M2 Pro with `benchmarks/overhead.py`. The harness runs
 each condition in a separate process, alternates their order, and **refuses

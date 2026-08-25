@@ -83,3 +83,42 @@ def test_bench_interceptor_reports_the_verdict_field():
     # what ClawMetry actually spends and is the reproducible one.
     assert out["wall"]["baseline"]["n"] > 0
     assert out["cpu"]["baseline"]["n"] > 0
+
+
+# ── the hook gate: the path that can actually hold a tool call ───────────
+
+def test_hook_gate_isolates_the_home_it_measures(tmp_path):
+    """The gate resolves its config as ``expanduser("~/.clawmetry/config.json")``
+    and ignores CLAWMETRY_HOME, so only a home override isolates a run. Getting
+    this wrong reads the operator's real key and benchmarks a different branch
+    than the one you meant, which is exactly what happened the first time."""
+    from benchmarks.overhead import _hook_home
+    import json as _json
+    import os as _os
+
+    home = _hook_home(str(tmp_path), api_key="cm_test", policies=[{"name": "p"}])
+    cfg = _os.path.join(home, ".clawmetry", "config.json")
+    cache = _os.path.join(home, ".clawmetry", "hooks_policy_cache.json")
+    assert _os.path.isfile(cfg) and _os.path.isfile(cache)
+    assert _json.load(open(cfg))["api_key"] == "cm_test"
+    # A no-key condition must leave no config behind at all, or it silently
+    # measures the keyed branch.
+    bare = _hook_home(str(tmp_path), api_key=None, policies=None)
+    assert not _os.path.exists(_os.path.join(bare, ".clawmetry", "config.json"))
+
+
+def test_hook_gate_reports_every_condition_against_a_floor():
+    """Most of a process-per-call hook is Python starting up, which belongs to
+    the mechanism and not to us. Without the floor the headline number is
+    dominated by a cost no change to ClawMetry could ever reduce."""
+    from benchmarks.overhead import bench_hook_gate
+    out = bench_hook_gate(n=4, warmup=1)
+    assert out["floor_bare_interpreter"]["p50_us"] > 0
+    for name in ("no_key", "warm_cache", "policy_miss", "cold_cache"):
+        cond = out["conditions"][name]
+        assert cond["n"] == 4
+        assert "added_over_floor_p50_us" in cond
+    # Only the refetch condition may be labelled network-dependent; mislabelling
+    # would let a network figure be quoted as a per-call cost.
+    assert out["conditions"]["cold_cache"]["network_dependent"] is True
+    assert out["conditions"]["warm_cache"]["network_dependent"] is False

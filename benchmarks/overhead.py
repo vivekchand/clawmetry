@@ -54,6 +54,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import statistics
 import sys
@@ -259,6 +260,148 @@ def bench_interceptor(n: int, warmup: int, rounds: int = 3) -> dict[str, Any]:
         shutil.rmtree(home, ignore_errors=True)
 
 
+# ── 1b. pre-tool hook gates: the other path that IS on the agent's ───────
+#         critical path, and the only one that can hold a tool call.
+
+_HOOK_EVENT = json.dumps({
+    "session_id": "overhead-bench",
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {"command": "ls -la /tmp"},
+    "cwd": "/tmp",
+})
+
+# A policy that cannot match the Bash/ls event above, so the gate runs the
+# full compile + match and then declines. This is the "cheap miss" the fast
+# path was built for and the case a real user hits on almost every call.
+_MISS_POLICY = {
+    "name": "overhead-bench-miss",
+    "enabled": True,
+    "tool": "WebFetch",
+    "action": "ask",
+}
+
+
+def _hook_home(tmp: str, *, api_key: str | None, policies: list | None) -> str:
+    """Build an isolated HOME for one gate condition.
+
+    HOME, not CLAWMETRY_HOME: the gate resolves its config as
+    ``os.path.expanduser("~/.clawmetry/config.json")`` and does not consult
+    CLAWMETRY_HOME, so only a home override actually isolates a run. Getting
+    this wrong reads the operator's real key and silently benchmarks a
+    different branch than the one you meant (it did, first time).
+
+    The caller must set USERPROFILE as well as HOME, because that is the
+    variable ``expanduser`` reads on Windows; setting only HOME there would
+    quietly fall through to the real profile again.
+    """
+    home = os.path.join(tmp, uuid.uuid4().hex[:8])
+    cm = os.path.join(home, ".clawmetry")
+    os.makedirs(cm, exist_ok=True)
+    if api_key:
+        with open(os.path.join(cm, "config.json"), "w") as fh:
+            json.dump({"api_key": api_key, "node_id": "bench-node"}, fh)
+    if policies is not None:
+        # A cache file younger than the 60s TTL keeps the gate off the
+        # network, which is what a warm steady state looks like.
+        with open(os.path.join(cm, "hooks_policy_cache.json"), "w") as fh:
+            json.dump({"policies": policies}, fh)
+    return home
+
+
+def _time_subprocess(argv: list[str], env: dict, stdin: str,
+                     n: int, warmup: int) -> list[float]:
+    """Wall time of a full process launch, which is what the agent waits on."""
+    import subprocess
+    for _ in range(warmup):
+        subprocess.run(argv, input=stdin, env=env, capture_output=True, text=True)
+    out: list[float] = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        subprocess.run(argv, input=stdin, env=env, capture_output=True, text=True)
+        out.append(time.perf_counter() - t0)
+    return out
+
+
+def bench_hook_gate(n: int, warmup: int) -> dict[str, Any]:
+    """Cost of a pre-tool gate, per gated tool call.
+
+    Where a runtime exposes a ``PreToolUse``-style hook, ClawMetry can hold a
+    tool call before it runs. Unlike the interceptor this is not optional
+    plumbing a Python agent opts into: it is a process the runtime spawns and
+    **waits for**, on every matching tool call, before the tool executes. It
+    is therefore the most consequential number on this page.
+
+    Reported against a bare-interpreter floor, because most of a
+    process-per-call hook is Python starting up and that cost belongs to the
+    mechanism rather than to us. The delta over the floor is our contribution
+    and the only part we can do anything about.
+
+    Three conditions, all measured with an isolated HOME:
+
+      ``no_key``      no cloud approver configured. The gate reads one file,
+                      finds nothing to do and returns. Today's OSS-local
+                      posture, and the cheapest real path.
+      ``warm_cache``  a key and a fresh on-disk policy cache. No network.
+      ``policy_miss`` same, plus a policy that compiles and then does not
+                      match. The "cheap miss" the fast path exists for.
+
+      ``cold_cache``  the policy cache has passed its 60s TTL, so the gate
+                      fetches policies from the cloud **inline, on the
+                      critical path**, before the tool runs. Reported
+                      separately and never folded into a headline per-call
+                      average, because it is substantially a measure of the
+                      operator's network: roughly one tool call per minute
+                      pays it, and on a slow link or a cloud outage it is
+                      bounded by a timeout rather than by anything here.
+    """
+    tmp = tempfile.mkdtemp(prefix="cm-bench-hook-")
+    try:
+        base_env = {k: v for k, v in os.environ.items()
+                    if k not in ("CLAWMETRY_API_KEY", "CLAWMETRY_NODE_ID")}
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_env["PYTHONPATH"] = repo
+
+        # The floor: an interpreter that does nothing. Anything a
+        # process-per-call hook costs starts here.
+        floor = _time_subprocess([sys.executable, "-c", "pass"], base_env, "", n, warmup)
+
+        conditions = {
+            "no_key": _hook_home(tmp, api_key=None, policies=None),
+            "warm_cache": _hook_home(tmp, api_key="cm_bench_offline", policies=[]),
+            "policy_miss": _hook_home(tmp, api_key="cm_bench_offline",
+                                      policies=[_MISS_POLICY]),
+            # No cache file at all -> stale by definition -> inline fetch.
+            "cold_cache": _hook_home(tmp, api_key="cm_bench_offline",
+                                     policies=None),
+        }
+        argv = [sys.executable, "-m", "clawmetry", "hooks", "run", "pretooluse"]
+        out: dict[str, Any] = {
+            "on_critical_path": True,
+            "floor_bare_interpreter": _summarise(floor),
+            "conditions": {},
+        }
+        floor_p50 = _summarise(floor)["p50_us"]
+        for name, home in conditions.items():
+            # HOMEDRIVE/HOMEPATH are cleared so they cannot win over
+            # USERPROFILE in expanduser's Windows lookup order.
+            env = dict(base_env, HOME=home, USERPROFILE=home)
+            env.pop("HOMEDRIVE", None)
+            env.pop("HOMEPATH", None)
+            samples = _time_subprocess(argv, env, _HOOK_EVENT, n, warmup)
+            summ = _summarise(samples)
+            out["conditions"][name] = {
+                **summ,
+                "added_over_floor_p50_us": round(summ["p50_us"] - floor_p50, 2),
+                # Flag the one condition whose number is mostly not ours, so
+                # no reader (and no renderer) can quote it as a per-call cost.
+                "network_dependent": name == "cold_cache",
+            }
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ── 2 + 3. ingest throughput, disk, and the read path ────────────────────
 
 def _event(i: int, session_id: str) -> dict[str, Any]:
@@ -375,6 +518,288 @@ def bench_ingest_and_query(events: int, sessions: int, query_n: int) -> dict[str
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ── 3b. the enforcement proxy: an in-path hop for budgets and routing ────
+
+_UPSTREAM_BODY = json.dumps({
+    "id": "msg_bench", "type": "message", "role": "assistant",
+    "model": "claude-opus-4-7",
+    "content": [{"type": "text", "text": "ok"}],
+    "usage": {"input_tokens": 1200, "output_tokens": 40},
+}).encode()
+
+
+def _serve_upstream() -> tuple[Any, str]:
+    """A loopback stand-in for the model provider, keep-alive and NODELAY on."""
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"   # keep-alive; see the note in the worker
+
+        def setup(self) -> None:
+            super().setup()
+            try:
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+
+        def do_POST(self) -> None:  # noqa: N802
+            n = int(self.headers.get("Content-Length") or 0)
+            if n:
+                self.rfile.read(n)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(_UPSTREAM_BODY)))
+            self.end_headers()
+            self.wfile.write(_UPSTREAM_BODY)
+
+        def log_message(self, *a: Any) -> None:
+            return
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}"
+
+
+def bench_proxy(n: int, warmup: int) -> dict[str, Any]:
+    """Cost of routing model calls through the enforcement proxy.
+
+    The proxy (``clawmetry/proxy.py``) enforces budget limits, loop detection
+    and model routing by sitting in the request path, so unlike the collector
+    it is unavoidably on the agent's critical path when enabled.
+
+    **Method.** Both conditions are measured socket-to-socket over loopback,
+    with the proxy served by waitress on a real port, so the comparison is
+    like for like. An earlier attempt timed the proxy through Flask's test
+    client against a real socket for the baseline, which compares two
+    different transports and is not a measurement of anything.
+
+    Part of the delta is inherent rather than ours: a proxy means the request
+    crosses the network stack twice (client to proxy, proxy to provider)
+    instead of once, and on a real deployment that second hop is the one that
+    also carries the provider's own latency. What is measured here is the
+    added cost with the provider replaced by a loopback stub, so the figure is
+    the proxy's own work plus one extra local hop.
+
+    Off by default (opt-in), and returns ``{"skipped": ...}`` rather than a
+    guess when its dependencies are unavailable.
+    """
+    try:
+        import requests
+        import waitress  # noqa: F401
+        from clawmetry.proxy import ProviderConfig, ProxyConfig, create_proxy_app
+    except Exception as exc:
+        return {"skipped": f"proxy deps unavailable: {exc}"}
+
+    import socket as _socket
+    import threading
+
+    tmp = tempfile.mkdtemp(prefix="cm-bench-proxy-")
+    prev_store = os.environ.get("CLAWMETRY_LOCAL_STORE_PATH")
+    prev_home = os.environ.get("CLAWMETRY_HOME")
+    srv = None
+    try:
+        # Sandbox the store. The proxy best-effort writes enforcement events
+        # into DuckDB, and the daemon owns the real writer lock: pointing this
+        # at a temp file keeps the benchmark away from the operator's data and
+        # away from a lock it has no business touching.
+        os.environ["CLAWMETRY_HOME"] = tmp
+        os.environ["CLAWMETRY_LOCAL_STORE_PATH"] = os.path.join(tmp, "bench.duckdb")
+        os.environ.setdefault("ANTHROPIC_API_KEY", "sk-bench-fake")
+
+        srv, upstream = _serve_upstream()
+        cfg = ProxyConfig()
+        cfg.providers = {"anthropic": ProviderConfig(
+            api_key_env="ANTHROPIC_API_KEY", base_url=upstream)}
+        app = create_proxy_app(cfg)
+
+        sk = _socket.socket()
+        sk.bind(("127.0.0.1", 0))
+        port = sk.getsockname()[1]
+        sk.close()
+        import waitress as _w
+        threading.Thread(
+            target=lambda: _w.serve(app, host="127.0.0.1", port=port,
+                                    threads=4, _quiet=True),
+            daemon=True).start()
+
+        payload = {"model": "claude-opus-4-7", "max_tokens": 64,
+                   "messages": [{"role": "user", "content": "benchmark " * 20}]}
+        headers = {"x-api-key": "sk-bench-fake", "content-type": "application/json",
+                   "anthropic-version": "2023-06-01"}
+        sess = requests.Session()
+
+        def _direct() -> None:
+            sess.post(upstream + "/v1/messages", json=payload,
+                      headers=headers, timeout=15)
+
+        def _proxied() -> None:
+            sess.post(f"http://127.0.0.1:{port}/v1/messages", json=payload,
+                      headers=headers, timeout=15)
+
+        for _ in range(200):   # wait for waitress to accept
+            try:
+                _proxied()
+                break
+            except Exception:
+                time.sleep(0.05)
+        else:
+            return {"skipped": "proxy did not come up"}
+
+        # Alternate so neither side gets only the cold half of the run.
+        d1 = _time_many(_direct, n, warmup)
+        p1 = _time_many(_proxied, n, warmup)
+        p2 = _time_many(_proxied, n, 0)
+        d2 = _time_many(_direct, n, 0)
+        direct, proxied = _summarise(d1 + d2), _summarise(p1 + p2)
+        added = round(proxied["p50_us"] - direct["p50_us"], 2)
+        return {
+            "opt_in": True,
+            "on_critical_path": True,
+            "method": ("socket-to-socket over loopback, proxy served by waitress, "
+                       "provider replaced by a local stub; includes the extra hop "
+                       "a proxy inherently adds"),
+            "direct": direct,
+            "proxied": proxied,
+            "added_p50_us": added,
+            "added_p95_us": round(proxied["p95_us"] - direct["p95_us"], 2),
+            "as_pct_of_real_call": {
+                "typical_5s": round(100.0 * added / 5_000_000, 4),
+            },
+        }
+    finally:
+        if srv is not None:
+            srv.shutdown()
+        for key, prev in (("CLAWMETRY_LOCAL_STORE_PATH", prev_store),
+                          ("CLAWMETRY_HOME", prev_home)):
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 4. steady-state daemon cost, measured on a real install ──────────────
+
+def _find_daemon_pids() -> dict[str, int]:
+    """Locate the running ClawMetry daemon and dashboard, read-only.
+
+    Matches on the command line rather than a pid file, because a pid file can
+    outlive the process it names. READS ONLY: this never signals anything. A
+    broad ``pkill``-shaped sweep over the same pattern has taken out a real
+    user's daemon before, so this function deliberately has no way to.
+    """
+    found: dict[str, int] = {}
+    try:
+        import subprocess
+        out = subprocess.check_output(["ps", "-Ao", "pid=,args="], text=True, timeout=15)
+    except Exception:
+        return found
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_s, _, args = line.partition(" ")
+        # A bare "clawmetry" substring is far too loose: on a developer box it
+        # also matches browser tabs open on clawmetry URLs and a cloud-sql-proxy
+        # pointed at the clawmetry database. Require an actual Python process
+        # running one of our two long-lived services.
+        #
+        # Precision matters twice over. Short-lived CLI subcommands must not
+        # match either (`clawmetry hooks run ...` fires on every gated tool
+        # call, and this very harness spawns its own), because sampling a
+        # process that exits mid-window yields a meaningless delta. Both
+        # mistakes were live: the first version latched onto a transient pid
+        # that had already gone by the second reading.
+        if "python" not in args.lower():
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        if ("-m clawmetry.sync" in args or "clawmetry/sync.py" in args) \
+                and "sync_daemon" not in found:
+            found["sync_daemon"] = pid
+        elif ("dashboard.py" in args
+              # The installed dashboard runs as `python -m clawmetry --port N`.
+              # Anchor on the module with no subcommand after it, so the CLI
+              # forms (`-m clawmetry hooks ...`, `-m clawmetry sync`) do not
+              # match here.
+              or re.search(r"-m\s+clawmetry(\s+--|\s*$)", args)) \
+                and "dashboard" not in found:
+            found["dashboard"] = pid
+    return found
+
+
+def _proc_cpu_rss(pid: int) -> tuple[float, float]:
+    """(cumulative CPU seconds, RSS MB) for ``pid``. Raises if it is gone."""
+    import subprocess
+    out = subprocess.check_output(
+        ["ps", "-p", str(pid), "-o", "cputime=,rss="], text=True, timeout=15).strip()
+    cpu_s, rss_s = out.split(None, 1)
+    secs = 0.0
+    for part in cpu_s.replace("-", ":").split(":"):
+        secs = secs * 60 + float(part)
+    return secs, int(rss_s.strip()) / 1024.0
+
+
+def bench_daemon_steady_state(window_s: float = 100.0) -> dict[str, Any]:
+    """What the daemon costs while it just sits there.
+
+    This is the number that actually matters for a sidecar you leave running,
+    and it is the one a burst-of-ingest benchmark cannot tell you. It is
+    measured as a **delta of cumulative CPU time across a window**, not as
+    ``ps %cpu``: that column is a decayed lifetime average, so on a
+    freshly-started daemon it reports the first-run ingest burst rather than
+    the steady state.
+
+    Measures the daemon already running on this machine, because a sandboxed
+    daemon with an empty store is not the thing anyone cares about. That makes
+    the result specific to this install's workload, which is stated rather
+    than smoothed away: a machine driving many agents with a large store will
+    legitimately cost more than a quiet laptop.
+
+    Returns ``{"skipped": ...}`` when no daemon is running, rather than
+    inventing a figure.
+    """
+    pids = _find_daemon_pids()
+    if not pids:
+        return {"skipped": "no running clawmetry daemon found on this machine"}
+
+    before: dict[str, tuple[float, float]] = {}
+    for name, pid in pids.items():
+        try:
+            before[name] = _proc_cpu_rss(pid)
+        except Exception:
+            pass
+    if not before:
+        return {"skipped": "daemon vanished before sampling started"}
+
+    t0 = time.perf_counter()
+    time.sleep(window_s)
+    elapsed = time.perf_counter() - t0
+
+    out: dict[str, Any] = {"window_s": round(elapsed, 1), "processes": {}}
+    for name, (cpu0, rss0) in before.items():
+        try:
+            cpu1, rss1 = _proc_cpu_rss(pids[name])
+        except Exception:
+            # Restarted or exited mid-window: a delta across that is garbage.
+            out["processes"][name] = {"skipped": "process went away mid-window"}
+            continue
+        used = max(0.0, cpu1 - cpu0)
+        out["processes"][name] = {
+            "pid": pids[name],
+            "cpu_seconds_used": round(used, 3),
+            "pct_of_one_core": round(100.0 * used / elapsed, 2),
+            "rss_mb_start": round(rss0, 1),
+            "rss_mb_end": round(rss1, 1),
+        }
+    return out
+
+
 # ── report ───────────────────────────────────────────────────────────────
 
 def _render(report: dict[str, Any]) -> str:
@@ -418,6 +843,50 @@ def _render(report: dict[str, Any]) -> str:
             f"-> instrumented {w['instrumented']['p50_us'] / 1000:.2f} ms "
             f"(stub transport, no network)"
         )
+    px = report.get("proxy") or {}
+    if px.get("skipped"):
+        out.append(f"  enforcement proxy           not measured: {px['skipped']}")
+    elif px.get("added_p50_us") is not None:
+        out.append("")
+        out.append(
+            f"  enforcement proxy (opt-in)  +{px['added_p50_us'] / 1000:.1f} ms per call "
+            f"(p50)   +{px['added_p95_us'] / 1000:.1f} ms p95"
+        )
+        out.append(
+            f"                              = {px['as_pct_of_real_call']['typical_5s']:.3f}% "
+            "of a 5s model call; includes the extra hop a proxy inherently adds"
+        )
+
+    hg = report.get("hook_gate") or {}
+    if hg.get("conditions"):
+        fl = hg["floor_bare_interpreter"]["p50_us"] / 1000
+        out.append("")
+        out.append("  pre-tool hook gate (opt-in, but ON the critical path):")
+        out.append(
+            f"    bare interpreter floor    {fl:.0f} ms   "
+            "- what any process-per-call hook costs before we do anything"
+        )
+        _labels = {
+            "no_key": "no cloud approver",
+            "warm_cache": "warm policy cache",
+            "policy_miss": "policy miss",
+            "cold_cache": "cold cache (refetch)",
+        }
+        for key, lbl in _labels.items():
+            c = hg["conditions"].get(key)
+            if not c:
+                continue
+            tag = "  <- includes a cloud round trip" if c.get("network_dependent") else ""
+            out.append(
+                f"    {lbl:<24}  {c['p50_us'] / 1000:5.0f} ms   "
+                f"(+{c['added_over_floor_p50_us'] / 1000:.0f} ms over floor){tag}"
+            )
+        out.append(
+            "    The refetch happens once per 60s cache window, on whichever tool"
+        )
+        out.append(
+            "    call trips it, and is bounded by your network rather than by us."
+        )
     out.append("")
 
     iq = report.get("ingest_query") or {}
@@ -442,6 +911,21 @@ def _render(report: dict[str, Any]) -> str:
             f"  blowout query {q['p50_us'] / 1000:.1f} ms p50   "
             f"{q['p95_us'] / 1000:.1f} ms p95   (dashboard read, not agent path)"
         )
+    ds = report.get("daemon_steady_state") or {}
+    if ds.get("skipped"):
+        out.append(f"  daemon idle   not measured: {ds['skipped']}")
+    elif ds.get("processes"):
+        for name, pr in ds["processes"].items():
+            if pr.get("skipped"):
+                out.append(f"  {name:<13} not measured: {pr['skipped']}")
+                continue
+            out.append(
+                f"  {name:<13} {pr['pct_of_one_core']:.2f}% of one core sustained "
+                f"over {ds['window_s']:.0f}s, {pr['rss_mb_end']:.0f} MB RSS"
+            )
+        out.append(
+            "                (this install's real workload, not an idle sandbox)"
+        )
     if host.get("peak_rss_mb") is not None:
         out.append(
             f"  memory        {host['peak_rss_mb']} MB peak RSS   "
@@ -455,6 +939,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__ and __doc__.split("\n")[0])
     ap.add_argument("--quick", action="store_true", help="fewer samples, ~15s")
     ap.add_argument("--json", dest="json_path", help="also write the raw report here")
+    ap.add_argument(
+        "--daemon-window", type=float, default=0.0,
+        help=("also sample the RUNNING daemon's steady-state CPU for this many "
+              "seconds (e.g. 100). Off by default: it costs that much wall "
+              "clock and needs a daemon to be running. Read-only."))
     args = ap.parse_args()
 
     # The interceptor measurement needs its own, much larger sample count.
@@ -479,7 +968,16 @@ def main() -> int:
         },
     }
     report["interceptor"] = bench_interceptor(icept_n, icept_warmup, icept_rounds)
+    # Subprocess-per-sample, so far fewer iterations than the in-process
+    # interceptor measurement: each one is a full interpreter launch.
+    report["proxy"] = bench_proxy(
+        n=60 if args.quick else 200, warmup=20 if args.quick else 50)
+    report["hook_gate"] = bench_hook_gate(
+        n=15 if args.quick else 40, warmup=3 if args.quick else 8)
     report["ingest_query"] = bench_ingest_and_query(events, sessions=50, query_n=query_n)
+
+    if args.daemon_window > 0:
+        report["daemon_steady_state"] = bench_daemon_steady_state(args.daemon_window)
 
     print(_render(report))
     if args.json_path:

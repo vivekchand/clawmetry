@@ -21,101 +21,187 @@
     "wall": {
       "baseline": {
         "n": 15000,
-        "p50_us": 651.71,
-        "p95_us": 2616.75,
-        "p99_us": 4375.21,
-        "min_us": 168.21,
-        "max_us": 70258.67,
-        "stdev_us": 1074.88
+        "p50_us": 558.58,
+        "p95_us": 2788.38,
+        "p99_us": 6649.17,
+        "min_us": 167.46,
+        "max_us": 47058.08,
+        "stdev_us": 1570.59
       },
       "instrumented": {
         "n": 15000,
-        "p50_us": 1106.33,
-        "p95_us": 3309.62,
-        "p99_us": 5106.08,
-        "min_us": 296.42,
-        "max_us": 35878.04,
-        "stdev_us": 1079.76
+        "p50_us": 998.0,
+        "p95_us": 3737.42,
+        "p99_us": 7565.92,
+        "min_us": 287.25,
+        "max_us": 58439.83,
+        "stdev_us": 1819.58
       },
-      "added_p50_us": 454.62,
-      "added_p95_us": 692.87
+      "added_p50_us": 439.42,
+      "added_p95_us": 949.04
     },
     "cpu": {
       "baseline": {
         "n": 15000,
-        "p50_us": 442.0,
-        "p95_us": 672.0,
-        "p99_us": 784.0,
-        "min_us": 139.0,
-        "max_us": 2819.0,
-        "stdev_us": 136.38
+        "p50_us": 419.0,
+        "p95_us": 636.0,
+        "p99_us": 794.0,
+        "min_us": 140.0,
+        "max_us": 1497.0,
+        "stdev_us": 134.95
       },
       "instrumented": {
         "n": 15000,
-        "p50_us": 787.0,
-        "p95_us": 1168.0,
-        "p99_us": 1326.0,
-        "min_us": 258.0,
-        "max_us": 1698.0,
-        "stdev_us": 241.07
+        "p50_us": 780.0,
+        "p95_us": 1146.0,
+        "p99_us": 1366.0,
+        "min_us": 253.0,
+        "max_us": 2036.0,
+        "stdev_us": 242.28
       },
-      "added_p50_us": 345.0
+      "added_p50_us": 361.0
     },
     "as_pct_of_real_call": {
-      "fast_1s": 0.0455,
-      "typical_5s": 0.0091,
+      "fast_1s": 0.0439,
+      "typical_5s": 0.0088,
       "long_30s": 0.0015
     },
     "per_round": [
       {
         "round": 0,
         "first": "baseline",
-        "wall_delta_p50_us": 557.58,
-        "cpu_delta_p50_us": 343.0
+        "wall_delta_p50_us": 571.5,
+        "cpu_delta_p50_us": 398.0
       },
       {
         "round": 1,
         "first": "patched",
-        "wall_delta_p50_us": 382.54,
-        "cpu_delta_p50_us": 351.0
+        "wall_delta_p50_us": 338.5,
+        "cpu_delta_p50_us": 335.0
       },
       {
         "round": 2,
         "first": "baseline",
-        "wall_delta_p50_us": 414.62,
-        "cpu_delta_p50_us": 339.0
+        "wall_delta_p50_us": 404.96,
+        "cpu_delta_p50_us": 352.0
       }
     ],
     "rounds_agree_on_sign": true,
     "below_noise_floor": false
   },
+  "proxy": {
+    "opt_in": true,
+    "on_critical_path": true,
+    "method": "socket-to-socket over loopback, proxy served by waitress, provider replaced by a local stub; includes the extra hop a proxy inherently adds",
+    "direct": {
+      "n": 400,
+      "p50_us": 1673.63,
+      "p95_us": 5516.04,
+      "p99_us": 9686.63,
+      "min_us": 620.46,
+      "max_us": 17208.46,
+      "stdev_us": 1767.7
+    },
+    "proxied": {
+      "n": 400,
+      "p50_us": 11363.5,
+      "p95_us": 27495.92,
+      "p99_us": 43541.67,
+      "min_us": 6212.46,
+      "max_us": 83736.0,
+      "stdev_us": 8071.61
+    },
+    "added_p50_us": 9689.87,
+    "added_p95_us": 21979.88,
+    "as_pct_of_real_call": {
+      "typical_5s": 0.1938
+    }
+  },
+  "hook_gate": {
+    "on_critical_path": true,
+    "floor_bare_interpreter": {
+      "n": 40,
+      "p50_us": 35975.46,
+      "p95_us": 45830.42,
+      "p99_us": 60800.29,
+      "min_us": 28594.17,
+      "max_us": 60800.29,
+      "stdev_us": 6339.45
+    },
+    "conditions": {
+      "no_key": {
+        "n": 40,
+        "p50_us": 53398.58,
+        "p95_us": 66010.12,
+        "p99_us": 67509.79,
+        "min_us": 45754.17,
+        "max_us": 67509.79,
+        "stdev_us": 5943.77,
+        "added_over_floor_p50_us": 17423.12,
+        "network_dependent": false
+      },
+      "warm_cache": {
+        "n": 40,
+        "p50_us": 80426.0,
+        "p95_us": 102774.46,
+        "p99_us": 476228.04,
+        "min_us": 66944.42,
+        "max_us": 476228.04,
+        "stdev_us": 62422.28,
+        "added_over_floor_p50_us": 44450.54,
+        "network_dependent": false
+      },
+      "policy_miss": {
+        "n": 40,
+        "p50_us": 83506.54,
+        "p95_us": 114828.33,
+        "p99_us": 169933.37,
+        "min_us": 66641.54,
+        "max_us": 169933.37,
+        "stdev_us": 18125.77,
+        "added_over_floor_p50_us": 47531.08,
+        "network_dependent": false
+      },
+      "cold_cache": {
+        "n": 40,
+        "p50_us": 225296.13,
+        "p95_us": 298812.92,
+        "p99_us": 306541.62,
+        "min_us": 196740.0,
+        "max_us": 306541.62,
+        "stdev_us": 27492.06,
+        "added_over_floor_p50_us": 189320.67,
+        "network_dependent": true
+      }
+    }
+  },
   "ingest_query": {
     "ingest": {
       "events": 25000,
       "sessions": 50,
-      "elapsed_s": 9.234,
-      "events_per_sec": 2707,
-      "us_per_event": 369.37
+      "elapsed_s": 9.05,
+      "events_per_sec": 2762,
+      "us_per_event": 362.0
     },
     "disk": {
-      "total_bytes": 17758796,
-      "bytes_per_event": 710.4,
+      "total_bytes": 17757586,
+      "bytes_per_event": 710.3,
       "mb_per_100k_events": 67.7
     },
     "query_context_blowout": {
       "n": 15,
-      "p50_us": 14485.42,
-      "p95_us": 57994.29,
-      "p99_us": 57994.29,
-      "min_us": 11335.04,
-      "max_us": 57994.29,
-      "stdev_us": 10946.49
+      "p50_us": 17683.58,
+      "p95_us": 28848.83,
+      "p99_us": 28848.83,
+      "min_us": 12798.42,
+      "max_us": 28848.83,
+      "stdev_us": 4305.26
     },
     "host": {
-      "peak_rss_mb": 161.0,
-      "rss_growth_mb": 60.2,
-      "cpu_user_s": 8.152,
-      "cpu_sys_s": 0.346
+      "peak_rss_mb": 199.2,
+      "rss_growth_mb": 89.3,
+      "cpu_user_s": 10.623,
+      "cpu_sys_s": 2.568
     }
   }
 }
