@@ -1612,6 +1612,63 @@ _DDL = [
         PRIMARY KEY (repo_root, sha)
     )
     """,
+    # ── Guard policies (detector incident -> enforcement action) ──────────
+    # Authored in the dashboard's Guard panel, evaluated by the daemon in
+    # ``sync.py::_emit_detector_incidents`` via ``clawmetry.policy_engine``.
+    # Rules are LOCAL: they never leave the node, because the actuator they
+    # drive (process_control signals) only works on the node itself.
+    """
+    CREATE TABLE IF NOT EXISTS session_policy (
+        policy_id       VARCHAR PRIMARY KEY,
+        name            VARCHAR,
+        enabled         BOOLEAN DEFAULT TRUE,
+        scope_runtime   VARCHAR DEFAULT '',
+        scope_agent_id  VARCHAR DEFAULT '',
+        trigger_kind    VARCHAR DEFAULT '',
+        min_severity    VARCHAR DEFAULT 'info',
+        min_repeat      INTEGER DEFAULT 0,
+        min_duration_s  INTEGER DEFAULT 0,
+        min_spend_usd   DOUBLE  DEFAULT 0,
+        action          VARCHAR DEFAULT 'monitor',
+        -- Escalation ladder as JSON: [{"action","after_secs"}, ...].
+        -- Empty/NULL means the single `action` above, which is why every
+        -- pre-ladder policy keeps working untouched.
+        steps           VARCHAR DEFAULT '',
+        created_at      BIGINT NOT NULL,
+        updated_at      BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_policy_enabled ON session_policy(enabled)",
+    # Threshold on the estimated cost of the FLAGGED STRETCH, as opposed to
+    # min_spend_usd which is the whole session's bill. "Kill anything burning
+    # more than $5 while stuck" is the rule people actually want, and it needs
+    # this column. ALTER (not a new CREATE) so existing stores pick it up.
+    "ALTER TABLE session_policy ADD COLUMN IF NOT EXISTS min_spend_at_risk_usd DOUBLE DEFAULT 0",
+    # Every policy decision the daemon reached, acted on or not. Doubles as
+    # the DURABLE one-shot latch: the (session_id, policy_id, step_index) PK
+    # means each RUNG of a policy's escalation ladder fires at most once per
+    # session even across a daemon restart, so a restart can never re-kill a
+    # session it already acted on, and can never replay a ladder from rung 0.
+    # A policy with no ladder is a one-rung ladder at step_index 0, which is
+    # exactly the old (session_id, policy_id) latch.
+    """
+    CREATE TABLE IF NOT EXISTS policy_actions (
+        session_id      VARCHAR NOT NULL,
+        policy_id       VARCHAR NOT NULL,
+        step_index      INTEGER NOT NULL DEFAULT 0,
+        runtime         VARCHAR,
+        action          VARCHAR,
+        kind            VARCHAR,
+        reason          VARCHAR,
+        evidence        BLOB,
+        enforced        BOOLEAN DEFAULT FALSE,
+        result_ok       BOOLEAN DEFAULT FALSE,
+        result_detail   VARCHAR,
+        created_at      BIGINT NOT NULL,
+        PRIMARY KEY (session_id, policy_id, step_index)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_policy_actions_created ON policy_actions(created_at DESC)",
 ]
 
 
@@ -1712,6 +1769,10 @@ _MIGRATIONS_V2 = [
     # Absolute root the relative `path` hangs off, so a cloud viewer can show
     # where on disk the file lives without re-deriving it from the runtime.
     ("memory_blobs", "root",          "VARCHAR"),
+    # Guard escalation ladders: JSON [{"action","after_secs"}, ...]. Empty on
+    # existing rows, which normalize_steps() reads as the single `action` —
+    # so every policy authored before ladders keeps its exact behaviour.
+    ("session_policy", "steps",       "VARCHAR DEFAULT ''"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -1770,6 +1831,60 @@ def _apply_migrations(conn) -> None:
         }
         if col not in existing_cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    if "policy_actions" in existing_tables:
+        _migrate_policy_actions_ladder(conn)
+
+
+def _migrate_policy_actions_ladder(conn) -> None:
+    """Widen the Guard latch from (session, policy) to (session, policy, step).
+
+    Escalation ladders need each RUNG to latch independently: with the old
+    two-column PK, rung 1 would overwrite rung 0's row, the ladder would lose
+    its place, and a daemon restart would replay it from the top — meaning a
+    ladder ending in ``kill`` could re-fire.
+
+    DuckDB cannot ALTER a primary key, so this rebuilds the table. Idempotent
+    via the ``step_index`` column probe: on an already-migrated store it does
+    nothing. Existing rows land at ``step_index = 0``, which is where a
+    single-action policy belongs. Failure is contained by the caller (which
+    logs and continues), and a store that stays on the old shape keeps
+    working — it just cannot climb past rung 0.
+    """
+    cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info('policy_actions')").fetchall()}
+    if "step_index" in cols:
+        return
+    conn.execute("""
+        CREATE TABLE policy_actions__ladder (
+            session_id      VARCHAR NOT NULL,
+            policy_id       VARCHAR NOT NULL,
+            step_index      INTEGER NOT NULL DEFAULT 0,
+            runtime         VARCHAR,
+            action          VARCHAR,
+            kind            VARCHAR,
+            reason          VARCHAR,
+            evidence        BLOB,
+            enforced        BOOLEAN DEFAULT FALSE,
+            result_ok       BOOLEAN DEFAULT FALSE,
+            result_detail   VARCHAR,
+            created_at      BIGINT NOT NULL,
+            PRIMARY KEY (session_id, policy_id, step_index)
+        )
+    """)
+    conn.execute("""
+        INSERT INTO policy_actions__ladder (
+            session_id, policy_id, step_index, runtime, action, kind, reason,
+            evidence, enforced, result_ok, result_detail, created_at
+        )
+        SELECT session_id, policy_id, 0, runtime, action, kind, reason,
+               evidence, enforced, result_ok, result_detail, created_at
+        FROM policy_actions
+    """)
+    conn.execute("DROP TABLE policy_actions")
+    conn.execute("ALTER TABLE policy_actions__ladder RENAME TO policy_actions")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_actions_created "
+                 "ON policy_actions(created_at DESC)")
+    log.info("local store: policy_actions migrated to a per-step Guard latch")
 
 
 # ── v7 dedup migration (#1232) ───────────────────────────────────────────────
@@ -1943,6 +2058,29 @@ def _to_blob(value: Any) -> bytes | None:
         return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
     except Exception:
         return str(value).encode("utf-8", errors="replace")
+
+
+def _from_blob(value: Any) -> Any:
+    """Inverse of :func:`_to_blob` — decode a DuckDB BLOB back to a Python
+    value. JSON is parsed; anything else comes back as a string. Never
+    raises: an undecodable blob returns ``None`` so one bad row cannot break
+    a whole result set."""
+    if value is None:
+        return None
+    try:
+        raw = (bytes(value).decode("utf-8", errors="replace")
+               if isinstance(value, (bytes, bytearray)) else str(value))
+    except Exception:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw[0] in "{[":
+        try:
+            return json.loads(raw)
+        except Exception:
+            return raw
+    return raw
 
 
 # DuckDB defaults to threads == CPU core count, so a single aggregate query
@@ -5003,6 +5141,297 @@ class LocalStore:
                         d["details"] = text
                 except UnicodeDecodeError:
                     d["details"] = None
+    # ── Guard policies ────────────────────────────────────────────────────
+    def upsert_session_policy(self, policy: dict) -> None:
+        """Create or update one Guard policy.
+
+        Permissive by design (repo rule: never crash on bad input) — a row
+        missing ``policy_id`` is dropped rather than raised on, and an
+        unknown ``action`` is coerced to the safe default ``monitor`` so a
+        malformed write can never escalate to a kill.
+        """
+        if not isinstance(policy, dict):
+            return
+        pid = str(policy.get("policy_id") or "").strip()[:128]
+        if not pid:
+            return
+        from clawmetry.policy_engine import ACTIONS as _ACTIONS
+        action = str(policy.get("action") or "monitor").strip().lower()
+        if action not in _ACTIONS:
+            action = "monitor"
+        sev = str(policy.get("min_severity") or "info").strip().lower()
+        # ``critical`` is the money/irreversibility tier: incidents whose
+        # spend at risk crosses the threshold, and the behavioural findings
+        # that outlive the session (a disabled protection, a root delete).
+        if sev not in ("info", "warning", "critical"):
+            sev = "info"
+        now_ms = int(time.time() * 1000)
+
+        def _i(key):
+            try:
+                return max(0, int(policy.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        def _f(key):
+            try:
+                return max(0.0, float(policy.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Normalize the ladder through the engine so what is STORED is what
+        # will be EVALUATED — validating here and again at read time would let
+        # the two drift. A malformed rung is dropped once, at the door.
+        from clawmetry.policy_engine import normalize_steps as _norm_steps
+        _steps = _norm_steps(policy)
+        # A one-rung ladder that merely repeats `action` carries no
+        # information, so store '' and let it read back as a plain policy.
+        _steps_json = ""
+        if len(_steps) > 1 or (_steps and _steps[0]["action"] != action):
+            _steps_json = json.dumps(_steps, separators=(",", ":"))[:4000]
+
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO session_policy (
+                    policy_id, name, enabled, scope_runtime, scope_agent_id,
+                    trigger_kind, min_severity, min_repeat, min_duration_s,
+                    min_spend_usd, min_spend_at_risk_usd, action, steps,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (policy_id) DO UPDATE SET
+                    name           = excluded.name,
+                    enabled        = excluded.enabled,
+                    scope_runtime  = excluded.scope_runtime,
+                    scope_agent_id = excluded.scope_agent_id,
+                    trigger_kind   = excluded.trigger_kind,
+                    min_severity   = excluded.min_severity,
+                    min_repeat     = excluded.min_repeat,
+                    min_duration_s = excluded.min_duration_s,
+                    min_spend_usd  = excluded.min_spend_usd,
+                    min_spend_at_risk_usd = excluded.min_spend_at_risk_usd,
+                    action         = excluded.action,
+                    steps          = excluded.steps,
+                    updated_at     = excluded.updated_at
+            """, [
+                pid,
+                str(policy.get("name") or "")[:200],
+                bool(policy.get("enabled", True)),
+                str(policy.get("scope_runtime") or "")[:64],
+                str(policy.get("scope_agent_id") or "")[:64],
+                str(policy.get("trigger_kind") or "")[:64],
+                sev,
+                _i("min_repeat"),
+                _i("min_duration_s"),
+                _f("min_spend_usd"),
+                _f("min_spend_at_risk_usd"),
+                action,
+                _steps_json,
+                now_ms,
+                now_ms,
+            ])
+
+    def delete_session_policy(self, policy_id: str) -> int:
+        """Delete one Guard policy. Returns rows removed (0 or 1)."""
+        pid = str(policy_id or "").strip()
+        if not pid:
+            return 0
+        with self._write_lock:
+            before = self._conn.execute(
+                "SELECT COUNT(*) FROM session_policy WHERE policy_id = ?",
+                [pid]).fetchone()
+            self._conn.execute(
+                "DELETE FROM session_policy WHERE policy_id = ?", [pid])
+        return int(before[0]) if before else 0
+
+    def query_session_policies(self, enabled_only: bool = False) -> list:
+        """All Guard policies, newest-updated first.
+
+        Returns ``[]`` on any error so a policy-table problem degrades to
+        "no enforcement" rather than breaking the daemon tick.
+        """
+        try:
+            sql = ("SELECT policy_id, name, enabled, scope_runtime, "
+                   "scope_agent_id, trigger_kind, min_severity, min_repeat, "
+                   "min_duration_s, min_spend_usd, min_spend_at_risk_usd, "
+                   "action, steps, created_at, updated_at FROM session_policy")
+            if enabled_only:
+                sql += " WHERE enabled = TRUE"
+            sql += " ORDER BY updated_at DESC"
+            rows = self._conn.execute(sql).fetchall()
+        except Exception:
+            return []
+        cols = ["policy_id", "name", "enabled", "scope_runtime",
+                "scope_agent_id", "trigger_kind", "min_severity", "min_repeat",
+                "min_duration_s", "min_spend_usd", "min_spend_at_risk_usd",
+                "action", "steps", "created_at", "updated_at"]
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            # Hand back a real list, never the raw JSON column: the engine
+            # tolerates both but the API and the UI should only ever see one.
+            raw = d.get("steps")
+            d["steps"] = []
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        d["steps"] = parsed
+                except Exception:
+                    pass
+            out.append(d)
+        return out
+
+    def policy_already_fired(self, session_id: str, policy_id: str,
+                             step_index: int = 0) -> bool:
+        """Durable one-shot latch, per RUNG of the policy's ladder.
+
+        True when this policy has already reached a decision at this rung for
+        this session. Survives daemon restarts (the in-memory alternative
+        would let a restart re-kill a session it already acted on). Fails
+        CLOSED — any read error returns True, i.e. we decline to act rather
+        than risk acting twice.
+
+        ``step_index`` defaults to 0, so a caller that predates escalation
+        ladders keeps the exact old semantics: a single-action policy fires
+        at most once per session.
+        """
+        sid = str(session_id or "").strip()
+        pid = str(policy_id or "").strip()
+        if not sid or not pid:
+            return True
+        try:
+            step = max(0, int(step_index or 0))
+        except (TypeError, ValueError):
+            return True  # fail closed on an unreadable rung
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM policy_actions WHERE session_id = ? "
+                "AND policy_id = ? AND step_index = ? LIMIT 1",
+                [sid, pid, step]).fetchone()
+            return row is not None
+        except Exception:
+            return True
+
+    def query_policy_ladder_state(self, limit: int = 2000) -> dict:
+        """How far each escalation ladder has climbed.
+
+        Returns ``{session_id: {policy_id: {"last_step", "last_fired_at"}}}``
+        where ``last_fired_at`` is epoch SECONDS (the engine's clock unit;
+        the column is milliseconds).
+
+        This is what makes a ladder durable: the daemon reads it each tick and
+        hands it to ``policy_engine.evaluate``, so a restart resumes at the
+        rung it had reached instead of replaying the ladder from the top — a
+        replay that, for a ladder ending in ``kill``, would mean killing a
+        session twice.
+
+        ``{}`` on any error, which reads as "no ladder has started". That is
+        the safe direction: every ladder is treated as being at rung 0, and
+        rung 0 is still protected by the per-step latch.
+        """
+        try:
+            lim = max(1, min(int(limit or 2000), 20000))
+        except (TypeError, ValueError):
+            lim = 2000
+        try:
+            rows = self._conn.execute(
+                "SELECT session_id, policy_id, MAX(step_index) AS last_step, "
+                "MAX(created_at) AS last_fired_at FROM policy_actions "
+                "GROUP BY session_id, policy_id "
+                "ORDER BY last_fired_at DESC LIMIT ?", [lim]).fetchall()
+        except Exception:
+            return {}
+        out: dict = {}
+        for sid, pid, last_step, last_fired_ms in rows:
+            if not sid or not pid:
+                continue
+            try:
+                step = int(last_step or 0)
+                fired = float(last_fired_ms or 0) / 1000.0
+            except (TypeError, ValueError):
+                continue
+            out.setdefault(str(sid), {})[str(pid)] = {
+                "last_step": step,
+                "last_fired_at": fired,
+            }
+        return out
+
+    def record_policy_action(self, session_id: str, policy_id: str,
+                             runtime: str = "", action: str = "",
+                             kind: str = "", reason: str = "",
+                             evidence: Any = None, enforced: bool = False,
+                             result_ok: bool = False,
+                             result_detail: str = "",
+                             step_index: int = 0) -> None:
+        """Record one policy decision (acted on or not) at one ladder rung.
+
+        Written for EVERY decision including dry-run ``monitor`` ones, which
+        is what makes monitor mode honest: the user can read exactly what
+        would have fired. Also serves as the latch (PK conflict = already
+        fired), so this must be written before/regardless of whether the
+        actuator succeeded.
+
+        ``step_index`` is part of the PK, so each rung of a ladder gets its
+        own durable row. Re-recording the SAME rung (the daemon writes once
+        before acting and once after, to fill in the result) updates that row
+        rather than inserting a second one.
+        """
+        sid = str(session_id or "").strip()[:128]
+        pid = str(policy_id or "").strip()[:128]
+        if not sid or not pid:
+            return
+        try:
+            step = max(0, int(step_index or 0))
+        except (TypeError, ValueError):
+            step = 0
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO policy_actions (
+                        session_id, policy_id, step_index, runtime, action,
+                        kind, reason, evidence, enforced, result_ok,
+                        result_detail, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (session_id, policy_id, step_index) DO UPDATE SET
+                        result_ok     = excluded.result_ok,
+                        result_detail = excluded.result_detail,
+                        enforced      = excluded.enforced
+                """, [
+                    sid, pid, step,
+                    str(runtime or "")[:64],
+                    str(action or "")[:32],
+                    str(kind or "")[:64],
+                    str(reason or "")[:400],
+                    _to_blob(evidence) if evidence is not None else None,
+                    bool(enforced),
+                    bool(result_ok),
+                    str(result_detail or "")[:400],
+                    int(time.time() * 1000),
+                ])
+        except Exception:
+            return
+
+    def query_policy_actions(self, limit: int = 50) -> list:
+        """Recent policy decisions, newest first. ``[]`` on any error."""
+        try:
+            lim = max(1, min(int(limit or 50), 500))
+        except (TypeError, ValueError):
+            lim = 50
+        try:
+            rows = self._conn.execute(
+                "SELECT session_id, policy_id, step_index, runtime, action, "
+                "kind, reason, evidence, enforced, result_ok, result_detail, "
+                "created_at FROM policy_actions ORDER BY created_at DESC "
+                "LIMIT ?", [lim]).fetchall()
+        except Exception:
+            return []
+        cols = ["session_id", "policy_id", "step_index", "runtime", "action",
+                "kind", "reason", "evidence", "enforced", "result_ok",
+                "result_detail", "created_at"]
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            d["evidence"] = _from_blob(d.get("evidence"))
             out.append(d)
         return out
 
