@@ -792,6 +792,7 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
                 [_gw_log_override] if _gw_log_override else _gateway_log_files()
             )
             _gw_log_path = _gw_candidates[-1] if _gw_candidates else None
+            _gw_events_before = len(events)
             if _gw_log_path:
                 try:
                     with open(_gw_log_path, "r", encoding="utf-8", errors="replace") as _gf:
@@ -805,6 +806,29 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
                         except Exception:
                             pass
                 except OSError:
+                    pass
+            # For genuinely container-isolated sandboxes the host path has no
+            # visibility into the container filesystem. Fall back to reading
+            # /tmp/gateway.log from inside the container via `sandbox exec`,
+            # matching the harness's own fetch path in test/cli/logs.test.ts
+            # (#5192). Skip when OPENSHELL_GATEWAY_LOG is set so test fixtures
+            # that override the path keep working.
+            if len(events) == _gw_events_before and not _gw_log_override:
+                try:
+                    _exec_res = _sp.run(
+                        ["openshell", "sandbox", "exec", "-n", name,
+                         "--", "tail", "-n", str(count), "/tmp/gateway.log"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    for _exec_line in (_exec_res.stdout or "").splitlines():
+                        _exec_line = _exec_line.strip()
+                        if not _exec_line:
+                            continue
+                        try:
+                            events.append(json.loads(_exec_line))
+                        except Exception:
+                            pass
+                except Exception:
                     pass
         return events
     except Exception:
