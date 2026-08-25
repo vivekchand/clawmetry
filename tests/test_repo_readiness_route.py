@@ -129,6 +129,15 @@ def test_window_is_clamped(monkeypatch, repo):
     assert readiness.readiness_payload(path=repo, days=-5)["window_days"] == 0
 
 
+def test_a_local_scan_does_not_claim_all_runtimes(monkeypatch, repo):
+    """The local endpoint re-scans per runtime, so the card must not show the
+    hosted "scored against every runtime" caveat when a filter is on."""
+    monkeypatch.setattr(readiness, "_repo_activity", lambda days: [])
+    assert readiness.readiness_payload(
+        path=repo, runtime="cursor")["scope"] == "cursor"
+    assert readiness.readiness_payload(path=repo)["scope"] == "all_runtimes"
+
+
 def test_runtime_filter_reaches_the_score(monkeypatch, repo):
     monkeypatch.setattr(readiness, "_repo_activity", lambda days: [])
     claude = readiness.readiness_payload(path=repo, runtime="claude_code")

@@ -21262,7 +21262,20 @@ function _cmRenderReadiness(data) {
   var unknown = checks.filter(function (c) { return c.status === 'unknown'; });
   var totalW = counted.reduce(function (a, c) { return a + c.weight; }, 0) || 1;
 
-  var html = '<div class="rr-verdict">' + _cmReadinessVerdict(rep, days) + '</div>';
+  var html = '';
+  // Per-runtime honesty (FLYWHEEL 0a.2). The hosted card is served from a
+  // snapshot the daemon scored against EVERY runtime's declared files,
+  // because the daemon cannot know which runtime the viewer picked. When a
+  // runtime filter is on and the payload says all_runtimes, say so out loud
+  // rather than letting node-wide data read as runtime-scoped.
+  var rtSel = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (data.scope === 'all_runtimes' && rtSel && rtSel !== 'all') {
+    html += '<div class="rr-scope-note">Scored against every runtime, not just '
+      + escapeHtml(rtSel) + '. This card comes from the snapshot your machine '
+      + 'uploaded, and that scan does not know which runtime you have selected.'
+      + '</div>';
+  }
+  html += '<div class="rr-verdict">' + _cmReadinessVerdict(rep, days) + '</div>';
   html += '<div class="rr-top">';
 
   // Grade block.

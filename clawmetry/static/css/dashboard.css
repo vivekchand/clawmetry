@@ -3126,3 +3126,8 @@ body.has-profile-menu #logout-btn { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .rr-card * { transition: none !important; animation: none !important; }
 }
+.rr-scope-note {
+  font-size: 12px; color: var(--text-warning); background: var(--bg-warning);
+  border: 1px solid var(--border-primary); border-radius: 6px;
+  padding: 7px 11px; margin-bottom: 14px; max-width: 72ch;
+}

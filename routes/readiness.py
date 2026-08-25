@@ -138,6 +138,10 @@ def readiness_payload(path: str = "", runtime: str = "",
         "report": report,
         "window_days": days,
         "runtime": runtime or "all",
+        # Local scans honour the runtime switcher, so the card needs no
+        # "all runtimes" caveat. The DAEMON's snapshot slice sets
+        # scope="all_runtimes" instead, and the renderer labels that.
+        "scope": runtime or "all_runtimes",
         "discovery": "sessions" if repos else "cwd",
     }
 
