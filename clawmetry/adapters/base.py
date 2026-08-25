@@ -209,12 +209,12 @@ class Session:
             self.end_reason = verdict.end_reason
         if not self.initial_cwd:
             # ONLY from an adapter that genuinely knows the launch directory.
-            # Deliberately not defaulted to ``cwd``: seeding it from wherever
-            # the session happens to be running now would make the two equal by
-            # construction, and the later drift check would never fire. The
-            # first-observation seed belongs in the durable record
-            # (``local_store.record_session_phase``), which can tell a first
-            # sighting from a re-read; this object cannot.
+            # Not defaulted to ``cwd`` HERE: this object is rebuilt on every
+            # pass, so seeding from wherever the session is running now would
+            # re-seed it every time and the two would be equal by construction.
+            # The first-observation seed belongs in the durable record
+            # (``local_store.record_session_phase``), which CAN tell a first
+            # sighting from a re-read and freezes the value it seeds.
             launch = extra.get("initialCwd") or extra.get("initial_cwd") or ""
             self.initial_cwd = str(launch or "")[:1024]
         return verdict

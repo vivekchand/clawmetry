@@ -4519,10 +4519,19 @@ class LocalStore:
           moves it. The daemon re-reads an active session every tick and
           restarts on every upgrade; recomputing this would reset "waiting on
           you for 14 minutes" to zero precisely when someone came back to look.
-        * **``initial_cwd`` is written once.** ``COALESCE`` keeps the first
-          non-empty value forever, so it stays comparable against ``cwd``
-          (where the session is running now). Seeding it from the current
-          directory on a re-read would make the two equal by construction.
+        * **``initial_cwd`` is written once.** On the FIRST insert it is seeded
+          from ``initial_cwd`` where the adapter knows the launch directory and
+          from ``cwd`` otherwise; ``COALESCE`` then keeps that first non-empty
+          value forever, so it stays comparable against ``cwd`` (where the
+          session is running now). This table is the only layer that can do the
+          seeding, because it is the only one that can tell a first sighting
+          from a re-read -- seeding on every pass would make the two equal by
+          construction and the later drift comparison could never fire.
+
+          The honest limit: a session first observed long after it launched is
+          seeded with wherever it had already got to. Drift that happened
+          before we were watching is not observable and is therefore not
+          reported, rather than being guessed at.
 
         A phase of ``None`` is recorded as NULL, not coerced to a quiet
         default: "we could not tell" is an answer this table stores.
