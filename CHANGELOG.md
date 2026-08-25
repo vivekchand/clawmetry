@@ -30,6 +30,15 @@
 - **Nothing is invented when there is no history.** A repo no agent has touched says so, rather than reporting that nobody got stuck in it. Those are different facts and a zero would read as the second.
 - **Verified:** 61 tests, and each honesty rule was checked by breaking the code and watching its test go red. Run against the real folders on a real machine, and both states looked at in a browser rather than assumed.
 
+### The cost surfaces can finally say whether any of it shipped (REQ-OBS-CEA-022) (2026-08-25)
+- **Who this reaches:** anyone whose agent works inside a Git repository, on every plan. Nothing to install, nothing to connect, and no account on your code host required.
+- **The gap this closes.** Every number ClawMetry showed you until now was an input. It could tell you an agent ran for three hours and cost $41, and it had no idea whether a line of that reached your product. If you have ever been asked to justify an agent budget, you have felt the missing half.
+- **Three new figures.** What a merged change actually cost. How much of what the agent wrote was later rewritten by somebody else. And how much money went to sessions that ended having produced nothing at all.
+- **It reads your repository. It never touches it.** No checkout, no fetch, no config change, no hook installed, nothing written to disk inside your project. That is enforced in code rather than promised in a document: every command goes through one gate that only lets read-only Git plumbing past, and a write command raises instead of running.
+- **No pull-request account needed.** If the `gh` command is installed and signed in, pull-request state is used. If it is not, the same figures come from your local branch and merge state, and the answer says which of the two it used rather than quietly reporting a smaller number.
+- **A quiet session is never called abandoned.** Only a session whose runtime actually reported that it ended can count toward abandoned spend. Guessing from silence would have been easy and would have inflated the one number most likely to be quoted at somebody.
+- **It tells you what it could not see.** Next to the figures is a count of the sessions that had no working directory recorded, or whose directory was not a repository we scanned, along with what those sessions spent. A small answer and a wrong answer look different.
+- **It stays out of your way.** Repository reading runs on its own slow timer, with ceilings on how far back it reads, how many commits and files it examines, and how long it may take, and `CLAWMETRY_GIT_OUTCOMES=0` switches it off entirely.
 
 ### Release: your agent is watched for more than loops, and the list is sorted by what it costs you (carries #5168) (2026-08-25)
 - **Who this reaches:** everyone. The detection that used to notice a stuck agent now also notices one behaving unlike itself, and the list you look at is ordered by money rather than by whichever check spoke last.

@@ -1454,6 +1454,117 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_repo_ts  ON otlp_records(repo, ts)",
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_user_ts  ON otlp_records(user_email, ts)",
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_sess_ts  ON otlp_records(session_id, ts)",
+    # ── Git outcomes (REQ-OBS-CEA-022) ────────────────────────────────────
+    #
+    # The output half of "what did this cost". Every cost figure in the
+    # product is an input; nothing until now was an outcome, so there was
+    # nothing to divide spend by. These five tables hold what
+    # ``clawmetry/git_outcomes.py`` reads out of the repository a session ran
+    # in — read-only, no network, no connector.
+    #
+    # Additive, each with its own primary key; no existing schema function is
+    # edited, so this composes with any other work adding tables here.
+    # ``CREATE TABLE IF NOT EXISTS`` makes it idempotent, so no schema-version
+    # bump is required.
+    #
+    # Every row that rests on a judgement carries the basis for it, because a
+    # merged verdict derived from a guessed default branch is a weaker claim
+    # than one derived from the remote's own HEAD, and a reader has to be able
+    # to tell them apart.
+    """
+    CREATE TABLE IF NOT EXISTS git_repos (
+        repo_root       VARCHAR PRIMARY KEY,
+        remote_url      VARCHAR,
+        host            VARCHAR,
+        owner           VARCHAR,
+        name            VARCHAR,
+        default_branch  VARCHAR,
+        branch_basis    VARCHAR,
+        merge_basis     VARCHAR,
+        pr_basis        VARCHAR,
+        rework_complete BOOLEAN DEFAULT FALSE,
+        commits_seen    INTEGER DEFAULT 0,
+        -- The commit cap keeps the NEWEST commits, so a truncated read is
+        -- narrower at its far end than asked for. A reader has to be able to
+        -- tell "nothing correlated" from "we did not look that far back".
+        commits_truncated BOOLEAN DEFAULT FALSE,
+        window_since    BIGINT DEFAULT 0,
+        window_until    BIGINT DEFAULT 0,
+        candidate_files INTEGER DEFAULT 0,
+        measured_files  INTEGER DEFAULT 0,
+        scan_secs       DOUBLE DEFAULT 0,
+        last_scanned_at BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS git_commits (
+        repo_root    VARCHAR NOT NULL,
+        sha          VARCHAR NOT NULL,
+        authored_at  BIGINT,
+        author_email VARCHAR,
+        author_name  VARCHAR,
+        subject      VARCHAR,
+        insertions   INTEGER DEFAULT 0,
+        deletions    INTEGER DEFAULT 0,
+        files_changed INTEGER DEFAULT 0,
+        -- NULL, not FALSE: "we could not resolve a default branch" and "this
+        -- did not ship" are different answers and must not render the same.
+        merged       BOOLEAN,
+        branch_hint  VARCHAR,
+        is_revert    BOOLEAN DEFAULT FALSE,
+        updated_at   BIGINT NOT NULL,
+        PRIMARY KEY (repo_root, sha)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_git_commits_time ON git_commits(authored_at)",
+    """
+    CREATE TABLE IF NOT EXISTS git_pull_requests (
+        repo_root    VARCHAR NOT NULL,
+        number       INTEGER NOT NULL,
+        state        VARCHAR,
+        title        VARCHAR,
+        url          VARCHAR,
+        merged_at    BIGINT DEFAULT 0,
+        head_branch  VARCHAR,
+        base_branch  VARCHAR,
+        merge_commit VARCHAR,
+        basis        VARCHAR,
+        updated_at   BIGINT NOT NULL,
+        PRIMARY KEY (repo_root, number)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_git_prs_merged ON git_pull_requests(merged_at)",
+    # One row per (commit, session) the correlator linked. ``confidence`` is
+    # the whole point of the table: repository-and-time is a real signal and a
+    # weak one, and presenting it as the same thing as an agreeing branch is
+    # the failure this column exists to prevent.
+    """
+    CREATE TABLE IF NOT EXISTS git_session_commits (
+        repo_root      VARCHAR NOT NULL,
+        sha            VARCHAR NOT NULL,
+        session_id     VARCHAR NOT NULL,
+        confidence     VARCHAR,
+        basis          VARCHAR,
+        matched_branch VARCHAR,
+        updated_at     BIGINT NOT NULL,
+        PRIMARY KEY (repo_root, sha, session_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_git_links_session ON git_session_commits(session_id)",
+    # Rework, measured rather than guessed: how many of the lines a commit
+    # added still exist at the current tip. ``added_lines`` counts only the
+    # files that were actually blamed, so the rate divides by what was
+    # measured and never by a total nobody looked at.
+    """
+    CREATE TABLE IF NOT EXISTS git_line_survival (
+        repo_root       VARCHAR NOT NULL,
+        sha             VARCHAR NOT NULL,
+        added_lines     INTEGER DEFAULT 0,
+        surviving_lines INTEGER DEFAULT 0,
+        measured_at     BIGINT NOT NULL,
+        PRIMARY KEY (repo_root, sha)
+    )
+    """,
 ]
 
 
@@ -4781,6 +4892,470 @@ class LocalStore:
             return []
         return [_session_phase_row(r) for r in rows]
 
+
+    # ── Git outcomes (REQ-OBS-CEA-022) ──────────────────────────────────
+    #
+    # The daemon writes one scan per repository through
+    # :meth:`ingest_git_scan`; the surface reads one composed answer through
+    # :meth:`query_git_outcomes`. Both live here so the join between spend
+    # (``sessions``) and outcome (``git_*``) has exactly one implementation,
+    # rather than one per consumer.
+
+    def ingest_git_scan(self, scan: dict[str, Any]) -> dict[str, int]:
+        """Persist one repository scan from ``clawmetry.git_outcomes``.
+
+        One method rather than five so the daemon proxy exposes one entry
+        point and a scan lands atomically enough that a reader never sees
+        commits without the repository row that says how they were judged.
+
+        Permissive by design: a scan that fails to persist must not take down
+        the tick that produced it. Returns per-table row counts.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: ingest_git_scan() called on read-only store"
+            )
+        root = str((scan or {}).get("repo_root") or "").strip()
+        if not root:
+            return {"repos": 0, "commits": 0, "pull_requests": 0,
+                    "links": 0, "survival": 0}
+        now = int(time.time())
+        counts = {"repos": 0, "commits": 0, "pull_requests": 0,
+                  "links": 0, "survival": 0}
+        survival = dict(scan.get("survival") or {})
+        measured = set(scan.get("measured_files") or [])
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO git_repos (
+                        repo_root, remote_url, host, owner, name,
+                        default_branch, branch_basis, merge_basis, pr_basis,
+                        rework_complete, commits_seen, commits_truncated,
+                        window_since, window_until, candidate_files,
+                        measured_files, scan_secs, last_scanned_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (repo_root) DO UPDATE SET
+                        remote_url      = excluded.remote_url,
+                        host            = excluded.host,
+                        owner           = excluded.owner,
+                        name            = excluded.name,
+                        default_branch  = excluded.default_branch,
+                        branch_basis    = excluded.branch_basis,
+                        merge_basis     = excluded.merge_basis,
+                        pr_basis        = excluded.pr_basis,
+                        rework_complete = excluded.rework_complete,
+                        commits_seen    = excluded.commits_seen,
+                        commits_truncated = excluded.commits_truncated,
+                        window_since    = excluded.window_since,
+                        window_until    = excluded.window_until,
+                        candidate_files = excluded.candidate_files,
+                        measured_files  = excluded.measured_files,
+                        scan_secs       = excluded.scan_secs,
+                        last_scanned_at = excluded.last_scanned_at
+                """, [
+                    root, str(scan.get("remote_url") or "")[:500],
+                    str(scan.get("host") or "")[:255],
+                    str(scan.get("owner") or "")[:255],
+                    str(scan.get("name") or "")[:255],
+                    str(scan.get("default_branch") or "")[:255],
+                    str(scan.get("branch_basis") or "unknown")[:32],
+                    str(scan.get("merge_basis") or "unknown")[:32],
+                    str(scan.get("pr_basis") or "unknown")[:48],
+                    bool(scan.get("rework_complete")),
+                    int(scan.get("commits_seen") or 0),
+                    bool(scan.get("commits_truncated")),
+                    int(scan.get("window_since") or 0),
+                    int(scan.get("window_until") or 0),
+                    int(scan.get("candidate_files") or 0),
+                    len(measured),
+                    float(scan.get("scan_secs") or 0.0),
+                    now,
+                ])
+                counts["repos"] = 1
+
+                for c in scan.get("commits") or []:
+                    sha = str(c.get("sha") or "")
+                    if not sha:
+                        continue
+                    files = c.get("files") or []
+                    self._conn.execute("""
+                        INSERT INTO git_commits (
+                            repo_root, sha, authored_at, author_email,
+                            author_name, subject, insertions, deletions,
+                            files_changed, merged, branch_hint, is_revert,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (repo_root, sha) DO UPDATE SET
+                            insertions    = excluded.insertions,
+                            deletions     = excluded.deletions,
+                            files_changed = excluded.files_changed,
+                            merged        = excluded.merged,
+                            branch_hint   = excluded.branch_hint,
+                            updated_at    = excluded.updated_at
+                    """, [
+                        root, sha, int(c.get("authored_at") or 0),
+                        str(c.get("author_email") or "")[:320],
+                        str(c.get("author_name") or "")[:255],
+                        str(c.get("subject") or "")[:500],
+                        int(c.get("insertions") or 0),
+                        int(c.get("deletions") or 0),
+                        len(files),
+                        c.get("merged"),
+                        str(c.get("branch_hint") or "")[:255],
+                        bool(c.get("is_revert")),
+                        now,
+                    ])
+                    counts["commits"] += 1
+                    # Added lines restricted to the files that were actually
+                    # blamed, so the rework rate divides by what was measured.
+                    added_measured = sum(
+                        int(f[1]) for f in files
+                        if f and str(f[0]) in measured and len(f) > 1
+                    )
+                    # Only merged commits carry a survival row: an unmerged
+                    # commit's lines are absent from the tip because it has
+                    # not landed, not because anyone rewrote them.
+                    if c.get("merged") and (added_measured > 0 or sha in survival):
+                        self._conn.execute("""
+                            INSERT INTO git_line_survival (
+                                repo_root, sha, added_lines, surviving_lines,
+                                measured_at
+                            ) VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT (repo_root, sha) DO UPDATE SET
+                                added_lines     = excluded.added_lines,
+                                surviving_lines = excluded.surviving_lines,
+                                measured_at     = excluded.measured_at
+                        """, [root, sha, added_measured,
+                              int(survival.get(sha) or 0), now])
+                        counts["survival"] += 1
+
+                prs = scan.get("pull_requests")
+                if prs is not None:
+                    for pr in prs:
+                        num = int(pr.get("number") or 0)
+                        if not num:
+                            continue
+                        self._conn.execute("""
+                            INSERT INTO git_pull_requests (
+                                repo_root, number, state, title, url,
+                                merged_at, head_branch, base_branch,
+                                merge_commit, basis, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT (repo_root, number) DO UPDATE SET
+                                state        = excluded.state,
+                                title        = excluded.title,
+                                url          = excluded.url,
+                                merged_at    = excluded.merged_at,
+                                head_branch  = excluded.head_branch,
+                                base_branch  = excluded.base_branch,
+                                merge_commit = excluded.merge_commit,
+                                basis        = excluded.basis,
+                                updated_at   = excluded.updated_at
+                        """, [
+                            root, num, str(pr.get("state") or "")[:32],
+                            str(pr.get("title") or "")[:500],
+                            str(pr.get("url") or "")[:500],
+                            int(pr.get("merged_at") or 0),
+                            str(pr.get("head_branch") or "")[:255],
+                            str(pr.get("base_branch") or "")[:255],
+                            str(pr.get("merge_commit") or "")[:40],
+                            str(scan.get("pr_basis") or "")[:48], now,
+                        ])
+                        counts["pull_requests"] += 1
+
+                for ln in scan.get("links") or []:
+                    sha = str(ln.get("sha") or "")
+                    sid = str(ln.get("session_id") or "")
+                    if not sha or not sid:
+                        continue
+                    self._conn.execute("""
+                        INSERT INTO git_session_commits (
+                            repo_root, sha, session_id, confidence, basis,
+                            matched_branch, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (repo_root, sha, session_id) DO UPDATE SET
+                            confidence     = excluded.confidence,
+                            basis          = excluded.basis,
+                            matched_branch = excluded.matched_branch,
+                            updated_at     = excluded.updated_at
+                    """, [root, sha, sid[:255],
+                          str(ln.get("confidence") or "")[:16],
+                          str(ln.get("basis") or "")[:48],
+                          str(ln.get("matched_branch") or "")[:255], now])
+                    counts["links"] += 1
+        except Exception:
+            log.exception("local store: ingest_git_scan failed (continuing)")
+        return counts
+
+    def query_git_repos(self) -> list[dict[str, Any]]:
+        """Every repository a scan has reached, newest scan first."""
+        cols = ("repo_root", "remote_url", "host", "owner", "name",
+                "default_branch", "branch_basis", "merge_basis", "pr_basis",
+                "rework_complete", "commits_seen", "commits_truncated",
+                "window_since", "window_until", "candidate_files",
+                "measured_files", "scan_secs", "last_scanned_at")
+        try:
+            rows = self._fetch(
+                f"SELECT {', '.join(cols)} FROM git_repos "
+                "ORDER BY last_scanned_at DESC", [])
+        except Exception:
+            return []
+        return [dict(zip(cols, r)) for r in rows]
+
+    #: Correlation strengths, strongest first. A caller names the weakest one
+    #: it will accept; anything weaker is counted and excluded, never silently
+    #: mixed in with the rest.
+    _GIT_CONFIDENCE_ORDER = ("high", "medium", "low")
+
+    def query_git_outcomes(
+        self,
+        *,
+        since_day: str = "",
+        repo: str = "",
+        runtime: str = "",
+        min_confidence: str = "medium",
+    ) -> dict[str, Any]:
+        """Join spend to outcome: what shipped, what was redone, what was lost.
+
+        ``since_day`` is a node-local ``YYYY-MM-DD`` lower bound produced by
+        ``clawmetry.cost_windows`` — the same clock every other cost surface
+        uses, so "this week" here means the week it means everywhere else.
+
+        The three figures and how each is derived:
+
+        * **cost per merged change** — the spend of sessions that produced at
+          least one merged commit, divided by the merged units that spend is
+          attached to. Units are pull requests where the code host answered
+          and merged commits where it did not, and the response says which.
+        * **rework** — the share of lines those sessions' commits added that no
+          longer exist at the tip, measured over the files that were actually
+          blamed.
+        * **abandoned spend** — the cost of sessions whose runtime reported
+          that they ended and that produced no commit at all. A session that
+          is merely quiet is not counted; see ADR-051.
+
+        Everything that could not be attributed is reported as its own count
+        rather than divided away, so a small answer is distinguishable from a
+        wrong one.
+        """
+        from clawmetry.cost_windows import day_expr_sql
+
+        order = self._GIT_CONFIDENCE_ORDER
+        want = str(min_confidence or "medium").lower()
+        max_rank = order.index(want) if want in order else 1
+        accepted = set(order[:max_rank + 1])
+
+        empty_cov = {
+            "sessions_in_window": 0, "sessions_with_cwd": 0,
+            "sessions_in_known_repo": 0, "sessions_not_attributable": 0,
+            "sessions_with_end_signal": 0, "unattributed_spend_usd": 0.0,
+            "links_by_confidence": {}, "links_excluded": 0,
+        }
+
+        try:
+            repos = {r["repo_root"]: r for r in self.query_git_repos()}
+        except Exception:
+            repos = {}
+        if repo:
+            repos = {k: v for k, v in repos.items() if k == repo}
+        if not repos:
+            return {"available": False, "reason": "no_repositories_scanned",
+                    "repos": [], "metrics": {}, "coverage": empty_cov}
+
+        # ── sessions in the window ──────────────────────────────────────
+        clauses = ["cost_usd IS NOT NULL"]
+        params: list[Any] = []
+        if since_day:
+            clauses.append(f"{day_expr_sql('last_active_at')} >= ?")
+            params.append(str(since_day))
+        rt_clause, rt_params = _runtime_session_id_clause(runtime)
+        if rt_clause:
+            clauses.append(rt_clause)
+            params.extend(rt_params)
+        try:
+            srows = self._fetch(
+                "SELECT session_id, cost_usd, cwd, git_branch, metadata "
+                "FROM sessions WHERE " + " AND ".join(clauses), params)
+        except Exception:
+            srows = []
+
+        sessions: dict[str, dict[str, Any]] = {}
+        for sid, cost, cwd, branch, meta in srows:
+            sid = str(sid or "")
+            if not sid:
+                continue
+            sessions[sid] = {
+                "session_id": sid,
+                # float(x or 0) would turn a real 0.0 into a missing value and
+                # a missing value into a real zero. Both matter here.
+                "cost_usd": float(cost) if cost is not None else 0.0,
+                "cwd": str(cwd or ""),
+                "git_branch": str(branch or ""),
+                "end_reason": _session_end_reason(meta),
+            }
+
+        # A session belongs to a repository when its recorded directory is
+        # inside one we scanned. Longest match wins, so a nested repository
+        # is not swallowed by its parent.
+        roots = sorted(repos.keys(), key=len, reverse=True)
+        for s in sessions.values():
+            cwd = s["cwd"]
+            s["repo_root"] = ""
+            if not cwd:
+                continue
+            for root in roots:
+                if cwd == root or cwd.startswith(root.rstrip("/") + "/"):
+                    s["repo_root"] = root
+                    break
+
+        # ── links, commits, pull requests, survival ─────────────────────
+        placeholders = ", ".join("?" * len(repos))
+        rvals = list(repos.keys())
+        try:
+            lrows = self._fetch(
+                "SELECT l.repo_root, l.sha, l.session_id, l.confidence, "
+                "       c.merged, c.branch_hint, c.is_revert "
+                "FROM git_session_commits l "
+                "LEFT JOIN git_commits c "
+                "  ON c.repo_root = l.repo_root AND c.sha = l.sha "
+                f"WHERE l.repo_root IN ({placeholders})", rvals)
+        except Exception:
+            lrows = []
+        try:
+            prrows = self._fetch(
+                "SELECT repo_root, number, state, merged_at, head_branch, "
+                "       merge_commit "
+                f"FROM git_pull_requests WHERE repo_root IN ({placeholders})",
+                rvals)
+        except Exception:
+            prrows = []
+        try:
+            svrows = self._fetch(
+                "SELECT repo_root, sha, added_lines, surviving_lines "
+                f"FROM git_line_survival WHERE repo_root IN ({placeholders})",
+                rvals)
+        except Exception:
+            svrows = []
+
+        merged_by_commit: dict[tuple, int] = {}
+        merged_by_branch: dict[tuple, int] = {}
+        for root, num, state, merged_at, head, mc in prrows:
+            if not merged_at:
+                continue
+            if mc:
+                merged_by_commit[(root, str(mc))] = int(num)
+            if head:
+                merged_by_branch[(root, str(head))] = int(num)
+        survival = {(str(r), str(sha)): (int(add or 0), int(sur or 0))
+                    for r, sha, add, sur in svrows}
+
+        # ── fold ────────────────────────────────────────────────────────
+        by_conf: dict[str, int] = {}
+        excluded = 0
+        merged_units: set = set()
+        shipped_sessions: set = set()
+        touched_sessions: set = set()
+        rework_added = rework_surviving = 0
+        counted_shas: set = set()
+        pr_backed = False
+
+        for root, sha, sid, conf, merged, branch_hint, _is_revert in lrows:
+            sid = str(sid or "")
+            conf = str(conf or "")
+            if sid not in sessions:
+                continue
+            by_conf[conf] = by_conf.get(conf, 0) + 1
+            if conf not in accepted:
+                excluded += 1
+                continue
+            touched_sessions.add(sid)
+            if not merged:
+                continue
+            shipped_sessions.add(sid)
+            pr = (merged_by_commit.get((root, str(sha)))
+                  or merged_by_branch.get((root, str(branch_hint or ""))))
+            if pr:
+                pr_backed = True
+                merged_units.add((root, "pr", pr))
+            else:
+                merged_units.add((root, "sha", str(sha)))
+            key = (str(root), str(sha))
+            if key not in counted_shas and key in survival:
+                counted_shas.add(key)
+                add, sur = survival[key]
+                rework_added += add
+                rework_surviving += sur
+
+        shipped_spend = round(
+            sum(sessions[s]["cost_usd"] for s in shipped_sessions), 6)
+        n_units = len(merged_units)
+        with_cwd = [s for s in sessions.values() if s["cwd"]]
+        in_repo = [s for s in with_cwd if s["repo_root"]]
+        ended = [s for s in in_repo if s["end_reason"]]
+        abandoned = [s for s in ended if s["session_id"] not in touched_sessions]
+
+        rework_pct = (round(1.0 - (rework_surviving / rework_added), 4)
+                      if rework_added > 0 else None)
+        pr_bases = {repos[r].get("pr_basis") for r in repos}
+        rework_partial = any(not repos[r].get("rework_complete") for r in repos)
+
+        metrics = {
+            "cost_per_merged_change": _git_metric(
+                value=(round(shipped_spend / n_units, 4) if n_units else None),
+                basis="pull_requests" if pr_backed else "branch_reachability",
+                reason=None if n_units else "no_merged_work_correlated",
+                unit="usd",
+                numerator_usd=shipped_spend,
+                denominator=n_units,
+                denominator_kind=("merged_pull_requests" if pr_backed
+                                  else "merged_commits"),
+                sessions_counted=len(shipped_sessions),
+            ),
+            "rework_rate": _git_metric(
+                value=rework_pct,
+                basis="line_survival",
+                reason=None if rework_pct is not None else "no_lines_measured",
+                unit="ratio",
+                lines_added_measured=rework_added,
+                lines_surviving=rework_surviving,
+                commits_measured=len(counted_shas),
+                complete=not rework_partial,
+            ),
+            "abandoned_session_spend": _git_metric(
+                value=(round(sum(s["cost_usd"] for s in abandoned), 6)
+                       if ended else None),
+                basis="end_reason",
+                reason=None if ended else "no_session_reported_an_end",
+                unit="usd",
+                sessions=len(abandoned),
+                sessions_with_end_signal=len(ended),
+            ),
+        }
+        coverage = {
+            "sessions_in_window": len(sessions),
+            "sessions_with_cwd": len(with_cwd),
+            "sessions_in_known_repo": len(in_repo),
+            "sessions_not_attributable": len(sessions) - len(in_repo),
+            "sessions_with_end_signal": len(ended),
+            "unattributed_spend_usd": round(sum(
+                s["cost_usd"] for s in sessions.values()
+                if not s["repo_root"]), 6),
+            "links_by_confidence": by_conf,
+            "links_excluded": excluded,
+            "min_confidence": order[max_rank],
+            # True when at least one repository hit the commit cap, so its
+            # history was read less far back than the window asked for.
+            "history_truncated": any(bool(repos[r].get("commits_truncated"))
+                                     for r in repos),
+        }
+        return {
+            "available": True,
+            "repos": [repos[r] for r in repos],
+            "pr_state": ("available" if pr_backed
+                         else (sorted(pr_bases)[0] if pr_bases else "unknown")),
+            "metrics": metrics,
+            "coverage": coverage,
+        }
     def ingest_alert_rule(self, rule: dict[str, Any]) -> None:
         """Upsert one alert rule. Required: ``id``.
 
@@ -14589,6 +15164,62 @@ def _runtime_session_id_clause(runtime: str | None) -> tuple[str | None, list[st
     # Unknown runtime label: produce a clause that matches nothing, so callers
     # get an empty result instead of silently leaking the unfiltered total.
     return ("1 = 0", [])
+
+# ── Git-outcome helpers (REQ-OBS-CEA-022) ──────────────────────────────────
+
+def _session_end_reason(meta: Any) -> str:
+    """The runtime's own end signal for a session, or ``""``.
+
+    ``sessions.metadata`` is a JSON blob and the end signal lives inside it
+    rather than in a column, so this is the one place that digs it out.
+
+    Its absence is the whole point of ADR-051: only a session whose runtime
+    said it ended may be called abandoned. Returning ``""`` for a session that
+    is merely quiet is correct and is what keeps a silence out of a money
+    figure.
+    """
+    if not meta:
+        return ""
+    if isinstance(meta, (bytes, bytearray, memoryview)):
+        try:
+            meta = bytes(meta).decode("utf-8", "replace")
+        except Exception:
+            return ""
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (TypeError, ValueError):
+            return ""
+    if not isinstance(meta, dict):
+        return ""
+    for key in ("end_reason", "endReason"):
+        v = meta.get(key)
+        if v:
+            return str(v)[:64]
+    return ""
+
+
+def _git_metric(*, value: Any, basis: str, reason: str | None = None,
+                unit: str = "", **extra: Any) -> dict[str, Any]:
+    """One reported figure, with what it rests on and whether it exists.
+
+    ``available`` is ``value is not None`` and deliberately NOT ``bool(value)``.
+    A rework rate of 0.0 means every line survived, which is the best possible
+    answer, and a cost of $0.00 for merged work is a real result. Treating a
+    falsy float as missing has already turned a genuine zero into a false
+    "stale data" state in this codebase once; it is not going to do it here.
+    """
+    out: dict[str, Any] = {
+        "value": value,
+        "available": value is not None,
+        "basis": basis,
+        "unit": unit,
+    }
+    if value is None and reason:
+        out["reason"] = reason
+    out.update(extra)
+    return out
+
 
 # Issue #1718: event_types whose ``data`` is rendered as a turn by the
 # transcript detail view (``routes/sessions.py:_try_local_store_transcript``
