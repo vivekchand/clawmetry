@@ -145,6 +145,14 @@ coverage is the thing this page exists to avoid:
   harness.
 - **Enforcement proxy** (`clawmetry/proxy.py`, port 4100). An in-path HTTP
   proxy for budget limits and model routing. Adds a hop; unmeasured.
+- **Steady-state daemon CPU.** The figures above measure a burst of ingest
+  work, not the 24/7 idle cost, which is what actually matters for a sidecar
+  you leave running. ClawMetry holds itself to a documented budget here (the
+  daemon idles near 0% and averages no more than roughly 5-10% of one core;
+  DuckDB is capped at 2 threads, hot rollups are result-cached, and polling is
+  in seconds-to-minutes rather than sub-second). That budget is enforced by
+  review and regression tests rather than by this harness, so treat it as a
+  stated target and not as a number this page measured.
 - **Cloud sync.** Snapshot encryption and upload run in the daemon, off the
   agent path, but the CPU cost of AES-256-GCM over a large snapshot is not
   in these figures.
