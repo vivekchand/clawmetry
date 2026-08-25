@@ -31,6 +31,7 @@ from typing import Any
 # Leaf module (typing-only deps) — safe to import at package load, no cycle.
 from clawmetry import error_signal as _error_signal
 from clawmetry import session_titles as _session_titles
+from clawmetry.adapters import phase as _phase
 
 
 def _get_openclaw_dir():
@@ -12904,6 +12905,25 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                     }
                 )
                 last_mtimes[fpath.name] = current_mtime
+                # Phase, on the same durable record every runtime writes to.
+                # OpenClaw is the one runtime that emits a real end signal, so
+                # its ``end_reason`` reaches the resolver as an asserted end
+                # and beats recency; without one the same recency windows the
+                # family runtimes use apply, and both come from
+                # clawmetry/adapters/phase.py rather than from a second rule
+                # invented here.
+                try:
+                    from clawmetry import local_store as _ls_phase
+                    _phase_store = _ls_phase.get_store()
+                except Exception:
+                    _phase_store = None
+                if _phase_store is not None:
+                    _record_session_phase(
+                        _phase_store, sid, "openclaw",
+                        end_reason=end_reason,
+                        last_activity_at=_iso_to_epoch(updated_at),
+                        started_at=_iso_to_epoch(started_at),
+                    )
                 if len(batch) >= BATCH_SIZE:
                     total_uploaded += _flush(batch)
                     batch = []
@@ -13760,12 +13780,111 @@ def _epoch_to_iso(epoch) -> str | None:
         return None
 
 
+def _iso_to_epoch(iso) -> float | None:
+    """Inverse of :func:`_epoch_to_iso`: ISO-8601 (or epoch) to epoch seconds.
+
+    OpenClaw stamps ISO strings while the phase model works in epoch seconds.
+    Tolerates a trailing ``Z`` (Python 3.9's ``fromisoformat`` rejects it) and
+    returns ``None`` on anything unparseable, so a bad timestamp reads as "no
+    signal" rather than as a session that has been idle since 1970.
+    """
+    if not iso:
+        return None
+    if isinstance(iso, (int, float)):
+        try:
+            return float(iso) or None
+        except (TypeError, ValueError):
+            return None
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
 # Session liveness buckets. Deliberately the SAME thresholds the subagent
 # reader already derives (routes/sessions.py ``_try_local_store_subagents``:
 # <120s active, <600s idle, else stale) so the two surfaces cannot disagree
 # about what "right now" means.
-_SESSION_ACTIVE_SECS = 120
-_SESSION_IDLE_SECS = 600
+# One definition of "recent", shared with the session phase model. These used
+# to be two literals here; ``clawmetry/adapters/phase.py`` now owns them so the
+# phase a session reports and the status this function buckets it into cannot
+# drift apart. Same values as before, so no bucket moved.
+_SESSION_ACTIVE_SECS = int(_phase.DEFAULT_WORKING_SECS)
+_SESSION_IDLE_SECS = int(_phase.DEFAULT_STALE_SECS)
+
+
+def _record_session_phase(store, session_id: str, runtime: str, *,
+                          phase=None, status=None, end_reason: str = "",
+                          last_activity_at=None, started_at=None,
+                          archived: bool = False, pid=None,
+                          cwd: str = "", initial_cwd: str = "",
+                          resolvable=None) -> dict:
+    """Resolve one session's phase and stamp the durable transition.
+
+    Called on EVERY observed session on every pass, before the high-water
+    skip -- a session that stopped advancing is exactly the one whose phase
+    must move on (working -> idle -> ended), and skipping it would freeze it at
+    "working" forever.
+
+    The stored row is the ONE place a phase lives. It is deliberately not
+    mirrored onto the session's metadata blob: a second copy updated on a
+    different cadence is how two surfaces come to disagree, which is the bug
+    the phase model exists to remove.
+
+    Never raises. A phase that fails to record leaves the session with no
+    durable transition time, which reads as unknown rather than as wrong.
+    """
+    try:
+        verdict = _phase.resolve(
+            now=time.time(),
+            phase=phase,
+            status=status,
+            end_reason=end_reason,
+            last_activity_at=last_activity_at,
+            started_at=started_at,
+            archived=archived,
+            pid=pid,
+            pid_alive=_pid_alive_for_phase(),
+        )
+        return store.record_session_phase(
+            session_id,
+            phase=verdict.phase,
+            runtime=runtime,
+            status=verdict.status,
+            phase_basis=verdict.basis,
+            end_reason=verdict.end_reason,
+            resolvable=resolvable,
+            cwd=cwd,
+            # An adapter that genuinely knows the LAUNCH directory passes it
+            # here; the store seeds from ``cwd`` only when this is empty.
+            # Dropping it would silently downgrade a known launch directory to
+            # "wherever it was when we first looked".
+            initial_cwd=initial_cwd,
+            # The daemon does not read the row back, and it records one for
+            # every observed session on every pass. Skipping the read-back
+            # halves the statements against the writer's CPU budget (§1e).
+            return_row=False,
+        ) or {}
+    except Exception as exc:
+        log.debug("session phase record failed (%s): %s", session_id, exc)
+        return {}
+
+
+def _pid_alive_for_phase():
+    """``process_control.is_alive`` where it imports, else ``None``.
+
+    Injected rather than imported by the adapter layer so the phase model
+    stays free of process syscalls. ``None`` means "no pid evidence", which
+    falls through to recency instead of asserting a dead process.
+    """
+    try:
+        from clawmetry import process_control
+        return process_control.is_alive
+    except Exception:
+        return None
 
 
 def _session_liveness(last_activity_iso: str | None) -> tuple[str, str | None]:
@@ -14305,6 +14424,27 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 ns_id = f"{runtime}:{s.id}"
                 started = _epoch_to_iso(s.started_at)
                 ended = _epoch_to_iso(s.ended_at)
+                # Phase FIRST, before the high-water skip below. A session that
+                # stopped advancing is precisely the one whose phase has to move
+                # on (working -> idle -> ended); recording it after the skip
+                # would freeze every quiet session at whatever it was last doing.
+                # Cheap: adapter fields only, no event read.
+                _s_extra = s.extra if isinstance(s.extra, dict) else {}
+                _record_session_phase(
+                    store, ns_id, runtime,
+                    phase=getattr(s, "phase", None),
+                    status=getattr(s, "status", None),
+                    end_reason=getattr(s, "end_reason", "") or "",
+                    last_activity_at=(getattr(s, "last_activity_at", None)
+                                      or s.ended_at or s.started_at),
+                    started_at=s.started_at,
+                    archived=bool(_s_extra.get("archived")),
+                    pid=_s_extra.get("pid"),
+                    cwd=(getattr(s, "cwd", "") or _s_extra.get("cwd") or ""),
+                    initial_cwd=(getattr(s, "initial_cwd", "")
+                                 or _s_extra.get("initialCwd")
+                                 or _s_extra.get("initial_cwd") or ""),
+                )
                 # High-water mark = newest event ts we've already ingested for
                 # this session. Skip sessions that haven't advanced since: the
                 # adapter would re-read the whole file (potentially thousands of
