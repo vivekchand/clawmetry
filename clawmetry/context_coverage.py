@@ -66,6 +66,15 @@ SIGNALS = ("utilization", "compaction", "overflow")
 # A runtime that starts emitting one should be deleted from this set in the
 # same PR, and ``tests/test_context_coverage.py`` pins the pairing so the two
 # cannot drift apart silently.
+#
+# PENDING: ``codex`` comes off this list once clawmetry-pro#174 ships, which
+# maps Codex's ``RolloutItem::Compacted`` rollout line. Deliberately not
+# removed ahead of that wheel, because the two mistakes are not symmetric.
+# Leaving it listed tells a user with no compactions that we are blind when we
+# are not (conservative, and anyone who does have compactions is unaffected,
+# since observation overrides this set). Removing it early tells a user
+# "0, ran clean" while we are genuinely blind, which is the failure this
+# module exists to prevent.
 UNSUPPORTED_COMPACTION = frozenset({
     "aider",
     "claude_code",
