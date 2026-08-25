@@ -50,6 +50,8 @@ import os
 import sys
 import time
 
+from clawmetry import hook_ownership
+
 # ── paths / markers ────────────────────────────────────────────────────────
 
 _STATE_PATH = os.path.expanduser("~/.clawmetry/claude_code_gate.json")
@@ -181,7 +183,9 @@ def _timeout_from_policies(policies) -> int:
             continue
     if longest <= 0:
         longest = 604800  # engine default: 7 days (#4066)
-    return longest + _HOOK_TIMEOUT_BUFFER_S
+    # Bounded: a wedged hook must not sit on the user's tool call for a
+    # week. See hook_ownership.clamp_hook_timeout for the trade-off.
+    return hook_ownership.clamp_hook_timeout(longest + _HOOK_TIMEOUT_BUFFER_S)
 
 
 # ── settings.json plumbing ─────────────────────────────────────────────────
@@ -207,6 +211,18 @@ def _write_json_atomic(path: str, data: dict) -> None:
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
+
+
+def _hook_is_ours(hook: dict) -> bool:
+    """Hook-level twin of :func:`_entry_is_ours` — same mirror carve-out.
+
+    The mirror hook carries its own marker and is owned by
+    ``_install_mirror``; the gate must not prune it.
+    """
+    cmd = (hook or {}).get("command") or ""
+    if MIRROR_CMD_MARKER in cmd:
+        return False
+    return HOOK_CMD_MARKER in cmd
 
 
 def _entry_is_ours(entry: dict) -> bool:
@@ -538,9 +554,13 @@ def _install(policies) -> None:
     if len(ours) == 1 and ours[0] == desired:
         _ensure_marker()  # cheap self-heal if the marker was deleted
         return  # already exactly in place — the common every-2s no-op
-    # Replace ours (if any, or stale duplicates) with the single fresh entry.
-    kept = [e for e in pretool
-            if not (isinstance(e, dict) and _entry_is_ours(e))]
+    # Replace OUR HOOKS (or stale duplicates) with the single fresh entry.
+    # Hook-level, never entry-level: a co-installed writer may have merged
+    # its command into the same entry as ours (`gk ai hook install
+    # claude-code --force`), and this path runs every ~2s — an entry-level
+    # drop would delete that writer's hook within seconds of it landing.
+    kept, _ = hook_ownership.prune_our_hooks(pretool, (HOOK_CMD_MARKER,),
+                                             ours_pred=_hook_is_ours)
     kept.append(desired)
     hooks["PreToolUse"] = kept
     _write_json_atomic(path, settings)
@@ -568,9 +588,9 @@ def _uninstall() -> None:
     hooks = settings.get("hooks") or {}
     pretool = hooks.get("PreToolUse")
     if isinstance(pretool, list):
-        kept = [e for e in pretool
-                if not (isinstance(e, dict) and _entry_is_ours(e))]
-        if len(kept) != len(pretool):
+        kept, n_removed = hook_ownership.prune_our_hooks(
+            pretool, (HOOK_CMD_MARKER,), ours_pred=_hook_is_ours)
+        if n_removed:
             if kept:
                 hooks["PreToolUse"] = kept
             else:
