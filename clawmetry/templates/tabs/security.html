@@ -81,6 +81,40 @@
         background:var(--bg-primary);color:var(--text-muted);flex-shrink:0;
         "></span>
     </div>
+    <!-- Data retention: how long this node keeps event history.
+         "How long do you keep my data, and can I change it?" is the first
+         question a security reviewer asks, so it belongs on this tab and not
+         buried in an env var. Shrink-only server-side, so the control cannot
+         be used to grant more retention than the plan allows. -->
+    <div id="security-retention-panel" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px 16px;
+      margin-bottom:14px;
+      display:flex;
+      align-items:center;
+      gap:14px;
+      flex-wrap:wrap;
+      ">
+      <div style="font-size:22px;flex-shrink:0;">🗄️</div>
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);" data-i18n="security.retention_title">Data retention</div>
+        <div id="retention-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;" data-i18n="security.retention_checking">Checking how long this machine keeps activity history...</div>
+      </div>
+      <div id="retention-controls" style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <label for="retention-days-input" style="font-size:11px;color:var(--text-muted);" data-i18n="security.retention_keep_for">Keep for</label>
+        <input id="retention-days-input" type="number" min="1" step="1" style="
+          width:74px;padding:4px 6px;font-size:12px;border-radius:6px;
+          border:1px solid var(--border);background:var(--bg-primary);
+          color:var(--text-primary);
+          " />
+        <span style="font-size:11px;color:var(--text-muted);" data-i18n="security.retention_days_unit">days</span>
+        <button class="refresh-btn" onclick="saveRetentionSetting();" data-i18n="security.retention_save">Save</button>
+        <button class="refresh-btn" onclick="saveRetentionSetting(true);" data-i18n="security.retention_use_plan">Use plan default</button>
+      </div>
+      <div id="retention-status" style="font-size:11px;color:var(--text-muted);width:100%;"></div>
+    </div>
     <!-- Threat Detection -->
     <div style="
       font-size:13px;
