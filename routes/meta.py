@@ -1367,7 +1367,6 @@ def api_otel_rollup():
     and a caller must be able to tell which one it asked, so every response
     says ``attribution: self-reported``.
     """
-    import dashboard as _d  # noqa: F401 — parity with the rest of bp_otel
     dimension = (request.args.get("dimension") or "team").strip()
     # Validate HERE, not in the store: _ls_call swallows the store's
     # ValueError and returns None, which would turn "you asked for a column

@@ -700,3 +700,17 @@ def test_the_batch_write_never_nests_a_read_inside_the_write_lock(store):
     )
     assert not error, error
     assert store.query_otlp_records(session_id="sess-lock")
+
+
+def test_a_count_that_could_not_be_taken_is_not_reported_as_zero(store, monkeypatch):
+    """``persisted`` on /api/otel-status is the number that answers "did this
+    actually store anything". Returning 0 when the count FAILED renders "we
+    could not ask" as "nothing is stored", which sends someone to debug an
+    ingest that is fine. None is the honest answer, and the route passes it
+    through.
+    """
+    def _boom(*a, **k):
+        raise RuntimeError("store is wedged")
+
+    monkeypatch.setattr(type(store), "_fetch", _boom)
+    assert store.count_otlp_records() is None

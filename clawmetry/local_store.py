@@ -5952,15 +5952,21 @@ class LocalStore:
                 "tokens_input", "tokens_output", "first_ts", "last_ts")
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
 
-    def count_otlp_records(self) -> int:
+    def count_otlp_records(self) -> int | None:
         """Row count for the daemon-free intake table. Used by
-        ``/api/otel-status`` to show that data actually persisted (as opposed
-        to living in the in-memory cache that a restart clears)."""
+        ``/api/otel-status`` to show that data actually persisted, as opposed
+        to living in the in-memory cache that a restart clears.
+
+        Returns ``None`` when the count could not be taken. Swallowing that as
+        ``0`` would render "we could not ask" as "nothing is stored", which is
+        the reading that sends someone to debug an ingest that is fine.
+        """
         try:
             rows = self._fetch("SELECT COUNT(*) FROM otlp_records", [])
             return int(rows[0][0]) if rows else 0
         except Exception:
-            return 0
+            log.warning("count_otlp_records failed", exc_info=True)
+            return None
 
     def query_spans(
         self,
