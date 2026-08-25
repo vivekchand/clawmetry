@@ -261,9 +261,13 @@ def test_install_idempotent_and_correct_timeouts(monkeypatch, tmp_path):
     assert len(pre) == 1, "must not duplicate on re-install"
     hk = pre[0]["hooks"][0]
     assert hk["command"] == "clawmetry hooks run pretooluse"
-    # Load-bearing: must exceed the 7-day max policy window or Claude
-    # Code times the hook out (= blocks) before the human decides.
-    assert hk["timeout"] == 605100
+    # Load-bearing in two directions: long enough that Claude Code does not
+    # time the hook out (= block) before the human decides, but BOUNDED so a
+    # wedged hook cannot sit on the call for the full 7-day policy window
+    # (WO-8). See hook_ownership.clamp_hook_timeout.
+    from clawmetry import hook_ownership
+    assert hk["timeout"] == hook_ownership.clamp_hook_timeout(605100)
+    assert hk["timeout"] <= hook_ownership.DEFAULT_HOOK_TIMEOUT_CEILING_S
     assert s["hooks"]["Notification"][0]["hooks"][0]["command"] == \
         "clawmetry hooks run notification"
     marker = json.load(open(str(tmp_path / "marker.json")))
