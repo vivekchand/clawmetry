@@ -655,3 +655,38 @@ def test_the_stored_phase_fills_in_where_this_read_cannot_tell(monkeypatch):
     assert served["phase"] == ph.PHASE_WAITING
     assert served["phaseBasis"] == "adapter"
     assert served["phaseSince"] == pytest.approx(now - 300)
+
+
+def test_the_daemon_passes_an_adapters_launch_directory_through(monkeypatch):
+    """An adapter that genuinely knows where a session was LAUNCHED must not
+    have that silently downgraded to "wherever it was when we first looked".
+
+    Regression: the family ingest passed ``cwd`` but not ``initial_cwd``, so
+    ``extra["initialCwd"]`` never reached the durable record.
+    """
+    import clawmetry.sync as sync
+    seen = {}
+
+    class _Store:
+        def record_session_phase(self, session_id, **kw):
+            seen[session_id] = kw
+            return {}
+
+    sync._record_session_phase(
+        _Store(), "codex:a", "codex",
+        last_activity_at=time.time() - 5,
+        cwd="/where/it/is/now",
+        initial_cwd="/where/it/started",
+    )
+    assert seen["codex:a"]["initial_cwd"] == "/where/it/started"
+    assert seen["codex:a"]["cwd"] == "/where/it/is/now"
+
+
+def test_an_adapter_supplied_launch_directory_wins_over_the_current_one(store):
+    _ls, st = store
+    st.record_session_phase("codex:a", phase="working", runtime="codex",
+                            cwd="/where/it/is/now",
+                            initial_cwd="/where/it/started")
+    row = st.query_session_phases(session_ids=["codex:a"])[0]
+    assert row["initialCwd"] == "/where/it/started"
+    assert row["cwd"] == "/where/it/is/now"

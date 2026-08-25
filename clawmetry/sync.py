@@ -13820,7 +13820,8 @@ def _record_session_phase(store, session_id: str, runtime: str, *,
                           phase=None, status=None, end_reason: str = "",
                           last_activity_at=None, started_at=None,
                           archived: bool = False, pid=None,
-                          cwd: str = "", resolvable=None) -> dict:
+                          cwd: str = "", initial_cwd: str = "",
+                          resolvable=None) -> dict:
     """Resolve one session's phase and stamp the durable transition.
 
     Called on EVERY observed session on every pass, before the high-water
@@ -13857,6 +13858,11 @@ def _record_session_phase(store, session_id: str, runtime: str, *,
             end_reason=verdict.end_reason,
             resolvable=resolvable,
             cwd=cwd,
+            # An adapter that genuinely knows the LAUNCH directory passes it
+            # here; the store seeds from ``cwd`` only when this is empty.
+            # Dropping it would silently downgrade a known launch directory to
+            # "wherever it was when we first looked".
+            initial_cwd=initial_cwd,
             # The daemon does not read the row back, and it records one for
             # every observed session on every pass. Skipping the read-back
             # halves the statements against the writer's CPU budget (§1e).
@@ -14435,6 +14441,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     archived=bool(_s_extra.get("archived")),
                     pid=_s_extra.get("pid"),
                     cwd=(getattr(s, "cwd", "") or _s_extra.get("cwd") or ""),
+                    initial_cwd=(getattr(s, "initial_cwd", "")
+                                 or _s_extra.get("initialCwd")
+                                 or _s_extra.get("initial_cwd") or ""),
                 )
                 # High-water mark = newest event ts we've already ingested for
                 # this session. Skip sessions that haven't advanced since: the
