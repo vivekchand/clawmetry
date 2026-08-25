@@ -865,6 +865,12 @@ _DAEMON_METHODS = frozenset({
     "delete_ownership_rule",
     "restamp_ownership",
     "query_ownership_summary",
+    # Node settings. Retention is the one that matters: the daemon prunes to
+    # this value, so the dashboard has to write it through the daemon rather
+    # than into a store the daemon never reads.
+    "get_node_setting",
+    "set_node_setting",
+    "list_node_settings",
     # Agent identity: one principal per AGENT (node + runtime + agent_id),
     # derived from sessions and overlaid with the agent_meta labels above.
     # Read-only; the daemon owns the writer, and ownership writes reuse
