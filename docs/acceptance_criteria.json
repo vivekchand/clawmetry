@@ -23,7 +23,11 @@
     "clawmetry-mac/firmware and the marketing site respectively. They are listed",
     "under external_prefixes so a stray reference to one is not mistaken for a typo."
   ],
-  "in_repo_prefixes": ["AC-OBS-", "AC-RSO-", "AC-GOV-"],
+  "in_repo_prefixes": [
+    "AC-OBS-",
+    "AC-RSO-",
+    "AC-GOV-"
+  ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
     "AC-BUILD-": "clawmetry-cloud (hosted agent builder)",
@@ -31,98 +35,653 @@
     "AC-WEB-": "marketing site"
   },
   "criteria": [
-    {"id": "AC-OBS-001.1", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When activity is available from a supported runtime, the system shall present the associated sessions and activity records to the operator."},
-    {"id": "AC-OBS-001.2", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When a session contains messages, tool activity, or trace activity, the system shall present those records in the session context."},
-    {"id": "AC-OBS-001.3", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "If no supported runtime activity is available, then the system shall indicate that no activity is available and provide setup-oriented guidance."},
-    {"id": "AC-OBS-001.4", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When new activity becomes available, the system shall make it available without requiring the operator to recreate the observed runtime."},
-    {"id": "AC-OBS-002.1", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When the operator opens the local observability experience, the system shall present available session, usage, health, and scheduled-work status."},
-    {"id": "AC-OBS-002.2", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When a supported runtime has active work, the system shall identify the runtime and its active session state."},
-    {"id": "AC-OBS-002.3", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "If a required local data source is unavailable, then the system shall identify the unavailable source without presenting unavailable data as current."},
-    {"id": "AC-OBS-003.1", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When the system recognizes a supported runtime, the system shall associate its activity with that runtime."},
-    {"id": "AC-OBS-003.2", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "When runtime-specific information is unavailable, the system shall preserve the activity that it can identify without inventing missing values."},
-    {"id": "AC-OBS-003.3", "doc": "Local Agent Observability", "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf", "text": "Where an extended runtime integration requires the paid extension, the system shall communicate the availability boundary before the operator relies on it."},
-
-    {"id": "AC-OBS-CEA-001.1", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When cost or usage is available, the system shall present it with its associated runtime, session, or time scope."},
-    {"id": "AC-OBS-CEA-001.2", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When a cost value cannot be determined, the system shall identify it as unavailable rather than report a zero value."},
-    {"id": "AC-OBS-CEA-001.3", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When the operator changes the available time scope, the system shall update the displayed measurements to that scope."},
-    {"id": "AC-OBS-CEA-001.4", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "Where a runtime records cost for only part of its work, the system shall present the figure it has AND identify it as a floor rather than a total. Suppressing it would understate real spend; presenting it plainly would overstate what is known."},
-    {"id": "AC-OBS-CEA-002.1", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When the system identifies an efficiency signal, the system shall present the signal with its associated activity context."},
-    {"id": "AC-OBS-CEA-002.2", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "If the supporting activity is no longer available, then the system shall identify the efficiency signal as lacking current supporting context."},
-    {"id": "AC-OBS-CEA-002.3", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When prompt caching is in use, the system shall present the cache hit rate as an efficiency signal with the amount already saved and a conservative estimate of the amount left on the table, and shall label the estimate as an estimate rather than as a measured value."},
-    {"id": "AC-OBS-CEA-002.4", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When a model in observed use has a safe cheaper same-provider sibling that would fit the observed workload, the system shall present a routing recommendation with the current model, the suggested model, the observed call volume, and the estimated monthly savings, and shall reconcile the recommendation's scope with the active runtime filter."},
-    {"id": "AC-OBS-CEA-002.5", "doc": "Cost and Efficiency Analytics", "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29", "text": "When automatic model downgrades have already occurred, the system shall present the already-realised savings alongside the potential-savings recommendation without conflating the two."},
-
-    {"id": "AC-OBS-RSO-001.1", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "When the operator selects an available session, the system shall present its ordered activity records."},
-    {"id": "AC-OBS-RSO-001.2", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "When an activity record has associated tool input, result, or error information, the system shall present the available associated information in that session context."},
-    {"id": "AC-OBS-RSO-001.3", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "If the selected session has no recorded activity, then the system shall indicate that the session is empty."},
-    {"id": "AC-OBS-RSO-002.1", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "When trace information is available for an operation, the system shall present its related activity records in their available relationship."},
-    {"id": "AC-OBS-RSO-002.2", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "If trace information is incomplete, then the system shall identify the available records without implying complete coverage."},
-    {"id": "AC-OBS-RSO-003.1", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "Family adapters emit each spawned child as a session with a parent link and a kind of sub-agent, workflow run, or workflow agent; the sync daemon records these on the subagents table via an explicit whitelist into the row's data blob."},
-    {"id": "AC-OBS-RSO-003.2", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "Still-running children are re-read on every sync pass so their live status never goes stale; child transcript events are ingested under the child's own namespaced session id."},
-    {"id": "AC-OBS-RSO-003.3", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "GET /api/session-orchestration/<session_id> returns the full orchestration tree for one session, accepting bare or runtime-prefixed ids, from the local store only, with an honest empty tree otherwise."},
-    {"id": "AC-OBS-RSO-003.4", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "GET /api/orchestration-summary?session_ids=... returns bulk per-session counts without prompt or reply text, backed by query_subagents_lite and exposed through the daemon query proxy allowlist."},
-    {"id": "AC-OBS-RSO-003.5", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "The Activity feed offers per-session filter chips that work on the local-store fast path, labels child runs as sub-agent or workflow-agent blocks, and shows an orchestration badge per session block."},
-    {"id": "AC-OBS-RSO-003.6", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "The Sessions tab transcript viewer includes an Orchestration panel with expandable per-agent 'Context given' and 'Replied' blocks; it auto-expands while anything is still running."},
-    {"id": "AC-OBS-RSO-003.7", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "A workflow-run row carries no tokens or cost of its own; its agents own their usage, so orchestration rollups never double-count."},
-    {"id": "AC-OBS-RSO-003.8", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "OpenClaw sub-agent and flow registries in state/openclaw.sqlite are mirrored into the subagents table; the subagents data blob merges across writers so no pass erases another's fields."},
-    {"id": "AC-OBS-RSO-003.9", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "Only genuine delegations carry a parent link. Forks, compression continuations and resume seeds keep their lineage in the session's extra data with no parent id."},
-    {"id": "AC-RSO-CWD-001.1", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "Session records persist the working directory and git branch when the runtime records them (first-class fields on the session row); an unavailable directory stays empty, never fabricated."},
-    {"id": "AC-RSO-CWD-001.2", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "The first-class cwd field is the contract consumers act on; an adapter's mirror of the same value in extra metadata is compatibility-and-diagnostic only for older wheels."},
-    {"id": "AC-RSO-CWD-001.3", "doc": "Runtime and Session Observability", "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6", "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."},
-
-    {"id": "AC-OBS-GHA-001.1", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "When an operator creates or changes a valid policy, the system shall retain the policy for its authorized scope."},
-    {"id": "AC-OBS-GHA-001.2", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "When an operator evaluates a policy against historical activity, the system shall show the resulting candidate matches without changing historical activity."},
-    {"id": "AC-OBS-GHA-001.3", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "If a policy is invalid, then the system shall identify the invalid policy without enabling it."},
-    {"id": "AC-OBS-GHA-002.1", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "When an approval request is pending, the system shall present its available action context and decision options to an authorized approver."},
-    {"id": "AC-OBS-GHA-002.2", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "When an approver decides a pending request, the system shall record the decision outcome and make it visible to the relevant workflow."},
-    {"id": "AC-OBS-GHA-002.3", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "If a request is expired, already decided, or unavailable, then the system shall not accept a new decision."},
-    {"id": "AC-GOV-GHA-006.1", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "When an active require_approval policy applies to cursor or copilot, ClawMetry installs the runtime's native pre-tool hook and removes it when no policy wants it; foreign hook entries are never modified."},
-    {"id": "AC-GOV-GHA-006.2", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "Each gated runtime posts to its own pre-tool receiver URL and its approval rows carry that runtime; policies are runtime-scope filtered before matching."},
-    {"id": "AC-GOV-GHA-006.3", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "The gate is fail-open end to end: any client or server failure results in 'no opinion' and the runtime's own permission flow proceeds; a broken ClawMetry can never stall the calling agent."},
-    {"id": "AC-GOV-GHA-006.4", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "A deny decision reaches the agent with the operator's reason, in the runtime's own response contract."},
-    {"id": "AC-GOV-GHA-006.5", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "Runtime-scoped policy selection sits inside the same fail-open guard as policy loading and matching: a selection failure answers 'allow' with a stated reason."},
-    {"id": "AC-GOV-GHA-006.6", "doc": "Governance and Human Approval", "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59", "text": "A runtime hosting sessions in more than one execution model is classified per session, never wholly available: it is named explicitly as split-support, so the safe default for a session that cannot be placed is refusal."},
-
-    {"id": "AC-OBS-LADC-001.1", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "When the operator requests integrity verification, the system shall report whether the retained records pass or fail the available integrity check."},
-    {"id": "AC-OBS-LADC-001.2", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "If integrity verification finds an unexpected record change, then the system shall identify that the verification failed."},
-    {"id": "AC-OBS-LADC-001.3", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "When every retained record still matches its own recorded fingerprint but the records cannot be arranged into a single ordered chain, the system shall report a third outcome, distinct from both pass and fail, and shall state that no record was altered or removed."},
-    {"id": "AC-OBS-LADC-001.4", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The system shall report verification failure only when a record's stored content no longer matches its recorded fingerprint, or when a record names a predecessor that is absent from the log. Incomplete ordering alone shall not be reported as failure."},
-    {"id": "AC-OBS-LADC-002.1", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "When cloud synchronization is not configured, the system shall continue to provide local observability without requiring cloud access."},
-    {"id": "AC-OBS-LADC-002.2", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "When the operator enables cloud synchronization, the system shall communicate the information category and protection boundary associated with the synchronization."},
-    {"id": "AC-OBS-LADC-002.3", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "When the operator disables cloud synchronization, the system shall stop new optional synchronization activity."},
-    {"id": "AC-OBS-LADC-004.1", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The system shall present the retention period currently in force for local activity history, and shall state which setting is producing it."},
-    {"id": "AC-OBS-LADC-004.2", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The operator shall be able to shorten the retention period, and the choice shall persist on the node across restarts."},
-    {"id": "AC-OBS-LADC-004.3", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The system shall never lengthen retention beyond the entitlement's ceiling. A request for a longer period shall be recorded as requested but shall not extend what is kept, and the system shall report both the requested and the enforced period."},
-    {"id": "AC-OBS-LADC-004.4", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The system shall reject a retention value that is not a whole number of days of at least one, rather than substituting a default."},
-    {"id": "AC-OBS-LADC-004.5", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The component that deletes aged history shall use the same resolved period the system reports to the operator."},
-    {"id": "AC-OBS-LADC-004.6", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "The operator shall be able to clear their choice and return to the entitlement's period."},
-    {"id": "AC-OBS-LADC-004.7", "doc": "Local Audit and Data Control", "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a", "text": "Before shortening the retention period, the system shall state what will be deleted and that the deletion is permanent, and shall require confirmation. Raising the period, or returning to the plan's period, destroys nothing and shall not require confirmation."},
-
-    {"id": "AC-GOV-001.1", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When an entitled extended runtime is available, the system shall observe its activity alongside the free runtimes."},
-    {"id": "AC-GOV-001.2", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "If an operator is not entitled to an extended runtime, then the system shall communicate the entitlement boundary rather than presenting the runtime as observed."},
-    {"id": "AC-GOV-001.3", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When an extended runtime lacks a known value, the system shall preserve what it can identify without inventing the missing value."},
-    {"id": "AC-GOV-002.1", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When the user selects a supported compliance framework, the system shall present the controls it can assess."},
-    {"id": "AC-GOV-002.2", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When the user requests an evidence bundle, the system shall produce the evidence it holds for the selected framework."},
-    {"id": "AC-GOV-002.3", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "The system shall identify the bundle as supporting evidence rather than as a certification."},
-    {"id": "AC-GOV-002.4", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "If required evidence is unavailable, then the system shall identify the gap rather than presenting the control as satisfied."},
-    {"id": "AC-GOV-003.1", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When an evaluation is run for eligible agent activity, the system shall record its result against the evaluated activity."},
-    {"id": "AC-GOV-003.2", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When the system identifies an automation finding, the system shall present the finding with the evidence that produced it."},
-    {"id": "AC-GOV-003.3", "doc": "Advanced Governance", "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084", "text": "When an action can change an agent environment, the system shall require explicit operator initiation."},
-
-    {"id": "AC-GOV-ERS-001.1", "doc": "Extended Runtime Support", "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072", "text": "When an entitled supported runtime is detected, the system shall observe and normalize its activity into the common model."},
-    {"id": "AC-GOV-ERS-001.2", "doc": "Extended Runtime Support", "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072", "text": "If the runtime adapter cannot read a required data source, then the system shall report the unavailable source without presenting partial data as complete."},
-    {"id": "AC-GOV-ERS-001.3", "doc": "Extended Runtime Support", "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072", "text": "When the extension is absent or not entitled, the system shall communicate the availability boundary."},
-
-    {"id": "AC-GOV-CE-001.1", "doc": "Compliance Evidence", "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4", "text": "When the auditor selects a supported framework, the system shall present the controls it can assess from retained evidence."},
-    {"id": "AC-GOV-CE-001.2", "doc": "Compliance Evidence", "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4", "text": "When a control lacks necessary evidence, the system shall identify the evidence gap."},
-    {"id": "AC-GOV-CE-001.3", "doc": "Compliance Evidence", "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4", "text": "The system shall not represent a control assessment as a formal certification."},
-    {"id": "AC-GOV-CE-002.1", "doc": "Compliance Evidence", "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4", "text": "When an auditor requests an evidence export, the system shall produce the retained records for the requested scope."},
-    {"id": "AC-GOV-CE-002.2", "doc": "Compliance Evidence", "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4", "text": "If a requested record is unavailable, then the system shall identify the omission in the export."},
-
-    {"id": "AC-GOV-AEA-001.1", "doc": "Advanced Evaluation and Automation", "doc_id": "7184222c-2615-4349-b13d-d19452d57c55", "text": "When an eligible assessment completes, the system shall record its result against the evaluated activity."},
-    {"id": "AC-GOV-AEA-001.2", "doc": "Advanced Evaluation and Automation", "doc_id": "7184222c-2615-4349-b13d-d19452d57c55", "text": "If adequate evidence is unavailable, then the system shall report the assessment as inconclusive rather than as passed."},
-    {"id": "AC-GOV-AEA-002.1", "doc": "Advanced Evaluation and Automation", "doc_id": "7184222c-2615-4349-b13d-d19452d57c55", "text": "When the system identifies a remediation finding, the system shall present the finding with its supporting evidence."},
-    {"id": "AC-GOV-AEA-002.2", "doc": "Advanced Evaluation and Automation", "doc_id": "7184222c-2615-4349-b13d-d19452d57c55", "text": "When an operator requests a supported remediation action, the system shall report its accepted, rejected, or failed outcome."},
-    {"id": "AC-GOV-AEA-002.3", "doc": "Advanced Evaluation and Automation", "doc_id": "7184222c-2615-4349-b13d-d19452d57c55", "text": "The system shall not apply a remediation action without explicit operator initiation."}
+    {
+      "id": "AC-GOV-001.1",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When an entitled extended runtime is available, the system shall observe its activity alongside the free runtimes."
+    },
+    {
+      "id": "AC-GOV-001.2",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "If an operator is not entitled to an extended runtime, then the system shall communicate the entitlement boundary rather than presenting the runtime as observed."
+    },
+    {
+      "id": "AC-GOV-001.3",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When an extended runtime lacks a known value, the system shall preserve what it can identify without inventing the missing value."
+    },
+    {
+      "id": "AC-GOV-002.1",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When the user selects a supported compliance framework, the system shall present the controls it can assess."
+    },
+    {
+      "id": "AC-GOV-002.2",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When the user requests an evidence bundle, the system shall produce the evidence it holds for the selected framework."
+    },
+    {
+      "id": "AC-GOV-002.3",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "The system shall identify the bundle as supporting evidence rather than as a certification."
+    },
+    {
+      "id": "AC-GOV-002.4",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "If required evidence is unavailable, then the system shall identify the gap rather than presenting the control as satisfied."
+    },
+    {
+      "id": "AC-GOV-003.1",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When an evaluation is run for eligible agent activity, the system shall record its result against the evaluated activity."
+    },
+    {
+      "id": "AC-GOV-003.2",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When the system identifies an automation finding, the system shall present the finding with the evidence that produced it."
+    },
+    {
+      "id": "AC-GOV-003.3",
+      "doc": "Advanced Governance",
+      "doc_id": "1a471e48-24c5-4a19-8e40-bf35c24f7084",
+      "text": "When an action can change an agent environment, the system shall require explicit operator initiation."
+    },
+    {
+      "id": "AC-GOV-AEA-001.1",
+      "doc": "Advanced Evaluation and Automation",
+      "doc_id": "7184222c-2615-4349-b13d-d19452d57c55",
+      "text": "When an eligible assessment completes, the system shall record its result against the evaluated activity."
+    },
+    {
+      "id": "AC-GOV-AEA-001.2",
+      "doc": "Advanced Evaluation and Automation",
+      "doc_id": "7184222c-2615-4349-b13d-d19452d57c55",
+      "text": "If adequate evidence is unavailable, then the system shall report the assessment as inconclusive rather than as passed."
+    },
+    {
+      "id": "AC-GOV-AEA-002.1",
+      "doc": "Advanced Evaluation and Automation",
+      "doc_id": "7184222c-2615-4349-b13d-d19452d57c55",
+      "text": "When the system identifies a remediation finding, the system shall present the finding with its supporting evidence."
+    },
+    {
+      "id": "AC-GOV-AEA-002.2",
+      "doc": "Advanced Evaluation and Automation",
+      "doc_id": "7184222c-2615-4349-b13d-d19452d57c55",
+      "text": "When an operator requests a supported remediation action, the system shall report its accepted, rejected, or failed outcome."
+    },
+    {
+      "id": "AC-GOV-AEA-002.3",
+      "doc": "Advanced Evaluation and Automation",
+      "doc_id": "7184222c-2615-4349-b13d-d19452d57c55",
+      "text": "The system shall not apply a remediation action without explicit operator initiation."
+    },
+    {
+      "id": "AC-GOV-CE-001.1",
+      "doc": "Compliance Evidence",
+      "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
+      "text": "When the auditor selects a supported framework, the system shall present the controls it can assess from retained evidence."
+    },
+    {
+      "id": "AC-GOV-CE-001.2",
+      "doc": "Compliance Evidence",
+      "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
+      "text": "When a control lacks necessary evidence, the system shall identify the evidence gap."
+    },
+    {
+      "id": "AC-GOV-CE-001.3",
+      "doc": "Compliance Evidence",
+      "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
+      "text": "The system shall not represent a control assessment as a formal certification."
+    },
+    {
+      "id": "AC-GOV-CE-002.1",
+      "doc": "Compliance Evidence",
+      "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
+      "text": "When an auditor requests an evidence export, the system shall produce the retained records for the requested scope."
+    },
+    {
+      "id": "AC-GOV-CE-002.2",
+      "doc": "Compliance Evidence",
+      "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
+      "text": "If a requested record is unavailable, then the system shall identify the omission in the export."
+    },
+    {
+      "id": "AC-GOV-ERS-001.1",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When an entitled supported runtime is detected, the system shall observe and normalize its activity into the common model."
+    },
+    {
+      "id": "AC-GOV-ERS-001.2",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "If the runtime adapter cannot read a required data source, then the system shall report the unavailable source without presenting partial data as complete."
+    },
+    {
+      "id": "AC-GOV-ERS-001.3",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When the extension is absent or not entitled, the system shall communicate the availability boundary."
+    },
+    {
+      "id": "AC-GOV-GHA-006.1",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "When an active require_approval policy applies to cursor or copilot, ClawMetry installs the runtime's native pre-tool hook and removes it when no policy wants it; foreign hook entries are never modified."
+    },
+    {
+      "id": "AC-GOV-GHA-006.2",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "Each gated runtime posts to its own pre-tool receiver URL and its approval rows carry that runtime; policies are runtime-scope filtered before matching."
+    },
+    {
+      "id": "AC-GOV-GHA-006.3",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "The gate is fail-open end to end: any client or server failure results in 'no opinion' and the runtime's own permission flow proceeds; a broken ClawMetry can never stall the calling agent."
+    },
+    {
+      "id": "AC-GOV-GHA-006.4",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "A deny decision reaches the agent with the operator's reason, in the runtime's own response contract."
+    },
+    {
+      "id": "AC-GOV-GHA-006.5",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "Runtime-scoped policy selection sits inside the same fail-open guard as policy loading and matching: a selection failure answers 'allow' with a stated reason."
+    },
+    {
+      "id": "AC-GOV-GHA-006.6",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "A runtime hosting sessions in more than one execution model is classified per session, never wholly available: it is named explicitly as split-support, so the safe default for a session that cannot be placed is refusal."
+    },
+    {
+      "id": "AC-OBS-001.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When activity is available from a supported runtime, the system shall present the associated sessions and activity records to the operator."
+    },
+    {
+      "id": "AC-OBS-001.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When a session contains messages, tool activity, or trace activity, the system shall present those records in the session context."
+    },
+    {
+      "id": "AC-OBS-001.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "If no supported runtime activity is available, then the system shall indicate that no activity is available and provide setup-oriented guidance."
+    },
+    {
+      "id": "AC-OBS-001.4",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When new activity becomes available, the system shall make it available without requiring the operator to recreate the observed runtime."
+    },
+    {
+      "id": "AC-OBS-002.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When the operator opens the local observability experience, the system shall present available session, usage, health, and scheduled-work status."
+    },
+    {
+      "id": "AC-OBS-002.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When a supported runtime has active work, the system shall identify the runtime and its active session state."
+    },
+    {
+      "id": "AC-OBS-002.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "If a required local data source is unavailable, then the system shall identify the unavailable source without presenting unavailable data as current."
+    },
+    {
+      "id": "AC-OBS-003.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When the system recognizes a supported runtime, the system shall associate its activity with that runtime."
+    },
+    {
+      "id": "AC-OBS-003.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "When runtime-specific information is unavailable, the system shall preserve the activity that it can identify without inventing missing values."
+    },
+    {
+      "id": "AC-OBS-003.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Where an extended runtime integration requires the paid extension, the system shall communicate the availability boundary before the operator relies on it."
+    },
+    {
+      "id": "AC-OBS-CEA-001.1",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When cost or usage is available, the system shall present it with its associated runtime, session, or time scope."
+    },
+    {
+      "id": "AC-OBS-CEA-001.2",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When a cost value cannot be determined, the system shall identify it as unavailable rather than report a zero value."
+    },
+    {
+      "id": "AC-OBS-CEA-001.3",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When the operator changes the available time scope, the system shall update the displayed measurements to that scope."
+    },
+    {
+      "id": "AC-OBS-CEA-001.4",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Where a runtime records cost for only part of its work, the system shall present the figure it has AND identify it as a floor rather than a total. Suppressing it would understate real spend; presenting it plainly would overstate what is known."
+    },
+    {
+      "id": "AC-OBS-CEA-002.1",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When the system identifies an efficiency signal, the system shall present the signal with its associated activity context."
+    },
+    {
+      "id": "AC-OBS-CEA-002.2",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "If the supporting activity is no longer available, then the system shall identify the efficiency signal as lacking current supporting context."
+    },
+    {
+      "id": "AC-OBS-CEA-002.3",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When prompt caching is in use, the system shall present the cache hit rate as an efficiency signal with the amount already saved and a conservative estimate of the amount left on the table, and shall label the estimate as an estimate rather than as a measured value."
+    },
+    {
+      "id": "AC-OBS-CEA-002.4",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When a model in observed use has a safe cheaper same-provider sibling that would fit the observed workload, the system shall present a routing recommendation with the current model, the suggested model, the observed call volume, and the estimated monthly savings, and shall reconcile the recommendation's scope with the active runtime filter."
+    },
+    {
+      "id": "AC-OBS-CEA-002.5",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When automatic model downgrades have already occurred, the system shall present the already-realised savings alongside the potential-savings recommendation without conflating the two."
+    },
+    {
+      "id": "AC-OBS-CEA-020.1",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When a finding is reported, the system shall present an estimate of the cost of the flagged period rather than the total cost of the session."
+    },
+    {
+      "id": "AC-OBS-CEA-020.2",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall state how each estimate was arrived at, and shall distinguish a measured figure from an approximation."
+    },
+    {
+      "id": "AC-OBS-CEA-020.3",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When cost cannot be determined, the system shall report it as unavailable rather than present a figure."
+    },
+    {
+      "id": "AC-OBS-CEA-020.4",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall order lists of findings by that estimate, and where estimates are equal shall fall back to how serious the finding is."
+    },
+    {
+      "id": "AC-OBS-CEA-020.5",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "An approximation shall not raise the seriousness of a finding; only a measured figure shall."
+    },
+    {
+      "id": "AC-OBS-CEA-020.6",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When only part of a list is shown to an operator, the system shall show the most costly entries rather than the most recent."
+    },
+    {
+      "id": "AC-OBS-CEA-021.1",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall record, for each session, how much work it did and where it reached, so that later sessions can be compared against it."
+    },
+    {
+      "id": "AC-OBS-CEA-021.2",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Re-examining a session that is still running shall update that session's record rather than add another."
+    },
+    {
+      "id": "AC-OBS-CEA-021.3",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When a population has never exhibited a behaviour the system relies on observing, the system shall stop reporting the absence of that behaviour as a finding for that population."
+    },
+    {
+      "id": "AC-OBS-CEA-021.4",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall retain these records for a bounded period and discard older ones."
+    },
+    {
+      "id": "AC-OBS-GHA-001.1",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "When an operator creates or changes a valid policy, the system shall retain the policy for its authorized scope."
+    },
+    {
+      "id": "AC-OBS-GHA-001.2",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "When an operator evaluates a policy against historical activity, the system shall show the resulting candidate matches without changing historical activity."
+    },
+    {
+      "id": "AC-OBS-GHA-001.3",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "If a policy is invalid, then the system shall identify the invalid policy without enabling it."
+    },
+    {
+      "id": "AC-OBS-GHA-002.1",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "When an approval request is pending, the system shall present its available action context and decision options to an authorized approver."
+    },
+    {
+      "id": "AC-OBS-GHA-002.2",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "When an approver decides a pending request, the system shall record the decision outcome and make it visible to the relevant workflow."
+    },
+    {
+      "id": "AC-OBS-GHA-002.3",
+      "doc": "Governance and Human Approval",
+      "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
+      "text": "If a request is expired, already decided, or unavailable, then the system shall not accept a new decision."
+    },
+    {
+      "id": "AC-OBS-LADC-001.1",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When the operator requests integrity verification, the system shall report whether the retained records pass or fail the available integrity check."
+    },
+    {
+      "id": "AC-OBS-LADC-001.2",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "If integrity verification finds an unexpected record change, then the system shall identify that the verification failed."
+    },
+    {
+      "id": "AC-OBS-LADC-001.3",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When every retained record still matches its own recorded fingerprint but the records cannot be arranged into a single ordered chain, the system shall report a third outcome, distinct from both pass and fail, and shall state that no record was altered or removed."
+    },
+    {
+      "id": "AC-OBS-LADC-001.4",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall report verification failure only when a record's stored content no longer matches its recorded fingerprint, or when a record names a predecessor that is absent from the log. Incomplete ordering alone shall not be reported as failure."
+    },
+    {
+      "id": "AC-OBS-LADC-002.1",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When cloud synchronization is not configured, the system shall continue to provide local observability without requiring cloud access."
+    },
+    {
+      "id": "AC-OBS-LADC-002.2",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When the operator enables cloud synchronization, the system shall communicate the information category and protection boundary associated with the synchronization."
+    },
+    {
+      "id": "AC-OBS-LADC-002.3",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When the operator disables cloud synchronization, the system shall stop new optional synchronization activity."
+    },
+    {
+      "id": "AC-OBS-LADC-004.1",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall present the retention period currently in force for local activity history, and shall state which setting is producing it."
+    },
+    {
+      "id": "AC-OBS-LADC-004.2",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The operator shall be able to shorten the retention period, and the choice shall persist on the node across restarts."
+    },
+    {
+      "id": "AC-OBS-LADC-004.3",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall never lengthen retention beyond the entitlement's ceiling. A request for a longer period shall be recorded as requested but shall not extend what is kept, and the system shall report both the requested and the enforced period."
+    },
+    {
+      "id": "AC-OBS-LADC-004.4",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall reject a retention value that is not a whole number of days of at least one, rather than substituting a default."
+    },
+    {
+      "id": "AC-OBS-LADC-004.5",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The component that deletes aged history shall use the same resolved period the system reports to the operator."
+    },
+    {
+      "id": "AC-OBS-LADC-004.6",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The operator shall be able to clear their choice and return to the entitlement's period."
+    },
+    {
+      "id": "AC-OBS-LADC-004.7",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "Before shortening the retention period, the system shall state what will be deleted and that the deletion is permanent, and shall require confirmation. Raising the period, or returning to the plan's period, destroys nothing and shall not require confirmation."
+    },
+    {
+      "id": "AC-OBS-RSO-001.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When the operator selects an available session, the system shall present its ordered activity records."
+    },
+    {
+      "id": "AC-OBS-RSO-001.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an activity record has associated tool input, result, or error information, the system shall present the available associated information in that session context."
+    },
+    {
+      "id": "AC-OBS-RSO-001.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "If the selected session has no recorded activity, then the system shall indicate that the session is empty."
+    },
+    {
+      "id": "AC-OBS-RSO-002.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When trace information is available for an operation, the system shall present its related activity records in their available relationship."
+    },
+    {
+      "id": "AC-OBS-RSO-002.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "If trace information is incomplete, then the system shall identify the available records without implying complete coverage."
+    },
+    {
+      "id": "AC-OBS-RSO-003.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Family adapters emit each spawned child as a session with a parent link and a kind of sub-agent, workflow run, or workflow agent; the sync daemon records these on the subagents table via an explicit whitelist into the row's data blob."
+    },
+    {
+      "id": "AC-OBS-RSO-003.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Still-running children are re-read on every sync pass so their live status never goes stale; child transcript events are ingested under the child's own namespaced session id."
+    },
+    {
+      "id": "AC-OBS-RSO-003.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "GET /api/session-orchestration/<session_id> returns the full orchestration tree for one session, accepting bare or runtime-prefixed ids, from the local store only, with an honest empty tree otherwise."
+    },
+    {
+      "id": "AC-OBS-RSO-003.4",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "GET /api/orchestration-summary?session_ids=... returns bulk per-session counts without prompt or reply text, backed by query_subagents_lite and exposed through the daemon query proxy allowlist."
+    },
+    {
+      "id": "AC-OBS-RSO-003.5",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The Activity feed offers per-session filter chips that work on the local-store fast path, labels child runs as sub-agent or workflow-agent blocks, and shows an orchestration badge per session block."
+    },
+    {
+      "id": "AC-OBS-RSO-003.6",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The Sessions tab transcript viewer includes an Orchestration panel with expandable per-agent 'Context given' and 'Replied' blocks; it auto-expands while anything is still running."
+    },
+    {
+      "id": "AC-OBS-RSO-003.7",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "A workflow-run row carries no tokens or cost of its own; its agents own their usage, so orchestration rollups never double-count."
+    },
+    {
+      "id": "AC-OBS-RSO-003.8",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "OpenClaw sub-agent and flow registries in state/openclaw.sqlite are mirrored into the subagents table; the subagents data blob merges across writers so no pass erases another's fields."
+    },
+    {
+      "id": "AC-OBS-RSO-003.9",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Only genuine delegations carry a parent link. Forks, compression continuations and resume seeds keep their lineage in the session's extra data with no parent id."
+    },
+    {
+      "id": "AC-OBS-RSO-030.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an agent mutates an unusual number of files for its history, or runs a destructive command such as a recursive delete at a home or system root, the system shall report it while the session is still running."
+    },
+    {
+      "id": "AC-OBS-RSO-030.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an agent opens a credential bearing artefact, the system shall report the CATEGORY of what was opened and shall not record its path."
+    },
+    {
+      "id": "AC-OBS-RSO-030.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an agent contacts an external destination it has no history of contacting, the system shall report it, and shall stay silent on that ground until it has enough history to make the claim."
+    },
+    {
+      "id": "AC-OBS-RSO-030.4",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an agent escalates privilege or weakens a system protection, the system shall report it, and shall distinguish actions that outlive the session from ordinary elevation."
+    },
+    {
+      "id": "AC-OBS-RSO-030.5",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Every report derived from tool arguments shall state that origin, so that no reader mistakes it for kernel level observation."
+    },
+    {
+      "id": "AC-OBS-RSO-030.6",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When a pattern appears inside a document the agent wrote, or inside a command that only inspects text, the system shall not report it as an action."
+    },
+    {
+      "id": "AC-OBS-RSO-030.7",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "No report shall contain a full command line or a full filesystem path."
+    },
+    {
+      "id": "AC-OBS-RSO-031.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When a runtime records file changes in a form the system can observe, the system shall treat those changes as progress for that runtime, including where the change is made through a shell command."
+    },
+    {
+      "id": "AC-OBS-RSO-031.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When a population of comparable sessions is too small to characterise, the system shall apply its shipped defaults rather than a measurement."
+    },
+    {
+      "id": "AC-OBS-RSO-031.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When a measurement is used, the system shall bound it so that neither an unusually busy population nor an unusually quiet one can disable or saturate reporting."
+    },
+    {
+      "id": "AC-OBS-RSO-031.4",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The system shall state, for each reported finding, whether the threshold it crossed was measured or shipped."
+    },
+    {
+      "id": "AC-OBS-RSO-031.5",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "When an operator sets a threshold for a specific runtime, the system shall prefer that value over both the shipped default and any measurement."
+    },
+    {
+      "id": "AC-OBS-RSO-031.6",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The system shall attribute a session to the runtime that produced it, and shall not rely on a stored value that can disagree with the session's own identity."
+    },
+    {
+      "id": "AC-RSO-CWD-001.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Session records persist the working directory and git branch when the runtime records them (first-class fields on the session row); an unavailable directory stays empty, never fabricated."
+    },
+    {
+      "id": "AC-RSO-CWD-001.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The first-class cwd field is the contract consumers act on; an adapter's mirror of the same value in extra metadata is compatibility-and-diagnostic only for older wheels."
+    },
+    {
+      "id": "AC-RSO-CWD-001.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."
+    }
   ]
 }
