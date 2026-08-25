@@ -41,6 +41,7 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 3. **Re-read the goal.** If invoked via `/goal`, the goal persists until the *outcome* is achieved and verified — not until the code is written.
 4. **Work in an isolated worktree.** Multiple Claude Code agents and crons run against this repo at the same time. Editing the main checkout is unsafe: another process can switch branches mid-edit and clobber uncommitted changes (burned 2026-05-28 — `feat/asset-registry` working-tree wiped when a concurrent agent checked out `release/hash-chain-2210` in the same checkout). Always start with `EnterWorktree`, or `git worktree add .claude/worktrees/<slug> -b feat/<slug> origin/main`. The worktree gives you your own branch + working tree; the shared checkout is for the human, not for parallel automation. Use `ExitWorktree` (or `git worktree remove`) once the PR is merged.
 5. **Survey what exists, then deep-research the robust way — never reinvent or ship a hack.** Before building detection/integration work (especially anything OS- or runtime-specific), first check for a proven open-source solution and reuse/reference it (e.g. **ccusage** already maps 15+ AI-CLI runtimes' local-data paths cross-platform — reference its source, don't re-derive). When you genuinely must build, deep-research the *authoritative* cross-platform approach — macOS **and** Windows **and** Linux, with cited sources — and design for an `unknown` fallback. A single-platform hack (e.g. a macOS-Keychain-only check) or a fragile heuristic that breaks on another OS/version is **not "done"** — it's a regression waiting to ship. Order of preference: **reuse a maintained project > documented robust cross-platform build > hack (never)**.
+6. **Write the PRD in 8090 before you write code.** See [§0c](#0c-write-the-prd-in-8090-first--software-factory-is-the-pm-not-a-lint-gate-hard-gate) — Software Factory is the product reviewer, and a requirement written after the fact reviews nothing.
 
 ## 0a. The bug-free bar: the hosted trial IS the product (HARD GATES)
 
@@ -62,6 +63,32 @@ Founder call 2026-08-08: the desktop app (`desktop/`) is one of the highest-ROI 
 3. **Build locally before trusting CI.** `makensis` (NSIS) and `appimagetool` can both be exercised in a plain Linux sandbox without a Windows/Linux-GUI machine — compile the script / validate the AppDir structure before pushing, don't find out from a red Windows/Linux runner 8 minutes later.
 4. **Stability over speed.** These installers are a stranger's first impression of the product on a machine you don't control — antivirus-flagged, SmartScreen-warned, or "app can't be opened because it is from an unidentified developer" all read as "this is a scam," not "unsigned OSS binary." Code-signing (Windows Authenticode, macOS Developer ID notarization — the pipeline is wired for BOTH; Windows activates when the `WINDOWS_CERT_PFX_BASE64`/`WINDOWS_CERT_PASSWORD` secrets are set) closes that gap; until a cert exists, the installer copy must say so honestly rather than pretend it's signed. On Windows the stakes are higher than a SmartScreen warning: Smart App Control in enforce mode blocks the unsigned NSIS uninstaller's `%TEMP%` relaunch, so the app cannot be uninstalled from Settings > Apps (lab repro 2026-08-10) — and the uninstaller can ONLY be signed at makensis time (`!uninstfinalize`), because `WriteUninstaller` regenerates `Uninstall.exe` from the embedded stub on every (re)install.
 5. **Verify the artifact, not the build log.** "CI went green" is not "the installer works" — actually download the produced `.exe`/`.dmg`/`.AppImage` from the release URL and confirm its byte size and (where testable) that it runs, same evidentiary bar as §0a.5.
+
+## 0c. Write the PRD in 8090 FIRST — Software Factory is the PM, not a lint gate (HARD GATE)
+
+**8090 Software Factory is a product reviewer. Treat it as the PM/product engineer on this work, not as a checkbox drift-bot enforces after the fact.** The requirement is where a change is *justified*; the blueprint is where it is *designed*; the code is where it is *built*. In that order.
+
+Burned 2026-08-25 (the Observe-pillar gaps, #5163/#5165/#5167/#5172): all four were implemented first, then Factory records were written to turn drift-bot green. Six rounds of edits produced accurate mechanism — component blocks, contracts, ADRs — and **zero product context**. Nobody reviewing those records could have told you who was hurt, what was out of scope, what was risked, or what we would have shipped instead. Three defects a PM would have caught went in with them:
+- a one-click, irreversible data-deletion control with no confirmation (retention),
+- a runtime whose cost is recorded *conditionally* declared as recorded, reintroducing the exact "a number that overstates what it knows" bug the change existed to remove,
+- a second ownership model landing beside one another PR had just merged, both writing the same `agent_meta` table.
+
+None of those are documentation problems. They are what you get when the reviewer is handed the answer instead of the question.
+
+**The order, for any change bigger than a bug fix:**
+
+1. **Requirement first.** Problem, who is hurt and how you know, user story, acceptance criteria in *external* terms ("the system shall report X"), explicit **non-goals**, and the alternatives you rejected with the reason. If you cannot write the problem statement without describing your solution, you do not understand the problem yet.
+2. **Blueprint second.** Components, contracts, ADRs. This is where mechanism belongs — and only after the requirement says why it should exist.
+3. **Then implement**, and link the PR to both.
+
+**Say the risk out loud in the record.** A requirement that lists only what improves is half a requirement. State what could break, who notices, and how it is undone: data that changes retroactively, migrations that rebuild derived tables, controls that delete, anything a second feature might collide with.
+
+**Check what else is in flight before you design.** `GET /blueprints/<id>` on the feature you are touching, and scan open PRs for the same noun. Two ownership models merged a day apart is a review failure, not a merge conflict.
+
+**Practical notes** (see [[reference_software_factory_external_api]] for the API):
+- Records live at `factory.8090.ai`, project `b415065f-ab2f-4f53-8864-0c009fd098cb`. `.claude/sf_client.py` does GET/PATCH with the keychain key.
+- Mirror any new acceptance criteria into `docs/acceptance_criteria.json` and cite them from tests, then tighten `docs/ac_coverage_baseline.json`. An AC nothing tests is a claim nothing holds you to.
+- **Long records are truncated by the reviewer.** A section appended past roughly the first ~10 KB of a blueprint reads as absent, forever, no matter how many times you rewrite it. Insert new sections near the top (after `## Feature Summary`) and check with `md.find(marker) * 100 // len(md)` — aim for single-digit percent. Same applies to source files: anything added deep in a 10k+ line module (`local_store.py`, `dashboard.py`, `sync.py`) will be reported as missing. Disprove those with `git show 'origin/<branch>:<file>' | grep -n` and move on.
 
 ## 1. The data-flow rule (this is the one that bites)
 

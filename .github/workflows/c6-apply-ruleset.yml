@@ -10,7 +10,7 @@ name: Apply E2E required checks via Rulesets API (C6)
 #   admin on its own repository for ruleset management.
 #
 # On first success this closes C6 automatically -- no PAT, no local setup,
-# no browser Settings UI required.
+#   no browser Settings UI required.
 #
 # Idempotent: upserts by name so repeated runs are safe.
 # Runs on every push to main so the ruleset self-heals if deleted.
@@ -19,26 +19,30 @@ name: Apply E2E required checks via Rulesets API (C6)
 # exit code -- exits 0 if 'E2E Gate (required)' is already present,
 # exits 1 (::error::, actionable) if the check is still missing.
 #
-# NOTE: administration:write is NOT listed in the permissions block because
-# requesting it at the workflow level causes GitHub to kill the run with 0
-# jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
-# The Python script handles the 403 runtime error gracefully instead.
+# PERMISSIONS NOTE:
+#   administration:write is declared at the JOB level (not workflow level).
+#   Workflow-level administration:write caused GitHub to kill the run with
+#   0 jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
+#   Job-level permissions are scoped to that job's GITHUB_TOKEN only and
+#   do not trigger the same 0-job behaviour. If the Rulesets API accepts
+#   the job-scoped token, C6 auto-closes without any PAT. The existing
+#   403 fallback is unchanged for graceful degradation.
 #
-# Tracking: vivekchand/clawmetry#4552 (C6)
+# Tracking: vivekchand/clawmetry#3970 (C6)
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
-
 jobs:
   apply-ruleset:
     name: Upsert E2E required-checks ruleset on main (C6)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      administration: write
     steps:
       - name: Upsert repository ruleset via API
         id: upsert
@@ -131,7 +135,7 @@ jobs:
                       "github.com/vivekchand/clawmetry/settings/branches > "
                       "Edit main > Require status checks > add 'E2E Gate (required)'. "
                       "Or: bash scripts/close-c6.sh. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
                   )
                   set_output("created", "false")
                   sys.exit(1)
@@ -204,7 +208,7 @@ jobs:
                       "Fastest fix (60 s): github.com/vivekchand/clawmetry/settings/branches "
                       "> Edit main > Require status checks > add 'E2E Gate (required)'. "
                       "Or: bash scripts/close-c6.sh. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/4552"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
                   )
                   set_output("created", "false")
                   sys.exit(1)
@@ -312,7 +316,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           REPO = "clawmetry"
-          TRACKING_ISSUE = 4552
+          TRACKING_ISSUE = 3970
           MARKER = "<!-- c6-ruleset-applied -->"
           RUN_URL = (
               f"https://github.com/{OWNER}/{REPO}/actions/runs/"
@@ -362,7 +366,7 @@ jobs:
 
           body = (
               f"{MARKER}\n"
-              "**C6 auto-closed via Rulesets API.**\n\n"
+              "**C6 auto-closed via Rulesets API (job-level administration:write).**\n\n"
               "The `c6-apply-ruleset.yml` workflow successfully created the "
               "`E2E Required Status Checks (C6)` repository ruleset on "
               f"`clawmetry/main` -- no admin PAT required.\n\n"
