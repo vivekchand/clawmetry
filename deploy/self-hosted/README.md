@@ -55,6 +55,38 @@ The self-hosted server records every node's heartbeats, sessions, and events
 node roster, daemon versions, liveness) plus fleet APIs:
 `/api/selfhosted/nodes`, `/api/selfhosted/status`, `/api/export/events`.
 
+## Onboarding without a per-machine daemon
+
+If a fleet-wide daemon install is not going to clear your security review,
+this deployment also accepts data straight from the runtime. Developers
+install nothing; you push one config value:
+
+```bash
+CLAWMETRY_TELEMETRY=1
+OTEL_EXPORTER_OTLP_ENDPOINT=https://clawmetry.internal.example
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <your gateway token>"
+OTEL_RESOURCE_ATTRIBUTES="team.id=platform,repository=payments-api"
+```
+
+The `Authorization` header is required from anywhere but the loopback
+interface (`/v1/*` is gated like `/api/*`), and a refused exporter drops its
+batch silently, so get it right before rolling this out to a fleet.
+
+Records land on `/v1/logs` and persist to DuckDB with the identity the runtime
+sends (user, email, organization, session) plus your own team/repo attributes,
+so `GET /api/otel/rollup?dimension=team` answers "what did this team spend"
+from the ingested rows alone. The image already contains the protobuf decoder
+this needs.
+
+Two things to know before you plan around it. **It covers Claude Code and
+Codex**, the runtimes that emit OpenTelemetry natively; the rest need the
+daemon that reads their transcripts. And **records arrive in plaintext**: the
+runtime encrypts nothing before it sends, so the `CLAWMETRY_SELF_HOSTED_E2E`
+option below does not apply to this path. Inside a VPC deployment the
+plaintext never leaves your network, which is exactly why this shape and
+self-hosting go together.
+
 ## E2E encryption trade-off
 
 By default the server answers `/auth` with `"e2e": false`, so nodes send

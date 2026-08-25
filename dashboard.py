@@ -18,6 +18,7 @@ from clawmetry.gateway_protocol import (
     GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
     GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
 )
+import hashlib
 import hmac
 import os
 import sys
@@ -3119,7 +3120,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
 
 
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
+    definition wins (search for "Daemon-free OTLP intake"). Edits here change
+    nothing at runtime; make them in the live copy.
+
+    Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
 
     Claude Code (and other runtimes) export their per-turn event stream as OTel
     *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
@@ -11935,18 +11940,200 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             pass
 
 
-def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+# ── Daemon-free OTLP intake (WO-7) ───────────────────────────────────────────
+#
+# Everything below serves one deployment shape: an org that does NOT install a
+# per-machine daemon and instead sets OTEL_EXPORTER_OTLP_ENDPOINT (one config
+# value, pushed by MDM) at a ClawMetry the org already runs. That is the only
+# path a 500-developer security review approves in an afternoon.
+#
+# HONESTY BOUNDARIES on this path, which the docs repeat and nothing here may
+# quietly widen:
+#   * Only runtimes that emit OTel natively arrive here — Claude Code and
+#     Codex today. This is NOT a 26-runtime intake path.
+#   * Records arrive in PLAINTEXT. The runtime encrypts nothing, so the
+#     daemon's end-to-end encryption guarantee does not cover this path; the
+#     honest answer for a customer who needs it is the self-hosted VPC
+#     receiver, where the plaintext never leaves their network.
 
-    Claude Code (and other runtimes) export their per-turn event stream as OTel
-    *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
-    with cost/token/model attributes — not just metrics/traces, so an OTel-
-    configured install gives signal we previously dropped. We map any log record
-    carrying cost or token attributes into the same metrics cache categories as
-    /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
-    Best-effort: a bad record never breaks the batch.
+# Log-record event names, matched on the suffix after the runtime prefix
+# ("claude_code.tool_decision" -> "tool_decision").
+_OTLP_TOOL_CALL_EVENTS = frozenset(
+    {"tool_decision", "tool_use", "tool_call"}
+)
+_OTLP_TOOL_RESULT_EVENTS = frozenset(
+    {"tool_result", "tool_use_result"}
+)
+
+
+# Record ids the live metrics cache has already counted. OTLP delivery is
+# at-least-once, so a retried batch used to add its cost to the tiles a second
+# time — the DuckDB ledger dedups on the primary key, but the tile a person
+# actually looks at showed double. Bounded: this is a cache guard, not a
+# ledger, and it must never grow without limit on a busy receiver. Old ids
+# fall out; a retry that arrives after ~20k records is vanishingly rare and
+# costs one duplicated tile entry, not a duplicated stored row.
+_OTLP_SEEN_MAX = 20000
+_otlp_seen_ids = set()
+_otlp_seen_order = deque()
+_otlp_seen_lock = threading.Lock()
+
+
+def _otlp_seen(record_id):
+    """True if this record already reached the metrics cache. Records it
+    otherwise. Thread-safe: waitress serves OTLP posts on many threads."""
+    if not record_id:
+        return False
+    with _otlp_seen_lock:
+        if record_id in _otlp_seen_ids:
+            return True
+        _otlp_seen_ids.add(record_id)
+        _otlp_seen_order.append(record_id)
+        while len(_otlp_seen_order) > _OTLP_SEEN_MAX:
+            _otlp_seen_ids.discard(_otlp_seen_order.popleft())
+    return False
+
+
+def _otlp_event_suffix(event_name):
+    """``claude_code.tool_decision`` -> ``tool_decision``. Lower-cased."""
+    name = (event_name or "").strip().lower()
+    return name.rsplit(".", 1)[-1] if "." in name else name
+
+
+def _otlp_record_ts(rec, received_at):
+    """Seconds for ONE OTLP log record, from the record's own clock.
+
+    The prototype stamped ``time.time()`` on every record, so a batched or
+    backfilled delivery — the normal case for OTLP, whose exporters buffer and
+    retry — was misdated as "now". Any daily or per-sprint rollup built on that
+    is wrong, and wrong in a way nobody notices until they compare it to a bill.
+
+    Precedence is the OTel spec's: ``time_unix_nano`` (when the event happened)
+    beats ``observed_time_unix_nano`` (when the collector saw it), and receipt
+    time is the last resort for an exporter that sends neither.
     """
+    for field in ("time_unix_nano", "observed_time_unix_nano"):
+        try:
+            nanos = int(getattr(rec, field, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if nanos > 0:
+            return nanos / 1e9
+    return received_at
+
+
+def _otlp_repo_key(value):
+    """Normalise a repository attribute into a groupable key.
+
+    An org sends its repo as whatever its tooling has: an https clone URL, an
+    ssh remote, or a checkout path. Rolling up cost by repo means those three
+    have to land on one key, so we take the last path segment without ``.git``
+    (``git@github.com:acme/api.git`` and ``/Users/x/src/api`` both -> ``api``).
+    The raw value stays in the attributes blob, so nothing is lost.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    raw = raw.rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    for sep in ("/", "\\", ":"):
+        if sep in raw:
+            raw = raw.rsplit(sep, 1)[-1]
+    return raw or None
+
+
+def _otlp_record_id(service_name, session_id, event_name, rec, attrs):
+    """Deterministic id for one log record, so a retried batch REPLACEs
+    instead of double-counting.
+
+    OTLP delivery is at-least-once by specification: an exporter that does not
+    see our 200 resends the whole batch. Without a stable key the second
+    delivery is a second $4.10, and spend that inflates on a network blip is
+    worse than no spend number at all. The record carries no id of its own, so
+    we hash what identifies it: emitter, session, event name, its own
+    nanosecond timestamp, body, and every attribute.
+    """
+    # Two decoders reach here: the protobuf message (``HasField``) and the
+    # OTLP/JSON shim (a plain object with a ``body`` attribute and no
+    # ``HasField``). Read the body without assuming either.
+    body = ""
+    try:
+        raw_body = getattr(rec, "body", None)
+        has_field = getattr(rec, "HasField", None)
+        if callable(has_field):
+            raw_body = rec.body if has_field("body") else None
+        if raw_body is not None:
+            try:
+                body = _otel_attr_value(raw_body)
+            except Exception:
+                body = str(raw_body)
+    except Exception:
+        body = ""
+    parts = [
+        str(service_name or ""), str(session_id or ""), str(event_name or ""),
+        str(getattr(rec, "time_unix_nano", 0) or 0),
+        str(getattr(rec, "observed_time_unix_nano", 0) or 0),
+        str(body),
+    ]
+    try:
+        for k in sorted(attrs):
+            parts.append("%s=%s" % (k, attrs[k]))
+    except Exception:
+        pass
+    joined = "\x1f".join(parts).encode("utf-8", "replace")
+    return hashlib.sha256(joined).hexdigest()[:32]
+
+
+def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
+    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596, WO-7).
+
+    Claude Code and Codex export their per-turn event stream as OTel *logs* —
+    ``event_name`` like ``claude_code.api_request`` / ``tool_decision`` with
+    cost/token/model attributes. This handler is the daemon-free intake path:
+    an org points OTEL_EXPORTER_OTLP_ENDPOINT here and gets observability with
+    nothing installed per machine.
+
+    Three destinations, in order of durability:
+
+    1. **DuckDB ``otlp_records``** — the durable ledger. One row per record
+       with the identity the runtime already sends (``user.id``,
+       ``user.email``, ``organization.id``, ``session.id``) plus the rollup
+       dimensions an org adds through ``OTEL_RESOURCE_ATTRIBUTES``
+       (``team.id``, repository). Without these there is no per-team or
+       per-repo answer, which is the whole reason an org buys this.
+    2. **DuckDB ``events``** — ``tool_decision`` / ``tool_result`` records
+       become ``tool_call`` / ``tool_result`` events, so the trajectory
+       detectors (stuck_loop, no_progress, repeated_tool_failure) work on this
+       path exactly as they do on the daemon path.
+    3. **The in-memory metrics cache** — unchanged, because it is what the
+       live tiles read on the same request. It is a cache, not storage: before
+       WO-7 it was the ONLY destination, so a restart erased the deployment's
+       entire history.
+
+    Writes go through ``local_store.get_store()``, which in this process is a
+    ``_ProxyStore`` forwarding to the daemon that owns the writer lock — the
+    request handler never takes it. Best-effort throughout: a bad record never
+    breaks the batch, and a failed DuckDB write never breaks the tiles.
+    """
+    received_at = time.time()
     req = _otlp_request(pb_data, "logs", content_encoding, content_type)
+
+    # Resolve the store lazily (same contract as the traces path): tests that
+    # monkeypatch the singleton, and installs without DuckDB, both keep working.
+    _store = None
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+    except Exception:
+        _store = None
+
+    # Accumulated across the WHOLE export batch and written in one call. An
+    # exporter ships hundreds of records per POST and get_store() here is an
+    # HTTP proxy to the daemon, so per-record writes would be per-record round
+    # trips (FLYWHEEL 1e, the daemon's CPU budget).
+    out_records = []
+    out_events = []
 
     def _f(attrs, *keys):
         for k in keys:
@@ -11960,48 +12147,277 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
             for attr in resource_logs.resource.attributes:
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
 
+        service_name = resource_attrs.get("service.name") or ""
+        agent_type = (
+            _otlp_service_name_to_agent_type(service_name) or "openclaw"
+        )
+        node_id = (
+            resource_attrs.get("node.id")
+            or resource_attrs.get("host.name")
+            or resource_attrs.get("host.id")
+            or "otlp"
+        )
+
         for scope_logs in resource_logs.scope_logs:
             for rec in scope_logs.log_records:
                 attrs = {}
                 for attr in rec.attributes:
                     attrs[attr.key] = _otel_attr_value(attr.value)
-                ts = time.time()
-                model = _f(attrs, "model") or resource_attrs.get("model", "")
-                channel = _f(attrs, "channel") or resource_attrs.get("channel", "")
-                provider = _f(attrs, "provider") or resource_attrs.get("provider", "")
+
+                def _pick(*keys):
+                    """Record attributes win over resource attributes — the
+                    precedence the OTel spec uses."""
+                    v = _f(attrs, *keys)
+                    if v is not None:
+                        return v
+                    return _f(resource_attrs, *keys)
+
+                # ── Fix 1: the record's own timestamp, not receipt time ──
+                ts = _otlp_record_ts(rec, received_at)
+
+                # ── Fix 2: identity ──────────────────────────────────────
+                # Claude Code sets user.id / user.email / organization.id /
+                # session.id on every record; team and repository come from
+                # the org's own OTEL_RESOURCE_ATTRIBUTES.
+                session_id = _pick(
+                    "session.id", "session_id", "gen_ai.conversation.id",
+                    "conversation.id",
+                )
+                user_id = _pick(
+                    "user.id", "user.account_uuid", "enduser.id", "user_id",
+                )
+                user_email = _pick("user.email", "enduser.email", "user_email")
+                org_id = _pick(
+                    "organization.id", "organization.uuid", "org.id",
+                    "organization_id", "tenant.id",
+                )
+                team = _pick(
+                    "team.id", "team", "department", "cost_center",
+                    "cost.center", "squad", "group.id",
+                )
+                repo_raw = _pick(
+                    "vcs.repository.url.full", "vcs.repository.url",
+                    "repository", "repo", "git.repository", "git.repo",
+                    "code.repository", "project.name", "workspace",
+                )
+                repo = _otlp_repo_key(repo_raw)
+
+                model = _pick("model", "gen_ai.request.model",
+                              "gen_ai.response.model") or ""
+                channel = _pick("channel") or ""
+                provider = _pick("provider", "gen_ai.provider.name",
+                                 "gen_ai.system") or ""
+
+                event_name = (getattr(rec, "event_name", "") or "").strip()
+                if not event_name:
+                    event_name = str(_f(attrs, "event.name") or "")
+                suffix = _otlp_event_suffix(event_name)
+
+                record_id = _otlp_record_id(
+                    service_name, session_id, event_name, rec, attrs
+                )
+                # The tiles must not count a retried batch twice. The DuckDB
+                # write below is idempotent on record_id; this is the same
+                # guarantee for the in-memory cache the live tiles read.
+                fresh = not _otlp_seen(record_id)
 
                 cost = _f(attrs, "cost_usd", "cost.usd", "cost")
+                cost_val = None
                 if cost is not None:
                     try:
-                        _add_metric("cost", {
-                            "timestamp": ts, "usd": float(cost),
-                            "model": model, "channel": channel, "provider": provider,
-                        })
+                        cost_val = float(cost)
                     except (TypeError, ValueError):
-                        pass
+                        cost_val = None
+                if cost_val is not None and fresh:
+                    _add_metric("cost", {
+                        "timestamp": ts, "usd": cost_val,
+                        "model": model, "channel": channel, "provider": provider,
+                    })
 
-                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens")
-                otok = _f(attrs, "output_tokens", "tokens.output", "completion_tokens")
+                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens",
+                          "gen_ai.usage.input_tokens")
+                otok = _f(attrs, "output_tokens", "tokens.output",
+                          "completion_tokens", "gen_ai.usage.output_tokens")
+                tin = tout = None
                 if itok is not None or otok is not None:
                     try:
-                        i, o = int(itok or 0), int(otok or 0)
-                        _add_metric("tokens", {
-                            "timestamp": ts, "input": i, "output": o, "total": i + o,
-                            "model": model, "channel": channel, "provider": provider,
-                        })
+                        tin, tout = int(itok or 0), int(otok or 0)
                     except (TypeError, ValueError):
-                        pass
+                        tin = tout = None
+                if tin is not None and fresh:
+                    _add_metric("tokens", {
+                        "timestamp": ts, "input": tin, "output": tout,
+                        "total": tin + tout,
+                        "model": model, "channel": channel, "provider": provider,
+                    })
 
                 dur = _f(attrs, "duration_ms", "duration.ms")
-                ev = (getattr(rec, "event_name", "") or "").lower()
-                if dur is not None and any(k in ev for k in ("request", "run", "completion")):
+                dur_val = None
+                if dur is not None:
                     try:
-                        _add_metric("runs", {
-                            "timestamp": ts, "duration_ms": float(dur),
-                            "model": model, "channel": channel,
-                        })
+                        dur_val = float(dur)
                     except (TypeError, ValueError):
-                        pass
+                        dur_val = None
+                if dur_val is not None and fresh and any(
+                    k in suffix for k in ("request", "run", "completion")
+                ):
+                    _add_metric("runs", {
+                        "timestamp": ts, "duration_ms": dur_val,
+                        "model": model, "channel": channel,
+                    })
+
+                # ── Fix 4: tool records become tool events ───────────────
+                tool_name = _f(
+                    attrs, "tool_name", "tool.name", "name",
+                    "gen_ai.tool.name",
+                )
+                decision = _f(attrs, "decision", "tool.decision")
+                success_attr = _f(attrs, "success", "tool.success")
+                success = None
+                if success_attr is not None:
+                    success = str(success_attr).strip().lower() not in (
+                        "false", "0", "no", "failure", "error",
+                    )
+
+                # ── Fix 3: persist, rather than only caching in memory ───
+                out_records.append({
+                    "record_id": record_id,
+                    "ts": ts,
+                    "received_at": received_at,
+                    "event_name": event_name or suffix or "log",
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "org_id": org_id,
+                    "team": team,
+                    "repo": repo,
+                    "node_id": node_id,
+                    "agent_type": agent_type,
+                    "service_name": service_name,
+                    "model": model or None,
+                    "provider": provider or None,
+                    "cost_usd": cost_val,
+                    "tokens_input": tin,
+                    "tokens_output": tout,
+                    "token_count": (
+                        (tin or 0) + (tout or 0) if tin is not None else None
+                    ),
+                    "duration_ms": dur_val,
+                    "tool_name": tool_name,
+                    "decision": decision,
+                    "success": success,
+                    "attributes": {
+                        "resource": resource_attrs,
+                        "record": attrs,
+                        "repo_raw": repo_raw,
+                    },
+                })
+
+                if not session_id:
+                    # Every downstream reader keys on session_id; a record
+                    # without one can still be rolled up by team/user above,
+                    # but it cannot join a trajectory.
+                    continue
+
+                ev_common = {
+                    "node_id": node_id,
+                    "agent_type": agent_type,
+                    "agent_id": "main",
+                    "session_id": str(session_id),
+                    "workspace_id": repo,
+                    "ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                    "runtime_kind": agent_type,
+                }
+
+                if suffix in _OTLP_TOOL_CALL_EVENTS and tool_name:
+                    # A rejected permission prompt is not a tool CALL — the
+                    # tool never ran. Recording it as one would tell the
+                    # no-progress detector the agent acted when it was
+                    # actually blocked waiting for a human.
+                    if str(decision or "").strip().lower() in (
+                        "reject", "rejected", "deny", "denied",
+                    ):
+                        continue
+                    args = _f(attrs, "tool_parameters", "tool.parameters",
+                              "arguments", "input")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (ValueError, TypeError):
+                            pass
+                    if args in (None, ""):
+                        # This path usually carries no arguments, and the
+                        # stuck_loop detector trips on K consecutive
+                        # IDENTICAL (tool, args) calls. Hashing "no args" to
+                        # one constant would make five Reads of five
+                        # different files look like a loop, so we say what is
+                        # true instead: the arguments are unknown here, and
+                        # unknown is not evidence of identical. The cycle
+                        # branch (tool NAMES only) still works untouched.
+                        args = {"_otlp_args_unknown": record_id}
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "tool_call"
+                    ev["data"] = {
+                        "tool": str(tool_name),
+                        "args": args,
+                        "decision": decision,
+                        "source": _f(attrs, "source", "tool.source"),
+                        "_otlp": True,
+                    }
+                    out_events.append(ev)
+                elif suffix in _OTLP_TOOL_RESULT_EVENTS and tool_name:
+                    err_text = _f(attrs, "error", "error.message") or ""
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "tool_result"
+                    ev["data"] = {
+                        "tool": str(tool_name),
+                        "is_error": (success is False) or bool(err_text),
+                        "error": err_text,
+                        "duration_ms": dur_val,
+                        "_otlp": True,
+                    }
+                    out_events.append(ev)
+                elif cost_val is not None or tin is not None:
+                    # The money records (api_request). Landing them in events
+                    # is what makes the usage + cost surfaces survive a
+                    # restart on a daemon-free deployment.
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "llm_call"
+                    ev["cost_usd"] = cost_val
+                    ev["token_count"] = (
+                        (tin or 0) + (tout or 0) if tin is not None else None
+                    )
+                    ev["model"] = model or None
+                    ev["data"] = {
+                        "model": model,
+                        "provider": provider,
+                        "input_tokens": tin,
+                        "output_tokens": tout,
+                        "cost_usd": cost_val,
+                        "duration_ms": dur_val,
+                        "_otlp": True,
+                    }
+                    out_events.append(ev)
+
+    if _store is not None and (out_records or out_events):
+        try:
+            # Keyword args are REQUIRED: the dashboard's _ProxyStore forwards
+            # **kwargs only, so a positional call silently writes nothing
+            # whenever the daemon owns the writer lock — i.e. every real
+            # install. put_otlp_batch is allowlisted in
+            # routes/local_query._DAEMON_METHODS so the daemon runs the write.
+            _store.put_otlp_batch(records=out_records, events=out_events)
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "local_store.put_otlp_batch failed: %s", e
+                )
+            except Exception:
+                pass
 
 
 def _get_otel_usage_data():

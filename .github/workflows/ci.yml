@@ -441,6 +441,57 @@ jobs:
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
+  # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────
+  # The ONLY job that installs opentelemetry-proto. Without it every OTLP
+  # protobuf test in this repo is importorskip'd, so the receiver an
+  # enterprise points 500 machines at had zero CI coverage — the failure mode
+  # is a green board over an untested path, not a red one. Two tests in
+  # test_spans_otlp_edge_cases.py had in fact been failing the whole time and
+  # nobody could see it, because the file skipped itself.
+  #
+  # The enterprise ingest image bakes the same dependency in (see Dockerfile),
+  # so this job runs the receiver in the configuration a customer actually
+  # deploys. HARD-FAIL: no continue-on-error.
+  otlp-receiver:
+    name: OTLP receiver (with otel extra)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies (including the otel extra)
+        run: |
+          pip install flask waitress cryptography duckdb pytest requests psutil
+          pip install "opentelemetry-proto>=1.20.0" "protobuf>=4.21.0"
+      - name: Assert the protobuf decoder is actually available
+        run: |
+          python3 -c "
+          import dashboard
+          assert dashboard._HAS_OTEL_PROTO, (
+              'otel extra did not import — the suite below would silently skip')
+          print('OTLP protobuf decoder present')
+          "
+      - name: Run the OTLP receiver suite
+        run: |
+          python3 -m pytest \
+            tests/test_otlp_daemon_free_intake.py \
+            tests/test_otlp_logs.py \
+            tests/test_otlp_metrics_edge_cases.py \
+            tests/test_otlp_traces_cost.py \
+            tests/test_otlp_json_no_protobuf.py \
+            tests/test_otlp_compat_port.py \
+            tests/test_otlp_dos_auth.py \
+            tests/test_otlp_rollup_cpu_budget.py \
+            tests/test_spans_otlp_edge_cases.py \
+            -q
+          # NOT listed: tests/test_e2e_otlp_ingest.py — it drives a LIVE
+          # dashboard over HTTP (BASE_URL), which this job does not boot. It
+          # runs in the api-tests job, which does.
+
   # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────────────────────
   # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:
   # `keystone_e2e.py --no-drive` exits 0 on every PR. The keystone is the
