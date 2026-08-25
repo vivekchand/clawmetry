@@ -72,7 +72,16 @@ def _fallback_repo() -> "str | None":
     history at all. On a fresh install ``sessions.cwd`` is empty, so we fall
     back to the git root of the directory the dashboard itself is running in.
     Returns ``None`` rather than a guess when that is not a repo.
+
+    NEVER on the hosted dashboard. The cloud container runs from ClawMetry's
+    OWN checkout, so this fallback there would score our source tree and
+    label it as the user's repo -- a fabricated card about a repo they have
+    never seen. On cloud the honest answer is "this machine has not uploaded
+    a scan yet"; the card is served from the daemon's ``repoReadiness``
+    snapshot slice, scanned where the agents actually run.
     """
+    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+        return None
     from clawmetry import repo_readiness
     try:
         cwd = os.getcwd()

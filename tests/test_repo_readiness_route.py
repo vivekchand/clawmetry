@@ -109,6 +109,21 @@ def test_endpoint_serves_a_scored_report(monkeypatch, client, repo):
     assert body["report"]["score"] in list("ABCDF")
 
 
+def test_the_hosted_dashboard_never_scores_its_own_checkout(monkeypatch):
+    """The cloud container runs from ClawMetry's own source tree. Falling back
+    to its working directory there would render a card about OUR repo and
+    label it as the user's."""
+    monkeypatch.setattr(readiness, "_repo_activity", lambda days: [])
+    monkeypatch.setenv("CLAWMETRY_CLOUD", "1")
+    body = readiness.readiness_payload()
+    assert body["status"] == "no_repo"
+    assert body["report"] is None
+    monkeypatch.delenv("CLAWMETRY_CLOUD")
+    # ...and off cloud the fallback still works, so a first-run local install
+    # sees its own repo scored.
+    assert readiness._fallback_repo() is not None
+
+
 def test_endpoint_is_free_and_ungated():
     """WO-5: free and ungated. This is a lead magnet, not a paid surface."""
     src = open(readiness.__file__, encoding="utf-8").read()

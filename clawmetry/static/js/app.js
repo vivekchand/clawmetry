@@ -21246,9 +21246,18 @@ function _cmRenderReadiness(data) {
       + escapeHtml((data && data.detail) || 'unknown error') + '</div>';
   }
   if (data.status === 'no_repo' || !data.report) {
-    return '<div class="rr-empty">Nothing to score yet. '
-      + escapeHtml(data.detail || '')
-      + ' Run an agent inside a code repo and this fills in on its own.</div>';
+    // Two different empty states. With repos in the picker, the selected one
+    // is a checkout that is gone from the machine that scanned it; telling
+    // that reader to "run an agent inside a code repo" would be nonsense.
+    var hasOthers = data.repos && data.repos.length;
+    return '<div class="rr-empty">'
+      + escapeHtml(data.detail || (hasOthers
+        ? 'That checkout is no longer on the machine that scanned it, so there '
+          + 'is nothing left to read. Its history is still in the picker above.'
+        : 'Nothing to score yet.'))
+      + (hasOthers ? ' Pick another repo above.'
+                   : ' Run an agent inside a code repo and this fills in on its own.')
+      + '</div>';
   }
   var rep = data.report;
   if (rep.status === 'not_found') {
