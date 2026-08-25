@@ -85,6 +85,8 @@ None of those are documentation problems. They are what you get when the reviewe
 
 **Check what else is in flight before you design.** `GET /blueprints/<id>` on the feature you are touching, and scan open PRs for the same noun. Two ownership models merged a day apart is a review failure, not a merge conflict.
 
+**This is enforced, not advisory.** `scripts/check_product_record.py` fails any PR touching product code whose body cites neither a Factory record nor an explicit `No-PRD: <reason>`. It cannot judge whether the record is any good -- it cannot, and pretending otherwise would be theatre. What it does is make skipping the review a sentence somebody typed rather than a step that quietly did not happen. Docs, tests, CI and scripts are exempt, so writing the record is never itself gated on citing one. The gate's own tests run inside its workflow, because a gate whose tests only run in the main suite can rot while still reporting green.
+
 **Practical notes** (see [[reference_software_factory_external_api]] for the API):
 - Records live at `factory.8090.ai`, project `b415065f-ab2f-4f53-8864-0c009fd098cb`. `.claude/sf_client.py` does GET/PATCH with the keychain key.
 - Mirror any new acceptance criteria into `docs/acceptance_criteria.json` and cite them from tests, then tighten `docs/ac_coverage_baseline.json`. An AC nothing tests is a claim nothing holds you to.

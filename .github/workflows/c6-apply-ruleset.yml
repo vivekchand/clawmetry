@@ -20,13 +20,14 @@ name: Apply E2E required checks via Rulesets API (C6)
 # exits 1 (::error::, actionable) if the check is still missing.
 #
 # PERMISSIONS NOTE:
-#   administration:write is declared at the JOB level (not workflow level).
-#   Workflow-level administration:write caused GitHub to kill the run with
-#   0 jobs on personal repos (confirmed: run #30243855242 = 0 jobs queued).
-#   Job-level permissions are scoped to that job's GITHUB_TOKEN only and
-#   do not trigger the same 0-job behaviour. If the Rulesets API accepts
-#   the job-scoped token, C6 auto-closes without any PAT. The existing
-#   403 fallback is unchanged for graceful degradation.
+#   administration:write is NOT declared at any level. Both workflow-level
+#   and job-level administration:write cause GitHub to kill the run with
+#   0 jobs on personal repos (confirmed: runs #30243855242 and #32833015913).
+#   The Rulesets API will 403; the fallback reads branch protection state
+#   and exits 0 if 'E2E Gate (required)' is already present, exits 1 with
+#   actionable Settings UI instructions if still missing.
+#   C6 must be closed via: github.com/vivekchand/clawmetry/settings/branches
+#   (60 seconds) or by setting E2E_ADMIN_PAT secret for c6-schedule-heal.yml.
 #
 # Tracking: vivekchand/clawmetry#3970 (C6)
 
@@ -42,7 +43,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      administration: write
     steps:
       - name: Upsert repository ruleset via API
         id: upsert
