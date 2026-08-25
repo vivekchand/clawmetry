@@ -119,6 +119,14 @@ the runtime already sends (`user.id`, `user.email`, `organization.id`,
 and `tool_result` records also become tool events, so the trajectory detectors
 (stuck loops, no progress, repeated tool failures) work on this path.
 
+The team and repository on this path are **self-reported**: they are whatever
+the org stamped on its own telemetry, carried through with the record, and
+every rollup response says so (`attribution: self-reported`). That is a
+different question from agent principals, which derive owner and team from
+what ClawMetry observes and name the rung an inherited value came from. A
+daemon-free machine has no principals to derive from, which is exactly why
+this path carries the org's own labels instead of inventing an answer.
+
 Read it back with `GET /api/otel/rollup?dimension=team|repo|user_email&days=30`,
 or `GET /api/otel-status`, whose `persisted` field is the DuckDB row count —
 `counts` above it is an in-memory cache that a restart clears.

@@ -1358,6 +1358,14 @@ def api_otel_rollup():
     ``?days=N`` bounds the window (default 30, max 365). Every figure is
     MEASURED: it sums what the runtime reported. Where a runtime reported no
     cost the sum is smaller, never estimated up to look complete.
+
+    The identity here is SELF-REPORTED — it is whatever the org stamped on its
+    own telemetry via ``OTEL_RESOURCE_ATTRIBUTES``, carried through with the
+    record. It is deliberately NOT ClawMetry's ownership answer: agent
+    principals (REQ-OBS-004) derive owner and team from what we observe, and
+    report which rung an inherited value came from. Two different questions,
+    and a caller must be able to tell which one it asked, so every response
+    says ``attribution: self-reported``.
     """
     import dashboard as _d  # noqa: F401 — parity with the rest of bp_otel
     dimension = (request.args.get("dimension") or "team").strip()
@@ -1399,6 +1407,9 @@ def api_otel_rollup():
         "rows": rows,
         "source": "otlp",
         "basis": "measured",
+        # What the org's own exporter config declared, not an attribution
+        # ClawMetry derived. See the docstring.
+        "attribution": "self-reported",
     })
 
 
