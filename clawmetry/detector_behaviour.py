@@ -18,16 +18,18 @@ from __future__ import annotations
 import re
 from typing import Iterable, Optional
 
-from clawmetry.detector_core import (
-    _IPV4_RE,
-    _cmd_sketch,
-    _incident,
-    _is_inspect_only,
-    _prepare,
-    _redact_path,
-    _step_mutates,
-    _stop_hint,
-)
+from clawmetry.detector_surface import _IPV4_RE, _cmd_sketch, _is_inspect_only, _redact_path
+
+
+def _core():
+    """The orchestrator's shared primitives, imported late.
+
+    ``clawmetry.detectors`` imports this module to build its registry, so a
+    module-level import back into it would be circular. The repo already uses
+    this late-import shape where a leaf needs something from its parent.
+    """
+    from clawmetry import detectors as _d
+    return _d
 
 
 # ── Detector 5: file_blast_radius ────────────────────────────────────────────
@@ -90,7 +92,7 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
     caller passes ``facts["cwd"]``; without it we do not guess a root.
     """
     try:
-        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         root = str((facts or {}).get("cwd") or "").rstrip("/")
         write_tools = th.get("write_tools")
         files: dict = {}
@@ -110,7 +112,7 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
                     first_idx = st.get("i")
                 if _deletes_a_root(cmd, st.get("paths") or ()):
                     root_delete = True
-            if not (_step_mutates(st, write_tools) or hits):
+            if not (_core()._step_mutates(st, write_tools) or hits):
                 continue
             write_calls += 1
             if first_idx is None:
@@ -142,26 +144,26 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
             "observed": "tool_arguments",
         }
         if root_delete:
-            return _incident(
+            return _core()._incident(
                 "file_blast_radius", session_id, runtime, "critical",
                 f"{runtime}: recursive delete at a home or system root",
                 "The agent ran a recursive delete targeting a home or system "
-                "root rather than a project subdirectory. " + _stop_hint(),
+                "root rather than a project subdirectory. " + _core()._stop_hint(),
                 evidence, first_idx)
         if destructive:
             label = sorted(set(destructive))[0]
-            return _incident(
+            return _core()._incident(
                 "file_blast_radius", session_id, runtime, "warning",
                 f"{runtime}: {label} across {n_files} file(s)",
                 f"The agent ran a {label} command. Destructive commands are "
-                f"not undone by stopping the agent afterwards. " + _stop_hint(),
+                f"not undone by stopping the agent afterwards. " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _incident(
+        return _core()._incident(
             "file_blast_radius", session_id, runtime, "warning",
             f"{runtime}: {n_files} files changed in one stretch",
             f"The agent mutated {n_files} distinct files (threshold {limit}) "
             f"without a pause. Wide edits are sometimes right and sometimes a "
-            f"misread task. " + _stop_hint(),
+            f"misread task. " + _core()._stop_hint(),
             evidence, first_idx)
     except Exception:
         return None
@@ -221,7 +223,7 @@ def credential_access(events: Iterable[dict], session_id: str,
     "exfiltrated data", which we cannot see and will not claim.
     """
     try:
-        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         categories: dict = {}
         first_idx = None
         first_pos = None
@@ -266,35 +268,35 @@ def credential_access(events: Iterable[dict], session_id: str,
         if egress_after and not strong:
             # Egress after a bare `env` is not the exfiltration shape; say what
             # was seen without the escalation.
-            return _incident(
+            return _core()._incident(
                 "credential_access", session_id, runtime, "info",
                 f"{runtime}: dumped the environment",
                 f"The agent printed its environment variables and later "
                 f"contacted {len(egress_after)} external host(s). Common in "
                 f"ordinary shell work, surfaced so it is not invisible. "
-                + _stop_hint(),
+                + _core()._stop_hint(),
                 evidence, first_idx)
         if not strong:
-            return _incident(
+            return _core()._incident(
                 "credential_access", session_id, runtime, "info",
                 f"{runtime}: dumped the environment",
-                "The agent printed its environment variables. " + _stop_hint(),
+                "The agent printed its environment variables. " + _core()._stop_hint(),
                 evidence, first_idx)
         if egress_after:
-            return _incident(
+            return _core()._incident(
                 "credential_access", session_id, runtime, "critical",
                 f"{runtime}: read {head}{more}, then reached {len(egress_after)} "
                 f"external host(s)",
                 f"The agent opened {head}{more} and afterwards contacted "
                 f"{', '.join(egress_after[:3])}. That ordering is worth a look "
-                f"before it continues. " + _stop_hint(),
+                f"before it continues. " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _incident(
+        return _core()._incident(
             "credential_access", session_id, runtime, "warning",
             f"{runtime}: read {head}{more}",
             f"The agent opened {head}{more}. Plenty of tasks legitimately need "
             f"this; it is surfaced so the choice is yours rather than "
-            f"invisible. " + _stop_hint(),
+            f"invisible. " + _core()._stop_hint(),
             evidence, first_idx)
     except Exception:
         return None
@@ -322,7 +324,7 @@ def network_egress(events: Iterable[dict], session_id: str,
     Contacting a host is not an accusation. The incident says where it went.
     """
     try:
-        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         known = th.get("known_hosts") or frozenset()
         hosts: dict = {}
         first_idx = None
@@ -362,25 +364,25 @@ def network_egress(events: Iterable[dict], session_id: str,
         }
         if ground == "first_time":
             shown = ", ".join(new_hosts[:3])
-            return _incident(
+            return _core()._incident(
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: first contact with {shown}"
                 + (f" +{len(new_hosts) - 3} more" if len(new_hosts) > 3 else ""),
                 f"This agent has not reached {shown} in the "
-                f"{len(known)} host(s) seen from it before now. " + _stop_hint(),
+                f"{len(known)} host(s) seen from it before now. " + _core()._stop_hint(),
                 evidence, hosts.get(new_hosts[0]))
         if ground == "fanout":
-            return _incident(
+            return _core()._incident(
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: reached {len(distinct)} external hosts",
                 f"The agent contacted {len(distinct)} distinct external hosts "
-                f"in one stretch (threshold {fanout_limit}). " + _stop_hint(),
+                f"in one stretch (threshold {fanout_limit}). " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _incident(
+        return _core()._incident(
             "network_egress", session_id, runtime, sev,
             f"{runtime}: connected to a raw IP address",
             f"The agent connected to {raw_ips[0]} by address rather than by "
-            f"name. " + _stop_hint(),
+            f"name. " + _core()._stop_hint(),
             evidence, hosts.get(raw_ips[0]))
     except Exception:
         return None
@@ -426,7 +428,7 @@ def privilege_change(events: Iterable[dict], session_id: str,
     permissions. Stopping the agent does not undo any of those.
     """
     try:
-        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         found: dict = {}
         critical: list = []
         first_idx = None
@@ -459,19 +461,19 @@ def privilege_change(events: Iterable[dict], session_id: str,
         }
         if critical:
             head = sorted(set(critical))[0]
-            return _incident(
+            return _core()._incident(
                 "privilege_change", session_id, runtime, "critical",
                 f"{runtime}: {head}",
                 f"The agent {head}. This outlives the session: stopping the "
-                f"agent does not undo it. " + _stop_hint(),
+                f"agent does not undo it. " + _core()._stop_hint(),
                 evidence, first_idx)
         head = labels[0]
         more = f" and {len(labels) - 1} more" if len(labels) > 1 else ""
-        return _incident(
+        return _core()._incident(
             "privilege_change", session_id, runtime, "warning",
             f"{runtime}: {head}{more}",
             f"The agent {head}{more}. Elevation mid-task is worth confirming "
-            f"was part of the plan. " + _stop_hint(),
+            f"was part of the plan. " + _core()._stop_hint(),
             evidence, first_idx)
     except Exception:
         return None

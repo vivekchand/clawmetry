@@ -1,149 +1,84 @@
-"""clawmetry/detectors.py: research-backed, judge-free, CPU-cheap anomaly
-detectors over a session's recent event sequence (issue #2999, extended #5168).
+"""clawmetry/detectors.py — research-backed, judge-free, CPU-cheap trajectory
+anomaly detectors over a session's recent event sequence (issue #2999).
 
 Design basis (the agent-observability deep-research memo + TrajAD / TRAIL /
 MAST taxonomies): zero-shot LLM judges are near-useless at localizing the bad
 step and 17-27x slower; naive embedding-outlier heuristics dilute the single
 anomalous step. What is load-bearing is *sequence structure*. So this module is
 a set of small, explainable, bounded heuristics over the ordered tool/result
-stream, NOT an expensive judge. Each detector is pure (no I/O, no store, no
+stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-EIGHT detectors, in two families that ask different questions.
+Eight detectors in two families. TRAJECTORY (is it stuck?) reads the shape of
+the tool stream and lives here. BEHAVIOUR (is it doing something it does not
+normally do?) reads what the calls DID and lives in ``detector_behaviour``:
+``file_blast_radius``, ``credential_access``, ``network_egress``,
+``privilege_change``. Those read tool ARGUMENTS rather than syscalls, and every
+incident says so. Thresholds are resolved in ``detector_calibration``; what a
+finding costs is computed in ``detector_money``.
 
-**Trajectory: is this agent stuck?** (the shape of the tool stream)
+The four trajectory detectors:
 
-1. ``stuck_loop``       TrajAD Type II (circular loops / repeated identical
-                        tool calls): K consecutive identical
-                        ``(tool, args-hash)`` calls OR a short repeating
-                        n-gram cycle of tool names.
-2. ``no_progress``      busy-but-not-advancing: >= N tool calls in the window
-                        with zero file mutations and no completion marker.
-3. ``repeated_tool_failure``  the SAME tool errors >= M times in the window.
-4. ``action_discrepancy``     TRAIL tool-related hallucination, NARROW form: a
-                        failed tool result immediately followed by the agent
-                        continuing (another tool call / a completion) WITHOUT
-                        a retry of the same tool or an acknowledgement of the
-                        error. Lower precision -> lower severity, honest
-                        wording ("agent continued after a failed command").
-
-**Behaviour: is this agent doing something it does not normally do?** (what the
-calls actually DID, read from their arguments)
-
-5. ``file_blast_radius``  more distinct files mutated than the cohort's normal,
-                        or a destructive command (recursive delete at a home or
-                        system root, hard reset, force push, mirror delete).
-6. ``credential_access``  an ssh key, cloud credential, ``.env``, certificate or
-                        stored token file is opened, or the environment dumped.
-7. ``network_egress``   a host absent from the cohort's learned host set,
-                        fan-out across many hosts, or a bare IP literal.
-8. ``privilege_change`` sudo, an edited sudoers file, a setuid bit,
-                        world-writable permissions, a disabled protection.
-
-THE HONESTY BOUND on family two, repeated in every incident as
-``evidence.observed = "tool_arguments"``: these read tool-call ARGUMENTS, not
-syscalls. An agent that shells out to a program which itself opens ``~/.ssh``
-is invisible here. Two rules keep that bound from becoming noise: heredoc
-bodies are stripped before matching (a script that merely CONTAINS the text
-``csrutil disable`` is not an escalation) and privilege patterns are ignored
-inside inspect-only commands such as ``grep`` or ``git log``.
+1. ``stuck_loop``       — TrajAD Type II (circular loops / repeated identical
+                          tool calls): K consecutive identical
+                          ``(tool, args-hash)`` calls OR a short repeating
+                          n-gram cycle of tool names.
+2. ``no_progress``      — busy-but-not-advancing: >= N tool calls in the window
+                          with zero file writes/edits and no completion marker.
+3. ``repeated_tool_failure`` — the SAME tool errors >= M times in the window.
+4. ``action_discrepancy``    — TRAIL tool-related hallucination, NARROW form: a
+                          failed tool result immediately followed by the agent
+                          continuing (another tool call / a completion) WITHOUT
+                          a retry of the same tool or an acknowledgement of the
+                          error. Lower precision -> lower severity, honest
+                          wording ("agent continued after a failed command").
 
 Each detector returns an incident dict (or ``None``):
 
     {
-      "kind":          one of DETECTOR_KINDS,
+      "kind":          "stuck_loop" | "no_progress" | "repeated_tool_failure"
+                       | "action_discrepancy",
       "session_id":    str,
       "runtime":       str,
-      "severity":      "info" | "warning" | "critical",
-      "title":         plain-words headline ("codex looping: 38 tool calls..."),
+      "severity":      "warning" | "info",
+      "title":         plain-words headline ("codex looping: 38 tool calls, ..."),
       "detail":        one-sentence explanation incl. the Stop/Pause hint,
-      "evidence":      small dict of the numbers behind the call, including
-                       the threshold crossed and where that threshold came
-                       from; REDACTED (categories not paths, program not
-                       command line) because this travels to the cloud,
-      "first_bad_step": int | None,   # 0-based index into ``events``
-      # attached by annotate_spend:
-      "spend_at_risk_usd":    float,  # cost of the FLAGGED STRETCH, estimated
-      "spend_basis":          "burn_rate" | "window_fraction" | "unknown",
-      "burn_rate_usd_per_min": float,
-      "session_cost_usd":      float,
+      "evidence":      small dict of the numbers behind the call,
+      "first_bad_step": int | None,   # 0-based index into ``events`` of the
+                                       # first event implicated (for localization
+                                       # -> proxy pause/rollback later).
     }
 
-``run_all(events, session_id, runtime, facts=, baseline=, thresholds=, steps=)``
-normalizes ONCE, shares the parse with every detector, and returns the
-incidents ordered by what ignoring them costs.
-
-**Thresholds are resolved, not hard-coded.** ``resolve_thresholds`` layers four
-sources, each overriding the last: module defaults, then the runtime profile
-(write-tool vocabulary, a checkable fact about the adapter), then the cohort's
-learned baseline, then a per-runtime env override
-(``CLAWMETRY_NOPROG_TOOLS__CODEX=40``). It reports which layer set each value.
-
-**Money decides the order.** ``annotate_spend`` prices the flagged stretch and
-says on what basis. Only a measured ``burn_rate`` may promote a warning to
-``critical``; a ``window_fraction`` apportionment is context only, and where
-nothing is known the figure is 0.0 with basis ``unknown``, never invented.
+``run_all`` runs every enabled detector and returns the incidents found, ordered
+by severity (warning before info). Thresholds are module constants overridable
+by env so the daemon can tune them without a code change.
 """
-
 from __future__ import annotations
 
-from typing import Iterable, Optional
+import hashlib
+import json
+import os
+from typing import Any, Iterable, Optional
 
-# The floor these detectors stand on, and the two questions that are not
-# detection: what counts as too much (calibration) and what a finding costs
-# (money). Re-exported below so ``clawmetry.detectors`` remains the single
-# import every caller already uses.
+# New in this change, each in its own module so the whole of the new capability
+# is readable in one place and this file keeps its shape.
 from clawmetry.detector_calibration import (  # noqa: F401
-    ACTION_DISCREPANCY_MIN,
-    BASELINE_CEIL_RATIO,
-    BASELINE_FLOOR_RATIO,
-    BASELINE_MIN_SESSIONS,
-    BASELINE_SIGMA,
-    BLAST_RADIUS_FILES,
-    DETECT_EVENT_WINDOW,
-    EGRESS_HOST_FANOUT,
-    NO_PROGRESS_TOOL_CALLS,
-    REPEATED_FAILURE_M,
-    RUNTIME_PROFILES,
-    STUCK_LOOP_CYCLE_REPEATS,
-    STUCK_LOOP_IDENTICAL_K,
-    STUCK_LOOP_MAX_CYCLE,
-    WRITE_TOOL_SUBSTRINGS,
+    BASELINE_CEIL_RATIO, BASELINE_FLOOR_RATIO, BASELINE_MIN_SESSIONS,
+    BASELINE_SIGMA, BLAST_RADIUS_FILES, EGRESS_HOST_FANOUT, RUNTIME_PROFILES,
     resolve_thresholds,
 )
-from clawmetry.detector_core import (  # noqa: F401
-    _action_surface,
-    _cmd_sketch,
-    _hosts_from_text,
-    _incident,
-    _is_inspect_only,
-    _is_write_tool,
-    _prepare,
-    _redact_path,
-    _runtime_of,
-    _step_mutates,
-    _stop_hint,
-    _strip_heredocs,
-    _text_looks_failed,
-    normalize_events,
-    session_profile,
+from clawmetry.detector_surface import (  # noqa: F401
+    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _cmd_sketch,
+    _hosts_from_text, _is_inspect_only, _redact_path, _strip_heredocs,
 )
 from clawmetry.detector_money import (  # noqa: F401
-    CRITICAL_SPEND_USD,
-    _SEVERITY_RANK,
-    _severity_promote,
-    annotate_spend,
-    incident_rank,
-    sort_incidents,
+    CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
+    incident_rank, sort_incidents,
 )
 from clawmetry.detector_behaviour import (  # noqa: F401
-    credential_access,
-    file_blast_radius,
-    network_egress,
-    privilege_change,
+    credential_access, file_blast_radius, network_egress, privilege_change,
 )
-
 
 # What this module detects, declared once and up front rather than derived at
 # the bottom of the file. Two reasons it is a literal:
@@ -167,6 +102,433 @@ DETECTOR_KINDS = (
     "network_egress",
     "privilege_change",
 )
+
+
+# ── Tunable thresholds (env-overridable) ─────────────────────────────────────
+# How many newest events any detector will look at. Bounds CPU per session.
+DETECT_EVENT_WINDOW = int(os.environ.get("CLAWMETRY_DETECT_WINDOW", "200"))
+
+# stuck_loop: K consecutive identical (tool, args-hash) calls trips it.
+STUCK_LOOP_IDENTICAL_K = int(os.environ.get("CLAWMETRY_LOOP_IDENTICAL_K", "3"))
+# stuck_loop: a repeating tool-name n-gram cycle (cycle length<=this) that
+# repeats at least STUCK_LOOP_CYCLE_REPEATS times also trips it.
+STUCK_LOOP_MAX_CYCLE = int(os.environ.get("CLAWMETRY_LOOP_MAX_CYCLE", "4"))
+STUCK_LOOP_CYCLE_REPEATS = int(os.environ.get("CLAWMETRY_LOOP_CYCLE_REPEATS", "3"))
+
+# no_progress: >= N tool calls with zero writes/edits and no completion.
+NO_PROGRESS_TOOL_CALLS = int(os.environ.get("CLAWMETRY_NOPROG_TOOLS", "20"))
+
+# repeated_tool_failure: same tool errors >= M times in the window.
+REPEATED_FAILURE_M = int(os.environ.get("CLAWMETRY_REPEAT_FAIL_M", "3"))
+
+# action_discrepancy: how many *non-acknowledging* continuation steps after a
+# failed result we require before flagging (>=1 = a single plow-ahead).
+ACTION_DISCREPANCY_MIN = int(os.environ.get("CLAWMETRY_ACTION_DISCREPANCY_MIN", "1"))
+
+# Tool names that indicate real progress (a file mutation). Lower-cased,
+# substring-matched against the tool name so "Edit"/"str_replace_editor"/
+# "apply_patch"/"write_file" all count. Tunable via env (comma-separated).
+_DEFAULT_WRITE_TOOLS = (
+    "write,edit,apply_patch,applypatch,str_replace,create_file,"
+    "multiedit,notebookedit,patch_file,write_file,save_file"
+)
+WRITE_TOOL_SUBSTRINGS = tuple(
+    s.strip().lower()
+    for s in os.environ.get("CLAWMETRY_WRITE_TOOLS", _DEFAULT_WRITE_TOOLS).split(",")
+    if s.strip()
+)
+
+# Substrings in tool-result text that, on their own, mark a failure even when no
+# structured ``is_error`` flag is present (TRAIL System-Execution signals).
+_FAILURE_TEXT_MARKERS = (
+    "command not found", "no such file", "no such file or directory",
+    "permission denied", "fatal:", "traceback (most recent call last)",
+    "exit code 1", "exit status 1", "non-zero exit", "errno",
+    "exception:", "segmentation fault", "connection refused", "timed out",
+)
+
+# ── Normalized event shape ───────────────────────────────────────────────────
+# A detector never reasons over raw store rows directly. ``normalize_events``
+# flattens the heterogenous on-the-wire shapes (top-level tool_call, OpenClaw v3
+# model.completed+toolMetas, Claude-Code assistant+content blocks, family
+# data.tool_calls arrays, tool_result/tool.result rows) into a flat, ordered
+# list of NormStep dicts the heuristics scan:
+#
+#   {"i": int,              # index into the *original* event list (localization)
+#    "kind": "tool_call" | "tool_result" | "text" | "user" | "end" | "other",
+#    "tool": str,           # tool name (tool_call/tool_result), else ""
+#    "args_hash": str,      # stable hash of normalized args (tool_call), else ""
+#    "is_error": bool,      # tool_result only
+#    "result_text": str,    # tool_result only (lower-cased, truncated)
+#    "has_text": bool,      # text turn carrying a real reply (progress marker)
+#   }
+
+_TOPLEVEL_TOOL_CALL_TYPES = frozenset(
+    {"tool_call", "tool_use", "toolcall", "tool.call", "tool.invoked"}
+)
+_TOOL_RESULT_TYPES = frozenset(
+    {"tool_result", "tool-result", "tool.result", "tool.completed",
+     "tool_use_result"}
+)
+_ASSISTANT_TYPES = frozenset(
+    {"assistant", "message", "model.completed", "subagent:assistant"}
+)
+_USER_TYPES = frozenset({"user", "prompt.submitted", "subagent:user"})
+_END_TYPES = frozenset(
+    {"session.ended", "session.end", "session.completed",
+     "session.stopped", "compaction"}
+)
+
+
+def _coerce_dict(data: Any) -> dict:
+    """Best-effort dict from an event ``data`` field (dict, JSON string, junk).
+    Never raises; returns ``{}`` when nothing usable."""
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _args_hash(args: Any) -> str:
+    """Stable short hash of a tool call's arguments. Order-insensitive for
+    dicts (sorted keys) so logically-identical calls hash the same. Never
+    raises — falls back to ``str`` then to an empty hash."""
+    try:
+        norm = json.dumps(args, sort_keys=True, separators=(",", ":"),
+                          default=str)
+    except Exception:
+        try:
+            norm = str(args)
+        except Exception:
+            return ""
+    return hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:
+    """Yield ``{"tool": name, "args": value}`` for every tool invocation a
+    single event describes. Covers all real shapes (top-level tool_call,
+    OpenClaw v3 toolMetas, Claude-Code content tool_use blocks, family
+    ``data.tool_calls`` arrays). Never raises."""
+    out: list[dict] = []
+    try:
+        # Shape 1: top-level tool call event — name + args live on data.
+        if et in _TOPLEVEL_TOOL_CALL_TYPES:
+            name = data.get("tool") or data.get("tool_name") or data.get("name")
+            args = (data.get("args") if data.get("args") is not None
+                    else data.get("arguments") if data.get("arguments") is not None
+                    else data.get("input"))
+            if isinstance(name, str) and name:
+                out.append({"tool": name, "args": args})
+            # Some top-level rows still carry a tool_calls array; fall through.
+
+        # Shape 2: family ``data.tool_calls`` array (claude_code/codex/cursor
+        # event_type='tool_call' w/ data.tool_calls — the gap fixed in #2984).
+        tcs = data.get("tool_calls")
+        if isinstance(tcs, list):
+            for tc in tcs:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                name = (tc.get("name") or tc.get("tool")
+                        or fn.get("name"))
+                args = (tc.get("args") if tc.get("args") is not None
+                        else tc.get("arguments") if tc.get("arguments") is not None
+                        else tc.get("input") if tc.get("input") is not None
+                        else fn.get("arguments"))
+                if isinstance(name, str) and name:
+                    out.append({"tool": name, "args": args})
+
+        # Shape 3: OpenClaw v3 ``toolMetas`` projection.
+        metas = data.get("toolMetas")
+        if isinstance(metas, list):
+            for m in metas:
+                if not isinstance(m, dict):
+                    continue
+                name = m.get("name") or m.get("tool")
+                args = (m.get("args") if m.get("args") is not None
+                        else m.get("arguments") if m.get("arguments") is not None
+                        else m.get("input"))
+                if isinstance(name, str) and name:
+                    out.append({"tool": name, "args": args})
+
+        # Shape 4: assistant ``message.content`` tool_use / toolCall blocks.
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        container = msg or data
+        content = container.get("content")
+        if isinstance(content, list):
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if str(blk.get("type") or "").lower() not in ("tool_use", "toolcall"):
+                    continue
+                name = blk.get("name") or blk.get("tool")
+                args = (blk.get("input") if blk.get("input") is not None
+                        else blk.get("arguments") if blk.get("arguments") is not None
+                        else blk.get("args"))
+                if isinstance(name, str) and name:
+                    out.append({"tool": name, "args": args})
+    except Exception:
+        return out
+    return out
+
+
+def _result_text(data: dict) -> str:
+    """Best-effort lower-cased text of a tool result for failure-marker
+    matching. Walks ``output``/``result``/``content``/``details``/``stderr``.
+    Truncated. Never raises."""
+    try:
+        for k in ("stderr", "error", "output", "result", "details"):
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                return v[:2000].lower()
+        content = data.get("content")
+        if isinstance(content, str) and content.strip():
+            return content[:2000].lower()
+        if isinstance(content, list):
+            parts = []
+            for blk in content:
+                if isinstance(blk, dict) and isinstance(blk.get("text"), str):
+                    parts.append(blk["text"])
+                elif isinstance(blk, str):
+                    parts.append(blk)
+            if parts:
+                return (" ".join(parts))[:2000].lower()
+        msg = data.get("message")
+        if isinstance(msg, dict):
+            return _result_text(msg)
+    except Exception:
+        pass
+    return ""
+
+
+def _structured_is_error(data: dict) -> Optional[bool]:
+    """Return the structured error flag if the event carries one, else None.
+    Covers ``is_error``/``isError``/``error``/non-zero exit codes."""
+    for k in ("is_error", "isError"):
+        if k in data:
+            return bool(data.get(k))
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        for k in ("is_error", "isError"):
+            if k in msg:
+                return bool(msg.get(k))
+    err = data.get("error")
+    if err not in (None, "", False):
+        return True
+    for k in ("exit_code", "exitCode", "returncode", "exit_status"):
+        if k in data:
+            try:
+                return int(data.get(k)) != 0
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _assistant_has_text(data: dict) -> bool:
+    """True if an assistant/model turn carries a real text reply (progress
+    marker, not a tool-only turn). Mirrors the stuck detector's logic."""
+    msg = data.get("message") if isinstance(data.get("message"), dict) else data
+    content = msg.get("content")
+    if isinstance(content, str) and content.strip():
+        return True
+    if isinstance(content, list):
+        for blk in content:
+            if isinstance(blk, str) and blk.strip():
+                return True
+            if isinstance(blk, dict):
+                bt = str(blk.get("type") or "").lower()
+                if bt in ("text", "output_text") and str(blk.get("text") or "").strip():
+                    return True
+                if not bt and str(blk.get("text") or "").strip():
+                    return True
+    if isinstance(msg.get("text"), str) and msg["text"].strip():
+        return True
+    for k in ("completionText", "completion"):
+        if isinstance(data.get(k), str) and data[k].strip():
+            return True
+    at = data.get("assistantTexts")
+    if isinstance(at, list) and any(isinstance(t, str) and t.strip() for t in at):
+        return True
+    return False
+
+
+def _event_role(data: dict) -> str:
+    role = data.get("role")
+    if not role and isinstance(data.get("message"), dict):
+        role = data["message"].get("role")
+    return str(role or "").strip().lower()
+
+
+def normalize_events(events: Iterable[dict]) -> list[dict]:
+    """Flatten heterogenous store events (newest-first OR oldest-first) into a
+    flat, CHRONOLOGICAL (oldest-first) list of NormStep dicts. A single event
+    can expand into multiple tool_call steps (multi-tool turns). Never raises;
+    skips malformed events. Bounded by ``DETECT_EVENT_WINDOW``.
+
+    Accepts the store's newest-first ``query_events`` output and reverses it so
+    detectors reason forward in time. ``i`` on each step is the index into the
+    chronological-ordered original event list (for first_bad_step localization).
+    """
+    evlist = [e for e in events if isinstance(e, dict)]
+    # Cap to the newest window, then present oldest-first. query_events is
+    # newest-first; if a caller already passes oldest-first that's fine too —
+    # we sort by ts when available, else keep input order.
+    evlist = evlist[:DETECT_EVENT_WINDOW]
+    evlist = list(reversed(evlist))  # store gives newest-first -> chronological
+
+    steps: list[dict] = []
+    for i, ev in enumerate(evlist):
+        et = str(ev.get("event_type") or "").strip().lower()
+        data = _coerce_dict(ev.get("data"))
+        role = _event_role(data)
+
+        if et in _END_TYPES:
+            steps.append({"i": i, "kind": "end", "tool": "", "args_hash": "",
+                          "is_error": False, "result_text": "", "has_text": False})
+            continue
+        if et in _USER_TYPES or role == "user":
+            steps.append({"i": i, "kind": "user", "tool": "", "args_hash": "",
+                          "is_error": False, "result_text": "", "has_text": False})
+            continue
+        if et in _TOOL_RESULT_TYPES:
+            txt = _result_text(data)
+            sflag = _structured_is_error(data)
+            # A structured True wins; otherwise (False or absent) fall back to
+            # failure-text markers — adapters that set is_error=False but emit a
+            # "command not found"/non-zero stderr are still real failures.
+            is_err = bool(sflag) or _text_looks_failed(txt)
+            tool = (data.get("tool") or data.get("tool_name") or data.get("name")
+                    or "")
+            steps.append({"i": i, "kind": "tool_result",
+                          "tool": str(tool or ""), "args_hash": "",
+                          "is_error": is_err, "result_text": txt,
+                          "has_text": False})
+            continue
+
+        # Tool CALLS (top-level or hosted inside an assistant/model envelope).
+        calls = _iter_tool_calls_from_data(et, data)
+        if calls:
+            for c in calls:
+                tool = str(c.get("tool") or "")
+                paths, cmd, hosts = _action_surface(tool, c.get("args"))
+                steps.append({
+                    "i": i, "kind": "tool_call",
+                    "tool": tool,
+                    "args_hash": _args_hash(c.get("args")),
+                    "is_error": False, "result_text": "", "has_text": False,
+                    # What the call touched; the behavioural detectors read these.
+                    "paths": paths, "cmd": cmd, "hosts": hosts,
+                })
+            continue
+
+        # Assistant/model text turn with a real reply = a progress marker.
+        if et in _ASSISTANT_TYPES or role == "assistant":
+            if _assistant_has_text(data):
+                steps.append({"i": i, "kind": "text", "tool": "", "args_hash": "",
+                              "is_error": False, "result_text": "", "has_text": True})
+                continue
+
+        steps.append({"i": i, "kind": "other", "tool": "", "args_hash": "",
+                      "is_error": False, "result_text": "", "has_text": False})
+    return steps
+
+
+def _text_looks_failed(text: str) -> bool:
+    if not text:
+        return False
+    return any(m in text for m in _FAILURE_TEXT_MARKERS)
+
+
+def _is_write_tool(tool: str, write_tools=None) -> bool:
+    """Does this tool NAME mean a file mutation?
+
+    ``write_tools`` is the resolved per-runtime vocabulary (the global default
+    plus the runtime profile's additions). Passing None keeps the old global
+    behaviour so existing callers are unaffected.
+    """
+    t = (tool or "").lower()
+    vocab = write_tools if write_tools else WRITE_TOOL_SUBSTRINGS
+    return any(sub in t for sub in vocab)
+
+def _step_mutates(step: dict, write_tools=None) -> bool:
+    """Did this step change a file — by tool name OR by shell command?
+
+    The second half is what makes ``no_progress`` correct for shell-first
+    runtimes (codex, picoclaw, nanoclaw and anything else whose edits happen
+    inside ``shell``/``exec``). Before this, a codex session that wrote code
+    through a heredoc looked identical to one that spun for an hour, because
+    neither produced a tool call whose NAME matched a write verb.
+    """
+    if step.get("kind") != "tool_call":
+        return False
+    if _is_write_tool(step.get("tool") or "", write_tools):
+        return True
+    cmd = step.get("cmd") or ""
+    if not cmd:
+        return False
+    return bool(_MUTATING_CMD_RE.search(cmd) or _REDIRECT_WRITE_RE.search(cmd))
+
+def _prepare(events, steps, thresholds, runtime, session_id):
+    """Shared detector preamble: resolve the runtime, its thresholds, and the
+    normalized steps exactly once when the caller has already done the work."""
+    rt = runtime or _runtime_of(session_id)
+    th = thresholds if isinstance(thresholds, dict) else resolve_thresholds(rt)
+    st = steps if steps is not None else normalize_events(events)
+    return rt, th, st
+
+def session_profile(steps: list, write_tools=None) -> dict:
+    """Summarize one session for the cohort baseline it feeds.
+
+    Takes already-normalized steps (the daemon has them; re-parsing 200 events
+    to count them would double the tick cost for nothing) and returns the four
+    numbers ``record_guard_observation`` stores: how many tool calls, how many
+    distinct files mutated, whether it wrote at all, and which external hosts
+    it reached.
+
+    This is the loop that closes gap 03: today's sessions decide what counts as
+    unusual tomorrow. Never raises — an empty profile just means this session
+    teaches the baseline nothing.
+    """
+    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
+    try:
+        files = set()
+        hosts = set()
+        calls = 0
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            for h in st.get("hosts") or ():
+                hosts.add(h)
+            if st.get("kind") != "tool_call" or not st.get("tool"):
+                continue
+            calls += 1
+            if _step_mutates(st, write_tools):
+                out["wrote"] = True
+                for p in st.get("paths") or ():
+                    files.add(p)
+        out["tool_calls"] = calls
+        out["write_files"] = len(files)
+        out["hosts"] = sorted(hosts)[:64]
+    except Exception:
+        return out
+    return out
+
+
+def _runtime_of(session_id: str) -> str:
+    try:
+        from clawmetry import waste_flags as _wf
+        return _wf.runtime_from_session_id(session_id) or "openclaw"
+    except Exception:
+        return "openclaw"
+
+
+def _stop_hint() -> str:
+    return "You can Stop or Pause this agent from the ClawMetry dashboard or device."
 
 
 # ── Detector 1: stuck_loop ───────────────────────────────────────────────────
@@ -443,7 +805,6 @@ _ALL_DETECTORS = (
     privilege_change,
 )
 
-
 def run_all(events: Iterable[dict], session_id: str,
             runtime: Optional[str] = None, *,
             facts: Optional[dict] = None,
@@ -494,3 +855,18 @@ def run_all(events: Iterable[dict], session_id: str,
         session_seconds=f.get("session_seconds") or 0.0,
         window_steps=len(steps),
     )
+
+
+def _incident(kind: str, session_id: str, runtime: str, severity: str,
+              title: str, detail: str, evidence: dict,
+              first_bad_step: Optional[int]) -> dict:
+    return {
+        "kind": kind,
+        "session_id": session_id,
+        "runtime": runtime,
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "evidence": evidence,
+        "first_bad_step": first_bad_step,
+    }
