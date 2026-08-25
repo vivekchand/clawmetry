@@ -4628,13 +4628,35 @@ def _try_local_store_spend_optimization():
     recs = recs[:5]
     total_save = sum(r["projected_savings_usd_30d"] for r in recs)
     total_cost = sum(r["current_cost_usd_30d"] for r in recs)
-    return {
+    # The loudest number on this card is a counterfactual: what the last 30
+    # days WOULD have cost on a cheaper tier. It rests on a static price-ratio
+    # table and on the assumption that the cheaper model does the same job.
+    # Both can be wrong, and the badge says so rather than letting a green
+    # 22px "Projected 30-day savings" read as money already in the bank.
+    saving_entry = _prov.estimated(
+        "the measured cost of these tool calls over the window, times the "
+        "published price gap between the model they ran on and the cheaper "
+        "tier suggested. It assumes the cheaper model would have produced an "
+        "equivalent result, which is the part that can be wrong",
+        "duckdb spans, priced with the static model-tier ratio table",
+        window="the last 30 days",
+        inputs={"tools_analysed": len(recs)})
+    return _prov.stamp({
         "recommendations":               recs,
         "total_projected_savings_usd_30d": round(total_save, 4),
         "total_analyzed_cost_usd_30d":   round(total_cost, 4),
         "window_days":                   30,
         "_source":                       "local_store",
-    }
+    }, {
+        "total_projected_savings_usd_30d": saving_entry,
+        "recommendations[].projected_savings_usd_30d": saving_entry,
+        "total_analyzed_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of the analysed tool calls",
+            "duckdb spans", window="the last 30 days"),
+        "recommendations[].current_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of this tool's calls",
+            "duckdb spans", window="the last 30 days"),
+    })
 
 
 @bp_usage.route("/api/usage/optimization-recommendations")
@@ -4649,13 +4671,23 @@ def api_usage_optimization_recommendations():
         fast = _try_local_store_spend_optimization()
         if fast is not None:
             return jsonify(fast)
-    return jsonify({
+    # Not "you could save $0.00". Nothing was analysed, so there is no
+    # number here at all, and stamp() nulls the ones that pretended there was.
+    return jsonify(_prov.stamp({
         "recommendations":               [],
         "total_projected_savings_usd_30d": 0,
         "total_analyzed_cost_usd_30d":   0,
         "window_days":                   30,
         "note": "Enable clawmetry connect to see recommendations.",
-    })
+    }, {
+        "total_projected_savings_usd_30d": _prov.unknown(
+            "no spans were available to analyse, so there is nothing to "
+            "compare a cheaper tier against",
+            source="/api/usage/optimization-recommendations"),
+        "total_analyzed_cost_usd_30d": _prov.unknown(
+            "no spans were available to analyse",
+            source="/api/usage/optimization-recommendations"),
+    }))
 
 
 @bp_usage.route("/api/efficiency")

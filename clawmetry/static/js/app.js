@@ -18421,14 +18421,26 @@ function renderSpendOptimization(data) {
   }
   var totalSave = data.total_projected_savings_usd_30d || 0;
   var saveFmt = totalSave >= 0.01 ? '$' + totalSave.toFixed(2) : totalSave > 0 ? '<$0.01' : '$0.00';
+  // This is the loudest number on the card and it is a counterfactual: what
+  // the window WOULD have cost on a cheaper tier, assuming that tier does the
+  // same job. Badged as an estimate so it does not read as banked money.
+  var saveEntry = window.cmProv
+    ? window.cmProv.of(data, 'total_projected_savings_usd_30d') : null;
+  var saveHtml = window.cmProv
+    ? window.cmProv.money(data, 'total_projected_savings_usd_30d',
+                          { label: 'Projected 30-day savings' })
+    : escHtml(saveFmt);
   var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;">';
   html += '<div style="font-size:12px;color:#86efac;margin-bottom:4px;">Projected 30-day savings</div>';
-  html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveFmt + '</div>';
+  html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveHtml + '</div>';
   html += '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">by routing simple tools to a cheaper model tier</div>';
   html += '</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;">';
   recs.forEach(function(rec) {
-    var savStr = rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01';
+    var savStr = window.cmProv
+      ? window.cmProv.figure(rec.projected_savings_usd_30d, saveEntry,
+                             { label: 'Projected saving', noBadge: true })
+      : (rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01');
     var curStr = rec.current_cost_usd_30d >= 0.01 ? '$' + rec.current_cost_usd_30d.toFixed(2) : rec.current_cost_usd_30d > 0 ? '<$0.01' : '$0.00';
     html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
     html += '<div style="flex:1;min-width:0;">';
