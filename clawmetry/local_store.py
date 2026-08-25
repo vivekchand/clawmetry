@@ -46,7 +46,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -4345,6 +4345,89 @@ class LocalStore:
             out.append(d)
         return out
 
+
+    # ── Repo activity (repo AI-readiness pairing) ─────────────────────────
+    def query_repo_activity(
+        self,
+        *,
+        since_days: int = 30,
+        limit: int = 5000,
+    ) -> "list[dict[str, Any]]":
+        """Sessions that ran in a known directory, with the loop signal (if
+        any) the detector wrote for each.
+
+        Powers the "before you blame the agent, look at what you handed it"
+        pairing: ``clawmetry.repo_readiness`` groups these rows by git root
+        so a repo's readiness grade sits next to the stuck rate that repo
+        actually produced.
+
+        One row per (session, signal); a session with two distinct signals
+        yields two rows, and a session with none yields one row with NULL
+        signal columns — so the caller can count sessions and incidents from
+        the same result without a second query. Sessions with no recorded
+        ``cwd`` are excluded: they cannot be attributed to a repo, and
+        guessing one would fabricate the correlation this feature exists to
+        show.
+
+        ``since_days <= 0`` disables the window. ``limit`` is clamped to
+        ``[1, 50000]``.
+        """
+        try:
+            days = int(since_days)
+        except (TypeError, ValueError):
+            days = 30
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 5000
+        lim = max(1, min(50000, lim))
+
+        clauses = ["s.cwd IS NOT NULL", "s.cwd <> ''"]
+        params: "list[Any]" = []
+        if days > 0:
+            # ``sessions.last_active_at`` is a VARCHAR holding an ISO-8601
+            # UTC timestamp, so the window is a STRING comparison against an
+            # ISO cutoff — the same shape ``query_sessions_table``'s ``since``
+            # filter uses. Casting to TIMESTAMP here is what a first draft
+            # does and it is a binder error, because the column is not one.
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            clauses.append("s.last_active_at >= ?")
+            params.append(cutoff.isoformat())
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT s.session_id, s.agent_type, s.cwd, s.git_branch,
+                   s.last_active_at, s.cost_usd,
+                   l.signature, l.repeat_count, l.severity, l.details
+            FROM sessions s
+            LEFT JOIN loop_signals l ON l.session_id = s.session_id
+            {where}
+            ORDER BY s.last_active_at DESC, s.session_id
+            LIMIT ?
+        """
+        params.append(lim)
+        cols = ["session_id", "agent_type", "cwd", "git_branch",
+                "last_active_at", "cost_usd", "signature", "repeat_count",
+                "severity", "details"]
+        out: "list[dict[str, Any]]" = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            v = d.get("last_active_at")
+            if hasattr(v, "isoformat"):
+                d["last_active_at"] = v.isoformat()
+            raw = d.get("details")
+            if raw is not None:
+                try:
+                    raw = _ccr.maybe_decompress(raw)
+                    text = (raw.decode("utf-8")
+                            if isinstance(raw, (bytes, bytearray)) else raw)
+                    try:
+                        d["details"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["details"] = text
+                except UnicodeDecodeError:
+                    d["details"] = None
+            out.append(d)
+        return out
 
     # ── Guard baselines ───────────────────────────────────────────────────
     def record_guard_observation(self, session_id: str, cohort: str,

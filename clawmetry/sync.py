@@ -19554,6 +19554,73 @@ _LOOPS_KIND_BY_SIGNATURE = {
 _LOOPS_VALID_KINDS = frozenset(_LOOPS_KIND_BY_SIGNATURE.values())
 
 
+#: Repo AI-readiness snapshot slice (WO-5). The hosted dashboard has no
+#: filesystem to scan -- the cloud container never sees the user's repos -- so
+#: the DAEMON scores them here and ships the finished report. Capped hard:
+#: five reports at roughly 3 kB each is a rounding error next to the snapshot,
+#: and a 200-repo machine must not be able to inflate it.
+_READINESS_SLICE_MAX = int(os.environ.get("CLAWMETRY_READINESS_SLICE_MAX", "5"))
+_READINESS_WINDOW_DAYS = int(os.environ.get("CLAWMETRY_READINESS_DAYS", "30"))
+
+
+def _build_repo_readiness_slice(store):
+    """Score the repos this node's agents actually work in.
+
+    Returns ``{"windowDays": n, "scope": "all_runtimes", "repos": [...]}``
+    where each repo carries its readiness report AND the stuck-signal
+    pairing. ``scope`` is load-bearing: the daemon scores against EVERY
+    runtime's declared instruction files because it cannot know which
+    runtime the viewer has selected, so a hosted renderer must label this
+    "all runtimes" rather than presenting it as runtime-scoped.
+
+    Repos that no longer exist on disk are listed (their history is real)
+    but carry ``report: None`` -- there is nothing left to read, and an
+    invented grade for a deleted checkout is worse than an honest gap.
+
+    Never raises: an empty slice paints the honest "nothing scored yet"
+    state rather than breaking the snapshot.
+    """
+    try:
+        from clawmetry import repo_readiness
+    except Exception as e:  # noqa: BLE001
+        log.debug("readiness-slice: module unavailable: %s", e)
+        return {}
+    try:
+        rows = store.query_repo_activity(
+            since_days=_READINESS_WINDOW_DAYS, limit=5000) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("readiness-slice: query_repo_activity failed: %s", e)
+        return {}
+
+    ranked = repo_readiness.rank_repos(
+        rows, window_days=_READINESS_WINDOW_DAYS, limit=_READINESS_SLICE_MAX)
+    out = []
+    for repo in ranked:
+        entry = {
+            "path": repo["path"],
+            "name": repo["name"],
+            "exists": repo["exists"],
+            "lastActiveAt": repo["last_active_at"],
+            "signals": repo["signals"],
+            "report": None,
+        }
+        if repo["exists"]:
+            try:
+                entry["report"] = repo_readiness.score_repo(
+                    repo["path"], signals=repo["signals"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("readiness-slice: score failed for %s: %s",
+                          repo["path"], e)
+        out.append(entry)
+    if not out:
+        return {}
+    return {
+        "windowDays": _READINESS_WINDOW_DAYS,
+        "scope": "all_runtimes",
+        "repos": out,
+    }
+
+
 def _build_loops_slice(store):
     """Build the bounded, plaintext ``loops[]`` snapshot slice from the loop
     signals the detector/stuck pass already wrote.
@@ -20664,6 +20731,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_loops:
         log.debug("snapshot: loops slice failed: %s", _e_loops)
 
+    # Repo AI-readiness (WO-5). Scored HERE, on the daemon, because the cloud
+    # container has no filesystem to scan: every input is a file in a repo on
+    # this machine. Same store handle as above (never a read_only re-open --
+    # FLYWHEEL section 1). Empty dict == nothing scored, which the hosted card
+    # renders as an honest empty state.
+    _readiness_slice: dict = {}
+    try:
+        from clawmetry import local_store as _ls_rr
+        _rr_store = _ls_rr.get_store()
+        if _rr_store is not None:
+            _readiness_slice = _build_repo_readiness_slice(_rr_store)
+    except Exception as _e_rr:
+        log.debug("snapshot: repo-readiness slice failed: %s", _e_rr)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -20688,6 +20769,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # path strips the id). Self-clearing 30-min window; empty == nothing
         # looping. Sourced from the detector pass's loop_signals (no recompute).
         "loops": _loops_slice,
+        # WO-5: per-repo readiness grade + the stuck-signal pairing, scored on
+        # this machine because the cloud has no repo to read. Carries
+        # ``scope: "all_runtimes"`` so a hosted renderer labels it instead of
+        # passing node-wide data off as runtime-scoped.
+        "repoReadiness": _readiness_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),

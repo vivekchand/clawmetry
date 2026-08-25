@@ -105,6 +105,7 @@ from helpers.gateway import (  # noqa: F401 — re-export for routes/
 from routes.usage import bp_usage
 from routes.crons import bp_crons
 from routes.harness import bp_harness
+from routes.readiness import bp_readiness
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -12376,6 +12377,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_fleet)
     app.register_blueprint(bp_gateway)
     app.register_blueprint(bp_harness)
+    app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
