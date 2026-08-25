@@ -948,6 +948,13 @@ _DAEMON_METHODS = frozenset({
     "record_guard_observation",
     "query_guard_baseline",
     "prune_guard_baseline",
+    # Session phase (clawmetry/adapters/phase.py). The daemon stamps a
+    # transition on every ingest pass and the dashboard reads it back to say
+    # how long a session has been waiting; both sides need the proxy because
+    # the daemon holds the writer lock
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "record_session_phase",
+    "query_session_phases",
 })
 
 
