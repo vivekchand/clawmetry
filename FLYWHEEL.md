@@ -179,15 +179,36 @@ machine's data at the end, and one product decision that belongs to a human
 compete for it) was discovered while auditing for breakage rather than while
 planning. The feature was good. The order was wrong.
 
-**A practical reason the order matters, beyond process.** `drift-bot`'s view
-of a changed file is positional: it reads the head of a large single-file diff
-and falls back to base content for the tail, so on PR #5168 it reported
-functions in the back half of a 1,900-line file as "not implemented" while
-quoting a docstring from the same commit's first line. Moving one constant
-from line 1823 to line 96 made its finding disappear. You cannot resolve a
-specification gap by pushing more code at it, and a large implementation-first
-diff is the exact shape it reads worst. Specify first, build in reviewable
-pieces, and the check has something to compare against.
+**A second reason, learned the hard way.** `drift-bot`'s reading of a changed
+file is also positional: it sees the head of a large single-file diff and falls
+back to base content for the tail. On PR #5168 it reported functions in the
+back half of a 1,948-line module as "not implemented" while quoting a docstring
+from the same commit's first line, and moving one constant from line 1823 to
+line 96 made its finding disappear. The right response to that is not to argue
+with the check. A module whose entire new surface sits in its back half is hard
+for anyone to review, so that PR split it into four modules along the seams its
+own section comments already marked. Specify first, then build in pieces a
+reviewer can hold in their head, and this stops being an argument.
+
+**Write it ahead of the code, but mark its status.** These two pull against
+each other and both are real, so say both explicitly in the document:
+
+- Software Factory compares a Requirement or Blueprint against the code on
+  `main`. Not against your branch. Not against your PR.
+- So a section written in the present tense about code that has not merged
+  makes the specification *wrong* the moment you save it, and every drift
+  finding it then produces is CORRECT. On PR #5168 the check kept quoting
+  `run_all`'s three-argument signature at `detectors.py:658`. That line is
+  exactly that signature on `main`. The reviewer was reading merged code and
+  comparing it against a document I had written as though the work were done.
+  I spent a long time treating that as the tool's defect. It was mine.
+- Every in-flight section therefore carries a status banner naming the PR and
+  saying plainly that it describes intended behaviour, and that a drift
+  finding against it is expected. Flip it to delivered when the PR lands.
+
+That resolves the tension. The specification exists before the work starts, so
+somebody has agreed what is being built, and it never claims the product does
+something it does not yet do.
 
 **How to write one** (the key is in the macOS Keychain under
 `clawmetry-sf-api-key`, and `SF_API_KEY` in repo secrets):
