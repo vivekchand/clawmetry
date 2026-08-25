@@ -40,7 +40,6 @@ import hashlib
 import inspect
 import json
 import logging
-import math
 import os
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 import threading
@@ -11467,12 +11466,19 @@ class LocalStore:
                         or data.get("modelId")
                         or ""
                     )
+                    cw = resolve_context_window(model, tok)
                     return {
                         "session_id":   sid,
                         "input_tokens": tok,
                         "ts":           ts,
                         "model":        model,
-                        "context_window": context_window_for_model(model, tok),
+                        "context_window": cw.tokens,
+                        # Provenance travels with the number so the gauge can
+                        # badge an estimate as an estimate. A utilisation
+                        # percentage whose denominator is a guess must not
+                        # render identically to one we looked up.
+                        "context_window_source": cw.source,
+                        "context_window_confidence": cw.confidence,
                     }
         return {"input_tokens": 0}
 
@@ -11620,7 +11626,8 @@ class LocalStore:
             if tok <= 0:
                 continue
             model = _model_of(data, model_col or "")
-            window = context_window_for_model(model, tok)
+            cw = resolve_context_window(model, tok)
+            window = cw.tokens
             pct = round(100.0 * tok / window, 2) if window else 0.0
             utilization.append({
                 "session_id": sid,
@@ -11629,6 +11636,10 @@ class LocalStore:
                 "window":     window,
                 "model":      model,
                 "pct":        pct,
+                # See the peek path above: a percentage is only as honest as
+                # its denominator, so ship where the denominator came from.
+                "window_source":     cw.source,
+                "window_confidence": cw.confidence,
             })
         # Oldest-first so the gauge reads left-to-right as a timeline.
         utilization.sort(key=lambda u: str(u.get("ts") or ""))
@@ -11740,6 +11751,131 @@ class LocalStore:
             "compactions":       compactions,
             "overflow_sessions": overflow_sessions,
         }
+
+    def query_context_coverage(
+        self,
+        *,
+        since: str | None = None,
+        sample_per_runtime: int = 300,
+    ) -> dict[str, Any]:
+        """Which context-blowout signals we can actually see, per runtime.
+
+        Answers the question a "Context blowouts: 0" tile cannot: is that a
+        clean run, or are we blind on this runtime? See
+        ``clawmetry/context_coverage.py`` for the verdict vocabulary.
+
+        Measured from this store, not declared: counts come from the user's
+        own events, and an observed signal overrides the module's denylist.
+        Only when a count is genuinely zero does the declaration get to
+        explain *why* it is zero.
+
+        Bounded by construction. Session and compaction counts are plain
+        aggregates over indexed columns. The utilization and overflow probes
+        read at most ``sample_per_runtime`` rows each, decoding ``data`` in
+        Python — it can be compressed, so a SQL ``LIKE`` over that column
+        would quietly match nothing and report every runtime as blind.
+
+        Never raises; an empty store returns empty rows.
+        """
+        from clawmetry import context_coverage as _cc
+
+        try:
+            sample_per_runtime = max(10, min(2000, int(sample_per_runtime)))
+        except (TypeError, ValueError):
+            sample_per_runtime = 300
+
+        def _parse(raw) -> dict:
+            if raw is None:
+                return {}
+            try:
+                raw = _ccr.maybe_decompress(raw)
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                parsed = json.loads(text) if text else {}
+                return parsed if isinstance(parsed, dict) else {}
+            except (ValueError, TypeError, UnicodeDecodeError):
+                return {}
+
+        def _scalar(sql: str, prm: list) -> int:
+            try:
+                out = self._fetch(sql, prm)
+                return int(out[0][0]) if out and out[0] and out[0][0] else 0
+            except Exception:
+                # A fresh DB (no events table yet) must read as "nothing
+                # seen", never raise out of a read-only query.
+                return 0
+
+        ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        runtimes = ["openclaw", *_NON_OPENCLAW_RUNTIME_PREFIXES]
+        rows: list[dict[str, Any]] = []
+
+        for rt in runtimes:
+            clause, cparams = _runtime_session_id_clause(rt)
+            conds = [clause] if clause else []
+            if since:
+                conds.append("ts >= ?")
+            base_params = list(cparams) + ([since] if since else [])
+            wsql = ("WHERE " + " AND ".join(conds)) if conds else ""
+            more = " AND " if conds else "WHERE "
+
+            sessions = _scalar(
+                f"SELECT COUNT(DISTINCT session_id) FROM events {wsql}",
+                list(base_params))
+            if not sessions:
+                # Runtime absent from this store. Emitting a zero row would
+                # pad the matrix with runtimes the user does not run.
+                continue
+
+            compactions = _scalar(
+                f"SELECT COUNT(*) FROM events {wsql}{more}event_type = 'compaction'",
+                list(base_params))
+
+            # Utilization: does this runtime record prompt-side tokens at all?
+            turns_with_tokens = 0
+            try:
+                for (raw,) in self._fetch(
+                    f"SELECT data FROM events {wsql}{more}event_type IN {ev_in} "
+                    f"ORDER BY ts DESC LIMIT {int(sample_per_runtime)}",
+                    list(base_params),
+                ):
+                    if int(_extract_usage_splits(_parse(raw)).get("input_tokens", 0) or 0) > 0:
+                        turns_with_tokens += 1
+            except Exception:
+                turns_with_tokens = 0
+
+            # Overflow: the provider rejected an over-long prompt. Same marker
+            # vocabulary the economics query uses, so the two surfaces cannot
+            # disagree about what counts as an overflow.
+            overflows = 0
+            try:
+                for (raw,) in self._fetch(
+                    f"SELECT data FROM events {wsql}{more}"
+                    f"(event_type = 'compaction' OR lower(event_type) LIKE '%error%') "
+                    f"ORDER BY ts DESC LIMIT {int(sample_per_runtime)}",
+                    list(base_params),
+                ):
+                    blob = json.dumps(_parse(raw)).lower()
+                    if any(mk in blob for mk in self._OVERFLOW_MARKERS):
+                        overflows += 1
+            except Exception:
+                overflows = 0
+
+            counts = {
+                "utilization": turns_with_tokens,
+                "compaction": compactions,
+                "overflow": overflows,
+            }
+            row: dict[str, Any] = {"runtime": rt, "sessions": sessions}
+            for sig in _cc.SIGNALS:
+                v = _cc.verdict(rt, sig, counts[sig])
+                row[sig] = {
+                    "count": counts[sig],
+                    "verdict": v,
+                    "note": _cc.explain(rt, sig, v),
+                }
+            rows.append(row)
+
+        rows.sort(key=lambda r: (-int(r.get("sessions") or 0), str(r.get("runtime"))))
+        return {"runtimes": rows, "summary": _cc.summarise(rows)}
 
     def query_model_fallbacks(
         self,
@@ -13871,72 +14007,21 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
     return "(" + ", ".join("'" + v.replace("'", "''") + "'" for v in values) + ")"
 
 
-# Standard Claude context window. Most models are 200K; the [1m] Opus/Sonnet
-# variants are 1M. Other providers/local models vary, but 200K is a safe
-# default that the observed-tokens guard below corrects upward when wrong.
-_DEFAULT_CONTEXT_WINDOW = 200_000
-_LARGE_CONTEXT_WINDOW = 1_000_000
-
-
-def _is_1m_default_model(m: str) -> bool:
-    """True for models that ship a 1M context window *by default*, so the
-    plain model string (no ``[1m]`` marker) should still size the gauge at
-    1M rather than the 200K default.
-
-    Currently the Opus 4.8 family (``claude-opus-4-8``, ``claude-opus-4.8``,
-    any ``...-opus-4-8...`` variant) ships with a 1M window. Older models
-    (opus-4-7, sonnet, haiku, claude-3-*) keep the 200K default unless they
-    carry an explicit ``[1m]`` marker. ``m`` is already lower-cased.
-    """
-    if not m:
-        return False
-    # Normalise separator: "claude-opus-4.8" / "claude-opus-4_8" -> "...4-8".
-    norm = m.replace(".", "-").replace("_", "-")
-    return ("opus-4-8" in norm) or ("opus4-8" in norm)
-
-
-def context_window_for_model(model: str, observed_tokens: int = 0) -> int:
-    """Best-effort context-window size (in tokens) for ``model``.
-
-    Used to size the LLM Context Inspector gauge so currentContextTokens /
-    contextWindow is coherent. Before this, contextWindow was hardcoded to
-    200K everywhere, so a Claude Code turn on the 1M Opus variant
-    (currentContextTokens ≈ 323K) rendered as ">100%". (Surfaced
-    2026-05-25.)
-
-    Three signals, in order:
-      1. **Model string** — a ``1m`` marker (``claude-opus-4-7[1m]``,
-         ``...-1m``) means the 1M variant. Some models ship a 1M window by
-         default (Opus 4.8 family), so the plain string with no marker is
-         still treated as 1M (see ``_is_1m_default_model``).
-      2. **Observed tokens** — a measured prompt can never exceed the
-         model's window, so if we saw MORE than the string-derived base we
-         must be on a larger variant whose marker we didn't recognise (the
-         beta 1M header isn't always echoed into the model string). Bump to
-         the next standard tier so the gauge never reads >100%.
-
-    Args:
-        model: the model string from the turn (may be empty).
-        observed_tokens: the measured live context size, if known. Acts as
-            a floor for the returned window.
-    """
-    m = (model or "").lower()
-    if "1m" in m:  # matches [1m], -1m, _1m, "1m"
-        base = _LARGE_CONTEXT_WINDOW
-    elif _is_1m_default_model(m):
-        # Some models ship a 1M context window by default, so OpenClaw may
-        # record the plain model string (e.g. "claude-opus-4-8") with no
-        # [1m] marker. That omission must NOT downgrade the gauge to 200K.
-        base = _LARGE_CONTEXT_WINDOW
-    else:
-        base = _DEFAULT_CONTEXT_WINDOW
-    obs = int(observed_tokens or 0)
-    if obs > base:
-        if obs <= _LARGE_CONTEXT_WINDOW:
-            return _LARGE_CONTEXT_WINDOW
-        # Round up to the next whole-million tier for >1M contexts.
-        return int(math.ceil(obs / _LARGE_CONTEXT_WINDOW) * _LARGE_CONTEXT_WINDOW)
-    return base
+# Context-window sizing moved to ``clawmetry/context_windows.py`` so the
+# model -> window table is an auditable file people can read and PR, instead
+# of two constants buried in a 14K-line store. Re-exported here because
+# call sites (and tests) have always reached for it via ``local_store``.
+#
+# The old implementation knew exactly two numbers, both Anthropic's, and
+# measured all 26 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
+# DeepSeek turn read as a comfortable 65%. See that module's docstring.
+from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)
+    ContextWindow,          # noqa: F401  re-export for callers/tests
+    MODEL_CONTEXT_WINDOWS,  # noqa: F401  re-export for callers/tests
+    context_window_for_model,  # noqa: F401  re-export for callers/tests
+    resolve_context_window,
+)
 
 
 def _extract_input_tokens(data: dict) -> int:

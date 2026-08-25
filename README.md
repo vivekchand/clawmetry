@@ -43,10 +43,58 @@ too. See [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 - **Cost & tokens**: per runtime, model, session and day, with anomaly flags
 - **Flow**: live diagram of messages moving through channels, models and tools
 - **Brain**: the reasoning and tool-call event stream as it happens
+- **Context blowout**: window utilization sized per provider, compaction vs forced overflow, plus a per-runtime map of what we *can't* see ([how](docs/CONTEXT_BLOWOUT.md))
 - **Memory & skills**: the files and skills each runtime actually loaded
 - **Health & logs**: disk, memory, error rates, rate limits, live log stream
 - **Alerts**: budget caps, error spikes, agent-offline, routed to Slack, Discord, PagerDuty, Telegram, Email
 - **Approvals**: pause risky tool calls *before* they run and approve from your phone ([how](docs/APPROVALS.md))
+
+## Context blowout, and what watching costs
+
+Two questions worth answering before you trust any agent-comparison tool.
+
+**How does it handle context-window blowout across runtimes?**
+
+A utilization percentage is only as honest as what it divides by. ClawMetry
+sizes the window per provider from [a table you can read and
+PR](clawmetry/context_windows.py), covering Anthropic, OpenAI, Google, xAI,
+DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 26
+runtimes with one vendor's ruler. That matters: a 300K GPT-5 turn scored
+against Anthropic's 200K reads ">100%, blown" when it is really at 75% of
+GPT-5's 400K. The same ruler hides a genuinely overflowed 130K DeepSeek turn
+as a comfortable 65%.
+
+Every window ships with its provenance: `model_table`, `explicit_marker`,
+`observed_floor`, or an honest `default` when we don't know the model. A
+gauge built on a guess never renders with the same authority as one built on
+a lookup.
+
+ClawMetry can only see compaction events on some runtimes. So
+`GET /api/context-coverage` reports, per runtime, whether a **zero means
+"ran clean" or "we're blind"**. A `0` that actually means blind says so.
+[Full detail](docs/CONTEXT_BLOWOUT.md)
+
+**What does the instrumentation cost?**
+
+| Path | Added to your agent | Default? |
+|---|---|---|
+| Session-file tailing (all 26 runtimes) | **0**. Separate process, no ClawMetry code in your agent | on |
+| HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.45 ms** per LLM call, or 0.009% of a 5s call | off |
+
+Daemon host cost: **2,707 events/sec** ingest, **710 bytes/event** on disk
+(67.7 MB per 100k events), **161 MB** peak RSS.
+
+Measured on an Apple M2 Pro with `benchmarks/overhead.py`. The harness runs
+each condition in a separate process, alternates their order, and **refuses
+to print a number when the rounds disagree on its sign**. Run it on your own
+machine in a minute:
+
+```bash
+python -m benchmarks.overhead
+```
+
+The raw JSON, the method, and the paths we have *not* measured yet (hook
+gates, the enforcement proxy) are in [docs/OVERHEAD.md](docs/OVERHEAD.md).
 
 ## Pricing
 
@@ -113,6 +161,8 @@ the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 | | |
 |---|---|
 | [Runtime compatibility](docs/compatibility.md) | What each adapter reads, and how to add a runtime |
+| [Context blowout](docs/CONTEXT_BLOWOUT.md) | Per-provider windows, compaction vs overflow, per-runtime coverage |
+| [Overhead](docs/OVERHEAD.md) | What instrumentation costs, measured, with the harness to reproduce it |
 | [Entitlements](docs/ENTITLEMENTS.md) | Free vs paid, tier matrix, license CLI |
 | [Approvals & policies](docs/APPROVALS.md) | Pre-execution gating, risk scoring, phone approvals |
 | [OpenTelemetry](docs/OPENTELEMETRY.md) | Export traces anywhere, ingest OTLP from anything |
