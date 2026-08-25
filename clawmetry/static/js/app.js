@@ -10940,6 +10940,10 @@ function _renderRetention(state) {
     return;
   }
   label.textContent = (state && state.explanation) || '';
+  // What is in force right now, so a later Save can tell shrinking from
+  // raising and only confirm the destructive direction.
+  window._cmRetentionEffectiveDays =
+    (state && typeof state.effective_days === 'number') ? state.effective_days : null;
   if (state && state.configured_days) {
     input.value = state.configured_days;
   } else if (state && state.effective_days) {
@@ -10980,6 +10984,26 @@ async function saveRetentionSetting(usePlanDefault) {
         status.textContent = 'Enter a whole number of days, 1 or more.';
         status.style.color = 'var(--danger, #dc2626)';
       }
+      return;
+    }
+  }
+  // Shortening retention DELETES history, within the hour, permanently. The
+  // shrink-only design makes the control safe against granting yourself more
+  // retention than you bought; it does nothing to protect you from deleting
+  // your own evidence by typing a smaller number. Those are different risks
+  // and the first one was mistaken for the second. So: say what will go, and
+  // ask. Only when the new period is SHORTER than what is in force -- raising
+  // it, or returning to the plan default, destroys nothing and should not
+  // nag.
+  var _cur = window._cmRetentionEffectiveDays;
+  if (!usePlanDefault && typeof _cur === 'number' && days < _cur) {
+    var _msg = 'Keep event history for ' + days + ' day'
+      + (days === 1 ? '' : 's') + ' instead of ' + _cur + '?\n\n'
+      + 'Everything older than ' + days + ' day' + (days === 1 ? '' : 's')
+      + ' is deleted from this machine within the hour, and cannot be '
+      + 'recovered.';
+    if (!window.confirm(_msg)) {
+      if (status) { status.textContent = 'Left unchanged.'; status.style.color = ''; }
       return;
     }
   }
@@ -11749,6 +11773,17 @@ function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
 // stops saying "yet" to the first two. Falls back to the old wording when
 // coverage is absent (older daemon, or a node-wide request).
 function _cmCoverageNoteHtml(cov, rtLabel) {
+  // A partial runtime HAS a number and it must not be hidden — hiding it
+  // would understate real spend. But it covers only part of the work, so it
+  // is a floor, and saying nothing would present it as a total. That is the
+  // same overstatement this whole surface exists to stop, pointed the other
+  // way.
+  if (cov && cov.cost_is_partial) {
+    return '<strong>' + escHtml(rtLabel) + ': at least this much</strong>'
+      + (cov.partial_note
+         ? '<div style="margin-top:3px;">' + escHtml(cov.partial_note) + '</div>'
+         : '');
+  }
   if (cov && cov.suppress_zero) {
     var head = '<strong>' + escHtml(cov.headline || '') + '</strong>';
     var why = cov.detail ? '<div style="margin-top:3px;">' + escHtml(cov.detail) + '</div>' : '';
