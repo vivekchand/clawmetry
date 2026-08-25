@@ -197,9 +197,21 @@ def _is_fatal_db_state(exc: BaseException) -> bool:
 # Log the invalidated-database recovery once per process, not once per tick.
 _fatal_db_reported = False
 
+# Set once the store has invalidated in this process, and cleared again if the
+# automatic rebuild below succeeds. ``health()`` reports it so the dashboard
+# can say the store needs attention instead of quietly rendering empty cards:
+# a bricked daemon looks identical to an idle one from the outside, which is
+# how one sat unnoticed for hours on 2026-08-25.
+_fatal_db_state = {"invalidated": False, "recovered": 0, "last_error": None}
+
 
 def _report_fatal_db_once(exc: BaseException) -> None:
     global _fatal_db_reported
+    _fatal_db_state["invalidated"] = True
+    try:
+        _fatal_db_state["last_error"] = _brief_exc(exc)
+    except Exception:
+        pass
     if _fatal_db_reported:
         return
     _fatal_db_reported = True
@@ -2223,6 +2235,10 @@ class LocalStore:
             # exist yet, the daemon hasn't started, and there's nothing to
             # read anyway.
             _migrate_legacy_db_path()
+        # One automatic index rebuild per process (see
+        # ``recover_invalidated_db``). A second invalidation is not a stale
+        # index and must not become a loop.
+        self._recovery_attempted = False
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
             try:
@@ -2246,6 +2262,101 @@ class LocalStore:
                 except Exception:
                     pass
                 raise
+
+    def recover_invalidated_db(self) -> bool:
+        """Apply DuckDB's own prescribed recovery for an invalidated handle.
+
+        DuckDB says it plainly: "the database must be restarted prior to being
+        used again". Until now nothing acted on that. The daemon kept running
+        with a dead handle, every write failed the same way, and every read
+        path answered empty -- so the dashboard went blank while the process
+        looked healthy and launchd, seeing no exit, never restarted it. On
+        2026-08-25 a dev machine sat in that state long enough to write 70 MB
+        of identical tracebacks.
+
+        Restarting the process is not enough on its own, because the cause is
+        usually a corrupt INDEX on disk: a fresh daemon re-ingests the same
+        rows, hits the same index delete, and invalidates again within
+        seconds. The recovery that works is the one already written down in
+        ``_report_fatal_db_once`` for a human to run by hand:
+
+            reopen -> CHECKPOINT -> DROP every index -> CHECKPOINT -> migrate
+
+        The last step is why this is safe to automate: ``_migrate`` recreates
+        every index from ``_DDL``, so dropping them destroys no rows and
+        leaves the schema exactly where it started. Table data is untouched.
+
+        Returns True if the store is usable again. Runs at most once per
+        process: if a rebuilt index invalidates a second time, the cause is
+        not a stale index and a loop would only hide that.
+        """
+        global _fatal_db_reported
+        if self._read_only:
+            return False
+        if self._recovery_attempted:
+            return False
+        self._recovery_attempted = True
+
+        log.error(
+            "local store: DuckDB invalidated the connection; rebuilding "
+            "indexes in place. Table rows are not touched."
+        )
+        with self._write_lock:
+            try:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = _open_connection(read_only=False)
+                self._conn.execute("CHECKPOINT")
+                names = [
+                    r[0] for r in self._conn.execute(
+                        "SELECT index_name FROM duckdb_indexes()"
+                    ).fetchall() if r and r[0]
+                ]
+                dropped = 0
+                for name in names:
+                    try:
+                        # Quoted: index names come from the catalogue, but a
+                        # bare identifier would still break on anything the
+                        # parser treats as reserved.
+                        self._conn.execute('DROP INDEX IF EXISTS "%s"' % name)
+                        dropped += 1
+                    except Exception as drop_exc:
+                        log.warning(
+                            "local store: could not drop index %s (%s)",
+                            name, _brief_exc(drop_exc),
+                        )
+                self._conn.execute("CHECKPOINT")
+            except Exception as exc:
+                log.error(
+                    "local store: index rebuild could not open or clean the "
+                    "database (%s). The store still needs manual recovery.",
+                    _brief_exc(exc),
+                )
+                return False
+
+        # Outside the lock: _migrate takes it itself.
+        try:
+            self._migrate()
+        except Exception as exc:
+            log.error(
+                "local store: indexes were dropped but the schema could not "
+                "be rebuilt (%s). Restart the daemon; migrations run on "
+                "boot and will recreate them.",
+                _brief_exc(exc),
+            )
+            return False
+
+        _fatal_db_state["invalidated"] = False
+        _fatal_db_state["recovered"] = int(_fatal_db_state.get("recovered") or 0) + 1
+        _fatal_db_reported = False
+        log.warning(
+            "local store: rebuilt %d index(es); the store is writable again. "
+            "Queued events flush on the next tick.",
+            dropped,
+        )
+        return True
 
     def _migrate(self) -> None:
         """Bring the store schema up to current SCHEMA_VERSION. Order matters:
@@ -6338,6 +6449,14 @@ class LocalStore:
                     # The handle is dead; the next two attempts would fail
                     # identically and each would log the whole failing chunk.
                     _report_fatal_db_once(exc)
+                    # One in-place index rebuild, then retry this same batch.
+                    # The ring still holds it (snapshot-then-pop), so a
+                    # successful recovery flushes the queued events instead of
+                    # leaving the daemon alive but permanently unable to
+                    # write. If recovery declines or fails we fall through to
+                    # exactly the previous behaviour: stop retrying, report.
+                    if self.recover_invalidated_db():
+                        continue
                     break
                 if attempt + 1 < FLUSH_MAX_ATTEMPTS:
                     # Exponential backoff: 0.05s, 0.10s, 0.20s, ... capped at 1s.
@@ -12737,6 +12856,15 @@ class LocalStore:
             # vacuum succeeds.
             "cap_exceeded": bool(self._cap_exceeded),
             "auto_vacuum_enabled": bool(AUTO_VACUUM_ENABLED),
+            # True while DuckDB has invalidated the handle and the automatic
+            # rebuild did not bring it back. Reported so a bricked store is
+            # VISIBLE: without it the daemon looks healthy from the outside
+            # and every card just renders empty, which is what let one sit
+            # unnoticed for hours. ``db_recoveries`` counts successful
+            # in-place rebuilds this process.
+            "db_invalidated": bool(_fatal_db_state.get("invalidated")),
+            "db_recoveries": int(_fatal_db_state.get("recovered") or 0),
+            "db_last_error": _fatal_db_state.get("last_error"),
             "event_count": int(n or 0),
             "oldest_ts": oldest,
             "newest_ts": newest,

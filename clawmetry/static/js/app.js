@@ -10918,6 +10918,27 @@ function _renderRetention(state) {
   var label = document.getElementById('retention-label');
   var input = document.getElementById('retention-days-input');
   if (!label || !input) return;
+  // On the hosted dashboard there is no node to read or write. The server
+  // answers from the plan alone, which is true for the account but blind to
+  // a SHORTER period the operator set on the machine itself — and the write
+  // has no path to that machine at all. Showing the plan number next to an
+  // editable box would state it as the machine's setting and offer a control
+  // that cannot work, so the panel goes read-only and says where the real
+  // answer lives.
+  if (window.CLOUD_MODE) {
+    var _rw = document.getElementById('retention-controls');
+    if (_rw) _rw.style.display = 'none';
+    var _days = state && state.cap_days;
+    label.textContent = _days
+      ? ('Your plan keeps event history for ' + _days + ' day'
+         + (_days === 1 ? '' : 's') + '. A machine can be set to keep less '
+         + 'than that, from the Security tab on the machine itself.')
+      : ('Your plan keeps event history indefinitely. A machine can be set '
+         + 'to keep less, from the Security tab on the machine itself.');
+    var _st = document.getElementById('retention-status');
+    if (_st) { _st.textContent = ''; _st.style.color = ''; }
+    return;
+  }
   label.textContent = (state && state.explanation) || '';
   if (state && state.configured_days) {
     input.value = state.configured_days;
