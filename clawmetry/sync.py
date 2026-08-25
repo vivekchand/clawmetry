@@ -374,7 +374,6 @@ def _effective_family_limit(runtime: str) -> int:
     return max(base, min(ov, _RUNTIME_BACKFILL_MAX))
 
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
 log = logging.getLogger("clawmetry-sync")
 log.setLevel(logging.INFO)
 if not log.handlers:
