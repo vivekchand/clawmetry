@@ -530,3 +530,84 @@ def test_the_duckdb_fast_path_also_serves_a_phase(monkeypatch):
     for key in ("status", "phaseBasis", "lastActivityAt", "resolvable",
                 "initialCwd"):
         assert key in served
+
+
+# ── 7. The OpenClaw ingest path ────────────────────────────────────────────
+#
+# OpenClaw does not come through the family-adapter loop -- it is parsed
+# straight from JSONL by ``sync_session_metadata`` -- so "every runtime gets a
+# phase" is only true if that path records one too. These build a real
+# workspace on disk and run the real function against it.
+
+
+def _write_openclaw_session(sessions_dir, sid, *, age_secs, end_reason=""):
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    lines = [
+        {"type": "message", "timestamp": (now - timedelta(seconds=age_secs + 30)).isoformat(),
+         "message": {"role": "user", "model": "claude-opus-5"}},
+        {"type": "message", "timestamp": (now - timedelta(seconds=age_secs)).isoformat(),
+         "message": {"role": "assistant", "model": "claude-opus-5",
+                     "usage": {"totalTokens": 12, "cost": {"total": 0.01}}}},
+    ]
+    if end_reason:
+        lines.append({"type": "session",
+                      "timestamp": (now - timedelta(seconds=age_secs)).isoformat(),
+                      "endReason": end_reason})
+    path = sessions_dir / f"{sid}.jsonl"
+    path.write_text("\n".join(_json.dumps(x) for x in lines) + "\n")
+    return path
+
+
+@pytest.fixture
+def openclaw_workspace(tmp_path, monkeypatch):
+    sessions = tmp_path / "oc" / "agents" / "main" / "sessions"
+    sessions.mkdir(parents=True)
+    monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(tmp_path / "oc"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "oc.duckdb"))
+    # Nothing may leave the machine during a test: point the data plane at a
+    # closed port so the upload fails fast and locally.
+    monkeypatch.setenv("CLAWMETRY_ENDPOINT", "http://127.0.0.1:1")
+    sys.modules.pop("clawmetry.local_store", None)
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    import clawmetry.sync as sync
+    # ``_record_sync_progress`` writes into the DEVELOPER's real ~/.clawmetry
+    # (CONFIG_DIR is resolved at import time and no env var redirects it). A
+    # unit test must never be able to change how the real install behaves.
+    monkeypatch.setattr(sync, "_record_sync_progress",
+                        lambda *a, **k: None, raising=False)
+    st = ls.get_store()
+    yield sessions, sync, st
+    try:
+        st.stop(flush=False)
+    except Exception:
+        pass
+
+
+def test_openclaw_sessions_are_given_a_phase_too(openclaw_workspace):
+    """AC-OBS-005.1 on the path that does not use a family adapter."""
+    sessions, sync, st = openclaw_workspace
+    _write_openclaw_session(sessions, "live-one", age_secs=5)
+    _write_openclaw_session(sessions, "quiet-one",
+                            age_secs=int(ph.DEFAULT_STALE_SECS) + 120)
+    sync.sync_session_metadata({"api_key": "test-only", "node_id": "n"}, {})
+    rows = {r["sessionId"]: r for r in st.query_session_phases(runtime="openclaw")}
+    assert rows["live-one"]["phase"] == ph.PHASE_WORKING
+    assert rows["quiet-one"]["phase"] == ph.PHASE_ENDED
+    assert rows["quiet-one"]["endReason"] == ph.END_STALE
+
+
+def test_openclaws_own_end_reason_beats_a_recent_write(openclaw_workspace):
+    """AC-OBS-005.5 -- OpenClaw is the one runtime that states a real end, and
+    what it says survives verbatim rather than being relabelled ``stale``."""
+    sessions, sync, st = openclaw_workspace
+    _write_openclaw_session(sessions, "stopped", age_secs=2,
+                            end_reason="user_stopped")
+    sync.sync_session_metadata({"api_key": "test-only", "node_id": "n"}, {})
+    row = st.query_session_phases(session_ids=["stopped"])[0]
+    assert row["phase"] == ph.PHASE_ENDED
+    assert row["phaseBasis"] == "asserted-end"
+    assert row["endReason"] == "user_stopped"
+    assert ph.end_reason_kind(row["endReason"]) == ph.END_SESSION_END
