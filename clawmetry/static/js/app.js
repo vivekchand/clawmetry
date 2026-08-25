@@ -21280,7 +21280,7 @@ function _cmRenderReadiness(data) {
   counted.forEach(function (c) {
     var col = _CM_RR_COLORS[c.status] || '#64748b';
     var op = c.status === 'warn' ? '0.55' : '1';
-    html += '<div class="rr-seg" title="' + escapeHtml(c.label + ' — ' + c.status)
+    html += '<div class="rr-seg" title="' + escapeHtml(c.label + ': ' + c.status)
       + '" style="width:' + (c.weight / totalW * 100).toFixed(2) + '%;'
       + 'background:' + col + ';opacity:' + op + ';"></div>';
   });
