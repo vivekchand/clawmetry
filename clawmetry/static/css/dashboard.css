@@ -3014,3 +3014,115 @@ body.has-profile-menu #logout-btn { display: none !important; }
 @media (max-width: 640px) {
   .cm-needs-where { display: none; }
 }
+
+/* ── Repo AI-readiness (Harness tab) ──────────────────────────────────────
+   "The handoff sheet": the grade a colleague would leave on the desk before
+   handing you the repo. The signature element is the weight bar, which draws
+   the ADR-004 grading rule instead of only asserting it: every counted check
+   is a segment sized by its weight, and anything we could not read sits
+   OUTSIDE the bar, hatched, labelled "not counted". A reader can see at a
+   glance that an unknown moved the grade in neither direction.
+   Monospace is reserved for literal things on disk (paths, evidence), so the
+   typeface itself says "we opened this file". */
+.rr-card { padding: 0; margin-bottom: 14px; overflow: hidden; }
+.rr-head {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;
+  justify-content: space-between;
+  padding: 16px 18px 14px; border-bottom: 1px solid var(--border-secondary);
+}
+.rr-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.rr-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; max-width: 60ch; }
+.rr-head-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rr-pick-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+.rr-pick {
+  max-width: 320px; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-secondary);
+}
+.rr-body { padding: 16px 18px 18px; }
+
+/* Verdict: one plain sentence joining the grade to what actually happened. */
+.rr-verdict {
+  font-size: 15px; line-height: 1.55; color: var(--text-secondary);
+  margin-bottom: 16px; max-width: 72ch;
+}
+.rr-verdict b { color: var(--text-primary); font-weight: 700; }
+
+.rr-top { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+
+/* Grade block. A stacked letter, not a donut. */
+.rr-grade { flex: 0 0 auto; min-width: 150px; }
+.rr-letter { font-size: 54px; font-weight: 800; line-height: 0.9; letter-spacing: -0.04em; }
+.rr-grade-label { font-size: 12.5px; font-weight: 600; margin-top: 4px; }
+.rr-grade-pct { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
+
+/* The weight bar + the not-counted tail. */
+.rr-bar-wrap { flex: 1 1 300px; min-width: 260px; }
+.rr-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-hover); }
+.rr-seg { height: 100%; }
+.rr-seg + .rr-seg { border-left: 1px solid var(--bg-secondary); }
+.rr-uncounted { display: flex; align-items: center; gap: 7px; margin-top: 8px; }
+.rr-hatch {
+  width: 34px; height: 10px; border-radius: 5px; flex: 0 0 auto;
+  border: 1px dashed var(--border-primary);
+  background: repeating-linear-gradient(45deg,
+    var(--bg-hover) 0 3px, transparent 3px 6px);
+}
+.rr-uncounted-text { font-size: 11.5px; color: var(--text-faint); }
+.rr-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; font-size: 11.5px; color: var(--text-muted); }
+.rr-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.rr-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* What actually happened here. */
+.rr-signals { flex: 1 1 240px; min-width: 220px; }
+.rr-signals-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin-bottom: 8px; }
+.rr-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rr-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: 12px; padding: 4px 9px; border-radius: 999px;
+  border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-tertiary);
+}
+.rr-chip b { font-size: 13px; color: var(--text-primary); }
+.rr-chip.rr-chip-zero { opacity: 0.55; }
+.rr-chip.rr-chip-hot { border-color: var(--text-warning); color: var(--text-warning); }
+.rr-chip.rr-chip-hot b { color: var(--text-warning); }
+
+/* Check rows. */
+.rr-checks { margin-top: 20px; border-top: 1px solid var(--border-secondary); }
+.rr-check { display: flex; gap: 11px; padding: 12px 0; border-bottom: 1px solid var(--border-secondary); }
+.rr-check:last-child { border-bottom: none; }
+.rr-glyph { flex: 0 0 auto; width: 18px; text-align: center; font-size: 13px; line-height: 1.5; font-weight: 700; }
+.rr-check-main { flex: 1 1 auto; min-width: 0; }
+.rr-check-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.rr-check-label { font-size: 13.5px; font-weight: 600; }
+.rr-weight { font-size: 11px; color: var(--text-faint); }
+.rr-detail { font-size: 12.5px; color: var(--text-muted); line-height: 1.55; margin-top: 3px; }
+.rr-fix { font-size: 12.5px; color: var(--text-tertiary); line-height: 1.55; margin-top: 5px; }
+.rr-fix::before { content: "Fix: "; font-weight: 600; color: var(--text-secondary); }
+.rr-evidence {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; color: var(--text-faint); margin-top: 5px;
+  /* anywhere, not break-all: a long path wraps at a slash instead of
+     splitting the sentence after it mid-word ("not hing"). */
+  overflow-wrap: anywhere; word-break: normal;
+}
+
+/* Which runtimes would find their instructions here. */
+.rr-cov { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-secondary); }
+.rr-cov-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin-bottom: 8px; }
+.rr-cov-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.rr-pill {
+  font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-faint);
+}
+.rr-pill.on { border-color: var(--text-success); color: var(--text-success); background: var(--bg-success); }
+.rr-empty { font-size: 13px; color: var(--text-muted); line-height: 1.6; max-width: 68ch; }
+
+@media (max-width: 620px) {
+  .rr-top { gap: 16px; }
+  .rr-letter { font-size: 44px; }
+  .rr-pick { max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rr-card * { transition: none !important; animation: none !important; }
+}

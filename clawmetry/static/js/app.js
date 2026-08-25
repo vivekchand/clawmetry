@@ -21140,6 +21140,226 @@ async function saveClaudeCoverageKey() {
   }
 }
 
+// ── Repo AI-readiness ─────────────────────────────────────────────────────
+// Before you blame the agent, look at what you handed it. Scores the repo an
+// agent actually worked in on how legible it is, and puts that grade next to
+// the stuck-loop counts the detectors recorded for the same repo.
+//
+// Free and ungated. Every figure is a filesystem fact or a DuckDB row; the
+// renderer never invents one. Two honesty rules are load-bearing here and
+// must survive any edit:
+//   1. An `unknown` check is drawn OUTSIDE the weight bar, hatched, labelled
+//      "not counted". It carries weight 0 and must never be shaded as if it
+//      passed or failed.
+//   2. `stuck_rate === null` means no agent has worked here. It renders as
+//      "nothing to compare yet", never as 0%.
+var _cmReadinessPath = '';
+var _cmReadinessBusy = false;
+
+async function loadRepoReadiness(path) {
+  var body = document.getElementById('rr-body');
+  if (!body) return;
+  if (typeof path === 'string' && path) _cmReadinessPath = path;
+  if (_cmReadinessBusy) return;
+  _cmReadinessBusy = true;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/repo-readiness?days=30';
+  if (_cmReadinessPath) url += '&path=' + encodeURIComponent(_cmReadinessPath);
+  if (rt && rt !== 'all') url += '&runtime=' + encodeURIComponent(rt);
+  try {
+    // fetchJsonWithTimeout, not a bare fetch: on a busy node the daemon
+    // serialises DuckDB reads and a plain fetch never settles, which pins the
+    // card on "Scanning the repo..." forever with no way back. Same helper and
+    // budget the rest of the app uses.
+    var data = await fetchJsonWithTimeout(url, 25000);
+    _cmRenderReadinessPicker(data);
+    body.innerHTML = _cmRenderReadiness(data);
+  } catch (e) {
+    var why = String((e && e.message) || e);
+    body.innerHTML = '<div class="rr-empty">'
+      + (/abort|timeout/i.test(why)
+        ? 'The scan is taking longer than usual, most likely because the '
+          + 'agent database is busy. Nothing is wrong with your repo.'
+        : 'Could not scan the repo: ' + escapeHtml(why))
+      + ' <a href="javascript:loadRepoReadiness()">Try again</a></div>';
+  } finally {
+    _cmReadinessBusy = false;
+  }
+}
+
+function _cmRenderReadinessPicker(data) {
+  var sel = document.getElementById('rr-repo-pick');
+  if (!sel) return;
+  var repos = (data && data.repos) || [];
+  var current = (data && data.report && data.report.path) || '';
+  if (!repos.length) {
+    sel.style.display = 'none';
+    var lbl = document.querySelector('.rr-pick-label');
+    if (lbl) lbl.style.display = 'none';
+    return;
+  }
+  sel.style.display = '';
+  sel.innerHTML = repos.map(function (r) {
+    var n = r.signals && r.signals.sessions;
+    var suffix = n ? ' (' + n + ' session' + (n === 1 ? '' : 's') + ')' : '';
+    var gone = r.exists ? '' : ' [not on this machine]';
+    return '<option value="' + escapeHtml(r.path) + '"'
+      + (r.path === current ? ' selected' : '') + '>'
+      + escapeHtml(r.name + suffix + gone) + '</option>';
+  }).join('');
+}
+
+function _cmReadinessVerdict(rep, days) {
+  // One plain sentence joining the grade to what actually happened here.
+  var sig = rep.signals || {};
+  var head = 'Graded <b>' + escapeHtml(rep.score) + ' &middot; '
+    + escapeHtml(rep.score_label) + '</b>.';
+  if (!sig.has_history) {
+    return head + ' No agent session on this machine has run in this repo yet, '
+      + 'so there is nothing to compare the grade against.';
+  }
+  var n = sig.sessions, stuck = sig.stuck_sessions;
+  var tail;
+  if (!stuck) {
+    tail = ' Agents ran <b>' + n + '</b> session' + (n === 1 ? '' : 's')
+      + ' here in the last ' + days + ' days and none of them got stuck.';
+  } else {
+    tail = ' Agents ran <b>' + n + '</b> session' + (n === 1 ? '' : 's')
+      + ' here in the last ' + days + ' days, and <b>' + stuck + '</b> of them '
+      + 'got stuck (' + sig.stuck_rate + '%).';
+  }
+  return head + tail;
+}
+
+var _CM_RR_COLORS = { pass: '#22c55e', warn: '#f59e0b', fail: '#ef4444' };
+var _CM_RR_GLYPH = { pass: '&#10003;', warn: '!', fail: '&#10005;', unknown: '?' };
+var _CM_RR_SIGNAL_LABEL = {
+  stuck_loop: 'Stuck loops',
+  no_progress: 'No progress',
+  repeated_tool_failure: 'Repeated tool failures',
+  action_discrepancy: 'Carried on after a failure'
+};
+
+function _cmRenderReadiness(data) {
+  if (!data || data.status === 'error') {
+    return '<div class="rr-empty">Could not scan the repo: '
+      + escapeHtml((data && data.detail) || 'unknown error') + '</div>';
+  }
+  if (data.status === 'no_repo' || !data.report) {
+    return '<div class="rr-empty">Nothing to score yet. '
+      + escapeHtml(data.detail || '')
+      + ' Run an agent inside a code repo and this fills in on its own.</div>';
+  }
+  var rep = data.report;
+  if (rep.status === 'not_found') {
+    return '<div class="rr-empty">That repo is no longer on this machine, so '
+      + 'there is nothing to read. Its session history is still in the picker '
+      + 'above.</div>';
+  }
+  var days = data.window_days || 30;
+  var checks = rep.checks || [];
+  var counted = checks.filter(function (c) { return c.weight > 0; });
+  var unknown = checks.filter(function (c) { return c.status === 'unknown'; });
+  var totalW = counted.reduce(function (a, c) { return a + c.weight; }, 0) || 1;
+
+  var html = '<div class="rr-verdict">' + _cmReadinessVerdict(rep, days) + '</div>';
+  html += '<div class="rr-top">';
+
+  // Grade block.
+  html += '<div class="rr-grade">'
+    + '<div class="rr-letter" style="color:' + escapeHtml(rep.score_color) + ';">'
+    + escapeHtml(rep.score) + '</div>'
+    + '<div class="rr-grade-label" style="color:' + escapeHtml(rep.score_color) + ';">'
+    + escapeHtml(rep.score_label) + '</div>'
+    + '<div class="rr-grade-pct">' + rep.score_pct + '% of the checks that count</div>'
+    + '</div>';
+
+  // Weight bar: one segment per counted check, width = its share of the grade.
+  // Warn is drawn at half opacity because it earns half credit.
+  html += '<div class="rr-bar-wrap"><div class="rr-bar">';
+  counted.forEach(function (c) {
+    var col = _CM_RR_COLORS[c.status] || '#64748b';
+    var op = c.status === 'warn' ? '0.55' : '1';
+    html += '<div class="rr-seg" title="' + escapeHtml(c.label + ' — ' + c.status)
+      + '" style="width:' + (c.weight / totalW * 100).toFixed(2) + '%;'
+      + 'background:' + col + ';opacity:' + op + ';"></div>';
+  });
+  html += '</div>';
+  if (unknown.length) {
+    html += '<div class="rr-uncounted"><span class="rr-hatch"></span>'
+      + '<span class="rr-uncounted-text">' + unknown.length + ' check'
+      + (unknown.length === 1 ? '' : 's') + ' we could not read. Not counted, '
+      + 'in either direction.</span></div>';
+  }
+  html += '<div class="rr-legend">'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.pass + ';"></i>Ready</span>'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.warn + ';opacity:.55;"></i>Half credit</span>'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.fail + ';"></i>Missing</span>'
+    + '</div></div>';
+
+  // What actually happened in this repo.
+  html += '<div class="rr-signals"><div class="rr-signals-h">What happened here</div>';
+  var sig = rep.signals || {};
+  if (!sig.has_history) {
+    html += '<div class="rr-empty" style="font-size:12.5px;">No sessions recorded '
+      + 'in this repo yet.</div>';
+  } else {
+    var inc = sig.incidents || {};
+    html += '<div class="rr-chips">';
+    Object.keys(_CM_RR_SIGNAL_LABEL).forEach(function (k) {
+      var n = inc[k] || 0;
+      html += '<span class="rr-chip ' + (n ? 'rr-chip-hot' : 'rr-chip-zero') + '">'
+        + '<b>' + n + '</b>' + escapeHtml(_CM_RR_SIGNAL_LABEL[k]) + '</span>';
+    });
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  // The checks.
+  html += '<div class="rr-checks">';
+  checks.forEach(function (c) {
+    var col = c.status === 'unknown' ? 'var(--text-faint)'
+      : (_CM_RR_COLORS[c.status] || 'var(--text-faint)');
+    html += '<div class="rr-check">'
+      + '<div class="rr-glyph" style="color:' + col + ';">'
+      + (_CM_RR_GLYPH[c.status] || '?') + '</div>'
+      + '<div class="rr-check-main">'
+      + '<div class="rr-check-h"><span class="rr-check-label">'
+      + escapeHtml(c.label) + '</span>'
+      + '<span class="rr-weight">'
+      + (c.weight > 0 ? 'worth ' + c.weight + ' points' : 'not counted')
+      + '</span></div>'
+      + '<div class="rr-detail">' + escapeHtml(c.detail || '') + '</div>';
+    if (c.remediation) {
+      html += '<div class="rr-fix">' + escapeHtml(c.remediation) + '</div>';
+    }
+    if (c.evidence) {
+      html += '<div class="rr-evidence">read from ' + escapeHtml(c.evidence) + '</div>';
+    }
+    html += '</div></div>';
+  });
+  html += '</div>';
+
+  // Per-runtime honesty: a repo can be legible to one runtime and invisible
+  // to another, and a single node-wide tick would hide that.
+  var cov = rep.runtime_coverage || [];
+  if (cov.length > 1) {
+    html += '<div class="rr-cov"><div class="rr-cov-h">Which runtimes would find '
+      + 'their instructions here</div><div class="rr-cov-pills">';
+    cov.forEach(function (r) {
+      html += '<span class="rr-pill' + (r.has_instructions ? ' on' : '') + '" title="'
+        + escapeHtml((r.has_instructions ? 'Reads: ' + r.files.join(', ')
+                                         : 'Looked for: ' + r.looked_for.join(', ')))
+        + '">' + escapeHtml(r.label) + '</span>';
+    });
+    html += '</div></div>';
+  }
+
+  html += '<div class="rr-evidence" style="margin-top:14px;">Scanned '
+    + escapeHtml(rep.path) + '. Nothing was run and nothing left this machine.</div>';
+  return html;
+}
+
 async function loadHarness() {
   var el = document.getElementById('harness-container');
   if (!el) return;
@@ -21151,6 +21371,9 @@ async function loadHarness() {
   var _cov = document.getElementById('claude-coverage');
   if (rt === 'claude_code') { loadClaudeCoverage(); }
   else if (_cov) { _cov.style.display = 'none'; _cov.innerHTML = ''; }
+  // Repo readiness is runtime-scoped (a repo legible to Claude Code can be
+  // invisible to Cursor), so it re-fetches with the switcher, like the panel.
+  loadRepoReadiness();
   try {
     if (!_cmHarnessTemplates) {
       var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });

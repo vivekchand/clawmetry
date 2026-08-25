@@ -1587,3 +1587,63 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
         "binary": binary,
         "truncated": size > len(raw),
     }
+
+
+# ── Project-relative root contract (consumed by repo_readiness) ─────────────
+#
+# ``clawmetry/repo_readiness.py`` scores an arbitrary code repo on how legible
+# it is to an agent. The set of files a runtime reads INSIDE a repo
+# (``CLAUDE.md``, ``AGENTS.md``, ``.cursor/rules/``, ``.github/prompts/``, …)
+# is already declared once, here, as the ``scope="project"`` RootSpecs. This
+# helper exposes those declarations as repo-relative paths so the scorer
+# DERIVES its file list from the catalog instead of hand-maintaining a second
+# copy that would silently drift every time a runtime is added.
+#
+# Only roots that live at or under the workspace root are returned: the
+# ``_expand_project_roots`` clones point at OTHER checkouts and are not part of
+# the per-repo contract.
+
+def project_relative_roots(categories: Optional[Iterable] = None) -> list:
+    """Every ``scope="project"`` root as a repo-relative path.
+
+    Returns ``[{runtime, runtime_label, category, rel, label, globs}, …]``
+    where ``rel`` is the path relative to the repo root (e.g. ``CLAUDE.md``,
+    ``.claude/skills``). Deduped, stably ordered, never raises.
+    """
+    wanted = parse_categories(categories) if categories is not None else set(CATEGORIES)
+    try:
+        ws = os.path.abspath(_workspace_root())
+    except OSError:
+        return []
+    out: list = []
+    seen = set()
+    try:
+        catalog = _catalog()
+    except Exception:
+        return []
+    for entry in catalog:
+        for spec in entry.roots:
+            if spec.scope != "project" or spec.category not in wanted:
+                continue
+            try:
+                root = os.path.abspath(spec.expanded_root())
+                rel = os.path.relpath(root, ws)
+            except (OSError, ValueError):
+                continue
+            # Skip clones that live outside this repo, and the degenerate
+            # "the repo root itself is the root" case.
+            if rel == os.curdir or rel.startswith(os.pardir) or os.path.isabs(rel):
+                continue
+            key = (entry.id, spec.category, rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "runtime": entry.id,
+                "runtime_label": entry.label,
+                "category": spec.category,
+                "rel": rel.replace(os.sep, "/"),
+                "label": spec.label or os.path.basename(rel),
+                "globs": tuple(spec.include_globs or ()),
+            })
+    return out
