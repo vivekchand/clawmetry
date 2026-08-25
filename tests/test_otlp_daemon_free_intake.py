@@ -502,3 +502,64 @@ def test_the_cache_dedup_set_stays_bounded(monkeypatch):
     # trade: a bounded guard, not a permanent ledger.
     assert _d._otlp_seen("rec-49") is True
     assert _d._otlp_seen("rec-0") is False
+
+
+# ── The write reaches the writer, or it reaches nothing ─────────────────────
+
+class _RecordingProxy:
+    """Stand-in for the dashboard-process ``_ProxyStore``: records every call
+    and no-ops, the way the real proxy forwards to the daemon."""
+
+    _read_only = True
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _f(*a, **k):
+            self.calls.append((name, a, k))
+            return None
+        return _f
+
+
+def test_the_batch_write_forwards_through_the_daemon_proxy(monkeypatch):
+    """When a daemon owns the DuckDB writer — every real install — the
+    dashboard's ``get_store()`` returns a proxy that forwards **kwargs ONLY.
+    A positional call is not an error: it is dropped, and the receiver
+    silently stores nothing while answering 200 to every exporter. That is how
+    the OTLP span path broke in June, found only by looking at live data.
+
+    So the contract is pinned from both ends: the call is by keyword, and the
+    method is on the daemon allowlist. Either one missing is the same silent
+    no-op.
+    """
+    import importlib
+
+    import routes.local_query as lq
+
+    ls = importlib.import_module("clawmetry.local_store")
+    rec = _RecordingProxy()
+    monkeypatch.setattr(ls, "get_store", lambda *a, **k: rec)
+
+    _d._process_otlp_logs(_export([
+        _api_request(int(time.time() * 1e9)),
+        _tool_decision(int(time.time() * 1e9), "Bash"),
+    ]))
+
+    calls = [c for c in rec.calls if c[0] == "put_otlp_batch"]
+    assert calls, "put_otlp_batch was never called by the receiver"
+    _name, args, kwargs = calls[0]
+    assert not args, f"positional args are dropped by the proxy: {args!r}"
+    assert "records" in kwargs and "events" in kwargs
+    assert kwargs["records"], "no records handed to the writer"
+    assert kwargs["events"], "no events handed to the writer"
+
+    # One call for the whole export batch, not one per record: get_store() here
+    # is an HTTP hop to the daemon and an exporter ships hundreds at a time.
+    assert len(calls) == 1, f"{len(calls)} writes for one batch"
+
+    # A method absent from the allowlist is refused by the daemon and the
+    # caller reads the 400 as an empty result.
+    for method in ("put_otlp_batch", "query_otlp_rollup",
+                   "query_otlp_records", "count_otlp_records"):
+        assert method in lq._DAEMON_METHODS, f"{method} missing from the allowlist"
