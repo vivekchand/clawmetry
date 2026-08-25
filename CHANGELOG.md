@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Release: the hosted dashboard stops offering a setting it cannot change (carries #5184) (2026-08-25)
+- **Who this reaches:** anyone who opens the Security tab on the hosted dashboard rather than on their own machine.
+- **How long we keep your history is a setting on one machine, and the hosted view now says so.** The control shipped last release, and it belongs on the machine: the period is stored there and the thing that deletes old history runs there. The hosted dashboard has neither. It was about to show you your plan's period worded as though it were what that machine actually does, which is not the same claim, because a machine can be set to keep less and the hosted view has no way to see that. It now says what it knows: your plan keeps history for so many days, and a machine can be set to keep less than that, from the Security tab on the machine itself.
+- **And it stops showing you a Save button that could never work.** There is no path from the hosted dashboard to the machine that holds the setting, so pressing Save could only ever fail. The box and the buttons are hidden there instead. A control that always fails is worse than no control.
+- **Verified:** 2 new tests, including one that pins the hosted view to the plan's number rather than the machine's, because reaching for the more convenient field is exactly how this comes back.
+
 ### Release: the local database now repairs itself instead of quietly giving up (carries #5177) (2026-08-25)
 - **Who this reaches:** anyone running ClawMetry on their own machine. If your dashboard has ever gone empty for no visible reason, this is the most likely cause and it is now handled.
 - **A stalled database used to stay stalled forever.** The local database can decide it has been damaged and refuse every further read and write until it is restarted. The last release taught ClawMetry to recognise that and stop retrying in a loop, which is what had been filling disks. It still needed you to fix it by hand, and it could not tell you that it did: the collector kept running and reporting healthy, so from the outside there was nothing to see except a dashboard where every card was empty. One machine sat like that long enough to write 70 MB of the same error.
