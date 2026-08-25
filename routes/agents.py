@@ -25,11 +25,13 @@ in enforce mode.
 from __future__ import annotations
 
 import os
+import time
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 from clawmetry.adapters import registry
+from clawmetry.adapters import phase as _phase
 from clawmetry._gate import require_runtime
 
 bp_agents = Blueprint("agents", __name__)
@@ -50,6 +52,83 @@ def _ls_call(method_name, **kwargs):
         return getattr(store, method_name)(**kwargs)
     except Exception:
         return None
+
+
+def _durable_phases(name: str, session_ids) -> dict:
+    """Durable phase rows for these sessions, keyed by BOTH id forms.
+
+    The daemon records family sessions under a runtime-prefixed id
+    (``codex:<uuid>``) and OpenClaw sessions bare, because that is how each one
+    lands in the sessions table. A caller here holds the adapter's native id and
+    should not have to know which, so both forms are asked for and both are
+    keyed in the result.
+
+    ``{}`` on any failure. A missing durable record is not an error: the phase
+    itself still resolves from the current observation, only the transition time
+    is unknown, and an unknown transition time is reported as absent rather than
+    as "just now".
+    """
+    ids = [i for i in (session_ids or []) if i]
+    if not ids:
+        return {}
+    wanted = []
+    for sid in ids[:500]:
+        wanted.append(sid)
+        wanted.append(f"{name}:{sid}")
+    rows = _ls_call("query_session_phases", session_ids=wanted, limit=1000)
+    out = {}
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("sessionId") or ""
+        if not rid:
+            continue
+        out[rid] = r
+        prefix = f"{name}:"
+        if rid.startswith(prefix):
+            out[rid[len(prefix):]] = r
+    return out
+
+
+def _apply_phase(payload: dict, durable: dict) -> dict:
+    """Overlay the durable record onto one serialized session.
+
+    Who wins what:
+
+    * ``phaseSince``, ``initialCwd`` and ``resolvable`` come from the store and
+      nowhere else. Deriving a transition time here would restart every
+      duration on every page load, which is the one number this model exists to
+      make trustworthy.
+    * The **phase** prefers the fresher answer. This request has just read the
+      session; the stored row is from the daemon's last pass, up to a tick ago.
+      A session that asked for permission ten seconds ago must not be reported
+      as still working because that is what the daemon last saw.
+    * When the two disagree, the stored transition time is reported as
+      **unknown**. It belongs to the phase the session has just left, and
+      printing it would claim "waiting for 14 minutes" about a state entered
+      seconds ago -- a fabricated duration, which is worse than none.
+    """
+    if not durable:
+        return payload
+    fresh = payload.get("phase")
+    stored = durable.get("phase")
+    if fresh and stored and fresh != stored:
+        payload["phaseSince"] = None
+    else:
+        payload["phaseSince"] = durable.get("phaseSince")
+        if stored and not fresh:
+            payload["phase"] = stored
+            payload["phaseBasis"] = (durable.get("phaseBasis")
+                                     or payload.get("phaseBasis") or "")
+            if durable.get("status"):
+                payload["status"] = durable.get("status")
+    if durable.get("initialCwd"):
+        payload["initialCwd"] = durable.get("initialCwd")
+    if durable.get("endReason") and not payload.get("endReason"):
+        payload["endReason"] = durable.get("endReason")
+    if durable.get("resolvable") is not None:
+        payload["resolvable"] = durable.get("resolvable")
+    return payload
 
 
 def _try_local_store_agent_sessions(name: str, limit: int):
@@ -99,6 +178,30 @@ def _try_local_store_agent_sessions(name: str, limit: int):
             "costStatus": meta.get("cost_status") or "",
             "endReason": meta.get("end_reason") or "",
         })
+    # Phase, on every row. Derived here from the stored timestamps so a store
+    # that has rows but no phase record yet still answers, then overlaid with
+    # the durable transition time -- which is the ONLY place ``phaseSince`` may
+    # come from (recomputing it per request restarts every duration on every
+    # page load).
+    now = time.time()
+    durable = _durable_phases(name, [s["id"] for s in sessions])
+    for s in sessions:
+        verdict = _phase.resolve(
+            now=now,
+            end_reason=s.get("endReason") or "",
+            last_activity_at=s.get("endedAt") or s.get("startedAt") or None,
+            started_at=s.get("startedAt") or None,
+        )
+        s["phase"] = verdict.phase
+        s["status"] = verdict.status
+        s["phaseBasis"] = verdict.basis
+        s["phaseSince"] = None
+        s["lastActivityAt"] = s.get("endedAt") or s.get("startedAt") or None
+        s["resolvable"] = None
+        s["initialCwd"] = ""
+        if verdict.end_reason and not s.get("endReason"):
+            s["endReason"] = verdict.end_reason
+        _apply_phase(s, durable.get(s["id"]) or {})
     return {"sessions": sessions, "_source": "local_store"}
 
 
@@ -140,4 +243,18 @@ def api_agent_sessions(name: str):
         sessions = adapter.list_sessions(limit=limit)
     except Exception as exc:
         return jsonify({"error": f"list_sessions() failed: {exc}"}), 500
-    return jsonify({"sessions": [s.to_dict() for s in sessions]})
+    # Every adapter's session gets a phase here, whether or not the adapter set
+    # one: ``resolve_phase`` keeps an asserted phase and derives one from the
+    # timestamps otherwise. An adapter that genuinely cannot say leaves it
+    # ``None``, which is the honest answer and deliberately not ``idle``.
+    now = time.time()
+    for s in sessions:
+        try:
+            s.resolve_phase(now=now)
+        except Exception:  # never let one odd session sink the listing
+            pass
+    durable = _durable_phases(name, [s.id for s in sessions])
+    payload = []
+    for s in sessions:
+        payload.append(_apply_phase(s.to_dict(), durable.get(s.id) or {}))
+    return jsonify({"sessions": payload})

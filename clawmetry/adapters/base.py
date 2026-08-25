@@ -13,10 +13,13 @@ Adapters fill what they have and leave the rest as zero / empty. The
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterator
+
+from . import phase as _phase
 
 
 class Capability(str, Enum):
@@ -110,6 +113,11 @@ class Session:
     reasoning_tokens: int = 0
     cost_usd: float | None = None
     cost_status: str = ""
+    # Why the session ended, in the RUNTIME's own words where it has any
+    # (``user_stopped``, ``max_turns``, ``turn_aborted:interrupted``). Where a
+    # runtime states none, ``resolve_phase`` fills one of the shared reasons in
+    # ``clawmetry.adapters.phase.END_REASONS``; an adapter's own account of
+    # what happened is never overwritten.
     end_reason: str = ""
     # Working directory the session ran in ("" when the runtime hides it).
     # First-class because kill/pause pid resolution keys on it
@@ -117,7 +125,99 @@ class Session:
     # extra["cwd"] while older OSS wheels without this field are in the
     # fleet (a pro adapter passing cwd= against an old wheel would crash).
     cwd: str = ""
+
+    # ── Phase model (see clawmetry/adapters/phase.py) ─────────────────────
+    # An adapter that can see its runtime's state sets ``phase`` (and
+    # ``status`` where it can see more) directly. One that cannot leaves both
+    # empty and ``resolve_phase`` derives what it can from the timestamps.
+    # ``None`` after resolution means the observed data could not establish a
+    # phase. That is an answer, and it is deliberately not ``idle``.
+    phase: str | None = None
+    status: str | None = None
+    # When the session entered ``phase``. Filled from the DURABLE record
+    # (``local_store.record_session_phase``), never recomputed per pass: a
+    # daemon restart must not reset "waiting on you for 14 minutes" to zero.
+    phase_since: float | None = None
+    # How the phase was reached (``adapter`` / ``status`` / ``recency`` / ...)
+    # so a reader can tell an asserted phase from a derived one.
+    phase_basis: str = ""
+    # Last observed activity. Falls back to ``ended_at``, which is what most
+    # adapters actually put there (the last event timestamp, or the file
+    # mtime) -- NOT an assertion that the session is over.
+    last_activity_at: float | None = None
+    # Can a pending ask be answered from ClawMetry? ``None`` = not known.
+    # Keeps "a control that cannot work must say why" structural rather than a
+    # convention each surface can forget.
+    resolvable: bool | None = None
+    # The directory the session was LAUNCHED in, set once at first observation
+    # and never overwritten, so it stays comparable against ``cwd`` (where the
+    # session is running now). Landing the field is this work order; the drift
+    # comparison that uses it is a later one.
+    initial_cwd: str = ""
+
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def observed_activity_at(self) -> float | None:
+        """Best last-activity timestamp this session carries.
+
+        ``ended_at`` is the fallback on purpose: across every shipped adapter
+        it holds the last event timestamp (or the file mtime), i.e. the newest
+        thing observed, not a claim that the session finished. Only
+        ``end_reason`` asserts an end.
+        """
+        if self.last_activity_at:
+            return self.last_activity_at
+        return self.ended_at or (self.started_at or None)
+
+    def resolve_phase(self, *, now: float | None = None, pid_alive=None):
+        """Fill ``phase`` / ``status`` / ``phase_basis`` / ``end_reason`` in place.
+
+        Idempotent: an adapter that already set ``phase`` keeps it (the
+        verdict's first rule is that the adapter wins). Deliberately does NOT
+        set ``phase_since`` -- that comes from the durable record, because a
+        value recomputed here would reset on every daemon restart.
+
+        ``pid_alive`` is injected rather than imported so the adapter layer
+        stays free of process syscalls; the daemon passes
+        ``process_control.is_alive``.
+
+        Returns the :class:`clawmetry.adapters.phase.PhaseVerdict`.
+        """
+        if self.phase_basis:
+            # Already resolved. Re-deriving would read our own derived phase
+            # back as an adapter assertion and launder a ``recency`` verdict
+            # into an ``adapter`` one, which is exactly the provenance the
+            # basis exists to keep straight.
+            return _phase.PhaseVerdict(self.phase, self.status,
+                                       self.end_reason, self.phase_basis)
+        extra = self.extra if isinstance(self.extra, dict) else {}
+        verdict = _phase.resolve(
+            now=now if now is not None else time.time(),
+            phase=self.phase,
+            status=self.status,
+            end_reason=self.end_reason,
+            last_activity_at=self.observed_activity_at(),
+            started_at=self.started_at or None,
+            archived=bool(extra.get("archived")),
+            pid=extra.get("pid"),
+            pid_alive=pid_alive,
+        )
+        self.phase = verdict.phase
+        self.status = verdict.status
+        self.phase_basis = verdict.basis
+        if verdict.end_reason and not self.end_reason:
+            self.end_reason = verdict.end_reason
+        if not self.initial_cwd:
+            # ONLY from an adapter that genuinely knows the launch directory.
+            # Not defaulted to ``cwd`` HERE: this object is rebuilt on every
+            # pass, so seeding from wherever the session is running now would
+            # re-seed it every time and the two would be equal by construction.
+            # The first-observation seed belongs in the durable record
+            # (``local_store.record_session_phase``), which CAN tell a first
+            # sighting from a re-read and freezes the value it seeds.
+            launch = extra.get("initialCwd") or extra.get("initial_cwd") or ""
+            self.initial_cwd = str(launch or "")[:1024]
+        return verdict
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -141,6 +241,13 @@ class Session:
             "costStatus": self.cost_status,
             "endReason": self.end_reason,
             "cwd": self.cwd,
+            "phase": self.phase,
+            "status": self.status,
+            "phaseSince": self.phase_since,
+            "phaseBasis": self.phase_basis,
+            "lastActivityAt": self.observed_activity_at(),
+            "resolvable": self.resolvable,
+            "initialCwd": self.initial_cwd,
         }
         if self.extra:
             d["extra"] = self.extra
