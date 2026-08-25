@@ -56,7 +56,19 @@ def _clear_seen_ids():
 def store(monkeypatch):
     """A private DuckDB writer for one test, wired in as the singleton the
     handler resolves. Never touches the developer's real store."""
+    import importlib
     import pathlib
+
+    # Re-resolve the module every time instead of trusting the import at the
+    # top of this file. Several suites (test_alert_rules_local_store.py among
+    # them) do ``sys.modules.pop("clawmetry.local_store"); importlib.reload``,
+    # which leaves this file holding a STALE module object. Patching
+    # ``get_store`` on the stale copy silently does nothing — the handler
+    # imports the live one, opens the real singleton, and the test fails with
+    # zero rows and no clue why. Rebind the global so the whole file agrees
+    # with the module the code under test will actually import.
+    global _ls
+    _ls = importlib.import_module("clawmetry.local_store")
 
     tmpdir = tempfile.mkdtemp(prefix="clawmetry-wo7-")
     path = os.path.join(tmpdir, "wo7.duckdb")
@@ -69,7 +81,12 @@ def store(monkeypatch):
     prev_db_path = _ls.DB_PATH
     _ls.DB_PATH = pathlib.Path(path)
     st = _ls.LocalStore()
-    monkeypatch.setattr(_ls, "_store_rw", st, raising=False)
+    # Deliberately NOT published to ``_ls._store_rw``. Other test modules tear
+    # down with ``local_store.get_store().stop()``, and a session-scoped
+    # finalizer running while our store sits in that global closes OUR
+    # connection mid-test — which surfaces here as "Connection already closed"
+    # from a write nobody in this file made. Patching the accessor is enough:
+    # the handler under test resolves its store through ``get_store()``.
     monkeypatch.setattr(_ls, "get_store", lambda read_only=False: st)
     try:
         yield st
