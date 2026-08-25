@@ -1,0 +1,51 @@
+name: Product record (8090 PRD before code)
+
+# FLYWHEEL.md section 0c: 8090 Software Factory is the product REVIEWER, not a
+# lint gate drift-bot enforces after the fact. The requirement is where a
+# change is justified; the blueprint is where it is designed; the code is
+# where it is built -- in that order.
+#
+# Burned 2026-08-25 (PRs #5163/#5165/#5167/#5172): all four were implemented
+# first and the Factory records written afterwards to turn drift-bot green.
+# Six rounds produced accurate mechanism and zero product context, and three
+# defects a reviewer would have caught went with them -- among them a
+# one-click irreversible data-deletion control with no confirmation. Nothing
+# in CI noticed, because nothing was looking.
+#
+# This does not judge whether the record is any GOOD -- it cannot, and
+# pretending otherwise would be theatre. It makes skipping the review a
+# sentence somebody typed instead of a step that quietly did not happen.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  product-record:
+    name: PR cites the product record that justified it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # The script's own tests run here too. A gate whose tests only run in
+      # the main suite can rot silently while the gate keeps reporting green.
+      - name: Self-test the gate
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest tests/test_product_record_gate.py -q
+
+      - name: Check this PR
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_product_record.py
