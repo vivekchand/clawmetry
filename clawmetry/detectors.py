@@ -10,7 +10,15 @@ stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-The four detectors map to the honest failure classes the landing page promises:
+Eight detectors in two families. TRAJECTORY (is it stuck?) reads the shape of
+the tool stream and lives here. BEHAVIOUR (is it doing something it does not
+normally do?) reads what the calls DID and lives in ``detector_behaviour``:
+``file_blast_radius``, ``credential_access``, ``network_egress``,
+``privilege_change``. Those read tool ARGUMENTS rather than syscalls, and every
+incident says so. Thresholds are resolved in ``detector_calibration``; what a
+finding costs is computed in ``detector_money``.
+
+The four trajectory detectors:
 
 1. ``stuck_loop``       — TrajAD Type II (circular loops / repeated identical
                           tool calls): K consecutive identical
@@ -52,6 +60,49 @@ import hashlib
 import json
 import os
 from typing import Any, Iterable, Optional
+
+# New in this change, each in its own module so the whole of the new capability
+# is readable in one place and this file keeps its shape.
+from clawmetry.detector_calibration import (  # noqa: F401
+    BASELINE_CEIL_RATIO, BASELINE_FLOOR_RATIO, BASELINE_MIN_SESSIONS,
+    BASELINE_SIGMA, BLAST_RADIUS_FILES, EGRESS_HOST_FANOUT, RUNTIME_PROFILES,
+    resolve_thresholds,
+)
+from clawmetry.detector_surface import (  # noqa: F401
+    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _cmd_sketch,
+    _hosts_from_text, _is_inspect_only, _redact_path, _strip_heredocs,
+)
+from clawmetry.detector_money import (  # noqa: F401
+    CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
+    incident_rank, sort_incidents,
+)
+from clawmetry.detector_behaviour import (  # noqa: F401
+    credential_access, file_blast_radius, network_egress, privilege_change,
+)
+
+# What this module detects, declared once and up front rather than derived at
+# the bottom of the file. Two reasons it is a literal:
+#
+#   * a reader (or a reviewer, or a tool) can learn the module's surface from
+#     its head instead of executing it;
+#   * it makes the registry guard real. Deriving this FROM ``_ALL_DETECTORS``
+#     and then asserting the two agree is a tautology that cannot catch a
+#     detector dropped from the registry. With a literal, that test compares
+#     two independently maintained facts, which is the only version of it
+#     worth running.
+DETECTOR_KINDS = (
+    # Trajectory: is this agent stuck?
+    "stuck_loop",
+    "no_progress",
+    "repeated_tool_failure",
+    "action_discrepancy",
+    # Behaviour: is it doing something it does not normally do?
+    "file_blast_radius",
+    "credential_access",
+    "network_egress",
+    "privilege_change",
+)
+
 
 # ── Tunable thresholds (env-overridable) ─────────────────────────────────────
 # How many newest events any detector will look at. Bounds CPU per session.
@@ -363,11 +414,15 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
         calls = _iter_tool_calls_from_data(et, data)
         if calls:
             for c in calls:
+                tool = str(c.get("tool") or "")
+                paths, cmd, hosts = _action_surface(tool, c.get("args"))
                 steps.append({
                     "i": i, "kind": "tool_call",
-                    "tool": str(c.get("tool") or ""),
+                    "tool": tool,
                     "args_hash": _args_hash(c.get("args")),
                     "is_error": False, "result_text": "", "has_text": False,
+                    # What the call touched; the behavioural detectors read these.
+                    "paths": paths, "cmd": cmd, "hosts": hosts,
                 })
             continue
 
@@ -389,9 +444,79 @@ def _text_looks_failed(text: str) -> bool:
     return any(m in text for m in _FAILURE_TEXT_MARKERS)
 
 
-def _is_write_tool(tool: str) -> bool:
+def _is_write_tool(tool: str, write_tools=None) -> bool:
+    """Does this tool NAME mean a file mutation?
+
+    ``write_tools`` is the resolved per-runtime vocabulary (the global default
+    plus the runtime profile's additions). Passing None keeps the old global
+    behaviour so existing callers are unaffected.
+    """
     t = (tool or "").lower()
-    return any(sub in t for sub in WRITE_TOOL_SUBSTRINGS)
+    vocab = write_tools if write_tools else WRITE_TOOL_SUBSTRINGS
+    return any(sub in t for sub in vocab)
+
+def _step_mutates(step: dict, write_tools=None) -> bool:
+    """Did this step change a file — by tool name OR by shell command?
+
+    The second half is what makes ``no_progress`` correct for shell-first
+    runtimes (codex, picoclaw, nanoclaw and anything else whose edits happen
+    inside ``shell``/``exec``). Before this, a codex session that wrote code
+    through a heredoc looked identical to one that spun for an hour, because
+    neither produced a tool call whose NAME matched a write verb.
+    """
+    if step.get("kind") != "tool_call":
+        return False
+    if _is_write_tool(step.get("tool") or "", write_tools):
+        return True
+    cmd = step.get("cmd") or ""
+    if not cmd:
+        return False
+    return bool(_MUTATING_CMD_RE.search(cmd) or _REDIRECT_WRITE_RE.search(cmd))
+
+def _prepare(events, steps, thresholds, runtime, session_id):
+    """Shared detector preamble: resolve the runtime, its thresholds, and the
+    normalized steps exactly once when the caller has already done the work."""
+    rt = runtime or _runtime_of(session_id)
+    th = thresholds if isinstance(thresholds, dict) else resolve_thresholds(rt)
+    st = steps if steps is not None else normalize_events(events)
+    return rt, th, st
+
+def session_profile(steps: list, write_tools=None) -> dict:
+    """Summarize one session for the cohort baseline it feeds.
+
+    Takes already-normalized steps (the daemon has them; re-parsing 200 events
+    to count them would double the tick cost for nothing) and returns the four
+    numbers ``record_guard_observation`` stores: how many tool calls, how many
+    distinct files mutated, whether it wrote at all, and which external hosts
+    it reached.
+
+    This is the loop that closes gap 03: today's sessions decide what counts as
+    unusual tomorrow. Never raises — an empty profile just means this session
+    teaches the baseline nothing.
+    """
+    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
+    try:
+        files = set()
+        hosts = set()
+        calls = 0
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            for h in st.get("hosts") or ():
+                hosts.add(h)
+            if st.get("kind") != "tool_call" or not st.get("tool"):
+                continue
+            calls += 1
+            if _step_mutates(st, write_tools):
+                out["wrote"] = True
+                for p in st.get("paths") or ():
+                    files.add(p)
+        out["tool_calls"] = calls
+        out["write_files"] = len(files)
+        out["hosts"] = sorted(hosts)[:64]
+    except Exception:
+        return out
+    return out
 
 
 def _runtime_of(session_id: str) -> str:
@@ -408,16 +533,18 @@ def _stop_hint() -> str:
 
 # ── Detector 1: stuck_loop ───────────────────────────────────────────────────
 def stuck_loop(events: Iterable[dict], session_id: str,
-               runtime: Optional[str] = None) -> Optional[dict]:
+               runtime: Optional[str] = None, *, thresholds: Optional[dict] = None,
+               steps: Optional[list] = None,
+               facts: Optional[dict] = None) -> Optional[dict]:
     """Flag a session that is circling: either K consecutive identical
     ``(tool, args_hash)`` calls, or a short repeating n-gram cycle of tool
     names. TrajAD Type II (process inefficiency / circular loops). Pure,
     bounded, never raises."""
     try:
-        steps = normalize_events(events)
-        runtime = runtime or _runtime_of(session_id)
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        identical_k = int(th["identical_k"])
         calls = [s for s in steps if s["kind"] == "tool_call" and s["tool"]]
-        if len(calls) < STUCK_LOOP_IDENTICAL_K:
+        if len(calls) < identical_k:
             return None
 
         # (a) K consecutive identical (tool, args_hash). Track the longest run.
@@ -431,7 +558,7 @@ def stuck_loop(events: Iterable[dict], session_id: str,
             if run > best_run:
                 best_run = run
                 best_end = j
-        if best_run >= STUCK_LOOP_IDENTICAL_K:
+        if best_run >= identical_k:
             first_idx = calls[best_end - best_run + 1]["i"]
             tool = calls[best_end]["tool"]
             title = f"{runtime} looping: {best_run}x identical {tool} calls, no progress"
@@ -440,14 +567,16 @@ def stuck_loop(events: Iterable[dict], session_id: str,
                 f"The agent repeated the same {tool} call {best_run} times in a row "
                 f"without a different action. " + _stop_hint(),
                 {"pattern": "identical", "tool": tool, "repeats": best_run,
-                 "total_tool_calls": len(calls)},
+                 "total_tool_calls": len(calls),
+                 "threshold": identical_k,
+                 "threshold_source": th["sources"]["identical_k"]},
                 first_idx,
             )
 
         # (b) repeating tool-NAME n-gram cycle (e.g. A,B,A,B,A,B).
         names = [c["tool"] for c in calls]
-        cyc = _find_repeating_cycle(names, STUCK_LOOP_MAX_CYCLE,
-                                    STUCK_LOOP_CYCLE_REPEATS)
+        cyc = _find_repeating_cycle(names, int(th["max_cycle"]),
+                                    int(th["cycle_repeats"]))
         if cyc is not None:
             cycle_tools, repeats, start = cyc
             first_idx = calls[start]["i"]
@@ -459,7 +588,9 @@ def stuck_loop(events: Iterable[dict], session_id: str,
                 f"The agent cycled through {label} {repeats} times without "
                 f"breaking out. " + _stop_hint(),
                 {"pattern": "cycle", "cycle": cycle_tools, "repeats": repeats,
-                 "total_tool_calls": len(calls)},
+                 "total_tool_calls": len(calls),
+                 "threshold": int(th["cycle_repeats"]),
+                 "threshold_source": th["sources"]["cycle_repeats"]},
                 first_idx,
             )
         return None
@@ -490,13 +621,20 @@ def _find_repeating_cycle(names: list[str], max_cycle: int,
 
 # ── Detector 2: no_progress ──────────────────────────────────────────────────
 def no_progress(events: Iterable[dict], session_id: str,
-                runtime: Optional[str] = None) -> Optional[dict]:
+                runtime: Optional[str] = None, *, thresholds: Optional[dict] = None,
+                steps: Optional[list] = None,
+                facts: Optional[dict] = None) -> Optional[dict]:
     """Flag a session accruing >= N tool calls in the window with ZERO file
     writes/edits and no completion/end marker since the last user turn (busy
     but not advancing). Pure, bounded, never raises."""
     try:
-        steps = normalize_events(events)
-        runtime = runtime or _runtime_of(session_id)
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        if not th.get("no_progress_enabled", True):
+            # This cohort has never once shown us a file write across a real
+            # sample of sessions, so "zero writes" is a fact about our
+            # visibility, not about the agent. Firing here would flag every
+            # session that runtime ever runs.
+            return None
         # Only consider the tail since the most recent user turn or end marker —
         # a fresh prompt resets "progress". Walk from the end backward.
         tail: list[dict] = []
@@ -507,9 +645,10 @@ def no_progress(events: Iterable[dict], session_id: str,
         tail.reverse()
 
         tool_calls = [s for s in tail if s["kind"] == "tool_call" and s["tool"]]
-        if len(tool_calls) < NO_PROGRESS_TOOL_CALLS:
+        threshold = int(th["no_progress_tools"])
+        if len(tool_calls) < threshold:
             return None
-        wrote = any(_is_write_tool(s["tool"]) for s in tool_calls)
+        wrote = any(_step_mutates(s, th.get("write_tools")) for s in tool_calls)
         if wrote:
             return None
         # An ``end`` in the tail would have broken the loop above, so reaching
@@ -522,7 +661,9 @@ def no_progress(events: Iterable[dict], session_id: str,
             f"The agent has made {n} tool calls without writing or editing any "
             f"file and without finishing. It may be busy but not making "
             f"progress. " + _stop_hint(),
-            {"tool_calls": n, "writes": 0},
+            {"tool_calls": n, "writes": 0, "threshold": threshold,
+             "threshold_source": th["sources"]["no_progress_tools"],
+             "baseline": th.get("baseline", {}).get("tool_calls")},
             first_idx,
         )
     except Exception:
@@ -531,13 +672,15 @@ def no_progress(events: Iterable[dict], session_id: str,
 
 # ── Detector 3: repeated_tool_failure ────────────────────────────────────────
 def repeated_tool_failure(events: Iterable[dict], session_id: str,
-                          runtime: Optional[str] = None) -> Optional[dict]:
+                          runtime: Optional[str] = None, *,
+                          thresholds: Optional[dict] = None,
+                          steps: Optional[list] = None,
+                          facts: Optional[dict] = None) -> Optional[dict]:
     """Flag when the SAME tool returns an error >= M times in the window.
     A tool_result with no ``tool`` name is attributed to the most recent
     preceding tool_call's tool. Pure, bounded, never raises."""
     try:
-        steps = normalize_events(events)
-        runtime = runtime or _runtime_of(session_id)
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
         counts: dict[str, int] = {}
         first_idx_by_tool: dict[str, int] = {}
         last_call_tool = ""
@@ -551,7 +694,7 @@ def repeated_tool_failure(events: Iterable[dict], session_id: str,
                 first_idx_by_tool.setdefault(tool, s["i"])
                 if not worst_tool or counts[tool] > counts.get(worst_tool, 0):
                     worst_tool = tool
-        if not worst_tool or counts.get(worst_tool, 0) < REPEATED_FAILURE_M:
+        if not worst_tool or counts.get(worst_tool, 0) < int(th["repeat_fail_m"]):
             return None
         fails = counts[worst_tool]
         title = f"{worst_tool} failed {fails} times"
@@ -559,7 +702,9 @@ def repeated_tool_failure(events: Iterable[dict], session_id: str,
             "repeated_tool_failure", session_id, runtime, "warning", title,
             f"The {worst_tool} tool returned an error {fails} times in this "
             f"session. The agent may be stuck on a failing step. " + _stop_hint(),
-            {"tool": worst_tool, "failures": fails},
+            {"tool": worst_tool, "failures": fails,
+             "threshold": int(th["repeat_fail_m"]),
+             "threshold_source": th["sources"]["repeat_fail_m"]},
             first_idx_by_tool.get(worst_tool),
         )
     except Exception:
@@ -568,7 +713,10 @@ def repeated_tool_failure(events: Iterable[dict], session_id: str,
 
 # ── Detector 4: action_discrepancy (NARROW, honest hallucination signal) ──────
 def action_discrepancy(events: Iterable[dict], session_id: str,
-                       runtime: Optional[str] = None) -> Optional[dict]:
+                       runtime: Optional[str] = None, *,
+                       thresholds: Optional[dict] = None,
+                       steps: Optional[list] = None,
+                       facts: Optional[dict] = None) -> Optional[dict]:
     """Flag the defensible "agent proceeded as if a failed tool succeeded" case
     (TRAIL tool-related hallucination branch): a tool_result indicating FAILURE
     immediately followed by the agent continuing (another tool call OR a
@@ -581,8 +729,7 @@ def action_discrepancy(events: Iterable[dict], session_id: str,
     this is severity 'info', and the wording never claims "hallucination" with
     false confidence. Pure, bounded, never raises."""
     try:
-        steps = normalize_events(events)
-        runtime = runtime or _runtime_of(session_id)
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
         n = len(steps)
         last_call_tool = ""
         last_call_hash = ""
@@ -646,36 +793,68 @@ def action_discrepancy(events: Iterable[dict], session_id: str,
 
 # ── Orchestration ────────────────────────────────────────────────────────────
 _ALL_DETECTORS = (
+    # Trajectory shape: is this agent stuck?
     stuck_loop,
     no_progress,
     repeated_tool_failure,
     action_discrepancy,
+    # Behaviour: is this agent doing something it does not normally do?
+    file_blast_radius,
+    credential_access,
+    network_egress,
+    privilege_change,
 )
 
-_SEVERITY_RANK = {"warning": 0, "info": 1}
-
-
 def run_all(events: Iterable[dict], session_id: str,
-            runtime: Optional[str] = None) -> list[dict]:
+            runtime: Optional[str] = None, *,
+            facts: Optional[dict] = None,
+            baseline: Optional[dict] = None,
+            thresholds: Optional[dict] = None,
+            steps: Optional[list] = None) -> list[dict]:
     """Run every detector over a session's recent events and return the
-    incidents found, ordered by severity (warning first). ``events`` is the
-    store's newest-first ``query_events`` output. Materializes ``events`` once
-    so the iterator is reusable across detectors. Never raises."""
+    incidents found, most expensive to ignore first.
+
+    ``events`` is the store's newest-first ``query_events`` output.
+    ``facts`` carries what the detectors cannot see for themselves —
+    ``cost_usd``, ``bad_for_seconds``, ``session_seconds``, ``cwd``.
+    ``baseline`` is this cohort's learned normal (see
+    ``local_store.query_guard_baseline``); absent, static thresholds apply.
+
+    Normalization happens ONCE here and is shared with every detector, so
+    adding detectors five through eight did not multiply the per-tick cost by
+    two — the parse was always the expensive part.
+
+    Never raises.
+    """
     try:
         evlist = list(events)
     except Exception:
         return []
     rt = runtime or _runtime_of(session_id)
+    th = thresholds if isinstance(thresholds, dict) else resolve_thresholds(rt, baseline)
+    if steps is None:
+        try:
+            steps = normalize_events(evlist)
+        except Exception:
+            steps = []
+    f = facts if isinstance(facts, dict) else {}
+
     out: list[dict] = []
     for det in _ALL_DETECTORS:
         try:
-            inc = det(evlist, session_id, rt)
+            inc = det(evlist, session_id, rt, thresholds=th, steps=steps, facts=f)
         except Exception:
             inc = None
         if inc:
             out.append(inc)
-    out.sort(key=lambda c: _SEVERITY_RANK.get(c.get("severity"), 9))
-    return out
+
+    return annotate_spend(
+        out,
+        cost_usd=f.get("cost_usd") or 0.0,
+        bad_for_seconds=f.get("bad_for_seconds") or 0.0,
+        session_seconds=f.get("session_seconds") or 0.0,
+        window_steps=len(steps),
+    )
 
 
 def _incident(kind: str, session_id: str, runtime: str, severity: str,

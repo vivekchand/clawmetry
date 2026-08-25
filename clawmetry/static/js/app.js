@@ -10241,6 +10241,36 @@ var _loopSignalsExpanded = false;
 var _loopSignalsNotifiedSig = null;
 var _loopSignalsPermissionAsked = false;
 
+// Plain words for each detector kind. The stored signature is an internal id
+// ("daemon_detect_file_blast_radius"); nobody opening this for the first time
+// should have to decode it.
+var LOOP_KIND_LABEL = {
+  stuck_loop: 'Repeating itself',
+  no_progress: 'Busy but not finishing',
+  repeated_tool_failure: 'The same step keeps failing',
+  action_discrepancy: 'Carried on after a failure',
+  file_blast_radius: 'Changed a lot of files at once',
+  credential_access: 'Opened a password or key file',
+  network_egress: 'Contacted somewhere new',
+  privilege_change: 'Asked for admin rights'
+};
+
+// What ignoring this is estimated to cost. Blank when we do not know, because
+// a made-up number is worse than an honest gap.
+function loopMoney(n) {
+  var v = Number(n) || 0;
+  if (v <= 0) return '';
+  return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
+}
+
+function loopBasisHint(basis) {
+  if (basis === 'burn_rate') return 'Measured: this session spend rate over the time it has been off track.';
+  // Say plainly that this one is rough, because it is the reason the row is
+  // not marked critical however large the number looks.
+  if (basis === 'window_fraction') return 'Rough guide only: the session cost shared across the flagged part of the window. Too approximate to raise the alert level on its own.';
+  return 'We do not have cost data for this session.';
+}
+
 function _loopSignalsMaybeNotify(rows) {
   if (!rows || !rows.length) return;
   if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -10299,19 +10329,31 @@ async function loadLoopSignals() {
     // for an alerts upsell.
     _loopSignalsMaybeNotify(rows);
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
-    var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
-      + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';
+    // Ordered by what it costs to ignore (the API sorts; we just render).
+    var totalRisk = loopMoney(data && data.spend_at_risk_usd);
+    var head = '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
+      + '<div>Last seen</div><div>Session</div><div>What happened</div>'
+      + '<div style="text-align:right;" title="Estimated cost of the flagged stretch, not the whole session.">At risk</div>'
+      + '<div style="text-align:right;">Repeats</div></div>';
     var body = rows.map(function(r) {
       var ts = r.last_seen || r.first_seen || '';
       try { ts = new Date(ts).toLocaleString(); } catch (e) {}
       var sid = String(r.session_id || '').slice(0, 16);
-      var sig = String(r.signature || '');
-      if (sig.length > 60) sig = sig.slice(0, 57) + '...';
+      // Prefer the detector headline, then a plain-words kind label, and only
+      // fall back to the raw signature for proxy-emitted rows that have
+      // neither.
+      var what = String(r.title || '') || LOOP_KIND_LABEL[r.kind] || String(r.signature || '');
+      if (what.length > 70) what = what.slice(0, 67) + '...';
       var rc = r.repeat_count != null ? r.repeat_count : '-';
-      return '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
+      var risk = loopMoney(r.spend_at_risk_usd);
+      var riskCell = risk
+        ? '<span title="' + escHtml(loopBasisHint(r.spend_basis)) + '">' + escHtml(risk) + '</span>'
+        : '<span style="color:var(--text-muted);" title="' + escHtml(loopBasisHint('')) + '">no cost data</span>';
+      return '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
         + '<div style="color:var(--text-muted);">' + escHtml(ts) + '</div>'
         + '<div style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.session_id || '')) + '">' + escHtml(sid) + '</div>'
-        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.signature || '')) + '">' + escHtml(sig) + '</div>'
+        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.detail || r.signature || '')) + '">' + escHtml(what) + '</div>'
+        + '<div style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">' + riskCell + '</div>'
         + '<div style="text-align:right;color:#ef4444;font-weight:700;">' + escHtml(String(rc)) + '</div>'
         + '</div>';
     }).join('');
@@ -10330,7 +10372,13 @@ async function loadLoopSignals() {
         + '<a href="https://app.clawmetry.com/upgrade?ref=loops" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">Unlock loop history and alerts in Cloud-Pro</a>'
         + '</div>';
     }
-    tableEl.innerHTML = head + body + cta;
+    // Lead with the money when we have it: the first thing a reader wants to
+    // know is not how many loops there were, it is what they are costing.
+    var summary = totalRisk
+      ? '<div style="padding:6px 0 8px;font-size:12px;color:var(--text-secondary);">About ' + escHtml(totalRisk)
+        + ' of spend is tied up in what is listed below. Stopping an agent here stops that meter.</div>'
+      : '';
+    tableEl.innerHTML = summary + head + body + cta;
   } catch (e) {
     // Fail closed: hide the badge so we don't show a stale or wrong count.
     badge.style.display = 'none';
