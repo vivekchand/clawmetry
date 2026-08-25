@@ -221,3 +221,49 @@ def test_the_daemon_prune_loop_reads_this_resolver():
     src = inspect.getsource(sync)
     assert "retention as _ret" in src
     assert "_ret.resolve(store=store)" in src
+
+
+# ── the hosted dashboard must not offer a control it cannot honour ──────
+
+def _app_js():
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent
+            / "clawmetry" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+
+def _security_html():
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent
+            / "clawmetry" / "templates" / "tabs" / "security.html"
+            ).read_text(encoding="utf-8")
+
+
+def test_hosted_panel_hides_the_control_it_cannot_honour():
+    """On cloud there is no node to write to, so the input and its buttons
+    must not render. Offering a Save that always fails is worse than not
+    offering one."""
+    html = _security_html()
+    assert 'id="retention-controls"' in html, (
+        "the editable controls need their own id so the hosted view can hide them"
+    )
+    js = _app_js()
+    i = js.index("function _renderRetention(")
+    body = js[i:i + 2000]
+    assert "window.CLOUD_MODE" in body
+    assert "retention-controls" in body
+
+
+def test_hosted_panel_does_not_state_the_plan_number_as_the_machines_setting():
+    """The hosted answer comes from the entitlement alone and cannot see a
+    shorter period set on the machine. It must be worded as the plan's
+    period, not as what this machine actually does."""
+    js = _app_js()
+    i = js.index("function _renderRetention(")
+    body = js[i:i + 2000]
+    assert "Your plan keeps event history" in body
+    assert "on the machine itself" in body
+    # and it must read cap_days (the plan ceiling), never effective_days,
+    # which on cloud is the same number wearing a claim it cannot support.
+    cloud_branch = body[body.index("window.CLOUD_MODE"):body.index("label.textContent = (state")]
+    assert "cap_days" in cloud_branch
+    assert "effective_days" not in cloud_branch
