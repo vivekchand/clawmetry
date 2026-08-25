@@ -10347,6 +10347,25 @@ function loopMoney(n) {
   return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
 }
 
+// The "At risk" cell, with its basis on it. The API sends a provenance entry
+// per row (routes/health.py::_loop_signal_enriched translates the detector's
+// own spend_basis), so the same badge that labels the Cost tab labels this,
+// and a signal nobody could price arrives as null rather than as $0.00.
+function loopRiskCell(row) {
+  var entry = (window.cmProv && window.cmProv.of(row, 'spend_at_risk_usd')) || null;
+  if (window.cmProv) {
+    return window.cmProv.figure(row.spend_at_risk_usd, entry, {
+      label: 'Spend at risk',
+      compact: true,
+      emptyText: 'no cost data'
+    });
+  }
+  var risk = loopMoney(row.spend_at_risk_usd);
+  return risk
+    ? '<span title="' + escHtml(loopBasisHint(row.spend_basis)) + '">' + escHtml(risk) + '</span>'
+    : '<span style="color:var(--text-muted);" title="' + escHtml(loopBasisHint('')) + '">no cost data</span>';
+}
+
 function loopBasisHint(basis) {
   if (basis === 'burn_rate') return 'Measured: this session spend rate over the time it has been off track.';
   // Say plainly that this one is rough, because it is the reason the row is
@@ -10415,6 +10434,12 @@ async function loadLoopSignals() {
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
     // Ordered by what it costs to ignore (the API sorts; we just render).
     var totalRisk = loopMoney(data && data.spend_at_risk_usd);
+    // The total is a FLOOR when some signals could not be priced; the badge
+    // carries that caveat (routes/health.py counts the unpriced ones).
+    var totalRiskHtml = window.cmProv
+      ? window.cmProv.money(data || {}, 'spend_at_risk_usd',
+                            { label: 'Total spend at risk', compact: true })
+      : escHtml(totalRisk);
     var head = '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
       + '<div>Last seen</div><div>Session</div><div>What happened</div>'
       + '<div style="text-align:right;" title="Estimated cost of the flagged stretch, not the whole session.">At risk</div>'
@@ -10429,10 +10454,7 @@ async function loadLoopSignals() {
       var what = String(r.title || '') || LOOP_KIND_LABEL[r.kind] || String(r.signature || '');
       if (what.length > 70) what = what.slice(0, 67) + '...';
       var rc = r.repeat_count != null ? r.repeat_count : '-';
-      var risk = loopMoney(r.spend_at_risk_usd);
-      var riskCell = risk
-        ? '<span title="' + escHtml(loopBasisHint(r.spend_basis)) + '">' + escHtml(risk) + '</span>'
-        : '<span style="color:var(--text-muted);" title="' + escHtml(loopBasisHint('')) + '">no cost data</span>';
+      var riskCell = loopRiskCell(r);
       return '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
         + '<div style="color:var(--text-muted);">' + escHtml(ts) + '</div>'
         + '<div style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.session_id || '')) + '">' + escHtml(sid) + '</div>'
@@ -17816,15 +17838,23 @@ async function loadUsage() {
       }
     }
 
-    var costLabel = data.source === 'otlp' ? 'Telemetry Cost' : 'Estimated Cost';
+    // The cost column no longer needs a label that guesses ("Estimated
+    // Cost"): each cell now carries its own basis, which is the accurate
+    // version of what that heading was reaching for.
+    var costLabel = 'Cost';
+    var _cmCell = function (key, name) {
+      return window.cmProv
+        ? window.cmProv.money(data, key, { label: name })
+        : fmtCost(data[key]);
+    };
     var tableHtml = '<thead><tr><th>Period</th><th>Tokens</th><th>' + costLabel + '</th></tr></thead><tbody>';
-    tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + fmtCost(data.todayCost) + '</td></tr>';
-    tableHtml += '<tr><td>This Week</td><td>' + fmtTokens(data.week) + '</td><td>' + fmtCost(data.weekCost) + '</td></tr>';
-    tableHtml += '<tr><td>This Month</td><td>' + fmtTokens(data.month) + '</td><td>' + fmtCost(data.monthCost) + '</td></tr>';
+    tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + _cmCell('todayCost', 'Cost today') + '</td></tr>';
+    tableHtml += '<tr><td>This Week</td><td>' + fmtTokens(data.week) + '</td><td>' + _cmCell('weekCost', 'Cost this week') + '</td></tr>';
+    tableHtml += '<tr><td>This Month</td><td>' + fmtTokens(data.month) + '</td><td>' + _cmCell('monthCost', 'Cost this month') + '</td></tr>';
     tableHtml += '</tbody>';
     document.getElementById('usage-cost-table').innerHTML = tableHtml;
     // Issue #68 — per-session cost breakdown table.
-    renderTopSessionsByCost(data.sessions || []);
+    renderTopSessionsByCost(data.sessions || [], data);
     // OTLP-specific sections
     var otelExtra = document.getElementById('otel-extra-sections');
     if (data.source === 'otlp') {
@@ -17968,10 +17998,19 @@ function _renderUsageCapCTA(capped) {
 // Issue #68 — render "Top sessions by cost" table on the Usage tab.
 // Rows come straight from /api/usage's new ``sessions`` array, already
 // sorted desc by total_cost_usd server-side.
-function renderTopSessionsByCost(rows) {
+function renderTopSessionsByCost(rows, usageData) {
   var el = document.getElementById('usage-top-sessions-table');
   if (!el) return;
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // One money formatter for the whole app lives in static/js/provenance.js;
+  // this is the local fallback for a cached page that predates it.
+  function fmtCost(c) {
+    if (window.cmProv) return window.cmProv.fmtMoney(c);
+    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
+  }
+  // Every row in this table was priced the same way, so the basis belongs on
+  // the column heading rather than repeated down forty rows.
+  var costEntry = (window.cmProv && usageData)
+    ? window.cmProv.of(usageData, 'sessions[].total_cost_usd') : null;
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   function fmtDate(iso) {
     if (!iso) return '—';
@@ -17987,7 +18026,10 @@ function renderTopSessionsByCost(rows) {
     + '<th>Agent</th>'
     + '<th>Model</th>'
     + '<th style="text-align:right;">Tokens</th>'
-    + '<th style="text-align:right;">Cost</th>'
+    + '<th style="text-align:right;">Cost'
+    + ((costEntry && window.cmProv)
+        ? window.cmProv.badge(costEntry, { label: 'Session cost' }) : '')
+    + '</th>'
     + '<th style="text-align:right;">Msgs</th>'
     + '<th>Started</th>'
     + '</tr></thead><tbody>';
@@ -17999,7 +18041,12 @@ function renderTopSessionsByCost(rows) {
       + '<td>' + escHtml(r.agent_id || '—') + '</td>'
       + '<td>' + (r.model ? '<span class="badge model">' + escHtml(r.model) + '</span>' : '—') + '</td>'
       + '<td style="text-align:right;">' + fmtTokens(r.total_tokens || 0) + '</td>'
-      + '<td style="text-align:right;font-weight:600;">' + fmtCost(r.total_cost_usd || 0) + '</td>'
+      + '<td style="text-align:right;font-weight:600;">'
+        + (window.cmProv
+            ? window.cmProv.figure(r.total_cost_usd, costEntry,
+                                   { label: 'Session cost', noBadge: true })
+            : fmtCost(r.total_cost_usd || 0))
+        + '</td>'
       + '<td style="text-align:right;">' + (r.message_count || 0) + '</td>'
       + '<td style="color:var(--text-muted);font-size:12px;">' + escHtml(fmtDate(r.started_at)) + '</td>'
       + '</tr>';
