@@ -91,21 +91,37 @@ def _durable_phases(name: str, session_ids) -> dict:
 
 
 def _apply_phase(payload: dict, durable: dict) -> dict:
-    """Overlay the durable transition time (and its provenance) onto one
-    serialized session.
+    """Overlay the durable record onto one serialized session.
 
-    ``phaseSince`` comes from the store and nowhere else. Deriving it here from
-    the current request would restart every duration on every page load, which
-    is the one number this model exists to make trustworthy.
+    Who wins what:
+
+    * ``phaseSince``, ``initialCwd`` and ``resolvable`` come from the store and
+      nowhere else. Deriving a transition time here would restart every
+      duration on every page load, which is the one number this model exists to
+      make trustworthy.
+    * The **phase** prefers the fresher answer. This request has just read the
+      session; the stored row is from the daemon's last pass, up to a tick ago.
+      A session that asked for permission ten seconds ago must not be reported
+      as still working because that is what the daemon last saw.
+    * When the two disagree, the stored transition time is reported as
+      **unknown**. It belongs to the phase the session has just left, and
+      printing it would claim "waiting for 14 minutes" about a state entered
+      seconds ago -- a fabricated duration, which is worse than none.
     """
     if not durable:
         return payload
-    payload["phaseSince"] = durable.get("phaseSince")
-    if durable.get("phase"):
-        payload["phase"] = durable.get("phase")
-        payload["phaseBasis"] = durable.get("phaseBasis") or payload.get("phaseBasis") or ""
-    if durable.get("status"):
-        payload["status"] = durable.get("status")
+    fresh = payload.get("phase")
+    stored = durable.get("phase")
+    if fresh and stored and fresh != stored:
+        payload["phaseSince"] = None
+    else:
+        payload["phaseSince"] = durable.get("phaseSince")
+        if stored and not fresh:
+            payload["phase"] = stored
+            payload["phaseBasis"] = (durable.get("phaseBasis")
+                                     or payload.get("phaseBasis") or "")
+            if durable.get("status"):
+                payload["status"] = durable.get("status")
     if durable.get("initialCwd"):
         payload["initialCwd"] = durable.get("initialCwd")
     if durable.get("endReason") and not payload.get("endReason"):

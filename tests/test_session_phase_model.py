@@ -611,3 +611,47 @@ def test_openclaws_own_end_reason_beats_a_recent_write(openclaw_workspace):
     assert row["phaseBasis"] == "asserted-end"
     assert row["endReason"] == "user_stopped"
     assert ph.end_reason_kind(row["endReason"]) == ph.END_SESSION_END
+
+
+def test_a_fresher_observation_beats_the_stored_phase(monkeypatch):
+    """The request has just read the session; the row is up to a tick old.
+
+    A session that asked for permission ten seconds ago must not be served as
+    still working because that is what the daemon last saw -- and the stored
+    transition time must NOT be carried across, because it belongs to the phase
+    the session has just left.
+    """
+    now = time.time()
+    asking = Session(agent="codex", id="w", started_at=now - 900,
+                     ended_at=now - 2, phase=ph.PHASE_WAITING,
+                     status="permission_requested")
+    rows = [{
+        "sessionId": "codex:w", "runtime": "codex", "phase": "working",
+        "status": "tool_use", "phaseBasis": "recency",
+        "phaseSince": now - 840, "endReason": "", "resolvable": None,
+        "initialCwd": "/repo/api", "cwd": "/repo/api", "observedAt": now - 55,
+    }]
+    app = _app_with(_FakeAdapter([asking]), monkeypatch, durable_rows=rows)
+    with app.test_client() as c:
+        served = c.get("/api/agents/codex/sessions").get_json()["sessions"][0]
+    assert served["phase"] == ph.PHASE_WAITING
+    assert served["status"] == "permission_requested"
+    assert served["phaseSince"] is None      # unknown, never the stale stamp
+    assert served["initialCwd"] == "/repo/api"  # the store still owns this
+
+
+def test_the_stored_phase_fills_in_where_this_read_cannot_tell(monkeypatch):
+    now = time.time()
+    blind = Session(agent="codex", id="b")  # no timestamps: unknown right now
+    rows = [{
+        "sessionId": "codex:b", "runtime": "codex", "phase": "waiting",
+        "status": "permission_requested", "phaseBasis": "adapter",
+        "phaseSince": now - 300, "endReason": "", "resolvable": True,
+        "initialCwd": "", "cwd": "", "observedAt": now - 30,
+    }]
+    app = _app_with(_FakeAdapter([blind]), monkeypatch, durable_rows=rows)
+    with app.test_client() as c:
+        served = c.get("/api/agents/codex/sessions").get_json()["sessions"][0]
+    assert served["phase"] == ph.PHASE_WAITING
+    assert served["phaseBasis"] == "adapter"
+    assert served["phaseSince"] == pytest.approx(now - 300)
