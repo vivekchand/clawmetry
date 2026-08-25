@@ -1365,7 +1365,69 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_guard_hosts_cohort ON guard_egress_hosts(cohort, last_seen)",
+    # ── Session phase (one state machine, every runtime) ──────────────────
+    # Its own table, not columns on ``sessions``: the phase is observed on a
+    # different cadence than the session row, three work orders are adding
+    # tables to this module at once, and an additive migration merges where an
+    # edit to the shared session schema would not.
+    #
+    # ``phase_since`` is the reason this table exists at all. It is the moment
+    # the session ENTERED its current phase, and it must survive a daemon
+    # restart -- recompute it per pass and every "waiting on you for 14
+    # minutes" resets to zero exactly when someone comes back to look. Writers
+    # keep the stored value when the phase is unchanged (see
+    # ``record_session_phase``).
+    #
+    # ``initial_cwd`` is written on the FIRST sighting and never rewritten, so
+    # it stays comparable against where the session is running now.
+    """
+    CREATE TABLE IF NOT EXISTS session_phase (
+        session_id   VARCHAR PRIMARY KEY,
+        runtime      VARCHAR,
+        phase        VARCHAR,
+        status       VARCHAR,
+        phase_basis  VARCHAR,
+        phase_since  BIGINT,
+        end_reason   VARCHAR,
+        resolvable   BOOLEAN,
+        initial_cwd  VARCHAR,
+        cwd          VARCHAR,
+        observed_at  BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_phase_phase ON session_phase(phase, phase_since DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_session_phase_runtime ON session_phase(runtime, observed_at DESC)",
 ]
+
+
+def _session_phase_row(row) -> dict:
+    """One ``session_phase`` row as the shape every reader uses.
+
+    Timestamps come back in SECONDS to match ``startedAt`` / ``endedAt`` in the
+    same session object -- the column is milliseconds because every other
+    timestamp column here is. ``phase`` stays ``None`` when the store holds
+    NULL: "we could not tell" is preserved, never rendered as a phase.
+    """
+    if not row:
+        return {}
+    def _secs(v):
+        try:
+            return float(v) / 1000.0 if v else None
+        except (TypeError, ValueError):
+            return None
+    return {
+        "sessionId": row[0],
+        "runtime": row[1] or "",
+        "phase": row[2] or None,
+        "status": row[3] or None,
+        "phaseBasis": row[4] or "",
+        "phaseSince": _secs(row[5]),
+        "endReason": row[6] or "",
+        "resolvable": None if row[7] is None else bool(row[7]),
+        "initialCwd": row[8] or "",
+        "cwd": row[9] or "",
+        "observedAt": _secs(row[10]),
+    }
 
 
 # ── Schema migrations (v1 → v2) ────────────────────────────────────────────
@@ -4438,6 +4500,130 @@ class LocalStore:
         except Exception:
             return 0
         return removed
+    # ── Session phase (see clawmetry/adapters/phase.py) ──────────────────
+
+    def record_session_phase(self, session_id: str, phase: Any = None,
+                             runtime: str = "", status: Any = None,
+                             phase_basis: str = "", end_reason: str = "",
+                             resolvable: Any = None, initial_cwd: str = "",
+                             cwd: str = "",
+                             observed_at: Any = None) -> dict[str, Any]:
+        """Record what one session's phase looks like NOW, and return the
+        durable row -- including the authoritative ``phase_since``.
+
+        Two invariants, and they are the whole point of the table:
+
+        * **A transition is stamped once.** When the observed phase equals the
+          stored one, ``phase_since`` is left alone. Only a genuine change
+          moves it. The daemon re-reads an active session every tick and
+          restarts on every upgrade; recomputing this would reset "waiting on
+          you for 14 minutes" to zero precisely when someone came back to look.
+        * **``initial_cwd`` is written once.** ``COALESCE`` keeps the first
+          non-empty value forever, so it stays comparable against ``cwd``
+          (where the session is running now). Seeding it from the current
+          directory on a re-read would make the two equal by construction.
+
+        A phase of ``None`` is recorded as NULL, not coerced to a quiet
+        default: "we could not tell" is an answer this table stores.
+
+        Never raises. A phase that fails to record degrades to a session with
+        no durable transition time, which reads as unknown rather than as
+        wrong.
+        """
+        sid = str(session_id or "").strip()[:256]
+        if not sid:
+            return {}
+        try:
+            now_ms = (int(float(observed_at) * 1000) if observed_at
+                      else int(time.time() * 1000))
+        except (TypeError, ValueError):
+            now_ms = int(time.time() * 1000)
+        ph = str(phase).strip().lower()[:32] if phase else None
+        st = str(status).strip().lower()[:64] if status else None
+        res = None if resolvable is None else bool(resolvable)
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO session_phase (
+                        session_id, runtime, phase, status, phase_basis,
+                        phase_since, end_reason, resolvable, initial_cwd, cwd,
+                        observed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        runtime     = excluded.runtime,
+                        phase       = excluded.phase,
+                        status      = excluded.status,
+                        phase_basis = excluded.phase_basis,
+                        -- The transition stamp: kept when the phase is
+                        -- unchanged, moved only when it actually changed.
+                        -- IS NOT DISTINCT FROM so NULL (unknown) compares
+                        -- equal to NULL and an unreadable session does not
+                        -- re-stamp itself every tick.
+                        phase_since = CASE
+                            WHEN session_phase.phase IS NOT DISTINCT FROM excluded.phase
+                            THEN COALESCE(session_phase.phase_since, excluded.phase_since)
+                            ELSE excluded.phase_since END,
+                        end_reason  = excluded.end_reason,
+                        resolvable  = excluded.resolvable,
+                        -- Written once, on the first sighting.
+                        initial_cwd = COALESCE(
+                            NULLIF(session_phase.initial_cwd, ''),
+                            NULLIF(excluded.initial_cwd, '')),
+                        cwd         = excluded.cwd,
+                        observed_at = excluded.observed_at
+                """, [sid, str(runtime or "")[:64], ph, st,
+                      str(phase_basis or "")[:32], now_ms,
+                      str(end_reason or "")[:128], res,
+                      str(initial_cwd or cwd or "")[:1024],
+                      str(cwd or "")[:1024], now_ms])
+                row = self._conn.execute("""
+                    SELECT session_id, runtime, phase, status, phase_basis,
+                           phase_since, end_reason, resolvable, initial_cwd,
+                           cwd, observed_at
+                      FROM session_phase WHERE session_id = ?
+                """, [sid]).fetchone()
+        except Exception:
+            return {}
+        return _session_phase_row(row)
+
+    def query_session_phases(self, session_ids: Any = None, runtime: str = "",
+                             phase: str = "",
+                             limit: int = 500) -> list[dict[str, Any]]:
+        """Read durable phase rows. Newest observation first.
+
+        ``session_ids`` narrows to an explicit set (what a session listing
+        needs); ``runtime`` / ``phase`` narrow a browse. Returns ``[]`` rather
+        than raising, so a store that is cold or locked paints an empty state
+        instead of an error.
+        """
+        try:
+            lim = max(1, min(5000, int(limit or 500)))
+        except (TypeError, ValueError):
+            lim = 500
+        where, params = [], []
+        ids = [str(s)[:256] for s in (session_ids or []) if s]
+        if ids:
+            where.append("session_id IN (" + ",".join("?" * len(ids[:1000])) + ")")
+            params.extend(ids[:1000])
+        if runtime:
+            where.append("runtime = ?")
+            params.append(str(runtime)[:64])
+        if phase:
+            where.append("phase = ?")
+            params.append(str(phase).strip().lower()[:32])
+        sql = ("SELECT session_id, runtime, phase, status, phase_basis, "
+               "phase_since, end_reason, resolvable, initial_cwd, cwd, "
+               "observed_at FROM session_phase")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY observed_at DESC LIMIT ?"
+        params.append(lim)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except Exception:
+            return []
+        return [_session_phase_row(r) for r in rows]
+
     def ingest_alert_rule(self, rule: dict[str, Any]) -> None:
         """Upsert one alert rule. Required: ``id``.
 
