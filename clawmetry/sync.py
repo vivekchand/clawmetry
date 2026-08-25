@@ -7170,6 +7170,23 @@ def _build_node_meta() -> dict:
         meta.update(_machine_specs())
     except Exception:
         pass
+    # Which secret opens this machine's shareable content. The FINGERPRINT
+    # only -- a hash of the key, never the key. It rides the plaintext
+    # heartbeat on purpose: a member who holds the wrong organisation key must
+    # be told exactly that, and the cloud cannot say so about a secret it has
+    # no identifier for. The alternative is the screen we already ship for a
+    # teammate's node: empty, with no way to tell "no sessions" from "wrong
+    # key". A hash of a 256-bit random key is not a way back to the key.
+    try:
+        from clawmetry import org_key as _ok
+
+        _cfg_ok = load_config() or {}
+        meta["content_key_scope"] = "organisation" if _ok.is_org_sealed(_cfg_ok) else "node"
+        _fp = _ok.fingerprint(_ok.content_key(_cfg_ok))
+        if _fp:
+            meta["content_key_fingerprint"] = _fp
+    except Exception:
+        pass
     # Pro-adapter + auto-update status so the cloud Fleet can show whether an
     # entitled node is actually running clawmetry-pro (the paid runtime
     # adapters) and keeping itself current — turning the "I'm on Pro but Claude
