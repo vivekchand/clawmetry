@@ -4623,14 +4623,44 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker 
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // 💰 Cost Ticker
+  function fmtCost(c) {
+    if (window.cmProv) return window.cmProv.fmtMoney(c);
+    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
+  }
+  // How these three numbers were obtained, on the tile's label. One badge for
+  // the tile: today, week and month all come out of the same rollup by the
+  // same rule, so they share a basis.
+  var _costEntry = window.cmProv ? window.cmProv.of(usage, 'todayCost') : null;
+  var _costUnknown = window.cmProv ? window.cmProv.isUnknown(_costEntry) : false;
+  var _basisEl = document.getElementById('cost-basis-badge');
+  if (_basisEl && window.cmProv) {
+    _basisEl.innerHTML = window.cmProv.badge(_costEntry, { label: 'Cost' });
+  }
   // Record the value we actually rendered so the hero can tell a real $0.00
-  // from the '$0.00' placeholder it would otherwise read off the DOM.
-  window._cmCostTodayRaw = Number(usage.todayCost || 0);
-  document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
-  document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
-  document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
+  // from the placeholder it would otherwise read off the DOM. When the cost
+  // is UNKNOWN there is no value to record: leaving a 0 here would have the
+  // hero announce "$0.00, free on your plan" over a spend nobody could read.
+  if (_costUnknown || usage.todayCost == null) {
+    window._cmCostTodayRaw = null;
+  } else {
+    window._cmCostTodayRaw = Number(usage.todayCost || 0);
+  }
+  var _setCost = function (id, value, label) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (window.cmProv) {
+      // noBadge: the tile's single label badge already says how, and the
+      // figure keeps a plain textContent so the hero can read it back.
+      el.innerHTML = window.cmProv.figure(value, _costEntry,
+                                          { label: label, noBadge: true });
+    } else {
+      el.textContent = fmtCost(value || 0);
+    }
+  };
+  _setCost('cost-today', usage.todayCost, 'Cost today');
+  _setCost('cost-week', usage.weekCost, 'Cost this week');
+  _setCost('cost-month', usage.monthCost, 'Cost this month');
   
   var trend = '';
   if (usage.trend && usage.trend.trend) {
@@ -4758,10 +4788,35 @@ async function loadMiniWidgets(overview, usage) {
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
         window._cmCostTodayRaw = Number(_scope.cost || 0);
-        _set('cost-today', '$' + _scope.cost.toFixed(2));
+        _set('cost-today', fmtCost(_scope.cost));
         // SPENDING wk/mo sub-figures scope too (were node-wide projections).
         if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
         if (_scope.costMonth != null) _set('cost-month', fmtCost(_scope.costMonth));
+        // These three came from the runtime-scoped API, not the payload
+        // loadMiniWidgets badged, and the local-mode fallback above is NOT
+        // period-split: it repeats the runtime's all-time total in all three
+        // slots. Re-badge from the source actually used, so the tooltip is
+        // about the number on screen rather than the one it replaced.
+        try {
+          var _sBadge = document.getElementById('cost-basis-badge');
+          if (_sBadge && window.cmProv) {
+            var _split = (_scope.costWeek !== _scope.costMonth);
+            _sBadge.innerHTML = window.cmProv.badge({
+              basis: _split ? 'derived' : 'estimated',
+              label: _split ? 'derived' : 'estimated',
+              hint: _split
+                ? 'Derived: computed from measured inputs by an exact rule.'
+                : 'Estimated: modelled, with an assumption that can be wrong.',
+              formula: _split
+                ? ('measured token counts for runtime ' + (_scope.runtime || '')
+                   + ', priced against the provider\'s published rate card')
+                : ('this runtime\'s all-time total, standing in for all three '
+                   + 'windows because the scoped source is not split by period'),
+              source: _split ? '/api/v1/usage?runtime=' + (_scope.runtime || '')
+                             : '/api/runtime-summary'
+            }, { label: 'Cost' });
+          }
+        } catch (_eb) {}
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
     }
@@ -17798,9 +17853,20 @@ async function loadUsage() {
       var maxTokens = Math.max.apply(null, _uDays.map(function(d){return d.tokens;})) || 1;
       var chartHtml = '';
       _uDays.forEach(function(d) {
-        var pct = Math.max(1, (d.tokens / maxTokens) * 100);
+        var pct = Math.max(1, ((d.tokens || 0) / maxTokens) * 100);
         var label = d.date.substring(5);
         var val = d.tokens >= 1000 ? (d.tokens/1000).toFixed(0) + 'K' : d.tokens;
+        // A bucket the current plan does not include is WITHHELD, not empty.
+        // It used to arrive zeroed, which painted twelve days on which the
+        // user apparently spent nothing. It now arrives with cost null and
+        // withheld true, and paints as a hatched, reserved slot instead.
+        if (d.withheld) {
+          chartHtml += '<div class="usage-bar-wrap cm-withheld" title="'
+            + escHtml('Not included on this plan. This day is held back, not empty.')
+            + '"><div class="usage-bar" style="height:22%"><div class="usage-bar-value"></div></div>'
+            + '<div class="usage-bar-label">' + escHtml(label) + '</div></div>';
+          return;
+        }
         chartHtml += '<div class="usage-bar-wrap"><div class="usage-bar" style="height:' + pct + '%"><div class="usage-bar-value">' + (d.tokens > 0 ? val : '') + '</div></div><div class="usage-bar-label">' + label + '</div></div>';
       });
       document.getElementById('usage-chart').innerHTML = chartHtml;

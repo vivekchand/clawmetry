@@ -181,8 +181,18 @@
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💰</span>
       <div>
-        <div class="stats-footer-label"><span data-i18n="overview.spending">Cost today</span> <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
-        <div class="stats-footer-value" id="cost-today">$0.00</div>
+        <!-- ``cost-basis-badge`` is filled by loadMiniWidgets with the shared
+             provenance badge (static/js/provenance.js): measured, derived or
+             estimated, formula on hover. It sits on the LABEL rather than on
+             the number because all three figures in this tile (today, week,
+             month) are obtained the same way, and three badges in one tile is
+             noise. -->
+        <div class="stats-footer-label"><span data-i18n="overview.spending">Cost today</span> <span id="cost-basis-badge"></span> <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+        <!-- Placeholder is NOT $0.00. It used to be, and for the first ~15s of
+             every page load this tile stated that the user had spent nothing,
+             over a real four-figure month (founder report 2026-08-15). A tile
+             that has not loaded says it has not loaded. -->
+        <div class="stats-footer-value" id="cost-today"><span class="cm-fig-unknown">still loading</span></div>
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">

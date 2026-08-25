@@ -89,15 +89,11 @@ class WeeklyDigest:
             "tokens_used": self.tokens_used,
             "insights": [asdict(i) for i in self.insights],
         }
-        # What the digest cost to write. Two different zeros live here and
-        # they must not look alike: no LLM was called (a real $0), versus a
-        # call whose token usage the provider did not report back (unknown).
-        if not self.synthesized:
-            entry = provenance.measured(
-                "no model was called to write this digest, so nothing was "
-                "spent on it",
-                "clawmetry.insights.WeeklyDigestGenerator")
-        elif self.tokens_used > 0:
+        # What the digest cost to write. A digest nobody paid for really did
+        # cost $0.00, and that zero is a measurement; the badge should say so
+        # rather than hide a true zero behind "not available". The estimate is
+        # the OTHER case, and it names the two assumptions inside it.
+        if self.tokens_used > 0:
             entry = provenance.estimated(
                 "the tokens the synthesis reported, split evenly between "
                 "input and output and priced at Sonnet's published rate. The "
@@ -106,10 +102,13 @@ class WeeklyDigest:
                 "clawmetry.providers_pricing (Sonnet rate card)",
                 inputs={"tokens_used": self.tokens_used})
         else:
-            entry = provenance.unknown(
-                "a model wrote this digest but reported no token usage, so "
-                "what it cost cannot be priced",
-                source="clawmetry.insights.WeeklyDigestGenerator")
+            entry = provenance.measured(
+                ("no model was called to write this digest, so nothing was "
+                 "spent on it")
+                if not self.synthesized else
+                ("no synthesis call reported any token usage, so nothing was "
+                 "billed for this digest"),
+                "clawmetry.insights.WeeklyDigestGenerator")
         return provenance.stamp(out, {"cost_usd": entry})
 
     def to_text(self) -> str:
