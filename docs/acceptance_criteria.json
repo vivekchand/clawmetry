@@ -666,6 +666,30 @@
       "text": "The system shall attribute a session to the runtime that produced it, and shall not rely on a stored value that can disagree with the session's own identity."
     },
     {
+      "id": "AC-OBS-RSO-032.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The system shall not transmit a session title to the hosted service in a form that service can read."
+    },
+    {
+      "id": "AC-OBS-RSO-032.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The system shall carry session titles to the hosted dashboard by the same encrypted path as other session content, keyed so that a title can be matched to the session it belongs to."
+    },
+    {
+      "id": "AC-OBS-RSO-032.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Where a session has no title of its own, the system shall carry nothing rather than an identifier presented as a title."
+    },
+    {
+      "id": "AC-OBS-RSO-032.4",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "A failure to produce titles shall degrade to no titles, and shall never prevent the rest of the snapshot from being produced."
+    },
+    {
       "id": "AC-RSO-CWD-001.1",
       "doc": "Runtime and Session Observability",
       "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
