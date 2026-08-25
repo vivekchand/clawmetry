@@ -217,21 +217,29 @@ for anyone to review, so that PR split it into four modules along the seams its
 own section comments already marked. Specify first, then build in pieces a
 reviewer can hold in their head, and this stops being an argument.
 
-**Write it ahead of the code, but mark its status.** These two pull against
-each other and both are real, so say both explicitly in the document:
+**Write it ahead of the code, and scope it to exactly this PR.** Three rules,
+each learned by breaking it on #5168:
 
-- Software Factory compares a Requirement or Blueprint against the code on
-  `main`. Not against your branch. Not against your PR.
-- So a section written in the present tense about code that has not merged
-  makes the specification *wrong* the moment you save it, and every drift
-  finding it then produces is CORRECT. On PR #5168 the check kept quoting
-  `run_all`'s three-argument signature at `detectors.py:658`. That line is
-  exactly that signature on `main`. The reviewer was reading merged code and
-  comparing it against a document I had written as though the work were done.
-  I spent a long time treating that as the tool's defect. It was mine.
-- Every in-flight section therefore carries a status banner naming the PR and
-  saying plainly that it describes intended behaviour, and that a drift
-  finding against it is expected. Flip it to delivered when the PR lands.
+- **Nothing more.** Do not specify work another branch is doing, or a second
+  half of the feature you have not built. A document that describes what no
+  branch delivers asserts behaviour the product does not have, and every drift
+  finding against that assertion is correct. #5168's first specification
+  covered both halves of a pillar and only one was being built.
+- **Nothing less.** Say where the implementation lives, by file. Drift Bot
+  reported the four behavioural detectors as missing because they are DEFINED
+  in `detector_behaviour.py` and only registered in `detectors.py`, so a
+  reviewer reading the registry sees imports. That is not a bug in the
+  reviewer; it is a fact about the code that the specification has to state.
+- **Specify behaviour, not internals.** A requirement says what the operator
+  gets. The moment it names a function signature or a field, you have handed
+  the reviewer an implementation detail to check against whatever code view it
+  has, and you will spend the afternoon arguing about a line number.
+
+Mark each in-flight section as delivered by its PR and say to assess it against
+that PR's head. **Do not write that a drift finding is "expected".** I did, in
+those words, and then spent rounds puzzled that a reviewer reading "a finding
+against this is correct and expected" produced one. Tell it where to look
+instead.
 
 The banner keeps the DOCUMENT honest. It does not make the check green, and it
 is important to be clear-eyed about why:
