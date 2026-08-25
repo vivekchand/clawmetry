@@ -7,7 +7,8 @@ are logically adjacent observability concerns:
 
   bp_logs     (4 routes) — /api/logs, /api/flow[-events], /api/logs-stream
   bp_memory   (4 routes) — /api/memory[-files], /api/file, /api/memory-analytics
-  bp_security (3 routes) — /api/security/{threats,signatures,posture}
+  bp_security (5 routes) — /api/security/{threats,signatures,posture}
+                           + /api/security/retention (GET/POST)
   bp_config   (4 routes) — /api/llmfit, /api/cost-optimizer, /api/cost-optimization,
                            /api/automation-analysis
 
@@ -2836,3 +2837,102 @@ def api_context_anatomy():
         "context_limit": CONTEXT_LIMIT,
         "pct_used": round(total / CONTEXT_LIMIT * 100, 1) if CONTEXT_LIMIT else 0,
     })
+
+
+# ── data retention: how long this node keeps event history ──────────────
+#
+# "How long do you keep my data, and can I change it?" is the first question
+# a security reviewer asks. The answer used to be implicit (your billing
+# tier) and only changeable through an environment variable set before the
+# daemon started. This exposes the number, says what is setting it, and lets
+# the operator shorten it.
+#
+# Shrink-only by construction (clawmetry/retention.py): a setting can ask for
+# LESS retention, never more than the plan allows. So the write is safe to
+# expose — the worst a mistake does is delete the operator's own data sooner,
+# which is the direction this control should fail in. The global cross-origin
+# guard in dashboard.py::_check_auth covers the POST.
+
+
+def _retention_store():
+    """Writer-lock-safe store handle, or None. Writes go through the daemon
+    proxy; only the daemon may hold the DuckDB writer."""
+    try:
+        from clawmetry import local_store
+        return local_store.get_store(read_only=True)
+    except Exception:
+        return None
+
+
+@bp_security.route("/api/security/retention", methods=["GET"])
+def api_security_retention():
+    """The effective retention window, the plan ceiling, and which is binding."""
+    try:
+        from clawmetry import retention as _ret
+        from routes.sessions import _ls_call
+        state = None
+        try:
+            # Prefer the daemon's view: it is the process that actually
+            # prunes, so its answer is the one that comes true.
+            settings = _ls_call("list_node_settings") or {}
+            if isinstance(settings, dict):
+                state = _ret.resolve(store=_StaticSettings(settings))
+        except Exception:
+            state = None
+        if state is None:
+            state = _ret.resolve(store=_retention_store())
+        return jsonify(state)
+    except Exception:
+        return jsonify({
+            "effective_days": None, "cap_days": None, "configured_days": None,
+            "env_days": None, "source": "unlimited", "tier": "unknown",
+            "can_configure": False, "explanation": "",
+        })
+
+
+class _StaticSettings:
+    """Adapter so ``retention.resolve`` can read settings fetched over the
+    daemon proxy without opening the store a second time."""
+
+    def __init__(self, settings):
+        self._settings = settings or {}
+
+    def get_node_setting(self, key):
+        return self._settings.get(key)
+
+
+@bp_security.route("/api/security/retention", methods=["POST"])
+def api_security_retention_set():
+    """Set (or clear) how long this node keeps event history.
+
+    Body: ``{"days": <int>}`` to set, ``{"days": null}`` to fall back to the
+    plan. A value above the plan ceiling is stored as asked but resolves down
+    to the ceiling; the response shows both numbers so nobody concludes they
+    bought more retention by typing a bigger one.
+    """
+    body = request.get_json(silent=True) or {}
+    if "days" not in body:
+        return jsonify({"ok": False, "error": "missing 'days'"}), 400
+    days = body.get("days")
+    try:
+        from routes.sessions import _ls_call
+        if days is None:
+            _ls_call("set_node_setting", key="retention_days", value=None)
+        else:
+            from clawmetry.retention import _coerce_days
+            n = _coerce_days(days)
+            if n is None:
+                return jsonify({
+                    "ok": False,
+                    "error": "days must be a whole number of days, 1 or more",
+                }), 400
+            _ls_call("set_node_setting", key="retention_days", value=n)
+    except Exception:
+        return jsonify({"ok": False, "error": "write failed"}), 200
+    from clawmetry import retention as _ret
+    try:
+        settings = _ls_call("list_node_settings") or {}
+        state = _ret.resolve(store=_StaticSettings(settings))
+    except Exception:
+        state = _ret.resolve(store=_retention_store())
+    return jsonify({"ok": True, **state})
