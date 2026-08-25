@@ -80,7 +80,7 @@ from the ingested rows alone. The image already contains the protobuf decoder
 this needs.
 
 Two things to know before you plan around it. **It covers Claude Code and
-Codex** — the runtimes that emit OpenTelemetry natively; the rest need the
+Codex**, the runtimes that emit OpenTelemetry natively; the rest need the
 daemon that reads their transcripts. And **records arrive in plaintext**: the
 runtime encrypts nothing before it sends, so the `CLAWMETRY_SELF_HOSTED_E2E`
 option below does not apply to this path. Inside a VPC deployment the

@@ -128,19 +128,19 @@ daemon-free machine has no principals to derive from, which is exactly why
 this path carries the org's own labels instead of inventing an answer.
 
 Read it back with `GET /api/otel/rollup?dimension=team|repo|user_email&days=30`,
-or `GET /api/otel-status`, whose `persisted` field is the DuckDB row count —
+or `GET /api/otel-status`, whose `persisted` field is the DuckDB row count.
 `counts` above it is an in-memory cache that a restart clears.
 
 **Two limits, stated here because this path is sold on them:**
 
-* **It covers the runtimes that emit OTel natively — Claude Code and Codex.**
+* **It covers the runtimes that emit OTel natively: Claude Code and Codex.**
   It is not a 26-runtime intake path, and no page should imply it is. The
   other runtimes need the daemon, which is what actually reads their
   transcripts.
 * **Records arrive in plaintext.** The runtime encrypts nothing before it
-  sends, so the end-to-end encryption described under *Data flow* — which is a
-  property of the **daemon's** snapshot push, where the key never leaves the
-  node — does not extend to this path. For a customer who needs the data never
+  sends, so the end-to-end encryption described under *Data flow* (a property
+  of the **daemon's** snapshot push, where the key never leaves the node) does
+  not extend to this path. For a customer who needs the data never
   to cross their boundary in the clear, the honest answer is the self-hosted
   VPC deployment: the receiver runs inside their network, and the plaintext
   never leaves it. Do not let the encryption claim drift over this path.
