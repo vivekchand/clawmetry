@@ -5163,7 +5163,10 @@ class LocalStore:
                     "repos": [], "metrics": {}, "coverage": empty_cov}
 
         # ── sessions in the window ──────────────────────────────────────
-        clauses = ["cost_usd IS NOT NULL"]
+        # No cost filter. A session whose cost is unrecorded is still a
+        # session that happened, and dropping it here would quietly shrink
+        # every coverage count the caller relies on to judge the answer.
+        clauses: list[str] = ["1 = 1"]
         params: list[Any] = []
         if since_day:
             clauses.append(f"{day_expr_sql('last_active_at')} >= ?")
@@ -5252,9 +5255,14 @@ class LocalStore:
         # ── fold ────────────────────────────────────────────────────────
         by_conf: dict[str, int] = {}
         excluded = 0
-        merged_units: set = set()
+        merged_units_pr: set = set()
+        merged_units_sha: set = set()
         shipped_sessions: set = set()
-        touched_sessions: set = set()
+        # Every session with a link at ANY confidence, including ones too weak
+        # to count toward a figure. "Produced nothing" is a stronger claim than
+        # "produced nothing we are confident about", and abandoned spend must
+        # rest on the stronger one or a low-confidence link becomes lost money.
+        linked_at_all: set = set()
         rework_added = rework_surviving = 0
         counted_shas: set = set()
         pr_backed = False
@@ -5265,10 +5273,10 @@ class LocalStore:
             if sid not in sessions:
                 continue
             by_conf[conf] = by_conf.get(conf, 0) + 1
+            linked_at_all.add(sid)
             if conf not in accepted:
                 excluded += 1
                 continue
-            touched_sessions.add(sid)
             if not merged:
                 continue
             shipped_sessions.add(sid)
@@ -5276,9 +5284,9 @@ class LocalStore:
                   or merged_by_branch.get((root, str(branch_hint or ""))))
             if pr:
                 pr_backed = True
-                merged_units.add((root, "pr", pr))
+                merged_units_pr.add((root, pr))
             else:
-                merged_units.add((root, "sha", str(sha)))
+                merged_units_sha.add((root, str(sha)))
             key = (str(root), str(sha))
             if key not in counted_shas and key in survival:
                 counted_shas.add(key)
@@ -5288,11 +5296,16 @@ class LocalStore:
 
         shipped_spend = round(
             sum(sessions[s]["cost_usd"] for s in shipped_sessions), 6)
-        n_units = len(merged_units)
+        # One unit per merged change, whichever way it was identified. When
+        # some merged commits matched a pull request and others did not, the
+        # denominator is the union and the basis says "mixed" -- labelling a
+        # mixed count as "merged pull requests" would misstate what it counts.
+        n_pr, n_sha = len(merged_units_pr), len(merged_units_sha)
+        n_units = n_pr + n_sha
         with_cwd = [s for s in sessions.values() if s["cwd"]]
         in_repo = [s for s in with_cwd if s["repo_root"]]
         ended = [s for s in in_repo if s["end_reason"]]
-        abandoned = [s for s in ended if s["session_id"] not in touched_sessions]
+        abandoned = [s for s in ended if s["session_id"] not in linked_at_all]
 
         rework_pct = (round(1.0 - (rework_surviving / rework_added), 4)
                       if rework_added > 0 else None)
@@ -5302,13 +5315,17 @@ class LocalStore:
         metrics = {
             "cost_per_merged_change": _git_metric(
                 value=(round(shipped_spend / n_units, 4) if n_units else None),
-                basis="pull_requests" if pr_backed else "branch_reachability",
+                basis=("pull_requests" if n_pr and not n_sha
+                       else "mixed" if n_pr else "branch_reachability"),
                 reason=None if n_units else "no_merged_work_correlated",
                 unit="usd",
                 numerator_usd=shipped_spend,
                 denominator=n_units,
-                denominator_kind=("merged_pull_requests" if pr_backed
-                                  else "merged_commits"),
+                denominator_kind="merged_changes",
+                denominator_breakdown={
+                    "pull_requests": n_pr,
+                    "commits_without_pull_request": n_sha,
+                },
                 sessions_counted=len(shipped_sessions),
             ),
             "rework_rate": _git_metric(
@@ -5351,8 +5368,12 @@ class LocalStore:
         return {
             "available": True,
             "repos": [repos[r] for r in repos],
-            "pr_state": ("available" if pr_backed
-                         else (sorted(pr_bases)[0] if pr_bases else "unknown")),
+            # Three different situations that a single "unavailable" would
+            # blur: pull requests matched; the host answered but nothing
+            # matched; the host was never reachable and why.
+            "pr_state": ("matched" if pr_backed
+                         else "no_pull_request_matched" if "gh_cli" in pr_bases
+                         else (sorted(b for b in pr_bases if b) or ["unknown"])[0]),
             "metrics": metrics,
             "coverage": coverage,
         }

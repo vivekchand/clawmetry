@@ -234,7 +234,9 @@ def test_metrics_fall_back_to_branch_state_without_pull_requests(store):
     out = store.query_git_outcomes()
     m = out["metrics"]["cost_per_merged_change"]
     assert m["basis"] == "branch_reachability"
-    assert m["denominator_kind"] == "merged_commits"
+    assert m["denominator_kind"] == "merged_changes"
+    assert m["denominator_breakdown"]["pull_requests"] == 0
+    assert m["denominator_breakdown"]["commits_without_pull_request"] >= 1
 
 
 # ── AC-OBS-CEA-022.4: every figure carries its basis; uncertainty shows ────
@@ -553,3 +555,46 @@ def test_endpoint_reports_an_honest_empty_without_a_store(monkeypatch):
     assert body["available"] is False
     assert body["reason"] == "local_store_unavailable"
     assert body["metrics"] == {}
+
+
+def test_a_session_linked_only_weakly_is_not_called_abandoned(store):
+    """"Produced nothing" is a stronger claim than "produced nothing we are
+    confident about". A session whose only links fall below the requested
+    confidence must not have its whole cost booked as money lost.
+
+    * AC-OBS-CEA-022.5 -- covered by this test.
+    """
+    strict = store.query_git_outcomes(min_confidence="high")
+    assert strict["coverage"]["links_excluded"] > 0
+    # on-branch ended and has links; raising the bar excludes some of them but
+    # must not turn the session into abandoned spend.
+    assert strict["metrics"]["abandoned_session_spend"]["sessions"] == 0
+    assert strict["metrics"]["abandoned_session_spend"]["value"] == pytest.approx(0.0)
+
+
+def test_a_session_with_no_cost_recorded_still_counts_as_seen(tmp_path, monkeypatch, scan, repo):
+    """A session whose cost is unrecorded is still a session that happened;
+    dropping it would quietly shrink every coverage count.
+
+    * AC-OBS-CEA-022.6 -- covered by this test.
+    """
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "n.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    st = ls.get_store()
+    try:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        st.ingest_session({
+            "agent_type": "openclaw", "session_id": "goose:no-cost",
+            "cwd": repo, "started_at": stamp, "last_active_at": stamp,
+        })
+        st.ingest_git_scan(scan)
+        cov = st.query_git_outcomes()["coverage"]
+        assert cov["sessions_in_window"] == 1
+        assert cov["sessions_with_cwd"] == 1
+    finally:
+        try:
+            st.stop(flush=True)
+        except Exception:
+            pass
