@@ -8628,6 +8628,13 @@ def send_heartbeat(config: dict) -> bool:
             pending = (resp_json or {}).get("pending_queries") or []
             if pending:
                 _dispatch_pending_queries(config, pending)
+            # Sessions their owner asked to share with their organisation. We
+            # seal each with the ORGANISATION key and upload it once, so a
+            # colleague can read it without this machine being awake and
+            # without holding this machine's key.
+            shares = (resp_json or {}).get("share_requests") or []
+            if shares:
+                _seal_shared_traces(config, shares)
             return True
         except Exception as e:
             last_err = e
@@ -11185,6 +11192,66 @@ def _build_q1_cache_pushes(config: dict) -> list:
             log.debug("q1 cache push failed for shape=%s: %s", shape, _e)
 
     return pushes
+
+
+def _seal_shared_traces(config: dict, session_ids: list) -> None:
+    """Seal each requested session's trace with the ORGANISATION key and upload.
+
+    This is the only path by which one person's session becomes readable by
+    their colleagues, and the key choice is the whole design:
+
+    * With an organisation key, the trace is sealed so every member can open
+      it, and the cloud stores ciphertext it cannot read.
+    * WITHOUT one we upload NOTHING. Sealing with this machine's own key would
+      produce a blob no colleague could open, and the share would sit there
+      looking successful forever. A share that cannot be read is worse than a
+      share that plainly failed, so we log what is missing and leave the
+      session in `sealing` until a key exists.
+
+    Failures are per-session and never raise: one unreadable session must not
+    stop the heartbeat or the other shares.
+    """
+    try:
+        from clawmetry import org_key as _ok
+    except Exception:
+        return
+    api_key = config.get("api_key")
+    if not api_key:
+        return
+
+    org = _ok.get(config)
+    if not org:
+        log.warning(
+            "share: %d session(s) are marked shared but this machine has no "
+            "organisation key, so nothing can be sealed for colleagues. Run "
+            "`clawmetry team key create`, or accept your organisation's key "
+            "with `clawmetry team key set --file KEYFILE`.",
+            len(session_ids),
+        )
+        return
+    fp = _ok.fingerprint(org)
+
+    for sid in list(session_ids)[:5]:
+        sid = str(sid or "").strip()
+        if not sid:
+            continue
+        try:
+            from routes.local_query import _dispatch as _local_dispatch
+            body = _local_dispatch("transcript", {"session_id": sid,
+                                                  "limit": 5000})
+            rows = (body or {}).get("rows") or []
+            if not rows:
+                log.info("share: %s has no recorded events; nothing to seal", sid)
+                continue
+            blob = encrypt_payload({"rows": rows, "count": len(rows),
+                                    "session_id": sid}, org)
+            _post("/ingest/shared-trace",
+                  {"session_id": sid, "blob": blob, "key_fingerprint": fp},
+                  api_key)
+            log.info("share: sealed %s (%d events) for the organisation",
+                     sid, len(rows))
+        except Exception as exc:
+            log.warning("share: could not seal %s: %s", sid, exc)
 
 
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
