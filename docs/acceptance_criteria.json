@@ -271,6 +271,42 @@
       "text": "Where an extended runtime integration requires the paid extension, the system shall communicate the availability boundary before the operator relies on it."
     },
     {
+      "id": "AC-OBS-004.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "An agent principal shall carry a team attribute distinct from its owner attribute, so that a person and a paying team can both be named."
+    },
+    {
+      "id": "AC-OBS-004.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Where an agent has no attribute of its own, the system shall inherit it from the most specific enclosing scope that has one, considering machine, then runtime."
+    },
+    {
+      "id": "AC-OBS-004.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "The system shall report which scope an inherited attribute came from, and shall not present an inherited value as one somebody chose for that agent."
+    },
+    {
+      "id": "AC-OBS-004.4",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Owner and team shall resolve independently, so a machine-level team and an agent-level owner both apply."
+    },
+    {
+      "id": "AC-OBS-004.5",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "An agent that matches no scope shall be reported as unassigned rather than attributed to a default."
+    },
+    {
+      "id": "AC-OBS-004.6",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Attributes shall be derived when read, not stored on activity records, so that they apply to history already collected and cannot drift from the labels that produce them."
+    },
+    {
       "id": "AC-OBS-005.1",
       "doc": "Local Agent Observability",
       "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
