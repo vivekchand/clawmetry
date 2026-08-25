@@ -67,9 +67,13 @@ SIGNALS = ("utilization", "compaction", "overflow")
 # same PR, and ``tests/test_context_coverage.py`` pins the pairing so the two
 # cannot drift apart silently.
 #
-# PENDING: ``codex`` comes off this list once clawmetry-pro#174 ships, which
-# maps Codex's ``RolloutItem::Compacted`` rollout line. Deliberately not
-# removed ahead of that wheel, because the two mistakes are not symmetric.
+# PENDING: ``codex`` comes off this list once a clawmetry-pro wheel carrying
+# clawmetry-pro#174 (merged 2026-08-25, which maps Codex's
+# ``RolloutItem::Compacted`` rollout line) is actually released. The trigger is
+# the released wheel, NOT the merge: a user still on the previous wheel is
+# genuinely blind, and delisting early would tell them "0, ran clean" while we
+# cannot see. Deliberately not removed ahead of that wheel, because the two
+# mistakes are not symmetric.
 # Leaving it listed tells a user with no compactions that we are blind when we
 # are not (conservative, and anyone who does have compactions is unaffected,
 # since observation overrides this set). Removing it early tells a user
