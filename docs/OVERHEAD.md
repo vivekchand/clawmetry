@@ -261,8 +261,8 @@ zero and a naive reading produces a confident, meaningless "+0.00 ms". Wall
 clock is unaffected and is reported normally.
 
 Worth recording how that guard was itself wrong first. The obvious check is to
-compare the delta against `time.get_clock_info("process_time").resolution` —
-and on Windows that reports `1e-07`, because the counter is *denominated* in
+compare the delta against `time.get_clock_info("process_time").resolution`.
+On Windows that reports `1e-07`, because the counter is *denominated* in
 100 ns units even though its value only changes five orders of magnitude less
 often. The check passed and the harness published the zero anyway. It was
 caught on the Windows CI leg, by this harness, one commit after the "fix".
