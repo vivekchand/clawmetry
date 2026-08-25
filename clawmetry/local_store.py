@@ -48,7 +48,6 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
-from datetime import date as _dt_date
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -270,7 +269,22 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
+
+# Day buckets are node-local calendar days, matching the cost windows that
+# filter them (clawmetry/cost_windows.py, ADR-046). Before v13 a day was the
+# first ten characters of whatever timestamp string the runtime wrote, so a
+# runtime writing UTC put a California user's evening spend on tomorrow while
+# the window asking for "today" was local. The two disagreed by design.
+#
+# ``_DAY_EXPR`` is the SQL half; ``cost_windows.local_day`` is the Python half
+# used by the rollup writers. They must produce the same key for the same
+# input or the rollups and the live aggregate part ways — which is the bug
+# class ADR-046 exists to close, so a test pins them against each other.
+from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
+from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
+
+_DAY_EXPR = _day_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -408,8 +422,10 @@ _DDL = [
     # ── Query Spine P2 (#2988): materialized rollups, written incrementally
     # at ingest by the daemon's own store handle (never a read-only re-open).
     # Upserts are O(events ingested per flush); a one-time chunked backfill
-    # (backfill_rollups) rebuilds them on upgrade. Day keys are derived from
-    # the event/session timestamp's date part (ts[:10], no tz conversion).
+    # (backfill_rollups) rebuilds them on upgrade. Day keys are the NODE-LOCAL
+    # calendar day (cost_windows.local_day), matching the windows that filter
+    # them; before schema v13 they were the timestamp string's first ten
+    # characters, which followed whatever timezone each runtime wrote.
     # Rows survive event pruning on purpose: they are the durable summary.
     """
     CREATE TABLE IF NOT EXISTS rollup_model_daily (
@@ -2284,6 +2300,43 @@ class LocalStore:
                         )
                         migration_failed = True
                         _migration_err = str(exc)
+                if not migration_failed and current < 13:
+                    # v12 -> v13: day buckets move to the NODE-LOCAL calendar
+                    # day (cost_windows.local_day / _DAY_EXPR). They used to be
+                    # the timestamp string's first ten characters, which
+                    # followed whatever timezone each runtime wrote — so a
+                    # runtime stamping UTC put a California user's 5pm spend on
+                    # tomorrow, while the window asking for "today" was local.
+                    #
+                    # Every rollup row already stored carries the OLD key. New
+                    # writes carry the new one, and the two would sum into the
+                    # same day cell — a day that is partly local and partly
+                    # UTC, which is worse than either. So wipe and rebuild.
+                    #
+                    # All THREE tables, for the reason v11 and v12 spell out:
+                    # ``backfill_rollups`` gates on the SUM of their counts and
+                    # skips when it is non-zero, so leaving one populated means
+                    # the rebuild never runs and the others stay empty forever.
+                    try:
+                        _rb = self._conn.execute(
+                            "SELECT (SELECT COUNT(*) FROM rollup_model_daily)"
+                            " + (SELECT COUNT(*) FROM rollup_runtime_daily)"
+                            " + (SELECT COUNT(*) FROM rollup_session)"
+                        ).fetchone()[0]
+                        self._conn.execute("DELETE FROM rollup_model_daily")
+                        self._conn.execute("DELETE FROM rollup_runtime_daily")
+                        self._conn.execute("DELETE FROM rollup_session")
+                        log.info(
+                            "local store: v13 day buckets are now node-local; "
+                            "wiped %d rollup row(s) for rebuild", _rb,
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v13 rollup wipe FAILED — schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -3426,6 +3479,164 @@ class LocalStore:
                 "updated_at": r[3],
             }
         return out
+
+    # Stable prefix for a derived agent principal id. Short, greppable, and
+    # obviously not a session id when it shows up in an audit row.
+    _PRINCIPAL_PREFIX = "ap_"
+
+    @staticmethod
+    def principal_id(node_id: str, runtime: str, agent_id: str) -> str:
+        """Deterministic id for the agent identified by this triple.
+
+        Pure and stable: the same agent yields the same id on every node, in
+        every process, across restarts, with no lookup and nothing to persist.
+        That is what lets an audit row, a policy and an inventory row all name
+        the same principal without a shared table to join through.
+
+        Derived rather than minted on purpose. ClawMetry watches agents nobody
+        instrumented -- there is no enrolment step we could hang a generated id
+        off, so identity has to fall out of what we already observe.
+        """
+        import hashlib as _hl
+
+        parts = (
+            str(node_id or "").strip().lower(),
+            str(runtime or "").strip().lower(),
+            str(agent_id or "main").strip().lower(),
+        )
+        digest = _hl.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+        return f"{LocalStore._PRINCIPAL_PREFIX}{digest[:16]}"
+
+    def query_agent_principals(
+        self,
+        *,
+        node_id: str | None = None,
+        runtime: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """One row per distinct AGENT, not per runtime.
+
+        The Agent Inventory rolls up one row per runtime, so ownership attaches
+        to "claude_code on this box" rather than to an agent. A policy cannot
+        say *this agent may not do that* without a principal, RBAC has no
+        subject, and the audit chain has no actor beyond a session id. This is
+        that missing primitive.
+
+        Derived from ``sessions``, which already carries every field the
+        identity needs -- so this adds no ingestion and works retroactively on
+        history already in the store. Runtime comes from the session-id prefix
+        (the same rule as ``sync._runtime_of_session`` / the frontend's
+        ``_cmRuntimeOf``), falling back to ``agent_type`` for rows whose id
+        carries no prefix.
+
+        Governance fields (owner / notes) are overlaid from ``agent_meta``,
+        keyed by principal id. That table's key is a free-form VARCHAR, so
+        principal-level ownership needs no migration and reuses the existing
+        ``set_agent_meta`` write path. A runtime-level label and an agent-level
+        label therefore coexist without colliding.
+
+        Each row::
+
+            {principal_id, node_id, runtime, agent_id, sessions, first_seen,
+             last_seen, total_tokens, cost_usd, owner, notes, owner_source}
+
+        ``owner_source`` is ``"agent"`` when this principal has its own label,
+        ``"runtime"`` when it inherits the runtime's, and ``""`` when nobody
+        has claimed it -- so the UI can show inherited ownership honestly
+        instead of implying someone named this agent specifically.
+
+        Never raises: any failure yields ``[]``.
+        """
+        try:
+            sql = """
+                SELECT
+                    COALESCE(node_id, '')                       AS node_id,
+                    CASE
+                        WHEN strpos(session_id, ':') > 1
+                        THEN lower(split_part(session_id, ':', 1))
+                        ELSE ''
+                    END                                          AS sid_prefix,
+                    lower(COALESCE(agent_type, ''))              AS agent_type,
+                    COALESCE(NULLIF(TRIM(agent_id), ''), 'main') AS agent_id,
+                    COUNT(DISTINCT session_id)                   AS sessions,
+                    MIN(started_at)                              AS first_seen,
+                    MAX(last_active_at)                          AS last_seen,
+                    COALESCE(SUM(total_tokens), 0)               AS total_tokens,
+                    COALESCE(SUM(cost_usd), 0.0)                 AS cost_usd
+                FROM sessions
+                WHERE session_id IS NOT NULL
+                GROUP BY 1, 2, 3, 4
+            """
+            rows = self._fetch(sql, [])
+        except Exception:
+            return []
+
+        # Resolve the prefix to a real runtime name. Unknown prefixes are not
+        # runtimes (a session id may contain a colon for other reasons), so
+        # they fall back to agent_type and finally to the openclaw default
+        # bucket -- the same precedence the rest of the codebase uses.
+        try:
+            from clawmetry import entitlements as _ent
+            known = set(_ent.ALL_RUNTIMES)
+        except Exception:
+            known = set()
+
+        try:
+            meta = self.query_agent_meta() or {}
+        except Exception:
+            meta = {}
+
+        want_node = (node_id or "").strip().lower() or None
+        want_rt = (runtime or "").strip().lower() or None
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            (r_node, sid_prefix, agent_type, r_agent, sessions,
+             first_seen, last_seen, tokens, cost) = r
+            rt = ""
+            if sid_prefix and (not known or sid_prefix in known):
+                rt = sid_prefix
+            elif agent_type and (not known or agent_type in known):
+                rt = agent_type
+            if not rt:
+                rt = "openclaw"
+
+            if want_node is not None and str(r_node).lower() != want_node:
+                continue
+            if want_rt is not None and rt != want_rt:
+                continue
+
+            pid = self.principal_id(r_node, rt, r_agent)
+            own = meta.get(pid) or {}
+            source = "agent" if own else ""
+            if not own:
+                # Fall back to the runtime-level label the Agent Inventory
+                # already writes, so an agent inherits its runtime's owner
+                # rather than rendering as unowned.
+                own = meta.get(rt) or {}
+                source = "runtime" if own else ""
+
+            out.append({
+                "principal_id": pid,
+                "node_id": str(r_node or ""),
+                "runtime": rt,
+                "agent_id": str(r_agent or "main"),
+                "sessions": int(sessions or 0),
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "total_tokens": int(tokens or 0),
+                "cost_usd": float(cost or 0.0),
+                "owner": own.get("owner") or "",
+                "notes": own.get("notes") or "",
+                "owner_source": source,
+            })
+
+        out.sort(key=lambda d: (d.get("last_seen") or "", d["sessions"]), reverse=True)
+        try:
+            n = max(1, min(2000, int(limit)))
+        except (TypeError, ValueError):
+            n = 500
+        return out[:n]
 
     def ingest_cron(self, cron: dict[str, Any]) -> None:
         """Upsert one cron-job row. Required: cron_id.
@@ -11652,7 +11863,7 @@ class LocalStore:
                 # the same event_type net but no usage payload.
                 continue
 
-            day = (ts or "")[:10]
+            day = _local_day(ts)
             if not day:
                 continue
 
@@ -11816,7 +12027,7 @@ class LocalStore:
             splits = _extract_usage_splits(data)
             if splits["input_tokens"] <= 0 and splits["output_tokens"] <= 0:
                 continue
-            day = (ts or "")[:10]
+            day = _local_day(ts)
             if not day:
                 continue
 
@@ -11959,7 +12170,7 @@ class LocalStore:
               SELECT
                 id, session_id, agent_id, ts, cost_usd, token_count,
                 event_type,
-                substr(ts, 1, 10) AS day,
+                {_DAY_EXPR} AS day,
                 CASE event_type
                   WHEN 'assistant'        THEN 2
                   WHEN 'message'          THEN 2
@@ -12891,18 +13102,13 @@ def _extract_event_usage(e: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_day(ts: Any) -> str | None:
-    """Day key ('YYYY-MM-DD') for a rollup row, derived from the timestamp
-    string's date part — no timezone conversion, matching how the rest of
-    the store buckets days (substr(ts,1,10)). Returns None (event skipped
-    from rollups) when the prefix is not a valid calendar date."""
-    s = str(ts or "")[:10]
-    if len(s) != 10:
-        return None
-    try:
-        _dt_date.fromisoformat(s)
-    except ValueError:
-        return None
-    return s
+    """Day key ('YYYY-MM-DD') for a rollup row, in the node's local calendar
+    day — matching how the rest of
+    the store buckets days in SQL (``_DAY_EXPR``): the node-local calendar
+    day, so a rollup row lands in the same bucket the live aggregate would
+    put it in. Returns None (event skipped from rollups) when no day can be
+    derived — an underivable bucket must not silently become today."""
+    return _local_day(ts)
 
 
 def _rollup_deltas(

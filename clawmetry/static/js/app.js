@@ -4879,6 +4879,12 @@ function loadEvalsTab() {
 
 // ── Quality tab renderer ───────────────────────────────────────────────────
 async function loadQualityTab() {
+  // Independent of the grade fetch below, deliberately: different endpoint,
+  // different failure mode. Chaining it behind the report card meant one
+  // slow /api/quality/report-card blanked the outcome line too.
+  _qLoadOutcomeTrend();
+  _qLoadSpotCheck();
+
   var qs = new URLSearchParams();
   qs.set('window', '7d');
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
@@ -4917,6 +4923,313 @@ async function loadQualityTab() {
   _qRenderRoughRuns(data);
   _qRenderStatusLine(data);
   _qRenderFooter(data);
+}
+
+// A DuckDB-backed read that misses is usually TRANSIENT: the daemon proxy
+// times out under the dashboard's boot fan-out (many panels fetching at
+// once), and the handler answers 200 with the store flagged unavailable.
+// Reproduced 2026-08-25 on a real install: the first call returned rows, the
+// next four came back unavailable while the page was still booting, then
+// recovered. Hiding a panel on that first miss hides it for the whole
+// session, so give it one more chance once the storm has passed.
+//
+// Deliberately one retry, only on the miss path: the happy path stays a
+// single request, so this cannot become a request storm of its own.
+async function _qFetchStore(url, isMiss) {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise(function(r) { setTimeout(r, 1200); });
+    var data = null;
+    try {
+      var r = await fetch(url);
+      if (r.ok) data = await r.json();
+    } catch (e) { data = null; }
+    if (data && !isMiss(data)) return data;
+    if (attempt) return data;   // second miss: report it, the caller decides
+  }
+  return null;
+}
+
+// ── The marks line: completion, cost, errors ───────────────────────────
+//
+// Deliberately NOT a second opinion on the grade above. The grade judges the
+// runs with enough activity to judge (56 of 177 in the audit window); this
+// line counts every run that reached a terminal state, and reports the three
+// facts that need no judgement at all: how many completed, what each one
+// cost, how many ended in an error.
+//
+// Keeping those separate matters. An earlier cut of this line published
+// "100% finished the job" directly beneath "7 rough ones cost you $122.50",
+// because sessions.outcome and the quality verdicts measure different things.
+// Two numbers about "did it work" disagreeing on one screen costs more trust
+// than either one buys. The scope note below says which is which.
+//
+// Free on every plan: no judge key, no rubric, no API spend.
+async function _qLoadOutcomeTrend() {
+  var sec = document.getElementById('q-outcomes');
+  var cells = document.getElementById('q-oc-cells');
+  var note = document.getElementById('q-oc-note');
+  if (!sec || !cells) return;
+
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var data = await _qFetchStore(
+    '/api/outcomes/trend?' + qs.toString(),
+    function(d) { return d.store_available === false; }
+  );
+
+  // Unreachable store (the hosted dashboard has no local DuckDB until the
+  // snapshot slice is served) — stay hidden. The tab already says once,
+  // above, that it reads local run history, and a row of dashes would read
+  // as zero rather than as unknown.
+  if (!data || data.store_available === false) { sec.setAttribute('hidden', ''); return; }
+
+  var cur = data.current || {};
+  var delta = data.delta || {};
+  if (!cur.finished) { sec.setAttribute('hidden', ''); return; }
+  sec.removeAttribute('hidden');
+
+  function cell(value, label, deltaHtml) {
+    return '<div class="q-oc">' +
+      '<span class="q-oc-n">' + escHtml(value) + '</span>' +
+      '<span class="q-oc-l">' + escHtml(label) + '</span>' +
+      (deltaHtml || '') + '</div>';
+  }
+  // A delta is only drawn when both periods cleared the comparability bar.
+  // Below it the counts still show; the comparison does not, because one
+  // busy week over one thin week is not a direction.
+  function deltaSpan(text, favourable) {
+    if (!data.comparable || text == null) return '';
+    var cls = favourable === null ? '' : (favourable ? ' up' : ' down');
+    return '<span class="q-oc-d' + cls + '">' + escHtml(text) + '</span>';
+  }
+  function vsWeek(n, sign) {
+    if (n === 0) return t('quality.oc_flat', null, 'same as the week before');
+    return (sign && n > 0 ? '+' : '') + n + ' ' +
+           t('quality.oc_vs_week', null, 'vs the week before');
+  }
+
+  var html = cell(
+    String(cur.finished),
+    t('quality.oc_completed', null, 'tasks completed'),
+    deltaSpan(vsWeek(delta.finished, true), null)
+  );
+
+  // Cost cell only when we actually know the cost. A runtime with no pricing
+  // table sums to $0, and "$0.00 per task" reads as free.
+  if (cur.cost_per_finished != null) {
+    var cd = delta.cost_per_finished;
+    html += cell(
+      _qMoney(cur.cost_per_finished),
+      t('quality.oc_cost', null, 'per completed task'),
+      deltaSpan(
+        cd == null || Math.abs(cd) < 0.005
+          ? t('quality.oc_cost_flat', null, 'about the same')
+          : (cd < 0 ? '−' : '+') + _qMoney(Math.abs(cd)) + ' ' +
+            t('quality.oc_vs_week', null, 'vs the week before'),
+        cd == null ? null : cd < 0
+      )
+    );
+  }
+
+  // Everything that ended badly, not just the "failed" label: an agent stuck
+  // in a loop or on a tool call that never returned burned the budget too.
+  function bad(p) {
+    return (p.failed || 0) + (p.cognitive_loop || 0) + (p.tool_call_stuck || 0);
+  }
+  var errs = bad(cur);
+  var errDelta = errs - bad(data.previous || {});
+  html += cell(
+    String(errs),
+    t('quality.oc_errored', null, 'ended in an error'),
+    deltaSpan(vsWeek(errDelta, true), errDelta === 0 ? null : errDelta < 0)
+  );
+  cells.innerHTML = html;
+
+  if (note) {
+    // Always present. This sentence is what keeps the line from reading as a
+    // contradiction of the grade above it.
+    var scope = t(
+      'quality.oc_scope', null,
+      'Counted from every run that finished, including the ones with too ' +
+      'little activity to grade.'
+    );
+    if (!data.comparable) {
+      scope += ' ' + t(
+        'quality.oc_not_comparable', { n: data.min_finished || 3 },
+        'Not enough finished tasks yet to compare weeks. Both need at least {n}.'
+      );
+    } else if (data.direction === 'regressing') {
+      scope += ' ' + t(
+        'quality.oc_regressing', null,
+        'More of them ended in an error than last week.'
+      );
+    }
+    note.textContent = scope;
+  }
+}
+
+// ── Spot-check ────────────────────────────────────────────────────────
+//
+// Since issue #1615 the daemon has picked a few runs at random every night
+// and written them to a review queue, and tracked how often the operator
+// agreed. It tracked zero for months: the endpoints shipped, the sampler
+// ran, and no screen ever rendered them, so nobody could answer. This is
+// the smallest surface that makes that work reachable.
+//
+// Loaded on the Quality tab only, unchained from the grade fetch.
+async function _qLoadSpotCheck() {
+  var sec = document.getElementById('q-spot');
+  var list = document.getElementById('q-spot-list');
+  var score = document.getElementById('q-spot-score');
+  if (!sec || !list) return;
+
+  var acc = null;
+  var queue = await _qFetchStore(
+    '/api/review/queue?limit=6',
+    function(d) { return d.store_available === false; }
+  );
+
+  // An unreadable store is not an empty queue. Saying "nothing waiting" to a
+  // hosted user who simply has no local DuckDB would be a wrong answer
+  // dressed as good news, so the panel stays hidden instead.
+  if (!queue || queue.store_available === false) {
+    sec.setAttribute('hidden', '');
+    return;
+  }
+  sec.removeAttribute('hidden');
+
+  try {
+    var a = await fetch('/api/review/accuracy?window=30');
+    if (a.ok) acc = await a.json();
+  } catch (e) { acc = null; }
+
+  if (score) {
+    var g = (acc && acc.global) || {};
+    var judged = (g.correct || 0) + (g.wrong || 0) + (g.borderline || 0);
+    score.innerHTML = judged
+      ? t('quality.spot_score', { right: g.correct || 0, n: judged },
+          'You said the agent was right on <b>{right} of {n}</b> runs you checked.')
+      : '';
+  }
+
+  var rows = (queue.rows || []).filter(function(x) { return x && x.session_id; });
+  if (!rows.length) {
+    list.innerHTML =
+      '<li class="q-spot-empty">' +
+      escHtml(t('quality.spot_empty', null,
+                'Nothing waiting. A few runs are picked each night.')) +
+      '<button type="button" onclick="qSampleNow(this)">' +
+      escHtml(t('quality.spot_sample_now', null, 'Pick some now')) +
+      '</button></li>';
+    return;
+  }
+
+  var VERDICTS = [
+    ['reviewed_correct',    t('quality.spot_right', null, 'Right'),    'right'],
+    ['reviewed_wrong',      t('quality.spot_wrong', null, 'Wrong'),    'wrong'],
+    ['reviewed_borderline', t('quality.spot_unsure', null, 'Not sure'), '']
+  ];
+  var html = '';
+  rows.forEach(function(row) {
+    var sum = row.session_summary || {};
+    var title = sum.title || row.session_id;
+    var when = row.sampled_at ? String(row.sampled_at).slice(0, 10) : '';
+    var cost = (sum.cost_usd != null) ? ' · ' + _qMoney(sum.cost_usd) : '';
+    var sid = String(row.session_id);
+    html += '<li data-sid="' + escHtml(sid) + '">' +
+      '<div>' +
+        '<div class="q-spot-when">' + escHtml(when + cost) + '</div>' +
+        '<div class="q-spot-title" title="' + escHtml(title) + '">' +
+          escHtml(title) + '</div>' +
+      '</div>';
+    if (row.status && row.status !== 'pending') {
+      var done = VERDICTS.filter(function(v) { return v[0] === row.status; })[0];
+      html += '<span class="q-spot-verdict ' + (done ? done[2] : '') + '">' +
+              escHtml(done ? done[1] : row.status) + '</span>';
+    } else {
+      html += '<div class="q-spot-actions">';
+      VERDICTS.forEach(function(v) {
+        html += '<button type="button" onclick="qReview(this, ' +
+                JSON.stringify(sid).replace(/"/g, '&quot;') + ', ' +
+                JSON.stringify(v[0]).replace(/"/g, '&quot;') + ')">' +
+                escHtml(v[1]) + '</button>';
+      });
+      html += '</div>';
+    }
+    html += '</li>';
+  });
+  list.innerHTML = html;
+}
+
+// Record one verdict. Replaces the row's buttons in place rather than
+// re-rendering the list, so the rows a person is working through don't
+// reshuffle under the cursor.
+async function qReview(btn, sessionId, status) {
+  var li = btn && btn.closest ? btn.closest('li') : null;
+  var actions = li ? li.querySelector('.q-spot-actions') : null;
+  if (actions) actions.innerHTML =
+    '<span class="q-spot-verdict">' +
+    escHtml(t('quality.spot_saving', null, 'Saving…')) + '</span>';
+  var ok = false;
+  try {
+    var r = await fetch('/api/review/' + encodeURIComponent(sessionId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status })
+    });
+    ok = r.ok;
+  } catch (e) { ok = false; }
+  if (!ok) {
+    // Say what happened and leave the row usable, rather than a dead spinner.
+    if (actions) actions.innerHTML =
+      '<span class="q-spot-verdict wrong">' +
+      escHtml(t('quality.spot_save_failed', null, "Didn't save. Try again.")) +
+      '</span>';
+    return;
+  }
+  _qLoadSpotCheck();
+}
+
+// Manual trigger for the nightly picker, so a new install can see the
+// workflow without waiting until midnight.
+async function qSampleNow(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await fetch('/api/review/sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+  } catch (e) {}
+  _qLoadSpotCheck();
+}
+
+// Money the way a person reads it: cents below a dollar, two decimals above.
+function _qMoney(v) {
+  var n = Number(v) || 0;
+  if (n > 0 && n < 0.01) return '<1¢';
+  if (n < 1) return Math.round(n * 100) + '¢';
+  return '$' + n.toFixed(2);
+}
+
+// Copy the export endpoint. Absolute, so pasting it into a collector config
+// on another machine works without the reader reconstructing the host.
+function qCopyExportUrl(btn) {
+  var el = document.getElementById('q-export-url');
+  if (!el) return;
+  var url = window.location.origin + el.textContent.trim();
+  var done = function() {
+    if (!btn) return;
+    var was = btn.textContent;
+    btn.textContent = t('quality.export_copied', null, 'Copied');
+    setTimeout(function() { btn.textContent = was; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function() {});
+  }
 }
 
 function _qRenderCard(data) {
