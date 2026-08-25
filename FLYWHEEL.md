@@ -139,13 +139,82 @@ Hold the line with:
 - **Poll in seconds-to-minutes, never sub-second.** The daemon wakes, works, then sleeps.
 - **Profile before shipping anything on the ingest / query / snapshot path.** `sample <pid> 4` (macOS) or py-spy. If it sustains more than ~1 core, it does not ship. Guard the caps + cache with a regression test so it stays mechanical.
 
+## 1f0. Specify it in Software Factory BEFORE you build it
+
+Treat 8090 Software Factory as the product manager on this project, not as a
+documentation chore that runs at merge time. It is the reviewer. `drift-bot`
+is that reviewer's voice, and a reviewer who was never told what you were
+building has nothing useful to say about whether you built the right thing.
+
+**The rule: a change that adds or alters product behaviour needs a Requirement
+or Blueprint describing it BEFORE implementation starts.** Not a summary
+appended afterwards. A specification a person could read cold and understand
+what is being built, for whom, and what it must not do.
+
+What that document has to carry, because acceptance criteria alone do not
+brief anyone:
+
+- the problem and who has it, in the product's own terms;
+- what changes for that person;
+- the product decisions that are not implementation details (in this repo
+  that is usually about honesty: what a surface may claim, what it must
+  refuse to invent, what it must not publish);
+- **non-goals**, which is the half that stops scope drifting mid-build;
+- risks, and any open question that needs a product decision rather than an
+  engineering one;
+- acceptance criteria, in the area document where they belong.
+
+`§1f` below then keeps that specification honest as the code moves. The two
+are not the same job: §1f0 is "did anyone agree this was the thing to build",
+§1f is "does the code still match what was agreed".
+
+**Burned 2026-08-25, PR #5168.** Roughly 1,700 lines of new detection logic
+were written with no Requirement describing any of it, and the specification
+was appended afterwards to clear a red check. Read the sequence back and the
+problem is obvious: the reviewer was handed a finished feature and asked to
+approve the paperwork. Three defects that a specification review would have
+raised as questions were instead found by running the code against a real
+machine's data at the end, and one product decision that belongs to a human
+(which finding the desk device's banner should show, now that several kinds
+compete for it) was discovered while auditing for breakage rather than while
+planning. The feature was good. The order was wrong.
+
+**A practical reason the order matters, beyond process.** `drift-bot`'s view
+of a changed file is positional: it reads the head of a large single-file diff
+and falls back to base content for the tail, so on PR #5168 it reported
+functions in the back half of a 1,900-line file as "not implemented" while
+quoting a docstring from the same commit's first line. Moving one constant
+from line 1823 to line 96 made its finding disappear. You cannot resolve a
+specification gap by pushing more code at it, and a large implementation-first
+diff is the exact shape it reads worst. Specify first, build in reviewable
+pieces, and the check has something to compare against.
+
+**How to write one** (the key is in the macOS Keychain under
+`clawmetry-sf-api-key`, and `SF_API_KEY` in repo secrets):
+
+```bash
+KEY=$(security find-generic-password -s clawmetry-sf-api-key -w)
+B=https://api.factory.8090.dev/v2/external-api
+curl -s -H "X-API-Key: $KEY" "$B/requirements?limit=100"   # find the area doc
+curl -s -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"title":"...","document_type":"FEATURE","markdown_content":"..."}' \
+  "$B/requirements"                                        # or create one
+```
+
+`document_type` is `FEATURE` or `OVERVIEW`. Patch an existing document with
+`PATCH /requirements/{id}` or `/blueprints/{id}`, body
+`{markdown_content, force_new_version: true}`. Python's `urllib` has no root
+certificates on some of our machines; use `curl`. There is no drift endpoint,
+so a drift run cannot be inspected or re-triggered through the API: a new
+commit is the only way to re-run it.
+
 ## 1f. Keep Software Factory in sync (Drift Bot)
 
 This repo (and `clawmetry-cloud` / `clawmetry-pro` / `clawmetry-mac` / `clawmetry-railway`) is tracked in [8090 Software Factory](https://factory.8090.ai) as the "ClawMetry" project: Requirements and Blueprints describing what the product does and how. A `drift-bot` GitHub status check runs on every PR and posts an inline comment when the code says something the Blueprints/Requirements don't. Real example: PR #4599 shipped the installer's stale-duplicate sweep and documented it in `CHANGELOG.md`, but no Blueprint said the installers clean up other Python interpreters on PATH, so Drift Bot failed the PR.
 
 **`CHANGELOG.md` is not enough.** Drift Bot reads Blueprints/Requirements, not the changelog. Before merging a change that alters documented (or should-be-documented) product behavior:
 - Check whether an existing Blueprint covers the area you touched; if your change makes it wrong or incomplete, update it.
-- If no Blueprint covers it yet, say so in the PR description so a human (or the next agent) creates one — don't let it merge silently undocumented.
+- If no Blueprint or Requirement covers it yet, **write one** (§1f0). Noting the gap in the PR description is what this rule used to say and it is how PR #5168 came to be built with no specification at all: the note is written, the PR merges, and nobody ever creates the document. Mentioning a gap is not closing it.
 - The dashboard's "Sync Blueprint with Code" agent action (or the Software Factory MCP skill, `npx skills add 8090-inc/software-factory-plugin`) can do this for you; point it at the specific PR/CHANGELOG entry rather than asking for a blanket sync of everything.
 - A red `drift-bot` check is a real signal like any other CI failure (§4) — fix the documentation gap, don't merge past it.
 - **You cannot make it green after the merge.** `drift-bot` is a *commit status* posted by the `8090-software-factory` GitHub App against the PR head SHA, not a GitHub Actions workflow: there is no re-run button and no run to re-trigger. Merging red leaves that PR permanently red even once the Blueprint is fixed. Note it does not appear in `gh api .../check-runs` at all, and `gh pr checks` shows it with an empty `details_url` — `gh pr checks <N> | awk -F'\t' '$2!="pass"'` is how you see it.

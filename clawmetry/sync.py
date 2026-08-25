@@ -19270,9 +19270,13 @@ def _emit_detector_incidents(store, state: dict) -> int:
             "tool_calls": int((top.get("evidence") or {}).get("total_tool_calls")
                               or (top.get("evidence") or {}).get("tool_calls") or 0),
             "since_seconds": 0,
-            # What ignoring this costs, so the device alert can rank too.
-            "spend_at_risk_usd": float(top.get("spend_at_risk_usd") or 0),
-            "severity": str(top.get("severity") or "warning"),
+            # No cost or severity here on purpose. _heartbeat_stuck_payload
+            # projects each item down to exactly four keys before it rides the
+            # heartbeat, so anything else added here is dead on arrival, and
+            # widening that projection is a four-repo device contract change
+            # (pro adapter -> this daemon -> cloud relay -> firmware render).
+            # The money lives in the loop_signals row, which every non-device
+            # consumer reads.
             "message": str(top.get("title") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
         })
 
