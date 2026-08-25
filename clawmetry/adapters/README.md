@@ -11,6 +11,40 @@ onto ClawMetry's unified `Session` / `Event` schema (see `base.py`).
 
 See `base.py` for `AgentAdapter`, `Session`, `Event`, and `Capability`.
 See `registry.py` for how pull-mode adapters are registered + detected.
+See `phase.py` for the session phase model, summarised next.
+
+---
+
+## The phase contract (`phase.py`)
+
+Every session an adapter returns carries a coarse **phase**: `waiting` (blocked
+on a person), `working`, `idle`, or `ended`. One vocabulary across all runtimes
+is what lets a single surface rank a Claude Code session against a Codex one.
+
+**Most adapters need to do nothing.** `Session.resolve_phase()` derives a phase
+from the timestamps every adapter already fills, and the daemon calls it. Two
+things are worth knowing before you touch it:
+
+* `ended_at` on a `Session` is the **last observed activity** (the last event
+  timestamp, or the file mtime), not a claim that the session finished. Only a
+  non-empty `end_reason` asserts an end, and an asserted end beats recency.
+* An adapter that can see more should set `status` (`thinking`, `tool_use`,
+  `responding`, `compacting`, `permission_requested`) and let the projection
+  pick the phase, rather than setting `phase` directly. Setting `phase` is for
+  a runtime that genuinely knows its own state.
+
+Two rules govern the model, and both fail towards "less alive":
+
+* **An undeterminable phase is `None`, never `idle`.** A runtime we cannot see
+  must not be reported as a runtime with nothing happening.
+* **`is_active()` reads an explicit allowlist.** A phase nobody has declared
+  active, including a new one, is not active.
+
+`phase_since` (when the session entered its phase) and `initial_cwd` (the
+launch directory) come from the durable `session_phase` record in
+`clawmetry/local_store.py`, not from the adapter. An adapter that knows the
+launch directory can pass it in `extra["initialCwd"]`; a pid in `extra["pid"]`
+lets the daemon report a session whose process is gone.
 
 ---
 
