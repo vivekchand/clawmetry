@@ -1413,7 +1413,7 @@ _DDL = [
     #
     # record_id is deterministic (see dashboard._otlp_record_id), so an OTLP
     # exporter retrying a batch REPLACEs its rows instead of double-counting
-    # the spend. That matters more here than anyone else in the store: OTLP
+    # the spend. That matters more here than anywhere else in the store: OTLP
     # delivery is at-least-once by specification.
     #
     # NOTE ON DATA HANDLING: rows on this path arrive in PLAINTEXT over HTTP.
