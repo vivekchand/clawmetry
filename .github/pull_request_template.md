@@ -1,4 +1,23 @@
 <!--
+FLYWHEEL.md section 0c: write the product record in 8090 BEFORE the code.
+Software Factory is the product reviewer -- a requirement written after the
+fact reviews nothing. Link what justified this change, or say why it needs
+nothing. CI checks that one of the two is present, never which one is right.
+-->
+
+**Product record:** <!-- https://factory.8090.ai/project/<uuid>/requirements/<uuid> -->
+
+<!-- For a change that genuinely needs none, delete the line above and keep a
+     real reason instead:   No-PRD: typo in a log string -->
+
+**Risk:** <!-- What could break, who notices, how it is undone. Data that
+changes retroactively, migrations that rebuild derived tables, controls that
+delete, anything already in flight this might collide with. "None" is a valid
+answer; a blank is not. -->
+
+---
+
+<!--
 Closes issue #1268. The MOAT checklist below catches the class of bug
 that produced the 3-PR cascade #1258 → #1260 → #1266 today (forgot
 allowlist + treated empty-fastpath as miss).
