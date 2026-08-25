@@ -1330,6 +1330,42 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_replay_events_parent       ON replay_events(parent_span_id)",
     "CREATE INDEX IF NOT EXISTS idx_replay_events_runtime_kind ON replay_events(runtime, kind)",
     "CREATE INDEX IF NOT EXISTS idx_replay_events_created_at   ON replay_events(created_at)",
+    # ── Guard baselines (learned normal, per cohort) ──────────────────────
+    # The trajectory detectors started with constant thresholds: 20 tool calls
+    # without a write is "not progressing", 25 files is a wide blast radius.
+    # Those numbers are right for some teams and absurd for others, and a
+    # constant cannot tell the difference. These two tables are the memory that
+    # lets a threshold be derived instead of declared.
+    #
+    # One row per SESSION (not per tick) so the daemon re-reading an active
+    # session every 60s updates its row instead of inflating the cohort.
+    """
+    CREATE TABLE IF NOT EXISTS guard_session_stats (
+        session_id   VARCHAR PRIMARY KEY,
+        cohort       VARCHAR NOT NULL,
+        runtime      VARCHAR,
+        agent_id     VARCHAR,
+        tool_calls   INTEGER DEFAULT 0,
+        write_files  INTEGER DEFAULT 0,
+        wrote        BOOLEAN DEFAULT FALSE,
+        updated_at   BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_guard_stats_cohort ON guard_session_stats(cohort, updated_at)",
+    # The set of external hosts a cohort has ever reached. This is what makes
+    # "first-time network egress" a claim we can stand behind rather than a
+    # restatement of "we have no memory".
+    """
+    CREATE TABLE IF NOT EXISTS guard_egress_hosts (
+        cohort      VARCHAR NOT NULL,
+        host        VARCHAR NOT NULL,
+        hits        BIGINT DEFAULT 1,
+        first_seen  BIGINT NOT NULL,
+        last_seen   BIGINT NOT NULL,
+        PRIMARY KEY (cohort, host)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_guard_hosts_cohort ON guard_egress_hosts(cohort, last_seen)",
 ]
 
 
@@ -4248,6 +4284,161 @@ class LocalStore:
             out.append(d)
         return out
 
+
+    # ── Guard baselines ───────────────────────────────────────────────────
+    def record_guard_observation(self, session_id: str, cohort: str,
+                                 runtime: str = "", agent_id: str = "",
+                                 tool_calls: int = 0, write_files: int = 0,
+                                 wrote: bool = False,
+                                 hosts: Any = None) -> None:
+        """Record what ONE session looked like, for the cohort it belongs to.
+
+        Upsert on ``session_id`` because the daemon re-reads an active session
+        every tick: without the PK the same session would be counted a hundred
+        times and its own behaviour would become the cohort's "normal".
+
+        ``hosts`` is the set of external hostnames the session reached; those
+        accumulate per cohort and are what ``network_egress`` checks a new
+        destination against. Permissive — never raises; a baseline that fails
+        to record degrades to a static threshold, which is the old behaviour.
+        """
+        sid = str(session_id or "").strip()[:128]
+        coh = str(cohort or "").strip()[:128]
+        if not sid or not coh:
+            return
+        now_ms = int(time.time() * 1000)
+        try:
+            tc = max(0, int(tool_calls or 0))
+            wf = max(0, int(write_files or 0))
+        except (TypeError, ValueError):
+            tc = wf = 0
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO guard_session_stats (
+                        session_id, cohort, runtime, agent_id, tool_calls,
+                        write_files, wrote, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        cohort      = excluded.cohort,
+                        runtime     = excluded.runtime,
+                        agent_id    = excluded.agent_id,
+                        -- A session only ever grows; GREATEST also means a
+                        -- shorter re-read window can never shrink the record.
+                        tool_calls  = GREATEST(guard_session_stats.tool_calls,
+                                               excluded.tool_calls),
+                        write_files = GREATEST(guard_session_stats.write_files,
+                                               excluded.write_files),
+                        wrote       = guard_session_stats.wrote OR excluded.wrote,
+                        updated_at  = excluded.updated_at
+                """, [sid, coh, str(runtime or "")[:64], str(agent_id or "")[:64],
+                      tc, wf, bool(wrote), now_ms])
+                for host in list(hosts or [])[:64]:
+                    h = str(host or "").strip().lower()[:253]
+                    if not h:
+                        continue
+                    self._conn.execute("""
+                        INSERT INTO guard_egress_hosts (
+                            cohort, host, hits, first_seen, last_seen
+                        ) VALUES (?, ?, 1, ?, ?)
+                        ON CONFLICT (cohort, host) DO UPDATE SET
+                            hits      = guard_egress_hosts.hits + 1,
+                            last_seen = excluded.last_seen
+                    """, [coh, h, now_ms, now_ms])
+        except Exception:
+            return
+
+    def query_guard_baseline(self, cohort: str, days: int = 30,
+                             exclude_session: str = "",
+                             max_hosts: int = 500) -> dict:
+        """What normal looks like for one cohort.
+
+        Returns ``{"cohort", "sessions", "write_sessions", "tool_calls":
+        {"n","mean","stddev","max"}, "write_files": {...}, "hosts": [...]}``.
+        ``{}`` on any error, and the caller falls back to static thresholds —
+        a broken baseline must never be able to raise or lower a threshold.
+
+        ``exclude_session`` drops the session being judged from its own
+        baseline. Without it a session that has already run 400 tool calls
+        teaches the cohort that 400 is normal and then declines to flag
+        itself.
+        """
+        coh = str(cohort or "").strip()
+        if not coh:
+            return {}
+        try:
+            window_days = max(1, int(days or 30))
+        except (TypeError, ValueError):
+            window_days = 30
+        cutoff = int((time.time() - window_days * 86400) * 1000)
+        params: list = [coh, cutoff]
+        excl = ""
+        if exclude_session:
+            excl = " AND session_id <> ?"
+            params.append(str(exclude_session))
+        try:
+            row = self._conn.execute(f"""
+                SELECT COUNT(*),
+                       SUM(CASE WHEN wrote THEN 1 ELSE 0 END),
+                       AVG(tool_calls), stddev_pop(tool_calls), MAX(tool_calls),
+                       AVG(write_files), stddev_pop(write_files), MAX(write_files)
+                FROM guard_session_stats
+                WHERE cohort = ? AND updated_at >= ?{excl}
+            """, params).fetchone()
+        except Exception:
+            return {}
+        if not row or not row[0]:
+            return {}
+
+        def _stat(n, mean, sd, mx):
+            return {"n": int(n or 0), "mean": round(float(mean or 0), 2),
+                    "stddev": round(float(sd or 0), 2), "max": int(mx or 0)}
+
+        n_sessions = int(row[0] or 0)
+        out = {
+            "cohort": coh,
+            "sessions": n_sessions,
+            "write_sessions": int(row[1] or 0),
+            "tool_calls": _stat(n_sessions, row[2], row[3], row[4]),
+            "write_files": _stat(n_sessions, row[5], row[6], row[7]),
+            "window_days": window_days,
+        }
+        try:
+            hosts = self._conn.execute("""
+                SELECT host FROM guard_egress_hosts
+                WHERE cohort = ? AND last_seen >= ?
+                ORDER BY hits DESC LIMIT ?
+            """, [coh, cutoff, max(1, min(int(max_hosts or 500), 5000))]).fetchall()
+            out["hosts"] = [r[0] for r in hosts if r and r[0]]
+        except Exception:
+            out["hosts"] = []
+        return out
+
+    def prune_guard_baseline(self, days: int = 180) -> int:
+        """Drop baseline rows older than ``days``. Returns rows removed.
+
+        The baseline is a rolling memory, not an archive: a team's normal in
+        March should not still be setting thresholds in October.
+        """
+        try:
+            keep_days = max(7, int(days or 180))
+        except (TypeError, ValueError):
+            keep_days = 180
+        cutoff = int((time.time() - keep_days * 86400) * 1000)
+        removed = 0
+        try:
+            with self._write_lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM guard_session_stats WHERE updated_at < ?",
+                    [cutoff]).fetchone()
+                removed = int(row[0]) if row else 0
+                self._conn.execute(
+                    "DELETE FROM guard_session_stats WHERE updated_at < ?", [cutoff])
+                self._conn.execute(
+                    "DELETE FROM guard_egress_hosts WHERE last_seen < ?", [cutoff])
+        except Exception:
+            return 0
+        return removed
     def ingest_alert_rule(self, rule: dict[str, Any]) -> None:
         """Upsert one alert rule. Required: ``id``.
 
