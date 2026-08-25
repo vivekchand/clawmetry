@@ -38,10 +38,19 @@ Deny emits BOTH the modern hookSpecificOutput JSON (stdout) and stderr +
 exit 2 (honored by every Claude Code version). Allow emits the modern JSON
 with exit 0.
 
-TIMEOUT: the installer sets the PreToolUse hook timeout just above the
-7-day max policy window (#4066) — process_tool_call answers within
-policy.timeout + grace and then applies on_timeout, so the hook always
-answers before Claude Code's hook timeout would block the call.
+TIMEOUT: the installer wants the hook timeout just above the policy window
+(#4066) so process_tool_call answers within policy.timeout + grace and
+applies on_timeout, rather than Claude Code timing out and blocking the
+call itself. That derivation alone produced a 7-day installed timeout, so
+it is now clamped by hook_ownership.clamp_hook_timeout (default 8h,
+CLAWMETRY_HOOK_TIMEOUT_MAX_S=0 to opt out). Past the ceiling the runtime
+times out first and blocks that one call — a bounded block, deliberately
+chosen over an unbounded wait on a wedged hook.
+
+COEXISTENCE: this is not the only writer of ~/.claude/settings.json (see
+clawmetry/hook_ownership.py). Install merges and uninstall removes at HOOK
+granularity, so a co-installed writer sharing an entry with us keeps its
+hook. Never delete a hook you did not write.
 """
 from __future__ import annotations
 
@@ -50,6 +59,8 @@ import os
 import sys
 import time
 import uuid
+
+from clawmetry import hook_ownership
 
 _CONFIG_PATH = os.path.expanduser("~/.clawmetry/config.json")
 _MARKER_PATH = os.path.expanduser("~/.clawmetry/hooks_installed.json")
@@ -67,7 +78,7 @@ _HOOK_CMD_MARKERS = ("clawmetry hooks run", "clawmetry hook claude-code")
 # Must exceed the max policy window (7 days, #4066) + poll grace —
 # Claude Code BLOCKS the call when a hook times out, which would
 # override the policy's own on_timeout choice.
-_PRETOOL_TIMEOUT_S = 605100
+_PRETOOL_TIMEOUT_S = hook_ownership.clamp_hook_timeout(605100)
 _NOTIFICATION_TIMEOUT_S = 10
 
 
@@ -420,23 +431,16 @@ def _cmd_binary_exists(cmd: str) -> bool:
 def _drop_stale_our_hooks(entries: list) -> bool:
     """Remove entries that carry our marker but whose binary is no longer
     executable.  Returns True if anything was pruned."""
-    removed = False
-    for entry in list(entries):
-        hooks = entry.get("hooks") or []
-        stale = [
-            h for h in hooks
-            if any(m in (h.get("command") or "") for m in _HOOK_CMD_MARKERS)
-            and not _cmd_binary_exists(h.get("command") or "")
-        ]
-        if not stale:
-            continue
-        surviving = [h for h in hooks if h not in stale]
-        if surviving:
-            entry["hooks"] = surviving
-        else:
-            entries.remove(entry)
-        removed = True
-    return removed
+    def _is_stale_ours(h: dict) -> bool:
+        cmd = (h or {}).get("command") or ""
+        return (hook_ownership.hook_is_ours(h, _HOOK_CMD_MARKERS)
+                and not _cmd_binary_exists(cmd))
+
+    kept, n = hook_ownership.prune_our_hooks(entries, _HOOK_CMD_MARKERS,
+                                             ours_pred=_is_stale_ours)
+    if n:
+        entries[:] = kept
+    return bool(n)
 
 
 def _has_our_hook(entries: list) -> bool:
@@ -541,13 +545,15 @@ def uninstall(settings_path: "str | None" = None) -> dict:
         hooks = settings.get("hooks") or {}
         removed = []
         for event, entries in list(hooks.items()):
-            kept = []
-            for entry in entries or []:
-                cmds = [h.get("command") or "" for h in (entry.get("hooks") or [])]
-                if any(any(m in c for m in _HOOK_CMD_MARKERS) for c in cmds):
-                    removed.append(event)
-                else:
-                    kept.append(entry)
+            if not isinstance(entries, list):
+                continue  # foreign/malformed shape — not ours to rewrite
+            # Hook-level, never entry-level: a co-installed writer
+            # (`gk ai hook install claude-code --force`, numbat, a
+            # hand-written entry) may live in the SAME entry as ours, and
+            # dropping the entry would take its hook with it.
+            kept, n = hook_ownership.prune_our_hooks(entries, _HOOK_CMD_MARKERS)
+            if n:
+                removed.append(event)
             if kept:
                 hooks[event] = kept
             elif event in hooks:
