@@ -106,9 +106,11 @@ def test_security_audit_returns_402_when_enforced(enforce, monkeypatch):
         # all" from "entitled but on a downgrade path".
         assert "tier" in body
         # required_tier lets the paywall render the right upgrade CTA.
-        # Audit logs are Enterprise-only, NOT Pro — so the CTA has to
-        # target Enterprise or users get sent to the wrong upgrade flow.
-        assert body["required_tier"] == enforce.TIER_ENTERPRISE
+        # audit_logs moved Enterprise -> Pro on 2026-08-25, so the CTA must
+        # target Pro. Sending a buyer to Enterprise for something their $19
+        # plan already unlocks is the same wrong-flow bug this line has
+        # always guarded, just in the other direction.
+        assert body["required_tier"] == enforce.TIER_CLOUD_PRO
         assert isinstance(body.get("hint"), str) and body["hint"]
         # No entries payload leaked through.
         assert "entries" not in body

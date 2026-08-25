@@ -154,10 +154,22 @@ def _ls_get_store():
 
 
 def _ls_iso_day(ts_str):
-    """Pull YYYY-MM-DD off an ISO timestamp. Tolerates None / short strings."""
+    """Node-local calendar day for an ISO timestamp. ``""`` when undecidable.
+
+    This used to be ``ts_str[:10]``, which is the timestamp's day in whatever
+    timezone the runtime wrote. Every caller compares the result against a day
+    axis built from ``date.today()`` — a LOCAL axis — so a runtime stamping
+    UTC dropped a user's evening activity into a bucket the axis did not
+    contain, and the row silently vanished from the chart. Same clock on both
+    sides now (ADR-046, clawmetry/cost_windows).
+    """
     if not ts_str or not isinstance(ts_str, str) or len(ts_str) < 10:
         return ""
-    return ts_str[:10]
+    try:
+        from clawmetry.cost_windows import local_day
+        return local_day(ts_str) or ""
+    except Exception:
+        return ts_str[:10]
 
 
 def _ls_event_plugin(ev):
@@ -221,6 +233,28 @@ def _ls_call(method_name, **kwargs):
         return None
     try:
         return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _runtime_coverage(runtime, *, has_data):
+    """Coverage block for a runtime-scoped cost/usage payload.
+
+    A call-event-driven surface cannot tell "this runtime was idle" apart
+    from "this runtime never writes per-call cost", and both render as
+    $0.00. For a token-blind runtime that zero is a false statement about
+    the user's spend. ``clawmetry.runtime_records`` knows which is which;
+    this attaches the answer so the UI can say so.
+
+    Returns ``None`` for an unscoped (node-wide) request — a node mixes
+    runtimes, so there is no single honest verdict to attach.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return None
+    try:
+        from clawmetry.runtime_records import coverage_payload
+        return coverage_payload(rt, has_data=bool(has_data))
     except Exception:
         return None
 
@@ -398,6 +432,12 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "warnings": [],
         "routing_savings_usd": round(float(routing_data.get("total_savings_usd") or 0.0), 6),
         "routing_substitutions": routing_data.get("by_pair") or [],
+        # Runtime-scoped honesty: says whether a $0 here means "idle" or
+        # "this runtime keeps no cost record". None when unscoped.
+        "coverage": _runtime_coverage(
+            runtime,
+            has_data=bool(month_tok or month_cost or today_tok or today_cost),
+        ),
     }
 
 
@@ -4542,6 +4582,14 @@ def api_efficiency():
                          "projected_monthly_cost_usd": 0.0, "actions": []}
         entry = dict(entry)
         entry["runtime"] = runtime
+        # ``insufficient_data`` alone conflates two opposite messages: a
+        # runtime that was idle, and a runtime that never writes the
+        # per-call cost this grade is computed from. The second one can
+        # never produce a grade no matter how long the user waits, so
+        # "not enough data yet" is a lie that costs them a support ticket.
+        entry["coverage"] = _runtime_coverage(
+            runtime, has_data=not entry.get("insufficient_data")
+        )
         return jsonify(entry)
     return jsonify(out)
 

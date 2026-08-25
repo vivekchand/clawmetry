@@ -100,8 +100,16 @@ below live here so the free UI can render locked rows with an accurate
 | Bucket | Constant | Features |
 |---|---|---|
 | Starter | `STARTER_FEATURES` | `multi_runtime`, `fleet`, `cloud_sync`, `all_channels`, `approval_queue`, `budget_limits`, `per_runtime_health_timeline` |
-| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `compliance_pack` |
-| Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `audit_logs`, `rbac`, `air_gapped_license`, `custom_data_residency` |
+| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `compliance_pack`, `audit_logs`, `rbac` |
+| Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `air_gapped_license`, `custom_data_residency`, `org_analytics` |
+
+`audit_logs` and `rbac` moved from Enterprise to Pro on 2026-08-25. Pro was
+sold as "the governance layer" while every governance primitive sat in
+Enterprise. `audit_logs` moved with a working surface behind it (append-only
+hash chain, real producers, `/api/audit-log`, the Security-tab feed). `rbac`
+has **no implementation yet** and is deliberately not advertised on the
+pricing page: there is no principal to attach a role to until agent identity
+ships. Ship the capability, then the claim.
 
 Display labels for every feature live in `entitlements.FEATURE_LABELS`.
 
