@@ -3004,6 +3004,59 @@ def api_loop_detection():
 # ---------------------------------------------------------------------------
 
 
+# Severity ladder shared with ``clawmetry.detectors`` (higher is louder).
+_LOOP_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+
+
+def _loop_signal_details(row) -> dict:
+    """``details`` as a dict, whatever the store handed back.
+
+    The column is a BLOB the writer JSON-encodes, and the read path can return
+    a dict, a JSON string, or None depending on how the row travelled (direct
+    open, daemon proxy, cloud relay). Never raises."""
+    details = row.get("details")
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str) and details.strip():
+        try:
+            import json as _json
+            parsed = _json.loads(details)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _loop_signal_enriched(row: dict) -> dict:
+    """Lift the money and the plain-words headline out of ``details``.
+
+    A renderer that has to reach into a nested blob to find the number it
+    sorts on will eventually forget to, and then the list silently reverts to
+    newest-first. Flattening makes the ranking contract visible in the
+    response shape itself."""
+    out = dict(row)
+    details = _loop_signal_details(row)
+    try:
+        at_risk = round(float(details.get("spend_at_risk_usd") or 0), 4)
+    except (TypeError, ValueError):
+        at_risk = 0.0
+    out["kind"] = str(details.get("kind") or "")
+    out["title"] = str(details.get("message") or "")
+    out["spend_at_risk_usd"] = at_risk
+    out["spend_basis"] = str(details.get("spend_basis") or "unknown")
+    return out
+
+
+def _loop_signal_rank(row: dict) -> tuple:
+    """Sort key: money, then severity, then recency."""
+    try:
+        spend = float(row.get("spend_at_risk_usd") or 0)
+    except (TypeError, ValueError):
+        spend = 0.0
+    sev = _LOOP_SEVERITY_RANK.get(str(row.get("severity") or "").lower(), 0)
+    return (spend, sev, str(row.get("last_seen") or ""))
+
+
 @bp_health.route("/api/loop-signals")
 def api_loop_signals():
     """Return recent LoopDetector signals for the dashboard's Brain badge.
@@ -3017,12 +3070,24 @@ def api_loop_signals():
         "signals": [
           {"session_id": str, "signature": str, "repeat_count": int,
            "first_seen": str, "last_seen": str, "severity": str,
-           "agent_type": str, "details": dict|str|None}
+           "agent_type": str, "details": dict|str|None,
+           # Flattened from details so a renderer never has to parse a blob:
+           "kind": str,                  # detector kind, "" for proxy signals
+           "title": str,                 # plain-words headline
+           "spend_at_risk_usd": float,   # cost of the flagged stretch (est.)
+           "spend_basis": str}           # burn_rate | window_fraction | unknown
         ],
         "count": <int>,
         "total_count": <int>,         # rows the store would have returned
-        "capped_pro_gated": <bool>    # True when OSS cap dropped rows
+        "capped_pro_gated": <bool>,   # True when OSS cap dropped rows
+        "spend_at_risk_usd": <float>  # total across the returned signals
       }
+
+    **Ordering is by what it costs to ignore**, then severity, then recency.
+    Sorting by recency alone put a two-cent "continued after a failed command"
+    above a session that had burned $170 while looping, which is the opposite
+    of the question the reader is asking. Where no cost is known every row ties
+    at 0.0 and the old newest-first order survives.
 
     Empty-list fallback (HTTP 200) on any error so the badge never breaks
     the page.
@@ -3058,9 +3123,14 @@ def api_loop_signals():
     if rows is None:
         rows = []
 
+    rows = [_loop_signal_enriched(r) for r in rows if isinstance(r, dict)]
+    rows.sort(key=_loop_signal_rank, reverse=True)
+
     total_count = len(rows)
     capped_pro_gated = False
     if not is_pro and total_count > 1:
+        # The teaser row is now the costliest one rather than the newest, so a
+        # free node's single visible signal is the one worth acting on.
         rows = rows[:1]
         capped_pro_gated = True
 
@@ -3069,6 +3139,8 @@ def api_loop_signals():
         "count": len(rows),
         "total_count": total_count,
         "capped_pro_gated": capped_pro_gated,
+        "spend_at_risk_usd": round(sum(
+            float(r.get("spend_at_risk_usd") or 0) for r in rows), 2),
     })
 
 
