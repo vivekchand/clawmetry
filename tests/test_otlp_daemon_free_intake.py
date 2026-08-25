@@ -714,3 +714,48 @@ def test_a_count_that_could_not_be_taken_is_not_reported_as_zero(store, monkeypa
 
     monkeypatch.setattr(type(store), "_fetch", _boom)
     assert store.count_otlp_records() is None
+
+
+# ── Not hardcoded to one emitter ────────────────────────────────────────────
+
+def test_a_second_emitter_is_not_mis_bucketed_as_claude_code(store):
+    """Every other fixture in this file says ``claude-code``, which is exactly
+    how a path ends up quietly hardcoded to one runtime.
+
+    This asserts a property of OUR mapping, not a claim about any other
+    runtime's schema: the emitter comes from the OTel-standard
+    ``service.name`` resource attribute, and the event kind from the suffix
+    after the last dot, so a different emitter lands under its OWN agent_type
+    with its tool records mapped the same way. A second runtime showing up
+    inside the first one's runtime filter is the bug this prevents.
+    """
+    now = time.time()
+    other = [
+        _kv("service.name", s="codex"),
+        _kv("team.id", s="platform"),
+        _kv("repository", s="acme/payments-api"),
+        _kv("host.name", s="build-box"),
+    ]
+    rec = _tool_decision(int(now * 1e9), "shell", session_id="other-sess")
+    rec.event_name = "codex.tool_decision"
+    money = _api_request(int(now * 1e9), session_id="other-sess", cost=0.75)
+    money.event_name = "codex.api_request"
+
+    _d._process_otlp_logs(_export([money, rec], resource_attrs=other))
+
+    rows = store.query_otlp_records(session_id="other-sess")
+    assert len(rows) == 2
+    assert {r["agent_type"] for r in rows} == {"codex"}
+    assert {r["service_name"] for r in rows} == {"codex"}
+    # Identity and rollup dimensions work the same for it.
+    assert rows[0]["team"] == "platform" and rows[0]["repo"] == "payments-api"
+
+    events = store.query_events(session_id="other-sess", limit=20)
+    kinds = {e["event_type"] for e in events}
+    assert "tool_call" in kinds, "a second emitter's tool records must map too"
+    assert {e["agent_type"] for e in events} == {"codex"}
+
+    # And it rolls up beside the first one rather than on top of it.
+    by_runtime = {r["key"]: r for r in store.query_otlp_rollup(
+        dimension="agent_type")}
+    assert by_runtime["codex"]["cost_usd"] == pytest.approx(0.75)
