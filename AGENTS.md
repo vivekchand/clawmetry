@@ -1,5 +1,7 @@
 # AGENTS.md — For AI Coding Agents
 
+> **Before code: write the product record in 8090** (FLYWHEEL.md section 0c). The requirement is where a change is justified, the blueprint is where it is designed, the code is where it is built -- in that order.
+>
 > **Read [`FLYWHEEL.md`](./FLYWHEEL.md) first.** It is how you ship a change end to end in this repo (code → PR → green CI → `[RELEASE]` → PyPI → cloud → verified live) and the non-negotiable "done" bar. Then [`CLAUDE.md`](./CLAUDE.md) for the architecture deep-dive. This file is the short "what to do"; those two carry the detail.
 
 ## Quick context
@@ -21,6 +23,7 @@ Quick chooser:
 - New pricing/copy/Buy → **clawmetry-landing**.
 
 ## The rules that bite
+- **Write the PRD in 8090 BEFORE you write code.** Software Factory is the product reviewer -- treat it as the PM on the work, not as a checkbox drift-bot enforces afterwards. Requirement (problem, who is hurt, non-goals, alternatives rejected, risk accepted) -> blueprint (components, contracts, ADRs) -> code, in that order. A PR that touches product code must link the record or say `No-PRD: <reason>`; CI checks that one of the two is there. Burned 2026-08-25: four changes built first and documented after produced accurate mechanism, zero product context, and three defects a reviewer would have caught -- including a one-click irreversible data delete with no confirmation. (FLYWHEEL.md section 0c.)
 - **DuckDB-first.** Every feature persists to and reads from the local DuckDB store (`clawmetry/local_store.py`; the daemon owns the writer lock). Reading raw JSONL / logs / `sessions.json` / process stats *inside a request handler* works locally but silently returns empty in cloud — that's a bug, not a shortcut. (FLYWHEEL.md §1.)
 - **Per-feature route modules.** New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. The old "single file" rule is dead — it broke down at ~33K lines and caused constant PR conflicts. Shared helpers still in `dashboard.py` are reached via late `import dashboard as _d`.
 - **No build step, no npm.** The live frontend is `clawmetry/static/css|js/*` + `clawmetry/templates/tabs/*.html`, vanilla JS only. (`dashboard.py` defines `DASHBOARD_HTML` twice; the second wins and loads the static/template files — the inline `<style>`/HTML earlier is dead code.) No React/Vue/webpack/vite.

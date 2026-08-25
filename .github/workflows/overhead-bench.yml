@@ -1,0 +1,109 @@
+name: Instrumentation overhead
+
+# The overhead figures in docs/OVERHEAD.md were taken on one Apple laptop, and
+# a benchmark that only ever runs on its author's machine is a claim, not a
+# measurement. This runs the same harness on Linux, macOS and Windows and
+# publishes each result as an artifact.
+#
+# Deliberately NOT a pass/fail gate. Shared CI runners are noisy neighbours and
+# a threshold on wall-clock latency would flap, and a check that flaps is a
+# check everyone learns to ignore. The harness already refuses to publish a
+# figure when its rounds disagree on the delta's sign, so a noisy runner
+# produces an honest "below the noise floor" rather than a false number. What
+# this job protects is that the harness still RUNS everywhere and still emits
+# a well-formed report.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 06:00 UTC. Often enough to catch a real regression in the
+    # harness or a platform, rare enough not to burn runner minutes on numbers
+    # nobody reads.
+    - cron: "0 6 * * 1"
+  pull_request:
+    paths:
+      - benchmarks/**
+      - clawmetry/interceptor.py
+      - clawmetry/hooks_claude_code.py
+      - clawmetry/local_store.py
+      - .github/workflows/overhead-bench.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: overhead (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . requests
+
+      # --quick keeps a shared runner under a couple of minutes. The full run
+      # is for a quiet machine you own.
+      - name: Run the harness
+        run: python -m benchmarks.overhead --quick --json overhead-${{ matrix.os }}.json
+
+      # The harness is allowed to report "below the noise floor"; it is not
+      # allowed to emit a report missing the sections a reader relies on, or
+      # to quietly stop measuring a path. That is the regression this catches.
+      - name: Check the report is well formed
+        shell: python
+        run: |
+          import glob, json, sys
+
+          path = glob.glob("overhead-*.json")[0]
+          report = json.load(open(path))
+
+          missing = [k for k in ("machine", "interceptor", "hook_gate", "ingest_query")
+                     if k not in report]
+          if missing:
+              sys.exit(f"report is missing section(s): {missing}")
+
+          for key in ("processor", "python", "cpu_count"):
+              if not report["machine"].get(key):
+                  sys.exit(f"machine stamp missing {key!r}; numbers without a "
+                           "machine are not reproducible")
+
+          ing = report["ingest_query"]["ingest"]
+          if not ing.get("events_per_sec"):
+              sys.exit("ingest measured nothing")
+
+          icept = report["interceptor"]
+          if not icept.get("skipped") and "below_noise_floor" not in icept:
+              sys.exit("interceptor result lost its noise-floor verdict, which is "
+                       "the field that stops a noise reading being published")
+
+          hg = report["hook_gate"]
+          if not hg.get("conditions"):
+              sys.exit("hook-gate measured no conditions")
+          for name, cond in hg["conditions"].items():
+              if not cond.get("n"):
+                  sys.exit(f"hook-gate condition {name!r} collected no samples")
+
+          print(f"{path}: report is well formed")
+          print(f"  ingest        {ing['events_per_sec']:,} events/sec")
+          if icept.get("below_noise_floor"):
+              print("  interceptor   below this runner's noise floor (expected on shared CI)")
+          elif not icept.get("skipped"):
+              print(f"  interceptor   +{icept['wall']['added_p50_us']:.0f} us wall p50")
+          floor = hg["floor_bare_interpreter"]["p50_us"] / 1000
+          print(f"  hook floor    {floor:.0f} ms bare interpreter")
+          for name, cond in hg["conditions"].items():
+              print(f"  hook {name:<12} +{cond['added_over_floor_p50_us'] / 1000:.0f} ms over floor")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overhead-${{ matrix.os }}
+          path: overhead-*.json
+          if-no-files-found: error

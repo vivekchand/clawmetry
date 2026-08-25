@@ -182,6 +182,7 @@ DEBUG=1                                # Enable debug logging
 ```
 
 ## Conventions
+- **Product record before code (FLYWHEEL.md section 0c).** 8090 Software Factory is the product reviewer, not a lint gate. Write the requirement first -- problem, who is hurt, non-goals, alternatives rejected, risk accepted -- then the blueprint, then the code. A requirement written after the fact reviews nothing, and `scripts/check_product_record.py` gates PRs on citing one (or an explicit `No-PRD: <reason>`).
 - **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
 - **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`clawmetry/static/css/dashboard.css`, `clawmetry/static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
