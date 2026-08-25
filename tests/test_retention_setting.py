@@ -33,6 +33,11 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
 * AC-OBS-LADC-004.6 -- the choice can be cleared:
   ``test_clearing_falls_back_to_the_plan``,
   ``test_clearing_removes_the_row_rather_than_writing_a_sentinel``.
+* AC-OBS-LADC-004.7 -- shortening asks first, naming what goes and that it
+  cannot be undone; raising does not nag:
+  ``test_shortening_retention_asks_before_deleting``,
+  ``test_the_prompt_names_what_goes_and_when``,
+  ``test_raising_retention_does_not_nag``.
 """
 from __future__ import annotations
 
@@ -267,3 +272,54 @@ def test_hosted_panel_does_not_state_the_plan_number_as_the_machines_setting():
     cloud_branch = body[body.index("window.CLOUD_MODE"):body.index("label.textContent = (state")]
     assert "cap_days" in cloud_branch
     assert "effective_days" not in cloud_branch
+
+# ── shortening retention DESTROYS data, so it must ask first ────────────
+#
+# Added 2026-08-25 after review. Shrink-only makes the control safe against
+# granting yourself MORE retention than you bought. It does nothing to stop
+# you deleting your own evidence by typing a smaller number, and the original
+# blueprint mistook the first safety property for the second. Type 1, press
+# Save, and within the hour every event older than a day is gone permanently.
+
+def _js():
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "clawmetry" / "static"
+            / "js" / "app.js").read_text(encoding="utf-8")
+
+
+def _save_fn():
+    js = _js()
+    i = js.index("async function saveRetentionSetting(")
+    return js[i:i + 2600]
+
+
+def test_shortening_retention_asks_before_deleting():
+    body = _save_fn()
+    assert "window.confirm(" in body, (
+        "shortening retention hard-deletes history within the hour; it must ask"
+    )
+    assert "cannot be " in body and "recovered" in body
+
+
+def test_the_prompt_names_what_goes_and_when():
+    """A confirm that says 'are you sure?' teaches nothing. It has to name the
+    new period, the old one, and that the deletion is permanent."""
+    body = _save_fn()
+    assert "instead of" in body
+    assert "within the hour" in body
+
+
+def test_raising_retention_does_not_nag():
+    """Only the destructive direction confirms. Raising the period, or going
+    back to the plan default, deletes nothing."""
+    body = _save_fn()
+    assert "days < _cur" in body
+    assert "!usePlanDefault" in body
+
+
+def test_the_period_in_force_is_recorded_for_the_comparison():
+    """The prompt can only tell shrinking from raising if the rendered state
+    left the current period somewhere it can read."""
+    js = _js()
+    i = js.index("function _renderRetention(")
+    assert "_cmRetentionEffectiveDays" in js[i:i + 2600]
