@@ -755,6 +755,19 @@ _DAEMON_METHODS = frozenset({
     # set_agent_meta. The handler calls put_span(span=...) by keyword (the proxy
     # only forwards kwargs).
     "put_span",
+    # WO-7 daemon-free intake. The OTLP /v1/logs receiver runs in the
+    # DASHBOARD process, which does not own the DuckDB writer lock, so its
+    # batch write has to come through here or it silently no-ops on every
+    # real install (the same trap put_span hit above). Call it by KEYWORD:
+    # put_otlp_batch(records=[...], events=[...]) — the proxy forwards
+    # **kwargs only. One call per OTLP export batch, not per record.
+    "put_otlp_batch",
+    # Read side of the same table: per-team / per-repo / per-person rollups
+    # over the daemon-free path, and the persisted-row count /api/otel-status
+    # shows so an operator can tell durable storage from the in-memory cache.
+    "query_otlp_records",
+    "query_otlp_rollup",
+    "count_otlp_records",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.

@@ -1397,6 +1397,63 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_session_phase_phase ON session_phase(phase, phase_since DESC)",
     "CREATE INDEX IF NOT EXISTS idx_session_phase_runtime ON session_phase(runtime, observed_at DESC)",
+    # ── Daemon-free OTLP intake (WO-7) ────────────────────────────────────
+    # The receiver at /v1/logs used to fold every record into the in-memory
+    # metrics cache, so an org that onboarded by pointing OTEL_* at ClawMetry
+    # lost everything on restart and could not roll anything up by team, repo
+    # or person. This table is the durable half of that path: one row per
+    # ingested OTLP log record, with the identity the runtime already sends
+    # (user.id / user.email / organization.id / session.id) plus the rollup
+    # dimensions an org sets via OTEL_RESOURCE_ATTRIBUTES (team, repo).
+    #
+    # NOT the events table. Events are the agent's behaviour stream (and the
+    # tool records below DO land there, so the trajectory detectors see this
+    # path); this table is the money-and-identity ledger the org buyer asks
+    # for. Keeping it separate means no migration on a hot shared schema.
+    #
+    # record_id is deterministic (see dashboard._otlp_record_id), so an OTLP
+    # exporter retrying a batch REPLACEs its rows instead of double-counting
+    # the spend. That matters more here than anyone else in the store: OTLP
+    # delivery is at-least-once by specification.
+    #
+    # NOTE ON DATA HANDLING: rows on this path arrive in PLAINTEXT over HTTP.
+    # The runtime encrypts nothing, so the daemon's E2E snapshot guarantee
+    # does not extend here. docs/enterprise.md says so out loud; keep it that
+    # way rather than letting the encryption claim drift over this table.
+    """
+    CREATE TABLE IF NOT EXISTS otlp_records (
+        record_id     VARCHAR PRIMARY KEY,
+        ts            DOUBLE  NOT NULL,
+        received_at   DOUBLE  NOT NULL,
+        event_name    VARCHAR,
+        session_id    VARCHAR,
+        user_id       VARCHAR,
+        user_email    VARCHAR,
+        org_id        VARCHAR,
+        team          VARCHAR,
+        repo          VARCHAR,
+        node_id       VARCHAR,
+        agent_type    VARCHAR,
+        service_name  VARCHAR,
+        model         VARCHAR,
+        provider      VARCHAR,
+        cost_usd      DOUBLE,
+        tokens_input  INTEGER,
+        tokens_output INTEGER,
+        token_count   INTEGER,
+        duration_ms   DOUBLE,
+        tool_name     VARCHAR,
+        decision      VARCHAR,
+        success       BOOLEAN,
+        attributes    BLOB
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_ts       ON otlp_records(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_org_ts   ON otlp_records(org_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_team_ts  ON otlp_records(team, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_repo_ts  ON otlp_records(repo, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_user_ts  ON otlp_records(user_email, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_sess_ts  ON otlp_records(session_id, ts)",
 ]
 
 
@@ -5608,6 +5665,302 @@ class LocalStore:
         call ``local_store.get_store().put_span(...)`` per the issue spec
         without us painting the rest of the module a different colour."""
         self.ingest_span(span)
+
+    # ── Daemon-free OTLP intake (WO-7) ─────────────────────────────────────
+
+    _OTLP_RECORD_COLS = (
+        "record_id", "ts", "received_at", "event_name", "session_id",
+        "user_id", "user_email", "org_id", "team", "repo", "node_id",
+        "agent_type", "service_name", "model", "provider", "cost_usd",
+        "tokens_input", "tokens_output", "token_count", "duration_ms",
+        "tool_name", "decision", "success", "attributes",
+    )
+
+    def put_otlp_batch(
+        self,
+        records: list[dict[str, Any]] | None = None,
+        events: list[dict[str, Any]] | None = None,
+    ) -> dict[str, int]:
+        """Persist ONE OTLP export batch: identity/spend rows into
+        ``otlp_records`` and behaviour rows into ``events``.
+
+        Both halves in one call on purpose. In the dashboard process
+        ``get_store()`` returns a ``_ProxyStore`` that forwards to the daemon
+        over HTTP, so a per-record call would cost one round trip per record —
+        an OTLP exporter ships batches of hundreds. One hop per batch keeps the
+        receiver inside the CPU budget (FLYWHEEL 1e).
+
+        Args are keyword-friendly and the proxy forwards ``**kwargs`` only, so
+        call this as ``put_otlp_batch(records=[...], events=[...])``. A
+        positional call through the proxy silently writes nothing — the same
+        foot-gun ``put_span`` hit.
+
+        ``record_id`` is the primary key and callers derive it deterministically
+        from the record's own content, so a retried OTLP batch REPLACEs its rows
+        rather than double-counting spend. Event rows dedup on ``id`` through
+        the normal INSERT-OR-IGNORE ingest path.
+
+        Returns ``{"records": n, "events": n, "events_skipped_daemon_owned":
+        n}`` — what was accepted, and what was dropped because a daemon
+        already owns that session (see below).
+        Never raises on a single bad row; a malformed record is skipped and the
+        rest of the batch lands.
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: put_otlp_batch() on read-only store")
+        rows: dict[str, list[Any]] = {}
+        for rec in records or []:
+            if not isinstance(rec, dict):
+                continue
+            rid = rec.get("record_id")
+            if not rid:
+                continue
+            try:
+                ts = float(rec.get("ts") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+
+            def _s(key: str) -> str | None:
+                v = rec.get(key)
+                if v in (None, ""):
+                    return None
+                return str(v)
+
+            def _f(key: str) -> float | None:
+                v = rec.get(key)
+                if v in (None, ""):
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            def _i(key: str) -> int | None:
+                v = _f(key)
+                return None if v is None else int(v)
+
+            success = rec.get("success")
+            if success is not None:
+                success = bool(success)
+            try:
+                received = float(rec.get("received_at") or 0.0) or time.time()
+            except (TypeError, ValueError):
+                received = time.time()
+            # Last write wins within the batch — an exporter that repeats a
+            # record inside one payload should not insert it twice.
+            rows[str(rid)] = [
+                str(rid), ts, received,
+                _s("event_name"), _s("session_id"), _s("user_id"),
+                _s("user_email"), _s("org_id"), _s("team"), _s("repo"),
+                _s("node_id"), _s("agent_type"), _s("service_name"),
+                _s("model"), _s("provider"),
+                _f("cost_usd"), _i("tokens_input"), _i("tokens_output"),
+                _i("token_count"), _f("duration_ms"),
+                _s("tool_name"), _s("decision"), success,
+                _to_blob(rec.get("attributes")),
+            ]
+
+        written = 0
+        if rows:
+            placeholders = ", ".join(["?"] * len(self._OTLP_RECORD_COLS))
+            sql = (
+                "INSERT OR REPLACE INTO otlp_records ("
+                + ", ".join(self._OTLP_RECORD_COLS)
+                + f") VALUES ({placeholders})"
+            )
+            with self._write_lock:
+                for params in rows.values():
+                    try:
+                        self._conn.execute(sql, params)
+                        written += 1
+                    except Exception:
+                        log.warning("otlp_records: row rejected", exc_info=True)
+
+        # Sessions whose behaviour stream a DAEMON already owns. On a machine
+        # that runs the daemon AND has the org's OTEL config pushed to it, the
+        # same session arrives twice: once read from the transcript on disk,
+        # once pushed by the runtime. Writing both would double the session's
+        # spend and show every tool call twice — and a cost figure that
+        # doubles because two collectors both worked is worse than a missing
+        # one. The transcript read is strictly richer (real tool arguments,
+        # assistant text), so the daemon wins and the OTLP events are dropped.
+        # The identity/spend LEDGER above is unaffected: it is a separate
+        # table with its own dedup key, and the org rollups still see every
+        # record.
+        #
+        # Known gap, stated rather than hidden: if the OTLP record arrives
+        # BEFORE the daemon has ingested that session's transcript, this check
+        # sees no daemon rows yet and lets the events through. The window is
+        # the first ingest tick of a brand-new session.
+        owned_by_daemon: set[str] = set()
+        want_sessions = sorted({
+            str(ev.get("session_id")) for ev in (events or [])
+            if isinstance(ev, dict) and ev.get("session_id")
+        })
+        if want_sessions:
+            try:
+                placeholders = ", ".join(["?"] * len(want_sessions))
+                rows = self._fetch(
+                    "SELECT DISTINCT session_id FROM events "
+                    f"WHERE session_id IN ({placeholders}) "
+                    "AND id NOT LIKE 'otlp:%'",
+                    list(want_sessions),
+                )
+                owned_by_daemon = {str(r[0]) for r in rows if r and r[0]}
+            except Exception:
+                log.warning("otlp events: ownership probe failed", exc_info=True)
+
+        ev_written = 0
+        ev_skipped = 0
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            if str(ev.get("session_id") or "") in owned_by_daemon:
+                ev_skipped += 1
+                continue
+            try:
+                self.ingest(ev)
+                ev_written += 1
+            except Exception:
+                log.warning("otlp events: row rejected", exc_info=True)
+        # The receiver is a request handler, not the daemon's ingest loop, so
+        # there is no flusher tick coming to drain the ring on its own
+        # schedule. Flush now: "data survives a restart" is this path's
+        # acceptance criterion, and a batch sitting in the ring does not.
+        if ev_written:
+            try:
+                self._flush_now()
+            except Exception:
+                log.warning("otlp events: flush failed", exc_info=True)
+        return {
+            "records": written,
+            "events": ev_written,
+            "events_skipped_daemon_owned": ev_skipped,
+        }
+
+    def query_otlp_records(
+        self,
+        *,
+        session_id: str | None = None,
+        org_id: str | None = None,
+        team: str | None = None,
+        repo: str | None = None,
+        user_email: str | None = None,
+        event_name: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read OTLP intake rows, newest first. Filters compose with AND."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        for col, val in (
+            ("session_id", session_id), ("org_id", org_id), ("team", team),
+            ("repo", repo), ("user_email", user_email),
+            ("event_name", event_name),
+        ):
+            if val:
+                clauses.append(f"{col} = ?")
+                params.append(str(val))
+        if since is not None:
+            clauses.append("ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            clauses.append("ts <= ?")
+            params.append(float(until))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        cols = list(self._OTLP_RECORD_COLS)
+        sql = (
+            f"SELECT {', '.join(cols)} FROM otlp_records {where} "
+            "ORDER BY ts DESC LIMIT ?"
+        )
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("attributes")
+            if raw is not None:
+                try:
+                    raw = _ccr.maybe_decompress(raw)
+                    text = (
+                        raw.decode("utf-8")
+                        if isinstance(raw, (bytes, bytearray)) else raw
+                    )
+                    try:
+                        d["attributes"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["attributes"] = text
+                except UnicodeDecodeError:
+                    d["attributes"] = None
+            out.append(d)
+        return out
+
+    _OTLP_ROLLUP_DIMENSIONS = frozenset(
+        {"team", "repo", "org_id", "user_email", "user_id",
+         "model", "agent_type", "session_id"}
+    )
+
+    def query_otlp_rollup(
+        self,
+        *,
+        dimension: str = "team",
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Spend/token rollup over the daemon-free intake path.
+
+        ``dimension`` is one of ``_OTLP_ROLLUP_DIMENSIONS`` — the whole point of
+        the identity extraction, and the acceptance criterion for WO-7: a
+        by-team or by-repo answer from the ingested rows alone, no join against
+        anything the daemon would have had to write.
+
+        The dimension is validated against a frozenset before it reaches the
+        SQL string; it is a column name, so it cannot be parameterised.
+        """
+        dim = str(dimension or "team")
+        if dim not in self._OTLP_ROLLUP_DIMENSIONS:
+            raise ValueError(f"unsupported rollup dimension: {dimension!r}")
+        clauses = [f"{dim} IS NOT NULL", f"{dim} <> ''"]
+        params: list[Any] = []
+        if since is not None:
+            clauses.append("ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            clauses.append("ts <= ?")
+            params.append(float(until))
+        sql = f"""
+            SELECT {dim} AS key,
+                   COUNT(*)                     AS records,
+                   COUNT(DISTINCT session_id)   AS sessions,
+                   COALESCE(SUM(cost_usd), 0)   AS cost_usd,
+                   COALESCE(SUM(token_count), 0) AS tokens,
+                   COALESCE(SUM(tokens_input), 0) AS tokens_input,
+                   COALESCE(SUM(tokens_output), 0) AS tokens_output,
+                   MIN(ts)                      AS first_ts,
+                   MAX(ts)                      AS last_ts
+            FROM otlp_records
+            WHERE {' AND '.join(clauses)}
+            GROUP BY {dim}
+            ORDER BY cost_usd DESC, records DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ("key", "records", "sessions", "cost_usd", "tokens",
+                "tokens_input", "tokens_output", "first_ts", "last_ts")
+        return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def count_otlp_records(self) -> int:
+        """Row count for the daemon-free intake table. Used by
+        ``/api/otel-status`` to show that data actually persisted (as opposed
+        to living in the in-memory cache that a restart clears)."""
+        try:
+            rows = self._fetch("SELECT COUNT(*) FROM otlp_records", [])
+            return int(rows[0][0]) if rows else 0
+        except Exception:
+            return 0
 
     def query_spans(
         self,

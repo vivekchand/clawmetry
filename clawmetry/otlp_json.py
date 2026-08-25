@@ -280,10 +280,17 @@ class _Span:
 
 
 class _LogRecord:
-    __slots__ = ("time_unix_nano", "event_name", "severity_text", "body", "attributes")
+    __slots__ = ("time_unix_nano", "observed_time_unix_nano", "event_name",
+                 "severity_text", "body", "attributes")
 
     def __init__(self, raw: dict):
         self.time_unix_nano = _as_int(_get(raw, "timeUnixNano", "time_unix_nano"))
+        # WO-7: the record's own clock is what the intake path stores, and an
+        # exporter that sets only observedTimeUnixNano (legal per the OTLP/JSON
+        # spec) used to fall through to receipt time here — misdating every
+        # batched or retried delivery as "now".
+        self.observed_time_unix_nano = _as_int(
+            _get(raw, "observedTimeUnixNano", "observed_time_unix_nano"))
         self.event_name = str(_get(raw, "eventName", "event_name", default="") or "")
         self.severity_text = str(_get(raw, "severityText", "severity_text", default="") or "")
         body = raw.get("body")
