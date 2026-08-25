@@ -302,8 +302,12 @@ def test_run_all_orders_warning_before_info():
     chrono.append(_tool_call("Read", {"p": "/y"}, 5))
     incidents = detectors.run_all(_newest_first(chrono), SID)
     if len(incidents) >= 2:
-        sevs = [i["severity"] for i in incidents]
-        assert sevs == sorted(sevs, key=lambda s: detectors._SEVERITY_RANK[s])
+        ranks = [detectors._SEVERITY_RANK[i["severity"]] for i in incidents]
+        # Loudest first (the rank is "higher is louder"). With no cost known,
+        # spend_at_risk ties at 0.0 for every incident and severity remains the
+        # deciding key, so the original guarantee still holds.
+        assert ranks == sorted(ranks, reverse=True)
+        assert incidents[0]["severity"] == "warning"
 
 
 # ── Daemon integration: seeded loop -> device_summary.alert ──────────────────
