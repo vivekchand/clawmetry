@@ -192,12 +192,41 @@ signal, itemised by cause.
 
 ![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-**It shows you the money you can get back.**
-$4,058.92 spent this month, about $3,668/mo of it itemised as recoverable
-(trim long conversations, route short tasks to a smaller model, trim
-thinking), and $35,572/mo already saved by cache reuse.
+**It shows you where the money went, in every window.**
+$252.47 today, $513.15 this week, $1,312.92 this month, each with the tokens
+behind it and how much of it your subscription already covers. Below that,
+about $1,128/mo itemised as recoverable and $17,256/mo already saved by
+cache reuse.
 
-![Cost: efficiency grade B with itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+
+**It draws how a message becomes an answer.**
+The live flow diagram: you, the channel it arrived on, the gateway, the model
+answering right now, and every tool it reached for. Nodes light up as work
+moves through them.
+
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+
+**Every agent on the machine, in one table.**
+What it runs, what it costs in the last 24 hours and over its lifetime, when
+it was last seen, who owns it, and whether a subscription is covering the
+bill. 14 agents here, 3 sessions working, 13 quiet.
+
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
+
+**It grades the work, not just the spend.**
+An A this week: 54 tasks came back clean, 2 rough ones cost $48.57, and the
+runs with too little activity to judge are left out of the grade instead of
+being counted as wins. Each rough run links to its trace.
+
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
+
+**It shows why the context window keeps filling up.**
+715K of a 1M-token window on the latest turn, an 83.3% peak, 4 compactions
+that all fired proactively rather than on an overflow, and the utilisation of
+every turn behind it.
+
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
 
 **Detection runs without you configuring anything.**
 The built-in detectors are on from install: agent went quiet, telemetry feed
@@ -206,6 +235,14 @@ threshold, threat signature matched, security tool finding, security posture
 changed. Your own rules are optional on top.
 
 ![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+
+**Holding a risky call is opt-in, and ships off.**
+Recursive deletes, force pushes, sudo, secrets, package installs and outbound
+calls each get a rule you can turn on. Until you do, ClawMetry watches and
+changes nothing. Once one is on, matching calls wait here (or on your phone)
+for an approve or a deny.
+
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
