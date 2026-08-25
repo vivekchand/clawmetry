@@ -49,6 +49,12 @@ def furnished(tmp_path):
 # ── the grade ──────────────────────────────────────────────────────────────
 
 def test_furnished_repo_grades_well(furnished):
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.1
+
+    a repo that does everything an agent needs grades well.
+    """
     rep = rr.score_repo(furnished)
     assert rep["status"] == "ok"
     assert rep["failed"] == 0, [c for c in rep["checks"] if c["status"] == "fail"]
@@ -56,6 +62,12 @@ def test_furnished_repo_grades_well(furnished):
 
 
 def test_bare_repo_fails_every_gradeable_check(bare):
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.1
+
+    all six graded checks, each answered from the filesystem.
+    """
     rep = rr.score_repo(bare)
     ids = {c["id"]: c["status"] for c in rep["checks"]}
     assert ids["instruction_file"] == "fail"
@@ -67,7 +79,12 @@ def test_bare_repo_fails_every_gradeable_check(bare):
 
 
 def test_every_fail_names_the_thing_it_looked_for(bare):
-    """A FAIL must be actionable: it says what was missing and how to fix it."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.3
+
+    a FAIL says what was looked for and how to fix it.
+    """
     for c in rr.score_repo(bare)["checks"]:
         if c["status"] == "fail":
             assert c["remediation"], c["id"]
@@ -75,8 +92,12 @@ def test_every_fail_names_the_thing_it_looked_for(bare):
 
 
 def test_every_pass_names_the_file_it_read(furnished):
-    """A PASS must carry the evidence, so a reader can tell a measured
-    result from a shipped constant."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.3
+
+    a PASS carries the path that was read, so a reader can tell a measured result from a shipped constant.
+    """
     for c in rr.score_repo(furnished)["checks"]:
         if c["status"] == "pass" and c["id"] != "instruction_loaded":
             assert c["evidence"], c["id"]
@@ -88,6 +109,10 @@ def test_every_pass_names_the_file_it_read(furnished):
 # ── ADR-004: unreadable means zero weight, never a penalty ─────────────────
 
 def test_unknown_checks_carry_zero_weight(furnished):
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.4
+    """
     for c in rr.score_repo(furnished)["checks"]:
         if c["status"] == "unknown":
             assert c["weight"] == 0, c["id"]
@@ -100,11 +125,11 @@ def test_check_helper_forces_unknown_to_zero_weight():
 
 
 def test_unreadable_config_scores_unknown_not_fail(tmp_path):
-    """A package.json we cannot parse must not read as "no test command".
+    """Acceptance criteria proven here:
 
-    This is the exact shape of the bug ADR-004 exists to stop: the file IS
-    there, we simply could not read it, and reporting that as a failure
-    invents a defect.
+    AC-OBS-007.4
+
+    a package.json we cannot parse must not read as "no test command". This is the exact shape of the bug ADR-004 exists to stop: the file IS there, we simply could not read it, and reporting that as a failure invents a defect.
     """
     d = tmp_path / "broken"
     d.mkdir()
@@ -115,7 +140,12 @@ def test_unreadable_config_scores_unknown_not_fail(tmp_path):
 
 
 def test_unknown_moves_the_grade_in_neither_direction():
-    """Two identical repos, one with an extra unknown, grade the same."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.4
+
+    two identical repos, one with an extra unknown, grade the same.
+    """
     base = [
         rr._check("a", "A", rr.PASS, "d", None, 10),
         rr._check("b", "B", rr.FAIL, "d", "fix", 10),
@@ -175,7 +205,12 @@ def test_never_raises_on_junk_input(junk):
 
 
 def test_renders_for_a_repo_with_no_clawmetry_history(furnished):
-    """Acceptance: the score renders for a repo ClawMetry has never seen."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.5
+
+    the score renders for a repo ClawMetry has never seen, and says it has no history rather than reporting a clean stuck rate.
+    """
     rep = rr.score_repo(furnished)
     assert rep["status"] == "ok"
     assert rep["signals"]["has_history"] is False
@@ -185,8 +220,12 @@ def test_renders_for_a_repo_with_no_clawmetry_history(furnished):
 
 
 def test_no_network_and_no_subprocess(monkeypatch, furnished):
-    """Acceptance: no network calls. Also no subprocess: we never run the
-    build we are grading."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.7
+
+    no network calls, and no subprocess either. We never run the build we are grading.
+    """
     import socket
     import subprocess
 
@@ -204,10 +243,11 @@ def test_no_network_and_no_subprocess(monkeypatch, furnished):
 
 
 def test_module_source_has_no_subprocess_or_urllib_import():
-    """Belt and braces: the guard above only catches what a scan reaches.
+    """Acceptance criteria proven here:
 
-    A future check that shells out to `make test` would be a read-only
-    violation AND a network call; this fails the moment one is added.
+    AC-OBS-007.7
+
+    , belt and braces: the guard above only catches what a scan reaches. A future check that shells out to `make test` would be a read-only violation AND a network call; this fails the moment one is added.
     """
     src = open(rr.__file__, encoding="utf-8").read()
     for banned in ("import subprocess", "import urllib", "import requests",
@@ -218,8 +258,12 @@ def test_module_source_has_no_subprocess_or_urllib_import():
 # ── per-runtime honesty ────────────────────────────────────────────────────
 
 def test_runtime_scoping_is_honest(furnished):
-    """A repo legible to Claude Code can be invisible to Cursor. A single
-    node-wide tick would hide that."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.6
+
+    a repo legible to Claude Code can be invisible to Cursor. A single node-wide tick would hide that.
+    """
     claude = rr.score_repo(furnished, runtime="claude_code")
     cursor = rr.score_repo(furnished, runtime="cursor")
     c_instr = [c for c in claude["checks"] if c["id"] == "instruction_file"][0]
@@ -278,6 +322,12 @@ def test_rel_ranking_is_derived_from_how_many_runtimes_read_the_file():
 
 
 def test_runtime_coverage_reports_what_it_looked_for(furnished):
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.6
+
+    per runtime, what was found and where we looked.
+    """
     cov = rr.runtime_coverage(furnished)
     by_id = {r["runtime"]: r for r in cov}
     assert by_id["claude_code"]["has_instructions"] is True
@@ -295,6 +345,12 @@ def _row(sid, cwd, signature=None, details=None, ts="2026-08-20T10:00:00"):
 
 
 def test_pair_signals_counts_sessions_and_incidents():
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.2
+
+    sessions in the window, and how many got stuck.
+    """
     rows = [
         _row("s1", "/r"),
         _row("s2", "/r", "daemon_detect_stuck_loop", {"kind": "stuck_loop"}),
@@ -322,6 +378,10 @@ def test_one_session_with_two_signals_counts_once_as_stuck():
 
 
 def test_no_sessions_means_no_rate_not_a_zero_rate():
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.5
+    """
     sig = rr.pair_signals([], window_days=30)
     assert sig["stuck_rate"] is None
     assert sig["has_history"] is False

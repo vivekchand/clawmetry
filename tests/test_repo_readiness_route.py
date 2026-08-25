@@ -42,6 +42,13 @@ def test_payload_scores_the_requested_path(monkeypatch, repo):
 
 
 def test_payload_picks_the_busiest_live_repo(monkeypatch, repo, tmp_path):
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.1
+    AC-OBS-007.2
+
+    a repo discovered from session history, with the session and stuck counts for that same repo beside its grade.
+    """
     quiet = tmp_path / "quiet"
     quiet.mkdir()
     rows = [_row("s1", repo), _row("s2", repo), _row("s3", str(quiet))]
@@ -125,7 +132,12 @@ def test_the_hosted_dashboard_never_scores_its_own_checkout(monkeypatch):
 
 
 def test_endpoint_is_free_and_ungated():
-    """WO-5: free and ungated. This is a lead magnet, not a paid surface."""
+    """Acceptance criteria proven here:
+
+    AC-OBS-007.8
+
+    free and ungated. A lead magnet, not a paid surface.
+    """
     src = open(readiness.__file__, encoding="utf-8").read()
     assert "@gate(" not in src
     assert "allows_feature" not in src

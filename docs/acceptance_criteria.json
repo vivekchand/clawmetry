@@ -748,6 +748,54 @@
       "doc": "Runtime and Session Observability",
       "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
       "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."
+    },
+    {
+      "id": "AC-OBS-007.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, for a repository named by the operator or discovered from session history, a grade for how legible that repository is to an agent, covering instruction file, test command, build command, lint or format gate, CI configuration and repository-scoped agent skills."
+    },
+    {
+      "id": "AC-OBS-007.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, beside that grade and for the same repository, how many sessions ran there in a stated window and how many of them the detectors recorded as stuck."
+    },
+    {
+      "id": "AC-OBS-007.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report every passing check with the specific path that was read to reach that verdict, and every failing check with the paths that were looked for plus a remediation the operator can act on."
+    },
+    {
+      "id": "AC-OBS-007.4",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report a check whose input could not be read as an explicit unknown that does not affect the grade in either direction, rather than as a failure or a pass."
+    },
+    {
+      "id": "AC-OBS-007.5",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report a repository with no recorded session history as having no history, distinctly from a repository where sessions ran and none got stuck."
+    },
+    {
+      "id": "AC-OBS-007.6",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, per runtime, which runtimes would find their instructions in the repository, and scope the graded result to the runtime the operator has selected."
+    },
+    {
+      "id": "AC-OBS-007.7",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Complete without making any network request and without executing any command from the repository under examination."
+    },
+    {
+      "id": "AC-OBS-007.8",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Remain available on every plan, including free, with no entitlement gate."
     }
   ]
 }
