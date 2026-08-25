@@ -19512,55 +19512,6 @@ def _build_loops_slice(store):
     return out
 
 
-def _build_session_titles_snapshot(limit: int = 400) -> dict:
-    """Session titles for the cloud, carried E2E-encrypted.
-
-    A session title is CONTENT, not a total. Where a runtime adapter supplies
-    no title of its own, the family ingest above falls back to the session's
-    FIRST USER MESSAGE (see ``_ftitle``), so a title can be a user's words
-    verbatim. It therefore rides this encrypted snapshot and must never ride
-    the plaintext ``/ingest/sessions`` metadata upload -- the same rule the
-    desk-device slice already follows in ``_build_device_summary``.
-
-    Keyed by the FULL canonical session id (``claude_code:<uuid>``) so the
-    cloud can join it onto the session rows it stores. The device slice is a
-    separate map keyed by the BARE id for a different consumer; do not merge
-    them.
-
-    Built on the daemon's OWN store handle (never a ``read_only`` re-open --
-    FLYWHEEL 1). Bounded by ``limit`` so the snapshot stays small.
-    """
-    out: dict = {}
-    try:
-        from clawmetry import local_store as _ls
-
-        store = _ls.get_store()
-        if store is None:
-            return out
-        rows = store.query_sessions_table(limit=limit) or []
-        for s in rows:
-            if not isinstance(s, dict):
-                continue
-            sid = str(s.get("session_id") or "").strip()
-            title = (s.get("title") or "").strip()
-            if not sid or not title:
-                continue
-            # A bare id is an identifier, not a title -- carrying it here
-            # would just duplicate the plaintext row for no gain.
-            bare = sid.rsplit(":", 1)[-1]
-            if title in (sid, bare) or bare.startswith(title):
-                continue
-            out[sid] = title[:120]
-            if len(out) >= limit:
-                break
-    except Exception as _ste:
-        try:
-            log.debug("session-titles slice skipped: %s", _ste)
-        except Exception:
-            pass
-    return out
-
-
 def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -20565,11 +20516,6 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
         # this). Cloud stays blind; E2E preserved.
-        # Session titles are content (a title can be the user's first message
-        # verbatim), so they travel encrypted here and NOT on the plaintext
-        # /ingest/sessions upload. Cloud joins this onto its session rows
-        # after client-side decrypt.
-        "sessionTitles": _build_session_titles_snapshot(),
         "deviceSummary": _build_device_summary(spending, _du,
                                                efficiency=_eff_slice),
         "cronJobs": _build_cron_jobs(paths),
