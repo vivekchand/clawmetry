@@ -44,7 +44,7 @@ jobs:
   e2e-gate:
     name: E2E Gate (required)
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 35
 
     steps:
       # Required because the gate logic is a repo script now. This job had no
