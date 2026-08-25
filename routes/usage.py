@@ -65,7 +65,8 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "devin",
     "gemini_cli",
     "cline",
-    "openhands",    "openworker",
+    "openhands",
+    "openworker",
 
 ))
 

@@ -162,7 +162,8 @@ RUNTIME_LABELS = {
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
     "openhands": "OpenHands",
-    "devin": "Devin",    "openworker": "OpenWorker",
+    "devin": "Devin",
+    "openworker": "OpenWorker",
 
 }
 
@@ -200,7 +201,8 @@ RUNTIME_LANDING_PATHS = {
     "devin": "/runtimes/devin",
     "gemini_cli": "/runtimes/gemini-cli",
     "cline": "/runtimes/cline",
-    "openhands": "/runtimes/openhands",    "openworker": "/runtimes/openworker",
+    "openhands": "/runtimes/openhands",
+    "openworker": "/runtimes/openworker",
 
 }
 

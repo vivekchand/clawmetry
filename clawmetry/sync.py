@@ -7199,7 +7199,8 @@ _LITE_RT_LABELS = {
     "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
-    "openhands": "OpenHands",    "openworker": "OpenWorker",
+    "openhands": "OpenHands",
+    "openworker": "OpenWorker",
 
 }
 
