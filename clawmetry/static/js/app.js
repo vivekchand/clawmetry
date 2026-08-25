@@ -1985,7 +1985,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
-  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); loadRetentionSetting(); }
   if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
@@ -10905,6 +10905,105 @@ async function approvalDecide(approvalId, decision, btn) {
 // attention, collapses the passing items behind a one-line "show all"
 // disclosure, and condenses the hero card so the action items aren't
 // buried under a wall of green PASS cards.
+// ── Data retention control (Security tab) ───────────────────────────────
+//
+// The number, WHAT is setting it, and a way to shorten it. A control that
+// showed "7 days" without saying whether that is your choice or your plan's
+// ceiling would just move the reviewer's question rather than answer it.
+//
+// The server resolves shrink-only: asking for more than the plan allows
+// stores the request but keeps pruning at the ceiling, and the copy says so
+// rather than letting the operator believe they bought more retention.
+function _renderRetention(state) {
+  var label = document.getElementById('retention-label');
+  var input = document.getElementById('retention-days-input');
+  if (!label || !input) return;
+  // On the hosted dashboard there is no node to read or write. The server
+  // answers from the plan alone, which is true for the account but blind to
+  // a SHORTER period the operator set on the machine itself — and the write
+  // has no path to that machine at all. Showing the plan number next to an
+  // editable box would state it as the machine's setting and offer a control
+  // that cannot work, so the panel goes read-only and says where the real
+  // answer lives.
+  if (window.CLOUD_MODE) {
+    var _rw = document.getElementById('retention-controls');
+    if (_rw) _rw.style.display = 'none';
+    var _days = state && state.cap_days;
+    label.textContent = _days
+      ? ('Your plan keeps event history for ' + _days + ' day'
+         + (_days === 1 ? '' : 's') + '. A machine can be set to keep less '
+         + 'than that, from the Security tab on the machine itself.')
+      : ('Your plan keeps event history indefinitely. A machine can be set '
+         + 'to keep less, from the Security tab on the machine itself.');
+    var _st = document.getElementById('retention-status');
+    if (_st) { _st.textContent = ''; _st.style.color = ''; }
+    return;
+  }
+  label.textContent = (state && state.explanation) || '';
+  if (state && state.configured_days) {
+    input.value = state.configured_days;
+  } else if (state && state.effective_days) {
+    input.value = state.effective_days;
+  } else {
+    input.value = '';
+  }
+  var status = document.getElementById('retention-status');
+  if (!status) return;
+  if (state && state.configured_days && state.cap_days
+      && state.configured_days > state.cap_days) {
+    status.textContent = 'You asked for ' + state.configured_days
+      + ' days; your plan keeps at most ' + state.cap_days
+      + ', so history older than ' + state.cap_days + ' days is still deleted.';
+    status.style.color = 'var(--warning, #d97706)';
+  } else {
+    status.textContent = '';
+    status.style.color = '';
+  }
+}
+
+async function loadRetentionSetting() {
+  try {
+    var r = await fetch('/api/security/retention');
+    if (!r.ok) return;
+    _renderRetention(await r.json());
+  } catch (e) { /* panel stays on its "checking..." copy */ }
+}
+
+async function saveRetentionSetting(usePlanDefault) {
+  var input = document.getElementById('retention-days-input');
+  var status = document.getElementById('retention-status');
+  var days = null;
+  if (!usePlanDefault) {
+    days = parseInt(input && input.value, 10);
+    if (!(days >= 1)) {
+      if (status) {
+        status.textContent = 'Enter a whole number of days, 1 or more.';
+        status.style.color = 'var(--danger, #dc2626)';
+      }
+      return;
+    }
+  }
+  try {
+    var r = await fetch('/api/security/retention', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: days })
+    });
+    var body = await r.json();
+    if (body && body.ok) {
+      _renderRetention(body);
+    } else if (status) {
+      status.textContent = (body && body.error) || 'Could not save.';
+      status.style.color = 'var(--danger, #dc2626)';
+    }
+  } catch (e) {
+    if (status) {
+      status.textContent = 'Could not save.';
+      status.style.color = 'var(--danger, #dc2626)';
+    }
+  }
+}
+
 async function loadSecurityPosture() {
   if (window.CLOUD_MODE) {
     // Trial-bug fix #23: posture scans the local OpenClaw config (no DuckDB in
