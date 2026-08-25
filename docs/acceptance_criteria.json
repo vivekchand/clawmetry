@@ -270,6 +270,48 @@
       "text": "Where an extended runtime integration requires the paid extension, the system shall communicate the availability boundary before the operator relies on it."
     },
     {
+      "id": "AC-OBS-005.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "For every supported runtime, the system shall report a session's current phase using one shared vocabulary -- waiting on a person, working, idle, or ended -- so that sessions from different runtimes can be compared and ordered together."
+    },
+    {
+      "id": "AC-OBS-005.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Where the observed data cannot determine a session's phase, the system shall report the phase as unknown, and shall not report it as idle or as ended."
+    },
+    {
+      "id": "AC-OBS-005.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "The system shall report how long a session has been in its current phase, measured from the transition into it, and that duration shall continue to be measured from the transition after the observing service restarts."
+    },
+    {
+      "id": "AC-OBS-005.4",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "The system shall treat a phase as active only where it has been declared active, so that a phase value the system does not recognise is reported as not active."
+    },
+    {
+      "id": "AC-OBS-005.5",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Where a session has ended, the system shall report why it ended, distinguishing a session that concluded from one that went stale, one whose process is gone, and one that was archived, and shall not report an abandoned session as a concluded one."
+    },
+    {
+      "id": "AC-OBS-005.6",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "The system shall report the directory a session was launched in, recorded when the session is first observed and not rewritten afterwards, so that a later comparison against where the session is running is possible."
+    },
+    {
+      "id": "AC-OBS-005.7",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Where a session is waiting on a person, the system shall report whether that ask can be answered through ClawMetry, so that a surface never offers an action it cannot perform."
+    },
+    {
       "id": "AC-OBS-CEA-001.1",
       "doc": "Cost and Efficiency Analytics",
       "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",

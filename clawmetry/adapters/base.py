@@ -183,6 +183,13 @@ class Session:
 
         Returns the :class:`clawmetry.adapters.phase.PhaseVerdict`.
         """
+        if self.phase_basis:
+            # Already resolved. Re-deriving would read our own derived phase
+            # back as an adapter assertion and launder a ``recency`` verdict
+            # into an ``adapter`` one, which is exactly the provenance the
+            # basis exists to keep straight.
+            return _phase.PhaseVerdict(self.phase, self.status,
+                                       self.end_reason, self.phase_basis)
         extra = self.extra if isinstance(self.extra, dict) else {}
         verdict = _phase.resolve(
             now=now if now is not None else time.time(),

@@ -13858,6 +13858,10 @@ def _record_session_phase(store, session_id: str, runtime: str, *,
             end_reason=verdict.end_reason,
             resolvable=resolvable,
             cwd=cwd,
+            # The daemon does not read the row back, and it records one for
+            # every observed session on every pass. Skipping the read-back
+            # halves the statements against the writer's CPU budget (§1e).
+            return_row=False,
         ) or {}
     except Exception as exc:
         log.debug("session phase record failed (%s): %s", session_id, exc)

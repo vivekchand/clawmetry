@@ -4507,7 +4507,8 @@ class LocalStore:
                              phase_basis: str = "", end_reason: str = "",
                              resolvable: Any = None, initial_cwd: str = "",
                              cwd: str = "",
-                             observed_at: Any = None) -> dict[str, Any]:
+                             observed_at: Any = None,
+                             return_row: bool = True) -> dict[str, Any]:
         """Record what one session's phase looks like NOW, and return the
         durable row -- including the authoritative ``phase_since``.
 
@@ -4525,6 +4526,11 @@ class LocalStore:
 
         A phase of ``None`` is recorded as NULL, not coerced to a quiet
         default: "we could not tell" is an answer this table stores.
+
+        ``return_row=False`` skips the read-back. The daemon records a phase for
+        every observed session on every pass -- up to ~1300 rows a minute on a
+        26-runtime node -- and does not use the returned row, so the second
+        statement is pure cost against the daemon's CPU budget.
 
         Never raises. A phase that fails to record degrades to a session with
         no durable transition time, which reads as unknown rather than as
@@ -4576,6 +4582,8 @@ class LocalStore:
                       str(end_reason or "")[:128], res,
                       str(initial_cwd or cwd or "")[:1024],
                       str(cwd or "")[:1024], now_ms])
+                if not return_row:
+                    return {}
                 row = self._conn.execute("""
                     SELECT session_id, runtime, phase, status, phase_basis,
                            phase_since, end_reason, resolvable, initial_cwd,
