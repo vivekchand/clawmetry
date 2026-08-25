@@ -28,7 +28,14 @@ def _iso(epoch_seconds: float) -> str:
 
 
 def _today_iso() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+    # The NODE-LOCAL day, because that is what both sides of this endpoint
+    # use: the handler builds its date axis with ``datetime.now()`` (local),
+    # and day buckets are node-local calendar days (ADR-046,
+    # clawmetry/cost_windows.local_day). Asserting a UTC day here passed only
+    # because it usually coincides — it went red on any machine whose local
+    # date differed from UTC at the moment the test ran, which was also the
+    # window where the endpoint itself dropped today's row on the floor.
+    return datetime.now().date().isoformat()
 
 
 def _wait_flush(store, timeout=2.0):
