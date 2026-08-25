@@ -57,6 +57,12 @@ setup(
     # CI is unaffected: the eval gate installs with `pip install -e .` and
     # reads `tests/...` from the checkout, and the wheel-asset gate asserts
     # runtime assets and imports, never the test package.
+    # ``benchmarks`` ships in the wheel on purpose (it is ~25KB of pure Python
+    # and pulls in nothing extra). The overhead figures we publish are only
+    # worth something if a reader can reproduce them, and shipping the harness
+    # means `pip install clawmetry` is enough to run
+    # `python -m benchmarks.overhead` on your own machine. Cloning first would
+    # be one more reason not to check.
     packages=find_packages(exclude=["tests", "tests.*"]) + ["routes", "helpers"],
     # static/ and templates/ now live INSIDE the clawmetry package so they
     # ship via package_data (wheel-safe). Flask is configured in dashboard.py

@@ -128,3 +128,32 @@ def api_context_economics():
         "summary":           summary,
         "_source":           "local_store",
     })
+
+
+@bp_context_economics.route("/api/context-coverage")
+def api_context_coverage():
+    """Per-runtime honesty map for the blowout numbers.
+
+    ``GET /api/context-coverage?since=<iso>``
+
+    A "compactions: 0" tile means two different things depending on the
+    runtime — a clean run, or no way to see one. This endpoint says which,
+    per runtime per signal, so the UI can render a blind spot as a blind spot
+    instead of as a reassuring zero. See ``clawmetry/context_coverage.py``.
+
+    Returns ``{runtimes: [...], summary: {...}}``. Only runtimes actually
+    present in this store are listed. Never 500s: an unreachable store
+    returns empty rows and the tab renders an honest empty state.
+    """
+    since = (request.args.get("since") or "").strip() or None
+    data = _coerce(_ls_call("query_context_coverage", since=since))
+    rows = data.get("runtimes") or []
+    summary = data.get("summary") or {
+        "runtimes": 0, "fully_observable": 0, "partially_observable": 0,
+        "signals": ["utilization", "compaction", "overflow"],
+    }
+    return jsonify({
+        "runtimes": rows,
+        "summary": summary,
+        "_source": "local_store",
+    })
