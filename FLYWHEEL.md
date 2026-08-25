@@ -206,6 +206,30 @@ each other and both are real, so say both explicitly in the document:
   saying plainly that it describes intended behaviour, and that a drift
   finding against it is expected. Flip it to delivered when the PR lands.
 
+The banner keeps the DOCUMENT honest. It does not make the check green, and it
+is important to be clear-eyed about why:
+
+**Spec-first and a drift-clean PR cannot both be absolute.** Drift Bot compares
+the specification against merged code. If the specification lands first, which
+is what §1f0 requires, it necessarily describes something `main` does not do
+yet, so the check is red for the life of the PR. If instead you write the
+specification at merge time to keep the check green, nobody reviewed the plan
+and §1f0 was pointless. Those are the only two options the current tooling
+offers, and PR #5168 walked into the gap between them.
+
+Until that is resolved, a spec-first PR reaches the merge decision with a red
+`drift-bot` and every other check green. **That decision belongs to a human**,
+and it is the one case where §4's "CI must be 100% green" needs a person to
+look rather than an agent to retry. Do not merge past it on your own judgement
+([[feedback_drift_bot_is_required_never_merge_past]]), and do not restructure
+working code hoping the check changes its mind.
+
+The durable fix is a product request to the factory: a document state such as
+*proposed* or *in review* that Drift Bot honours, so an agreed-but-unshipped
+specification does not read as a contradiction. The status banner above is a
+prose approximation of that state, written for the humans until the tool can
+act on it. Raise it as a request rather than working around it.
+
 That resolves the tension. The specification exists before the work starts, so
 somebody has agreed what is being built, and it never claims the product does
 something it does not yet do.
