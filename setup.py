@@ -150,7 +150,7 @@ setup(
         "Topic :: System :: Monitoring",
     ],
     keywords=(
-        "clawmetry observability governance monitoring dashboard "
+        "clawmetry observability monitoring dashboard "
         "ai agent llm llm-observability opentelemetry cost-tracking "
         "claude-code codex cursor github-copilot gemini-cli cline openhands "
         "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "

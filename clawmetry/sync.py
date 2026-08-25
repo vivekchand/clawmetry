@@ -6876,6 +6876,49 @@ def _outcomes_slice_for_snapshot(runtime: str | None = None) -> dict:
         return {}
 
 
+def _outcomes_trend_slice_for_snapshot(runtime: str | None = None) -> dict:
+    """7d-over-7d outcome + cost trend for the Quality tab's "is it getting
+    better?" line on the hosted dashboard.
+
+    Mirrors ``routes/sessions.api_outcomes_trend``: ONE 14-day read split into
+    two 7-day periods, compared by
+    ``clawmetry.outcome_classifier.outcome_trend``. Without this slice the
+    hosted card fetches an /api/outcomes/trend the cloud container cannot
+    answer (no local DuckDB) and renders blank — the failure mode FLYWHEEL
+    §0a.1 exists to stop.
+
+    Best-effort; ``{}`` on any error so the snapshot never fails.
+    """
+    try:
+        from clawmetry import local_store as _ls_tr
+        from clawmetry.outcome_classifier import outcome_trend
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        now = _dt.now(_tz.utc)
+
+        def _iso(delta_days):
+            return (now - _td(days=delta_days)).isoformat().replace("+00:00", "Z")
+
+        cur_since = _iso(7)
+        rows = _ls_tr.get_store().query_outcomes(
+            agent_type="openclaw", since=_iso(14), runtime=runtime,
+            limit=4000) or []
+        current, previous = [], []
+        for r in rows:
+            ts = (r or {}).get("last_active_at") or (r or {}).get("ended_at") or ""
+            if not ts:
+                continue
+            (current if ts >= cur_since else previous).append(r)
+        payload = outcome_trend(current, previous)
+        payload["window"] = "7d"
+        payload["runtime"] = runtime or "all"
+        payload["store_available"] = True
+        return payload
+    except Exception as e:
+        log.debug("snapshot: outcomes trend slice failed: %s", e)
+        return {}
+
+
 def _collect_activity_counters_today(runtime: str | None = None) -> dict | None:
     """Plaintext activity counters for the heartbeat envelope (issue #1652).
 
@@ -14904,6 +14947,38 @@ def _runtime_of_session(sid: str) -> str:
     return "openclaw"
 
 
+def _build_runtime_records():
+    """Per-runtime "what does this runtime record" verdicts for the snapshot.
+
+    The Cost tab and the Efficiency card are call-event driven: with no
+    per-call cost rows they render $0.00 / "grade appears after about a day".
+    For a runtime that never writes per-call cost, both are false. Locally the
+    handlers attach the verdict themselves; on cloud there are no handlers, so
+    the verdict has to travel in the snapshot for the interceptor to attach.
+
+    Static (a declared table, not a measurement) and small. Best-effort: any
+    failure yields ``{}`` and the UI keeps its older, vaguer wording.
+    """
+    try:
+        from clawmetry.runtime_records import RUNTIME_RECORDS, SIGNALS, coverage_payload
+        out = {}
+        for rt in RUNTIME_RECORDS:
+            base = coverage_payload(rt, has_data=False)
+            out[rt] = {
+                "runtime_label": base["runtime_label"],
+                "records": {s: base["records"][s] for s in SIGNALS},
+                "headline": base["headline"],
+                "detail": base["detail"],
+                "suppress_zero": base["suppress_zero"],
+                "cost_is_estimate": base["cost_is_estimate"],
+                "status_when_empty": base["status"],
+            }
+        return out
+    except Exception as _e:
+        log.debug("runtimeRecords slice failed: %s", _e)
+        return {}
+
+
 def _build_runtime_summary(limit: int = 20000):
     """Per-runtime rollup so the cloud Models / Cost / Overview tabs can scope
     aggregates to the selected runtime for real (not just show a note).
@@ -20254,6 +20329,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # ?runtime= and serve byRuntime[rt], falling back to the node-wide slice.
     _runtime_summary = _build_runtime_summary()
     _outcomes_by_rt: dict = {}
+    _outcomes_trend_by_rt: dict = {}
     _activity_by_rt: dict = {}
     try:
         _rt_keys = list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []
@@ -20262,6 +20338,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 _o = _outcomes_slice_for_snapshot(runtime=_rtk)
                 if _o:
                     _outcomes_by_rt[_rtk] = _o
+                _ot = _outcomes_trend_slice_for_snapshot(runtime=_rtk)
+                if _ot:
+                    _outcomes_trend_by_rt[_rtk] = _ot
                 _a = _collect_activity_counters_today(runtime=_rtk)
                 if _a:
                     _activity_by_rt[_rtk] = _a
@@ -20419,6 +20498,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "activityTodayByRuntime": _activity_by_rt,
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
+        # 7d-over-7d trend behind the Quality tab's "is it getting better?"
+        # line. Read by the cloud cm-cloud-outcomes-trend interceptor, which
+        # serves trendByRuntime[rt] for ?runtime= and falls back to node-wide.
+        "outcomesTrend": _outcomes_trend_slice_for_snapshot(),
+        "outcomesTrendByRuntime": _outcomes_trend_by_rt,
         # Agent Inventory roster: node-wide roster (one row per runtime) + a
         # per-runtime slice the cloud cm-cloud-inventory interceptor returns for
         # ?runtime=<rt> (only that runtime's row — the no-leak contract).
@@ -20463,6 +20547,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "runtimeSummary": _runtime_summary,
+        # What each runtime actually records (clawmetry/runtime_records.py).
+        # Rides the snapshot so the HOSTED dashboard can tell "this runtime
+        # was idle" apart from "this runtime keeps no cost record" — without
+        # it the cloud goes back to promising a number that will never
+        # arrive. Static, tiny (26 short entries), and content-free.
+        "runtimeRecords": _build_runtime_records(),
         "transcripts": _build_transcripts(
             extra_sids=[
                 s["sessionId"]

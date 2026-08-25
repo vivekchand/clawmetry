@@ -60,11 +60,19 @@ def test_pro_only_features_include_published_pro_set(ent):
 def test_enterprise_features_match_pricing(ent):
     """Enterprise card on /pricing promises these 6 keys — all must be honoured.
 
+    Asserted against the Enterprise tier's RESOLVED feature set, not the
+    ``ENTERPRISE_FEATURES`` bucket. The promise a customer read on the card is
+    "buy Enterprise and you get these", and that is a statement about the tier,
+    not about which constant a key happens to live in.
+
+    The distinction became load-bearing on 2026-08-25, when ``audit_logs`` and
+    ``rbac`` moved down to ``PRO_ONLY_FEATURES``. Enterprise resolves to
+    ``PAID_FEATURES | ENTERPRISE_FEATURES`` and ``PAID_FEATURES`` includes the
+    Pro-only set, so no Enterprise customer lost anything — but a guard written
+    against the bucket would have gone red and implied they had.
+
     Asserted as a subset, not equality, so the catalogue can grow without the
-    guard going red: the promise is "the card's 6 keys are included", and a 7th
-    Enterprise key breaks nothing a customer was told. Mirrors how
-    ``test_pro_only_features`` guards the Pro set. What the card must never do
-    is lose one of these — that assertion is unchanged.
+    guard going red. What the tier must never do is lose one of these.
     """
     promised = frozenset({
         "siem_export",
@@ -74,7 +82,11 @@ def test_enterprise_features_match_pricing(ent):
         "air_gapped_license",
         "custom_data_residency",
     })
-    assert promised.issubset(ent.ENTERPRISE_FEATURES)
+    enterprise_resolved = ent.FREE_FEATURES | ent._TIER_FEATURES[ent.TIER_ENTERPRISE]
+    assert promised.issubset(enterprise_resolved)
+    # And the two that moved are genuinely reachable one tier down now.
+    pro_resolved = ent.FREE_FEATURES | ent._TIER_FEATURES[ent.TIER_CLOUD_PRO]
+    assert {"audit_logs", "rbac"}.issubset(pro_resolved)
 
 
 def test_org_analytics_is_enterprise_only(ent):
