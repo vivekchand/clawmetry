@@ -184,7 +184,9 @@ def _tool_result(when_ns, tool, success=True, error="", session_id="sess-wo7"):
 def test_batched_delivery_keeps_its_own_timestamps(store):
     """A batch delivered now, describing work from six hours ago, must land
     six hours ago. The prototype stamped time.time() on every record, so any
-    daily rollup over a retried or buffered export was silently wrong."""
+    daily rollup over a retried or buffered export was silently wrong.
+    AC-OBS-006.1
+    """
     six_hours_ago = time.time() - 6 * 3600
     _d._process_otlp_logs(_export([_api_request(int(six_hours_ago * 1e9))]))
 
@@ -197,7 +199,9 @@ def test_batched_delivery_keeps_its_own_timestamps(store):
 
 def test_observed_time_is_used_when_the_record_has_no_event_time(store):
     """Exporters may set only observedTimeUnixNano. Falling through to
-    receipt time there is the same misdating bug in a different coat."""
+    receipt time there is the same misdating bug in a different coat.
+    AC-OBS-006.1
+    """
     observed = time.time() - 3600
     rec = _api_request(0)
     rec.observed_time_unix_nano = int(observed * 1e9)
@@ -209,7 +213,9 @@ def test_observed_time_is_used_when_the_record_has_no_event_time(store):
 
 def test_metrics_cache_gets_the_record_timestamp_too(store, monkeypatch):
     """The live tiles read the in-memory cache; if only the DuckDB row is
-    correctly dated, today's tile still counts yesterday's spend."""
+    correctly dated, today's tile still counts yesterday's spend.
+    AC-OBS-006.1
+    """
     captured = []
     monkeypatch.setattr(
         _d, "_add_metric", lambda cat, e: captured.append((cat, e))
@@ -254,7 +260,11 @@ def test_repo_key_normalisation(raw, expected):
 # ── Fix 3: it survives a restart ────────────────────────────────────────────
 
 def test_rows_survive_a_store_restart(store, monkeypatch, tmp_path):
-    """The acceptance criterion the in-memory cache could never meet."""
+    """The acceptance criterion the in-memory cache could never meet.
+    AC-OBS-006.2
+    
+    AC-OBS-006.3
+    """
     _d._process_otlp_logs(_export([_api_request(int(time.time() * 1e9))]))
     db_path = str(_ls.DB_PATH)
     store.stop(flush=True)
@@ -271,7 +281,9 @@ def test_rows_survive_a_store_restart(store, monkeypatch, tmp_path):
 
 def test_a_retried_batch_does_not_double_count_spend(store):
     """OTLP delivery is at-least-once. An exporter that misses our 200 resends
-    the batch, and spend that doubles on a network blip is worse than none."""
+    the batch, and spend that doubles on a network blip is worse than none.
+    AC-OBS-006.5
+    """
     payload = _export([_api_request(int(time.time() * 1e9))])
     _d._process_otlp_logs(payload)
     _d._process_otlp_logs(payload)
@@ -304,7 +316,11 @@ def test_tool_records_become_tool_events(store):
 
 def test_trajectory_detectors_fire_on_the_otlp_path(store):
     """The point of mapping tool events: a session that fails the same tool
-    over and over is visible on a deployment with no daemon on any machine."""
+    over and over is visible on a deployment with no daemon on any machine.
+    AC-OBS-006.7
+    
+    AC-OBS-006.7
+    """
     from clawmetry import detectors
 
     now = time.time()
@@ -347,7 +363,9 @@ def test_unknown_tool_arguments_do_not_fabricate_a_loop(store):
 
 def test_a_rejected_permission_is_not_a_tool_call(store):
     """The tool never ran. Counting it as a call tells the no-progress
-    detector the agent acted, when it was blocked waiting for a human."""
+    detector the agent acted, when it was blocked waiting for a human.
+    AC-OBS-006.7
+    """
     now = time.time()
     _d._process_otlp_logs(_export([
         _tool_decision(int(now * 1e9), "Bash", decision="reject"),
@@ -401,7 +419,9 @@ def test_rollup_rejects_an_unknown_dimension(store):
 def test_enterprise_image_ships_the_otlp_protobuf_dependency():
     """deploy/self-hosted/docker-compose.yml builds the root Dockerfile. A
     receiver that answers 501 until someone remembers `pip install
-    clawmetry[otel]` is not a receiver an org can point 500 machines at."""
+    clawmetry[otel]` is not a receiver an org can point 500 machines at.
+    AC-OBS-006.4
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dockerfile = open(os.path.join(root, "Dockerfile")).read()
     assert "opentelemetry-proto" in dockerfile
@@ -430,7 +450,9 @@ def test_a_session_the_daemon_already_owns_is_not_duplicated(store):
     """A machine can have BOTH the daemon and the org's OTEL config. The same
     session then arrives twice — read from the transcript, and pushed by the
     runtime. Spend that doubles because two collectors both did their job is
-    worse than spend that is missing."""
+    worse than spend that is missing.
+    AC-OBS-006.6
+    """
     now = time.time()
     # The daemon got there first: a transcript-derived event for this session.
     store.ingest({
@@ -475,7 +497,9 @@ def test_a_daemon_free_session_still_gets_its_events(store):
 def test_a_retried_batch_does_not_double_the_live_tiles_either(store, monkeypatch):
     """The DuckDB ledger dedups on the record id, but a person looks at the
     tile, not the table. Both have to hold, or the receiver reports a spike
-    that is really the network retrying."""
+    that is really the network retrying.
+    AC-OBS-006.5
+    """
     captured = []
     monkeypatch.setattr(
         _d, "_add_metric", lambda cat, e: captured.append((cat, e))
@@ -563,3 +587,66 @@ def test_the_batch_write_forwards_through_the_daemon_proxy(monkeypatch):
     for method in ("put_otlp_batch", "query_otlp_rollup",
                    "query_otlp_records", "count_otlp_records"):
         assert method in lq._DAEMON_METHODS, f"{method} missing from the allowlist"
+
+
+# ── The two claims that only exist if a surface actually makes them ─────────
+
+def test_rollup_endpoint_says_the_grouping_is_self_reported(store):
+    """AC-OBS-006.4 asks for two things and the second is the easy one to
+    lose: the rollup must SAY the grouping is self-reported.
+
+    Agent principals (REQ-OBS-004) derive owner and team from what ClawMetry
+    observes and name the rung an inherited value came from. This path carries
+    what the sender declared about itself. A reader who cannot tell which
+    question they asked has been misled, so the answer says which one it is.
+    
+    AC-OBS-006.4
+    """
+    now = time.time()
+    _d._process_otlp_logs(_export(
+        [_api_request(int(now * 1e9), session_id="s1", cost=4.0)],
+        resource_attrs=_resource(repo="acme/payments-api", team="platform"),
+    ))
+
+    # A bare Flask app with just this blueprint: dashboard.app registers its
+    # blueprints inside detect_config(), which a unit test does not run.
+    import flask
+    import routes.meta as meta
+
+    app = flask.Flask(__name__)
+    app.register_blueprint(meta.bp_otel)
+    client = app.test_client()
+    r = client.get("/api/otel/rollup?dimension=team&days=30")
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    body = r.get_json()
+    assert body["attribution"] == "self-reported"
+    assert body["basis"] == "measured"
+    assert body["dimension"] == "team"
+    assert {row["key"] for row in body["rows"]} == {"platform"}
+
+    # A column that does not exist is a caller error, not a store outage —
+    # answering 503 there would send someone to look at the wrong thing.
+    bad = client.get("/api/otel/rollup?dimension=cost_usd%3B+DROP+TABLE+events")
+    assert bad.status_code == 400
+    assert "allowed" in bad.get_json()
+
+
+def test_the_docs_state_the_two_limits_this_path_is_sold_on():
+    """AC-OBS-006.8. Both limits are load-bearing for a customer decision and
+    both are the kind of sentence that quietly disappears in an edit:
+
+    * it covers the runtimes that emit OpenTelemetry natively, not all of them
+    * records arrive unencrypted, so the daemon's end-to-end encryption
+      guarantee does not stretch over this path
+
+    A claim nothing checks is a claim that drifts. This is the check.
+    
+    AC-OBS-006.8
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for rel in ("docs/enterprise.md", "deploy/self-hosted/README.md"):
+        text = open(os.path.join(root, rel)).read().lower()
+        assert "claude code" in text and "codex" in text, (
+            f"{rel} must name the runtimes this path actually covers")
+        assert "plaintext" in text or "unencrypted" in text, (
+            f"{rel} must say records arrive unencrypted on this path")
