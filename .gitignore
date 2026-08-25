@@ -36,6 +36,10 @@ Thumbs.db
 .clawmetry-fleet.db
 .clawmetry-fleet.db-shm
 .clawmetry-fleet.db-wal
+# SQLite side files a test or a local ingest leaves beside a REAL runtime
+# fixture. They are process artifacts, never fixture content.
+tests/fixtures/**/*.db-shm
+tests/fixtures/**/*.db-wal
 .clawmetry-metrics.json
 .claude/worktrees/
 
