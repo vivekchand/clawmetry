@@ -262,7 +262,7 @@ def test_repo_key_normalisation(raw, expected):
 def test_rows_survive_a_store_restart(store, monkeypatch, tmp_path):
     """The acceptance criterion the in-memory cache could never meet.
     AC-OBS-006.2
-    
+
     AC-OBS-006.3
     """
     _d._process_otlp_logs(_export([_api_request(int(time.time() * 1e9))]))
@@ -318,7 +318,7 @@ def test_trajectory_detectors_fire_on_the_otlp_path(store):
     """The point of mapping tool events: a session that fails the same tool
     over and over is visible on a deployment with no daemon on any machine.
     AC-OBS-006.7
-    
+
     AC-OBS-006.7
     """
     from clawmetry import detectors
@@ -599,7 +599,7 @@ def test_rollup_endpoint_says_the_grouping_is_self_reported(store):
     observes and name the rung an inherited value came from. This path carries
     what the sender declared about itself. A reader who cannot tell which
     question they asked has been misled, so the answer says which one it is.
-    
+
     AC-OBS-006.4
     """
     now = time.time()
@@ -640,7 +640,7 @@ def test_the_docs_state_the_two_limits_this_path_is_sold_on():
       guarantee does not stretch over this path
 
     A claim nothing checks is a claim that drifts. This is the check.
-    
+
     AC-OBS-006.8
     """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
