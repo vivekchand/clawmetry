@@ -1062,7 +1062,11 @@ def _try_local_store_usage_forecast():
         remaining_budget = effective_budget - cost_this_month
         days_to_budget = max(0.0, remaining_budget / daily_rate)
 
-    return {
+    # "Projected month-end $147.00" is the single most confident-looking
+    # number on the Cost tab and it is a forecast: it assumes the next N days
+    # look like the last 7. A quiet week or a holiday breaks it, which is
+    # exactly the case where somebody would quote it. Labelled as an estimate.
+    return _prov.stamp({
         "available": True,
         "daily_rate_usd": round(daily_rate, 4),
         "cost_this_month_usd": round(cost_this_month, 4),
@@ -1074,7 +1078,28 @@ def _try_local_store_usage_forecast():
         "window_days": window_days,
         "daily_window": [round(c, 4) for c in reversed(window)],
         "_source": "local_store",
-    }
+    }, {
+        "projected_month_usd": _prov.estimated(
+            "spend so far this month, plus the average of the last 7 days "
+            "times the days left. It assumes the rest of the month looks "
+            "like the last week",
+            "DuckDB daily rollups on this node",
+            window="the calendar month",
+            inputs={"spent_so_far_usd": round(cost_this_month, 4),
+                    "daily_rate_usd": round(daily_rate, 4),
+                    "days_remaining": days_remaining}),
+        "cost_this_month_usd": _prov.derived(
+            "sum of the priced cost of every call this month",
+            "DuckDB daily rollups on this node",
+            window="this month, the local calendar month from the 1st"),
+        "daily_rate_usd": _prov.derived(
+            "the priced cost of the last 7 days divided by 7",
+            "DuckDB daily rollups on this node",
+            window="the last 7 days"),
+        "monthly_budget_usd": _prov.measured(
+            "the monthly limit you set",
+            "clawmetry budget config"),
+    })
 
 
 # Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type

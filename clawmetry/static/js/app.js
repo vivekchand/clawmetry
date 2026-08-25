@@ -18531,12 +18531,25 @@ async function loadCostForecast() {
       '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">' +
         '<div>' +
           '<div style="font-size:12px;color:var(--text-muted);">Projected month-end</div>' +
-          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' $' + proj.toFixed(2) + '</div>' +
+          // A forecast, and the badge says so. It assumes the rest of the
+          // month looks like the last 7 days, which is wrong in exactly the
+          // week somebody would quote it at their finance team.
+          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' '
+            + (window.cmProv
+                ? window.cmProv.money(d, 'projected_month_usd',
+                                      { label: 'Projected month-end' })
+                : '$' + proj.toFixed(2)) + '</div>' +
         '</div>' +
         '<div style="color:var(--text-muted);font-size:13px;">' + escHtml(statusMsg) + '</div>' +
         '<div style="margin-left:auto;text-align:right;font-size:12px;color:var(--text-muted);">' +
-          '$' + (d.daily_rate_usd || 0).toFixed(4) + '/day avg<br>' +
-          '$' + (d.cost_this_month_usd || 0).toFixed(2) + ' spent so far' +
+          (window.cmProv
+            ? window.cmProv.money(d, 'daily_rate_usd',
+                                  { label: 'Average per day', compact: true })
+            : '$' + (d.daily_rate_usd || 0).toFixed(4)) + '/day avg<br>' +
+          (window.cmProv
+            ? window.cmProv.money(d, 'cost_this_month_usd',
+                                  { label: 'Spent so far this month', compact: true })
+            : '$' + (d.cost_this_month_usd || 0).toFixed(2)) + ' spent so far' +
         '</div>' +
       '</div>';
   } catch(e) {
