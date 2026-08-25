@@ -38,6 +38,30 @@ def _iso(epoch_seconds: float) -> str:
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
 
 
+def _today_utc_ts(clock: str) -> str:
+    """A UTC ``...Z`` timestamp whose NODE-LOCAL day is today, for any offset.
+
+    These tests used to build ``_today_utc_ts("10:00:00")`` from today's LOCAL
+    date. On a machine far from UTC that string is a different local day than
+    the one being asserted — e.g. at UTC+14, 10:00Z is tomorrow. It passed
+    only because day buckets used to be the timestamp's first ten characters,
+    which is the UTC/local conflation ADR-046 removes: buckets are now the
+    node-local calendar day (clawmetry/cost_windows.local_day).
+
+    So build the instant in LOCAL time and render it as UTC. Realistic wire
+    shape, unambiguous local day, green in every timezone rather than only in
+    the CI runner's.
+    """
+    h, m, rest = clock.split(":", 2)
+    sec, _, frac = rest.partition(".")
+    local = datetime.now().replace(
+        hour=int(h), minute=int(m), second=int(sec), microsecond=0
+    ).astimezone()
+    utc = local.astimezone(timezone.utc)
+    stamp = utc.strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{stamp}.{frac}Z" if frac else f"{stamp}Z"
+
+
 def _wait_flush(store, t=2.0):
     """Block until the in-memory ring has drained to DuckDB."""
     deadline = time.monotonic() + t
@@ -594,7 +618,6 @@ def test_usage_v3_real_shape_returns_real_splits(fast_path_app):
     store = ls.get_store()
 
     today = datetime.now().strftime("%Y-%m-%d")
-    base = f"{today}T10:00"
 
     # Three turns, each emitting BOTH an assistant + model.completed
     # event ~150 ms apart (matches the gateway-vs-Claude-Code emit race).
@@ -602,7 +625,7 @@ def test_usage_v3_real_shape_returns_real_splits(fast_path_app):
         _ingest_v3_assistant(
             store,
             sid="sess-v3-real",
-            ts=f"{base}:{sec_a}.100Z",
+            ts=_today_utc_ts(f"10:00:{sec_a}.100"),
             ev_id=f"v3-asst-{i}",
             input_tokens=6, output_tokens=7,
             cache_read=28_500 + i, cache_write=70 + i,
@@ -610,7 +633,7 @@ def test_usage_v3_real_shape_returns_real_splits(fast_path_app):
         _ingest_v3_model_completed(
             store,
             sid="sess-v3-real",
-            ts=f"{base}:{sec_mc}.250Z",  # ~150ms later
+            ts=_today_utc_ts(f"10:00:{sec_mc}.250"),  # ~150ms later
             ev_id=f"v3-mc-{i}",
             input_tokens=6, output_tokens=7,
         )
@@ -661,12 +684,12 @@ def test_usage_v3_today_week_month_match_when_only_today(fast_path_app):
 
     _ingest_v3_assistant(
         store, sid="sess-window-test",
-        ts=f"{today}T11:30:00.100Z", ev_id="v3-w-asst",
+        ts=_today_utc_ts("11:30:00.100"), ev_id="v3-w-asst",
         input_tokens=6, output_tokens=7, cache_read=28_500, cache_write=70,
     )
     _ingest_v3_model_completed(
         store, sid="sess-window-test",
-        ts=f"{today}T11:30:00.250Z", ev_id="v3-w-mc",
+        ts=_today_utc_ts("11:30:00.250"), ev_id="v3-w-mc",
         input_tokens=6, output_tokens=7,
     )
     _wait_flush(store)
@@ -717,7 +740,7 @@ def test_usage_v3_subagent_assistant_event(fast_path_app):
     # Parent assistant turn.
     _ingest_v3_assistant(
         store, sid="sess-with-subagent",
-        ts=f"{today}T12:00:00.100Z", ev_id="v3-parent",
+        ts=_today_utc_ts("12:00:00.100"), ev_id="v3-parent",
         input_tokens=6, output_tokens=7, cache_read=28_500, cache_write=70,
     )
 
@@ -728,7 +751,7 @@ def test_usage_v3_subagent_assistant_event(fast_path_app):
         "agent_id":   "main",
         "session_id": "sess-with-subagent",
         "event_type": "subagent:assistant",
-        "ts":         f"{today}T12:00:30.100Z",
+        "ts":         _today_utc_ts("12:00:30.100"),
         "data": {
             "type":    "subagent:assistant",
             "version": 3,
@@ -853,12 +876,12 @@ def test_query_daily_usage_splits_dedups_sibling_events(fast_path_app):
     today = datetime.now().strftime("%Y-%m-%d")
     _ingest_v3_assistant(
         store, sid="sess-dedup",
-        ts=f"{today}T10:00:00.100Z", ev_id="dedup-asst",
+        ts=_today_utc_ts("10:00:00.100"), ev_id="dedup-asst",
         input_tokens=6, output_tokens=7, cache_read=28_500, cache_write=70,
     )
     _ingest_v3_model_completed(
         store, sid="sess-dedup",
-        ts=f"{today}T10:00:00.250Z", ev_id="dedup-mc",
+        ts=_today_utc_ts("10:00:00.250"), ev_id="dedup-mc",
         input_tokens=6, output_tokens=7,
     )
     _wait_flush(store)
@@ -882,12 +905,12 @@ def test_query_daily_usage_splits_keeps_distinct_turns(fast_path_app):
     today = datetime.now().strftime("%Y-%m-%d")
     _ingest_v3_assistant(
         store, sid="sess-distinct",
-        ts=f"{today}T10:00:00.100Z", ev_id="t1",
+        ts=_today_utc_ts("10:00:00.100"), ev_id="t1",
         input_tokens=6, output_tokens=7, cache_read=28_500, cache_write=70,
     )
     _ingest_v3_assistant(
         store, sid="sess-distinct",
-        ts=f"{today}T10:00:04.500Z", ev_id="t2",  # 4.4 s later
+        ts=_today_utc_ts("10:00:04.500"), ev_id="t2",  # 4.4 s later
         input_tokens=6, output_tokens=7, cache_read=28_600, cache_write=71,
     )
     _wait_flush(store)
@@ -910,7 +933,7 @@ def test_query_daily_usage_splits_skips_zero_usage_rows(fast_path_app):
     # One real assistant event.
     _ingest_v3_assistant(
         store, sid="sess-skip",
-        ts=f"{today}T10:00:00.100Z", ev_id="real",
+        ts=_today_utc_ts("10:00:00.100"), ev_id="real",
         input_tokens=6, output_tokens=7, cache_read=28_500, cache_write=70,
     )
     # One assistant event with empty usage — should be skipped.
@@ -920,7 +943,7 @@ def test_query_daily_usage_splits_skips_zero_usage_rows(fast_path_app):
         "agent_id":   "main",
         "session_id": "sess-skip",
         "event_type": "assistant",
-        "ts":         f"{today}T10:00:30.000Z",
+        "ts":         _today_utc_ts("10:00:30.000"),
         "data":       {"message": {"role": "assistant"}},
         "model":      "claude-opus-4-7",
     })
@@ -973,7 +996,7 @@ def test_by_plugin_trend_does_not_double_count_v3_sibling_pairs(fast_path_app):
     app, ls, _u = fast_path_app
     today = datetime.now().strftime("%Y-%m-%d")
     _ingest_v3_pair(ls.get_store(), sid="sess-trend-dup",
-                     ts_iso=f"{today}T10:00:00.100Z")
+                     ts_iso=_today_utc_ts("10:00:00.100"))
     _wait_flush(ls.get_store())
 
     body = app.test_client().get("/api/usage/by-plugin/trend?days=14").get_json()

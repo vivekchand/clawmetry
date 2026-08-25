@@ -1,6 +1,6 @@
 # Runtime / Agent Compatibility
 
-ClawMetry observes 22 AI-agent runtimes. Each runtime that
+ClawMetry observes 26 AI-agent runtimes. Each runtime that
 isn't OpenClaw ships a dedicated reader adapter (`clawmetry/adapters/`) that
 translates its native session format into ClawMetry's unified Session/Event
 shapes; the daemon then ingests them into the same local DuckDB store and cloud
@@ -42,6 +42,7 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Gemini CLI | Beta adapter | One JSONL chat recording per session under `~/.gemini/tmp/<project-basename>/chats/session-<ts>-<id8>.jsonl` | Recording is always on (no setting to enable). Per-turn token split + model id + tool calls with results, and nested `chats/<parentSessionId>/` sub-agent transcripts. The project dir is the cwd's BASENAME; the sha256 is stored inside the file as `projectHash`. `GEMINI_CLI_HOME` names the dir *containing* `.gemini`. |
 | Cline | Beta adapter | SQLite index at `~/.cline/data/db/sessions.db` plus `~/.cline/data/sessions/<id>/<id>.messages.json` per session | Cost in USD is on disk, which is rare. The index records `pid`, `status` and sub-agent lineage, so liveness is reported rather than guessed. Rejected tool calls are surfaced as errors. Note the `data` leaf: `~/.cline` itself holds only hooks and worktrees. |
 | OpenHands | Beta adapter | One directory per conversation under `~/.openhands/conversations/<hex>/` — `base_state.json` plus one immutable JSON file per event | Tokens and per-call cost live in the sidecar, never on the events. The directory name is the conversation id with dashes stripped. `prompt_tokens` is cumulative across calls, and cost reads 0.0 both for a free local model and for a failed pricing lookup. Delegated sub-agents nest under `subagents/`. |
+| Devin | Beta adapter | One SQLite store for every session (`$XDG_DATA_HOME/devin/cli/sessions.db`) holding a message forest plus the ACP tool-call records | Sessions and tool calls. Fork and revert leave abandoned branches, which the adapter excludes so they are never billed. Whether usage and cost are recorded has not been verified against a real capture yet, so no token or cost number is claimed. Devin Cloud sessions are API-only and not ingested. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
 OpenClaw, NVIDIA NemoClaw and Goose are free in the OSS package — their

@@ -125,6 +125,7 @@ from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
 from routes.inventory import bp_inventory
+from routes.govern import bp_govern
 from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
@@ -563,7 +564,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        # Only honour the workspace-relative path when we can actually write
+        # there. Under launchd the process starts with cwd="/", and the
+        # workspace auto-detect below falls back to os.getcwd(), so WORKSPACE
+        # becomes "/" on any machine with no detectable OpenClaw workspace.
+        # That resolved to "/.clawmetry-fleet.db" -- unwritable on macOS -- and
+        # the dashboard exited(1) on every launchd boot instead of falling
+        # through to the ~/.clawmetry path this function documents as
+        # authoritative. A dev-mode workspace stays honoured; only an
+        # unwritable one is skipped.
+        if os.access(os.path.dirname(_ws_db) or ".", os.W_OK):
+            return _ws_db
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
     preferred_dir = os.path.expanduser("~/.clawmetry")
@@ -3436,7 +3448,11 @@ def detect_config(args=None):
                 WORKSPACE = c
                 break
         if not WORKSPACE:
-            WORKSPACE = os.getcwd()
+            # "/" is not a workspace. launchd starts agents with cwd="/", so
+            # this last-resort guess silently poisoned every workspace-relative
+            # state path (see _fleet_db_path) on an auto-started install.
+            _cwd = os.getcwd()
+            WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
 
     MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 
@@ -9495,7 +9511,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        # Only honour the workspace-relative path when we can actually write
+        # there. Under launchd the process starts with cwd="/", and the
+        # workspace auto-detect below falls back to os.getcwd(), so WORKSPACE
+        # becomes "/" on any machine with no detectable OpenClaw workspace.
+        # That resolved to "/.clawmetry-fleet.db" -- unwritable on macOS -- and
+        # the dashboard exited(1) on every launchd boot instead of falling
+        # through to the ~/.clawmetry path this function documents as
+        # authoritative. A dev-mode workspace stays honoured; only an
+        # unwritable one is skipped.
+        if os.access(os.path.dirname(_ws_db) or ".", os.W_OK):
+            return _ws_db
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
     preferred_dir = os.path.expanduser("~/.clawmetry")
@@ -12274,7 +12301,11 @@ def detect_config(args=None):
                 WORKSPACE = c
                 break
         if not WORKSPACE:
-            WORKSPACE = os.getcwd()
+            # "/" is not a workspace. launchd starts agents with cwd="/", so
+            # this last-resort guess silently poisoned every workspace-relative
+            # state path (see _fleet_db_path) on an auto-started install.
+            _cwd = os.getcwd()
+            WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
 
     MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 
@@ -12392,6 +12423,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
     app.register_blueprint(bp_inventory)
+    app.register_blueprint(bp_govern)
     if not _pro_loaded:
         app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
