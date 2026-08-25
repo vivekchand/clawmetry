@@ -139,12 +139,13 @@ def test_min_tier_enterprise_only_feature_is_enterprise(ent):
     for feat in (
         "siem_export",
         "sso",
-        "audit_logs",
-        "rbac",
         "air_gapped_license",
         "custom_data_residency",
     ):
         assert ent.min_tier_for_feature(feat) == ent.TIER_ENTERPRISE, feat
+    # audit_logs + rbac moved Enterprise -> Pro on 2026-08-25.
+    for feat in ("audit_logs", "rbac"):
+        assert ent.min_tier_for_feature(feat) == ent.TIER_CLOUD_PRO, feat
 
 
 def test_min_tier_unknown_feature_is_none(ent):
