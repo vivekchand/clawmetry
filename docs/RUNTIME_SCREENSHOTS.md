@@ -1,6 +1,6 @@
 # ClawMetry × your runtime — screenshot gallery
 
-ClawMetry auto-detects 26 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
+ClawMetry auto-detects 27 agent runtimes with zero config. This gallery shows the dashboard observing **real sessions** from each supported runtime: the runtime switcher scopes every tab (sessions, transcripts, cost, activity) to the agent you pick.
 
 > Every screenshot below is the real dashboard rendering a real ClawMetry instance. The 2026-08 refresh: each runtime's store was populated with a showcase project written in that runtime's **native on-disk session format** (schema-verified against the production adapters — 12 sessions per runtime, each building an app for a social cause: clean water, safer roads, food security, and more), plus live Claude Code and OpenClaw sessions captured on a real machine. Alerts, approvals, and quality data come from the product's own evaluators running against that store.
 

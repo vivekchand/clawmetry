@@ -6,7 +6,7 @@ a security reviewer would triage it: what does THIS invocation touch?
 
 Why call-level: definition-level risk (Matimo-style "POST = medium") can't
 tell ``ls`` from ``rm -rf /`` — both arrive through the same shell tool on
-every harness. ClawMetry sees the arguments for all 26+ runtimes at the
+every harness. ClawMetry sees the arguments for all 27+ runtimes at the
 same normalisation point the approvals watcher uses, so the classifier
 runs on (canonical category, extracted command, raw args) and the SAME
 verdict applies to a Claude Code ``Bash``, a Codex ``shell``, a Cursor
