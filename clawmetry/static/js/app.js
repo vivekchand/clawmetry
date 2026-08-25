@@ -1693,6 +1693,88 @@ function _ceToggleCompaction(idx) {
   row.style.display = (row.style.display === 'none' || !row.style.display) ? 'block' : 'none';
 }
 
+// ── Per-runtime signal coverage ─────────────────────────────────────────
+// "Compactions: 0" is two different statements wearing the same clothes: the
+// runtime ran clean, or we cannot see compactions on that runtime at all.
+// ClawMetry only emits compaction events for a minority of its adapters, so
+// for most runtimes the second reading is the true one. Rendering them
+// identically tells a user their Codex sessions never blow out when we were
+// never going to know either way. Reads /api/context-coverage.
+// A utilisation percentage is only as honest as its denominator. When the
+// context window came from our fallback rather than a lookup, the gauge has
+// to say so: rendering a guessed denominator with the same authority as a
+// looked-up one is how a dashboard tells a confident lie. Sources are
+// model_table / explicit_marker / observed_floor / default (see
+// clawmetry/context_windows.py).
+function _ceWindowProvenance(pt) {
+  if (!pt) return '';
+  var src = pt.window_source || pt.context_window_source || '';
+  if (!src || src === 'model_table' || src === 'explicit_marker' || src === 'observed_floor') return '';
+  return ' · <span style="color:#d97706;" title="No context-window size is known for this model, so the gauge uses ClawMetry\'s 200K fallback. Set CLAWMETRY_CONTEXT_WINDOW to pin it, or add the model to clawmetry/context_windows.py.">estimated window</span>';
+}
+
+async function loadContextCoverage() {
+  var el = document.getElementById('ce-coverage-panel');
+  if (!el) return;
+  var data;
+  try {
+    data = await fetch('/api/context-coverage').then(function(r){ return r.json(); });
+  } catch (e) {
+    el.innerHTML = '';   // never block the tab on the honesty panel
+    return;
+  }
+  var rows = (data && data.runtimes) || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+
+  var SIGNALS = [
+    { key: 'utilization', label: 'Window %' },
+    { key: 'compaction',  label: 'Compaction' },
+    { key: 'overflow',    label: 'Overflow' }
+  ];
+  function cell(c) {
+    if (!c) return '<td></td>';
+    var v = c.verdict;
+    if (v === 'observed') {
+      return '<td style="padding:6px 10px;color:#16a34a;font-weight:600;">' + escHtml(String(c.count)) + '</td>';
+    }
+    if (v === 'supported_none_seen') {
+      return '<td style="padding:6px 10px;color:var(--text-muted);">0</td>';
+    }
+    // unsupported: the number is not a number, it is a blind spot.
+    return '<td style="padding:6px 10px;color:#d97706;" title="' + escHtml(c.note || '') + '">'
+      + 'not visible</td>';
+  }
+  var body = rows.map(function(r) {
+    return '<tr style="border-top:1px solid var(--border-primary);">'
+      + '<td style="padding:6px 10px;font-weight:600;">' + escHtml(r.runtime) + '</td>'
+      + '<td style="padding:6px 10px;color:var(--text-muted);">' + escHtml(String(r.sessions)) + '</td>'
+      + SIGNALS.map(function(sg){ return cell(r[sg.key]); }).join('')
+      + '</tr>';
+  }).join('');
+
+  var blind = rows.filter(function(r) {
+    return SIGNALS.some(function(sg){ return r[sg.key] && r[sg.key].verdict === 'unsupported'; });
+  });
+
+  el.innerHTML = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">'
+    + '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">What we can see, per runtime</div>'
+    + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;max-width:720px;">'
+    + 'A zero only means "ran clean" when we could have seen otherwise. Where a signal is '
+    + '<span style="color:#d97706;">not visible</span>, the runtime does not record it and ClawMetry is blind to it.</div>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<thead><tr style="color:var(--text-muted);text-align:left;">'
+    + '<th style="padding:6px 10px;font-weight:600;">Runtime</th>'
+    + '<th style="padding:6px 10px;font-weight:600;">Sessions</th>'
+    + SIGNALS.map(function(sg){ return '<th style="padding:6px 10px;font-weight:600;">' + escHtml(sg.label) + '</th>'; }).join('')
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + (blind.length
+        ? '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">'
+          + escHtml(String(blind.length)) + ' of ' + escHtml(String(rows.length))
+          + ' runtimes have at least one blind spot. Hover a cell for why.</div>'
+        : '')
+    + '</div>';
+}
+
 async function loadContextEconomics() {
   var gaugeEl = document.getElementById('ce-gauge-panel');
   var sumEl = document.getElementById('ce-summary');
@@ -1711,6 +1793,7 @@ async function loadContextEconomics() {
     gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_context_economics", null, "Failed to load context economics") + ': ' + escHtml(String(e)) + '</div>';
     return;
   }
+  try { loadContextCoverage(); } catch (e) { /* panel is additive, never fatal */ }
   var util = data.utilization || [];
   var comps = data.compactions || [];
   var overflow = data.overflow_sessions || [];
@@ -1775,7 +1858,7 @@ async function loadContextEconomics() {
         + '<span style="font-size:12px;color:var(--text-muted);">' + _ceFmtTokens(_last.tokens) + ' / ' + _ceFmtTokens(_last.window) + ' tokens (' + _lp + '%)' + (_last.model ? (' · ' + escHtml(String(_last.model))) : '') + '</span></div>'
         + '<div style="height:14px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:7px;overflow:hidden;">'
         + '<div style="height:100%;width:' + Math.min(100, _lp) + '%;background:' + _lcolor + ';border-radius:7px;transition:width .5s;"></div></div>'
-        + '<div style="font-size:10px;color:var(--text-faint);margin-top:4px;">' + escHtml(_lscope) + ' · ' + escHtml(String(_last.ts || '')) + '</div>'
+        + '<div style="font-size:10px;color:var(--text-faint);margin-top:4px;">' + escHtml(_lscope) + ' · ' + escHtml(String(_last.ts || '')) + _ceWindowProvenance(_last) + '</div>'
         + '</div>';
     }
   }
