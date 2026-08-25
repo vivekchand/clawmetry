@@ -634,6 +634,44 @@ def _step_mutates(step: dict, write_tools=None) -> bool:
     return bool(_MUTATING_CMD_RE.search(cmd) or _REDIRECT_WRITE_RE.search(cmd))
 
 
+def session_profile(steps: list, write_tools=None) -> dict:
+    """Summarize one session for the cohort baseline it feeds.
+
+    Takes already-normalized steps (the daemon has them; re-parsing 200 events
+    to count them would double the tick cost for nothing) and returns the four
+    numbers ``record_guard_observation`` stores: how many tool calls, how many
+    distinct files mutated, whether it wrote at all, and which external hosts
+    it reached.
+
+    This is the loop that closes gap 03: today's sessions decide what counts as
+    unusual tomorrow. Never raises — an empty profile just means this session
+    teaches the baseline nothing.
+    """
+    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
+    try:
+        files = set()
+        hosts = set()
+        calls = 0
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            for h in st.get("hosts") or ():
+                hosts.add(h)
+            if st.get("kind") != "tool_call" or not st.get("tool"):
+                continue
+            calls += 1
+            if _step_mutates(st, write_tools):
+                out["wrote"] = True
+                for p in st.get("paths") or ():
+                    files.add(p)
+        out["tool_calls"] = calls
+        out["write_files"] = len(files)
+        out["hosts"] = sorted(hosts)[:64]
+    except Exception:
+        return out
+    return out
+
+
 def _prepare(events, steps, thresholds, runtime, session_id):
     """Shared detector preamble: resolve the runtime, its thresholds, and the
     normalized steps exactly once when the caller has already done the work."""

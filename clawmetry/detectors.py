@@ -127,6 +127,7 @@ from clawmetry.detector_core import (  # noqa: F401
     _strip_heredocs,
     _text_looks_failed,
     normalize_events,
+    session_profile,
 )
 from clawmetry.detector_money import (  # noqa: F401
     CRITICAL_SPEND_USD,
@@ -493,41 +494,3 @@ def run_all(events: Iterable[dict], session_id: str,
         session_seconds=f.get("session_seconds") or 0.0,
         window_steps=len(steps),
     )
-
-
-def session_profile(steps: list, write_tools=None) -> dict:
-    """Summarize one session for the cohort baseline it feeds.
-
-    Takes already-normalized steps (the daemon has them; re-parsing 200 events
-    to count them would double the tick cost for nothing) and returns the four
-    numbers ``record_guard_observation`` stores: how many tool calls, how many
-    distinct files mutated, whether it wrote at all, and which external hosts
-    it reached.
-
-    This is the loop that closes gap 03: today's sessions decide what counts as
-    unusual tomorrow. Never raises — an empty profile just means this session
-    teaches the baseline nothing.
-    """
-    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
-    try:
-        files = set()
-        hosts = set()
-        calls = 0
-        for st in steps or []:
-            if not isinstance(st, dict):
-                continue
-            for h in st.get("hosts") or ():
-                hosts.add(h)
-            if st.get("kind") != "tool_call" or not st.get("tool"):
-                continue
-            calls += 1
-            if _step_mutates(st, write_tools):
-                out["wrote"] = True
-                for p in st.get("paths") or ():
-                    files.add(p)
-        out["tool_calls"] = calls
-        out["write_files"] = len(files)
-        out["hosts"] = sorted(hosts)[:64]
-    except Exception:
-        return out
-    return out
