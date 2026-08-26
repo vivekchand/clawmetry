@@ -86,6 +86,71 @@ activity without replacing the ClawMetry dashboard:
   (`CLAWMETRY_OTLP_ENDPOINT`, see `docs/OTEL_PUSH_EXPORTER.md`) and the
   `GET /api/otel/export` pull endpoint.
 
+## Daemon-free intake (the OTLP receiver)
+
+The deployment above assumes a daemon on every machine. Many orgs will not
+approve that: a background process on 500 developer laptops that reads
+transcripts and can signal processes is a security review measured in
+quarters. The receiver is the alternative. Developers install nothing; one
+config value, pushed by MDM, points the runtime at a ClawMetry the org already
+runs:
+
+```bash
+export CLAWMETRY_TELEMETRY=1                 # Claude Code: turn on its exporter
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://clawmetry.internal.example
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $CLAWMETRY_GATEWAY_TOKEN"
+# Optional, and what makes the rollups useful:
+export OTEL_RESOURCE_ATTRIBUTES="team.id=platform,repository=payments-api"
+```
+
+The header is not optional off the loopback interface. `/v1/*` is gated like
+`/api/*`: loopback is trusted, anything else needs the gateway token, and an
+exporter that is refused drops its batch quietly on the developer's machine
+rather than telling anyone. (`CLAWMETRY_OTLP_ALLOW_UNAUTH=1` on the server
+turns the gate off for a trusted network segment; the receiver then accepts
+cost and usage data from anyone who can route to it, so treat that as a
+deliberate decision, not a convenience.)
+
+Records land on `POST /v1/logs` (also `/v1/traces`, `/v1/metrics`) and are
+written to DuckDB: one row per record in `otlp_records` carrying the identity
+the runtime already sends (`user.id`, `user.email`, `organization.id`,
+`session.id`) plus whatever `OTEL_RESOURCE_ATTRIBUTES` adds. `tool_decision`
+and `tool_result` records also become tool events, so the trajectory detectors
+(stuck loops, no progress, repeated tool failures) work on this path.
+
+The team and repository on this path are **self-reported**: they are whatever
+the org stamped on its own telemetry, carried through with the record, and
+every rollup response says so (`attribution: self-reported`). That is a
+different question from agent principals, which derive owner and team from
+what ClawMetry observes and name the rung an inherited value came from. A
+daemon-free machine has no principals to derive from, which is exactly why
+this path carries the org's own labels instead of inventing an answer.
+
+Read it back with `GET /api/otel/rollup?dimension=team|repo|user_email&days=30`,
+or `GET /api/otel-status`, whose `persisted` field is the DuckDB row count.
+`counts` above it is an in-memory cache that a restart clears.
+
+**Two limits, stated here because this path is sold on them:**
+
+* **It covers the runtimes that emit OTel natively: Claude Code and Codex.**
+  It is not a 26-runtime intake path, and no page should imply it is. The
+  other runtimes need the daemon, which is what actually reads their
+  transcripts.
+* **Records arrive in plaintext.** The runtime encrypts nothing before it
+  sends, so the end-to-end encryption described under *Data flow* (a property
+  of the **daemon's** snapshot push, where the key never leaves the node) does
+  not extend to this path. For a customer who needs the data never
+  to cross their boundary in the clear, the honest answer is the self-hosted
+  VPC deployment: the receiver runs inside their network, and the plaintext
+  never leaves it. Do not let the encryption claim drift over this path.
+
+Prerequisite: the ingest image ships `opentelemetry-proto`, because the default
+exporter protocol is `http/protobuf` and without it the receiver answers 501.
+The `Dockerfile` that `deploy/self-hosted/docker-compose.yml` builds installs
+it; a bare `pip install clawmetry` needs `pip install clawmetry[otel]` (OTLP/JSON
+alone decodes with the stdlib and needs no extra).
+
 ## Audit export
 
 ```bash

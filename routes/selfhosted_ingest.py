@@ -17,6 +17,14 @@ can point a fleet of nodes at a single-tenant server inside a customer VPC:
 * ``POST /api/approvals/request``, ``GET /api/approvals/<id>`` + admin decision
 * ``GET  /api/export/events``        — audit export (JSONL/CSV, time-ranged)
 * ``GET  /api/selfhosted/nodes``, ``GET /api/selfhosted/status``
+
+The other way into a VPC deployment does NOT come through this module: a
+runtime that speaks OpenTelemetry can post straight to the ``bp_otel``
+receiver (``/v1/logs``) with no daemon on the machine at all, and that path
+persists to DuckDB via ``dashboard._process_otlp_logs``. It is the same
+server and the same container; it just skips the node-daemon protocol below.
+See ``docs/enterprise.md`` — "Daemon-free intake" — including why the E2E
+option here does not cover it (the runtime sends plaintext).
 * ``GET  /selfhosted``               — fleet overview page (admin-gated HTML)
 
 Storage is a single SQLite database (stdlib, WAL) at

@@ -1072,6 +1072,26 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── OpenWorker (github.com/andrewyng/openworker) ────────────────
+    # Instructions are AGENTS.md, and OpenWorker reads BOTH a project one and a
+    # user-global one it keeps in its own state dir (coworker/project.py returns
+    # state_dir()/AGENTS.md). Skills live in state_dir()/skills as folders
+    # (skills/store.py: "folder-is-truth"); mcp.json is its MCP client config.
+    ow_home = _env_root("COWORKER_STATE_DIR",
+                        os.path.expanduser("~/.config/coworker"))
+    catalog.append(RuntimeCatalogEntry(
+        id="openworker", label="OpenWorker", roots=(
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(ow_home, "AGENTS.md"),
+                     label="Global AGENTS.md", scope="global"),
+            RootSpec("skills", os.path.join(ow_home, "skills"),
+                     ("*/SKILL.md", "*/*.md"), "Skills", "global"),
+            RootSpec("mcp", os.path.join(ow_home, "mcp.json"),
+                     label="mcp.json", scope="global"),
+        ),
+    ))
+
     # ── OpenHands (github.com/OpenHands/OpenHands) ──────────────────
     # Repo instructions are AGENTS.md (and the legacy .openhands/microagents
     # tree, which OpenHands still reads). Skills and MCP config live under the
@@ -1492,7 +1512,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 26 runtimes would be a wall of
+    because listing every absent root for 27 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
@@ -1587,3 +1607,63 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
         "binary": binary,
         "truncated": size > len(raw),
     }
+
+
+# ── Project-relative root contract (consumed by repo_readiness) ─────────────
+#
+# ``clawmetry/repo_readiness.py`` scores an arbitrary code repo on how legible
+# it is to an agent. The set of files a runtime reads INSIDE a repo
+# (``CLAUDE.md``, ``AGENTS.md``, ``.cursor/rules/``, ``.github/prompts/``, …)
+# is already declared once, here, as the ``scope="project"`` RootSpecs. This
+# helper exposes those declarations as repo-relative paths so the scorer
+# DERIVES its file list from the catalog instead of hand-maintaining a second
+# copy that would silently drift every time a runtime is added.
+#
+# Only roots that live at or under the workspace root are returned: the
+# ``_expand_project_roots`` clones point at OTHER checkouts and are not part of
+# the per-repo contract.
+
+def project_relative_roots(categories: Optional[Iterable] = None) -> list:
+    """Every ``scope="project"`` root as a repo-relative path.
+
+    Returns ``[{runtime, runtime_label, category, rel, label, globs}, …]``
+    where ``rel`` is the path relative to the repo root (e.g. ``CLAUDE.md``,
+    ``.claude/skills``). Deduped, stably ordered, never raises.
+    """
+    wanted = parse_categories(categories) if categories is not None else set(CATEGORIES)
+    try:
+        ws = os.path.abspath(_workspace_root())
+    except OSError:
+        return []
+    out: list = []
+    seen = set()
+    try:
+        catalog = _catalog()
+    except Exception:
+        return []
+    for entry in catalog:
+        for spec in entry.roots:
+            if spec.scope != "project" or spec.category not in wanted:
+                continue
+            try:
+                root = os.path.abspath(spec.expanded_root())
+                rel = os.path.relpath(root, ws)
+            except (OSError, ValueError):
+                continue
+            # Skip clones that live outside this repo, and the degenerate
+            # "the repo root itself is the root" case.
+            if rel == os.curdir or rel.startswith(os.pardir) or os.path.isabs(rel):
+                continue
+            key = (entry.id, spec.category, rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "runtime": entry.id,
+                "runtime_label": entry.label,
+                "category": spec.category,
+                "rel": rel.replace(os.sep, "/"),
+                "label": spec.label or os.path.basename(rel),
+                "globs": tuple(spec.include_globs or ()),
+            })
+    return out
