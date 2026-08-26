@@ -70,8 +70,9 @@ Then FLYWHEEL.md's shipping loop for the repo you are in: branch → PR → gree
 ```bash
 python3 .claude/wo.py status <n> in_progress        # when you start
 python3 .claude/wo.py comment <n> /path/to/note.md  # evidence: PR link, test output
+python3 .claude/wo.py comment <n> /path/to/note.md  # evidence: CI green, PR open — before in_review
 python3 .claude/wo.py status <n> in_review           # PR open, CI green
-python3 .claude/wo.py comment <n> /path/to/note.md  # evidence: merged and verified live
+python3 .claude/wo.py comment <n> /path/to/note.md  # evidence: merged and verified live — before completed
 python3 .claude/wo.py status <n> completed           # merged and verified live
 ```
 Every tick must leave a comment on the WO even when the answer is "blocked, here is
