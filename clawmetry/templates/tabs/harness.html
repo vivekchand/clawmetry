@@ -66,6 +66,27 @@
     </div>
   </div>
 
+  <!-- Repo AI-readiness (WO-5). Before you blame the agent, look at what you
+       handed it: a grade for how legible the repo is to an agent, sitting next
+       to the stuck-loop counts the detectors recorded for sessions that
+       actually ran in that repo. Free and ungated. Filled by
+       loadRepoReadiness(); every number in it is a filesystem fact or a row
+       already in DuckDB. -->
+  <div id="repo-readiness" class="card rr-card">
+    <div class="rr-head">
+      <div>
+        <div class="rr-title">Is this repo ready for an agent?</div>
+        <div class="rr-sub">Agents get stuck on repos that do not explain themselves. This is what yours tells them.</div>
+      </div>
+      <div class="rr-head-controls">
+        <label class="rr-pick-label" for="rr-repo-pick">Repo</label>
+        <select id="rr-repo-pick" class="rr-pick" onchange="loadRepoReadiness(this.value)"></select>
+        <button type="button" class="btn-ghost" onclick="loadRepoReadiness()" title="Re-scan this repo">&#8635;</button>
+      </div>
+    </div>
+    <div id="rr-body" class="rr-body">Scanning the repo&hellip;</div>
+  </div>
+
   <!-- Claude surface coverage. Only rendered for the Claude Code runtime,
        filled by loadClaudeCoverage(). Two honest halves: the surfaces this
        machine traces in full, and the ones that never touch this disk. -->

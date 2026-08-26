@@ -26,7 +26,7 @@ pip install clawmetry && clawmetry
 Öppnas på **http://localhost:8900**. Ingen konfiguration: den hittar de agentruntider
 du redan har, läser dem skrivskyddat och ändrar ingenting i hur de körs.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## Fungerar med 26 agentruntider
 
@@ -100,9 +100,9 @@ samma maskin. Docker-instruktioner: [docs/DOCKER.md](docs/DOCKER.md).
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Översikt**: tokens, sessioner, hälsa | **Brain**: agentens händelseström i realtid |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Översikt**: tokens, sessioner, hälsa | **Agenter** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **Kostnad**: per modell och session | **Godkännanden**: grindkontroll för riskfyllda verktygsanrop |
 
 Fler, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
