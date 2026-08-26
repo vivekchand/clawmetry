@@ -26,7 +26,7 @@ pip install clawmetry && clawmetry
 **http://localhost:8900** येथे उघडते. झिरो कॉन्फिग: तुमच्याकडे आधीपासून असलेले एजंट रनटाईम्स ते शोधते,
 त्यांना फक्त-वाचनासाठी वाचते, आणि ते कसे चालतात यात काहीही बदल करत नाही.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## २६ एजंट रनटाईम्ससोबत काम करते
 
@@ -100,9 +100,9 @@ macOS, Linux किंवा Windows वर Python 3.8+ आणि त्या�
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: टोकन्स, सेशन्स, हेल्थ | **Brain**: लाइव्ह एजंट इव्हेंट स्ट्रीम |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Overview**: टोकन्स, सेशन्स, हेल्थ | **एजंट** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **Cost**: मॉडेल आणि सेशननुसार | **Approvals**: जोखमीचे टूल कॉल्स गेट करा |
 
 अधिक, प्रत्येक रनटाईमनुसार: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
