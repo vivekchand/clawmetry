@@ -27,6 +27,12 @@ concurrency:
   group: moat-keystone-drive-nightly
   cancel-in-progress: false
 
+# Least-privilege default. The drive job below declares its own
+# permissions block (contents: read + issues: write), which replaces this
+# default wholesale, so the auto-filed P0 issue still works.
+permissions:
+  contents: read
+
 jobs:
   drive:
     name: Keystone Drive (real openclaw turn -> 13 probes)
