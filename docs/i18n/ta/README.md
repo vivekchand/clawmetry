@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 **http://localhost:8900** என்ற முகவரியில் திறக்கும். கட்டமைப்பு தேவையில்லை: நீங்கள் ஏற்கெனவே வைத்திருக்கும் ஏஜென்ட் ரன்டைம்களை இது கண்டறிந்து, அவற்றை வாசிப்பு-மட்டும் முறையில் படித்து, அவை இயங்கும் விதத்தில் எதையும் மாற்றாது.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## 26 ஏஜென்ட் ரன்டைம்களுடன் இயங்கும்
 
@@ -97,9 +97,9 @@ macOS, Linux அல்லது Windows-இல் Python 3.8+ தேவை, ம�
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: டோக்கன்கள், அமர்வுகள், ஆரோக்கியம் | **Brain**: நேரடி ஏஜென்ட் நிகழ்வு ஸ்ட்ரீம் |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Overview**: டோக்கன்கள், அமர்வுகள், ஆரோக்கியம் | **Agents** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **செலவு**: மாடல் மற்றும் அமர்வு வாரியாக | **அனுமதிகள்**: ஆபத்தான கருவி அழைப்புகளைக் கேட்டிங் செய்தல் |
 
 ரன்டைம் வாரியாக மேலும்: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
