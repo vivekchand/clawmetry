@@ -16959,16 +16959,40 @@ def _resolve_spending(daily_usage, state_spending):
     from one source so the payload is internally consistent. ``source`` is
     surfaced so the cloud can tell a real $0 from a degraded read.
     """
+    from clawmetry import provenance as _prov
     live = daily_usage or {}
     stale = state_spending or {}
     keys = (("today", "todayCost"), ("week", "weekCost"), ("month", "monthCost"))
+    windows = {
+        "today": "today, the local calendar day",
+        "week": "this week, the local calendar week starting Monday",
+        "month": "this month, the local calendar month from the 1st",
+    }
     if all(live.get(src_key) is not None for _, src_key in keys):
         out = {out_key: float(live.get(src_key)) for out_key, src_key in keys}
         out["source"] = "live"
-        return out
+        return _prov.stamp(out, {
+            k: _prov.derived(
+                "the runtime's own cost when it reported one, otherwise "
+                "measured token counts priced against the provider's "
+                "published rate card",
+                "DuckDB rollups on this node, this tick",
+                window=windows[k])
+            for k, _src in keys})
+    # The live rollup did not answer, so this is the last triple the daemon
+    # managed to record. It is a real measurement of a moment that has passed,
+    # which is an assumption about now, so it is labelled as one rather than
+    # presented as the current spend.
     out = {out_key: float(stale.get(out_key) or 0) for out_key, _ in keys}
     out["source"] = "state"
-    return out
+    return _prov.stamp(out, {
+        k: _prov.estimated(
+            "the last spend the daemon successfully recorded, standing in "
+            "for a live read that did not answer this tick, so it may be out "
+            "of date",
+            "~/.clawmetry/state.json",
+            window=windows[k])
+        for k, _src in keys})
 
 
 def _build_daily_usage(days=14):
@@ -17090,7 +17114,7 @@ def _build_daily_usage(days=14):
         except Exception as _e_rt:
             log.debug("daily usage byRuntime build failed: %s", _e_rt)
             by_runtime = {}
-        return {
+        return _stamp_daily_usage({
             "days": out_days,
             "today": int(daily_tok.get(tstr, 0)),
             "week": int(sum(v for k, v in daily_tok.items() if k >= wk)),
@@ -17099,10 +17123,56 @@ def _build_daily_usage(days=14):
             "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
             "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
             "byRuntime": by_runtime,
-        }
+        })
     except Exception as _e:
         log.debug("daily usage snapshot build failed: %s", _e)
         return {}
+
+
+# ── Provenance for the snapshot's cost slice ─────────────────────────────────
+#
+# The hosted dashboard renders these numbers, not the ones /api/usage builds:
+# the cloud container has no DuckDB, so it reads this slice out of the
+# encrypted snapshot. If the badge only shipped on the local payload, a trial
+# user would see labelled figures on localhost and bare ones on the product
+# they are being asked to pay for. Same vocabulary, same words, both sides.
+
+def _daily_usage_provenance():
+    """Provenance entries for the ``dailyUsage`` snapshot slice."""
+    from clawmetry import provenance as _prov
+    src = "DuckDB rollup_daily / rollup_runtime_daily on this node"
+    formula = ("the runtime's own cost when it reported one, otherwise "
+               "measured input, output and cache token counts priced against "
+               "the provider's published rate card")
+    windows = {
+        "today": "today, the local calendar day",
+        "week": "this week, the local calendar week starting Monday",
+        "month": "this month, the local calendar month from the 1st",
+    }
+    entries = {}
+    for w, text in windows.items():
+        entries[w + "Cost"] = _prov.derived(formula, src, window=text)
+        entries[w] = _prov.measured(
+            "sum of token counts on deduped call events in the window",
+            src, window=text)
+    entries["days[].cost_usd"] = _prov.derived(
+        formula, src, window="one local calendar day per bucket")
+    entries["byRuntime[].cost_usd"] = _prov.derived(
+        formula, src, window="one local calendar day per bucket")
+    entries["cost_usd"] = _prov.derived(formula, src,
+                                        window="the row's own bucket")
+    return entries
+
+
+def _stamp_daily_usage(payload):
+    """Attach the cost slice's provenance. Never raises: a snapshot that
+    fails to build is a far worse outcome than one that ships unlabelled."""
+    try:
+        from clawmetry import provenance as _prov
+        return _prov.stamp(payload, _daily_usage_provenance())
+    except Exception as _e:
+        log.debug("dailyUsage provenance stamp failed: %s", _e)
+        return payload
 
 
 def _reliability_score_session(events):

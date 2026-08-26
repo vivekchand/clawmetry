@@ -77,9 +77,15 @@ def _usage_today():
         from routes.usage import _try_local_store_usage
 
         usage = _try_local_store_usage() or {}
+        # ``todayCost`` is None when nobody could price the window (see
+        # clawmetry/provenance.py). The device has one line and no room for a
+        # basis badge, so an unknown lands as 0.0 here. That is lossy on
+        # purpose and cannot happen today (the unscoped call never returns
+        # None); the ``or`` is here so a future runtime-scoped caller degrades
+        # instead of raising on float(None).
         return (
-            round(float(usage.get("todayCost", 0.0)), 4),
-            int(usage.get("today", 0)),
+            round(float(usage.get("todayCost") or 0.0), 4),
+            int(usage.get("today") or 0),
         )
     except Exception:
         return (0.0, 0)

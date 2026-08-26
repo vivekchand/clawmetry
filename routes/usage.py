@@ -42,6 +42,7 @@ from typing import Optional
 
 from flask import Blueprint, jsonify, make_response, request
 from clawmetry._gate import gate
+from clawmetry import provenance as _prov
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -261,6 +262,116 @@ def _runtime_coverage(runtime, *, has_data):
         return None
 
 
+# ── Provenance: how every figure on the Cost tab was obtained ────────────────
+#
+# The Cost tab is the surface a reader is most likely to quote at somebody
+# else, so it is the one that has to be able to show its working. See
+# ``clawmetry/provenance.py`` for the vocabulary; the short version is that a
+# figure is measured (read from a record), derived (an exact rule over
+# measured inputs), estimated (a model with an assumption in it), or unknown
+# (and then it is None, never 0.0).
+#
+# Cost is DERIVED, not measured, and saying so is the point of this work: a
+# runtime that reports its own dollar figure is rare, so almost every cost on
+# this tab is measured token counts priced against the provider's published
+# rate card. That is a good number and it is not a receipt.
+
+_COST_FORMULA = (
+    "the runtime's own cost when it reported one, otherwise measured input, "
+    "output and cache token counts priced against the provider's published "
+    "rate card"
+)
+_TOKEN_FORMULA = "sum of token counts on deduped call events in the window"
+
+# The windows are ``clawmetry.cost_windows``' calendar definitions, in the
+# node's local timezone. Naming them here means the tooltip and the SQL agree
+# by construction rather than by memory.
+_WINDOW_TEXT = {
+    "today": "today, the local calendar day",
+    "week": "this week, the local calendar week starting Monday",
+    "month": "this month, the local calendar month from the 1st",
+}
+
+
+def _usage_provenance(source: str, *, runtime=None, coverage=None):
+    """Provenance entries for an ``/api/usage`` payload.
+
+    ``source`` is the store the numbers were read out of, so a reader can
+    tell the DuckDB fast path from the transcript-scan fallback: they can
+    disagree, and when they do, which one you are looking at is the first
+    question worth asking.
+
+    ``coverage`` is ``_runtime_coverage``'s verdict, and it already knows the
+    thing that matters here: ``not_recorded`` means this runtime keeps no
+    per-call cost record and ``unverified`` means we have never confirmed
+    whether it does. Under either, a $0 is a statement about our coverage and
+    not about the user's spend, so the cost figures come back unknown instead
+    of as a confident zero.
+    """
+    scope = ("runtime %s" % runtime) if runtime else "every runtime on this node"
+    cov_status = str((coverage or {}).get("status") or "")
+    blind_reason = {
+        "not_recorded": ("this runtime keeps no per-call cost record, so a "
+                         "zero here would describe our coverage, not your "
+                         "spend"),
+        "unverified": ("we have not confirmed whether this runtime records "
+                       "per-call cost, so a zero here would be a claim we "
+                       "cannot back"),
+    }.get(cov_status)
+    entries = {}
+    for window in ("today", "week", "month"):
+        cost_key = window + "Cost"
+        if blind_reason:
+            entries[cost_key] = _prov.unknown(
+                blind_reason, source=source, window=_WINDOW_TEXT[window])
+        else:
+            entries[cost_key] = _prov.derived(
+                _COST_FORMULA, source, window=_WINDOW_TEXT[window],
+                inputs={"scope": scope})
+        entries[window] = _prov.measured(
+            _TOKEN_FORMULA, source, window=_WINDOW_TEXT[window],
+            inputs={"scope": scope})
+    entries["days[].cost"] = _prov.derived(
+        _COST_FORMULA, source, window="one local calendar day per bucket")
+    entries["sessions[].total_cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["sessionCosts"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["billingCoverage.covered_usd"] = _prov.estimated(
+        "the API-equivalent cost of the models a detected subscription "
+        "covers, which assumes the detected plan is the one actually billed",
+        "clawmetry subscription detection")
+    entries["billingCoverage.out_of_pocket_usd"] = _prov.estimated(
+        "API-equivalent cost minus the covered share, on the same assumption",
+        "clawmetry subscription detection")
+    entries["covered_usd"] = entries["billingCoverage.covered_usd"]
+    entries["out_of_pocket_usd"] = entries["billingCoverage.out_of_pocket_usd"]
+    entries["cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the row's own window")
+    entries["total_cost_usd"] = entries["cost_usd"]
+    return entries
+
+
+def _stamp_usage(result, source, *, runtime=None):
+    """Attach the Cost tab's provenance to a built payload. Never raises."""
+    try:
+        entries = _usage_provenance(
+            source, runtime=runtime, coverage=result.get("coverage"))
+        if "routing_savings_usd" in result:
+            entries["routing_savings_usd"] = _prov.estimated(
+                "for each substitution the enforcement proxy made, the price "
+                "of the model that was asked for minus the price of the model "
+                "that ran, at the measured token count. It is a "
+                "counterfactual: nobody was billed the larger number",
+                "duckdb:events(auto_downgraded).estimated_saved_usd",
+                window="the last 30 days")
+            entries["saved_usd"] = entries["routing_savings_usd"]
+        _prov.stamp(result, entries)
+    except Exception:
+        pass
+    return result
+
+
 def _try_local_store_usage(runtime: Optional[str] = None):
     """Fast path for /api/usage. Builds the daily token/cost chart by
     aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
@@ -406,7 +517,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
     import dashboard as _d  # late import — same pattern as other paths
 
-    return {
+    return _stamp_usage({
         "source": "local_store",
         "_source": "local_store",
         "days": days,
@@ -440,7 +551,8 @@ def _try_local_store_usage(runtime: Optional[str] = None):
             runtime,
             has_data=bool(month_tok or month_cost or today_tok or today_cost),
         ),
-    }
+    }, "DuckDB local store (daily_aggregates, rolled by the sync daemon)",
+        runtime=runtime)
 
 
 def _ls_top_sessions_by_cost(limit=20, runtime=None):
@@ -950,7 +1062,11 @@ def _try_local_store_usage_forecast():
         remaining_budget = effective_budget - cost_this_month
         days_to_budget = max(0.0, remaining_budget / daily_rate)
 
-    return {
+    # "Projected month-end $147.00" is the single most confident-looking
+    # number on the Cost tab and it is a forecast: it assumes the next N days
+    # look like the last 7. A quiet week or a holiday breaks it, which is
+    # exactly the case where somebody would quote it. Labelled as an estimate.
+    return _prov.stamp({
         "available": True,
         "daily_rate_usd": round(daily_rate, 4),
         "cost_this_month_usd": round(cost_this_month, 4),
@@ -962,7 +1078,28 @@ def _try_local_store_usage_forecast():
         "window_days": window_days,
         "daily_window": [round(c, 4) for c in reversed(window)],
         "_source": "local_store",
-    }
+    }, {
+        "projected_month_usd": _prov.estimated(
+            "spend so far this month, plus the average of the last 7 days "
+            "times the days left. It assumes the rest of the month looks "
+            "like the last week",
+            "DuckDB daily rollups on this node",
+            window="the calendar month",
+            inputs={"spent_so_far_usd": round(cost_this_month, 4),
+                    "daily_rate_usd": round(daily_rate, 4),
+                    "days_remaining": days_remaining}),
+        "cost_this_month_usd": _prov.derived(
+            "sum of the priced cost of every call this month",
+            "DuckDB daily rollups on this node",
+            window="this month, the local calendar month from the 1st"),
+        "daily_rate_usd": _prov.derived(
+            "the priced cost of the last 7 days divided by 7",
+            "DuckDB daily rollups on this node",
+            window="the last 7 days"),
+        "monthly_budget_usd": _prov.measured(
+            "the monthly limit you set",
+            "clawmetry budget config"),
+    })
 
 
 # Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type
@@ -1476,20 +1613,37 @@ def _apply_oss_24h_cap(result):
     capped = dict(result)
     days = list(capped.get("days") or [])
     # 24h window = today's bucket + yesterday's bucket (covers any clock
-    # crossing midnight). Keep the trailing 2 entries, zero the rest so
+    # crossing midnight). Keep the trailing 2 entries and WITHHOLD the rest so
     # the bar chart still renders 14 slots without leaking history.
+    #
+    # Withheld is not zero. These buckets used to be zeroed, which rendered as
+    # twelve days on which the user spent nothing: a plan boundary shown as a
+    # measurement. They now carry ``withheld: True`` and a null cost, and the
+    # chart paints them as held back rather than as $0.00 (the same rule
+    # ``provenance.stamp`` applies to a top-level unknown figure).
     if days:
         head = max(0, len(days) - 2)
         for i in range(head):
             d = dict(days[i])
             d["tokens"] = 0
-            d["cost"] = 0
+            d["cost"] = None
+            d["withheld"] = True
             d["inputTokens"] = 0
             d["outputTokens"] = 0
             d["cacheReadTokens"] = 0
             d["cacheWriteTokens"] = 0
             days[i] = d
         capped["days"] = days
+        # Copy before editing: the un-capped payload is the long-lived cache
+        # entry, and a shared provenance dict would carry this note back into
+        # the Pro rendering of the same numbers.
+        prov = dict(capped.get(_prov.PROVENANCE_KEY) or {})
+        if "days[].cost" in prov:
+            entry = dict(prov["days[].cost"])
+            entry["note"] = ("buckets older than 24 hours are withheld on "
+                             "this plan and carry no value")
+            prov["days[].cost"] = entry
+            capped[_prov.PROVENANCE_KEY] = prov
     capped["capped_at_24h"] = True
     return capped
 
@@ -1900,6 +2054,7 @@ def api_usage():
     # Prefer OTLP data when available
     if _d._has_otel_data():
         result = _d._get_otel_usage_data()
+        _stamp_usage(result, "OpenTelemetry metrics received on /v1/metrics")
         _d._usage_cache["data"] = result
         _d._usage_cache["ts"] = now
         try:
@@ -2017,6 +2172,7 @@ def api_usage():
         "trend": trend_data,
         "warnings": warnings,
     }
+    _stamp_usage(result, "transcript scan (the local store was unavailable)")
     import time as _time
 
     _d._usage_cache["data"] = result
@@ -4497,13 +4653,35 @@ def _try_local_store_spend_optimization():
     recs = recs[:5]
     total_save = sum(r["projected_savings_usd_30d"] for r in recs)
     total_cost = sum(r["current_cost_usd_30d"] for r in recs)
-    return {
+    # The loudest number on this card is a counterfactual: what the last 30
+    # days WOULD have cost on a cheaper tier. It rests on a static price-ratio
+    # table and on the assumption that the cheaper model does the same job.
+    # Both can be wrong, and the badge says so rather than letting a green
+    # 22px "Projected 30-day savings" read as money already in the bank.
+    saving_entry = _prov.estimated(
+        "the measured cost of these tool calls over the window, times the "
+        "published price gap between the model they ran on and the cheaper "
+        "tier suggested. It assumes the cheaper model would have produced an "
+        "equivalent result, which is the part that can be wrong",
+        "duckdb spans, priced with the static model-tier ratio table",
+        window="the last 30 days",
+        inputs={"tools_analysed": len(recs)})
+    return _prov.stamp({
         "recommendations":               recs,
         "total_projected_savings_usd_30d": round(total_save, 4),
         "total_analyzed_cost_usd_30d":   round(total_cost, 4),
         "window_days":                   30,
         "_source":                       "local_store",
-    }
+    }, {
+        "total_projected_savings_usd_30d": saving_entry,
+        "recommendations[].projected_savings_usd_30d": saving_entry,
+        "total_analyzed_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of the analysed tool calls",
+            "duckdb spans", window="the last 30 days"),
+        "recommendations[].current_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of this tool's calls",
+            "duckdb spans", window="the last 30 days"),
+    })
 
 
 @bp_usage.route("/api/usage/optimization-recommendations")
@@ -4518,13 +4696,23 @@ def api_usage_optimization_recommendations():
         fast = _try_local_store_spend_optimization()
         if fast is not None:
             return jsonify(fast)
-    return jsonify({
+    # Not "you could save $0.00". Nothing was analysed, so there is no
+    # number here at all, and stamp() nulls the ones that pretended there was.
+    return jsonify(_prov.stamp({
         "recommendations":               [],
         "total_projected_savings_usd_30d": 0,
         "total_analyzed_cost_usd_30d":   0,
         "window_days":                   30,
         "note": "Enable clawmetry connect to see recommendations.",
-    })
+    }, {
+        "total_projected_savings_usd_30d": _prov.unknown(
+            "no spans were available to analyse, so there is nothing to "
+            "compare a cheaper tier against",
+            source="/api/usage/optimization-recommendations"),
+        "total_analyzed_cost_usd_30d": _prov.unknown(
+            "no spans were available to analyse",
+            source="/api/usage/optimization-recommendations"),
+    }))
 
 
 @bp_usage.route("/api/efficiency")
