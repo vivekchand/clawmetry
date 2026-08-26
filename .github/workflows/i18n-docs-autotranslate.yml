@@ -47,12 +47,17 @@ jobs:
 
       - name: Translate README into all locales
         if: env.SKIP != '1'
+        # The dispatch input is untrusted text. Bind it to an env var and read
+        # it as a quoted shell variable — YAML quotes do NOT protect here,
+        # because ${{ }} is substituted textually before bash parses the line.
+        env:
+          ONLY: ${{ github.event.inputs.only }}
         run: |
           python3 scripts/i18n_translate_docs.py \
             --readme README.md \
             --locales-dir clawmetry/static/locales \
             --out-dir docs/i18n \
-            --only "${{ github.event.inputs.only }}"
+            --only "$ONLY"
 
       - name: Open sync PR
         if: env.SKIP != '1'
