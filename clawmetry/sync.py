@@ -19498,6 +19498,108 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
         log.debug("guard: baseline observation failed for %s: %s", sid, e)
 
 
+# ── Git outcome scan (REQ-OBS-CEA-022) ─────────────────────────────────────
+
+#: Seconds between repository scans. Slow on purpose: merges do not happen at
+#: the cadence tool calls do, and the scan is the most expensive thing in this
+#: file per unit of information it produces.
+GIT_SCAN_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_GIT_SCAN_INTERVAL", "900"))
+#: Most repositories scanned in one tick. A fleet machine can accumulate a lot
+#: of working directories; scanning them all in one tick is how a background
+#: job turns into a foreground problem.
+GIT_MAX_REPOS_PER_TICK = int(os.environ.get("CLAWMETRY_GIT_MAX_REPOS", "5"))
+
+
+def _git_scan_tick(store) -> int:
+    """Read every repository the sessions point at; persist what shipped.
+
+    Read-only with respect to both the agent and the repository: it runs the
+    plumbing commands in ``clawmetry.git_outcomes``, which refuses anything
+    that could write, and it only ever INSERTs into this node's own store.
+
+    Repositories are visited least-recently-scanned first, so a machine with
+    more repositories than one tick can cover works through all of them
+    instead of re-reading the same one forever. Never raises into the daemon
+    loop. Returns the number of repositories scanned.
+    """
+    try:
+        from clawmetry import git_outcomes as _git
+    except Exception as e:  # noqa: BLE001
+        log.warning("git-outcomes: import failed: %s", e)
+        return 0
+    if not _git.is_enabled():
+        return 0
+
+    # Sessions carry the directory the work happened in. Sessions with no
+    # directory are not an error and not a gap we paper over — they are
+    # counted and reported by the read side as not attributable.
+    try:
+        rows = store.query_sessions_table(limit=2000) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("git-outcomes: session read failed: %s", e)
+        return 0
+    sessions: list[dict] = []
+    for r in rows:
+        cwd = str((r or {}).get("cwd") or "").strip()
+        if not cwd:
+            continue
+        sessions.append({
+            "session_id": str(r.get("session_id") or ""),
+            "cwd": cwd,
+            "git_branch": str(r.get("git_branch") or ""),
+            "started_epoch": _epoch_of(r.get("started_at")),
+            "last_active_epoch": _epoch_of(r.get("last_active_at")),
+        })
+    if not sessions:
+        return 0
+
+    found = _git.discover_repos({s["cwd"] for s in sessions})
+    if not found:
+        return 0
+    try:
+        scanned_at = {r["repo_root"]: int(r.get("last_scanned_at") or 0)
+                      for r in (store.query_git_repos() or [])}
+    except Exception:
+        scanned_at = {}
+    roots = sorted(found.keys(), key=lambda r: scanned_at.get(r, 0))
+
+    done = 0
+    for root in roots[:GIT_MAX_REPOS_PER_TICK]:
+        dirs = set(found[root])
+        mine = [s for s in sessions if s["cwd"] in dirs]
+        try:
+            scan = _git.scan_repo(root, mine)
+            store.ingest_git_scan(scan)
+            done += 1
+            log.info(
+                "git-outcomes: %s — %d commit(s) linked, %d session link(s), "
+                "pr=%s, %.1fs",
+                scan.get("name") or root, len(scan.get("commits") or []),
+                len(scan.get("links") or []), scan.get("pr_basis"),
+                scan.get("scan_secs") or 0.0,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("git-outcomes: scan failed for %s: %s", root, e)
+    return done
+
+
+def _epoch_of(ts: Any) -> int:
+    """Epoch seconds for a session timestamp string; 0 when undecidable."""
+    s = str(ts or "").strip()
+    if not s:
+        return 0
+    from datetime import datetime
+    if s.endswith("Z") or s.endswith("z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return 0
+    if dt.tzinfo is None:
+        return int(dt.timestamp())
+    return int(dt.timestamp())
+
+
 def _emit_detector_incidents(store, state: dict) -> int:
     """Run ``clawmetry.detectors`` over each active session, emit each incident
     as a ``loop_signals`` row (reusing the stuck detector's device-alert path)
@@ -22265,6 +22367,7 @@ def run_daemon() -> None:
     # start surfaces immediately.
     last_stuck_eval = 0.0
     last_detect_eval = 0.0
+    last_git_scan = 0.0
 
     while True:
         try:
@@ -22598,6 +22701,27 @@ def run_daemon() -> None:
                         save_state(state)
                     except Exception:
                         pass
+
+            # ── Git outcome scan (REQ-OBS-CEA-022) ──
+            # The output half of the cost story: what the agent's work
+            # actually shipped. Read-only against both the agent and the
+            # repository, bounded in history, commits, files and wall clock,
+            # and off entirely with CLAWMETRY_GIT_OUTCOMES=0. Slow tick —
+            # merges do not happen at tool-call cadence.
+            now_git = time.time()
+            if (now_git - last_git_scan) >= GIT_SCAN_INTERVAL_SEC:
+                try:
+                    from clawmetry import local_store as _ls_git
+                    n_repos = _git_scan_tick(_ls_git.get_store())
+                    if n_repos:
+                        log.info("git-outcomes: scanned %d repo(s)", n_repos)
+                except Exception as _ge:
+                    log.warning("git-outcomes: tick errored: %s", _ge)
+                last_git_scan = now_git
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
 
             # ── Eval scheduler (issue #1619 Phase 1) ──
             # Sister of the alerts evaluator. Picks unscored completed
