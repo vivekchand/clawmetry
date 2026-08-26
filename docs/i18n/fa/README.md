@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 در **http://localhost:8900** باز می‌شود. بدون پیکربندی: محیط‌های اجرای عامل‌هایی را که از قبل دارید پیدا می‌کند، آن‌ها را فقط برای خواندن می‌خواند و هیچ چیزی در نحوه‌ی اجرای آن‌ها تغییر نمی‌دهد.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## با ۲۶ محیط اجرای عامل کار می‌کند
 
@@ -97,9 +97,9 @@ pip install clawmetry     # سپس: clawmetry
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **نمای کلی**: توکن‌ها، نشست‌ها، سلامت | **مغز**: جریان زنده‌ی رویدادهای عامل |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **نمای کلی**: توکن‌ها، نشست‌ها، سلامت | **عامل‌ها** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **هزینه**: بر اساس مدل و نشست | **تأییدها**: دروازه‌بانی فراخوانی‌های پرریسک ابزار |
 
 بیشتر، به ازای هر محیط اجرا: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
