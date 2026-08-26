@@ -5,6 +5,13 @@ on:
     branches: [main, master]
   pull_request:
 
+# Every job here only reads the repository: checkout, install, run tests,
+# upload an artifact. Nothing calls the GitHub API with GITHUB_TOKEN, pushes
+# a commit, tags, comments on a PR or touches a Release, so the whole
+# workflow runs on the read-only default and no job needs an elevated block.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
