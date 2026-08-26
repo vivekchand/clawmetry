@@ -67,12 +67,18 @@ jobs:
         run: bash scripts/harness/sync.sh
 
       - name: Audit observability coverage + file gap issues
+        # Dispatch inputs are untrusted text. Bind them to env vars and read
+        # them as quoted shell variables so the runner never expands them as
+        # code. Never interpolate ${{ github.event.* }} into a `run:` block.
+        env:
+          RUNTIME: ${{ github.event.inputs.runtime }}
+          FILE_ISSUES: ${{ github.event.inputs.file_issues }}
         run: |
-          ARGS=""
-          [ -n "${{ github.event.inputs.runtime }}" ] && ARGS="--runtime ${{ github.event.inputs.runtime }}"
+          ARGS=()
+          [ -n "$RUNTIME" ] && ARGS=(--runtime "$RUNTIME")
           # default to filing issues on schedule; honor the dispatch toggle
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.file_issues }}" = "false" ]; then
-            echo "dry-run (no issues)"; python3 scripts/harness/audit.py $ARGS
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$FILE_ISSUES" = "false" ]; then
+            echo "dry-run (no issues)"; python3 scripts/harness/audit.py "${ARGS[@]}"
           else
-            python3 scripts/harness/audit.py --file-issues $ARGS
+            python3 scripts/harness/audit.py --file-issues "${ARGS[@]}"
           fi
