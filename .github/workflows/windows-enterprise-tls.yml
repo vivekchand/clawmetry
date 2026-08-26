@@ -23,6 +23,10 @@ on:
       - .github/workflows/windows-enterprise-tls.yml
   workflow_dispatch:
 
+# Least privilege: checkout + pytest + a local mitmproxy. No API writes.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     runs-on: windows-latest
