@@ -12,9 +12,19 @@ on:
     - cron: "0 6 * * *"   # nightly PyPI-release run
   workflow_dispatch:
 
+# Least privilege: this workflow only builds a wheel and probes a local
+# dashboard. It never writes to the repository or any GitHub API surface.
+permissions:
+  contents: read
+
 concurrency:
   group: api-latency-smoke-${{ github.ref }}
   cancel-in-progress: true
+
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
 
 jobs:
   smoke:

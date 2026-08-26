@@ -53,12 +53,18 @@ jobs:
 
       - name: Translate deltas (via Claude Code CLI, no API key)
         if: env.SKIP != '1'
+        # The dispatch input is untrusted text. Bind it to an env var and read
+        # it as a quoted shell variable — YAML quotes do NOT protect here,
+        # because ${{ }} is substituted textually before bash parses the line.
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+          SINCE: ${{ github.event.before || 'HEAD~1' }}
         run: |
           python3 scripts/i18n_autotranslate.py \
             --engine claude-cli \
             --locales-dir clawmetry/static/locales \
-            --since "${{ github.event.before || 'HEAD~1' }}" \
-            --only "${{ github.event.inputs.only }}"
+            --since "$SINCE" \
+            --only "$ONLY"
 
       - name: Open sync PR
         if: env.SKIP != '1'
