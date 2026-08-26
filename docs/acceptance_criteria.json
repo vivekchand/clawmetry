@@ -474,6 +474,60 @@
       "text": "The system shall retain these records for a bounded period and discard older ones."
     },
     {
+      "id": "AC-OBS-CEA-022.1",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall report the cost of an agent's work alongside whether that work reached a merged change, reached a branch only, or reached neither."
+    },
+    {
+      "id": "AC-OBS-CEA-022.2",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "The system shall never modify a repository it reads: no checkout, no fetch, no configuration change, and no write of any kind."
+    },
+    {
+      "id": "AC-OBS-CEA-022.3",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "When a pull-request host is unavailable or its tooling is not installed, the system shall report what local branch and merge state supports and shall state that pull-request state is unavailable, rather than failing or omitting the surface."
+    },
+    {
+      "id": "AC-OBS-CEA-022.4",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Every reported figure shall carry the basis it was derived from, and a figure resting on an uncertain correlation shall be reported as uncertain rather than presented next to certain ones."
+    },
+    {
+      "id": "AC-OBS-CEA-022.5",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Spend on abandoned work shall be counted only for sessions whose runtime reported that they ended. An inactive session shall not be treated as an abandoned one."
+    },
+    {
+      "id": "AC-OBS-CEA-022.6",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Sessions whose working directory is unknown shall be reported as not attributable, with a count, rather than silently dropped from the totals."
+    },
+    {
+      "id": "AC-OBS-CEA-022.7",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Outcomes shall be attributed to a runtime, a model or a repository, and shall not be attributed to a named person."
+    },
+    {
+      "id": "AC-OBS-CEA-022.8",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "A named window of time on this surface shall mean the same span as the same-named window on every other cost surface."
+    },
+    {
+      "id": "AC-OBS-CEA-022.9",
+      "doc": "Cost and Efficiency Analytics",
+      "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
+      "text": "Reading a repository shall be bounded in how much history it examines and in how long it may take, and shall be capable of being switched off entirely on a node."
+    },
+    {
       "id": "AC-OBS-GHA-001.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
