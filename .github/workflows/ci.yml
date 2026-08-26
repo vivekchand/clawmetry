@@ -349,6 +349,8 @@ jobs:
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
             tests/test_hooks_claude_code.py \
+            tests/test_goose_adapter.py \
+            tests/test_goose_platform_paths.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
