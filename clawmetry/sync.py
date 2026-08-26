@@ -7217,6 +7217,8 @@ _LITE_RT_LABELS = {
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
     "openhands": "OpenHands",
+    "openworker": "OpenWorker",
+
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -13589,6 +13591,10 @@ _FAMILY_ADAPTER_SPECS = (
     # the ACP tool-call records. Devin Cloud sessions are API-only and
     # deliberately not ingested here.
     ("clawmetry_pro.adapters.devin", "DevinAdapter"),
+    # OpenWorker (github.com/andrewyng/openworker) -- a generalist desktop
+    # worker, not a coding CLI: its sessions are SaaS-connector work as
+    # often as file edits.
+    ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
 )
 
 
@@ -15156,6 +15162,7 @@ _RUNTIME_PREFIXES = frozenset({
     "gemini_cli",
     "cline",
     "openhands",
+    "openworker",
 })
 
 

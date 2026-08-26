@@ -118,6 +118,9 @@ PAID_RUNTIMES = frozenset(
         "gemini_cli",
         "cline",
         "openhands",
+        # OpenWorker (github.com/andrewyng/openworker) -- Andrew Ng's local-first
+        # desktop worker. Generalist (25+ SaaS connectors), not a coding CLI.
+        "openworker",
     }
 )
 
@@ -160,6 +163,8 @@ RUNTIME_LABELS = {
     "cline": "Cline",
     "openhands": "OpenHands",
     "devin": "Devin",
+    "openworker": "OpenWorker",
+
 }
 
 # Public per-runtime page on clawmetry.com for every known runtime. This is
@@ -197,6 +202,8 @@ RUNTIME_LANDING_PATHS = {
     "gemini_cli": "/runtimes/gemini-cli",
     "cline": "/runtimes/cline",
     "openhands": "/runtimes/openhands",
+    "openworker": "/runtimes/openworker",
+
 }
 
 # Canonical list of chat-channel adapters observable by ClawMetry, in the

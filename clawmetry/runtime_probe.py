@@ -130,6 +130,17 @@ RUNTIME_PROBES: tuple = (
     # creates ~/.openhands/profiles and ~/.openhands/cache on first launch even
     # when the persistence dir points elsewhere -- so the root existing is not
     # evidence that any conversation was ever recorded.
+    # OpenWorker ("coworker") is a desktop app; its state dir is
+    # $COWORKER_STATE_DIR, else %APPDATA%\\coworker on Windows, else
+    # ~/.config/coworker (coworker/secrets.py::state_dir). Probe the STORE
+    # files rather than the directory: the dir alone is created by a first
+    # launch that never recorded a session, and ~/.config is shared with
+    # every other tool, so a bare-dir probe is the weakest possible evidence.
+    RuntimeProbe("openworker", "OpenWorker",
+                 ("~/.config/coworker/coworker.db",
+                  "~/.config/coworker/conversations",
+                  "~/AppData/Roaming/coworker/coworker.db"),
+                 env="CLAWMETRY_OPENWORKER_STATE_DIR"),
     RuntimeProbe("openhands", "OpenHands",
                  ("~/.openhands/conversations/*/base_state.json",),
                  env="CLAWMETRY_OPENHANDS_HOME"),
