@@ -10,6 +10,13 @@ on:
         description: 'Version to publish (e.g. 0.10.0)'
         required: true
 
+# Least-privilege default. The publish job below declares its own
+# permissions block (contents: read + id-token: write + attestations:
+# write), which replaces this default wholesale -- provenance minting and
+# PyPI Trusted Publishing are unaffected.
+permissions:
+  contents: read
+
 jobs:
   publish:
     name: Build & Publish to PyPI
