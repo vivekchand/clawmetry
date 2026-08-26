@@ -31323,6 +31323,10 @@ def has_capacity_batch(
                 else None
             ),
             "retention_days": (
+                # `is not None` guard: `None` here means UNSET;
+                # `has_retention_window(None)` means UNLIMITED. Do not
+                # collapse the two -- see the "unset vs unlimited" para
+                # in this helper's docstring.
                 has_retention_window(retention_days)
                 if retention_days is not None
                 else None
@@ -31402,6 +31406,10 @@ def has_capacity_batch_at(
                 else None
             ),
             "retention_days": (
+                # `is not None` guard: `None` here means UNSET;
+                # `has_retention_window_at(p, None)` means UNLIMITED.
+                # Do not collapse -- see the "unset vs unlimited" para
+                # in this helper's docstring.
                 has_retention_window_at(p, retention_days)
                 if retention_days is not None
                 else None
