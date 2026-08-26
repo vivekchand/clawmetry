@@ -19,3 +19,48 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+
+  # npm — the React SPA. This is the repo's largest JS dependency tree and
+  # the only one with a committed lockfile that ships into clawmetry/static/.
+  # Minor/patch updates are grouped so a routine week is one PR, not twenty.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      frontend-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # npm — Playwright E2E harness. Runs in CI on every PR, so its
+  # dependencies are part of the CI supply chain.
+  - package-ecosystem: "npm"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    groups:
+      e2e-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # npm — the ClawHub/OpenClaw plugin, which is published to npm
+  # (openclaw.release.publishToNpm). No lockfile, so Dependabot updates the
+  # manifest ranges.
+  - package-ecosystem: "npm"
+    directory: "/clawhub-plugin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
