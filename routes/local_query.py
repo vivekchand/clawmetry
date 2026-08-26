@@ -974,6 +974,15 @@ _DAEMON_METHODS = frozenset({
     # (memory: feedback_cli_methods_need_daemon_allowlist).
     "record_session_phase",
     "query_session_phases",
+    # Git outcomes (REQ-OBS-CEA-022). The daemon writes a repository scan and
+    # the dashboard reads the joined answer; both cross the process boundary
+    # because the daemon holds the DuckDB writer lock. An unlisted method here
+    # 400s and the surface silently reports nothing, which is exactly the
+    # failure mode this feature exists to stop
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "ingest_git_scan",
+    "query_git_repos",
+    "query_git_outcomes",
 })
 
 
