@@ -1,0 +1,20 @@
+{
+ "1": {
+  "note": "Verified against merged main, not rebuilt. Committed Resend/Pepy/admin fallbacks gone, 4 fail-closed 503 guards, 10/10 acceptance tests green. Follow-up: leaked keys still unrotated in provider consoles.",
+  "pr": "https://github.com/vivekchand/clawmetry-landing/pull/592",
+  "state": "shipped",
+  "tick": "2026-08-24"
+ },
+ "2": {
+  "note": "Verified against merged main. /api/connect returns 410 and mints nothing; issuance path removed repo-wide; 3/3 connect tests green.",
+  "pr": "https://github.com/vivekchand/clawmetry-landing/pull/593",
+  "state": "shipped",
+  "tick": "2026-08-24"
+ },
+ "3": {
+  "note": "Genuinely unstarted: branch had 0 commits, plan sat unexecuted since Aug 1. Implemented all 6 steps + fixed a _db() NameError the change exposed. 248 tests pass; landing#669 CI fully green and mergeable. Left at in_review because merge deploys to the live site and changes Vivek's own admin access path.",
+  "pr": "https://github.com/vivekchand/clawmetry-landing/pull/669",
+  "state": "in_flight",
+  "tick": "2026-08-24"
+ }
+}
