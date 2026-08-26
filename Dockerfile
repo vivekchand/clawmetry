@@ -18,6 +18,16 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# OTLP protobuf support, baked in rather than left to the [otel] extra.
+# This image is what deploy/self-hosted/docker-compose.yml builds, and the
+# daemon-free intake path (an org points OTEL_EXPORTER_OTLP_ENDPOINT here
+# instead of installing anything per machine) depends on it: OTLP/JSON
+# decodes with the stdlib, but the default exporter protocol is
+# http/protobuf, and without these the receiver answers 501 to every POST.
+# An enterprise receiver that has to be told to `pip install clawmetry[otel]`
+# before it accepts data is not a receiver.
+RUN pip install --no-cache-dir "opentelemetry-proto>=1.20.0" "protobuf>=4.21.0"
+
 # Copy application code and necessary files for setup
 COPY dashboard.py .
 COPY history.py .

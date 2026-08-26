@@ -97,6 +97,13 @@ UNSUPPORTED_COMPACTION = frozenset({
     "nanoclaw",
     "opencode",
     "openhands",
+    # OpenWorker DOES record compaction, but as a single current boundary on
+    # the session row rather than as events, and the count above is derived
+    # from events whose type contains "compact". So we would report "0
+    # compactions, ran clean" for a session that has compacted, which is the
+    # exact failure this module exists to prevent. Delist once the adapter
+    # emits a compaction event, and only once the WHEEL carrying that ships.
+    "openworker",
     "picoclaw",
     "qm",
     "qwen_code",

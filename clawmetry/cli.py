@@ -1334,7 +1334,7 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 26 runtimes available.")
+            print("  Pro adapters installed - all 27 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
@@ -4052,7 +4052,7 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('Plans')} {DIM('(same either way; each tier includes the one before):')}")
     print(f"    {DIM('Free    $0          watch OpenClaw + NVIDIA NemoClaw, forever')}")
-    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 26 runtimes')}")
+    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 27 runtimes')}")
     print(f"    {DIM('Pro    $19/node/mo  everything in Starter + governance (alerts, approvals, evals)')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
@@ -5391,6 +5391,167 @@ def _license_json_dump(payload: dict) -> None:
     import json as _json
 
     print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _cmd_team(args) -> None:
+    """`clawmetry team key` -- create, accept or inspect the organisation key.
+
+    The organisation key is what makes a session readable by the people you
+    work with instead of only by you. It is created on one machine, handed to
+    colleagues out of band, and never sent to the hosted service.
+
+    The key is never accepted on the command line. A secret in argv is a secret
+    in shell history and in every `ps` listing on the machine, and this one
+    opens an organisation's content rather than one machine's -- so it is read
+    from a file, from stdin, or from a prompt, matching `clawmetry license`.
+    """
+    import json as _json
+
+    from clawmetry import org_key as _ok
+    from clawmetry.sync import load_config, save_config
+
+    action = getattr(args, "team_action", "show") or "show"
+    as_json = bool(getattr(args, "as_json", False))
+    # A machine that has never run `clawmetry connect` has no config file at
+    # all. That is not an error to report as a stack trace: `show` should say
+    # plainly that no key is set, and the write actions should name the one
+    # step that has to happen first.
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = None
+    if cfg is None:
+        if action == "show":
+            if as_json:
+                print(_json.dumps({"action": "show", "ok": True,
+                                   "organisation_key": False,
+                                   "fingerprint": "",
+                                   "content_key_scope": "none",
+                                   "connected": False}, indent=2))
+            else:
+                print("Organisation key: not set")
+                print("This machine is not connected to ClawMetry Cloud yet, "
+                      "so there is nothing for colleagues to read.")
+                print("Connect it first with:  clawmetry connect")
+            return
+        print("This machine is not connected to ClawMetry Cloud yet.")
+        print("Run `clawmetry connect` first, then set the organisation key.")
+        raise SystemExit(1)
+
+    def _emit(payload: dict, lines: list) -> None:
+        if as_json:
+            print(_json.dumps(payload, indent=2))
+        else:
+            for ln in lines:
+                print(ln)
+
+    if action == "show":
+        fp = _ok.fingerprint(_ok.get(cfg))
+        scoped = _ok.is_org_sealed(cfg)
+        _emit(
+            {"action": "show", "ok": True, "organisation_key": scoped,
+             "fingerprint": fp, "content_key_scope":
+                 "organisation" if scoped else "node"},
+            ([f"Organisation key: set (fingerprint {fp})",
+              "This machine's sessions can be read by your organisation once "
+              "they are shared."]
+             if scoped else
+             ["Organisation key: not set",
+              "This machine's content can be read only by you.",
+              "Create one with:  clawmetry team key create",
+              "or accept your organisation's with:  clawmetry team key set --file KEYFILE"]),
+        )
+        return
+
+    if action == "create":
+        if _ok.get(cfg) and not getattr(args, "force", False):
+            print("This machine already holds an organisation key "
+                  f"(fingerprint {_ok.fingerprint(_ok.get(cfg))}).")
+            print("Replacing it makes content sealed with the old key "
+                  "unreadable. Re-run with --force if that is what you want.")
+            raise SystemExit(1)
+        key = _ok.generate()
+        cfg[_ok.CONFIG_FIELD] = key
+        save_config(cfg)
+        fp = _ok.fingerprint(key)
+        if as_json:
+            print(_json.dumps({"action": "create", "ok": True,
+                               "fingerprint": fp, "key": key}, indent=2))
+        else:
+            print("Organisation key created. It is shown once -- store it in "
+                  "your password manager now.")
+            print("")
+            print(f"    {key}")
+            print("")
+            print(f"Fingerprint: {fp}")
+            print("Give it to a colleague over a channel you trust. Anyone "
+                  "holding it can read what your organisation shares; the "
+                  "hosted service never receives it and cannot recover it for "
+                  "you.")
+        return
+
+    if action == "set":
+        key = _read_secret_arg(
+            getattr(args, "file", None),
+            prompt="Paste your organisation key: ",
+        )
+        if not key:
+            print("No key provided.")
+            raise SystemExit(1)
+        prev = _ok.get(cfg)
+        if prev and _ok.fingerprint(prev) != _ok.fingerprint(key) \
+                and not getattr(args, "force", False):
+            print("This machine already holds a DIFFERENT organisation key "
+                  f"(fingerprint {_ok.fingerprint(prev)}).")
+            print("Replacing it makes content sealed with the old key "
+                  "unreadable. Re-run with --force if that is what you want.")
+            raise SystemExit(1)
+        cfg[_ok.CONFIG_FIELD] = key
+        save_config(cfg)
+        fp = _ok.fingerprint(key)
+        _emit({"action": "set", "ok": True, "fingerprint": fp},
+              [f"Organisation key accepted (fingerprint {fp}).",
+               "Check it matches the fingerprint your colleague read out. If "
+               "it does not, you hold a different key and will not be able to "
+               "read what they share."])
+        return
+
+    if action == "forget":
+        if not _ok.get(cfg):
+            _emit({"action": "forget", "ok": True, "changed": False},
+                  ["This machine holds no organisation key."])
+            return
+        cfg.pop(_ok.CONFIG_FIELD, None)
+        save_config(cfg)
+        _emit({"action": "forget", "ok": True, "changed": True},
+              ["Organisation key removed from this machine.",
+               "Content sealed with it stays sealed; this machine can no "
+               "longer open it, and neither can the hosted service."])
+        return
+
+    print(f"Unknown action: {action}")
+    raise SystemExit(2)
+
+
+def _read_secret_arg(path, prompt: str) -> str:
+    """Read a secret from a file, from stdin, or from an interactive prompt.
+
+    Never from argv. `clawmetry license --file` exists for the same reason:
+    a token on the command line is a token in shell history and in `ps`.
+    """
+    import sys as _sys
+
+    if path:
+        with open(os.path.expanduser(str(path)), "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    if not _sys.stdin.isatty():
+        return _sys.stdin.read().strip()
+    try:
+        import getpass as _gp
+
+        return _gp.getpass(prompt).strip()
+    except Exception:
+        return ""
 
 
 def _cmd_license(args) -> None:
@@ -7919,6 +8080,47 @@ def main() -> None:
     )
 
     # license — manage the self-hosted Pro/Enterprise license
+    p_team = sub.add_parser(
+        "team",
+        help="Share this machine's sessions with your organisation",
+    )
+    team_sub = p_team.add_subparsers(dest="team_target")
+    p_team_key = team_sub.add_parser(
+        "key", help="Create, accept or inspect the organisation key"
+    )
+    p_team_key.add_argument(
+        "team_action",
+        nargs="?",
+        default="show",
+        choices=["show", "create", "set", "forget"],
+        help="show (default) | create | set | forget",
+    )
+    p_team_key.add_argument(
+        "--file",
+        dest="file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "For 'set': read the key from PATH instead of typing it. The key "
+            "is never accepted as a command-line argument -- that would put "
+            "an organisation's secret in shell history and in every `ps` "
+            "listing. Without --file the key is read from stdin, or prompted "
+            "for without echo."
+        ),
+    )
+    p_team_key.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Replace a key this machine already holds. Content sealed with "
+            "the old key becomes unreadable, so this is never the default."
+        ),
+    )
+    p_team_key.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit {action, ok, fingerprint} JSON (jq-friendly).",
+    )
+
     p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
     p_license.add_argument(
         "license_action",
@@ -8354,6 +8556,7 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "team",
         "tier",
         "runtimes",
         "features",
@@ -8406,6 +8609,8 @@ def main() -> None:
             _cmd_uninstall(args)
         elif args.cmd == "activate":
             _cmd_activate(args)
+        elif args.cmd == "team":
+            _cmd_team(args)
         elif args.cmd == "license":
             _cmd_license(args)
         elif args.cmd == "tier":

@@ -126,6 +126,13 @@ RUNTIME_PROFILES: dict = {
     # makes no_progress meaningful for them.
     "picoclaw": {"write_tools": ()},
     "nanoclaw": {"write_tools": ()},
+    # OpenWorker declares its own write set in ``coworker/risk.py``:
+    # {write_file, replace_in_file, apply_patch, apply_unified_diff}.
+    # ``write_file`` and ``apply_patch`` already match the module defaults; the
+    # other two match nothing, so without this profile a session that edits
+    # exclusively through them looks like it made no progress at all. It also
+    # drives a shell (``run_shell``), which the shell-mutation rule covers.
+    "openworker": {"write_tools": ("replace_in_file", "apply_unified_diff")},
 }
 
 # Threshold key -> (module default, base env var). A per-runtime override is
