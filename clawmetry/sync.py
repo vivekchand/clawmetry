@@ -7273,6 +7273,23 @@ def _xdg_data_home() -> str:
     return os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
 
 
+def _goose_data_dirs() -> list:
+    """Goose's data dir candidates, from the adapter that actually reads them.
+
+    Goose does NOT anchor at ``~/.local/share`` on every platform: Windows
+    lives under ``%APPDATA%\\Block\\goose\\data`` and ``GOOSE_PATH_ROOT``
+    relocates everything. Importing the adapter's resolver keeps detection and
+    ingestion from drifting apart — a hardcoded copy here is exactly how a
+    Windows install reads as "Goose not present" while the adapter is happily
+    ingesting it. Falls back to the POSIX default if the adapter is missing.
+    """
+    try:
+        from clawmetry.adapters.goose import data_dir_candidates
+        return list(data_dir_candidates())
+    except Exception:
+        return [os.path.join(os.path.expanduser("~"), ".local", "share", "goose")]
+
+
 def _runtime_data_paths(rid: str) -> list:
     """Native on-disk data location(s) for a runtime, used to compute recency.
     Mirrors the per-adapter stores (the same dirs the lite/pro detectors read).
@@ -7292,7 +7309,7 @@ def _runtime_data_paths(rid: str) -> list:
         "codex": [os.path.join(home, ".codex", "sessions")],
         "qwen_code": [os.path.join(home, ".qwen")],
         "opencode": [os.path.join(home, ".local", "share", "opencode", "opencode.db")],
-        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "goose": _goose_data_dirs(),
         "hermes": [os.path.join(home, ".hermes", "state.db")],
         "aider": [os.path.join(home, ".aider")],
         "picoclaw": [os.path.join(home, ".picoclaw")],
@@ -7440,7 +7457,7 @@ def _detect_runtimes_lite() -> list:
     # Presence-only (non-JSONL formats — count unknown) → report with 0 sessions.
     _present = {
         "cursor": [os.path.join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")],
-        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "goose": _goose_data_dirs(),
         "opencode": [os.path.join(home, ".local", "share", "opencode")],
         "hermes": [os.path.join(home, ".hermes", "state.db")],
         "picoclaw": [os.path.join(home, ".picoclaw")],

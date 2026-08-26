@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 Открывается по адресу **http://localhost:8900**. Никакой настройки: приложение находит уже установленные у вас среды выполнения агентов, читает их в режиме "только чтение" и никак не влияет на их работу.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## Работает с 26 средами выполнения агентов
 
@@ -97,9 +97,9 @@ pip install clawmetry     # затем: clawmetry
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: токены, сессии, состояние системы | **Brain**: поток событий агента в реальном времени |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Overview**: токены, сессии, состояние системы | **Агенты** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **Cost**: по моделям и сессиям | **Approvals**: контроль рискованных вызовов инструментов |
 
 Больше скриншотов по каждой среде выполнения: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).

@@ -26,7 +26,7 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Codex       | Beta adapter   | "rollout" JSONL `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Transcripts, model, tool calls, token usage (from `token_count` events). |
 | Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
 | Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
-| Goose       | Beta adapter (**free**) | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. Adapter ships in the OSS package (`clawmetry/adapters/goose.py`) — no plan required. |
+| Goose       | Beta adapter (**free**) | SQLite `<goose data dir>/sessions/sessions.db` — `${XDG_DATA_HOME:-~/.local/share}/goose` on macOS **and** Linux, `%APPDATA%\Block\goose\data` on Windows, or `$GOOSE_PATH_ROOT/data` when that is set (`sessions` + `messages` tables) | Transcripts, model, tool calls, real token totals. Adapter ships in the OSS package (`clawmetry/adapters/goose.py`) — no plan required. |
 | opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
 | Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
 | Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |

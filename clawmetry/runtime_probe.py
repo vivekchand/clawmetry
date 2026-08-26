@@ -54,7 +54,12 @@ class RuntimeProbe:
                 if root and os.path.exists(os.path.expanduser(root)):
                     return True
             for p in self.paths:
-                expanded = os.path.expanduser(p)
+                # expandvars FIRST so "$XDG_DATA_HOME/..." resolves; an unset
+                # var stays literal and simply globs to nothing, which is the
+                # honest answer rather than a bare-root false positive.
+                expanded = os.path.expanduser(os.path.expandvars(p))
+                if "$" in expanded:
+                    continue
                 if _glob.glob(expanded):
                     return True
         except Exception:
@@ -75,7 +80,22 @@ RUNTIME_PROBES: tuple = (
         "~/.config/Cursor/User/globalStorage/state.vscdb",
     )),
     RuntimeProbe("aider", "Aider", ("~/.aider*",), env="AIDER_HISTORY_DIRS"),
-    RuntimeProbe("goose", "Goose", ("~/.local/share/goose/sessions",)),
+    # Goose resolves its data dir with etcetera's choose_app_strategy, which
+    # is XDG on macOS as well as Linux (NOT ~/Library/Application Support)
+    # and RoamingAppData on Windows; GOOSE_PATH_ROOT relocates all of it.
+    # The last entry is the legacy macOS location Goose's own paths.rs still
+    # names for pre-existing installs. The env-var forms are globbed rather
+    # than declared via ``env=``, because "$GOOSE_PATH_ROOT exists" is not
+    # evidence of a Goose install — "$GOOSE_PATH_ROOT/data/sessions exists"
+    # is. Kept in step with clawmetry/adapters/goose.py::_candidate_db_paths().
+    RuntimeProbe("goose", "Goose", (
+        "$GOOSE_PATH_ROOT/data/sessions",
+        "$XDG_DATA_HOME/goose/sessions",
+        "~/.local/share/goose/sessions",
+        "$APPDATA/Block/goose/data/sessions",
+        "~/AppData/Roaming/Block/goose/data/sessions",
+        "~/Library/Application Support/Block/goose/sessions",
+    )),
     RuntimeProbe("opencode", "opencode", ("~/.local/share/opencode",)),
     RuntimeProbe("qwen_code", "Qwen Code", ("~/.qwen/projects",)),
     RuntimeProbe("hermes", "Hermes", ("~/.hermes",), env="HERMES_HOME"),
