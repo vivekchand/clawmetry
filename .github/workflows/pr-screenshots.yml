@@ -253,8 +253,13 @@ jobs:
       # fork guardrail.
       - name: Set per-PR screenshots branch name
         if: always()
+        # Event data is untrusted text. Bind it to an env var and read it as a
+        # quoted shell variable so the runner never expands it as code.
+        # Never interpolate ${{ github.event.* }} into a `run:` block.
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          echo "PR_SCREENSHOTS_BRANCH=pr-screenshots-pr-${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+          echo "PR_SCREENSHOTS_BRANCH=pr-screenshots-pr-${PR_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Publish screenshots to per-PR branch
         if: ${{ always() && !github.event.pull_request.head.repo.fork }}
