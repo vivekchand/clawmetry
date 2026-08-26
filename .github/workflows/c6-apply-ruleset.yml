@@ -36,6 +36,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default. The apply-ruleset job below declares its own
+# permissions block (contents: read + issues: write), which replaces this
+# default wholesale, so the tracking-issue comment still works.
+permissions:
+  contents: read
+
 jobs:
   apply-ruleset:
     name: Upsert E2E required-checks ruleset on main (C6)
