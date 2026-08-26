@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 Bubukas sa **http://localhost:8900**. Walang configuration na kailangan: hinahanap nito ang mga agent runtime na mayroon ka na, binabasa ang mga ito nang read-only, at walang binabago sa kung paano ang mga ito tumatakbo.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## Gumagana sa 27 agent runtimes
 
@@ -97,9 +97,9 @@ parehong makina. Mga instruksyon sa Docker: [docs/DOCKER.md](docs/DOCKER.md).
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: mga token, session, health | **Brain**: live na event stream ng agent |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Overview**: mga token, session, health | **Mga Agent** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **Cost**: ayon sa model at session | **Approvals**: i-gate ang mga mapanganib na tool call |
 
 Marami pa, kada runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).

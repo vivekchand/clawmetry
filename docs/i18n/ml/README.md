@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 **http://localhost:8900** ൽ തുറക്കും. കോൺഫിഗറേഷൻ ആവശ്യമില്ല: നിങ്ങളുടെ പക്കൽ ഇതിനകം ഉള്ള ഏജന്റ് റൺടൈമുകൾ ഇത് കണ്ടെത്തുന്നു, അവ റീഡ്-ഒൺലി ആയി വായിക്കുന്നു, അവ എങ്ങനെ പ്രവർത്തിക്കുന്നു എന്നതിൽ ഒന്നും മാറ്റുന്നില്ല.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## 26 ഏജന്റ് റൺടൈമുകളുമായി പ്രവർത്തിക്കുന്നു
 
@@ -97,9 +97,9 @@ macOS, Linux അല്ലെങ്കിൽ Windows-ൽ Python 3.8+ ഉം അ�
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **അവലോകനം**: ടോക്കണുകൾ, സെഷനുകൾ, ആരോഗ്യം | **ബ്രെയിൻ**: തത്സമയ ഏജന്റ് ഇവന്റ് സ്ട്രീം |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **അവലോകനം**: ടോക്കണുകൾ, സെഷനുകൾ, ആരോഗ്യം | **ഏജന്റുകൾ** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **ചെലവ്**: മോഡലും സെഷനും പ്രകാരം | **അപ്രൂവലുകൾ**: അപകടസാധ്യതയുള്ള ടൂൾ കോളുകൾ ഗേറ്റ് ചെയ്യുന്നു |
 
 കൂടുതൽ, ഓരോ റൺടൈം പ്രകാരവും: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
