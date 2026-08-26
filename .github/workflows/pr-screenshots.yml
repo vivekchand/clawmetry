@@ -329,9 +329,11 @@ jobs:
         if: ${{ always() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Bind event data to an env var rather than interpolating it into the
+          # script, so no `run:` block in this repo expands ${{ github.event.* }}.
+          PR: ${{ github.event.pull_request.number }}
         run: |
           set -e
-          PR=${{ github.event.pull_request.number }}
           MARKER="<!-- visual-diff-bot -->"
           BODY="$(printf '%s\n\n%s' "$MARKER" "$(cat /tmp/visual-diff-body.md)")"
           existing_id=$(gh api -X GET "repos/${{ github.repository }}/issues/${PR}/comments" --paginate \
