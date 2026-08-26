@@ -8,6 +8,11 @@ on:
     branches: [main]
     types: [labeled]  # Trigger by adding label 'browserstack'
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   cross-browser:
     name: Cross-Browser Tests

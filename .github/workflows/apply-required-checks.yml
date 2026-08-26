@@ -73,17 +73,25 @@ jobs:
 
       - name: Preview checks (dry run)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm != 'APPLY'
+        # This step only needs to know WHETHER a token is available, never its
+        # value. Compare in the expression context and pass the booleans down,
+        # so neither the PAT input nor the secret is ever spliced into the
+        # script as source text. Never interpolate an input or a secret into a
+        # `run:` block.
+        env:
+          HAS_PAT_INPUT: ${{ inputs.pat_token != '' }}
+          HAS_PAT_SECRET: ${{ secrets.E2E_ADMIN_PAT != '' }}
         run: |
           echo "=== DRY RUN -- checks that will be added when confirm=APPLY ==="
           echo ""
-          if [ -z "${{ inputs.pat_token }}" ] && [ -z "${{ secrets.E2E_ADMIN_PAT }}" ]; then
+          if [ "$HAS_PAT_INPUT" != "true" ] && [ "$HAS_PAT_SECRET" != "true" ]; then
             echo "  No admin token available (neither pat_token input nor E2E_ADMIN_PAT secret)."
             echo "  Quickest path: paste a fine-grained PAT into the pat_token input and"
             echo "  re-run with confirm=APPLY.  No local setup required."
             echo ""
             echo "  PAT permissions needed: Administration (read+write) on:"
             echo "    clawmetry, clawmetry-cloud, clawmetry-landing"
-          elif [ -n "${{ inputs.pat_token }}" ]; then
+          elif [ "$HAS_PAT_INPUT" = "true" ]; then
             echo "  Using pat_token input -- will apply to all 3 repos:"
             echo "  clawmetry         : E2E Gate (required)"
             echo "  clawmetry-cloud   : Cloud golden-path browser E2E"
@@ -106,7 +114,11 @@ jobs:
 
       - name: Mask PAT token
         if: inputs.pat_token != ''
-        run: echo "::add-mask::${{ inputs.pat_token }}"
+        # ::add-mask:: needs the literal value, so it must reach the step --
+        # but via the environment, not spliced into the script as source text.
+        env:
+          PAT_TOKEN: ${{ inputs.pat_token }}
+        run: echo "::add-mask::${PAT_TOKEN}"
 
       - name: Apply required status checks
         id: c6_verify
