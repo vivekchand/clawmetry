@@ -392,13 +392,17 @@ jobs:
         # explicitly first — the workflow dispatch below needs the ref.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Untrusted: a PR title is attacker-controlled text. Bind it to an
+          # env var and use "$PR_TITLE" so the shell never parses it as code.
+          # Never interpolate ${{ github.event.* }} directly into `run:`.
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           NEW_TAG="v${{ steps.bump.outputs.new }}"
           git tag "$NEW_TAG" || echo "Tag already exists locally"
           git push origin "refs/tags/$NEW_TAG" || echo "Tag already on origin, skipping"
           gh release create "$NEW_TAG" \
             --title "$NEW_TAG" \
-            --notes "Released via PR: ${{ github.event.pull_request.title }}" \
+            --notes "Released via PR: $PR_TITLE" \
             --draft || echo "Release already exists, skipping"
 
       # GitHub deliberately suppresses `on: push: tags:` cascade triggers
