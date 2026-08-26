@@ -23,7 +23,7 @@ pip install clawmetry && clawmetry
 Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
 you already have, reads them read-only, and changes nothing about how they run.
 
-![ClawMetry catching a spending anomaly and a stalled agent live](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
 ## Works with 27 agent runtimes
 
@@ -213,6 +213,13 @@ it was last seen, who owns it, and whether a subscription is covering the
 bill. 14 agents here, 3 sessions working, 13 quiet.
 
 ![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
+
+**It shows where a turn's time and money went, tool by tool.**
+One turn of a real session: 11 tools in 11.2 minutes for $1.16. Every Bash
+call and model call gets its own bar on the timeline, so the command that ran
+for 4.1 minutes and the one that ran for 226ms are told apart at a glance.
+
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
 
 **It grades the work, not just the spend.**
 An A this week: 54 tasks came back clean, 2 rough ones cost $48.57, and the
