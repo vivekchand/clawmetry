@@ -31,6 +31,11 @@ concurrency:
   group: openclaw-boot-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   boot:
     name: Install + boot + health-check

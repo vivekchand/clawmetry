@@ -24,6 +24,11 @@ concurrency:
   group: oss-golden-path-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   oss-golden-path:
     name: OSS golden path (wheel + OpenClaw + 9 tabs)
