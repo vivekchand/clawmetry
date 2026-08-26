@@ -266,11 +266,15 @@ def test_api_usage_caps_14d_to_24h_for_free(fast_path_app, monkeypatch):
     assert body["capped_at_24h"] is True
     # Chart still has 14 slots so the UI shape is unchanged.
     assert isinstance(body["days"], list) and len(body["days"]) == 14
-    # Buckets older than today/yesterday must be zeroed.
+    # Buckets older than today/yesterday must be WITHHELD.
     older = body["days"][:-2]
     for d in older:
         assert d["tokens"] == 0, f"older bucket {d['date']} leaked tokens"
-        assert d["cost"] == 0
+        # Withheld, not zero. These used to carry cost 0, which rendered as
+        # twelve days on which the user spent nothing: a plan boundary shown
+        # as a measurement. A held-back day carries no value and says so.
+        assert d["cost"] is None, f"withheld bucket {d['date']} reads as $0"
+        assert d.get("withheld") is True
 
 
 def test_api_usage_no_cap_for_pro(fast_path_app, monkeypatch):

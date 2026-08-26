@@ -15,7 +15,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from clawmetry import provenance
 from clawmetry.sync import _resolve_spending
+
+
+def _money(out):
+    """The spend triple alone, so a test about eras is not also a test about
+    which bookkeeping keys the payload happens to carry."""
+    return {k: v for k, v in out.items()
+            if k in ("today", "week", "month", "source")}
 
 
 def test_real_zero_is_not_treated_as_missing():
@@ -38,13 +46,18 @@ def test_partial_zero_does_not_mix_eras():
     live = {"todayCost": 0.0, "weekCost": 7.25, "monthCost": 24.11}
     stale = {"today": 22.73, "week": 999.0, "month": 22.73}
     out = _resolve_spending(live, stale)
-    assert out == {"today": 0.0, "week": 7.25, "month": 24.11, "source": "live"}
+    assert _money(out) == {"today": 0.0, "week": 7.25, "month": 24.11,
+                           "source": "live"}
 
 
 def test_failed_read_falls_back_wholesale_and_is_labelled():
     """_build_daily_usage() returns {} on failure -> use stale, and SAY so."""
     out = _resolve_spending({}, {"today": 1.5, "week": 2.5, "month": 3.5})
-    assert out == {"today": 1.5, "week": 2.5, "month": 3.5, "source": "state"}
+    assert _money(out) == {"today": 1.5, "week": 2.5, "month": 3.5,
+                           "source": "state"}
+    # And says so in the badge, not only in a field nobody renders: a stale
+    # triple standing in for a live read is an estimate of what is true now.
+    assert provenance.entry_for(out, "today")["basis"] == provenance.ESTIMATED
 
 
 def test_partial_live_payload_is_not_half_trusted():
@@ -59,9 +72,26 @@ def test_partial_live_payload_is_not_half_trusted():
 
 def test_both_sources_empty_is_zero_not_a_crash():
     out = _resolve_spending({}, {})
-    assert out == {"today": 0.0, "week": 0.0, "month": 0.0, "source": "state"}
+    assert _money(out) == {"today": 0.0, "week": 0.0, "month": 0.0,
+                           "source": "state"}
 
 
 def test_never_crashes_on_none():
     out = _resolve_spending(None, None)
     assert out["today"] == 0.0 and out["source"] == "state"
+
+
+def test_a_live_triple_is_labelled_derived_not_measured():
+    """Cost is tokens times a rate card, not a receipt, and the badge says so.
+
+    This is the one figure users quote at other people, so the difference
+    between "we watched you spend this" and "we priced what you used" has to
+    survive the trip to the screen.
+    """
+    out = _resolve_spending(
+        {"todayCost": 1.0, "weekCost": 2.0, "monthCost": 3.0}, {})
+    for key in ("today", "week", "month"):
+        entry = provenance.entry_for(out, key)
+        assert entry is not None, "%s shipped with no basis" % key
+        assert entry["basis"] == provenance.DERIVED
+        assert entry["formula"] and entry["window"]

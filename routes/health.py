@@ -3043,7 +3043,17 @@ def _loop_signal_enriched(row: dict) -> dict:
     out["kind"] = str(details.get("kind") or "")
     out["title"] = str(details.get("message") or "")
     out["spend_at_risk_usd"] = at_risk
-    out["spend_basis"] = str(details.get("spend_basis") or "unknown")
+    basis = str(details.get("spend_basis") or "unknown")
+    out["spend_basis"] = basis
+    # Same figure, said out loud. ``spend_basis`` has been on this row for a
+    # while and no renderer ever showed it; the provenance entry is the one
+    # the badge reads, and it nulls the dollar figure when the basis is
+    # unknown so a session nobody could price stops looking like a free one.
+    try:
+        from clawmetry import provenance as _prov
+        _prov.stamp(out, {"spend_at_risk_usd": _prov.from_spend_basis(basis)})
+    except Exception:
+        pass
     return out
 
 
@@ -3134,14 +3144,41 @@ def api_loop_signals():
         rows = rows[:1]
         capped_pro_gated = True
 
-    return jsonify({
+    # The total is only ever a floor when some signals could not be priced,
+    # and a floor rendered as a total is its own kind of lie. Count the holes
+    # and say so on the badge.
+    priced = [r for r in rows if r.get("spend_at_risk_usd") is not None]
+    unpriced = len(rows) - len(priced)
+    payload = {
         "signals": rows,
         "count": len(rows),
         "total_count": total_count,
         "capped_pro_gated": capped_pro_gated,
         "spend_at_risk_usd": round(sum(
-            float(r.get("spend_at_risk_usd") or 0) for r in rows), 2),
-    })
+            float(r.get("spend_at_risk_usd") or 0) for r in priced), 2),
+    }
+    try:
+        from clawmetry import provenance as _prov
+        if rows and not priced:
+            entry = _prov.unknown(
+                "none of these signals could be priced, because no cost was "
+                "recorded for the sessions they came from",
+                source="/api/loop-signals")
+        elif unpriced:
+            entry = _prov.derived(
+                "sum of the spend at risk across the signals that could be "
+                "priced. It is a floor, not a total",
+                "/api/loop-signals",
+                inputs={"priced_signals": len(priced),
+                        "unpriced_signals": unpriced})
+        else:
+            entry = _prov.derived(
+                "sum of the spend at risk across every signal shown",
+                "/api/loop-signals", inputs={"signals": len(rows)})
+        _prov.stamp(payload, {"spend_at_risk_usd": entry})
+    except Exception:
+        pass
+    return jsonify(payload)
 
 
 @bp_health.route("/api/backups")
