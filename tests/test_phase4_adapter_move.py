@@ -68,7 +68,10 @@ def test_family_adapter_specs_split_by_tier():
     from clawmetry.entitlements import FREE_RUNTIMES
 
     specs = _s._FAMILY_ADAPTER_SPECS
-    assert len(specs) == 24, f"expected 24 family adapters, got {len(specs)}"
+    # Bump when a runtime is added. The real invariant (loader == catalogue)
+    # is test_entitlements.py::test_paid_runtimes_match_family_adapter_specs;
+    # this is the blunt tripwire that catches an accidental extra entry.
+    assert len(specs) == 25, f"expected 25 family adapters, got {len(specs)}"
 
     free_specs = [s for s in specs if s[0].startswith("clawmetry.adapters.")]
     paid_specs = [s for s in specs if s[0].startswith("clawmetry_pro.adapters.")]

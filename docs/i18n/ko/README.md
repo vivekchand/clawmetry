@@ -25,7 +25,7 @@ pip install clawmetry && clawmetry
 
 **http://localhost:8900** 에서 열립니다. 설정이 필요 없습니다: 이미 사용 중인 에이전트 런타임을 찾아내고, 읽기 전용으로 읽으며, 실행 방식에는 아무런 변화도 주지 않습니다.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## 26개 에이전트 런타임과 함께 작동합니다
 
@@ -97,9 +97,9 @@ macOS, Linux, Windows에서 Python 3.8 이상이 필요하며, 동일한 머신�
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **Overview**: 토큰, 세션, 상태 | **Brain**: 실시간 에이전트 이벤트 스트림 |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **Overview**: 토큰, 세션, 상태 | **에이전트** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **Cost**: 모델 및 세션별 | **Approvals**: 위험한 도구 호출 차단 |
 
 런타임별 더 많은 스크린샷: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).

@@ -54,7 +54,12 @@ class RuntimeProbe:
                 if root and os.path.exists(os.path.expanduser(root)):
                     return True
             for p in self.paths:
-                expanded = os.path.expanduser(p)
+                # expandvars FIRST so "$XDG_DATA_HOME/..." resolves; an unset
+                # var stays literal and simply globs to nothing, which is the
+                # honest answer rather than a bare-root false positive.
+                expanded = os.path.expanduser(os.path.expandvars(p))
+                if "$" in expanded:
+                    continue
                 if _glob.glob(expanded):
                     return True
         except Exception:
@@ -75,7 +80,22 @@ RUNTIME_PROBES: tuple = (
         "~/.config/Cursor/User/globalStorage/state.vscdb",
     )),
     RuntimeProbe("aider", "Aider", ("~/.aider*",), env="AIDER_HISTORY_DIRS"),
-    RuntimeProbe("goose", "Goose", ("~/.local/share/goose/sessions",)),
+    # Goose resolves its data dir with etcetera's choose_app_strategy, which
+    # is XDG on macOS as well as Linux (NOT ~/Library/Application Support)
+    # and RoamingAppData on Windows; GOOSE_PATH_ROOT relocates all of it.
+    # The last entry is the legacy macOS location Goose's own paths.rs still
+    # names for pre-existing installs. The env-var forms are globbed rather
+    # than declared via ``env=``, because "$GOOSE_PATH_ROOT exists" is not
+    # evidence of a Goose install — "$GOOSE_PATH_ROOT/data/sessions exists"
+    # is. Kept in step with clawmetry/adapters/goose.py::_candidate_db_paths().
+    RuntimeProbe("goose", "Goose", (
+        "$GOOSE_PATH_ROOT/data/sessions",
+        "$XDG_DATA_HOME/goose/sessions",
+        "~/.local/share/goose/sessions",
+        "$APPDATA/Block/goose/data/sessions",
+        "~/AppData/Roaming/Block/goose/data/sessions",
+        "~/Library/Application Support/Block/goose/sessions",
+    )),
     RuntimeProbe("opencode", "opencode", ("~/.local/share/opencode",)),
     RuntimeProbe("qwen_code", "Qwen Code", ("~/.qwen/projects",)),
     RuntimeProbe("hermes", "Hermes", ("~/.hermes",), env="HERMES_HOME"),
@@ -130,6 +150,17 @@ RUNTIME_PROBES: tuple = (
     # creates ~/.openhands/profiles and ~/.openhands/cache on first launch even
     # when the persistence dir points elsewhere -- so the root existing is not
     # evidence that any conversation was ever recorded.
+    # OpenWorker ("coworker") is a desktop app; its state dir is
+    # $COWORKER_STATE_DIR, else %APPDATA%\\coworker on Windows, else
+    # ~/.config/coworker (coworker/secrets.py::state_dir). Probe the STORE
+    # files rather than the directory: the dir alone is created by a first
+    # launch that never recorded a session, and ~/.config is shared with
+    # every other tool, so a bare-dir probe is the weakest possible evidence.
+    RuntimeProbe("openworker", "OpenWorker",
+                 ("~/.config/coworker/coworker.db",
+                  "~/.config/coworker/conversations",
+                  "~/AppData/Roaming/coworker/coworker.db"),
+                 env="CLAWMETRY_OPENWORKER_STATE_DIR"),
     RuntimeProbe("openhands", "OpenHands",
                  ("~/.openhands/conversations/*/base_state.json",),
                  env="CLAWMETRY_OPENHANDS_HOME"),

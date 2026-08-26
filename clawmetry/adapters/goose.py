@@ -9,10 +9,24 @@ what a fresh ``goose`` install writes.
 
 On-disk layout
 --------------
-``$XDG_DATA_HOME/goose/sessions/sessions.db`` (default on macOS/Linux
-``~/.local/share/goose/sessions/sessions.db``). VERIFIED against a real
-Goose 1.35.0 install by running ``goose run`` against local Ollama and
-reading the DB it wrote (``schema_version`` = 13). Two relevant tables:
+``<goose data dir>/sessions/sessions.db``, where the data dir is whatever
+Goose's own ``Paths::data_dir()`` resolves to. See ``_candidate_db_paths()``
+for the derivation; the short version is:
+
+* ``$GOOSE_PATH_ROOT/data`` when that env var is set to an ABSOLUTE path.
+* Windows: ``%APPDATA%\\Block\\goose\\data``.
+* macOS **and** Linux: ``${XDG_DATA_HOME:-~/.local/share}/goose``. macOS is
+  NOT ``~/Library/Application Support`` here: Goose calls etcetera's
+  ``choose_app_strategy``, which is the *CLI* convention (Xdg everywhere but
+  Windows), not the platform-native one. Goose's own
+  ``documentation/docs/guides/logs.md`` agrees, listing Session Records under
+  "Unix-like (macOS, Linux)".
+* macOS legacy installs may still hold data at ``~/Library/Application
+  Support/Block/goose/`` — probed last, honoured only if present.
+
+VERIFIED against a real Goose 1.35.0 install (macOS, no XDG_DATA_HOME) by
+running ``goose run`` against local Ollama and reading the DB it wrote
+(``schema_version`` = 13). Two relevant tables:
 
 ``sessions`` (one row per conversation)::
 
@@ -89,6 +103,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -103,16 +118,107 @@ _AGENT = "goose"
 # -- discovery ---------------------------------------------------------------
 
 
-def _default_db_path() -> str:
-    """Resolve Goose's sessions.db, honouring XDG_DATA_HOME like Goose does.
+def _goose_path_root() -> str:
+    """``$GOOSE_PATH_ROOT`` if it is set AND absolute, else "".
 
-    Goose uses the platform data dir: ``$XDG_DATA_HOME/goose`` (falling back
-    to ``~/.local/share/goose``) on macOS/Linux. The sessions store lives at
-    ``<data>/sessions/sessions.db``.
+    Mirrors Goose's own ``Paths::validated_path_root`` — Goose *ignores* a
+    relative value rather than resolving it, so we must too or we would look
+    somewhere Goose never writes.
     """
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = xdg if xdg else os.path.expanduser("~/.local/share")
-    return os.path.join(base, "goose", "sessions", "sessions.db")
+    raw = (os.environ.get("GOOSE_PATH_ROOT") or "").strip()
+    if not raw:
+        return ""
+    root = os.path.expanduser(raw)
+    return root if os.path.isabs(root) else ""
+
+
+def _candidate_db_paths() -> list:
+    """Every place Goose may hold ``sessions.db``, in Goose's own precedence.
+
+    Resolved from ``crates/goose/src/config/paths.rs`` (read at goose 1.35.0),
+    which is ``GOOSE_PATH_ROOT`` first and otherwise etcetera's
+    ``choose_app_strategy``. That helper is **not** the platform-native
+    strategy: etcetera selects ``Windows`` on Windows and **``Xdg`` everywhere
+    else, macOS included** (``create_strategies!(Apple, Xdg)`` — verified in
+    etcetera 0.8/0.10/0.11, and 0.11 is what Goose pins). So:
+
+    * ``$GOOSE_PATH_ROOT/data/sessions/sessions.db`` — absolute paths only.
+    * Windows: ``%APPDATA%\\Block\\goose\\data\\sessions\\sessions.db``
+      (etcetera's Windows app strategy is ``<RoamingAppData>/<author>/<app>/data``).
+    * macOS **and** Linux: ``${XDG_DATA_HOME:-~/.local/share}/goose/sessions/sessions.db``.
+      Confirmed against a live goose 1.35.0 on macOS with no XDG_DATA_HOME set,
+      and against the repo's own ``documentation/docs/guides/logs.md``, which
+      lists Session Records as ``~/.local/share/goose/sessions/sessions.db``
+      for "Unix-like (macOS, Linux)".
+    * macOS legacy: ``~/Library/Application Support/Block/goose/sessions/sessions.db``.
+      Goose's ``paths.rs`` keeps the "Block" naming expressly for "existing
+      user config/data directories (e.g. ~/Library/Application Support/Block/
+      goose/)", and the repo's environment-variables guide still names it as
+      the macOS default, so an older install may really have data there. It is
+      probed LAST and only honoured if the file exists — we never report it as
+      the place Goose will write.
+
+    ``CLAWMETRY_GOOSE_DB`` overrides everything (same escape hatch shape as
+    ``CLAWMETRY_DEVIN_DB``), for installs that relocate the store.
+    """
+    home = os.path.expanduser("~")
+    out = []
+
+    override = (os.environ.get("CLAWMETRY_GOOSE_DB") or "").strip()
+    if override:
+        out.append(os.path.expanduser(override))
+
+    root = _goose_path_root()
+    if root:
+        out.append(os.path.join(root, "data", "sessions", "sessions.db"))
+
+    if sys.platform.startswith("win"):
+        appdata = (os.environ.get("APPDATA") or "").strip() or os.path.join(
+            home, "AppData", "Roaming")
+        out.append(os.path.join(appdata, "Block", "goose", "data",
+                                "sessions", "sessions.db"))
+    else:
+        xdg = (os.environ.get("XDG_DATA_HOME") or "").strip() or os.path.join(
+            home, ".local", "share")
+        out.append(os.path.join(xdg, "goose", "sessions", "sessions.db"))
+        if sys.platform == "darwin":
+            out.append(os.path.join(home, "Library", "Application Support",
+                                    "Block", "goose", "sessions", "sessions.db"))
+
+    seen = set()
+    uniq = []
+    for p in out:
+        if p and p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def data_dir_candidates() -> list:
+    """Goose data dirs (the parent of ``sessions/``) for each candidate store.
+
+    Public because the sync daemon's detection/recency tables read it rather
+    than re-deriving the layout — one stale copy of a path list is how a
+    runtime silently reads as "not installed" on a platform nobody tested.
+    """
+    return [os.path.dirname(os.path.dirname(p)) for p in _candidate_db_paths()]
+
+
+def _default_db_path() -> str:
+    """The Goose sessions.db to read: the first candidate that exists.
+
+    When none exists we return the FIRST candidate — where Goose would write
+    on this machine — so ``detect()`` reports an honest ``dbPath`` instead of
+    a legacy fallback the user has never had.
+    """
+    cands = _candidate_db_paths()
+    for p in cands:
+        try:
+            if os.path.isfile(p):
+                return p
+        except OSError:
+            continue
+    return cands[0]
 
 
 # -- helpers -----------------------------------------------------------------

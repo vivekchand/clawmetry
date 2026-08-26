@@ -7171,6 +7171,23 @@ def _build_node_meta() -> dict:
         meta.update(_machine_specs())
     except Exception:
         pass
+    # Which secret opens this machine's shareable content. The FINGERPRINT
+    # only -- a hash of the key, never the key. It rides the plaintext
+    # heartbeat on purpose: a member who holds the wrong organisation key must
+    # be told exactly that, and the cloud cannot say so about a secret it has
+    # no identifier for. The alternative is the screen we already ship for a
+    # teammate's node: empty, with no way to tell "no sessions" from "wrong
+    # key". A hash of a 256-bit random key is not a way back to the key.
+    try:
+        from clawmetry import org_key as _ok
+
+        _cfg_ok = load_config() or {}
+        meta["content_key_scope"] = "organisation" if _ok.is_org_sealed(_cfg_ok) else "node"
+        _fp = _ok.fingerprint(_ok.content_key(_cfg_ok))
+        if _fp:
+            meta["content_key_fingerprint"] = _fp
+    except Exception:
+        pass
     # Pro-adapter + auto-update status so the cloud Fleet can show whether an
     # entitled node is actually running clawmetry-pro (the paid runtime
     # adapters) and keeping itself current — turning the "I'm on Pro but Claude
@@ -7200,6 +7217,8 @@ _LITE_RT_LABELS = {
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
     "openhands": "OpenHands",
+    "openworker": "OpenWorker",
+
 }
 
 # Activity thresholds (seconds) for classifying a detected runtime. Detecting a
@@ -7254,6 +7273,23 @@ def _xdg_data_home() -> str:
     return os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
 
 
+def _goose_data_dirs() -> list:
+    """Goose's data dir candidates, from the adapter that actually reads them.
+
+    Goose does NOT anchor at ``~/.local/share`` on every platform: Windows
+    lives under ``%APPDATA%\\Block\\goose\\data`` and ``GOOSE_PATH_ROOT``
+    relocates everything. Importing the adapter's resolver keeps detection and
+    ingestion from drifting apart — a hardcoded copy here is exactly how a
+    Windows install reads as "Goose not present" while the adapter is happily
+    ingesting it. Falls back to the POSIX default if the adapter is missing.
+    """
+    try:
+        from clawmetry.adapters.goose import data_dir_candidates
+        return list(data_dir_candidates())
+    except Exception:
+        return [os.path.join(os.path.expanduser("~"), ".local", "share", "goose")]
+
+
 def _runtime_data_paths(rid: str) -> list:
     """Native on-disk data location(s) for a runtime, used to compute recency.
     Mirrors the per-adapter stores (the same dirs the lite/pro detectors read).
@@ -7273,7 +7309,7 @@ def _runtime_data_paths(rid: str) -> list:
         "codex": [os.path.join(home, ".codex", "sessions")],
         "qwen_code": [os.path.join(home, ".qwen")],
         "opencode": [os.path.join(home, ".local", "share", "opencode", "opencode.db")],
-        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "goose": _goose_data_dirs(),
         "hermes": [os.path.join(home, ".hermes", "state.db")],
         "aider": [os.path.join(home, ".aider")],
         "picoclaw": [os.path.join(home, ".picoclaw")],
@@ -7421,7 +7457,7 @@ def _detect_runtimes_lite() -> list:
     # Presence-only (non-JSONL formats — count unknown) → report with 0 sessions.
     _present = {
         "cursor": [os.path.join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")],
-        "goose": [os.path.join(home, ".local", "share", "goose")],
+        "goose": _goose_data_dirs(),
         "opencode": [os.path.join(home, ".local", "share", "opencode")],
         "hermes": [os.path.join(home, ".hermes", "state.db")],
         "picoclaw": [os.path.join(home, ".picoclaw")],
@@ -8611,6 +8647,13 @@ def send_heartbeat(config: dict) -> bool:
             pending = (resp_json or {}).get("pending_queries") or []
             if pending:
                 _dispatch_pending_queries(config, pending)
+            # Sessions their owner asked to share with their organisation. We
+            # seal each with the ORGANISATION key and upload it once, so a
+            # colleague can read it without this machine being awake and
+            # without holding this machine's key.
+            shares = (resp_json or {}).get("share_requests") or []
+            if shares:
+                _seal_shared_traces(config, shares)
             return True
         except Exception as e:
             last_err = e
@@ -11170,6 +11213,66 @@ def _build_q1_cache_pushes(config: dict) -> list:
     return pushes
 
 
+def _seal_shared_traces(config: dict, session_ids: list) -> None:
+    """Seal each requested session's trace with the ORGANISATION key and upload.
+
+    This is the only path by which one person's session becomes readable by
+    their colleagues, and the key choice is the whole design:
+
+    * With an organisation key, the trace is sealed so every member can open
+      it, and the cloud stores ciphertext it cannot read.
+    * WITHOUT one we upload NOTHING. Sealing with this machine's own key would
+      produce a blob no colleague could open, and the share would sit there
+      looking successful forever. A share that cannot be read is worse than a
+      share that plainly failed, so we log what is missing and leave the
+      session in `sealing` until a key exists.
+
+    Failures are per-session and never raise: one unreadable session must not
+    stop the heartbeat or the other shares.
+    """
+    try:
+        from clawmetry import org_key as _ok
+    except Exception:
+        return
+    api_key = config.get("api_key")
+    if not api_key:
+        return
+
+    org = _ok.get(config)
+    if not org:
+        log.warning(
+            "share: %d session(s) are marked shared but this machine has no "
+            "organisation key, so nothing can be sealed for colleagues. Run "
+            "`clawmetry team key create`, or accept your organisation's key "
+            "with `clawmetry team key set --file KEYFILE`.",
+            len(session_ids),
+        )
+        return
+    fp = _ok.fingerprint(org)
+
+    for sid in list(session_ids)[:5]:
+        sid = str(sid or "").strip()
+        if not sid:
+            continue
+        try:
+            from routes.local_query import _dispatch as _local_dispatch
+            body = _local_dispatch("transcript", {"session_id": sid,
+                                                  "limit": 5000})
+            rows = (body or {}).get("rows") or []
+            if not rows:
+                log.info("share: %s has no recorded events; nothing to seal", sid)
+                continue
+            blob = encrypt_payload({"rows": rows, "count": len(rows),
+                                    "session_id": sid}, org)
+            _post("/ingest/shared-trace",
+                  {"session_id": sid, "blob": blob, "key_fingerprint": fp},
+                  api_key)
+            log.info("share: sealed %s (%d events) for the organisation",
+                     sid, len(rows))
+        except Exception as exc:
+            log.warning("share: could not seal %s: %s", sid, exc)
+
+
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
     """Run each cloud-requested query against the local store, encrypt the
     result, and POST back to /ingest/cache. Failures on individual queries
@@ -13505,6 +13608,10 @@ _FAMILY_ADAPTER_SPECS = (
     # the ACP tool-call records. Devin Cloud sessions are API-only and
     # deliberately not ingested here.
     ("clawmetry_pro.adapters.devin", "DevinAdapter"),
+    # OpenWorker (github.com/andrewyng/openworker) -- a generalist desktop
+    # worker, not a coding CLI: its sessions are SaaS-connector work as
+    # often as file edits.
+    ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
 )
 
 
@@ -15072,6 +15179,7 @@ _RUNTIME_PREFIXES = frozenset({
     "gemini_cli",
     "cline",
     "openhands",
+    "openworker",
 })
 
 
@@ -19537,6 +19645,73 @@ _LOOPS_KIND_BY_SIGNATURE = {
 _LOOPS_VALID_KINDS = frozenset(_LOOPS_KIND_BY_SIGNATURE.values())
 
 
+#: Repo AI-readiness snapshot slice (WO-5). The hosted dashboard has no
+#: filesystem to scan -- the cloud container never sees the user's repos -- so
+#: the DAEMON scores them here and ships the finished report. Capped hard:
+#: five reports at roughly 3 kB each is a rounding error next to the snapshot,
+#: and a 200-repo machine must not be able to inflate it.
+_READINESS_SLICE_MAX = int(os.environ.get("CLAWMETRY_READINESS_SLICE_MAX", "5"))
+_READINESS_WINDOW_DAYS = int(os.environ.get("CLAWMETRY_READINESS_DAYS", "30"))
+
+
+def _build_repo_readiness_slice(store):
+    """Score the repos this node's agents actually work in.
+
+    Returns ``{"windowDays": n, "scope": "all_runtimes", "repos": [...]}``
+    where each repo carries its readiness report AND the stuck-signal
+    pairing. ``scope`` is load-bearing: the daemon scores against EVERY
+    runtime's declared instruction files because it cannot know which
+    runtime the viewer has selected, so a hosted renderer must label this
+    "all runtimes" rather than presenting it as runtime-scoped.
+
+    Repos that no longer exist on disk are listed (their history is real)
+    but carry ``report: None`` -- there is nothing left to read, and an
+    invented grade for a deleted checkout is worse than an honest gap.
+
+    Never raises: an empty slice paints the honest "nothing scored yet"
+    state rather than breaking the snapshot.
+    """
+    try:
+        from clawmetry import repo_readiness
+    except Exception as e:  # noqa: BLE001
+        log.debug("readiness-slice: module unavailable: %s", e)
+        return {}
+    try:
+        rows = store.query_repo_activity(
+            since_days=_READINESS_WINDOW_DAYS, limit=5000) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("readiness-slice: query_repo_activity failed: %s", e)
+        return {}
+
+    ranked = repo_readiness.rank_repos(
+        rows, window_days=_READINESS_WINDOW_DAYS, limit=_READINESS_SLICE_MAX)
+    out = []
+    for repo in ranked:
+        entry = {
+            "path": repo["path"],
+            "name": repo["name"],
+            "exists": repo["exists"],
+            "lastActiveAt": repo["last_active_at"],
+            "signals": repo["signals"],
+            "report": None,
+        }
+        if repo["exists"]:
+            try:
+                entry["report"] = repo_readiness.score_repo(
+                    repo["path"], signals=repo["signals"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("readiness-slice: score failed for %s: %s",
+                          repo["path"], e)
+        out.append(entry)
+    if not out:
+        return {}
+    return {
+        "windowDays": _READINESS_WINDOW_DAYS,
+        "scope": "all_runtimes",
+        "repos": out,
+    }
+
+
 def _build_loops_slice(store):
     """Build the bounded, plaintext ``loops[]`` snapshot slice from the loop
     signals the detector/stuck pass already wrote.
@@ -19649,55 +19824,6 @@ def _build_loops_slice(store):
         out.append(entry)
         if len(out) >= _LOOPS_SLICE_MAX:
             break
-    return out
-
-
-def _build_session_titles_snapshot(limit: int = 400) -> dict:
-    """Session titles for the cloud, carried E2E-encrypted.
-
-    A session title is CONTENT, not a total. Where a runtime adapter supplies
-    no title of its own, the family ingest above falls back to the session's
-    FIRST USER MESSAGE (see ``_ftitle``), so a title can be a user's words
-    verbatim. It therefore rides this encrypted snapshot and must never ride
-    the plaintext ``/ingest/sessions`` metadata upload -- the same rule the
-    desk-device slice already follows in ``_build_device_summary``.
-
-    Keyed by the FULL canonical session id (``claude_code:<uuid>``) so the
-    cloud can join it onto the session rows it stores. The device slice is a
-    separate map keyed by the BARE id for a different consumer; do not merge
-    them.
-
-    Built on the daemon's OWN store handle (never a ``read_only`` re-open --
-    FLYWHEEL 1). Bounded by ``limit`` so the snapshot stays small.
-    """
-    out: dict = {}
-    try:
-        from clawmetry import local_store as _ls
-
-        store = _ls.get_store()
-        if store is None:
-            return out
-        rows = store.query_sessions_table(limit=limit) or []
-        for s in rows:
-            if not isinstance(s, dict):
-                continue
-            sid = str(s.get("session_id") or "").strip()
-            title = (s.get("title") or "").strip()
-            if not sid or not title:
-                continue
-            # A bare id is an identifier, not a title -- carrying it here
-            # would just duplicate the plaintext row for no gain.
-            bare = sid.rsplit(":", 1)[-1]
-            if title in (sid, bare) or bare.startswith(title):
-                continue
-            out[sid] = title[:120]
-            if len(out) >= limit:
-                break
-    except Exception as _ste:
-        try:
-            log.debug("session-titles slice skipped: %s", _ste)
-        except Exception:
-            pass
     return out
 
 
@@ -20647,6 +20773,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_loops:
         log.debug("snapshot: loops slice failed: %s", _e_loops)
 
+    # Repo AI-readiness (WO-5). Scored HERE, on the daemon, because the cloud
+    # container has no filesystem to scan: every input is a file in a repo on
+    # this machine. Same store handle as above (never a read_only re-open --
+    # FLYWHEEL section 1). Empty dict == nothing scored, which the hosted card
+    # renders as an honest empty state.
+    _readiness_slice: dict = {}
+    try:
+        from clawmetry import local_store as _ls_rr
+        _rr_store = _ls_rr.get_store()
+        if _rr_store is not None:
+            _readiness_slice = _build_repo_readiness_slice(_rr_store)
+    except Exception as _e_rr:
+        log.debug("snapshot: repo-readiness slice failed: %s", _e_rr)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -20671,6 +20811,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # path strips the id). Self-clearing 30-min window; empty == nothing
         # looping. Sourced from the detector pass's loop_signals (no recompute).
         "loops": _loops_slice,
+        # WO-5: per-repo readiness grade + the stuck-signal pairing, scored on
+        # this machine because the cloud has no repo to read. Carries
+        # ``scope: "all_runtimes"`` so a hosted renderer labels it instead of
+        # passing node-wide data off as runtime-scoped.
+        "repoReadiness": _readiness_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
@@ -20705,11 +20850,6 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Compact all-runtime slice a WiFi hardware companion decrypts + renders
         # (the device GETs the snapshot, decrypts with the user's key, reads
         # this). Cloud stays blind; E2E preserved.
-        # Session titles are content (a title can be the user's first message
-        # verbatim), so they travel encrypted here and NOT on the plaintext
-        # /ingest/sessions upload. Cloud joins this onto its session rows
-        # after client-side decrypt.
-        "sessionTitles": _build_session_titles_snapshot(),
         "deviceSummary": _build_device_summary(spending, _du,
                                                efficiency=_eff_slice),
         "cronJobs": _build_cron_jobs(paths),
