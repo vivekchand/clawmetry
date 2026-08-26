@@ -16959,16 +16959,40 @@ def _resolve_spending(daily_usage, state_spending):
     from one source so the payload is internally consistent. ``source`` is
     surfaced so the cloud can tell a real $0 from a degraded read.
     """
+    from clawmetry import provenance as _prov
     live = daily_usage or {}
     stale = state_spending or {}
     keys = (("today", "todayCost"), ("week", "weekCost"), ("month", "monthCost"))
+    windows = {
+        "today": "today, the local calendar day",
+        "week": "this week, the local calendar week starting Monday",
+        "month": "this month, the local calendar month from the 1st",
+    }
     if all(live.get(src_key) is not None for _, src_key in keys):
         out = {out_key: float(live.get(src_key)) for out_key, src_key in keys}
         out["source"] = "live"
-        return out
+        return _prov.stamp(out, {
+            k: _prov.derived(
+                "the runtime's own cost when it reported one, otherwise "
+                "measured token counts priced against the provider's "
+                "published rate card",
+                "DuckDB rollups on this node, this tick",
+                window=windows[k])
+            for k, _src in keys})
+    # The live rollup did not answer, so this is the last triple the daemon
+    # managed to record. It is a real measurement of a moment that has passed,
+    # which is an assumption about now, so it is labelled as one rather than
+    # presented as the current spend.
     out = {out_key: float(stale.get(out_key) or 0) for out_key, _ in keys}
     out["source"] = "state"
-    return out
+    return _prov.stamp(out, {
+        k: _prov.estimated(
+            "the last spend the daemon successfully recorded, standing in "
+            "for a live read that did not answer this tick, so it may be out "
+            "of date",
+            "~/.clawmetry/state.json",
+            window=windows[k])
+        for k, _src in keys})
 
 
 def _build_daily_usage(days=14):
@@ -17090,7 +17114,7 @@ def _build_daily_usage(days=14):
         except Exception as _e_rt:
             log.debug("daily usage byRuntime build failed: %s", _e_rt)
             by_runtime = {}
-        return {
+        return _stamp_daily_usage({
             "days": out_days,
             "today": int(daily_tok.get(tstr, 0)),
             "week": int(sum(v for k, v in daily_tok.items() if k >= wk)),
@@ -17099,10 +17123,56 @@ def _build_daily_usage(days=14):
             "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
             "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
             "byRuntime": by_runtime,
-        }
+        })
     except Exception as _e:
         log.debug("daily usage snapshot build failed: %s", _e)
         return {}
+
+
+# ── Provenance for the snapshot's cost slice ─────────────────────────────────
+#
+# The hosted dashboard renders these numbers, not the ones /api/usage builds:
+# the cloud container has no DuckDB, so it reads this slice out of the
+# encrypted snapshot. If the badge only shipped on the local payload, a trial
+# user would see labelled figures on localhost and bare ones on the product
+# they are being asked to pay for. Same vocabulary, same words, both sides.
+
+def _daily_usage_provenance():
+    """Provenance entries for the ``dailyUsage`` snapshot slice."""
+    from clawmetry import provenance as _prov
+    src = "DuckDB rollup_daily / rollup_runtime_daily on this node"
+    formula = ("the runtime's own cost when it reported one, otherwise "
+               "measured input, output and cache token counts priced against "
+               "the provider's published rate card")
+    windows = {
+        "today": "today, the local calendar day",
+        "week": "this week, the local calendar week starting Monday",
+        "month": "this month, the local calendar month from the 1st",
+    }
+    entries = {}
+    for w, text in windows.items():
+        entries[w + "Cost"] = _prov.derived(formula, src, window=text)
+        entries[w] = _prov.measured(
+            "sum of token counts on deduped call events in the window",
+            src, window=text)
+    entries["days[].cost_usd"] = _prov.derived(
+        formula, src, window="one local calendar day per bucket")
+    entries["byRuntime[].cost_usd"] = _prov.derived(
+        formula, src, window="one local calendar day per bucket")
+    entries["cost_usd"] = _prov.derived(formula, src,
+                                        window="the row's own bucket")
+    return entries
+
+
+def _stamp_daily_usage(payload):
+    """Attach the cost slice's provenance. Never raises: a snapshot that
+    fails to build is a far worse outcome than one that ships unlabelled."""
+    try:
+        from clawmetry import provenance as _prov
+        return _prov.stamp(payload, _daily_usage_provenance())
+    except Exception as _e:
+        log.debug("dailyUsage provenance stamp failed: %s", _e)
+        return payload
 
 
 def _reliability_score_session(events):
@@ -19518,6 +19588,108 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
                 hosts=profile["hosts"])
     except Exception as e:  # noqa: BLE001
         log.debug("guard: baseline observation failed for %s: %s", sid, e)
+
+
+# ── Git outcome scan (REQ-OBS-CEA-022) ─────────────────────────────────────
+
+#: Seconds between repository scans. Slow on purpose: merges do not happen at
+#: the cadence tool calls do, and the scan is the most expensive thing in this
+#: file per unit of information it produces.
+GIT_SCAN_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_GIT_SCAN_INTERVAL", "900"))
+#: Most repositories scanned in one tick. A fleet machine can accumulate a lot
+#: of working directories; scanning them all in one tick is how a background
+#: job turns into a foreground problem.
+GIT_MAX_REPOS_PER_TICK = int(os.environ.get("CLAWMETRY_GIT_MAX_REPOS", "5"))
+
+
+def _git_scan_tick(store) -> int:
+    """Read every repository the sessions point at; persist what shipped.
+
+    Read-only with respect to both the agent and the repository: it runs the
+    plumbing commands in ``clawmetry.git_outcomes``, which refuses anything
+    that could write, and it only ever INSERTs into this node's own store.
+
+    Repositories are visited least-recently-scanned first, so a machine with
+    more repositories than one tick can cover works through all of them
+    instead of re-reading the same one forever. Never raises into the daemon
+    loop. Returns the number of repositories scanned.
+    """
+    try:
+        from clawmetry import git_outcomes as _git
+    except Exception as e:  # noqa: BLE001
+        log.warning("git-outcomes: import failed: %s", e)
+        return 0
+    if not _git.is_enabled():
+        return 0
+
+    # Sessions carry the directory the work happened in. Sessions with no
+    # directory are not an error and not a gap we paper over — they are
+    # counted and reported by the read side as not attributable.
+    try:
+        rows = store.query_sessions_table(limit=2000) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("git-outcomes: session read failed: %s", e)
+        return 0
+    sessions: list[dict] = []
+    for r in rows:
+        cwd = str((r or {}).get("cwd") or "").strip()
+        if not cwd:
+            continue
+        sessions.append({
+            "session_id": str(r.get("session_id") or ""),
+            "cwd": cwd,
+            "git_branch": str(r.get("git_branch") or ""),
+            "started_epoch": _epoch_of(r.get("started_at")),
+            "last_active_epoch": _epoch_of(r.get("last_active_at")),
+        })
+    if not sessions:
+        return 0
+
+    found = _git.discover_repos({s["cwd"] for s in sessions})
+    if not found:
+        return 0
+    try:
+        scanned_at = {r["repo_root"]: int(r.get("last_scanned_at") or 0)
+                      for r in (store.query_git_repos() or [])}
+    except Exception:
+        scanned_at = {}
+    roots = sorted(found.keys(), key=lambda r: scanned_at.get(r, 0))
+
+    done = 0
+    for root in roots[:GIT_MAX_REPOS_PER_TICK]:
+        dirs = set(found[root])
+        mine = [s for s in sessions if s["cwd"] in dirs]
+        try:
+            scan = _git.scan_repo(root, mine)
+            store.ingest_git_scan(scan)
+            done += 1
+            log.info(
+                "git-outcomes: %s — %d commit(s) linked, %d session link(s), "
+                "pr=%s, %.1fs",
+                scan.get("name") or root, len(scan.get("commits") or []),
+                len(scan.get("links") or []), scan.get("pr_basis"),
+                scan.get("scan_secs") or 0.0,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("git-outcomes: scan failed for %s: %s", root, e)
+    return done
+
+
+def _epoch_of(ts: Any) -> int:
+    """Epoch seconds for a session timestamp string; 0 when undecidable."""
+    s = str(ts or "").strip()
+    if not s:
+        return 0
+    from datetime import datetime
+    if s.endswith("Z") or s.endswith("z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return 0
+    if dt.tzinfo is None:
+        return int(dt.timestamp())
+    return int(dt.timestamp())
 
 
 def _emit_detector_incidents(store, state: dict) -> int:
@@ -22288,6 +22460,7 @@ def run_daemon() -> None:
     # start surfaces immediately.
     last_stuck_eval = 0.0
     last_detect_eval = 0.0
+    last_git_scan = 0.0
 
     while True:
         try:
@@ -22621,6 +22794,27 @@ def run_daemon() -> None:
                         save_state(state)
                     except Exception:
                         pass
+
+            # ── Git outcome scan (REQ-OBS-CEA-022) ──
+            # The output half of the cost story: what the agent's work
+            # actually shipped. Read-only against both the agent and the
+            # repository, bounded in history, commits, files and wall clock,
+            # and off entirely with CLAWMETRY_GIT_OUTCOMES=0. Slow tick —
+            # merges do not happen at tool-call cadence.
+            now_git = time.time()
+            if (now_git - last_git_scan) >= GIT_SCAN_INTERVAL_SEC:
+                try:
+                    from clawmetry import local_store as _ls_git
+                    n_repos = _git_scan_tick(_ls_git.get_store())
+                    if n_repos:
+                        log.info("git-outcomes: scanned %d repo(s)", n_repos)
+                except Exception as _ge:
+                    log.warning("git-outcomes: tick errored: %s", _ge)
+                last_git_scan = now_git
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
 
             # ── Eval scheduler (issue #1619 Phase 1) ──
             # Sister of the alerts evaluator. Picks unscored completed

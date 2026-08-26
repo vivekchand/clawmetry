@@ -13780,6 +13780,10 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/time-range-picker.js', v=version) }}"></script>
+<!-- Provenance badges: the shared "measured / derived / estimated" component
+     every dollar amount and score renders through. Loaded BEFORE app.js so
+     window.cmMoney / cmProvBadge exist by the time a tab paints. -->
+<script src="{{ url_for('static', filename='js/provenance.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
