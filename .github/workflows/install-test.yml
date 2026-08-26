@@ -6,6 +6,11 @@ on:
     paths: [install.sh, install.ps1, install.cmd]
   workflow_dispatch:
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   test-linux:
     runs-on: ubuntu-latest

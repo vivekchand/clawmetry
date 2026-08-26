@@ -24,6 +24,8 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
   GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
   GET  /api/efficiency                    — efficiency grade + measured savings
+  GET  /api/usage/outcomes                — cost per merged change, rework rate,
+                                            abandoned spend (REQ-OBS-CEA-022)
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
@@ -5013,3 +5015,82 @@ def api_usage_compression():
         return jsonify(_agg_compression(rows))
     except Exception:
         return jsonify({})
+
+
+# ── Git outcome join (REQ-OBS-CEA-022) ─────────────────────────────────────
+#
+# Every other endpoint in this module measures an input. This one measures
+# whether the input produced anything: what shipped work cost, how much of it
+# was written twice, and how much money went to work that reached nothing.
+#
+# The join itself lives in ``clawmetry/local_store.py:query_git_outcomes`` and
+# the repository reading in ``clawmetry/git_outcomes.py``. This handler does
+# window resolution and shape, and nothing else — a handler that re-derived
+# the join would be a second definition of the same numbers.
+
+#: The only windows this surface accepts. ADR-046 gave the product ONE
+#: definition of today / this week / this month and it is not this module's
+#: place to invent a second: a rolling-7-day option here would report a
+#: different weekly figure from every other cost card on a Saturday, both
+#: "correct", and read to the user as the product being broken.
+_OUTCOME_WINDOWS = ("today", "week", "month")
+
+
+@bp_usage.route("/api/usage/outcomes")
+def api_usage_outcomes():
+    """Cost per merged change, rework rate and abandoned spend.
+
+    Query parameters: ``window`` (``today``/``week``/``month``, default
+    ``month``), ``repo`` (a repository root, default all), ``runtime``
+    (default all) and ``min_confidence`` (``high``/``medium``/``low``,
+    default ``medium``).
+
+    Never 500s, and never fabricates. A figure that cannot be derived comes
+    back with ``available: false`` and a reason; the coverage block says how
+    many sessions were considered and how many could not be attributed, so a
+    small answer is distinguishable from a wrong one.
+    """
+    window = (request.args.get("window") or "month").strip().lower()
+    if window not in _OUTCOME_WINDOWS:
+        return jsonify({
+            "error": "unknown window",
+            "allowed": list(_OUTCOME_WINDOWS),
+        }), 400
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    repo = (request.args.get("repo") or "").strip()
+    min_conf = (request.args.get("min_confidence") or "medium").strip().lower()
+    if min_conf not in ("high", "medium", "low"):
+        min_conf = "medium"
+
+    try:
+        from clawmetry.cost_windows import window_start_days
+        today, week, month = window_start_days()
+        since_day = {"today": today, "week": week, "month": month}[window]
+    except Exception:
+        since_day = ""
+
+    payload = _ls_call(
+        "query_git_outcomes",
+        since_day=since_day, repo=repo,
+        runtime=("" if runtime in ("", "all") else runtime),
+        min_confidence=min_conf,
+    )
+    if not isinstance(payload, dict):
+        # No store, no daemon, or the read failed. Reporting less beats
+        # reporting something untrue, and beats a 500 on a dashboard tab.
+        payload = {
+            "available": False,
+            "reason": "local_store_unavailable",
+            "repos": [], "metrics": {}, "coverage": {},
+        }
+    payload["window"] = window
+    payload["window_start"] = since_day
+    payload["runtime"] = runtime or "all"
+    payload["generated_at"] = int(time.time())
+    if not payload.get("available") and "enabled" not in payload:
+        try:
+            from clawmetry.git_outcomes import is_enabled as _git_enabled
+            payload["enabled"] = bool(_git_enabled())
+        except Exception:
+            payload["enabled"] = None
+    return jsonify(payload)

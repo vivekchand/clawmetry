@@ -49,6 +49,15 @@
 - **Nothing is invented when there is no history.** A repo no agent has touched says so, rather than reporting that nobody got stuck in it. Those are different facts and a zero would read as the second.
 - **Verified:** 61 tests, and each honesty rule was checked by breaking the code and watching its test go red. Run against the real folders on a real machine, and both states looked at in a browser rather than assumed.
 
+### The cost surfaces can finally say whether any of it shipped (REQ-OBS-CEA-022) (2026-08-25)
+- **Who this reaches:** anyone whose agent works inside a Git repository, on every plan. Nothing to install, nothing to connect, and no account on your code host required.
+- **The gap this closes.** Every number ClawMetry showed you until now was an input. It could tell you an agent ran for three hours and cost $41, and it had no idea whether a line of that reached your product. If you have ever been asked to justify an agent budget, you have felt the missing half.
+- **Three new figures.** What a merged change actually cost. How much of what the agent wrote was later rewritten by somebody else. And how much money went to sessions that ended having produced nothing at all.
+- **It reads your repository. It never touches it.** No checkout, no fetch, no config change, no hook installed, nothing written to disk inside your project. That is enforced in code rather than promised in a document: every command goes through one gate that only lets read-only Git plumbing past, and a write command raises instead of running.
+- **No pull-request account needed.** If the `gh` command is installed and signed in, pull-request state is used. If it is not, the same figures come from your local branch and merge state, and the answer says which of the two it used rather than quietly reporting a smaller number.
+- **A quiet session is never called abandoned.** Only a session whose runtime actually reported that it ended can count toward abandoned spend. Guessing from silence would have been easy and would have inflated the one number most likely to be quoted at somebody.
+- **It tells you what it could not see.** Next to the figures is a count of the sessions that had no working directory recorded, or whose directory was not a repository we scanned, along with what those sessions spent. A small answer and a wrong answer look different.
+- **It stays out of your way.** Repository reading runs on its own slow timer, with ceilings on how far back it reads, how many commits and files it examines, and how long it may take, and `CLAWMETRY_GIT_OUTCOMES=0` switches it off entirely.
 
 ### Release: your agent is watched for more than loops, and the list is sorted by what it costs you (carries #5168) (2026-08-25)
 - **Who this reaches:** everyone. The detection that used to notice a stuck agent now also notices one behaving unlike itself, and the list you look at is ordered by money rather than by whichever check spoke last.
@@ -1288,6 +1297,17 @@
   runtime labels.
 
 ## [Unreleased]
+
+### One session phase across every runtime (2026-08-25)
+- **Why:** every view that answers "what needs me right now" worked out for itself whether a session was alive. One called it live if its transcript file had just grown, another went by heartbeats, and each runtime's reader decided on its own whether a quiet transcript meant finished or still going. So the same session could read as running on one tab and finished on another, and there was no way to line a Claude Code session up against a Codex one, because the two were not being described in the same words.
+- **Why:** nothing knew when a session entered the state it is in now, only when it started. That leaves "started 2h ago" as the only thing anyone can show, and it is the wrong sentence. "Waiting on you for 14 minutes" is the one you can act on, and it needs no cost data and no transcript to be true.
+- **What:** every session now reports one of four states, in the same words on every runtime: waiting on a person, working, idle, or ended. Sessions from different runtimes can finally be put in one list and ordered by what they need.
+- **What:** each one also reports how long it has been in that state, measured from the moment it changed. That measurement survives the collector restarting, so coming back to your machine after an upgrade does not reset every timer to zero.
+- **What:** a session that ended says why: it concluded, it went quiet long enough to call it abandoned, its process is gone, or the runtime archived it. Where a runtime states its own reason, that reason is kept word for word. Abandoned and finished are no longer the same answer.
+- **What:** where a runtime cannot say what a session is doing, the answer is now blank rather than a guess. Blank means we could not tell; it never quietly reads as "idle", because a runtime nobody can see should not be reported as a runtime with nothing happening.
+- **What:** the directory a session was launched in is recorded the first time it is seen and never rewritten, so a future check can tell you an agent has wandered out of the repo it was started in.
+- **Verified:** on a real machine, 73 sessions across 13 installed runtimes were given a state from one ingest pass, and served with it. The recency windows are the ones the collector already used, so nothing about which sessions count as recent has changed.
+- **Note:** this ships the shared vocabulary and nothing that displays it. The terminal listing and the attention board are separate work.
 
 ### Context windows are sized per provider, and the overhead is measured (2026-08-25)
 - **Why:** two fair questions about running an observer alongside your agents had no honest answer here. How does ClawMetry handle context blowout across runtimes, and what does the instrumentation itself cost? The README said nothing about either.
