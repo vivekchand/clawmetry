@@ -1011,6 +1011,11 @@ def _catalog() -> list:
             RootSpec("memory", grok_bot_home, ("*.json",),
                      "Grok Bot client settings", "global", max_depth=1),
         ),
+        note=("Grok Bot agents run on xAI-hosted cloud VMs; their instructions, "
+              "skills and files live on the VM, not on this machine. The only "
+              "local surface is the desktop client's own settings (MCP servers "
+              "and the egress-tunnel switch). An empty skills list here means "
+              "\u201cnot observable from this machine\u201d, not \u201cnone configured\u201d."),
     ))
 
     # ── DeepSeek Harness (dsh) ──────────────────────────────────────
