@@ -1324,8 +1324,92 @@ def api_otel_status():
             "exportLastFlushAt": export_stats.get("last_flush_at"),
             "exportSpansSent": export_stats.get("spans_sent", 0),
             "exportLastError": export_stats.get("last_error"),
+            # WO-7: ``counts`` above is the in-memory cache — it empties on
+            # restart, and reading it as "we have N records" is exactly the
+            # mistake this work order exists to correct. ``persisted`` is the
+            # DuckDB row count on the daemon-free intake path: the number that
+            # is still there tomorrow. ``None`` means we could not ask the
+            # store, which is not the same as zero.
+            "persisted": _otlp_persisted_count(),
         }
     )
+
+
+def _otlp_persisted_count():
+    """DuckDB row count for the daemon-free intake path, or None if unknown."""
+    try:
+        n = _ls_call("count_otlp_records")
+        return None if n is None else int(n)
+    except Exception:
+        return None
+
+
+@bp_otel.route("/api/otel/rollup")
+def api_otel_rollup():
+    """Spend + tokens on the daemon-free intake path, grouped by one identity
+    dimension: ``team``, ``repo``, ``org_id``, ``user_email``, ``user_id``,
+    ``model``, ``agent_type`` or ``session_id``.
+
+    This is the answer the org buyer actually asks for ("what did the platform
+    team spend on the payments repo last month"), and it comes from the
+    ingested rows alone — no daemon, no per-machine install, nothing joined in
+    from a filesystem the cloud container does not have.
+
+    ``?days=N`` bounds the window (default 30, max 365). Every figure is
+    MEASURED: it sums what the runtime reported. Where a runtime reported no
+    cost the sum is smaller, never estimated up to look complete.
+
+    The identity here is SELF-REPORTED — it is whatever the org stamped on its
+    own telemetry via ``OTEL_RESOURCE_ATTRIBUTES``, carried through with the
+    record. It is deliberately NOT ClawMetry's ownership answer: agent
+    principals (REQ-OBS-004) derive owner and team from what we observe, and
+    report which rung an inherited value came from. Two different questions,
+    and a caller must be able to tell which one it asked, so every response
+    says ``attribution: self-reported``.
+    """
+    dimension = (request.args.get("dimension") or "team").strip()
+    # Validate HERE, not in the store: _ls_call swallows the store's
+    # ValueError and returns None, which would turn "you asked for a column
+    # that does not exist" into "the store is down".
+    try:
+        from clawmetry.local_store import LocalStore as _LS
+        allowed = set(_LS._OTLP_ROLLUP_DIMENSIONS)
+    except Exception:
+        allowed = {"team", "repo", "org_id", "user_email", "user_id",
+                   "model", "agent_type", "session_id"}
+    if dimension not in allowed:
+        return jsonify({
+            "error": f"unsupported dimension: {dimension!r}",
+            "allowed": sorted(allowed),
+        }), 400
+    try:
+        days = max(1, min(365, int(request.args.get("days") or 30)))
+    except (TypeError, ValueError):
+        days = 30
+    since = time.time() - days * 86400
+    rows = _ls_call(
+        "query_otlp_rollup", dimension=dimension, since=since, limit=200
+    )
+    if rows is None:
+        # The store could not be reached. Say so, rather than rendering an
+        # empty rollup that reads as "this team spent nothing".
+        return jsonify({
+            "dimension": dimension,
+            "rows": [],
+            "unavailable": True,
+            "error": "local store unavailable",
+        }), 503
+    return jsonify({
+        "dimension": dimension,
+        "days": days,
+        "since": since,
+        "rows": rows,
+        "source": "otlp",
+        "basis": "measured",
+        # What the org's own exporter config declared, not an attribution
+        # ClawMetry derived. See the docstring.
+        "attribution": "self-reported",
+    })
 
 
 # ── Version impact analysis ─────────────────────────────────────────────────────────────────────

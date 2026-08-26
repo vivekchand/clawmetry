@@ -26,7 +26,7 @@ pip install clawmetry && clawmetry
 נפתח בכתובת **http://localhost:8900**. אפס הגדרות: הוא מוצא את זמני הריצה של הסוכנים
 שכבר יש לכם, קורא אותם בקריאה בלבד, ולא משנה דבר באופן שבו הם פועלים.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry: a Claude Code agent working right now, with cost, health and every other runtime on the machine](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 ## עובד עם 26 זמני ריצה של סוכנים
 
@@ -100,9 +100,9 @@ pip install clawmetry     # ואז: clawmetry
 
 | | |
 |---|---|
-| ![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png) |
-| **סקירה כללית**: טוקנים, הפעלות, בריאות | **Brain**: זרם אירועי הסוכן החי |
-| ![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png) | ![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
+| ![Overview: spending anomaly banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png) | ![Agents: every AI agent runtime on the machine with 24h and lifetime cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png) |
+| **סקירה כללית**: טוקנים, הפעלות, בריאות | **סוכנים** |
+| ![Cost: today, this week and this month with an efficiency grade](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png) | ![Approvals: protection rules holding risky tool calls for sign-off](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png) |
 | **עלות**: לפי מודל והפעלה | **אישורים**: שערור קריאות כלים מסוכנות |
 
 עוד, לפי זמן ריצה: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).

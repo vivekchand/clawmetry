@@ -37,6 +37,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "gemini_cli",
     "cline",
     "openhands",
+    "openworker",
 })
 
 
