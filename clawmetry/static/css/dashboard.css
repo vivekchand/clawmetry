@@ -3131,3 +3131,108 @@ body.has-profile-menu #logout-btn { display: none !important; }
   border: 1px solid var(--border-primary); border-radius: 6px;
   padding: 7px 11px; margin-bottom: 14px; max-width: 72ch;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Provenance badges (static/js/provenance.js)
+
+   Every dollar amount and every score carries one of these: measured,
+   derived, estimated, or no basis at all. They sit beside the number they
+   describe and hold the formula in their tooltip.
+
+   The design brief is "readable, then invisible". A badge that shouts gets
+   ignored within a day, and this one appears next to every figure on the
+   Cost tab, so it is small, lower-case, low-contrast, and tinted only enough
+   that the eye can sort the four kinds without reading them. The number
+   stays the loudest thing in the row.
+
+   The exception is `.cm-fig-unknown`, which is SUPPOSED to interrupt: it is
+   standing where a number would be, and the reader has to notice that
+   nothing is being claimed there.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.cm-prov {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-primary);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: help;
+  user-select: none;
+}
+
+/* Read from a record: the strongest thing we can say. */
+.cm-prov-measured {
+  color: var(--text-success);
+  border-color: var(--text-success);
+  background: var(--bg-success);
+}
+
+/* An exact rule over measured inputs. Most cost figures land here. */
+.cm-prov-derived {
+  color: var(--text-accent);
+  border-color: var(--text-accent);
+  background: transparent;
+}
+
+/* There is an assumption in this number. */
+.cm-prov-estimated {
+  color: var(--text-warning);
+  border-color: var(--text-warning);
+  background: var(--bg-warning);
+}
+
+/* Nobody knows, and we are not going to guess. */
+.cm-prov-unknown,
+.cm-prov-unlabelled {
+  color: var(--text-faint);
+  border-style: dashed;
+  border-color: var(--text-faint);
+  background: transparent;
+}
+
+/* One letter, for a table cell where the word would crowd the number. */
+.cm-prov-compact {
+  margin-left: 4px;
+  padding: 0 4px;
+  min-width: 14px;
+  text-align: center;
+  letter-spacing: 0;
+}
+
+/* The figure itself. Dotted underline so it reads as inspectable rather
+   than as decoration, without moving the baseline the way a border would. */
+.cm-fig {
+  cursor: help;
+  text-decoration: underline dotted var(--border-primary);
+  text-underline-offset: 3px;
+}
+
+/* Standing where a number would be. Deliberately unlike every real figure
+   on the page: no currency symbol, no digits, dimmed, italic. A reader must
+   never be able to mistake this for $0.00, which is what it replaced. */
+.cm-fig-unknown {
+  color: var(--text-faint);
+  font-style: italic;
+  font-weight: 400;
+  text-decoration: none;
+  cursor: help;
+}
+
+/* A withheld chart bucket: history the current plan does not include. Held
+   back is not zero, so it does not paint as a zero-height bar with a $0
+   label. Hatched, so the slot is visibly reserved rather than empty. */
+.usage-bar-wrap.cm-withheld .usage-bar {
+  background-image: repeating-linear-gradient(
+    45deg, var(--border-primary) 0 3px, transparent 3px 6px);
+  background-color: transparent;
+  opacity: 0.65;
+}
