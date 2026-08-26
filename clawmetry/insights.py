@@ -74,9 +74,13 @@ class WeeklyDigest:
     summary: str = ""
     cost_usd: float = 0.0
     tokens_used: int = 0
+    #: Whether an LLM was called at all. A digest written without one costs
+    #: nothing, and that zero is a fact rather than a missing number.
+    synthesized: bool = True
 
     def to_dict(self) -> dict:
-        return {
+        from clawmetry import provenance
+        out = {
             "generated_at": self.generated_at,
             "week_start": self.week_start,
             "week_end": self.week_end,
@@ -85,6 +89,27 @@ class WeeklyDigest:
             "tokens_used": self.tokens_used,
             "insights": [asdict(i) for i in self.insights],
         }
+        # What the digest cost to write. A digest nobody paid for really did
+        # cost $0.00, and that zero is a measurement; the badge should say so
+        # rather than hide a true zero behind "not available". The estimate is
+        # the OTHER case, and it names the two assumptions inside it.
+        if self.tokens_used > 0:
+            entry = provenance.estimated(
+                "the tokens the synthesis reported, split evenly between "
+                "input and output and priced at Sonnet's published rate. The "
+                "split is an assumption and the model may not have been the "
+                "one priced",
+                "clawmetry.providers_pricing (Sonnet rate card)",
+                inputs={"tokens_used": self.tokens_used})
+        else:
+            entry = provenance.measured(
+                ("no model was called to write this digest, so nothing was "
+                 "spent on it")
+                if not self.synthesized else
+                ("no synthesis call reported any token usage, so nothing was "
+                 "billed for this digest"),
+                "clawmetry.insights.WeeklyDigestGenerator")
+        return provenance.stamp(out, {"cost_usd": entry})
 
     def to_text(self) -> str:
         """Plain-text form for email / Slack / Telegram bodies."""
@@ -580,7 +605,13 @@ def _synthesize_narrative(
 
 
 def _estimate_cost(tokens_used: int) -> float:
-    """Sonnet $3/$15 per 1M (providers_pricing.py); split 50/50 in/out."""
+    """Sonnet $3/$15 per 1M (providers_pricing.py); split 50/50 in/out.
+
+    An estimate, and ``WeeklyDigest.to_dict`` labels it as one. The 50/50
+    split is a guess (a synthesis call is input-heavy in practice) and the
+    relay path may not run Sonnet at all, so this is the right order of
+    magnitude and not a bill.
+    """
     half = tokens_used / 2
     return round((half / 1_000_000) * 3.0 + (half / 1_000_000) * 15.0, 4)
 
@@ -640,15 +671,23 @@ class WeeklyDigestGenerator:
         trend = next((i for i in digest.insights if i.key == "trend_summary"), None)
         if trend and trend.rows:
             r = trend.rows[0]
+            # ``or 0`` on the cost would turn a row that carries no cost at
+            # all into "$0.00 spent", which reads as a week that cost
+            # nothing. A missing cost says it is missing.
+            raw_cost = r.get("cost")
+            cost_text = (f"${float(raw_cost):.2f} spent"
+                         if isinstance(raw_cost, (int, float))
+                         else "cost not recorded")
             digest.summary = (
                 f"{r.get('events') or 0:,} events across "
                 f"{r.get('sessions') or 0} sessions; "
-                f"${r.get('cost') or 0:.2f} spent; "
+                f"{cost_text}; "
                 f"{r.get('tokens') or 0:,} tokens."
             )
         else:
             digest.summary = "Quiet week — no events recorded in the local store."
 
+        digest.synthesized = bool(mode != "none" and secret)
         digest.cost_usd = _estimate_cost(digest.tokens_used)
         return digest
 

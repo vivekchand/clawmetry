@@ -140,8 +140,14 @@ def test_proxy_signals_without_details_survive(monkeypatch, client):
     body = json.loads(client.get("/api/loop-signals").data)
     assert body["signals"][0]["session_id"] == "detector"
     proxy_row = body["signals"][1]
-    assert proxy_row["spend_at_risk_usd"] == 0.0
+    # A signal nobody could price is NOT a $0.00 signal. It used to serialise
+    # as 0.0, which renders as a free incident sitting at the bottom of a list
+    # sorted by money; it is now null and carries an unknown basis, so the
+    # badge says "no basis" where the dollars would have been.
+    assert proxy_row["spend_at_risk_usd"] is None
     assert proxy_row["spend_basis"] == "unknown"
+    assert proxy_row["provenance"]["spend_at_risk_usd"]["basis"] == "unknown"
+    assert proxy_row["provenance"]["spend_at_risk_usd"]["reason"]
     assert proxy_row["title"] == ""
 
 
