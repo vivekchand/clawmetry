@@ -1298,6 +1298,17 @@
 
 ## [Unreleased]
 
+### One session phase across every runtime (2026-08-25)
+- **Why:** every view that answers "what needs me right now" worked out for itself whether a session was alive. One called it live if its transcript file had just grown, another went by heartbeats, and each runtime's reader decided on its own whether a quiet transcript meant finished or still going. So the same session could read as running on one tab and finished on another, and there was no way to line a Claude Code session up against a Codex one, because the two were not being described in the same words.
+- **Why:** nothing knew when a session entered the state it is in now, only when it started. That leaves "started 2h ago" as the only thing anyone can show, and it is the wrong sentence. "Waiting on you for 14 minutes" is the one you can act on, and it needs no cost data and no transcript to be true.
+- **What:** every session now reports one of four states, in the same words on every runtime: waiting on a person, working, idle, or ended. Sessions from different runtimes can finally be put in one list and ordered by what they need.
+- **What:** each one also reports how long it has been in that state, measured from the moment it changed. That measurement survives the collector restarting, so coming back to your machine after an upgrade does not reset every timer to zero.
+- **What:** a session that ended says why: it concluded, it went quiet long enough to call it abandoned, its process is gone, or the runtime archived it. Where a runtime states its own reason, that reason is kept word for word. Abandoned and finished are no longer the same answer.
+- **What:** where a runtime cannot say what a session is doing, the answer is now blank rather than a guess. Blank means we could not tell; it never quietly reads as "idle", because a runtime nobody can see should not be reported as a runtime with nothing happening.
+- **What:** the directory a session was launched in is recorded the first time it is seen and never rewritten, so a future check can tell you an agent has wandered out of the repo it was started in.
+- **Verified:** on a real machine, 73 sessions across 13 installed runtimes were given a state from one ingest pass, and served with it. The recency windows are the ones the collector already used, so nothing about which sessions count as recent has changed.
+- **Note:** this ships the shared vocabulary and nothing that displays it. The terminal listing and the attention board are separate work.
+
 ### Context windows are sized per provider, and the overhead is measured (2026-08-25)
 - **Why:** two fair questions about running an observer alongside your agents had no honest answer here. How does ClawMetry handle context blowout across runtimes, and what does the instrumentation itself cost? The README said nothing about either.
 - **Why:** the window a percentage divides by was Anthropic's, for every runtime. That is wrong in both directions and neither error looks wrong on screen. A 300K-token GPT-5 turn read as "over 100%, blown" when GPT-5 holds 400K and the turn was at 75%. A DeepSeek turn at 130K read as a comfortable 65% when DeepSeek holds 128K and it had already overflowed.
