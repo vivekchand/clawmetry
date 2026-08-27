@@ -62,5 +62,9 @@
   "antigravity": {
     "label": "Antigravity",
     "brand": "#4285f4"
+  },
+  "grok_bot": {
+    "label": "Grok Bot",
+    "brand": "#111827"
   }
 }

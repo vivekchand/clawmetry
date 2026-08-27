@@ -20,6 +20,15 @@ on:
     types: [completed]
   workflow_dispatch:
 
+# Every cross-repo action below (checkout of clawmetry-cloud, branch push, PR
+# create/close/merge) authenticates as `secrets.CLOUD_REPO_PAT`, which this
+# block does not govern — a PAT carries its own scopes. The only thing that
+# rides on GITHUB_TOKEN is the checkout of THIS repo, which needs `contents:
+# read` and nothing more. Deliberately kept read-only so a future step cannot
+# quietly acquire write on clawmetry via the ambient token.
+permissions:
+  contents: read
+
 jobs:
   pin-version:
     name: Rebuild cloud with latest OSS
