@@ -964,7 +964,7 @@ def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
 def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
     """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
     saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
-    if so, download+install the wheel so the node gets all 27 runtimes.
+    if so, download+install the wheel so the node gets all 28 runtimes.
 
     HARD RULES enforced here:
       * Pro is installed ONLY for an entitled plan (Starter/Pro/Trial/
