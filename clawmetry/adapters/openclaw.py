@@ -818,7 +818,7 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
                     _exec_res = _sp.run(
                         ["openshell", "sandbox", "exec", "-n", name,
                          "--", "tail", "-n", str(count), "/tmp/gateway.log"],
-                        capture_output=True, text=True, timeout=10,
+                        capture_output=True, text=True, timeout=3,
                     )
                     for _exec_line in (_exec_res.stdout or "").splitlines():
                         _exec_line = _exec_line.strip()
