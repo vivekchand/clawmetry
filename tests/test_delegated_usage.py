@@ -378,3 +378,74 @@ def test_save_from_file_returns_only_the_mask(monkeypatch, tmp_path):
 
 
 import inspect  # noqa: E402  (used by the guards above)
+
+
+# ── the UI surface ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    import dashboard as d
+
+    monkeypatch.setenv("CLAWMETRY_CURSOR_KEY_PATH", str(tmp_path / "cursor.json"))
+    monkeypatch.delenv("CLAWMETRY_CURSOR_API_KEY", raising=False)
+    try:
+        d.detect_config()
+    except Exception:
+        pass
+    return d.app.test_client()
+
+
+def test_status_never_returns_the_key(client):
+    """Write-only over HTTP: a page that can read this API learns four chars."""
+    from clawmetry import cursor_connector as cc
+
+    secret = "key_supersecretvalue"
+    cc.save_key(secret)
+    r = client.get("/api/cursor/status")
+    # Raw bytes, not the parsed body: JSON-escaping must not be what hides it.
+    assert secret not in r.get_data(as_text=True)
+    assert r.get_json()["maskedKey"] == "…alue"
+
+
+def test_connect_stores_without_echoing(client):
+    secret = "key_anothersecretvalue"
+    r = client.post("/api/cursor/connect", json={"apiKey": secret})
+    assert r.status_code == 200
+    assert r.get_json()["connected"] is True
+    assert secret not in r.get_data(as_text=True)
+
+
+def test_connect_rejects_an_empty_key(client):
+    r = client.post("/api/cursor/connect", json={})
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "missing_api_key"
+
+
+def test_connect_is_post_only(client):
+    """A GET would put the key in a URL, and URLs land in logs and history."""
+    assert client.get("/api/cursor/connect").status_code == 405
+
+
+def test_delegated_usage_endpoint_is_bounded(client):
+    """An agent id no local transcript named rolls up to nothing."""
+    body = client.get(f"/api/delegated-usage?agents={AGENT}").get_json()
+    assert body["costUsd"] is None
+    assert body["costStatus"] == "unavailable"
+
+
+def test_banner_is_scoped_to_the_two_runtimes_and_hides_the_key():
+    """The panel must not appear on unrelated runtime views, and the field must
+    never be a plain text input that a screenshot or a password manager reads.
+    """
+    import os
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(
+        os.path.join(here, "clawmetry", "templates", "partials", "banners.html"),
+        encoding="utf-8",
+    ).read()
+    assert "{ cursor: 1, grok_bot: 1 }" in html
+    assert 'id="cm-cursor-key" type="password"' in html
+    # The key is POSTed in a body; a query string would leak it to logs.
+    assert "apiKey=" not in html
