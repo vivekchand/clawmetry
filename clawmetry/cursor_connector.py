@@ -101,6 +101,38 @@ def save_key(api_key: str) -> str:
     return mask(api_key)
 
 
+def save_key_from_file(path: str) -> str:
+    """Read a key from ``path`` and store it. Returns ONLY the masked form.
+
+    Exists so a caller never binds the raw secret. The CLI used to read the
+    file itself and hand the string over, which put the credential in a local
+    variable one ``print`` away from a terminal and a shell history -- exactly
+    the shape static analysis flags, and it was right to. Reading, storing and
+    masking all happen in here now, and the value that comes back out cannot
+    be un-masked.
+    """
+    with open(os.path.expanduser(path), encoding="utf-8") as fh:
+        return save_key(fh.read().strip())
+
+
+def save_key_from_env() -> str:
+    """Store the key named by ``CLAWMETRY_CURSOR_API_KEY``. Masked form out."""
+    return save_key((os.environ.get(_KEY_ENV) or "").strip())
+
+
+def masked_key() -> str:
+    """The stored key's masked form, or "" when not connected.
+
+    The only key-derived string any caller outside this module may hold.
+    """
+    key = load_key()
+    return mask(key) if key else ""
+
+
+def is_connected() -> bool:
+    return bool(load_key())
+
+
 def forget_key() -> bool:
     try:
         os.remove(key_path())

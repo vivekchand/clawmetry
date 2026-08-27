@@ -317,3 +317,64 @@ def test_harvest_never_raises_on_a_bad_event():
 
     assert sync._harvest_delegated_agent_ids(None) == []
     assert sync._harvest_delegated_agent_ids([object()]) == []
+
+
+# ── the CLI must never hold the raw credential ──────────────────────────────
+
+
+def test_cli_never_binds_the_raw_key():
+    """CodeQL flagged the first version of this, and it was right.
+
+    The CLI used to read the key file itself, which put the credential in a
+    local variable one print/traceback away from a terminal and a shell
+    history. Reading, storing and masking now happen inside the connector and
+    only a masked form comes back, so this is a structural guarantee rather
+    than a promise to be careful.
+    """
+    import inspect
+    import clawmetry.cli as cli
+
+    src = inspect.getsource(cli._cmd_cursor)
+    assert "load_key()" not in src, "the CLI must not read the raw key"
+    assert "save_key(" not in src, "the CLI must not pass a raw key around"
+    for leaky in ("{key}", "{api_key}", "{exc}"):
+        assert leaky not in src, f"{leaky} in a credential path is a leak channel"
+
+
+def test_connect_has_no_positional_key_argument():
+    """A secret on the command line lands in shell history."""
+    import clawmetry.cli as cli
+
+    src = inspect.getsource(cli) if False else open(cli.__file__, encoding="utf-8").read()
+    assert '"cursor_key"' not in src, (
+        "the positional key argument was removed on purpose: --file or the "
+        "env var only"
+    )
+
+
+def test_masked_key_is_the_only_key_derived_value_exposed(monkeypatch, tmp_path):
+    import clawmetry.cursor_connector as cc
+
+    secret = "key_supersecretvalue"
+    path = tmp_path / "cursor.json"
+    monkeypatch.setenv("CLAWMETRY_CURSOR_KEY_PATH", str(path))
+    monkeypatch.delenv("CLAWMETRY_CURSOR_API_KEY", raising=False)
+    path.write_text(json.dumps({"apiKey": secret}))
+    out = cc.masked_key()
+    assert secret not in out
+    assert out == "…alue"
+    assert cc.is_connected() is True
+
+
+def test_save_from_file_returns_only_the_mask(monkeypatch, tmp_path):
+    import clawmetry.cursor_connector as cc
+
+    secret = "key_supersecretvalue"
+    src = tmp_path / "k.txt"
+    src.write_text(secret + "\n")
+    monkeypatch.setenv("CLAWMETRY_CURSOR_KEY_PATH", str(tmp_path / "cursor.json"))
+    out = cc.save_key_from_file(str(src))
+    assert out == "…alue" and secret not in out
+
+
+import inspect  # noqa: E402  (used by the guards above)

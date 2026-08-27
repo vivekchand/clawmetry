@@ -5563,14 +5563,18 @@ def _cmd_cursor(args) -> None:
 
     Nothing here runs unless you connect: with no key stored, the daemon makes
     no outbound call to Cursor at all.
+
+    This function never binds the raw key. Reading, storing and masking happen
+    inside ``cursor_connector``, and only a masked form is ever returned to
+    here -- so no print, log or traceback in this file can carry the secret.
     """
     from clawmetry import cursor_connector as cc
 
     action = getattr(args, "cursor_action", "status") or "status"
 
     if action == "status":
-        key = cc.load_key()
-        if not key:
+        masked = cc.masked_key()
+        if not masked:
             print("Cursor: not connected.")
             print("  Delegated cloud-agent work cannot be priced without it.")
             print("  Connect with:  clawmetry cursor connect --file /path/to/key")
@@ -5578,33 +5582,28 @@ def _cmd_cursor(args) -> None:
             print("  their agents API at all, and that gate is theirs, not ours.")
             return
         from clawmetry.delegated_usage import get_store
-        print(f"Cursor: connected (key {cc.mask(key)})")
+        print(f"Cursor: connected (key {masked})")
         print(f"  Delegated agents seen in local transcripts: "
               f"{len(get_store().observed())}")
         print(f"  Endpoint: {cc.API_BASE}")
         return
 
     if action == "connect":
-        key = getattr(args, "cursor_key", None)
         path = getattr(args, "cursor_file", None)
-        if path:
-            try:
-                with open(os.path.expanduser(path), encoding="utf-8") as fh:
-                    key = fh.read().strip()
-            except OSError as exc:
-                print(f"Could not read {path}: {exc}")
-                return
-        if not key:
-            key = (os.environ.get("CLAWMETRY_CURSOR_API_KEY") or "").strip()
-        if not key:
+        try:
+            masked = cc.save_key_from_file(path) if path else cc.save_key_from_env()
+        except OSError:
+            # Deliberately not printing the exception: this path handles a
+            # credential and an exception string is an uncontrolled channel.
+            print(f"Could not read the key file: {path}")
+            return
+        except ValueError:
             print("No key supplied.")
             print("  clawmetry cursor connect --file /path/to/key")
             print("  (or set CLAWMETRY_CURSOR_API_KEY)")
             return
-        try:
-            masked = cc.save_key(key)
-        except Exception as exc:
-            print(f"Could not save the key: {exc}")
+        except Exception:
+            print("Could not save the key.")
             return
         print(f"Cursor connected (key {masked}).")
         print(f"  Stored 0600 at {cc.key_path()}; never synced, never logged.")
@@ -8201,12 +8200,6 @@ def main() -> None:
         "cursor_action", nargs="?", default="status",
         choices=["status", "connect", "sync", "forget"],
         help="status (default) | connect <KEY> | sync | forget",
-    )
-    p_cursor.add_argument(
-        "cursor_key", nargs="?", default=None,
-        help=("Your Cursor API key, for 'connect'. Prefer --file or the "
-              "CLAWMETRY_CURSOR_API_KEY env var: an argument here lands in "
-              "your shell history."),
     )
     p_cursor.add_argument(
         "--file", dest="cursor_file", default=None, metavar="PATH",
