@@ -5,6 +5,15 @@ on:
     types: [closed]
     branches: [main]
 
+# Read-only floor. This workflow's single job re-declares its own scopes
+# below, and a job-level block REPLACES the top level rather than merging
+# with it, so this value never actually applies to `release` — it is here so
+# the default for any job added later is read-only, and so the workflow
+# stops reading as "inherits whatever the repository default happens to be".
+# The publish/tag/PR scopes stay on the job that needs them, not up here.
+permissions:
+  contents: read
+
 jobs:
   release:
     name: Bump version & publish to PyPI

@@ -79,6 +79,58 @@ def test_workflow_parses_as_yaml(path: str) -> None:
     )
 
 
+class _DuplicateKeyLoader(yaml.SafeLoader):
+    """A SafeLoader that refuses a mapping with a repeated key.
+
+    PyYAML's own resolution is last-one-wins, silently: ``yaml.safe_load`` on a
+    file with two top-level ``permissions:`` blocks returns a perfectly good
+    dict and raises nothing. GitHub Actions does the opposite -- it rejects the
+    file outright and fails the run at startup -- so a duplicate key is exactly
+    the class of break ``test_workflow_parses_as_yaml`` cannot see.
+    """
+
+
+def _no_duplicate_keys(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.YAMLError(
+                f"duplicate key {key!r} at line {key_node.start_mark.line + 1}"
+            )
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_DuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys
+)
+
+
+@pytest.mark.parametrize("path", _workflow_files(), ids=os.path.basename)
+def test_workflow_has_no_duplicate_keys(path: str) -> None:
+    """No mapping may repeat a key. GitHub rejects the file if one does.
+
+    Burned by the token-permissions hardening pass: two separate PRs each
+    added a top-level ``permissions: contents: read`` block to
+    api-latency-smoke.yml. Both were individually correct, neither conflicted
+    in git, and the pre-merge check was ``yaml.safe_load`` -- which happily
+    kept the second and returned a valid dict. The workflow was dead on main
+    from the moment the second one merged, its runs listed under the file path
+    with zero jobs, and the API-latency safety net was off.
+    """
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    try:
+        yaml.load(source, _DuplicateKeyLoader)
+    except yaml.YAMLError as exc:  # pragma: no cover - message is the point
+        pytest.fail(
+            f"{os.path.basename(path)} repeats a mapping key ({exc}). PyYAML "
+            "keeps the last one without complaining, but GitHub rejects the "
+            "workflow and fails every run at startup before any step executes."
+        )
+
+
 @pytest.mark.parametrize("path", _workflow_files(), ids=os.path.basename)
 def test_workflow_has_required_top_level_keys(path: str) -> None:
     """A parseable file can still be a non-workflow. Check the shape."""

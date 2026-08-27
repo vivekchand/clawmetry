@@ -7212,7 +7212,8 @@ _LITE_RT_LABELS = {
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
     "n8n": "n8n", "antigravity": "Antigravity", "copilot": "GitHub Copilot",
-    "grok": "Grok", "qm": "QM", "deepseek_harness": "DeepSeek Harness",
+    "grok": "Grok Build", "grok_bot": "Grok Bot",
+    "qm": "QM", "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo", "kimi": "Kimi CLI", "devin": "Devin",
     "gemini_cli": "Gemini CLI",
     "cline": "Cline",
@@ -13580,6 +13581,10 @@ _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.openhands", "OpenHandsAdapter"),
     ("clawmetry_pro.adapters.copilot", "CopilotAdapter"),
     ("clawmetry_pro.adapters.grok", "GrokAdapter"),
+    # Grok Bot is a SEPARATE xAI product from Grok Build above: cloud-VM
+    # agents driven from an Anysphere-built desktop app, stored under
+    # "Grok Bot"/sand-client-persistence + ~/.grokbot. Not a ~/.grok reader.
+    ("clawmetry_pro.adapters.grok_bot", "GrokBotAdapter"),
     # qm (github.com/yc-software/qm, qm.ycombinator.com) — YC's Postgres-
     # backed multiplayer agent harness. Meta-orchestrator like Hermes;
     # delegates to Pi / OpenCode / Codex / Claude Code, so a qm user is
@@ -15173,7 +15178,7 @@ def _build_model_attribution():
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
     "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
-    "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
+    "antigravity", "copilot", "grok", "grok_bot", "qm", "deepseek_harness", "exo",
     "kimi",
     "devin",
     "gemini_cli",
