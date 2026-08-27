@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 27 runtimes, which is the bar that keeps this table true.
+# answer it for all 28 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -205,6 +205,16 @@ RUNTIME_RECORDS: dict[str, dict] = {
         note="OpenHands records tokens and per-call cost. Its cost reads 0.00 "
              "both for a free local model and for a pricing lookup it could "
              "not resolve, so a genuine zero and a missing price look alike.",
+    ),
+    "grok_bot": _e(
+        UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
+        "No tokens, model or cost",
+        note="Grok Bot runs inference on its own cloud VM. The desktop client "
+             "stores the full transcript -- both sides -- but an exhaustive walk "
+             "of its store finds no token counts, no model id and no cost: the "
+             "fields do not exist rather than being empty. Transcripts and local "
+             "tool-permission asks are complete; spend is not observable here at "
+             "all, so no figure is derived.",
     ),
     "openworker": _e(
         ON_DISK, DERIVED, ON_DISK,

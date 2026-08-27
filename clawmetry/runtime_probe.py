@@ -161,6 +161,14 @@ RUNTIME_PROBES: tuple = (
                   "~/.config/coworker/conversations",
                   "~/AppData/Roaming/coworker/coworker.db"),
                  env="CLAWMETRY_OPENWORKER_STATE_DIR"),
+    # Grok Bot (Anysphere "sand" desktop client). Probe the SLICE DIR and
+    # ~/.grokbot, not ~/.grok -- that is Grok Build, a different runtime.
+    RuntimeProbe("grok_bot", "Grok Bot",
+                 ("~/Library/Application Support/Grok Bot/sand-client-persistence",
+                  "~/AppData/Roaming/Grok Bot/sand-client-persistence",
+                  "~/.config/Grok Bot/sand-client-persistence",
+                  "~/.grokbot/settings.json"),
+                 env="CLAWMETRY_GROK_BOT_DATA_ROOT"),
     RuntimeProbe("openhands", "OpenHands",
                  ("~/.openhands/conversations/*/base_state.json",),
                  env="CLAWMETRY_OPENHANDS_HOME"),
