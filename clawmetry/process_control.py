@@ -67,6 +67,14 @@ _DEFAULT_GRACE_SECS = 5.0
 # on purpose (single shared IDE process). openclaw is handled by the CLI cancel
 # path in sync.py, not here.
 #
+# grok_bot is absent on purpose and can never join: a Grok Bot agent runs on
+# xAI's cloud VM, not on this machine, and the one local Electron process
+# serves every bot. There is no per-bot process here to signal, so the Guard
+# tab must show the control disabled with that reason rather than a button
+# that quietly does nothing. (Its local-exec daemon IS a local process, but
+# killing that severs every bot's local access at once -- not a per-session
+# control, and not something to expose as one.)
+#
 # copilot (GitHub Copilot CLI) has a claude_code-grade strong resolution: each
 # run writes ``~/.copilot/logs/process-<epoch_ms>-<pid>.log`` whose body logs
 # ``Workspace initialized: <session_id>`` — pid comes from the FILENAME and the

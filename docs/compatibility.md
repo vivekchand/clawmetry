@@ -1,6 +1,6 @@
 # Runtime / Agent Compatibility
 
-ClawMetry observes 27 AI-agent runtimes. Each runtime that
+ClawMetry observes 28 AI-agent runtimes. Each runtime that
 isn't OpenClaw ships a dedicated reader adapter (`clawmetry/adapters/`) that
 translates its native session format into ClawMetry's unified Session/Event
 shapes; the daemon then ingests them into the same local DuckDB store and cloud
@@ -34,7 +34,8 @@ See [`NUMBAT.md`](NUMBAT.md).
 | n8n         | Beta adapter   | SQLite `~/.n8n/database.sqlite` (`execution_entity`/`execution_data`, WAL) | Workflow executions as sessions, node runs as tool calls, AI Agent prompts + model attribution; tokens + cost where the model sub-node records usage. Postgres and n8n Cloud installs are not covered by this adapter. |
 | Antigravity | Beta adapter   | Brain JSONL under `~/.gemini/<flavor>/brain/<uuid>/` (flavors: `antigravity`, `antigravity-cli`, `antigravity-ide`, `jetski`) + `conversations/<uuid>.db` (SQLite, WAL) | Conversations as sessions, planner/tool steps as events, thinking + checkpoint (compaction) events; per-generation model, token split (prompt/thinking/response) and cost decoded from `gen_metadata`; background-generation burn; subagent + battle-mode metadata. |
 | GitHub Copilot | Beta adapter | Copilot CLI `events.jsonl` under `~/.copilot/session-state/` + the `session-store.db` per-call usage ledger | Conversations, tool calls, model routing, cache-aware token split, vendor-billed AI-credit cost. |
-| Grok | Beta adapter | xAI Grok Build CLI: `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}` | Conversations, per-turn token split, model routing, and the outbound repo payload staged under `~/.grok/upload_queue/`. |
+| Grok Build | Beta adapter | xAI Grok Build CLI: `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}` | Conversations, per-turn token split, model routing, and the outbound repo payload staged under `~/.grok/upload_queue/`. |
+| Grok Bot | Beta adapter | xAI Grok Bot desktop client (Anysphere `com.anysphere.sand`): `~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob` (base32-named plaintext JSON) + `~/.grokbot/` | Full transcripts, both sides, plus local tool-permission asks and the MCP / egress-tunnel posture. **No tokens, model or cost:** the bot infers on its own cloud VM and none of that reaches the client, so no spend is reported rather than a derived guess. One desktop process serves every bot, so there is no per-bot pause/stop/kill. |
 | QM | Beta adapter | Postgres (no on-disk session store); adapter reads `DATABASE_URL` / `CLAWMETRY_QM_DATABASE_URL` read-only | YC's multiplayer harness; delegates to Pi / opencode / Codex / Claude Code, which show up as their own runtimes. |
 | DeepSeek Harness | Beta adapter | JSONL under `$DSH_HOME/sessions` (default `~/.dsh/sessions`), zstd-compressed by default | Transcripts, model, tool calls. `zstandard` is installed lazily, only once compressed dsh data is detected. |
 | Exo | Beta adapter | One pretty-printed JSON file per event under `<workspace>/.exo/exoharness/agents/*/conversations/*/events/` | Per-call usage + cost persisted by Exo itself. State dir is workspace-relative; set `CLAWMETRY_EXO_ROOTS` for unusual layouts. |

@@ -18,6 +18,15 @@ on:
       - 'v*.*.*'
   workflow_dispatch: {}
 
+# Least-privilege floor for the three BUILD jobs (macos / linux inherit this;
+# windows re-declares it alongside id-token). The `release` job, and only that
+# job, elevates to `contents: write` so softprops/action-gh-release can attach
+# installers to the tag's Release and publish it. Keep the elevation on that
+# job — a workflow-wide `contents: write` would hand every build job, and each
+# third-party action it runs, the ability to write to the repository.
+permissions:
+  contents: read
+
 jobs:
   macos:
     name: macOS .app + .dmg (signed + notarized when secrets are set)
