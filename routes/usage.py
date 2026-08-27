@@ -70,6 +70,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "cline",
     "openhands",
     "openworker",
+    "grok_bot",
 
 ))
 
@@ -1116,6 +1117,7 @@ _RUNTIME_PREFIXES = frozenset({
     "cline",
     "openhands",
     "openworker",
+    "grok_bot",
 })
 
 
