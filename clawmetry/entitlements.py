@@ -110,6 +110,7 @@ PAID_RUNTIMES = frozenset(
         "antigravity",
         "copilot",
         "grok",
+        "grok_bot",
         "qm",
         "deepseek_harness",
         "exo",
@@ -154,7 +155,10 @@ RUNTIME_LABELS = {
     "n8n": "n8n",
     "antigravity": "Antigravity",
     "copilot": "GitHub Copilot",
-    "grok": "Grok",
+    # Two different xAI products. "Grok" alone is ambiguous now that Bot
+    # exists, so the CLI runtime is named for what it actually is.
+    "grok": "Grok Build",
+    "grok_bot": "Grok Bot",
     "qm": "QM",
     "deepseek_harness": "DeepSeek Harness",
     "exo": "Exo",
@@ -194,6 +198,7 @@ RUNTIME_LANDING_PATHS = {
     "antigravity": "/runtimes/antigravity",
     "copilot": "/runtimes/copilot",
     "grok": "/runtimes/grok",
+    "grok_bot": "/runtimes/grok-bot",
     "qm": "/runtimes/qm",
     "deepseek_harness": "/runtimes/deepseek-harness",
     "exo": "/runtimes/exo",
