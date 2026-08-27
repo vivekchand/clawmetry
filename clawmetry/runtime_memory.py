@@ -975,7 +975,7 @@ def _catalog() -> list:
     # ── Grok Build (xAI) ────────────────────────────────────────────
     grok_home = _env_root("CLAWMETRY_GROK_HOME", os.path.expanduser("~/.grok"))
     catalog.append(RuntimeCatalogEntry(
-        id="grok", label="Grok",
+        id="grok", label="Grok Build",
         roots=(
             RootSpec("memory", os.path.join(ws, "AGENTS.md"),
                      label="Project AGENTS.md", scope="project"),
@@ -994,6 +994,28 @@ def _catalog() -> list:
             RootSpec("hooks", os.path.join(ws, ".grok", "hooks"),
                      label="Project hooks", scope="project"),
         ),
+    ))
+
+    # ── Grok Bot (xAI, Anysphere "sand" desktop client) ─────────────
+    # NOT ~/.grok -- that is Grok Build above, a different product. Grok Bot
+    # keeps its agent-side files on the bot's own cloud VM; the only local
+    # surface is the desktop client's settings, which is where the MCP server
+    # list and the egress-tunnel switch live. No skills or hooks roots are
+    # declared because Grok Bot ships neither locally: an empty root would
+    # render as "none configured" when the truth is "not observable here".
+    grok_bot_home = _env_root("CLAWMETRY_GROK_BOT_HOME",
+                              os.path.expanduser("~/.grokbot"))
+    catalog.append(RuntimeCatalogEntry(
+        id="grok_bot", label="Grok Bot",
+        roots=(
+            RootSpec("memory", grok_bot_home, ("*.json",),
+                     "Grok Bot client settings", "global", max_depth=1),
+        ),
+        note=("Grok Bot agents run on xAI-hosted cloud VMs; their instructions, "
+              "skills and files live on the VM, not on this machine. The only "
+              "local surface is the desktop client's own settings (MCP servers "
+              "and the egress-tunnel switch). An empty skills list here means "
+              "\u201cnot observable from this machine\u201d, not \u201cnone configured\u201d."),
     ))
 
     # ── DeepSeek Harness (dsh) ──────────────────────────────────────
@@ -1512,7 +1534,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 27 runtimes would be a wall of
+    because listing every absent root for 28 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
