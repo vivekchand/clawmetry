@@ -346,6 +346,7 @@ jobs:
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_runtime_count_copy_sync.py \
             tests/test_grok_bot_runtime_wiring.py \
+            tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
             tests/test_query_contract_drift.py \

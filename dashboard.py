@@ -12085,6 +12085,58 @@ def _otlp_record_id(service_name, session_id, event_name, rec, attrs):
     return hashlib.sha256(joined).hexdigest()[:32]
 
 
+def _delegated_is_agent_id(value) -> bool:
+    """True when an OTLP conversation id is a delegated vendor agent id.
+
+    Import is late and failure is False: the delegated-usage module is part of
+    the OSS package, but an ingest path must not start refusing records because
+    an optional import moved.
+    """
+    try:
+        from clawmetry.delegated_usage import is_delegated_agent_id
+        return is_delegated_agent_id(value)
+    except Exception:
+        return False
+
+
+def _delegated_record_otel(agent_id, tin, tout, cache_read, cache_write,
+                           model="", ts=0.0) -> bool:
+    """File one Cursor cloud-agent OTel record against its agent id.
+
+    ``require_observed`` stays ON: a team's export carries every agent on the
+    Cursor team, and only the ones a transcript on THIS machine actually named
+    may be attributed here. Without that bound a colleague's agent would appear
+    on your session.
+    """
+    try:
+        from clawmetry.delegated_usage import (
+            SOURCE_OTEL, CURSOR, DelegatedUsage, get_store,
+        )
+
+        def _n(v):
+            try:
+                return int(v) if v is not None else 0
+            except (TypeError, ValueError):
+                return 0
+
+        usage = DelegatedUsage(
+            agent_id=str(agent_id),
+            vendor=CURSOR,
+            source=SOURCE_OTEL,
+            input_tokens=_n(tin),
+            output_tokens=_n(tout),
+            cache_read_tokens=_n(cache_read),
+            cache_write_tokens=_n(cache_write),
+            model=str(model or ""),
+            updated_at=float(ts or 0.0) or 0.0,
+        )
+        if usage.total_tokens <= 0:
+            return False
+        return get_store().record(usage)
+    except Exception:
+        return False
+
+
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP logs protobuf and ingest agent EVENT records (#2596, WO-7).
 
@@ -12182,6 +12234,12 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                 session_id = _pick(
                     "session.id", "session_id", "gen_ai.conversation.id",
                     "conversation.id",
+                    # Cursor's OTel export keys every log record with
+                    # cursor.conversation.id, which for a CLOUD agent is the
+                    # customer-visible bc-... id -- the same id a Grok Bot
+                    # transcript records when it delegates. That attribute is
+                    # therefore the join between two vendors' telemetry.
+                    "cursor.conversation.id",
                 )
                 user_id = _pick(
                     "user.id", "user.account_uuid", "enduser.id", "user_id",
@@ -12250,6 +12308,45 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "total": tin + tout,
                         "model": model, "channel": channel, "provider": provider,
                     })
+
+                # ── Delegated usage: Cursor cloud agents (push lane) ─────
+                # Cursor Enterprise can point its OTel export straight at this
+                # receiver -- the only lane needing no credential and no
+                # outbound call from us. A record whose conversation id is a
+                # bc-... cloud agent is work some LOCAL runtime delegated, so
+                # it is filed against that agent rather than counted as a
+                # session of our own.
+                #
+                # The per-log token attribute names are NOT in Cursor's public
+                # docs (they live in a Wire Reference that is not reachable),
+                # so this reads a candidate list and a miss records NOTHING.
+                # A wrong guess must yield silence, never a fabricated figure.
+                if _delegated_is_agent_id(session_id):
+                    try:
+                        c_in = _f(
+                            attrs, "cursor.api.request.input_tokens",
+                            "cursor.input_tokens", "input_tokens",
+                            "gen_ai.usage.input_tokens",
+                        )
+                        c_out = _f(
+                            attrs, "cursor.api.request.output_tokens",
+                            "cursor.output_tokens", "output_tokens",
+                            "gen_ai.usage.output_tokens",
+                        )
+                        c_cr = _f(
+                            attrs, "cursor.api.request.cache_read_tokens",
+                            "cursor.cache_read_tokens", "cache_read_tokens",
+                        )
+                        c_cw = _f(
+                            attrs, "cursor.api.request.cache_creation_tokens",
+                            "cursor.cache_write_tokens", "cache_creation_tokens",
+                        )
+                        if any(v is not None for v in (c_in, c_out, c_cr, c_cw)):
+                            _delegated_record_otel(
+                                session_id, c_in, c_out, c_cr, c_cw, model, ts,
+                            )
+                    except Exception:
+                        pass
 
                 dur = _f(attrs, "duration_ms", "duration.ms")
                 dur_val = None
