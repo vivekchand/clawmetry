@@ -104,6 +104,9 @@ UNSUPPORTED_COMPACTION = frozenset({
     # exact failure this module exists to prevent. Delist once the adapter
     # emits a compaction event, and only once the WHEEL carrying that ships.
     "openworker",
+    # Grok Bot compacts (if at all) on its cloud VM; the desktop client
+    # store has no compaction entry kind, so absence proves nothing.
+    "grok_bot",
     "picoclaw",
     "qm",
     "qwen_code",

@@ -160,7 +160,7 @@ setup(
         "ai agent llm llm-observability opentelemetry cost-tracking "
         "claude-code codex cursor github-copilot gemini-cli cline openhands openworker "
         "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "
-        "hermes exo openclaw nemoclaw nanoclaw picoclaw moltbot"
+        "hermes exo grok-bot openclaw nemoclaw nanoclaw picoclaw moltbot"
     ),
     license="MIT",
     project_urls={
