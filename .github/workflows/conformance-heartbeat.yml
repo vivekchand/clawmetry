@@ -40,9 +40,11 @@ concurrency:
   group: conformance-heartbeat-${{ github.event.schedule || inputs.scope }}
   cancel-in-progress: false
 
+# Six of the seven jobs below only read: they install the published wheel and
+# run it. Only `alarm` writes, and only to file the heartbeat issue, so
+# `issues: write` is granted on that job instead of to the whole workflow.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   # ---------------------------------------------------------------------
@@ -230,6 +232,11 @@ jobs:
     needs: [pypi-install, pypi-install-3os, installers, installers-windows, matrix-report]
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
+    # The only job that writes. `gh issue list` reads before it writes, so
+    # keep read alongside the write it actually needs.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: File or update the alarm issue
         env:
