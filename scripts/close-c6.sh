@@ -25,7 +25,7 @@
 # After running: every PR in those 3 repos must pass the E2E suite to merge.
 # This closes criterion C6 of the E2E Robustness epic.
 #
-# Tracking: vivekchand/clawmetry#4029
+# Tracking: vivekchand/clawmetry#5266 (E2E epic, C6)
 
 set -euo pipefail
 
