@@ -56,8 +56,20 @@
   var _timer = null;
   // Modal selection lives in module state, not the DOM, so a background
   // refresh that repaints the pill can never reset a half-made choice.
+  //
+  // Pro + annual is preselected DELIBERATELY, and differs from the
+  // hard-block overlay's Starter default on purpose: that screen is a
+  // blocked user trying to get unstuck, so it leads with the cheapest way
+  // back in. This one is a proactive upsell to somebody still working, so it
+  // leads with the recommended tier. Both are one click from the other.
   var _selTier = 'pro';
   var _selInterval = 'year';
+
+  // Last thing painted into the slot, so a background refresh that reports an
+  // unchanged countdown is a no-op. Without this the pill's DOM is rebuilt on
+  // every poll (once a minute), which drops hover and focus mid-interaction
+  // for no reason.
+  var _lastPaint = null;
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -299,6 +311,7 @@
     if (!pillEnabled() || !st || !st.show || isPaid(st)) {
       host.className = '';
       host.innerHTML = '';
+      _lastPaint = null;
       return;
     }
     injectStyles();
@@ -306,6 +319,9 @@
     var cta = st.expired
       ? tr('trial.upgrade_now', null, 'Upgrade')
       : tr('trial.upgrade', null, 'Upgrade');
+    var paint = urgency(st) + '\u0000' + label + '\u0000' + cta;
+    if (paint === _lastPaint && document.getElementById(BTN_ID)) return;
+    _lastPaint = paint;
     host.innerHTML = ''
       + '<span id="' + PILL_ID + '" class="cm-' + urgency(st) + '" '
       + 'title="' + esc(tr('trial.pill_title', null,

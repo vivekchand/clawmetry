@@ -694,6 +694,50 @@ check('self-hosted needs no opt-in flag', function () {
   });
 });
 
+function fire(env, detail) {
+  (env.document._listeners['cm:trial-state'] || []).forEach(function (fn) { fn({ detail: detail }); });
+}
+
+check('an unchanged countdown does not rebuild the pill', function () {
+  const env = makeEnv({ fetch: function () { return null; } });
+  run(env);
+  return flush().then(function () {
+    fire(env, { tier: 'trial', days_until_expiry: 5, expired: false });
+    const first = env.document.getElementById('cm-trial-pill-btn');
+    assert(first, 'pill never rendered');
+    fire(env, { tier: 'trial', days_until_expiry: 5, expired: false });
+    eq(env.document.getElementById('cm-trial-pill-btn'), first,
+      'rebuilt the pill DOM for an identical state -- this drops hover/focus '
+      + 'every poll');
+  });
+});
+
+check('a changed countdown DOES repaint', function () {
+  const env = makeEnv({ fetch: function () { return null; } });
+  run(env);
+  return flush().then(function () {
+    fire(env, { tier: 'trial', days_until_expiry: 5, expired: false });
+    fire(env, { tier: 'trial', days_until_expiry: 4, expired: false });
+    includes(slotHtml(env), '4 days remaining', 'countdown froze at the old value');
+  });
+});
+
+// The repaint cache must be cleared when the pill hides, or a lapse back into
+// trial (license expiry, account switch) would be skipped as "unchanged".
+check('paid -> trial again re-renders rather than staying hidden', function () {
+  const env = makeEnv({ fetch: function () { return null; } });
+  run(env);
+  return flush().then(function () {
+    fire(env, { tier: 'trial', days_until_expiry: 3, expired: false });
+    includes(slotHtml(env), '3 days remaining');
+    fire(env, { tier: 'pro', days_until_expiry: 300, expired: false });
+    eq(slotHtml(env), '', 'pill survived an upgrade to paid');
+    fire(env, { tier: 'trial', days_until_expiry: 3, expired: false });
+    includes(slotHtml(env), '3 days remaining',
+      'pill stayed hidden after lapsing back to trial -- stale repaint cache');
+  });
+});
+
 check('modal exposes a global the profile menu can call', function () {
   const env = makeEnv({ fetch: function () { return { tier: 'trial', days_until_expiry: 2 }; } });
   run(env);
