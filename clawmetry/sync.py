@@ -14199,6 +14199,40 @@ def _session_quality(events, *, runtime: str, session_id: str,
     return d
 
 
+def _harvest_delegated_agent_ids(events) -> list:
+    """Vendor agent ids this session delegated work to, newest last.
+
+    Grok Bot records a Cursor cloud agent handoff as an event carrying
+    ``extra.backgroundAgentId``; that id is the operator's own agent, visible
+    to them at cursor.com/agents/<id>, and metered by Cursor. Harvesting it
+    here lets ``clawmetry.delegated_usage`` price that work later, from either
+    Cursor's push export or its API.
+
+    Registering the id with the store is deliberate and load-bearing: the
+    store refuses usage for an agent it has not been told about locally.
+    Best-effort -- a failure here must never block session ingest.
+    """
+    out = []
+    try:
+        from clawmetry.delegated_usage import get_store, is_delegated_agent_id
+
+        seen = set()
+        for ev in events or ():
+            extra = getattr(ev, "extra", None) or {}
+            if not isinstance(extra, dict):
+                continue
+            aid = extra.get("backgroundAgentId") or extra.get("delegatedAgentId")
+            if is_delegated_agent_id(aid) and aid not in seen:
+                seen.add(aid)
+                out.append(aid)
+        if out:
+            get_store().observe(out)
+    except Exception:
+        log.debug("delegated agent harvest failed", exc_info=True)
+        return []
+    return out
+
+
 def _session_tool_health(events) -> dict:
     """Per-session tool failure-rate from the adapter events: how many tool
     results came back as a REAL (non-benign) error. A tool that keeps failing
@@ -14609,6 +14643,14 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # oldest-first, so a low cap drops the freshest activity); the
                 # high-water filter below keeps the actual ingest to new events.
                 _events = list(adapter.list_events(s.id, limit=_family_event_read_cap()))
+                # Delegated agents: the vendor agent ids this session handed
+                # work to. Recording them here is what BOUNDS attribution --
+                # delegated usage may only ever land on a session whose own
+                # transcript named the agent, so a colleague's Cursor agent
+                # arriving on a shared team export can never attach to it.
+                _delegated_ids = _harvest_delegated_agent_ids(_events)
+                if _delegated_ids:
+                    metadata["delegatedAgentIds"] = _delegated_ids
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
