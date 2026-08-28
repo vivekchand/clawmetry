@@ -178,6 +178,14 @@ function queryIn(root, sel) {
   });
 }
 
+function opened(env, url) {
+  // Exact membership in the list of URLs the stub was asked to open.
+  // Deliberately NOT indexOf(url): CodeQL reads `indexOf(<url literal>)` as
+  // incomplete URL-substring sanitization, and an exact comparison is a
+  // stricter assertion anyway.
+  return env.__opened.some(function (u) { return u === url; });
+}
+
 function makeEnv(opts) {
   opts = opts || {};
   const head = makeEl('head');
@@ -229,6 +237,10 @@ function makeEnv(opts) {
   };
   env.window = env;
   env.CLOUD_MODE = opts.cloud || false;
+  // Hosted cloud renders the pill only when the cloud opts in (it already
+  // injects its own trial banner). Default the flag ON for cloud tests that
+  // assert rendering; `cloudOptIn:false` exercises the default-off gate.
+  if (opts.cloud && opts.cloudOptIn !== false) env.CM_TRIAL_PILL = true;
   env.CM_PLANS = opts.plans === null ? undefined : (opts.plans || {
     prices: { starter: { month: 9, year: 90, was: 190 }, pro: { month: 19, year: 190, was: 390 } },
     blurb: { starter: 'Starter blurb.', pro: 'Pro blurb.' },
@@ -470,7 +482,7 @@ check('checkout POSTs the chosen tier + interval and opens the returned URL', fu
       assert(body, 'never called /api/trial/checkout');
       eq(body.tier, 'pro', 'wrong tier sent');
       eq(body.plan, 'monthly', 'wrong interval sent');
-      assert(env.__opened.indexOf('https://checkout.stripe.com/c/pay/cs_test_123') !== -1,
+      assert(opened(env, 'https://checkout.stripe.com/c/pay/cs_test_123'),
         'never navigated to the Stripe URL: ' + JSON.stringify(env.__opened));
     });
   });
@@ -586,7 +598,7 @@ check('desktop shell: no about:blank pre-open, final URL goes to the bridge', fu
     return flush().then(function () {
       assert(env.__opened.indexOf('about:blank') === -1,
         'pre-opened a blank tab inside the desktop shell: ' + JSON.stringify(env.__opened));
-      assert(env.__opened.indexOf('https://checkout.stripe.com/c/pay/cs_desktop') !== -1,
+      assert(opened(env, 'https://checkout.stripe.com/c/pay/cs_desktop'),
         'desktop never reached the checkout URL: ' + JSON.stringify(env.__opened));
     });
   });
@@ -605,6 +617,80 @@ check('browser: still pre-opens synchronously (no pywebview bridge)', function (
     m.querySelector('.cm-up-cta').click();
     eq(env.__opened[0], 'about:blank',
       'browser lost its popup-blocker-safe pre-open');
+  });
+});
+
+// The hosted dashboard is the OSS DASHBOARD_HTML rendered by the cloud with an
+// injected window.CLOUD_TOKEN; localStorage['clawmetry-token'] is set by the
+// SEPARATE /cloud account page. Reading only localStorage left the pill
+// silently missing on the hosted dashboard.
+check('cloud: reads window.CLOUD_TOKEN when localStorage is empty', function () {
+  let asked = '';
+  const env = makeEnv({
+    cloud: true,
+    token: '',
+    fetch: function (url) {
+      if (String(url).indexOf('/api/cloud/account') === 0) {
+        asked = String(url);
+        return { plan: 'trial', trial_active: true, trial_days_left: 3 };
+      }
+      return null;
+    },
+  });
+  env.CLOUD_TOKEN = 'cm_injected_by_cloud';
+  run(env);
+  return flush().then(function () {
+    includes(asked, 'cm_injected_by_cloud', 'never used the injected CLOUD_TOKEN');
+    includes(slotHtml(env), '3 days remaining', 'hosted dashboard rendered no pill');
+  });
+});
+
+check('cloud: CLOUD_TOKEN wins over a stale localStorage token', function () {
+  let asked = '';
+  const env = makeEnv({
+    cloud: true,
+    token: 'cm_stale_from_other_account',
+    fetch: function (url) {
+      if (String(url).indexOf('/api/cloud/account') === 0) {
+        asked = String(url);
+        return { plan: 'trial', trial_active: true, trial_days_left: 3 };
+      }
+      return null;
+    },
+  });
+  env.CLOUD_TOKEN = 'cm_current';
+  run(env);
+  return flush().then(function () {
+    includes(asked, 'cm_current');
+    assert(asked.indexOf('cm_stale_from_other_account') === -1,
+      'used the stale localStorage token over the injected one');
+  });
+});
+
+// clawmetry-cloud injects its own fixed trial banner (#cm-trial-bar) into this
+// page. Rendering the pill as well would give the hosted product two competing
+// countdowns, so the cloud must opt in explicitly.
+check('cloud: no pill unless the cloud opts in', function () {
+  const env = makeEnv({
+    cloud: true,
+    cloudOptIn: false,
+    token: 'cm_test',
+    fetch: function () { return { plan: 'trial', trial_active: true, trial_days_left: 2 }; },
+  });
+  run(env);
+  return flush().then(function () {
+    eq(slotHtml(env), '',
+      'rendered a pill on the hosted cloud without CM_TRIAL_PILL -- that is a '
+      + 'second countdown next to the cloud banner');
+  });
+});
+
+check('self-hosted needs no opt-in flag', function () {
+  const env = makeEnv({ fetch: function () { return { tier: 'trial', days_until_expiry: 2 }; } });
+  assert(env.CM_TRIAL_PILL === undefined, 'test env leaked the cloud flag');
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), '2 days remaining', 'self-hosted pill needs an opt-in it should not');
   });
 });
 

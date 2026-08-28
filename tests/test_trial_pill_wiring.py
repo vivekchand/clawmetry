@@ -123,6 +123,40 @@ def test_profile_menu_opens_the_in_app_modal() -> None:
     )
 
 
+# ── cross-repo id collision ─────────────────────────────────────────────────
+
+def test_button_id_does_not_collide_with_the_cloud_banner() -> None:
+    """clawmetry-cloud injects its own trial banner into THIS page (the hosted
+    dashboard is this same DASHBOARD_HTML) and its upgrade button already owns
+    the id ``cm-trial-upgrade-btn``. Reusing it puts two elements with one id
+    in the document, which is invalid HTML and makes ``getElementById`` a coin
+    toss between two components' buttons.
+    """
+    src = _read(PILL_JS)
+    live = [
+        line for line in src.splitlines()
+        if "cm-trial-upgrade-btn" in line and not line.strip().startswith("//")
+    ]
+    assert not live, (
+        "trial-pill.js uses the id clawmetry-cloud's trial banner already owns "
+        f"({live}); pick a distinct id"
+    )
+
+
+def test_cloud_rendering_is_opt_in() -> None:
+    """The hosted cloud must not get two countdowns.
+
+    The cloud already renders its own ``#cm-trial-bar``. The pill therefore
+    stays dark on cloud until the cloud sets ``window.CM_TRIAL_PILL`` in the
+    same change that retires the banner. Self-hosted and desktop need no flag.
+    """
+    src = _read(PILL_JS)
+    assert "CM_TRIAL_PILL" in src, (
+        "the cloud opt-in gate is gone; the hosted dashboard would render the "
+        "pill alongside the cloud's own trial banner"
+    )
+
+
 # ── the pricing ladder is not duplicated ────────────────────────────────────
 
 def test_pill_reads_the_shared_price_ladder() -> None:

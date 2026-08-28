@@ -31,7 +31,11 @@
   'use strict';
 
   var PILL_ID = 'cm-trial-pill';
-  var BTN_ID = 'cm-trial-upgrade-btn';
+  // NOT "cm-trial-upgrade-btn": clawmetry-cloud's dashboard.py injects a trial
+  // banner into this very page using that id. Two elements sharing an id is
+  // invalid HTML and makes getElementById a coin toss between two different
+  // components' buttons.
+  var BTN_ID = 'cm-trial-pill-btn';
   var MODAL_ID = 'cm-upgrade-modal';
   var STYLE_ID = 'cm-trial-pill-style';
   var SLOT_ID = 'cm-trial-pill-slot';
@@ -70,6 +74,23 @@
 
   function isCloud() {
     try { return !!window.CLOUD_MODE; } catch (e) { return false; }
+  }
+
+  // Whether this deployment should render the pill at all.
+  //
+  // Self-hosted and desktop: always. They have no other trial affordance.
+  //
+  // Hosted cloud: only when the cloud opts in with `window.CM_TRIAL_PILL`.
+  // clawmetry-cloud already injects its OWN trial UI into this page -- a fixed
+  // top banner (#cm-trial-bar) with a countdown and an upgrade CTA -- and
+  // rendering both would give the hosted product two competing countdowns.
+  // The cloud-side change is two lines (set the flag, drop the banner
+  // injection), and until it lands the cloud keeps the affordance it has. The
+  // cloud code path below is complete and tested, not stubbed; this gate is
+  // about not shipping duplicate UI across a repo boundary.
+  function pillEnabled() {
+    if (!isCloud()) return true;
+    try { return !!window.CM_TRIAL_PILL; } catch (e) { return false; }
   }
 
   function plans() {
@@ -275,7 +296,7 @@
   function renderPill(st) {
     var host = slot();
     if (!host) return;
-    if (!st || !st.show || isPaid(st)) {
+    if (!pillEnabled() || !st || !st.show || isPaid(st)) {
       host.className = '';
       host.innerHTML = '';
       return;
@@ -442,7 +463,20 @@
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 
+  // The account token, which the cloud exposes in two different places.
+  //
+  // The hosted dashboard is the OSS DASHBOARD_HTML rendered by the cloud with
+  // an injected `window.CLOUD_TOKEN` (clawmetry-cloud dashboard.py, the
+  // early_flag script). `localStorage['clawmetry-token']` is set by the
+  // SEPARATE /cloud account page. Read only the latter and the pill goes
+  // silently missing on the hosted dashboard -- no error, just no pill on one
+  // of the three deployments this component exists to cover.
   function cloudToken() {
+    try {
+      if (typeof window.CLOUD_TOKEN === 'string' && window.CLOUD_TOKEN) {
+        return window.CLOUD_TOKEN;
+      }
+    } catch (e) { /* noop */ }
     try {
       return (window.localStorage && localStorage.getItem('clawmetry-token')) || '';
     } catch (e) { return ''; }
