@@ -745,6 +745,35 @@ def _gateway_log_events_rpc(count: int = 50) -> list:
         return []
 
 
+def _gateway_log_events_probe(count: int = 50) -> tuple:
+    """Run _gateway_log_events with a NEMOCLAW_LOGS_PROBE_TIMEOUT_MS budget.
+
+    The NemoClaw harness CLI has a bounded probe around fetching the
+    OpenClaw-side log (NEMOCLAW_LOGS_PROBE_TIMEOUT_MS in
+    test/cli/logs.test.ts): on timeout it emits a distinct degraded-mode
+    signal rather than silently returning empty. This function mirrors that
+    posture so ClawMetry can surface the same diagnostic (#5293).
+
+    Returns (events, source_available) where source_available=False means
+    the probe timed out, letting callers distinguish 'gateway log source
+    unreachable / timing out' from 'source reachable but log is empty'.
+    Never raises.
+    """
+    timeout_ms = int(os.environ.get("NEMOCLAW_LOGS_PROBE_TIMEOUT_MS", "5000"))
+    timeout_s = max(0.5, timeout_ms / 1000.0)
+    try:
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _future = _pool.submit(_gateway_log_events, count)
+            try:
+                events = _future.result(timeout=timeout_s)
+                return events, True
+            except _cf.TimeoutError:
+                return [], False
+    except Exception:
+        return [], False
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -2274,9 +2303,10 @@ class OpenClawAdapter(AgentAdapter):
             _gw_log = _gateway_log_meta()
             if _gw_log:
                 meta.update(_gw_log)
-            _gw_events = _gateway_log_events()
+            _gw_events, _gw_available = _gateway_log_events_probe()
             if _gw_events:
                 meta["gatewayLogEvents"] = _gw_events
+            meta["gatewayLogSourceAvailable"] = _gw_available
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
