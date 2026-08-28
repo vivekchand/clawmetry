@@ -181,6 +181,47 @@ if (Test-Path $openclawDir) {
     $workspace = $openclawDir
 }
 
+# >>> CM_PRO_SYNC_BLOCK_START (tests source this block) >>>
+# ── Paid runtime adapters: keep clawmetry-pro in step with the core ─────
+# The closed-source `clawmetry-pro` wheel (the paid runtime adapters — Claude
+# Code, Codex, Cursor, …) ships on its own cadence, so upgrading only the core
+# leaves an entitled node on months-old adapters. `sync_pro_from_config()` is
+# the entitlement-gated, idempotent, never-raises helper the daemon uses: a
+# free account installs nothing, and an unreachable license server keeps
+# whatever is already on disk. Runs BEFORE the daemon restart below so the
+# daemon comes back on a matched core + adapters pair.
+function Sync-ClawmetryPro {
+    param([string]$PythonExe)
+    $probe = @"
+import json
+try:
+    from clawmetry.license import sync_pro_from_config
+    state, before, after, msg = sync_pro_from_config()
+except Exception as exc:
+    state, before, after, msg = 'none', '', '', str(exc)
+print(json.dumps({'state': state, 'before': before, 'after': after, 'msg': msg}))
+"@
+    try {
+        $raw = & $PythonExe -c $probe 2>$null | Select-Object -Last 1
+        if (-not $raw) { return }
+        $r = $raw | ConvertFrom-Json
+    } catch { return }
+    switch ($r.state) {
+        "updated" {
+            if ($r.before) {
+                Write-Host "  Pro runtime adapters updated: clawmetry-pro $($r.before) -> $($r.after)" -ForegroundColor Green
+            } else {
+                Write-Host "  Pro runtime adapters installed: clawmetry-pro $($r.after)" -ForegroundColor Green
+            }
+        }
+        "current" { Write-Host "  Pro runtime adapters up to date (clawmetry-pro $($r.after))" }
+        "kept"    { Write-Host "  clawmetry-pro $($r.after) kept - could not confirm entitlement right now" }
+    }
+}
+
+Sync-ClawmetryPro -PythonExe $venvPython
+# <<< CM_PRO_SYNC_BLOCK_END <<<
+
 # Restart the daemon we stopped in the pre-flight so it runs the NEW code.
 # (A daemon left down after an upgrade is the "my node went quiet after
 # updating" bug; a daemon left up is running the version we just replaced.)

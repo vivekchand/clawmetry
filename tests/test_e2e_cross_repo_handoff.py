@@ -1,6 +1,6 @@
 """C4 cross-repo handoff E2E.
 
-Tests the full funnel in four tiers:
+Tests the full funnel in five tiers:
 
   T1 -- landing signup:   POST /api/subscribe returns {ok:true}.
                           Boots the real clawmetry-landing app via run_landing.py
@@ -10,6 +10,13 @@ Tests the full funnel in four tiers:
   T2 -- cloud server:     /cloud returns HTTP 200 (stubbed DB + auth)
   T3 -- daemon pair:      /ingest/heartbeat returns 200 (daemon authenticated)
   T4 -- first sync event: cache_push included in heartbeat, accepted by cloud
+                          The inline stub validates blob structure (12-byte nonce
+                          prefix) so stub-mode tests the real wire contract, not
+                          a fake base64 blob.
+  T5 -- encryption roundtrip: _encrypt_payload_aes_gcm + _decrypt_payload_aes_gcm
+                          round-trip verifies the AES-256-GCM contract matches
+                          clawmetry/sync.py wire format (12-byte nonce || ciphertext,
+                          base64url-encoded). Runs without any server.
 
 Checkout layout expected by the workflow:
 
@@ -31,6 +38,8 @@ Budget: < 10 min.
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
 import secrets
 import subprocess
@@ -40,6 +49,57 @@ import time
 
 import pytest
 import requests
+
+# ---------------------------------------------------------------------------
+# AES-256-GCM helpers -- matches clawmetry/sync.py wire format exactly.
+# Wire format: base64url(12-byte-nonce || ciphertext)
+# The key is a base64url-encoded 32-byte AES-256 key; if the string isn't
+# valid base64 (e.g. a passphrase), SHA-256 derives the raw bytes -- same
+# normalisation as sync.py:_normalize_encryption_key.
+# ---------------------------------------------------------------------------
+
+def _normalize_encryption_key(key_str: str) -> str:
+    """Return a base64url-encoded 32-byte key. Matches sync.py logic."""
+    try:
+        raw = base64.urlsafe_b64decode(key_str + "==")
+        if len(raw) == 32:
+            return key_str
+    except Exception:
+        pass
+    raw = hashlib.sha256(key_str.encode()).digest()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _encrypt_payload_aes_gcm(data: dict, key_b64: str) -> str:
+    """Encrypt *data* dict with AES-256-GCM. Returns base64url(nonce||ct).
+
+    Wire-format identical to clawmetry/sync.py:encrypt_payload so T4 in
+    stub mode exercises the real encryption contract, not a fake blob.
+    Requires the 'cryptography' package (installed in the test venv via
+    requirements.txt and cross-repo-handoff.yml).
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key_b64 = _normalize_encryption_key(key_b64)
+    raw_key = base64.urlsafe_b64decode(key_b64 + "==")
+    cipher = AESGCM(raw_key)
+    nonce = secrets.token_bytes(12)
+    plain = json.dumps(data, separators=(",", ":")).encode()
+    ct = cipher.encrypt(nonce, plain, None)
+    return base64.urlsafe_b64encode(nonce + ct).decode()
+
+
+def _decrypt_payload_aes_gcm(blob_b64: str, key_b64: str) -> dict:
+    """Decrypt a blob produced by _encrypt_payload_aes_gcm. Used in T5."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key_b64 = _normalize_encryption_key(key_b64)
+    raw_key = base64.urlsafe_b64decode(key_b64 + "==")
+    raw = base64.urlsafe_b64decode(blob_b64 + "==")
+    nonce, ct = raw[:12], raw[12:]
+    cipher = AESGCM(raw_key)
+    return json.loads(cipher.decrypt(nonce, ct, None))
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -172,9 +232,11 @@ class _InlineDaemonSim:
             "events": self.events,
         }
         if self.push_cache:
+            payload = {"sessions": self.events, "node_id": self.node_id}
+            blob = _encrypt_payload_aes_gcm(payload, self.encryption_key)
             body["cache_pushes"] = [
                 {
-                    "data": base64.urlsafe_b64encode(b"stub-encrypted-payload").decode(),
+                    "data": blob,
                     "ts": time.time(),
                 }
             ]
@@ -213,6 +275,26 @@ def _start_cloud_stub() -> threading.Thread:
     def heartbeat():
         body = flask.request.get_json(silent=True) or {}
         node_id = body.get("node_id", "unknown")
+        cache_pushes = body.get("cache_pushes", [])
+        for push in cache_pushes:
+            blob_b64 = push.get("data", "")
+            try:
+                raw = base64.urlsafe_b64decode(blob_b64 + "==")
+            except Exception:
+                return flask.jsonify({
+                    "ok": False,
+                    "error": "cache_push.data is not valid base64url",
+                }), 400
+            if len(raw) < 13:
+                return flask.jsonify({
+                    "ok": False,
+                    "error": (
+                        f"cache_push.data too short ({len(raw)} bytes); "
+                        "expected at least 13 (12-byte AES-GCM nonce + 1 byte ciphertext). "
+                        "Wire format: base64url(nonce||ciphertext). "
+                        "Ensure _InlineDaemonSim uses real AES-256-GCM, not a fake stub blob."
+                    ),
+                }), 400
         with _lock:
             _nodes[node_id] = {"node_id": node_id, "last_seen": time.time()}
         return flask.jsonify({"ok": True, "accepted": True})
@@ -460,3 +542,58 @@ def test_t4_first_sync_event_lands():
         raise AssertionError(
             f"/api/cloud/nodes parse error: {exc}. Body: {r.text[:300]!r}"
         ) from exc
+
+
+def test_t5_encryption_roundtrip_stub():
+    """T5: AES-256-GCM encrypt/decrypt roundtrip matches sync.py wire format.
+
+    Verifies that _encrypt_payload_aes_gcm produces a blob that:
+    1. Is valid base64url.
+    2. Decodes to at least 13 bytes (12-byte nonce + at least 1 byte ciphertext).
+    3. Decrypts to the original dict via _decrypt_payload_aes_gcm.
+    4. Uses the same key normalisation as sync.py (SHA-256 for passphrases,
+       raw base64url for 32-byte keys).
+
+    This test runs without any server and catches regressions where the stub
+    encryption diverges from the real sync.py wire format. Fixes the gap where
+    stub-mode T4 previously sent a fake blob (base64(b"stub-encrypted-payload"))
+    that passed inline cloud validation by accident: the inline stub now rejects
+    blobs shorter than 13 bytes, so this roundtrip proves the real AES-256-GCM
+    encryption is working end-to-end in stub mode.
+    """
+    key = _ENC_KEY
+    payload = {"sessions": [{"type": "stub", "seq": 0}], "node_id": TEST_NODE_ID}
+
+    blob = _encrypt_payload_aes_gcm(payload, key)
+
+    try:
+        raw = base64.urlsafe_b64decode(blob + "==")
+    except Exception as exc:
+        raise AssertionError(f"Encrypted blob is not valid base64url: {exc}") from exc
+
+    assert len(raw) >= 13, (
+        f"Encrypted blob too short ({len(raw)} bytes); expected >= 13 "
+        "(12-byte nonce + at least 1 byte ciphertext). "
+        "Check _encrypt_payload_aes_gcm nonce generation."
+    )
+
+    recovered = _decrypt_payload_aes_gcm(blob, key)
+    assert recovered == payload, (
+        f"Roundtrip failed: decrypted dict does not match original.\n"
+        f"Original: {payload!r}\nRecovered: {recovered!r}"
+    )
+
+    wrong_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    decrypt_raised = False
+    try:
+        _decrypt_payload_aes_gcm(blob, wrong_key)
+    except Exception:
+        decrypt_raised = True
+    assert decrypt_raised, (
+        "Decryption with the wrong key must raise (proves real AES-256-GCM, "
+        "not a fake blob that round-trips under any key)."
+    )
+
+    short_fake = base64.urlsafe_b64encode(b"tooshort").decode()
+    short_raw = base64.urlsafe_b64decode(short_fake + "==")
+    assert len(short_raw) < 13, "Sanity: a deliberately short blob is < 13 bytes."
