@@ -5171,6 +5171,27 @@ def _unattended_update_target(current: str):
     )
 
 
+def _print_pro_sync_result() -> None:
+    """Reconcile clawmetry-pro with this node's entitlement and print ONE line
+    about it (nothing at all when there is no cloud account). Shared shape with
+    install.sh's ``_cm_sync_pro``. Never raises."""
+    try:
+        from clawmetry.license import sync_pro_from_config
+
+        state, before, after, _msg = sync_pro_from_config()
+    except Exception:
+        return
+    if state == "updated":
+        if before:
+            print(f"Pro runtime adapters updated: clawmetry-pro {before} → {after}")
+        else:
+            print(f"Pro runtime adapters installed: clawmetry-pro {after}")
+    elif state == "current":
+        print(f"Pro runtime adapters already current (clawmetry-pro {after})")
+    elif state == "kept":
+        print(f"clawmetry-pro {after} kept — could not confirm entitlement right now")
+
+
 def _cmd_update(args=None) -> None:
     """Self-update clawmetry to the latest PyPI version.
 
@@ -5226,6 +5247,12 @@ def _cmd_update(args=None) -> None:
                 ).stdout.strip()
             except Exception:
                 new_ver = "unknown"
+            # The paid runtime adapters ship as a SEPARATE wheel on its own
+            # cadence, so "updated" has to mean both or an entitled node ends
+            # up on a current core with months-old adapters. Runs before the
+            # daemon restart below so it comes back on a matched pair. Silent
+            # + no-op for a free account; never fails the update.
+            _print_pro_sync_result()
             if new_ver == current:
                 print(f"Already on latest version ({current})")
             else:
