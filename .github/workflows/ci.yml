@@ -229,6 +229,20 @@ jobs:
           done
           echo "✅ JS Syntax OK"
 
+      # Trial pill + in-app upgrade modal (static/js/trial-pill.js): the whole
+      # pre-expiry conversion path. Every failure mode here is silent -- a pill
+      # that renders for a paying customer, a countdown off by a day, a
+      # checkout button that opens a tab to nowhere -- so it gets behaviour
+      # tests (Node, no jsdom) plus wiring guards for the script tag, the
+      # mount point, and the i18n keys.
+      #
+      # Named explicitly because this job runs FILE LISTS, not `pytest tests/`:
+      # a test file nobody names never runs. Several sibling JS-unit files
+      # (test_appjs_units.py, test_brain_axis_ticks_js.py, ...) are in that
+      # state today -- present, green locally, and never executed by CI.
+      - name: Trial pill + upgrade modal
+        run: python3 -m pytest tests/test_trial_pill_wiring.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
