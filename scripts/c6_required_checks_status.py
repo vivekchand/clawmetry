@@ -180,7 +180,7 @@ def render_summary(all_ok: bool, rows: list[str]) -> str:
             "**Or store a PAT** as the `E2E_ADMIN_PAT` secret and this "
             "workflow heals it automatically.",
             "",
-            "Tracking: [#4552](https://github.com/vivekchand/clawmetry/issues/4552)",
+            "Tracking: [#5266](https://github.com/vivekchand/clawmetry/issues/5266)",
         ]
     return "\n".join(out)
 

@@ -37,7 +37,7 @@ runs:
   using: "composite"
   steps:
     - name: Setup Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: ${{ inputs.node-version }}
 
@@ -45,24 +45,30 @@ runs:
     # Keyed on (OS, requested version) so a version bump invalidates cleanly.
     - name: Cache global openclaw install
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.npm-openclaw-global
         key: openclaw-${{ runner.os }}-${{ inputs.version }}-v1
 
+    # `version` is supplied by the calling workflow, so it reaches the shell
+    # through the environment and is referenced as a quoted variable rather
+    # than being expanded into the script text by the expression evaluator.
     - name: Install OpenClaw (npm -g)
       shell: bash
+      env:
+        OPENCLAW_VERSION: ${{ inputs.version }}
+        OPENCLAW_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
       run: |
         set -e
         PREFIX="$HOME/.npm-openclaw-global"
         mkdir -p "$PREFIX"
         npm config set prefix "$PREFIX"
         echo "$PREFIX/bin" >> "$GITHUB_PATH"
-        if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ] && [ -x "$PREFIX/bin/openclaw" ]; then
+        if [ "$OPENCLAW_CACHE_HIT" = "true" ] && [ -x "$PREFIX/bin/openclaw" ]; then
           echo "openclaw cache hit, skipping install"
         else
-          npm install -g --no-audit --no-fund "openclaw@${{ inputs.version }}"
+          npm install -g --no-audit --no-fund "openclaw@$OPENCLAW_VERSION"
         fi
 
     - name: Verify openclaw on PATH
@@ -78,9 +84,25 @@ runs:
 
     - name: Export OPENCLAW_GATEWAY_TOKEN for downstream steps
       shell: bash
+      env:
+        OPENCLAW_GATEWAY_TOKEN_INPUT: ${{ inputs.gateway-token }}
       run: |
+        set -e
         # Downstream workflow steps read this to authenticate dashboard
         # requests against the running gateway. Empty token = dashboard
         # falls back to anon mode (which is why "the screenshots are
         # always broken" today: no token, no authed screens).
-        echo "OPENCLAW_GATEWAY_TOKEN=${{ inputs.gateway-token }}" >> "$GITHUB_ENV"
+        #
+        # The value comes from the caller, so it is passed through the
+        # environment instead of being expanded into this script. $GITHUB_ENV
+        # is line-oriented: a newline in the value would define extra
+        # variables for every later step in the job, so reject one loudly
+        # rather than write it. The input is documented as a single token.
+        case "$OPENCLAW_GATEWAY_TOKEN_INPUT" in
+          *$'\n'*|*$'\r'*)
+            echo "::error::setup-openclaw: gateway-token must be a single line"
+            exit 1
+            ;;
+        esac
+        printf 'OPENCLAW_GATEWAY_TOKEN=%s\n' \
+          "$OPENCLAW_GATEWAY_TOKEN_INPUT" >> "$GITHUB_ENV"

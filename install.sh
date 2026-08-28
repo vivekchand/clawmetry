@@ -440,6 +440,172 @@ _cm_reonboard_gate() {
 
 # <<< CM_EXISTING_SETUP_BLOCK_END <<<
 
+# >>> CM_PRO_SYNC_BLOCK_START (tests source everything between these sentinels;
+#     see tests/test_install_script_pro_upgrade.py)
+# ── Paid runtime adapters: keep clawmetry-pro in step with the core ─────────
+# The core wheel and the closed-source ``clawmetry-pro`` wheel (the paid
+# runtime adapters — Claude Code, Codex, Cursor, …) ship on separate cadences,
+# and this installer only ever upgraded the core. A node on Trial / Starter /
+# Pro / Enterprise therefore kept whatever pro wheel it happened to install at
+# connect time, and the "already up to date" early exit never looked at pro at
+# all — so re-running the installer could not repair it (founder, 2026-08-28).
+#
+# ``clawmetry.license.auto_provision_pro()`` is the SAME entitlement-gated,
+# idempotent, never-raises entry point the sync daemon uses: it probes
+# ``/api/license/entitlement``, installs NOTHING for a free/un-entitled
+# account, and downloads the wheel only when it is strictly newer than the
+# installed one. The installer just calls it at the two points it owns.
+CM_PRO_STATE=""   # ""|none|current|updated|kept|failed
+CM_PRO_FROM=""
+CM_PRO_TO=""
+CM_PRO_MSG=""
+CM_PRO_CHANGED=0
+
+_CM_PRO_PY=$(cat <<'PYEOF'
+import json, os, shlex
+
+HOME = os.path.expanduser("~")
+
+
+def emit(**kw):
+    for k, v in kw.items():
+        print("%s=%s" % (k, shlex.quote(str(v or ""))))
+
+
+def _read_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+
+cfg = _read_json(os.path.join(HOME, ".clawmetry", "config.json"))
+key = str(cfg.get("api_key") or "").strip() or os.environ.get("CLAWMETRY_API_KEY", "").strip()
+if not key.startswith("cm_"):
+    # No cloud account on this machine. (A self-hosted signed license takes the
+    # other path: `clawmetry license activate` provisions the wheel itself.)
+    emit(CM_PRO_STATE="none")
+    raise SystemExit(0)
+
+try:
+    from clawmetry.license import (
+        _pro_installed_version as _ver,
+        auto_provision_pro as _provision,
+        ensure_pro_on_path as _ensure,
+    )
+except Exception as exc:  # CLI too old / broken install — never fail the run
+    emit(CM_PRO_STATE="none", CM_PRO_MSG="clawmetry.license unavailable: %s" % exc)
+    raise SystemExit(0)
+
+try:
+    _ensure()  # a prior fallback-dir install must be visible before we compare
+except Exception:
+    pass
+before = _ver() or ""
+try:
+    ok, msg = _provision(key, cfg.get("node_id"))
+except Exception as exc:  # belt-and-suspenders: the helper already never raises
+    emit(CM_PRO_STATE="failed", CM_PRO_FROM=before, CM_PRO_TO=before, CM_PRO_MSG=str(exc))
+    raise SystemExit(0)
+after = _ver() or ""
+
+if not ok:
+    # Free / un-entitled account, offline mode, or a probe that could not
+    # reach the license server. Report only what is true on disk: either pro
+    # is absent (say nothing) or it is present and we left it alone.
+    if after:
+        emit(CM_PRO_STATE="kept", CM_PRO_FROM=before, CM_PRO_TO=after, CM_PRO_MSG=msg)
+    else:
+        emit(CM_PRO_STATE=("failed" if msg else "none"), CM_PRO_MSG=msg)
+    raise SystemExit(0)
+
+emit(
+    CM_PRO_STATE=("updated" if after != before else "current"),
+    CM_PRO_FROM=before,
+    CM_PRO_TO=after,
+    CM_PRO_MSG=msg,
+)
+PYEOF
+)
+
+# Reconcile the pro wheel for an entitled account. Prints ONE line (nothing at
+# all for a free account) and never fails the install: every failure mode ends
+# in a dim note plus a zero exit. Sets CM_PRO_CHANGED=1 when the wheel on disk
+# actually moved, so the caller knows a daemon restart is owed.
+_cm_sync_pro() {
+  CM_PRO_STATE=""
+  CM_PRO_FROM=""
+  CM_PRO_TO=""
+  CM_PRO_MSG=""
+  CM_PRO_CHANGED=0
+  _pro_py="${1:-$INSTALL_DIR/bin/python3}"
+  if [ ! -x "$_pro_py" ]; then
+    _pro_py="$(command -v python3 2>/dev/null || true)"
+  fi
+  [ -n "$_pro_py" ] || return 0
+  _pro_vals=$("$_pro_py" -c "$_CM_PRO_PY" 2>/dev/null || true)
+  if [ -n "$_pro_vals" ]; then
+    eval "$_pro_vals" || true
+  fi
+  case "$CM_PRO_STATE" in
+    updated)
+      CM_PRO_CHANGED=1
+      if [ -n "$CM_PRO_FROM" ]; then
+        echo -e "  ${GREEN}✓ Pro runtime adapters updated${NC} ${DIM}(clawmetry-pro ${CM_PRO_FROM} → ${CM_PRO_TO})${NC}"
+      else
+        echo -e "  ${GREEN}✓ Pro runtime adapters installed${NC} ${DIM}(clawmetry-pro ${CM_PRO_TO})${NC}"
+      fi
+      ;;
+    current)
+      echo -e "  ${DIM}✓ Pro runtime adapters up to date (clawmetry-pro ${CM_PRO_TO})${NC}"
+      ;;
+    kept)
+      echo -e "  ${DIM}↻ clawmetry-pro ${CM_PRO_TO} kept — could not confirm entitlement right now${NC}"
+      ;;
+    failed)
+      echo -e "  ${DIM}↻ clawmetry-pro update skipped: ${CM_PRO_MSG}${NC}"
+      ;;
+  esac
+  return 0
+}
+
+# Restart the OS-managed daemons so a freshly-installed pro wheel is actually
+# imported. A running daemon holds the OLD adapter modules in memory, so
+# without this the wheel on disk is new and the process is not. Only used on
+# the early-exit path — the full install path has its own (larger) restart
+# block that also rewrites stale plist/unit paths. Never fails the install.
+_cm_kick_daemons() {
+  _kick_found=0
+  case "${OS:-}" in
+    Darwin)
+      for _kick_plist in "$HOME/Library/LaunchAgents"/com.clawmetry.*.plist; do
+        [ -f "$_kick_plist" ] || continue
+        _kick_found=1
+        ( launchctl kickstart -k "gui/$(id -u)/$(basename "$_kick_plist" .plist)" >/dev/null 2>&1 || true ) &
+      done
+      disown -a 2>/dev/null || true
+      ;;
+    Linux)
+      if command -v systemctl >/dev/null 2>&1; then
+        if [ "$(id -u)" = "0" ] && systemctl list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
+          systemctl restart --no-block clawmetry-sync.service >/dev/null 2>&1 && _kick_found=1
+        elif systemctl --user list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
+          systemctl --user restart --no-block clawmetry-sync.service >/dev/null 2>&1 && _kick_found=1
+        fi
+      fi
+      ;;
+  esac
+  if [ "$_kick_found" = "1" ]; then
+    echo -e "  ${DIM}  ↺ Restarting daemons so the new adapters load${NC}"
+  else
+    echo -e "  ${DIM}  Restart clawmetry to load the new adapters${NC}"
+  fi
+  return 0
+}
+
+# <<< CM_PRO_SYNC_BLOCK_END <<<
+
 # ── Early exit: already up to date ──────────────────────────────────────────
 if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then
   _CURRENT=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
@@ -450,6 +616,16 @@ print(json.loads(r.read())['info']['version'])
 " 2>/dev/null)
   if [ -n "$_CURRENT" ] && [ "$_CURRENT" = "$_LATEST" ] && [ -n "$_existing_pids" ]; then
     echo -e "  ${GREEN}${BOLD}✓ ClawMetry $_CURRENT already up to date${NC}"
+    # The CORE being current says nothing about the paid runtime adapters:
+    # clawmetry-pro ships on its own cadence, so an entitled node can sit on a
+    # stale pro wheel behind a perfectly current core. Reconcile it here —
+    # this early exit is exactly where a user re-runs the installer hoping to
+    # be brought fully current. No-op (and silent) for a free account.
+    _cm_sync_pro "$INSTALL_DIR/bin/python3"
+    if [ "$CM_PRO_CHANGED" = "1" ]; then
+      # The daemons already running hold the OLD adapter modules in memory.
+      _cm_kick_daemons
+    fi
     # Nothing to install — but if this node is already linked to an account,
     # say so (email, plan, cloud-vs-local) and offer the wizard instead of
     # dead-ending on a one-line hint.
@@ -609,6 +785,14 @@ fi
 # -I isolation (CWD off sys.path) for source-checkout runs.
 CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
 [ -n "$CLAWMETRY_VERSION" ] || CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -I -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
+
+# ── Paid runtime adapters (clawmetry-pro) ────────────────────────────────────
+# Refresh clawmetry-pro for an entitled account NOW — i.e. after the core
+# wheel is on disk and BEFORE the launchd/systemd restarts below, so the
+# daemons come back up on a matched pair (new core + new adapters) instead of
+# waiting for the daemon's own ~30-min entitlement watcher. Silent + no-op for
+# a free account, and never fails the install.
+_cm_sync_pro "$INSTALL_DIR/bin/python3"
 
 # ── Restart launchd jobs (macOS) ─────────────────────────────────────────────
 # After a venv reinstall, the dashboard/sync daemons launched at boot are

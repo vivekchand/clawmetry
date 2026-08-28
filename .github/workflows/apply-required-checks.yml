@@ -18,7 +18,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #     With only GITHUB_TOKEN (ghs_): read-only verify path in the script
 #     (exits 0 if C6 configured, exits 1 if not -- no admin rights needed).
 #     With E2E_ADMIN_PAT: full apply + verify.
-#     On failure, posts a notification comment on tracking issue #4552.
+#     On failure, posts a notification comment on tracking issue #5266.
 #
 # TOKEN PATHS (priority order):
 #   1. inputs.pat_token  -- PAT typed into the Run workflow dialog
@@ -37,7 +37,7 @@ name: Apply required E2E status checks (C6 -- one-shot)
 #   clawmetry-landing.
 #
 # Idempotent: running multiple times is safe.
-# Tracking: vivekchand/clawmetry#4552
+# Tracking: vivekchand/clawmetry#5266 (E2E epic, C6)
 
 on:
   workflow_dispatch:
@@ -69,7 +69,7 @@ jobs:
     name: Apply required E2E status checks (C6)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preview checks (dry run)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm != 'APPLY'
@@ -129,7 +129,7 @@ jobs:
         run: python3 scripts/apply_required_status_checks.py
 
       # When the C6 read-only verify exits 1 (checks not yet configured on main),
-      # post or update a comment on the E2E Robustness tracking issue #4552 so the
+      # post or update a comment on the E2E Robustness tracking issue #5266 so the
       # repo admin receives a GitHub notification.
       #
       # Only fires on push-to-main (the automated verify path), NOT on manual
@@ -164,19 +164,25 @@ jobs:
           Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow
           confirm=APPLY, pat_token=paste-token-here
 
+          ### Also: merge these 3 CI-green pending PRs
+
+          - **C3** landing golden path required check: [clawmetry-landing#678](https://github.com/vivekchand/clawmetry-landing/pull/678)
+          - **C4** cross-repo handoff AES-GCM fidelity: [clawmetry#5269](https://github.com/vivekchand/clawmetry/pull/5269)
+          - **C5** cloud node tab screenshots: [clawmetry-cloud#2143](https://github.com/vivekchand/clawmetry-cloud/pull/2143)
+
           Once any option above is done, the next push to main self-heals to green."
 
           # Upsert: update existing comment if present, otherwise create new.
           existing_id=$(gh api -X GET \
-            "repos/${REPO}/issues/4552/comments" \
+            "repos/${REPO}/issues/5266/comments" \
             --jq 'map(select(.body | startswith("<!-- c6-notify-bot -->"))) | .[0].id // empty' \
             2>/dev/null || echo "")
           if [ -n "${existing_id}" ]; then
             gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" \
               -f body="${BODY}" > /dev/null
-            echo "Updated existing C6 notification on #4552 (comment ${existing_id})"
+            echo "Updated existing C6 notification on #5266 (comment ${existing_id})"
           else
-            gh api -X POST "repos/${REPO}/issues/4552/comments" \
+            gh api -X POST "repos/${REPO}/issues/5266/comments" \
               -f body="${BODY}" > /dev/null
-            echo "Posted new C6 notification on #4552"
+            echo "Posted new C6 notification on #5266"
           fi
