@@ -13505,6 +13505,15 @@ DASHBOARD_HTML = r"""
     <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
   </div>
   {% endif %}
+  <!-- Trial pill + green Upgrade button. Deliberately OUTSIDE the legacy_nav
+       if/else so both navs get exactly one instance, sitting immediately left
+       of the account avatar (plan state belongs next to identity).
+       Populated by static/js/trial-pill.js, which keeps it empty and
+       display:none on every paid install — a paying customer must never be
+       shown a countdown. Before this, a trialing user's only warning was a
+       line two clicks deep in the avatar dropdown, and the only in-app path
+       to a card form was the paywall that appears AFTER expiry. -->
+  <div id="cm-trial-pill-slot"></div>
   <!-- Account menu: self-hosted installs sign in (trial/license) just like
        Cloud, so they get the same top-right profile affordance — identity,
        billing/plan management, and an always-visible sign-out. Rendered by
@@ -13857,6 +13866,11 @@ DASHBOARD_HTML = r"""
 
 <script src="{{ url_for('static', filename='js/gw-setup.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/onboarding.js', v=version) }}"></script>
+<!-- Loaded LAST: trial-pill.js reads window.CM_PLANS (published by app.js) as
+     its price ladder and exposes window.cmOpenUpgradeModal, which gw-setup.js's
+     profile menu calls. Both are looked up at call time, so load order only
+     needs app.js to have run first. -->
+<script src="{{ url_for('static', filename='js/trial-pill.js', v=version) }}"></script>
 
 </body>
 </html>
