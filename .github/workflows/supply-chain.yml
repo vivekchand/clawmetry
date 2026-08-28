@@ -157,6 +157,6 @@ jobs:
           path: scorecard-results.sarif
           retention-days: 30
       # Surfaces findings in the GitHub Security tab rather than only in logs.
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3.37.9
         with:
           sarif_file: scorecard-results.sarif
