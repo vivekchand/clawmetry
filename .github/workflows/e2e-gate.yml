@@ -51,7 +51,7 @@ jobs:
       # checkout while the logic was an inline heredoc, which needs nothing
       # from the working tree -- converting it to a script call silently broke
       # that assumption and the gate died with "No such file or directory".
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The gate logic lives in scripts/e2e_gate.py so it can be unit-tested
       # (tests/test_e2e_gate.py) instead of only being exercised in anger on a
