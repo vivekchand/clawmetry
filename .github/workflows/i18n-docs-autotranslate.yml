@@ -27,7 +27,7 @@ jobs:
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Guard - require Claude Code token
         run: |
@@ -36,7 +36,7 @@ jobs:
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: env.SKIP != '1'
         with:
           python-version: '3.11'
@@ -61,7 +61,7 @@ jobs:
 
       - name: Open sync PR
         if: env.SKIP != '1'
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: chore/i18n-docs-autotranslate
           delete-branch: true
