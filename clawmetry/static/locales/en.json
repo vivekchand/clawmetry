@@ -1265,5 +1265,6 @@
   "trial.paste_first": "Paste a license key first.",
   "trial.verifying": "Verifying key…",
   "trial.activated": "License installed — reloading…",
-  "trial.activate_failed": "License activation failed."
+  "trial.activate_failed": "License activation failed.",
+  "trial.pill_sub_expired": "Subscription expired"
 }

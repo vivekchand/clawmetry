@@ -738,6 +738,28 @@ check('paid -> trial again re-renders rather than staying hidden', function () {
   });
 });
 
+// A lapsed Pro subscription is not an ended trial. Telling a former paying
+// customer their "trial" ended is wrong and reads as an insult.
+check('a lapsed PAID subscription says "Subscription expired", not "Trial ended"', function () {
+  const env = makeEnv({ fetch: function () { return { tier: 'pro', expired: true, days_until_expiry: -1 }; } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), 'Subscription expired');
+    assert(slotHtml(env).indexOf('Trial ended') === -1,
+      'called a lapsed paid subscription an ended trial');
+    includes(slotHtml(env), 'Upgrade', 'no way back for a lapsed subscriber');
+  });
+});
+
+check('an expired TRIAL still says "Trial ended"', function () {
+  const env = makeEnv({ fetch: function () { return { tier: 'trial', expired: true, days_until_expiry: -1 }; } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), 'Trial ended');
+    assert(slotHtml(env).indexOf('Subscription expired') === -1);
+  });
+});
+
 check('modal exposes a global the profile menu can call', function () {
   const env = makeEnv({ fetch: function () { return { tier: 'trial', days_until_expiry: 2 }; } });
   run(env);

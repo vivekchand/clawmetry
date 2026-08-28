@@ -157,7 +157,17 @@
 
   // ── copy ──────────────────────────────────────────────────────────────
   function pillLabel(st) {
-    if (st.expired) return tr('trial.pill_ended', null, 'Trial ended');
+    if (st.expired) {
+      // A lapsed PAID subscription is not an ended trial. The hard-block
+      // overlay already draws this distinction in its reason line ("Your
+      // ClawMetry trial has ended" vs "Your ClawMetry subscription has
+      // expired"); telling a former Pro customer their "trial" ended is both
+      // wrong and slightly insulting.
+      if (st.tier && st.tier !== 'trial') {
+        return tr('trial.pill_sub_expired', null, 'Subscription expired');
+      }
+      return tr('trial.pill_ended', null, 'Trial ended');
+    }
     var d = st.days;
     if (d === null || d === undefined) {
       // No expiry known. Say so plainly rather than printing a number we
