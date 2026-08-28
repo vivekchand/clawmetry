@@ -35,9 +35,11 @@ concurrency:
   group: release-canary
   cancel-in-progress: false
 
+# `wait-for-propagation` and `canary` only check out the repo and install from
+# PyPI. Only `alarm` writes, and only to open the P0 issue, so `issues: write`
+# is granted on that job instead of to the whole workflow.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   wait-for-propagation:
@@ -150,6 +152,11 @@ jobs:
     needs: [wait-for-propagation, canary]
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
+    # The only job that writes. `gh issue list` reads before it writes, so
+    # keep read alongside the write it actually needs.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Open a P0 issue with the decision and the link
         env:
