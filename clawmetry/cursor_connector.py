@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import time
+import urllib.parse
 from typing import Any
 
 from clawmetry.delegated_usage import (
@@ -111,7 +112,8 @@ def save_key_from_file(path: str) -> str:
     masking all happen in here now, and the value that comes back out cannot
     be un-masked.
     """
-    with open(os.path.expanduser(path), encoding="utf-8") as fh:
+    resolved = os.path.realpath(os.path.expanduser(path))
+    with open(resolved, encoding="utf-8") as fh:
         return save_key(fh.read().strip())
 
 
@@ -192,7 +194,7 @@ def fetch_agent_usage(agent_id: str, api_key: str = "") -> DelegatedUsage | None
     api_key = api_key or load_key()
     if not api_key:
         return None
-    body = _get(f"/v1/agents/{agent_id}/usage", api_key)
+    body = _get(f"/v1/agents/{urllib.parse.quote(agent_id, safe='')}/usage", api_key)
     if not isinstance(body, dict):
         return None
     # Cursor nests some responses under a data envelope; accept either.
