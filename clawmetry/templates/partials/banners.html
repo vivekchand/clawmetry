@@ -369,3 +369,101 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
   .cm-sync-step[data-state="active"] { color:#a5b4fc; border-color:#6366f1aa; background:rgba(67,56,202,0.25); }
   .cm-sync-step[data-state="error"]  { color:#fecaca; border-color:#7f1d1d; background:rgba(127,29,29,0.35); }
 </style>
+
+<!-- Cursor account link. Shown ONLY on the Cursor or Grok Bot runtime views,
+     because that is where the question it answers occurs to a user: a Grok Bot
+     delegates work to Cursor cloud agents that are billed to YOU, and this is
+     the opt-in that lets ClawMetry price it.
+
+     The key is write-only: it is POSTed once and never rendered back. There is
+     deliberately no "show key" control, the field is a password input, and the
+     status endpoint returns only a masked form. -->
+<div id="cm-cursor-link" style="display:none; padding:10px 16px; background:#0b0d12; border-bottom:1px solid rgba(124,140,255,0.18); color:#c7d2fe; font-size:13px; align-items:center; gap:10px; flex-wrap:wrap;">
+  <span id="cm-cursor-link-msg" style="flex:1; min-width:260px;"></span>
+  <input id="cm-cursor-key" type="password" autocomplete="off" spellcheck="false"
+         placeholder="Cursor API key"
+         style="display:none; padding:6px 10px; border-radius:6px; border:1px solid rgba(124,140,255,0.35); background:#11131b; color:#e5e7eb; font-size:13px; min-width:220px;">
+  <button id="cm-cursor-connect" style="display:none; padding:6px 14px; border-radius:6px; border:1px solid rgba(124,140,255,0.5); background:rgba(124,140,255,0.15); color:#a5b4ff; font-size:13px; font-weight:600; cursor:pointer;">Connect</button>
+  <button id="cm-cursor-refresh" style="display:none; padding:6px 14px; border-radius:6px; border:1px solid rgba(124,140,255,0.35); background:transparent; color:#a5b4ff; font-size:13px; cursor:pointer;">Refresh usage</button>
+  <button id="cm-cursor-dismiss" title="Dismiss" aria-label="Dismiss" style="background:transparent; border:none; color:#6b7280; cursor:pointer; font-size:18px; line-height:1; padding:0 4px;">×</button>
+</div>
+<script>
+(function () {
+  var RUNTIMES = { cursor: 1, grok_bot: 1 };
+  function scope() {
+    try {
+      var u = new URL(window.location.href);
+      return (u.searchParams.get('runtime') || u.searchParams.get('scope') || '').trim();
+    } catch (e) { return ''; }
+  }
+  var box = document.getElementById('cm-cursor-link');
+  if (!box || !RUNTIMES[scope()]) return;
+  try { if (localStorage.getItem('cm_cursor_link_dismissed')) return; } catch (e) {}
+
+  var msg = document.getElementById('cm-cursor-link-msg');
+  var field = document.getElementById('cm-cursor-key');
+  var connect = document.getElementById('cm-cursor-connect');
+  var refresh = document.getElementById('cm-cursor-refresh');
+
+  function show(html, wantKey, wantRefresh) {
+    msg.innerHTML = html;
+    field.style.display = wantKey ? '' : 'none';
+    connect.style.display = wantKey ? '' : 'none';
+    refresh.style.display = wantRefresh ? '' : 'none';
+    box.style.display = 'flex';
+  }
+
+  function render(s) {
+    if (!s || s.supported === false) return;               // hosted: no local key store
+    if (s.connected) {
+      show('Cursor connected (<b>' + (s.maskedKey || '') + '</b>) · '
+           + (s.delegatedAgents || 0) + ' delegated agent(s) seen locally.', false, true);
+    } else {
+      show('<b>Price the work delegated to Cursor.</b> A bot hands tasks to Cursor '
+           + 'cloud agents billed to your account. Connect it and that spend is '
+           + 'attributed back here. <span style="opacity:.75">Needs a paid Cursor '
+           + 'plan; the key is stored locally, never synced.</span>', true, false);
+    }
+  }
+
+  function load() {
+    fetch('/api/cursor/status')
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function () { /* absent endpoint: stay hidden */ });
+  }
+
+  connect.onclick = function () {
+    var v = (field.value || '').trim();
+    if (!v) { field.focus(); return; }
+    connect.disabled = true;
+    // POSTed in the body, never a query string, and never rendered back.
+    fetch('/api/cursor/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: v })
+    }).then(function (r) { return r.json(); })
+      .then(function (out) {
+        field.value = '';                                   // clear immediately
+        connect.disabled = false;
+        if (out && out.connected) { load(); } else { show('Could not store the key.', true, false); }
+      }).catch(function () { connect.disabled = false; });
+  };
+
+  refresh.onclick = function () {
+    refresh.disabled = true;
+    refresh.textContent = 'Refreshing…';
+    fetch('/api/cursor/sync', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function () { refresh.disabled = false; refresh.textContent = 'Refresh usage'; load(); })
+      .catch(function () { refresh.disabled = false; refresh.textContent = 'Refresh usage'; });
+  };
+
+  document.getElementById('cm-cursor-dismiss').onclick = function () {
+    try { localStorage.setItem('cm_cursor_link_dismissed', '1'); } catch (e) {}
+    box.style.display = 'none';
+  };
+
+  load();
+})();
+</script>

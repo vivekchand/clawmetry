@@ -606,6 +606,12 @@
       if (!existing) mount(state);
     }
     _lastBlocked = blocked;
+    // Broadcast every snapshot so the header trial pill (static/js/trial-pill.js)
+    // rides this poll instead of running a second identical one. Fire-and-forget:
+    // no listener, or a browser without CustomEvent, changes nothing here.
+    try {
+      window.dispatchEvent(new CustomEvent('cm:trial-state', { detail: state }));
+    } catch (e) { /* noop */ }
     var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
     var delay = blocked ? (paying ? POLL_MS_PAYING : POLL_MS_ACTIVE) : POLL_MS_IDLE;
     if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
