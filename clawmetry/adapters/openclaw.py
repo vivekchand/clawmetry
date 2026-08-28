@@ -751,11 +751,18 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     Arms OCSF output first (idempotent settings set), then calls
     ``openshell logs <name> -n <count> --source all``.  For container-backed
     (non-terminal) sandboxes also merges the last ``count`` lines from the
-    OpenClaw gateway log at ``/tmp/gateway.log`` (override with
-    ``OPENSHELL_GATEWAY_LOG``), matching the harness's two-source merge in
-    ``showSandboxLogsWithDeps`` (#3571).  Returns a list of parsed OCSF event
-    dicts; silently drops non-JSON lines.  Never raises; returns ``[]`` when
-    openshell is absent or any call fails.
+    OpenClaw gateway log, matching the harness's two-source merge in
+    ``showSandboxLogsWithDeps`` (#3571).
+
+    Gateway log resolution order for non-terminal sandboxes:
+    1. ``OPENSHELL_GATEWAY_LOG`` env override (for testing / explicit override).
+    2. Host-side rotating log files found by ``_gateway_log_files()``.
+    3. ``openshell sandbox exec -n <name> -- tail -n <count> /tmp/gateway.log``
+       — the fallback for genuinely container-backed sandboxes where the
+       gateway writes its log inside the container, not on the host (#5291).
+
+    Returns a list of parsed OCSF event dicts; silently drops non-JSON lines.
+    Never raises; returns ``[]`` when openshell is absent or any call fails.
     """
     try:
         import shutil as _sh
