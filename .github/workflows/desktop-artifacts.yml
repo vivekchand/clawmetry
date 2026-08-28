@@ -701,7 +701,7 @@ jobs:
       # must keep the release draft rather than publish a "latest" whose
       # download links 404 (seen live on v0.12.674, 2026-08-10).
       - name: Attach to release and publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: false
           make_latest: "true"
