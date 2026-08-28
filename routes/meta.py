@@ -563,6 +563,26 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
     except Exception:
         pass
 
+    # Reconcile the PAID runtime adapters with the core we just installed.
+    # clawmetry-pro is a separate wheel on its own cadence, so an entitled node
+    # updated only on the core drifts: current dashboard, months-old adapters.
+    # Runs before the restart below so both processes come back on a matched
+    # pair. Entitlement-gated + idempotent + never-raises: a free account
+    # installs nothing and an unreachable license server keeps what's on disk.
+    _pro_state = "none"
+    try:
+        from clawmetry.license import sync_pro_from_config as _sync_pro
+
+        _pro_state, _pro_before, _pro_after, _pro_msg = _sync_pro()
+        if _pro_state == "updated":
+            _ulog.info("self-update (%s): clawmetry-pro %s -> %s",
+                       reason, _pro_before or "(none)", _pro_after)
+        elif _pro_state == "kept":
+            _ulog.info("self-update (%s): clawmetry-pro %s kept (%s)",
+                       reason, _pro_after, _pro_msg or "entitlement unconfirmed")
+    except Exception as _pe:
+        _ulog.debug("self-update (%s): pro sync skipped: %s", reason, _pe)
+
     # Arm the crash-loop rollback guard BEFORE any restart: if the new wheel
     # boot-loops, the daemon's next boots detect it and pip-roll back to
     # ``old_version`` (clawmetry/update_guard.py — firmware-OTA style).
@@ -577,7 +597,8 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
                    "(unsupervised process keeps running the old build until "
                    "its next start)", reason, old_version, new_version)
         return {"ok": True, "old_version": old_version,
-                "new_version": new_version, "restart_deferred": True}, 200
+                "new_version": new_version, "restart_deferred": True,
+                "pro_state": _pro_state}, 200
 
     # Schedule restart after response is sent.
     # CRITICAL: kick the sync daemon FIRST. Otherwise it keeps the OLD wheel in
@@ -643,7 +664,8 @@ def perform_self_update(reason: str = "manual", restart: bool = True,
     _ulog.info("self-update (%s): upgraded v%s -> v%s; restarting in 2s",
                reason, old_version, new_version)
     _thr.Timer(2.0, _restart).start()
-    return {"ok": True, "old_version": old_version, "new_version": new_version}, 200
+    return {"ok": True, "old_version": old_version,
+            "new_version": new_version, "pro_state": _pro_state}, 200
 
 
 @bp_version.route("/api/update", methods=["POST"])

@@ -471,11 +471,19 @@ function _cmProfileRender(st) {
         + t('profile.billing', null, 'Billing & plan') + '</button>';
     }
     if (st.tier === 'trial') {
-      // Self-hosted upgrades are sold on clawmetry.com/pricing (?deploy=self
-      // preselects the self-hosted buy modal). The /upgrade route on the
-      // cloud app is the CLOUD-account funnel — for a self-hosted trial it
-      // either bounces through a login wall or silently starts a cloud trial.
-      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://clawmetry.com/pricing?deploy=self&utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
+      // Prefer the in-app chooser (static/js/trial-pill.js): it POSTs to
+      // /api/trial/checkout, which mints a Stripe Checkout Session against
+      // the account THIS node is already linked to, so the license lands on
+      // the next daemon heartbeat with no key to copy-paste.
+      // The pricing page stays the fallback for a cached page where
+      // trial-pill.js did not load. Note it must be clawmetry.com/pricing
+      // (?deploy=self preselects the self-hosted buy modal), never the cloud
+      // app's /upgrade route — that is the CLOUD-account funnel, and for a
+      // self-hosted trial it either bounces through a login wall or silently
+      // starts a cloud trial.
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();'
+        + 'if(typeof window.cmOpenUpgradeModal===\'function\'){window.cmOpenUpgradeModal(\'profile-menu\');}'
+        + 'else{window.open(\'https://clawmetry.com/pricing?deploy=self&utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\');}">'
         + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>'
         + t('profile.upgrade', null, 'Upgrade plan') + '</button>';
     }
