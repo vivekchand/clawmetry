@@ -1022,6 +1022,60 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
         return False, ""
 
 
+def sync_pro_from_config(config: dict | None = None) -> tuple[str, str, str, str]:
+    """Reconcile the installed ``clawmetry-pro`` wheel with what THIS node's
+    account is entitled to, reading the cloud key off disk.
+
+    The core wheel and the pro wheel ship on separate cadences, so every path
+    that upgrades the core (``clawmetry update``, the dashboard's "Update
+    now", the daemon's auto-updater, ``install.sh``) has to reconcile pro too
+    or an entitled node drifts: current core, months-old adapters.
+
+    Returns ``(state, before, after, message)`` where state is:
+
+    * ``none``    — no cloud key on disk, or a free/un-entitled account with
+      no pro installed. Nothing was installed and nothing is claimed.
+    * ``current`` — entitled and already on the newest published wheel.
+    * ``updated`` — a newer wheel was installed (``before`` may be empty for a
+      first install). The caller owes a process restart: a running daemon
+      holds the OLD adapter modules in memory.
+    * ``kept``    — pro is installed but entitlement could not be confirmed
+      (offline, license server unreachable). We leave it exactly as it is
+      rather than guess in either direction.
+
+    Never raises — an upgrade must never fail because the pro check did."""
+    try:
+        cfg = config if isinstance(config, dict) else {}
+        if not cfg:
+            try:
+                with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
+                    cfg = json.load(fh) or {}
+            except Exception:
+                cfg = {}
+        key = str(cfg.get("api_key") or "").strip()
+        if not key:
+            key = os.environ.get("CLAWMETRY_API_KEY", "").strip()
+        if not key.startswith("cm_"):
+            # No cloud account. A self-hosted signed license takes the other
+            # path — `clawmetry license activate` provisions the wheel itself.
+            return "none", "", "", ""
+        ensure_pro_on_path()
+        before = _pro_installed_version() or ""
+        ok, msg = auto_provision_pro(key, cfg.get("node_id"))
+        after = _pro_installed_version() or ""
+        if not ok:
+            # ``auto_provision_pro`` returns (False, "") for BOTH a free
+            # account and a probe that never reached the server, so report
+            # only what is true on disk.
+            if after:
+                return "kept", before, after, msg
+            return "none", before, after, msg
+        return ("updated" if after != before else "current"), before, after, msg
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("license: sync_pro_from_config failed: %s", exc)
+        return "none", "", "", str(exc)
+
+
 def _audit_license_event(
     action: str,
     *,

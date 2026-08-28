@@ -373,6 +373,8 @@ jobs:
             tests/test_hooks_claude_code.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
+            tests/test_license_sync_pro_from_config.py \
+            tests/test_install_script_pro_upgrade.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
