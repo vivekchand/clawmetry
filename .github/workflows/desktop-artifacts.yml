@@ -49,7 +49,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGN != 'true'
         shell: bash
         run: |
-          echo "::error::${{ github.ref_name }} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
+          echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
           exit 1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -276,7 +276,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_AZ_SIGN != 'true' && env.HAS_WIN_CERT != 'true'
         shell: bash
         run: |
-          echo "::error::${{ github.ref_name }} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
+          echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
           exit 1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -293,8 +293,8 @@ jobs:
       - name: Stamp bundle version
         shell: pwsh
         run: |
-          $refName = "${{ github.ref_name }}"
-          if ("${{ github.ref_type }}" -eq "tag") {
+          $refName = $Env:GITHUB_REF_NAME
+          if ($Env:GITHUB_REF_TYPE -eq "tag") {
             $version = $refName.Substring(1)
           } else {
             $version = (Select-String -Path dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
