@@ -5581,6 +5581,77 @@ def _read_secret_arg(path, prompt: str) -> str:
         return ""
 
 
+def _cmd_cursor(args) -> None:
+    """Manage the opt-in Cursor connection used to price delegated work.
+
+    A Grok Bot -- and any future runtime that delegates -- hands work to Cursor
+    cloud agents that belong to YOU and are billed to YOU. Cursor meters them;
+    this is how ClawMetry is allowed to ask.
+
+    Nothing here runs unless you connect: with no key stored, the daemon makes
+    no outbound call to Cursor at all.
+
+    This function never binds the raw key. Reading, storing and masking happen
+    inside ``cursor_connector``, and only a masked form is ever returned to
+    here -- so no print, log or traceback in this file can carry the secret.
+    """
+    from clawmetry import cursor_connector as cc
+
+    action = getattr(args, "cursor_action", "status") or "status"
+
+    if action == "status":
+        masked = cc.masked_key()
+        if not masked:
+            print("Cursor: not connected.")
+            print("  Delegated cloud-agent work cannot be priced without it.")
+            print("  Connect with:  clawmetry cursor connect --file /path/to/key")
+            print("  Needs any PAID Cursor plan -- Cursor's free tier cannot use")
+            print("  their agents API at all, and that gate is theirs, not ours.")
+            return
+        from clawmetry.delegated_usage import get_store
+        print(f"Cursor: connected (key {masked})")
+        print(f"  Delegated agents seen in local transcripts: "
+              f"{len(get_store().observed())}")
+        print(f"  Endpoint: {cc.API_BASE}")
+        return
+
+    if action == "connect":
+        path = getattr(args, "cursor_file", None)
+        try:
+            masked = cc.save_key_from_file(path) if path else cc.save_key_from_env()
+        except OSError:
+            # Deliberately not printing the exception: this path handles a
+            # credential and an exception string is an uncontrolled channel.
+            print(f"Could not read the key file: {path}")
+            return
+        except ValueError:
+            print("No key supplied.")
+            print("  clawmetry cursor connect --file /path/to/key")
+            print("  (or set CLAWMETRY_CURSOR_API_KEY)")
+            return
+        except Exception:
+            print("Could not save the key.")
+            return
+        print(f"Cursor connected (key {masked}).")
+        print(f"  Stored 0600 at {cc.key_path()}; never synced, never logged.")
+        print("  Run 'clawmetry cursor sync', or let the daemon refresh it.")
+        return
+
+    if action == "sync":
+        out = cc.sync()
+        if not out.get("enabled"):
+            print("Cursor: not connected -- nothing to sync.")
+            return
+        print(f"Cursor sync: {out['fetched']} refreshed, {out['skipped']} still "
+              f"fresh, {out['failed']} unavailable, of {out['observed']} "
+              f"agent(s) seen locally.")
+        return
+
+    if action == "forget":
+        print("Cursor key removed." if cc.forget_key() else "No stored key to remove.")
+        return
+
+
 def _cmd_license(args) -> None:
     """clawmetry license [activate|status|deactivate|fingerprint|verify] — manage
     the self-hosted license.
@@ -8148,6 +8219,20 @@ def main() -> None:
         help="Emit {action, ok, fingerprint} JSON (jq-friendly).",
     )
 
+    p_cursor = sub.add_parser(
+        "cursor",
+        help="Connect your Cursor account so delegated cloud-agent work can be priced",
+    )
+    p_cursor.add_argument(
+        "cursor_action", nargs="?", default="status",
+        choices=["status", "connect", "sync", "forget"],
+        help="status (default) | connect <KEY> | sync | forget",
+    )
+    p_cursor.add_argument(
+        "--file", dest="cursor_file", default=None, metavar="PATH",
+        help="For 'connect': read the key from PATH instead of the command line",
+    )
+
     p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
     p_license.add_argument(
         "license_action",
@@ -8583,6 +8668,7 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "cursor",
         "team",
         "tier",
         "runtimes",
@@ -8619,6 +8705,8 @@ def main() -> None:
             _cmd_sync(args)
         elif args.cmd == "status":
             _cmd_status(args)
+        elif args.cmd == "cursor":
+            _cmd_cursor(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
         elif args.cmd == "secure":
