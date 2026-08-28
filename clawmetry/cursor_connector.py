@@ -122,6 +122,19 @@ def save_key_from_env() -> str:
     return save_key((os.environ.get(_KEY_ENV) or "").strip())
 
 
+def save_key_from_body(payload: "dict[str, object]") -> str:
+    """Extract and store the key from an HTTP request payload dict.
+
+    Exists so the route handler never binds the raw secret under a local name.
+    Reading, storing and masking all happen here; the value that comes back out
+    cannot be un-masked. Mirrors save_key_from_file / save_key_from_env for the
+    browser-form path.
+
+    Raises ValueError when the payload carries no non-empty ``apiKey``.
+    """
+    return save_key(str(payload.get("apiKey") or "").strip())
+
+
 def masked_key() -> str:
     """The stored key's masked form, or "" when not connected.
 

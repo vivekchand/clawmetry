@@ -78,17 +78,17 @@ def api_cursor_connect():
     from clawmetry import cursor_connector as cc
 
     payload = request.get_json(silent=True) or {}
-    api_key = str(payload.get("apiKey") or "").strip()
-    if not api_key:
+    if not str(payload.get("apiKey") or "").strip():
         return jsonify({"error": "missing_api_key"}), 400
     try:
-        masked = cc.save_key(api_key)
+        # save_key_from_body never returns the raw secret; the handler never
+        # binds it under a local name (same structural guarantee as the CLI).
+        masked = cc.save_key_from_body(payload)
     except Exception:
         # No exception text: this path handles a credential and an exception
         # string is an uncontrolled channel.
         logger.warning("cursor connect: could not store key")
         return jsonify({"error": "could_not_store"}), 500
-    # Deliberately no echo of api_key anywhere in this response or the log.
     return jsonify({"connected": True, "maskedKey": masked})
 
 

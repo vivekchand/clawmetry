@@ -434,6 +434,27 @@ def test_delegated_usage_endpoint_is_bounded(client):
     assert body["costStatus"] == "unavailable"
 
 
+def test_connect_handler_never_binds_the_raw_key():
+    """CodeQL flagged the first version of this handler, and it was right.
+
+    The handler must not extract the raw key into a local variable — same
+    structural guarantee as the CLI (test_cli_never_binds_the_raw_key).
+    Reading, storing and masking all happen inside save_key_from_body; only a
+    masked form reaches the handler.
+    """
+    import inspect
+    from routes import delegated
+
+    src = inspect.getsource(delegated.api_cursor_connect)
+    assert "save_key(" not in src, (
+        "connect handler must use save_key_from_body, not pass a raw key to save_key"
+    )
+    for leaky in ("api_key =", "= api_key", "{api_key}"):
+        assert leaky not in src, (
+            f"{leaky!r} in the connect handler is a credential leak channel"
+        )
+
+
 def test_banner_is_scoped_to_the_two_runtimes_and_hides_the_key():
     """The panel must not appear on unrelated runtime views, and the field must
     never be a plain text input that a screenshot or a password manager reads.
