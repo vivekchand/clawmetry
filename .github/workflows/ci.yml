@@ -22,8 +22,8 @@ jobs:
     name: Syntax & Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.9"
       - name: Check Python syntax (all .py files, Python 3.9 compatible)
@@ -218,7 +218,7 @@ jobs:
       # dashboard JS bundle died, stranding every user on the boot
       # overlay. `node --check` catches this in <1s. Required gate.
       - name: Setup Node (for JS syntax check)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
       - name: Check JS syntax (all clawmetry/static/js/*.js)
@@ -228,6 +228,20 @@ jobs:
             node --check "$f" || { echo "❌ JS PARSE FAILED: $f"; exit 1; }
           done
           echo "✅ JS Syntax OK"
+
+      # Trial pill + in-app upgrade modal (static/js/trial-pill.js): the whole
+      # pre-expiry conversion path. Every failure mode here is silent -- a pill
+      # that renders for a paying customer, a countdown off by a day, a
+      # checkout button that opens a tab to nowhere -- so it gets behaviour
+      # tests (Node, no jsdom) plus wiring guards for the script tag, the
+      # mount point, and the i18n keys.
+      #
+      # Named explicitly because this job runs FILE LISTS, not `pytest tests/`:
+      # a test file nobody names never runs. Several sibling JS-unit files
+      # (test_appjs_units.py, test_brain_axis_ticks_js.py, ...) are in that
+      # state today -- present, green locally, and never executed by CI.
+      - name: Trial pill + upgrade modal
+        run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
@@ -255,8 +269,8 @@ jobs:
             python-version: "3.9"
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -319,8 +333,8 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -346,6 +360,7 @@ jobs:
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_runtime_count_copy_sync.py \
             tests/test_grok_bot_runtime_wiring.py \
+            tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
             tests/test_query_contract_drift.py \
@@ -359,6 +374,8 @@ jobs:
             tests/test_hooks_claude_code.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
+            tests/test_license_sync_pro_from_config.py \
+            tests/test_install_script_pro_upgrade.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
@@ -383,8 +400,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -409,8 +426,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -441,8 +458,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -468,8 +485,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -528,8 +545,8 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -621,8 +638,8 @@ jobs:
       CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -631,7 +648,7 @@ jobs:
         # health check silently times out.
         run: pip install flask pytest pytest-playwright requests duckdb
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('setup.py', 'requirements.txt') }}
@@ -689,7 +706,7 @@ jobs:
 
       - name: Upload JUnit test report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-e2e-critical-${{ github.run_id }}
           path: /tmp/junit-e2e-critical.xml
@@ -717,8 +734,8 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.9"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install from source
@@ -766,8 +783,8 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Build wheel
@@ -858,8 +875,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -912,7 +929,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: |
           clawmetry eval --suite tests/data/golden_ci.yaml --no-persist --json > eval-result.json || true
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure() && steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
         with:
           name: clawmetry-ci-eval-result
@@ -948,8 +965,8 @@ jobs:
     # setup pattern is documented.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Setup OpenClaw
@@ -973,7 +990,7 @@ jobs:
         run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py tests/test_e2e_real_openclaw_pipeline.py -v --tb=short
       - name: Upload gateway logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: moat-live-e2e-logs
           path: |
