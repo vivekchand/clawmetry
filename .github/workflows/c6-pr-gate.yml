@@ -3,7 +3,7 @@ name: C6 Required-status-checks gate (PR audit)
 # Runs on every pull request to surface whether C6 (required-status-checks)
 # is configured on main. Fails visibly on every PR until the admin closes C6.
 #
-# The daily c6-health.yml posts to issue #4029 but the admin may not check
+# The daily c6-health.yml posts to issue #5266 but the admin may not check
 # that issue between merges. This check appears directly in the PR status
 # list alongside OSS golden path, E2E Browser Tests, etc. -- impossible to
 # miss when reviewing a PR.
@@ -44,7 +44,7 @@ name: C6 Required-status-checks gate (PR audit)
 #     Edit main > Require status checks > add:
 #       E2E Gate (required)
 #
-# Tracking: vivekchand/clawmetry#4029 (C6)
+# Tracking: vivekchand/clawmetry#5266 (E2E epic, C6)
 
 on:
   pull_request:
@@ -121,7 +121,15 @@ jobs:
           [Apply required E2E status checks (C6)](https://github.com/vivekchand/clawmetry/actions/workflows/apply-required-checks.yml)
           -- confirm=APPLY, pat_token=paste-token-here
 
-          _C6 is the sole remaining criterion of the E2E Robustness epic. All other 6 criteria (C1 OSS golden path, C2 Cloud golden path, C3 Landing, C4 Cross-repo handoff, C5 Visual diff all tabs, C7 Quarantine) are green. Tracking: [#4029](https://github.com/vivekchand/clawmetry/issues/4029)_"
+          ### Also: merge these 3 pending PRs to clear C3/C4/C5
+
+          Three criteria are AMBER with CI-green PRs waiting for merge:
+
+          - **C3** (landing golden path required check): [clawmetry-landing#678](https://github.com/vivekchand/clawmetry-landing/pull/678)
+          - **C4** (cross-repo handoff AES-GCM fidelity): [clawmetry#5269](https://github.com/vivekchand/clawmetry/pull/5269)
+          - **C5** (cloud node tab screenshots): [clawmetry-cloud#2143](https://github.com/vivekchand/clawmetry-cloud/pull/2143)
+
+          _E2E epic tracking: [#5266](https://github.com/vivekchand/clawmetry/issues/5266). Current state: C1 OSS golden path GREEN, C2 cloud GREEN, C7 quarantine GREEN. AMBER: C3 (merge landing#678), C4 (merge #5269), C5 cloud (merge cloud#2143), C6 (this Settings fix)._"
 
           existing_id=$(gh api -X GET \
             "repos/${REPO}/issues/${PR}/comments" \
