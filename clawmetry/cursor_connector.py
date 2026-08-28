@@ -50,7 +50,11 @@ from clawmetry.delegated_usage import (
 
 logger = logging.getLogger("clawmetry.cursor_connector")
 
-API_BASE = os.environ.get("CLAWMETRY_CURSOR_API_BASE", "https://api.cursor.com")
+_DEFAULT_API_BASE = "https://api.cursor.com"
+_ALLOWED_API_SCHEME = "https"
+_ALLOWED_API_HOST = "api.cursor.com"
+
+API_BASE = os.environ.get("CLAWMETRY_CURSOR_API_BASE", _DEFAULT_API_BASE)
 _KEY_ENV = "CLAWMETRY_CURSOR_API_KEY"
 _TIMEOUT = 15
 
@@ -66,9 +70,8 @@ _REFRESH_AFTER_SECS = 900
 
 
 def key_path() -> str:
-    return os.path.expanduser(
-        os.environ.get("CLAWMETRY_CURSOR_KEY_PATH", "~/.clawmetry/cursor.json")
-    )
+    raw = os.environ.get("CLAWMETRY_CURSOR_KEY_PATH", "~/.clawmetry/cursor.json")
+    return os.path.realpath(os.path.expanduser(raw))
 
 
 def load_key() -> str:
@@ -94,11 +97,12 @@ def save_key(api_key: str) -> str:
     # which the file exists world-readable with a key inside.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"apiKey": api_key, "savedAt": time.time()}, fh)
+        fh = os.fdopen(fd, "w", encoding="utf-8")
     except Exception:
-        os.close(fd) if not fd else None
+        os.close(fd)
         raise
+    with fh:
+        json.dump({"apiKey": api_key, "savedAt": time.time()}, fh)
     return mask(api_key)
 
 
@@ -170,6 +174,18 @@ def _get(path: str, api_key: str) -> dict[str, Any] | None:
     """One GET. Returns None on any failure. NEVER logs the key or the header."""
     import urllib.error
     import urllib.request
+
+    try:
+        parsed = urllib.parse.urlparse(API_BASE)
+        if parsed.scheme != _ALLOWED_API_SCHEME or parsed.netloc != _ALLOWED_API_HOST:
+            logger.error(
+                "cursor api: API_BASE must be %s://%s; blocking outbound call",
+                _ALLOWED_API_SCHEME,
+                _ALLOWED_API_HOST,
+            )
+            return None
+    except Exception:
+        return None
 
     req = urllib.request.Request(
         f"{API_BASE}{path}",

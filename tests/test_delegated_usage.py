@@ -105,6 +105,34 @@ def test_pull_lane_asks_only_about_observed_agents(store, monkeypatch):
     assert not any("/v1/agents\n" in p or p == "/v1/agents" for p in asked)
 
 
+def test_get_blocks_non_https_api_base(monkeypatch):
+    """SSRF guard: an env-var override to a non-HTTPS or off-host base is blocked."""
+    import clawmetry.cursor_connector as cc
+
+    for bad_base in ("http://api.cursor.com", "https://evil.example.com", "ftp://api.cursor.com"):
+        monkeypatch.setattr(cc, "API_BASE", bad_base)
+        result = cc._get("/v1/agents/bc-test/usage", "key_test")
+        assert result is None, f"expected None for API_BASE={bad_base!r}, got {result!r}"
+
+
+def test_get_allows_the_canonical_api_base(monkeypatch):
+    """The default https://api.cursor.com base must pass the guard."""
+    import urllib.request
+    import clawmetry.cursor_connector as cc
+
+    monkeypatch.setattr(cc, "API_BASE", "https://api.cursor.com")
+    opened = []
+
+    class FakeResp:
+        def read(self): return b'{"inputTokens": 5}'
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (opened.append(a), FakeResp())[1])
+    result = cc._get("/v1/agents/bc-test/usage", "key_test")
+    assert opened, "urlopen should have been called for the canonical base"
+
+
 # ── delegated spend is never the session's own spend ────────────────────────
 
 
