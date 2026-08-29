@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Feature: Lovable joins the fleet as the 29th supported runtime (2026-08-29)
+- **What it is.** Lovable (lovable.dev) builds full apps from prompts, and its agent runs entirely in the vendor cloud. ClawMetry now observes it through the one real local surface Lovable ships: the GitHub-synced repo, where every accepted agent edit lands as one bot commit. Clone your Lovable project and it appears in the dashboard as a Lovable session with a per-edit timeline, including which teammate prompted each edit.
+- **What it will not pretend.** No token or dollar figures (Lovable bills credits in the cloud; nothing local records them), no live indicator (a clone cannot prove the cloud agent is active), and the view is honestly labeled as current up to your last git fetch. Detection requires actual Lovable bot commits, so a fork of a Lovable scaffold is not misread as agent activity.
+- **Where to point it.** Zero config when your clones live in the usual places; set `CLAWMETRY_LOVABLE_DIRS` to add others. Requires a paid plan, like other non-free runtimes.
+
 ### Fix: the desktop app can no longer get permanently stuck at "PyPI install failed" (carries #5333) (2026-08-29)
 - **Who this reaches:** anyone installing the desktop app on Windows, and anyone whose install broke after a Python update. Reported from the field 2026-08-29: a Windows 11 machine showed "PyPI install failed. See bootstrap.log." on every single launch, with no way out short of deleting hidden folders by hand.
 - **Why it could stick forever.** On first launch the app builds itself a private Python environment and installs ClawMetry into it. On Windows, that environment quietly dies when the Python it was built from is updated or moved — something the Microsoft Store does on every update — and the app kept mistaking the corpse for a working environment. Every relaunch then failed the same way, forever. The app now checks that the environment actually *runs*, not merely that its files exist, and rebuilds it on the spot when it does not.

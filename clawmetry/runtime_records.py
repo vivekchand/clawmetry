@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 28 runtimes, which is the bar that keeps this table true.
+# answer it for all 29 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -227,6 +227,15 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "from the pricing table, never reported. Its audit log also "
              "carries token columns; those meter the Auto-Approve reviewer, "
              "not the agent, and are deliberately excluded from session cost.",
+    ),
+    "lovable": _e(
+        UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
+        "No tokens, model or cost",
+        note="Lovable's agent runs entirely in the vendor cloud and bills "
+             "credits; the local surface is a git clone of the GitHub-synced "
+             "repo, which records one bot commit per accepted edit and "
+             "nothing about tokens, model or spend. The fields do not exist "
+             "locally rather than being empty, so no figure is derived.",
     ),
     # ── partial / conditional ────────────────────────────────────────────
     "n8n": _e(
