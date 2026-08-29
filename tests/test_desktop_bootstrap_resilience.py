@@ -354,3 +354,68 @@ def test_version_reader_tolerates_legacy_cache(tmp_path):
     cache.write_text('{"python": "/usr/bin/python3"}')
     assert dapp._bootstrap_python_version(cache) == ""
     assert dapp._bootstrap_python_version(None) == ""
+
+
+# ── 7. an exe stub is not an install (package-corpse recovery) ───────────
+#
+# Live field case 2026-08-29, second failure of the day on the same
+# machine: the watcher's in-place `clawmetry update` fired seconds after
+# a release, pip uninstalled the old package and failed to install the
+# new one while the daemon held clawmetry.exe open. Result: an exe stub
+# with no clawmetry module. The warm-launch short-circuit trusted the
+# stub, so every relaunch showed "Daemon did not come up" forever, and
+# the watcher shelled the corpse to update itself every 60s forever.
+
+
+def test_warm_launch_requires_a_complete_install(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    exe = sup._venv_clawmetry()
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("stub")
+    # no dist-info anywhere -> the install is a corpse
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: None)
+    # prove bootstrap FALLS THROUGH to the install path rather than
+    # trusting the stub: with no usable python it must fail with
+    # no_python (the old code returned True here and bricked relaunches)
+    monkeypatch.setattr(dapp, "_bootstrap_python", lambda cache_file=None: None)
+    monkeypatch.setattr(dapp.platform, "system", lambda: "Linux")
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "no_python"
+
+
+def test_warm_launch_stays_fast_when_install_is_complete(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    exe = sup._venv_clawmetry()
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("stub")
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: "1.2.3")
+
+    def boom(cache_file=None):
+        raise AssertionError("healthy warm launch must not probe interpreters")
+
+    monkeypatch.setattr(dapp, "_bootstrap_python", boom)
+    assert sup.bootstrap() is True
+
+
+def test_corpse_heal_reinstalls_only_on_the_corpse_signature(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    calls = []
+    monkeypatch.setattr(sup, "_pip_install_clawmetry",
+                        lambda: calls.append(1) or (0, "ok"))
+
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: None)
+    sup._heal_package_corpse("Connection to pypi.org timed out")
+    assert not calls, "transient update failures must not trigger reinstalls"
+
+    sup._heal_package_corpse("ModuleNotFoundError: No module named 'clawmetry'")
+    assert len(calls) == 1, "the corpse signature must trigger a reinstall"
+
+
+def test_corpse_heal_noops_when_package_is_actually_present(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    calls = []
+    monkeypatch.setattr(sup, "_pip_install_clawmetry",
+                        lambda: calls.append(1) or (0, "ok"))
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: "1.2.3")
+    sup._heal_package_corpse("No module named 'somethingelse'")
+    assert not calls
