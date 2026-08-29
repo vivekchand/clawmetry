@@ -14378,6 +14378,31 @@ def _session_compression_potential(events, model: str = "", min_chars: int = 400
     return out
 
 
+def _session_tool_call_count(events) -> int:
+    """Tool EXECUTIONS in this session, from the adapter events in hand.
+
+    Carried to the cloud on the session row so hosted Autonomy (deep
+    sessions = 10+ tool calls) can score without the events table, which
+    never syncs. Counts calls, not results, mirroring the Pro engine's
+    "tool executions" semantics; a result-shaped event (type contains
+    "result") is skipped even when it names a tool. Never raises.
+    """
+    n = 0
+    try:
+        for e in events:
+            et = (getattr(e, "type", "") or "").lower()
+            if "result" in et:
+                continue
+            calls = getattr(e, "tool_calls", None)
+            if isinstance(calls, (list, tuple)) and calls:
+                n += len(calls)
+            elif calls or getattr(e, "tool_name", ""):
+                n += 1
+    except Exception:
+        return n
+    return n
+
+
 def _session_idle_gaps(events, ttl_sec: int = 300) -> dict:
     """Count idle gaps that crossed the prompt-cache TTL. Anthropic's cache
     expires after ~5 minutes, so every consecutive-event gap longer than that
@@ -14884,6 +14909,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     # Only the dedicated key: metadata["source"] is already used
                     # by other adapters for cwd paths and provider names.
                     "surface": metadata.get("surface") or "",
+                    # Tool executions on the row so hosted Autonomy (deep
+                    # sessions = 10+ tool calls) can score without the events
+                    # table, which never syncs. None (not 0) when no events
+                    # were readable, so blind never looks like zero.
+                    "tool_call_count": (
+                        _session_tool_call_count(_events) if _events else None),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
                 # Re-ingest the full event set for sessions that advanced (the
