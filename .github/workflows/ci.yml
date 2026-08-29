@@ -245,6 +245,15 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # The desktop shell's first pip install must self-heal (broken-venv
+      # rebuild, cold-cache retry, actionable failure hints) — the
+      # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
+      # this job is a plain pytest environment; the other desktop tests
+      # predate CI wiring and still run nowhere (same file-list trap as
+      # the JS-unit files above).
+      - name: Desktop bootstrap resilience
+        run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
