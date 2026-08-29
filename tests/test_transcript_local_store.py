@@ -184,3 +184,82 @@ def test_transcript_includes_external_api_calls(app):
     assert calls[0]["host"] == "api.github.com"
     assert calls[0]["method"] == "GET"
     assert calls[0]["status_code"] == 200
+
+
+def test_transcript_thinking_rows_are_typed_and_usage_stamped(app):
+    """Extended-thinking events keep ``type: "thinking"`` so the UI can style
+    the model's internal reasoning apart from the actual reply, and the
+    daemon-stamped per-event token/cost lands on the message (once per row)."""
+    a, ls = app
+    store = ls.get_store()
+    sid = "sess-thinking-typed"
+    store.ingest(_ev("t1", sid, "user", "how is life", "2026-05-12T10:00:00Z"))
+    think = _ev("t2", sid, "assistant", "casual small talk — reply warmly",
+                "2026-05-12T10:00:03Z")
+    think["event_type"] = "thinking"
+    think["data"] = json.dumps({"type": "thinking", "role": "assistant",
+                                "content": "casual small talk — reply warmly",
+                                "timestamp": "2026-05-12T10:00:03Z"})
+    think["token_count"] = 1276
+    think["cost_usd"] = 0.0886
+    store.ingest(think)
+    store.ingest(_ev("t3", sid, "assistant", "life is good!",
+                     "2026-05-12T10:00:05Z"))
+    _drain(store)
+
+    c = a.test_client()
+    r = c.get(f"/api/transcript/{sid}")
+    assert r.status_code == 200
+    msgs = r.get_json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "assistant"]
+    # The thinking turn is typed; the actual reply is not.
+    assert msgs[1].get("type") == "thinking"
+    assert msgs[2].get("type") != "thinking"
+    # Usage stamped from the event row for the per-turn spend badge.
+    assert msgs[1].get("tokens") == 1276
+    assert abs(msgs[1].get("cost_usd", 0) - 0.0886) < 1e-9
+    assert "tokens" not in msgs[2]
+
+
+def test_transcript_nested_message_thinking_block_emitted(app):
+    """Claude-Code shape: a ``thinking`` content block nested under
+    ``data.message`` becomes its own ``type: "thinking"`` turn instead of
+    being silently dropped, and the row's usage lands once on the first
+    message emitted for the row."""
+    a, ls = app
+    store = ls.get_store()
+    sid = "sess-thinking-nested"
+    row = {
+        "id": "n1",
+        "node_id": "node-test",
+        "agent_id": "main",
+        "session_id": sid,
+        "event_type": "assistant",
+        "ts": "2026-05-12T10:00:00Z",
+        "token_count": 500,
+        "cost_usd": 0.05,
+        "data": json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "let me reason about it"},
+                    {"type": "text", "text": "the actual answer"},
+                ],
+            },
+            "timestamp": "2026-05-12T10:00:00Z",
+        }),
+    }
+    store.ingest(row)
+    _drain(store)
+
+    c = a.test_client()
+    r = c.get(f"/api/transcript/{sid}")
+    assert r.status_code == 200
+    msgs = r.get_json()["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["type"] == "thinking"
+    assert msgs[0]["content"] == "let me reason about it"
+    assert msgs[1]["content"] == "the actual answer"
+    # Row usage stamped exactly once (first message of the row).
+    assert msgs[0].get("tokens") == 500
+    assert "tokens" not in msgs[1]
