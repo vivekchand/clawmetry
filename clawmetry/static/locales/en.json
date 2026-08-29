@@ -412,6 +412,7 @@
   "app.test_sent": "Test sent!",
   "app.test_sent_to": "Test sent to: ",
   "app.thinking": "Thinking…",
+  "app.thinking_internal": "thinking (internal)",
   "app.this_feature_requires_clawmetry_pro": "This feature requires ClawMetry Pro",
   "app.this_file_is_empty": "This file is empty.",
   "app.time_travel": "Time travel: ",
