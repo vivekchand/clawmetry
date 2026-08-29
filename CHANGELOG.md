@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Release: a failed desktop install now tells us it failed, and only that (carries #5351) (2026-08-29)
+- **Who this reaches:** everyone who installs the desktop app, and especially the installs that never make it — until now, an install that died on someone's machine was invisible unless they told us themselves. This week's Windows failure was diagnosed from a photograph of a screen.
+- **What is sent when a first install fails:** the failure's category (the same one shown on your screen — "a dependency has no prebuilt package", "a proxy is intercepting the connection", and so on), which Python version the installer found, the app version, and the operating system. That is the entire list.
+- **What is never sent:** your file paths, your username, your machine's name, and the log itself. The log stays on your machine, in full, where it has always been. The list of sent fields is closed and enforced by a test — adding anything to it is a deliberate, reviewed act.
+- **Your existing choice is respected.** If you opted out of telemetry — the environment variable, the marker file, or a self-hosted deployment — nothing is sent, and the app behaves identically either way: same explanation on screen, same local log.
+- **Why:** a failure category arriving from the field turns "we find out when someone photographs a screen" into "we find out the day it starts happening", and the fix pipeline picks it up from there.
+- **Verified:** 18 new tests, including one that pins the sent fields key-by-key and one that proves an opted-out machine sends nothing.
+
 ### Feature: cloud transcripts arrive in seconds, with a real spinner (carries #5342) (2026-08-29)
 - **Who this reaches:** anyone reading a session on the hosted dashboard. Clicking a session used to show a sentence — "It answers on its next check-in, usually within a minute" — and mean it: the transcript routinely took up to a minute to appear. It now lands in single-digit seconds, behind a spinner that shows something is actually happening.
 - **The wait was the schedule, not the network.** A transcript never sits in the cloud — it stays on the machine that ran the session, and the cloud has to ask that machine for it. But the machine only checked for questions on its regular check-in, once a minute when nobody was watching. Your question sat in a mailbox until the next scheduled pickup. Now, instead of napping between check-ins, the machine keeps one quiet open line to the cloud — "anything for me?" — and the moment you ask for a transcript, that line answers and the machine responds immediately. When idle it costs exactly what the nap did: one held request in place of one sleep.
