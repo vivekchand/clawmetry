@@ -7705,7 +7705,7 @@ def main() -> None:
     # needs the store — print the help text directly and return.
     if "--help" in sys.argv or "-h" in sys.argv:
         print(
-            "\U0001f99e ClawMetry -- See your agent think.\n"
+            "ClawMetry -- See your agent think.\n"
             "\n"
             "Usage: clawmetry [command] [options]\n"
             "\n"
