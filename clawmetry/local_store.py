@@ -8663,6 +8663,63 @@ class LocalStore:
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
+    def query_transcript_page(
+        self,
+        *,
+        session_id: str,
+        before_ts: int | None = None,
+        limit: int = 150,
+    ) -> dict[str, Any]:
+        """One older-history page of raw events for a session, newest-first.
+
+        Backing for the ``transcript_page`` relay shape: the cloud replay
+        renders the snapshot's capped transcript instantly, then pages the
+        elided history on demand through this method (rendered to messages at
+        the routes/daemon edge, never re-implemented in the browser).
+
+        ``before_ts`` is an EXCLUSIVE ms-epoch cursor: only events strictly
+        older are returned, so repeatedly passing the previous page's
+        ``next_before_ts`` walks backward with no duplicates. Returns
+        ``{rows, has_more, next_before_ts}`` — a dict, not a bare list, so
+        the paging verdict rides the same payload (dispatch special-cases
+        dict-returning shapes the way ``agent_graph`` already is).
+        """
+        limit = max(1, int(limit))
+        until_iso = None
+        if before_ts:
+            try:
+                until_iso = datetime.fromtimestamp(
+                    int(before_ts) / 1000, tz=timezone.utc
+                ).isoformat()
+            except (ValueError, OSError, OverflowError):
+                until_iso = None
+        # ``until`` is inclusive at the SQL layer; overfetch a little, then
+        # drop rows at/after the cursor so boundary events sharing the exact
+        # cursor millisecond are not served twice.
+        raw = self.query_events(
+            session_id=session_id, until=until_iso, limit=limit + 16
+        )
+        rows: list[dict[str, Any]] = []
+        for r in raw:
+            ts_ms = _event_ts_ms(r.get("ts"))
+            if before_ts and ts_ms is not None and ts_ms >= int(before_ts):
+                continue
+            rows.append(r)
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_before_ts = None
+        for r in reversed(rows):
+            ts_ms = _event_ts_ms(r.get("ts"))
+            if ts_ms is not None:
+                next_before_ts = ts_ms
+                break
+        return {
+            "rows": rows,
+            "count": len(rows),
+            "has_more": has_more,
+            "next_before_ts": next_before_ts,
+        }
+
     def query_event_count(self, *, runtime: str | None = None) -> int:
         """Count events, optionally for one runtime. Proxyable by design.
 
@@ -15086,6 +15143,30 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
 def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
     """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
     return dict(zip(cols, row))
+
+
+def _event_ts_ms(ts: Any) -> int | None:
+    """Best-effort ms-epoch for an event row ``ts`` cell. DuckDB hands back a
+    ``datetime`` for TIMESTAMP columns, but rows that crossed a JSON boundary
+    (daemon proxy, tests) carry ISO strings, and a few legacy shapes carry
+    epoch numbers. ``None`` when unparseable — a paging cursor must never be
+    an invented time."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        try:
+            return int(ts.timestamp() * 1000)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(ts, (int, float)):
+        return int(ts * 1000) if ts < 1e12 else int(ts)
+    try:
+        return int(
+            datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+            * 1000
+        )
+    except (ValueError, OSError, OverflowError):
+        return None
 
 
 def _coerce_value(v: Any) -> Any:
