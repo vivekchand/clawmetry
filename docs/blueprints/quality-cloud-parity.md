@@ -185,7 +185,7 @@ touching function signatures.
 ### ADR-003: Calibration thresholds hoisted to slice root, not per-card
 
 Context: the first version of the snapshot slice embedded the full calibration
-thresholds in every per-runtime card. At 28 runtimes the thresholds were
+thresholds in every per-runtime card. At 30 runtimes the thresholds were
 repeated 14 times; each copy was byte-identical. The thresholds made up
 roughly a quarter of the slice by size.
 
