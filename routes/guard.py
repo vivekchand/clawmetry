@@ -147,6 +147,18 @@ def _runtime_supports_signals(runtime: str, session_id: str = "",
                 "reason": f"capability check failed: {str(e)[:120]}"}
 
 
+def _session_runtime(session_id: str, agent_type: str) -> str:
+    """Which runtime is this session, really? Mirrors ``sync._detector_runtime``:
+    the session-id prefix wins, ``agent_type`` is only the fallback, because on
+    a real install the column reads ``openclaw`` for nearly every row."""
+    try:
+        from clawmetry import waste_flags as _wf
+        rt = str(_wf.runtime_from_session_id(session_id) or "").strip().lower()
+    except Exception:
+        rt = ""
+    return rt or str(agent_type or "").strip().lower()
+
+
 # Severity ladder shared with ``clawmetry.detectors`` (higher is louder).
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
@@ -248,7 +260,13 @@ def api_guard_sessions():
         sid = str(s.get("session_id") or "")
         if not sid:
             continue
-        runtime = str(s.get("agent_type") or "")
+        # The ``sessions`` table's ``agent_type`` reads ``openclaw`` for
+        # nearly every row on a real install; the session-id prefix is the
+        # identity the rest of the product uses (same derivation as
+        # ``sync._detector_runtime``). Trusting the column here would hand
+        # ``runtime_control_support`` the wrong runtime for every family
+        # session and disable controls that work.
+        runtime = _session_runtime(sid, s.get("agent_type") or "")
         meta = s.get("metadata")
         meta = meta if isinstance(meta, dict) else {}
         cwd = ""

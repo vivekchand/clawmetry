@@ -13572,6 +13572,20 @@ async function loadSessions() {
     // running or the local store is unreachable.
     fetch('/api/loop-signals?limit=200&since_minutes=60').then(r => r.json()).catch(function() { return {signals:[]}; })
   ]);
+  // Guard join: per-session control capability (which of Pause/Resume/Stop can
+  // actually work HERE, and why not when not) plus the ranked incident, from
+  // the same resolver the Guard tab and the daemon's policies use. Absent on
+  // cloud (the cloud has its own kill-switch dialogs) and on older daemons —
+  // rows then degrade to the legacy lone Stop button.
+  var guardBySid = {};
+  if (!window.CLOUD_MODE) {
+    try {
+      var _gd = await fetch('/api/guard/sessions?limit=200').then(function(r) { return r.ok ? r.json() : {sessions:[]}; });
+      ((_gd && _gd.sessions) || []).forEach(function(g) {
+        if (g && g.session_id) guardBySid[g.session_id] = g;
+      });
+    } catch (e) { /* guard endpoints absent: legacy rendering */ }
+  }
   // Build a session_id → eval lookup for O(1) overlay.
   var evalMap = {};
   ((evalData && evalData.evals) || []).forEach(function(e) {
@@ -13636,16 +13650,63 @@ async function loadSessions() {
         ' in this session. Open the Brain tab for per-call detail."' +
         ' style="margin-left:6px;color:#dc2626;font-size:13px;">&#9888;</span>';
     }
-    // Issue #1364 — loop-detection badge. Shown when the proxy's LoopDetector
-    // has recorded repeated identical requests from this session in the last
-    // hour. Data comes from the loop_signals DuckDB table via /api/loop-signals.
-    var _loopCount = loopSessions[sid] || 0;
-    if (_loopCount > 0) {
-      html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
-        ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+    // Rogue flag on the row itself, not only the banner: the highest-ranked
+    // detector incident for this session (same ranking the Guard tab and the
+    // daemon use), named in plain words and colored by severity. Falls back
+    // to the legacy proxy loop badge when Guard data is unavailable.
+    var _guard = guardBySid[sid] || null;
+    var _inc = _guard && _guard.incident ? _guard.incident : null;
+    if (_inc) {
+      var _sevCrit = String(_inc.severity || '') === 'critical';
+      var _incLabel = LOOP_KIND_LABEL[_inc.kind] || _inc.title || 'Off track';
+      var _incMoney = loopMoney(_inc.spend_at_risk_usd);
+      var _incTitle = (_inc.title || _incLabel) + (_inc.detail ? ' — ' + _inc.detail : '') +
+        (_incMoney ? ' · est. ' + _incMoney + ' at risk (' + (_inc.spend_basis || 'unknown') + ')' : '') +
+        '. Click to open the Guard tab.';
+      var _incColor = _sevCrit ? '#dc2626' : '#d97706';
+      var _incBg = _sevCrit ? 'rgba(220,38,38,0.12)' : 'rgba(217,119,6,0.12)';
+      var _incBorder = _sevCrit ? 'rgba(220,38,38,0.4)' : 'rgba(217,119,6,0.35)';
+      html += '<span class="session-rogue-warn" onclick="event.stopPropagation();switchTab(\'guard\')" title="' + escHtml(_incTitle) + '"' +
+        ' style="margin-left:6px;color:' + _incColor + ';font-size:11px;font-weight:700;background:' + _incBg + ';border:1px solid ' + _incBorder + ';border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; ' +
+        escHtml(_incLabel) + (_incMoney ? ' · ' + _incMoney : '') + '</span>';
+    } else {
+      // Issue #1364 — legacy loop badge (proxy LoopDetector repeats).
+      var _loopCount = loopSessions[sid] || 0;
+      if (_loopCount > 0) {
+        html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
+          ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+      }
     }
     html += '</span>';
-    html += '<button onclick="event.stopPropagation();stopSession(\'' + escHtml(sid).replace(/'/g, "\\\\'") + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    // Session controls, right on the row. Pause/Resume render only where this
+    // node can actually deliver them (per-session capability from
+    // process_control.runtime_control_support); a control that cannot work is
+    // disabled with the reason on it rather than quietly doing nothing. Cloud
+    // keeps its own Stop dialog (its kill-switch JS overrides stopSession).
+    var _sidJs = escHtml(sid).replace(/'/g, "\\\\'");
+    html += '<span style="display:flex;gap:5px;align-items:center;flex-shrink:0;">';
+    if (_guard && !window.CLOUD_MODE) {
+      var _acts = _guard.control_actions || [];
+      var _rtJs = escHtml(_guard.runtime || '').replace(/'/g, "\\\\'");
+      var _cwdJs = escHtml(_guard.cwd || '').replace(/'/g, "\\\\'");
+      var _mk = function(action, glyph, label, bg) {
+        var on = _acts.indexOf(action) !== -1;
+        var why = on ? (_guard.control_note || (label + ' this session'))
+                     : (_guard.control_reason || 'Not available for this session');
+        if (on) {
+          return '<button onclick="event.stopPropagation();guardControl(\'' + _sidJs + '\',\'' + action + '\',\'' + _rtJs + '\',\'' + _cwdJs + '\')" title="' + escHtml(why) + '"' +
+            ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + label + '</button>';
+        }
+        return '<button disabled title="' + escHtml(why) + '"' +
+          ' style="background:var(--bg-tertiary,#2a2a2a);color:var(--text-muted,#888);border:1px solid var(--border-secondary,#3a3a3a);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:not-allowed;opacity:.6;">' + glyph + ' ' + label + '</button>';
+      };
+      html += _mk('pause', '⏸', 'Pause', '#b45309');
+      html += _mk('resume', '▶', 'Resume', '#15803d');
+      html += _mk('stop', '⏹', 'Stop', '#b91c1c');
+    } else {
+      html += '<button onclick="event.stopPropagation();stopSession(\'' + _sidJs + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    }
+    html += '</span>';
     html += '</div>';
     var sessCost = costMap[sid] || costMap[(sid||'').slice(-16)] || null;
     html += '<div class="session-meta">';
@@ -13838,6 +13899,37 @@ function _renderSessionsRetentionCta(capped) {
   } else {
     cta.style.display = 'none';
     cta.innerHTML = '';
+  }
+}
+
+// Row-level session control. One endpoint, the same actuator the Guard tab
+// and the daemon's policies use, so a click here and an automatic policy
+// action are identical to the agent process. Reports the REAL outcome —
+// including advisory_only, where a "pause" is only a proxy flag and no
+// enforcement proxy is running to honor it.
+async function guardControl(sessionId, action, runtime, cwd) {
+  var sid = String(sessionId || '').trim();
+  if (!sid || !action) return;
+  if (action === 'stop' || action === 'kill') {
+    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' session "' + sid + '"?')) return;
+  }
+  try {
+    var r = await fetch('/api/guard/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sid, action: action,
+                            runtime: runtime || '', cwd: cwd || ''})
+    });
+    var data = await r.json();
+    if (!r.ok || !data.ok) {
+      var why = (data && (data.detail || data.error)) || 'request failed';
+      alert('Could not ' + action + ' this session: ' + why);
+    } else if (data.raw && data.raw.advisory_only) {
+      alert('Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.');
+    }
+    loadSessions();
+  } catch (e) {
+    alert('Could not ' + action + ' this session: ' + e.message);
   }
 }
 
