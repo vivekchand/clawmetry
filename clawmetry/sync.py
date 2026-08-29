@@ -7220,6 +7220,7 @@ _LITE_RT_LABELS = {
     "openhands": "OpenHands",
     "openworker": "OpenWorker",
     "lovable": "Lovable",
+    "replit": "Replit Agent",
 
 }
 
@@ -13622,6 +13623,12 @@ _FAMILY_ADAPTER_SPECS = (
     # store; the adapter reads local git clones of its GitHub-synced repos
     # (one bot commit per accepted agent edit). Observe-only, no cost.
     ("clawmetry_pro.adapters.lovable", "LovableAdapter"),
+    # Replit Agent (replit.com) -- the agent loop runs on Replit's infra but
+    # serializes per-session transcript journals INTO the Repl workspace
+    # (.local/state/replit/agent/), so the daemon reads them where it runs:
+    # inside the workspace shell (`pip install clawmetry` in a Repl) or over
+    # a local clone/export pointed at via CLAWMETRY_REPLIT_ROOTS.
+    ("clawmetry_pro.adapters.replit", "ReplitAdapter"),
 )
 
 
@@ -15264,6 +15271,7 @@ _RUNTIME_PREFIXES = frozenset({
     "openhands",
     "openworker",
     "lovable",
+    "replit",
 })
 
 

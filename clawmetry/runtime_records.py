@@ -216,6 +216,19 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "tool-permission asks are complete; spend is not observable here at "
              "all, so no figure is derived.",
     ),
+    "replit": _e(
+        UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
+        "No tokens, model, cost or timestamps in the workspace journal",
+        doc_label="Replit Agent",
+        note="Replit Agent runs its loop on Replit's infrastructure and "
+             "serializes the full transcript journal into the Repl workspace, "
+             "but an exhaustive walk of that state finds no token counts, no "
+             "model id, no cost and no per-message timestamps: Replit bills "
+             "effort-based checkpoints server-side and none of it reaches the "
+             "workspace. Transcripts and tool calls are complete; spend is "
+             "not observable here at all, so no figure is derived and times "
+             "come from file mtimes with the basis declared.",
+    ),
     "openworker": _e(
         ON_DISK, DERIVED, ON_DISK,
         "The token split rides a per-message sidecar tagged with the model "

@@ -71,7 +71,7 @@ def test_family_adapter_specs_split_by_tier():
     # Bump when a runtime is added. The real invariant (loader == catalogue)
     # is test_entitlements.py::test_paid_runtimes_match_family_adapter_specs;
     # this is the blunt tripwire that catches an accidental extra entry.
-    assert len(specs) == 27, f"expected 27 family adapters, got {len(specs)}"
+    assert len(specs) == 28, f"expected 28 family adapters, got {len(specs)}"
 
     free_specs = [s for s in specs if s[0].startswith("clawmetry.adapters.")]
     paid_specs = [s for s in specs if s[0].startswith("clawmetry_pro.adapters.")]

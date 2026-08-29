@@ -5500,7 +5500,7 @@ var _Q_RUNTIME_NAMES = {
   qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
-  openworker: 'OpenWorker', lovable: 'Lovable',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -11902,7 +11902,7 @@ var _CM_RT_LABEL = {
   copilot: 'GitHub Copilot', grok: 'Grok Build', grok_bot: 'Grok Bot', qm: 'QM',
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
-  openworker: 'OpenWorker', lovable: 'Lovable',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11914,7 +11914,7 @@ var _CM_RT_PREFIXES = {
   n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
   kimi: 1,
   devin: 1, gemini_cli: 1, cline: 1, openhands: 1,
-  openworker: 1, grok_bot: 1, lovable: 1,
+  openworker: 1, grok_bot: 1, lovable: 1, replit: 1,
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are

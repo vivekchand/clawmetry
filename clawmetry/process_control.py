@@ -91,6 +91,12 @@ _DEFAULT_GRACE_SECS = 5.0
 # liveness-checks the pid and cross-checks argv + live cwd instead of the
 # start-token guard. Fallback: argv+cwd.
 #
+# replit is absent on purpose and can never join: Replit Agent's loop runs on
+# Replit's infrastructure, not in the Repl workspace container (the workspace
+# runs the user's APP, not the agent), so even a daemon running inside the
+# Repl has no agent pid to signal. The Guard tab must show the control
+# disabled with that reason rather than a button that quietly does nothing.
+#
 # kimi / pi / grok / deepseek_harness are per-terminal CLI processes resolved
 # by argv+cwd like codex; "pi" and "dsh" are exact-basename matches (see
 # _EXACT_ARGV_HINTS) because substring matching would hit pip/python or any
