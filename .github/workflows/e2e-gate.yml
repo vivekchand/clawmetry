@@ -25,11 +25,18 @@ name: E2E Gate (required)
 #   (1 check name instead of 4)
 #
 # Tracking: vivekchand/clawmetry#4029 (C6)
+#
+# This workflow intentionally runs on pull_request only -- not on push events.
+# Drift Bot (8090-software-factory app) posts its commit status to PR head
+# SHAs only; the app never re-posts to the merge commit that lands on main.
+# If the gate ran on push events, it would wait the full 35 min timeout for
+# a Drift Bot status that never arrives (confirmed on run #33224218966).
+# The enforcement that matters happens on the PR; no extra run is needed after
+# the merge. Supersedes PR #5323 which fixed the same issue via code but was
+# blocked by a Blueprint update on 8090.ai.
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 concurrency:
   group: e2e-gate-${{ github.event.pull_request.number || github.ref }}
