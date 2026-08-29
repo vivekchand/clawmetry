@@ -294,3 +294,41 @@ def test_family_sessions_persist_cwd_from_metadata(sync_with_isolated_store):
     assert sync._session_cwd({"cwd": "/proj/demo"}) == "/proj/demo"             # pi
     assert sync._session_cwd({"metadata": {"workingDir": "/x"}}) == "/x"        # nested
     assert sync._session_cwd({"displayName": "n"}) is None
+
+
+def test_session_tool_call_count_counts_calls_not_results():
+    """tool_call_count rides the cloud session row so hosted Autonomy can
+    score deep sessions (10+ tool calls) without the events table, which
+    never syncs. Calls count; results do not; absent events stay None."""
+    from clawmetry.sync import _session_tool_call_count
+
+    class _E:
+        def __init__(self, type="", tool_name="", tool_calls=None):
+            self.type = type
+            self.tool_name = tool_name
+            self.tool_calls = tool_calls
+
+    events = [
+        _E(type="tool_call", tool_name="Bash"),
+        _E(type="TOOL_CALL", tool_calls=[{"name": "Read"}, {"name": "Grep"}]),
+        _E(type="tool_result", tool_name="Bash"),   # result: not an execution
+        _E(type="message"),                          # no tool at all
+    ]
+    assert _session_tool_call_count(events) == 3
+    assert _session_tool_call_count([]) == 0
+
+
+def test_family_cloud_row_carries_tool_call_count():
+    """Source guard: the family cloud session row names tool_call_count so a
+    refactor cannot silently drop the field the hosted Autonomy score reads.
+    (Pairs the present-thing grep with the ingest allowlist on the cloud.)"""
+    import inspect
+    import clawmetry.sync as _sync
+
+    src = inspect.getsource(_sync)
+    anchor = src.index('"surface": metadata.get("surface") or ""')
+    window = src[anchor:anchor + 600]
+    assert '"tool_call_count"' in window, (
+        "family cloud_session_rows no longer carries tool_call_count; "
+        "hosted Autonomy goes blind without it"
+    )
