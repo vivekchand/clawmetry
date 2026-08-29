@@ -107,6 +107,10 @@ UNSUPPORTED_COMPACTION = frozenset({
     # Grok Bot compacts (if at all) on its cloud VM; the desktop client
     # store has no compaction entry kind, so absence proves nothing.
     "grok_bot",
+    # Lovable's agent runs (and manages its own context) in the vendor
+    # cloud; the local surface is a git clone of the synced repo, which
+    # records commits, not context events. Absence proves nothing.
+    "lovable",
     "picoclaw",
     "qm",
     "qwen_code",

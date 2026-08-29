@@ -7219,6 +7219,7 @@ _LITE_RT_LABELS = {
     "cline": "Cline",
     "openhands": "OpenHands",
     "openworker": "OpenWorker",
+    "lovable": "Lovable",
 
 }
 
@@ -13617,6 +13618,10 @@ _FAMILY_ADAPTER_SPECS = (
     # worker, not a coding CLI: its sessions are SaaS-connector work as
     # often as file edits.
     ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
+    # Lovable (lovable.dev) -- cloud app builder with NO local process or
+    # store; the adapter reads local git clones of its GitHub-synced repos
+    # (one bot commit per accepted agent edit). Observe-only, no cost.
+    ("clawmetry_pro.adapters.lovable", "LovableAdapter"),
 )
 
 
@@ -15258,6 +15263,7 @@ _RUNTIME_PREFIXES = frozenset({
     "cline",
     "openhands",
     "openworker",
+    "lovable",
 })
 
 
