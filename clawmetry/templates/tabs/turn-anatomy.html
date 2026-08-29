@@ -5,7 +5,11 @@
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="app.decompose_one_agent_turn_into_a_waterfall_prompt_m">Decompose one agent turn into a waterfall: prompt → model call(s) → each tool (start→end) → compaction → reply. Bar width is proportional to wall-clock duration.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
-      <button class="refresh-btn" id="ta-back-btn" style="display:none;" onclick="turnAnatomyShowList()" data-i18n="app.back_to_sessions">← Back to sessions</button>
+      <!-- Back must RELOAD the list, not just unhide it: arriving via the
+           session deep-dive handoff skips loadTurnAnatomy's list fetch, so a
+           bare turnAnatomyShowList() lands on the static "Loading sessions…"
+           placeholder forever. -->
+      <button class="refresh-btn" id="ta-back-btn" style="display:none;" onclick="loadTurnAnatomy()" data-i18n="app.back_to_sessions">← Back to sessions</button>
       <button class="refresh-btn" onclick="loadTurnAnatomy()">↻</button>
     </div>
   </div>
