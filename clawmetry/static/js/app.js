@@ -19408,6 +19408,9 @@ function _buildReplayEvent(m, idx) {
     content: m.content || '',
     timestamp: m.timestamp,
     tokens: m.tokens || null,
+    // Daemon-stamped per-event cost (stamped on the first message of each
+    // event row) — summed per turn for the chapter-header cost badge.
+    cost: m.cost_usd || null,
     params: m.params || null,
     // #1911: structured tool call/result detail for the deep-dive chip.
     tool: m.tool || null,
@@ -19618,7 +19621,10 @@ function _renderReplayEvent(ev, highlighted) {
   // (prose) turns stand out and the timeline reads cleanly.
   var _c = ev.content;
   if (!_c || !String(_c).trim()) {
-    var chipLabel = role === 'assistant' ? '🔧 Tool call'
+    // A thinking event whose text wasn't captured must not masquerade as a
+    // tool call — label it for what it is.
+    var chipLabel = ev.type === 'thinking' ? '🧠 ' + t("app.thinking_internal", null, "thinking (internal)")
+                  : role === 'assistant' ? '🔧 Tool call'
                   : role === 'user' ? '↩ Tool result'
                   : role === 'system' ? '⚙ System'
                   : (escHtml(role) + ' · no text');
@@ -19628,16 +19634,22 @@ function _renderReplayEvent(ev, highlighted) {
     return '<div class="chat-tool-chip ' + (role === 'user' ? 'tc-user' : 'tc-asst') + '" id="replay-msg-' + ev.originalIndex + '" style="align-self:' + chipSide + ';' + chipRing + '">'
       + '<span class="chat-tool-chip-label">' + chipLabel + '</span>'
       + (ev.tokens ? '<span class="chat-tool-chip-meta">' + ev.tokens + ' tok</span>' : '')
+      + (ev.cost > 0 ? '<span class="chat-tool-chip-meta">' + _taFmtCost(ev.cost) + '</span>' : '')
       + (chipTs ? '<span class="chat-tool-chip-meta">' + chipTs + '</span>' : '')
       + '</div>';
   }
   var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+  // Extended-thinking turns are the model reasoning on the user's behalf, not
+  // the reply — cyan-accented (matching the turn-anatomy "model" color) so a
+  // reader can tell internal work from the actual answer at a glance.
+  var isThinking = ev.type === 'thinking';
+  if (isThinking) cls = 'thinking';
   var content = ev.content;
   var needsTruncate = content.length > 800;
   var displayContent = needsTruncate ? content.substring(0, 800) : content;
   var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
   var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
-  html += '<div class="chat-role">' + escHtml(role) + '</div>';
+  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(role)) + '</div>';
   if (needsTruncate) {
     html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;">' + escHtml(displayContent) + '</div>';
     html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
@@ -19645,7 +19657,7 @@ function _renderReplayEvent(ev, highlighted) {
   } else {
     html += '<div style="white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
   }
-  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens</div>';
+  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens' + (ev.cost > 0 ? ' &middot; ' + _taFmtCost(ev.cost) : '') + '</div>';
   // Issue #564: decoding-config pill — small inline summary of the sampling
   // params that produced this assistant turn (only present when the backend
   // could extract at least one known key).
@@ -19727,7 +19739,9 @@ function _groupIntoTurns(events) {
         lastTs: ev.timestamp || null,
         events: [],
         toolCount: 0,
-        errorCount: 0
+        errorCount: 0,
+        tokens: 0,
+        cost: 0
       };
       turns.push(current);
     }
@@ -19735,6 +19749,8 @@ function _groupIntoTurns(events) {
     if (ev.timestamp) current.lastTs = ev.timestamp;
     if (ev.tool) current.toolCount++;
     if (ev.tool && ev.tool.is_error) current.errorCount++;
+    if (ev.tokens) current.tokens += ev.tokens;
+    if (ev.cost) current.cost += ev.cost;
   }
   return turns;
 }
@@ -19772,6 +19788,10 @@ function _renderTurnChapter(turn, highlightOriginal) {
   if (turn.toolCount > 0) pieces.push('🔧 ' + turn.toolCount);
   if (turn.errorCount > 0) pieces.push('<span style="color:#e0625a;">✕ ' + turn.errorCount + '</span>');
   if (duration) pieces.push('⏱ ' + duration);
+  // Turn spend — same per-event token/cost stamps the Turn anatomy page sums,
+  // so the two figures agree.
+  if (turn.tokens > 0) pieces.push('🪙 ' + (turn.tokens >= 1000 ? (turn.tokens / 1000).toFixed(1) + 'K' : turn.tokens) + ' tok');
+  if (turn.cost > 0) pieces.push('<span style="color:#34d399;">' + _taFmtCost(turn.cost) + '</span>');
   var meta = pieces.join(' · ');
   var html = '<section class="turn-chapter" id="turn-chapter-' + turn.turn + '">';
   html += '<header class="turn-chapter-head">';

@@ -23174,9 +23174,23 @@ def run_daemon() -> None:
             ),
         )
         if _wake_now:
-            # Zero the timer so the `now - last_heartbeat > interval` gate at
-            # the end of the next cycle body fires no matter the cadence.
-            last_heartbeat = 0.0
+            # Answer NOW, not after the next cycle body. The body's ingest
+            # passes can run 10-20s on a busy node, and waiting them out put
+            # a measured 22.5s on a transcript ask that the wake had already
+            # detected within ~2s (live measurement, 2026-08-29). A heartbeat
+            # here drains pending_queries and dispatches them synchronously;
+            # the cycle body then runs as usual with a fresh timer.
+            if send_heartbeat(config):
+                last_heartbeat = time.time()
+                consecutive_hb_failures = 0
+                heartbeat_interval = _pick_heartbeat_interval(
+                    _LAST_HEARTBEAT_RESPONSE
+                )
+            else:
+                # Fall back to the old shape: zero the timer so the normal
+                # end-of-cycle gate retries, and let its failure accounting
+                # take over from there.
+                last_heartbeat = 0.0
 
 
 # ── Telegram gateway-log ingest (#1192 follow-up) ──────────────────────────
