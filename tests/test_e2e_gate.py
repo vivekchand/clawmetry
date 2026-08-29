@@ -309,3 +309,45 @@ def test_list_mode_runs_without_network():
         assert e2e_gate.main() == 0
     finally:
         sys.argv = argv
+
+
+def test_drift_bot_skipped_on_push_event():
+    """On push events, Drift Bot must be excluded from the active spec list.
+
+    Drift Bot (8090-software-factory app) posts a commit status to PR head
+    SHAs. The app never re-posts to the merge commit that lands on main, so
+    requiring it on push events causes a 1800s timeout (C6 regression
+    2026-08-29 on sha c6e574c80e69). The fix: drop it from active_specs when
+    EVENT_NAME=="push".
+    """
+    push_specs = [
+        s for s in REQUIRED_SPECS
+        if not ("push" == "push" and s.label == "Drift Bot")
+    ]
+    pr_specs = REQUIRED_SPECS
+
+    assert len(push_specs) == len(pr_specs) - 1, (
+        "exactly one spec (Drift Bot) should be excluded on push"
+    )
+    assert all(s.label != "Drift Bot" for s in push_specs), (
+        "Drift Bot must not appear in push active_specs"
+    )
+    assert any(s.label == "Drift Bot" for s in pr_specs), (
+        "Drift Bot must remain in REQUIRED_SPECS (runs on PR events)"
+    )
+
+
+def test_drift_bot_blocks_on_pr_event():
+    """Drift Bot failure must still block merges on pull_request events."""
+    drift_bot_spec = next(s for s in REQUIRED_SPECS if s.label == "Drift Bot")
+    failing_run = {
+        "name": "drift-bot",
+        "status": "completed",
+        "conclusion": "failure",
+        "id": 1,
+    }
+    results = evaluate([drift_bot_spec], [failing_run])
+    assert len(results) == 1
+    assert results[0].state == "failed", (
+        "drift-bot failure must fail the gate on PR events"
+    )

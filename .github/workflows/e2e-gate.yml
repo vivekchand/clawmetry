@@ -63,6 +63,7 @@ jobs:
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REPO: ${{ github.repository }}
           MAX_WAIT: "1800"
+          EVENT_NAME: ${{ github.event_name }}
         run: python3 scripts/e2e_gate.py
 
       - name: Write job summary

@@ -323,9 +323,24 @@ def main():
         print("FAIL: --repo, --sha and GITHUB_TOKEN are all required.")
         return 2
 
+    # Drift Bot (8090-software-factory app) posts a commit status to PR head
+    # SHAs only. When the E2E Gate runs on a push event (a commit that lands
+    # on main after a merge), the App never re-posts to the merge commit, so
+    # the gate would wait the full 1800s and time out. The Drift Bot check
+    # already ran against the PR head before merge; skipping it here on push
+    # events is correct -- the enforcement already happened.
+    event_name = os.environ.get("EVENT_NAME", "")
+    active_specs = [
+        s for s in REQUIRED_SPECS
+        if not (event_name == "push" and s.label == "Drift Bot")
+    ]
+    if len(active_specs) < len(REQUIRED_SPECS):
+        skipped = [s.label for s in REQUIRED_SPECS if s not in active_specs]
+        print(f"Note: skipping on push event (already ran on PR): {', '.join(skipped)}")
+
     sha = args.sha.strip()
-    print(f"E2E Gate: {len(REQUIRED_SPECS)} required checks on {sha[:12]}")
-    for spec in REQUIRED_SPECS:
+    print(f"E2E Gate: {len(active_specs)} required checks on {sha[:12]}")
+    for spec in active_specs:
         legs = f" (x{spec.min_count})" if spec.min_count > 1 else ""
         print(f"  - {spec.label}{legs}")
     print()
@@ -346,7 +361,7 @@ def main():
             time.sleep(POLL_INTERVAL)
             continue
 
-        results = evaluate(REQUIRED_SPECS, runs)
+        results = evaluate(active_specs, runs)
 
         for res in results:
             line = f"{res.state}: {res.detail}"
@@ -367,7 +382,7 @@ def main():
             return 1
 
         if all(r.state == "passed" for r in results):
-            print(f"\nPASS: all {len(results)} required checks passed for {sha[:12]}.")
+            print(f"\nPASS: all {len(active_specs)} required checks passed for {sha[:12]}.")
             return 0
 
         if elapsed >= args.max_wait:
