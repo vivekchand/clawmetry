@@ -161,6 +161,13 @@ RUNTIME_PROBES: tuple = (
                   "~/.config/coworker/conversations",
                   "~/AppData/Roaming/coworker/coworker.db"),
                  env="CLAWMETRY_OPENWORKER_STATE_DIR"),
+    # Lovable (lovable.dev) has NO install and no fixed data dir: the local
+    # evidence is a git clone of a Lovable-synced repo, identified by its
+    # CONTENT (README project marker + bot commits), which a path glob cannot
+    # express without false positives. So the probe fires only on the
+    # explicit env override; real discovery is content-based in the adapter.
+    RuntimeProbe("lovable", "Lovable", (),
+                 env="CLAWMETRY_LOVABLE_DIRS"),
     # Grok Bot (Anysphere "sand" desktop client). Probe the SLICE DIR and
     # ~/.grokbot, not ~/.grok -- that is Grok Build, a different runtime.
     RuntimeProbe("grok_bot", "Grok Bot",
