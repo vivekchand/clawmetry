@@ -91,11 +91,19 @@ setup(
         "flask>=2.0,<4",
         "waitress>=2.0",
         "cryptography>=3.0",
-        # cffi 2.0.0 introduced a Python 3.9 finalizer regression that causes
-        # a SIGSEGV at sys.exit() when argparse prints --help text, crashing
-        # `clawmetry uninstall --help` on py3.9. Pin below 2.0 until cffi
-        # ships a fix upstream. See issue #5108.
-        "cffi<2",
+        # cffi is pinned per interpreter, and both halves are load-bearing:
+        # - Below 3.14: cffi 2.0.0 introduced a Python 3.9 finalizer
+        #   regression that SIGSEGVs at sys.exit() when argparse prints
+        #   --help text, crashing `clawmetry uninstall --help` on py3.9
+        #   (issue #5108) — and cffi 2.1+ ships no cp39 wheels at all, so
+        #   <2 stays correct there.
+        # - On 3.14+: cffi 1.x ships NO cp314 wheels, so an unconditional
+        #   <2 forces a source build that demands MSVC on end-user Windows
+        #   machines ("Microsoft Visual C++ 14.0 or greater is required")
+        #   and bricked a desktop first install in the field (2026-08-29).
+        #   cffi 2.x is the only series with 3.14 wheels.
+        'cffi<2; python_version < "3.14"',
+        'cffi>=2; python_version >= "3.14"',
         # Local store at ~/.clawmetry/clawmetry.duckdb. Holds events,
         # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
         # wheel; columnar storage gives 10-100x speed vs SQLite for the
@@ -163,7 +171,7 @@ setup(
     keywords=(
         "clawmetry observability monitoring dashboard "
         "ai agent llm llm-observability opentelemetry cost-tracking "
-        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker "
+        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker lovable replit "
         "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "
         "hermes exo grok-bot openclaw nemoclaw nanoclaw picoclaw moltbot"
     ),
