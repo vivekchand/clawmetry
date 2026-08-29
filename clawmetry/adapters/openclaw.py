@@ -745,17 +745,53 @@ def _gateway_log_events_rpc(count: int = 50) -> list:
         return []
 
 
+def _gateway_log_events_probe(count: int = 50) -> tuple:
+    """Run _gateway_log_events with a NEMOCLAW_LOGS_PROBE_TIMEOUT_MS budget.
+
+    The NemoClaw harness CLI has a bounded probe around fetching the
+    OpenClaw-side log (NEMOCLAW_LOGS_PROBE_TIMEOUT_MS in
+    test/cli/logs.test.ts): on timeout it emits a distinct degraded-mode
+    signal rather than silently returning empty. This function mirrors that
+    posture so ClawMetry can surface the same diagnostic (#5293).
+
+    Returns (events, source_available) where source_available=False means
+    the probe timed out, letting callers distinguish 'gateway log source
+    unreachable / timing out' from 'source reachable but log is empty'.
+    Never raises.
+    """
+    timeout_ms = int(os.environ.get("NEMOCLAW_LOGS_PROBE_TIMEOUT_MS", "5000"))
+    timeout_s = max(0.5, timeout_ms / 1000.0)
+    try:
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _future = _pool.submit(_gateway_log_events, count)
+            try:
+                events = _future.result(timeout=timeout_s)
+                return events, True
+            except _cf.TimeoutError:
+                return [], False
+    except Exception:
+        return [], False
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
     Arms OCSF output first (idempotent settings set), then calls
     ``openshell logs <name> -n <count> --source all``.  For container-backed
     (non-terminal) sandboxes also merges the last ``count`` lines from the
-    OpenClaw gateway log at ``/tmp/gateway.log`` (override with
-    ``OPENSHELL_GATEWAY_LOG``), matching the harness's two-source merge in
-    ``showSandboxLogsWithDeps`` (#3571).  Returns a list of parsed OCSF event
-    dicts; silently drops non-JSON lines.  Never raises; returns ``[]`` when
-    openshell is absent or any call fails.
+    OpenClaw gateway log, matching the harness's two-source merge in
+    ``showSandboxLogsWithDeps`` (#3571).
+
+    Gateway log resolution order for non-terminal sandboxes:
+    1. ``OPENSHELL_GATEWAY_LOG`` env override (for testing / explicit override).
+    2. Host-side rotating log files found by ``_gateway_log_files()``.
+    3. ``openshell sandbox exec -n <name> -- tail -n <count> /tmp/gateway.log``
+       — the fallback for genuinely container-backed sandboxes where the
+       gateway writes its log inside the container, not on the host (#5291).
+
+    Returns a list of parsed OCSF event dicts; silently drops non-JSON lines.
+    Never raises; returns ``[]`` when openshell is absent or any call fails.
     """
     try:
         import shutil as _sh
@@ -805,6 +841,26 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
                         except Exception:
                             pass
                 except OSError:
+                    pass
+            elif not _gw_log_override:
+                # No host-side log found and no explicit override: the gateway log
+                # lives inside the container.  Read it via `sandbox exec`, which is
+                # exactly what the harness does in showSandboxLogsWithDeps (#5291).
+                try:
+                    _exec_res = _sp.run(
+                        ["openshell", "sandbox", "exec", "-n", name, "--",
+                         "tail", "-n", str(count), "/tmp/gateway.log"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    for _exec_line in (_exec_res.stdout or "").splitlines():
+                        _exec_line = _exec_line.strip()
+                        if not _exec_line:
+                            continue
+                        try:
+                            events.append(json.loads(_exec_line))
+                        except Exception:
+                            pass
+                except Exception:
                     pass
         return events
     except Exception:
@@ -2274,9 +2330,10 @@ class OpenClawAdapter(AgentAdapter):
             _gw_log = _gateway_log_meta()
             if _gw_log:
                 meta.update(_gw_log)
-            _gw_events = _gateway_log_events()
+            _gw_events, _gw_available = _gateway_log_events_probe()
             if _gw_events:
                 meta["gatewayLogEvents"] = _gw_events
+            meta["gatewayLogSourceAvailable"] = _gw_available
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
