@@ -1018,6 +1018,23 @@ def _catalog() -> list:
               "\u201cnot observable from this machine\u201d, not \u201cnone configured\u201d."),
     ))
 
+    # ── Lovable (lovable.dev) ───────────────────────────────────────
+    # Lovable's Knowledge and Skills live in the vendor cloud (workspace/
+    # project knowledge, workspace skills), reachable only through its
+    # authenticated surface. The local git clone of a synced project holds
+    # app code and commit history, not instruction files, so no roots are
+    # declared: an invented root would render as "none configured" when the
+    # truth is "not observable from this machine" (same rule as Grok Bot).
+    catalog.append(RuntimeCatalogEntry(
+        id="lovable", label="Lovable",
+        roots=(),
+        note=("Lovable projects keep their Knowledge and Skills in the "
+              "vendor cloud, not on this machine. The local surface is a git "
+              "clone of the GitHub-synced repo (code + per-edit commit "
+              "history). An empty list here means \u201cnot observable from "
+              "this machine\u201d, not \u201cnone configured\u201d."),
+    ))
+
     # ── DeepSeek Harness (dsh) ──────────────────────────────────────
     dsh_home = _env_root("DSH_HOME", os.path.expanduser("~/.dsh"))
     dsh_agents = _env_root("DSH_AGENTS_HOME",
@@ -1112,6 +1129,27 @@ def _catalog() -> list:
             RootSpec("mcp", os.path.join(ow_home, "mcp.json"),
                      label="mcp.json", scope="global"),
         ),
+    ))
+
+    # ── Replit Agent (replit.com) ───────────────────────────────────
+    # Instructions/memory are replit.md at the workspace root — the agent
+    # both reads it as standing guidance and rewrites it as project docs.
+    # The agent's own running checklist is progress_tracker.md under the
+    # serialized state dir. There is no local skills surface: skills-like
+    # behaviour (integrations, templates) lives on Replit's side.
+    catalog.append(RuntimeCatalogEntry(
+        id="replit", label="Replit Agent", roots=(
+            RootSpec("memory", os.path.join(ws, "replit.md"),
+                     label="replit.md", scope="project"),
+            RootSpec("memory", os.path.join(
+                         ws, ".local", "state", "replit", "agent",
+                         "progress_tracker.md"),
+                     label="Agent progress tracker", scope="project"),
+        ),
+        note=("Replit Agent runs on Replit's infrastructure; replit.md and "
+              "the serialized agent state live in the Repl workspace, so "
+              "they are visible here when the daemon runs inside the Repl "
+              "or over a cloned workspace."),
     ))
 
     # ── OpenHands (github.com/OpenHands/OpenHands) ──────────────────
@@ -1534,7 +1572,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 28 runtimes would be a wall of
+    because listing every absent root for 30 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
