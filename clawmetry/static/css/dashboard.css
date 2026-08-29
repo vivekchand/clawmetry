@@ -634,6 +634,13 @@
   .chat-msg.assistant { background: #1a3a2a; border: 1px solid #2a5a3a; color: #c0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
   .chat-msg.system { background: #2a2a1a; border: 1px solid #4a4a2a; color: #f0e0a0; align-self: center; font-size: 12px; font-style: italic; max-width: 90%; }
   .chat-msg.tool { background: #1a1a24; border: 1px solid #2a2a3a; color: #a0a0b0; align-self: flex-start; font-family: 'SF Mono', monospace; font-size: 12px; border-left: 3px solid #555; }
+  /* Extended-thinking turns — the model reasoning on the user's behalf, not
+     the reply. Cyan accent matches the turn-anatomy "model" span color so the
+     mapping reads the same on both pages: cyan = model working, green = the
+     actual reply to the human, blue = the human. */
+  .chat-msg.thinking { background: rgba(34,211,238,0.06); border: 1px solid rgba(34,211,238,0.28); border-left: 3px solid #22d3ee; color: var(--text-secondary); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .chat-msg.thinking .chat-role { color: #22d3ee; opacity: 1; }
+  .chat-msg.thinking .chat-content-truncated::after { background: linear-gradient(transparent, rgba(16,34,40,0.9)); }
   .chat-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
   /* Compact chip for tool turns (no prose) so they don't render as blank
      bubbles. Role-accented left border keeps them consistent with the prose
