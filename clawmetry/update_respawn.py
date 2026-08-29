@@ -165,11 +165,15 @@ def main(argv=None) -> int:
             pip_kwargs = {"stdout": log, "stderr": log, "timeout": 300}
             if os.name == "nt":
                 pip_kwargs["creationflags"] = _NO_WINDOW
-            proc = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade",
-                 "--no-cache-dir", spec],
-                **pip_kwargs,
-            )
+            argv = [sys.executable, "-m", "pip", "install", "--upgrade",
+                    "--no-cache-dir", spec]
+            if os.name == "nt":
+                # No compiler on end-user Windows: a dependency without a
+                # wheel must fail as "no matching distribution", never as
+                # an MSVC source-build demand (field failure 2026-08-29,
+                # cffi<2 on Python 3.14).
+                argv.insert(5, "--only-binary=:all:")
+            proc = subprocess.run(argv, **pip_kwargs)
             if proc.returncode == 0:
                 ok = True
                 _prune_stale_dist_info(target, _say)
