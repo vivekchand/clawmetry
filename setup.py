@@ -163,7 +163,7 @@ setup(
     keywords=(
         "clawmetry observability monitoring dashboard "
         "ai agent llm llm-observability opentelemetry cost-tracking "
-        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker lovable "
+        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker lovable replit "
         "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "
         "hermes exo grok-bot openclaw nemoclaw nanoclaw picoclaw moltbot"
     ),

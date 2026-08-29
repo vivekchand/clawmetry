@@ -111,6 +111,10 @@ UNSUPPORTED_COMPACTION = frozenset({
     # cloud; the local surface is a git clone of the synced repo, which
     # records commits, not context events. Absence proves nothing.
     "lovable",
+    # Replit Agent manages context on Replit's servers (checkpoints, scoped
+    # chats); the in-workspace journal has no compaction entry kind, so
+    # absence proves nothing.
+    "replit",
     "picoclaw",
     "qm",
     "qwen_code",
