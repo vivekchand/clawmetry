@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fix: a botched self-update can no longer strand the desktop app (carries #5356) (2026-08-29)
+- **Who this reaches:** desktop app users on Windows, where the running app can hold files open in a way that makes an in-place update fail halfway. Seen live: an update fired seconds after a release, removed the old version, failed to install the new one, and left an app that errored every minute and would not recover on relaunch.
+- **The app now checks it is actually installed, not merely present.** A leftover launcher file used to be taken as proof the software was there, so a half-updated install stayed broken forever. The check now requires a complete installation, and anything less triggers a clean reinstall on the next launch — about fifteen seconds instead of a permanent dead end.
+- **And it repairs itself without waiting for a relaunch.** When the updater's own failure message shows the software is missing, the app reinstalls it directly on the spot. Ordinary hiccups — a release still propagating, a brief network failure — do not trigger reinstalls; they resolve themselves on a later attempt.
+- **Verified:** 4 new tests, including the exact stranded state seen in the field; the underlying updater race is tracked separately for a durable fix.
+
 ### Release: a failed desktop install now tells us it failed, and only that (carries #5351) (2026-08-29)
 - **Who this reaches:** everyone who installs the desktop app, and especially the installs that never make it — until now, an install that died on someone's machine was invisible unless they told us themselves. This week's Windows failure was diagnosed from a photograph of a screen.
 - **What is sent when a first install fails:** the failure's category (the same one shown on your screen — "a dependency has no prebuilt package", "a proxy is intercepting the connection", and so on), which Python version the installer found, the app version, and the operating system. That is the entire list.
