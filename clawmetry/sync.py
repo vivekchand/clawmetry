@@ -22,6 +22,7 @@ import threading
 import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -321,6 +322,21 @@ STREAM_INTERVAL = 2  # seconds between real-time stream pushes
 # missing-field branch falls through to SLOW.
 HEARTBEAT_INTERVAL_FAST = 3
 HEARTBEAT_INTERVAL_SLOW = 60
+
+# Wake long-poll (fast relay, 2026-08-29). On the SLOW cadence a relay query
+# (e.g. the cloud session-trace page asking for a transcript) used to sit
+# unseen for up to 60s — the daemon only learns about queued work on its next
+# heartbeat. Instead of tightening the fleet-wide cadence, the idle sleep at
+# the bottom of the main loop is spent holding GET /ingest/wake open; the
+# cloud answers early the moment there is a queued query, a durable pending
+# action, or a viewer watching the dashboard, and the daemon heartbeats
+# immediately. Net request rate while idle: one cheap held GET per ~15s tick
+# in place of a plain sleep. CLAWMETRY_WAKE_POLL=0 turns it off; a cloud
+# without the endpoint (404) mutes it for WAKE_POLL_MUTE_SECS so old servers
+# aren't hammered.
+WAKE_POLL_MAX_WAIT = 15          # seconds the server may hold one wake call
+WAKE_POLL_MUTE_SECS = 600        # back-off after a 404/unsupported response
+_WAKE_POLL_MUTED_UNTIL = 0.0     # module state: epoch until which wake is off
 BATCH_SIZE = (
     200  # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
 )
@@ -7032,6 +7048,94 @@ def _pick_heartbeat_interval(resp_json: dict | None) -> int:
         if resp_json.get("viewer_active", False)
         else HEARTBEAT_INTERVAL_SLOW
     )
+
+
+def _wake_says_heartbeat(resp_json: dict | None) -> bool:
+    """Pure decision: does a /ingest/wake response warrant an immediate
+    heartbeat? Work (queued relay query / pending action) obviously does;
+    so does a live viewer, so the daemon flips to FAST without waiting out
+    the rest of a slow beat."""
+    if not isinstance(resp_json, dict):
+        return False
+    return bool(resp_json.get("work") or resp_json.get("viewer_active"))
+
+
+def _wake_wait(config: dict, wait_secs: float) -> dict | None:
+    """Hold GET /ingest/wake open for up to ``wait_secs``; the cloud answers
+    early when there is a reason to heartbeat (queued relay query, durable
+    pending action, or an active viewer).
+
+    Returns the parsed response dict, or None on any failure — callers treat
+    None as "sleep normally". A 404 (cloud without the endpoint yet) mutes
+    the wake poll for WAKE_POLL_MUTE_SECS so old servers aren't polled with
+    a request they will never understand.
+    """
+    global _WAKE_POLL_MUTED_UNTIL
+    if os.environ.get("CLAWMETRY_WAKE_POLL", "1") == "0":
+        return None
+    if time.time() < _WAKE_POLL_MUTED_UNTIL:
+        return None
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return None
+    except Exception:
+        pass
+    node_id = str(config.get("node_id") or "")
+    api_key = str(config.get("api_key") or "")
+    if not (node_id and api_key):
+        return None
+    wait_secs = max(0.0, min(float(WAKE_POLL_MAX_WAIT), float(wait_secs)))
+    url = (
+        INGEST_URL.rstrip("/")
+        + "/ingest/wake?node_id="
+        + urllib.parse.quote(node_id)
+        + f"&wait={int(wait_secs)}"
+    )
+    req = urllib.request.Request(
+        url, headers={"X-Api-Key": api_key, "X-Node-Id": node_id}, method="GET"
+    )
+    try:
+        # Timeout leaves headroom past the server's hold; no retries — a
+        # failed wake costs nothing (the next tick tries again) and retrying
+        # a long-poll would double-hold the connection.
+        with urllib.request.urlopen(req, timeout=wait_secs + 10) as resp:
+            raw = resp.read()
+        body = json.loads(raw) if (raw and raw.strip()) else {}
+        return body if isinstance(body, dict) else None
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 405, 501):
+            _WAKE_POLL_MUTED_UNTIL = time.time() + WAKE_POLL_MUTE_SECS
+            log.debug("wake poll unsupported by cloud (%s); muted for %ss",
+                      e.code, WAKE_POLL_MUTE_SECS)
+        return None
+    except Exception as e:
+        log.debug("wake poll failed (non-fatal): %s", e)
+        return None
+
+
+def _idle_sleep_or_wake(config: dict, sleep_secs: float,
+                        allow_wake: bool) -> bool:
+    """The main loop's end-of-cycle sleep. When ``allow_wake`` (SLOW cadence,
+    heartbeats healthy), the sleep is spent holding /ingest/wake instead of
+    ``time.sleep`` — same wall-clock, but the cloud can end it early.
+
+    Returns True when the caller should heartbeat immediately.
+    """
+    sleep_secs = max(1.0, float(sleep_secs))
+    if not allow_wake:
+        time.sleep(sleep_secs)
+        return False
+    t0 = time.time()
+    resp = _wake_wait(config, sleep_secs)
+    if _wake_says_heartbeat(resp):
+        return True
+    # Wake declined/failed/answered early with nothing: sleep out the
+    # remainder so a broken endpoint can't turn the tick into a hot loop.
+    remaining = sleep_secs - (time.time() - t0)
+    if remaining > 0.05:
+        time.sleep(remaining)
+    return False
 
 
 def _machine_specs() -> dict:
@@ -22958,7 +23062,28 @@ def run_daemon() -> None:
         # whenever a viewer is active. When idle (SLOW=60s),
         # POLL_INTERVAL still rules, so bandwidth + Cloud Run cost stay
         # flat.
-        time.sleep(max(1, min(POLL_INTERVAL, heartbeat_interval)))
+        #
+        # Wake long-poll (fast relay, 2026-08-29): on the SLOW cadence the
+        # sleep is spent holding GET /ingest/wake instead — same wall-clock
+        # when idle, but a fresh relay query (cloud trace page, Guard action)
+        # or a newly-arrived viewer ends it early and forces an immediate
+        # heartbeat, cutting relay latency from "next slow beat" (≤60s) to a
+        # couple of seconds. Skipped on FAST (3s beats are already prompt)
+        # and while heartbeats are failing (don't hold sockets to a flapping
+        # cloud).
+        _cycle_sleep = max(1, min(POLL_INTERVAL, heartbeat_interval))
+        _wake_now = _idle_sleep_or_wake(
+            config,
+            _cycle_sleep,
+            allow_wake=(
+                heartbeat_interval > HEARTBEAT_INTERVAL_FAST
+                and consecutive_hb_failures == 0
+            ),
+        )
+        if _wake_now:
+            # Zero the timer so the `now - last_heartbeat > interval` gate at
+            # the end of the next cycle body fires no matter the cadence.
+            last_heartbeat = 0.0
 
 
 # ── Telegram gateway-log ingest (#1192 follow-up) ──────────────────────────
