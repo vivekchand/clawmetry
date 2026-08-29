@@ -94,6 +94,23 @@ def verify(version: str, verbose: bool = True) -> list:
         if verbose:
             print(f"  installing clawmetry=={version} from PyPI ...")
 
+        # Preflight: distinguish a publish failure (version wholly absent from
+        # PyPI) from CDN propagation lag (version visible in the JSON API but
+        # not yet on the simple index). CDN lag is worth retrying; a missing
+        # artifact is not — the upload never happened, so retrying pip install
+        # just spins for 2.5 minutes before surfacing an opaque error.
+        # This is the guard that would have caught #5106 (0.12.759), where
+        # the publish step failed before uploading and the canary could not
+        # distinguish that from a propagation race.
+        if not version_is_available(version):
+            return [
+                f"clawmetry=={version} is not present in the PyPI JSON API.\n"
+                "The publish step likely did not complete — the artifact was never "
+                "uploaded.\n"
+                "Check the publish workflow logs and re-trigger the upload, then "
+                "re-run the canary."
+            ]
+
         # Retry install up to 5 times for CDN propagation lag.
         install_ok = False
         for attempt in range(1, 6):
