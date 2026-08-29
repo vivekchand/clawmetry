@@ -28,6 +28,7 @@ jobs:
       - name: Checkout clawmetry (OSS)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           path: oss
 
       # CLOUD_REPO_PAT is NOT exposed to pull_request runs from a fork (GitHub
@@ -54,6 +55,7 @@ jobs:
         if: steps.access.outputs.available == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: vivekchand/clawmetry-landing
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: landing
@@ -63,6 +65,7 @@ jobs:
         if: steps.access.outputs.available == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: cloud
