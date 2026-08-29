@@ -66,5 +66,9 @@
   "grok_bot": {
     "label": "Grok Bot",
     "brand": "#111827"
+  },
+  "lovable": {
+    "label": "Lovable",
+    "brand": "#ff3366"
   }
 }
