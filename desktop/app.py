@@ -1106,7 +1106,21 @@ class RuntimeSupervisor:
         self.failure_class: Optional[str] = None
         self.bootstrap_python_version: str = ""
         if self._venv_clawmetry().exists():
-            return True
+            # The exe stub existing is NOT the package existing. A pip
+            # upgrade that dies between uninstall and install (live field
+            # case 2026-08-29: the watcher updated in place seconds after
+            # a release while the daemon held clawmetry.exe open) leaves
+            # the stub with no clawmetry module behind it — every spawn
+            # then dies with ModuleNotFoundError, and trusting the stub
+            # here made that state permanent across relaunches. Require a
+            # COMPLETE install (dist-info with RECORD — a directory glob,
+            # so the healthy warm launch stays spawn-free and fast) and
+            # fall through to the normal install path when it is absent.
+            if self._get_installed_version() is not None:
+                return True
+            self._log("entry point exists but no complete clawmetry "
+                      "dist-info — package corpse from a half-failed "
+                      "in-place update; reinstalling")
 
         cache = self.runtime / "bootstrap-python.json"
         py = _bootstrap_python(cache)
@@ -1413,6 +1427,7 @@ class RuntimeSupervisor:
             self._log(f"watcher clawmetry-update rc={r.returncode}")
             if r.returncode != 0:
                 self._log(r.stderr[:2000])
+                self._heal_package_corpse(r.stderr or "")
             # Stamp regardless of rc: see the docstring. A failed attempt
             # still consumed an interval, and not stamping it turns the
             # 60s cadence into "retry forever, every tick".
@@ -1423,6 +1438,32 @@ class RuntimeSupervisor:
             # hanging PyPI is exactly the failure that would otherwise
             # re-enter pip on every tick and starve crash-respawn.
             self._mark_upgraded(self._get_installed_version())
+
+    def _heal_package_corpse(self, update_stderr: str) -> None:
+        """Reinstall clawmetry when an in-place update destroyed it.
+
+        Live field case 2026-08-29: `clawmetry update` ran seconds after
+        a release (watcher cadence is 60s, releases can be minutes
+        apart), pip uninstalled the old version and failed to install
+        the new one while the daemon held `clawmetry.exe` open — from
+        then on every `clawmetry ...` invocation died with
+        ModuleNotFoundError, every 60s, forever, because the updater the
+        watcher shells IS the package that no longer exists. The venv's
+        python and pip survive a corpse, so the shell repairs it
+        directly rather than asking the corpse to fix itself."""
+        if "No module named" not in update_stderr:
+            # Only the corpse signature. Other update failures (index
+            # propagation races, transient network) resolve themselves
+            # on a later tick and must not trigger surprise installs.
+            return
+        if self._get_installed_version() is not None:
+            return
+        self._log("update left an exe stub with no clawmetry package — "
+                  "reinstalling via the venv's pip")
+        rc, out = self._pip_install_clawmetry()
+        self._log(f"package-corpse reinstall rc={rc}")
+        if rc != 0:
+            self._log(f"reinstall output tail: {out[-2000:]}")
 
     def restart_daemon(self) -> bool:
         """Stop the current daemon and spawn a fresh one on the same
