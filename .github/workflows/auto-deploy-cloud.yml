@@ -36,6 +36,14 @@ jobs:
     steps:
       - name: Checkout OSS repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this job pushes from the OSS working copy -- every git
+          # command below runs after `cd clawmetry-cloud`, against the second
+          # checkout and its CLOUD_REPO_PAT. So this credential has no consumer
+          # and only stands in .git/config for the rest of the job. Do NOT copy
+          # this to the checkout below: that one's credential is the one the
+          # force-push uses.
+          persist-credentials: false
 
       - name: Get OSS version
         id: oss_version
