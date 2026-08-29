@@ -72,6 +72,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "openworker",
     "grok_bot",
     "lovable",
+    "replit",
 
 ))
 
@@ -1127,6 +1128,7 @@ _RUNTIME_PREFIXES = frozenset({
     "openworker",
     "grok_bot",
     "lovable",
+    "replit",
 })
 
 

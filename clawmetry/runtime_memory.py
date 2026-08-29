@@ -1131,6 +1131,27 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Replit Agent (replit.com) ───────────────────────────────────
+    # Instructions/memory are replit.md at the workspace root — the agent
+    # both reads it as standing guidance and rewrites it as project docs.
+    # The agent's own running checklist is progress_tracker.md under the
+    # serialized state dir. There is no local skills surface: skills-like
+    # behaviour (integrations, templates) lives on Replit's side.
+    catalog.append(RuntimeCatalogEntry(
+        id="replit", label="Replit Agent", roots=(
+            RootSpec("memory", os.path.join(ws, "replit.md"),
+                     label="replit.md", scope="project"),
+            RootSpec("memory", os.path.join(
+                         ws, ".local", "state", "replit", "agent",
+                         "progress_tracker.md"),
+                     label="Agent progress tracker", scope="project"),
+        ),
+        note=("Replit Agent runs on Replit's infrastructure; replit.md and "
+              "the serialized agent state live in the Repl workspace, so "
+              "they are visible here when the daemon runs inside the Repl "
+              "or over a cloned workspace."),
+    ))
+
     # ── OpenHands (github.com/OpenHands/OpenHands) ──────────────────
     # Repo instructions are AGENTS.md (and the legacy .openhands/microagents
     # tree, which OpenHands still reads). Skills and MCP config live under the
@@ -1551,7 +1572,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 29 runtimes would be a wall of
+    because listing every absent root for 30 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
