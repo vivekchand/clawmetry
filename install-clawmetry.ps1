@@ -56,7 +56,9 @@ if ($LASTEXITCODE -ne 0) {
 & "$installDir\Scripts\python.exe" -m pip install --upgrade pip 2>&1 | Out-Null
 # Install clawmetry
 Write-Host "→ Installing clawmetry from PyPI..."
-& "$installDir\Scripts\pip.exe" install --no-cache-dir clawmetry 2>&1 | Out-Null
+# --only-binary: no compiler on user machines; a missing wheel must fail
+# clearly, not demand MSVC (field failure 2026-08-29, cffi on py3.14)
+& "$installDir\Scripts\pip.exe" install --no-cache-dir --only-binary=:all: clawmetry 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ Failed to install clawmetry." -ForegroundColor Red
     exit 1
