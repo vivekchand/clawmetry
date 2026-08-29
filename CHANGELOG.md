@@ -1328,6 +1328,12 @@
 
 ## [Unreleased]
 
+### Hosted Autonomy can finally see tool use (2026-08-29)
+- **Why:** the hosted People lens and person pages score Autonomy from deep sessions (10+ tool calls), but tool calls live in the events table and events never leave the machine. The cloud honestly labeled Autonomy blind for every person, forever — the score could not exist no matter how much data synced.
+- **What:** the collector now counts each session's tool executions from the events it already reads (calls, not results) and carries that single number on the session row it pushes to cloud. When no events were readable the field is absent, never zero, so a blind runtime cannot masquerade as a person who never lets the agent drive.
+- **What:** with clawmetry-pro 0.7.18 on the cloud, hosted Autonomy scores from these row counts; local scoring from full events is unchanged.
+- **Verified:** unit tests for call-vs-result counting plus a source guard so a refactor cannot silently drop the field; end-to-end shape verified against the cloud ingest allowlist and the Pro engine's row-level reader (carries #5308).
+
 ### One session phase across every runtime (2026-08-25)
 - **Why:** every view that answers "what needs me right now" worked out for itself whether a session was alive. One called it live if its transcript file had just grown, another went by heartbeats, and each runtime's reader decided on its own whether a quiet transcript meant finished or still going. So the same session could read as running on one tab and finished on another, and there was no way to line a Claude Code session up against a Codex one, because the two were not being described in the same words.
 - **Why:** nothing knew when a session entered the state it is in now, only when it started. That leaves "started 2h ago" as the only thing anyone can show, and it is the wrong sentence. "Waiting on you for 14 minutes" is the one you can act on, and it needs no cost data and no transcript to be true.
