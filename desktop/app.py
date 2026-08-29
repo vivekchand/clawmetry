@@ -898,13 +898,22 @@ class RuntimeSupervisor:
     # Hard-won pip flags for the first install:
     #   --no-input        never hang on a keyring/credential prompt in a
     #                     windowless app (there is no console to answer it)
-    #   --prefer-binary   never try to compile duckdb/cryptography from
-    #                     sdist when any wheel matches this interpreter
+    #   --only-binary=:all: on Windows — an end-user Windows machine has no
+    #                     compiler, so a source build can only ever fail
+    #                     with "Microsoft Visual C++ 14.0 or greater is
+    #                     required" (field failure 2026-08-29: cffi<2 had
+    #                     no cp314 wheel, pip fell back to the sdist).
+    #                     Every dependency ships wheels on Windows; a
+    #                     missing wheel must fail as a clear "no matching
+    #                     distribution", not an MSVC demand. Elsewhere a
+    #                     source build can succeed, so only prefer wheels.
     #   --timeout/--retries  fail over faster than pip's 15s default —
     #                     dual-stack networks with broken IPv6 burn the
     #                     whole budget timing out per AAAA address
     _PIP_FLAGS = (
-        "--disable-pip-version-check", "--no-input", "--prefer-binary",
+        "--disable-pip-version-check", "--no-input",
+        ("--only-binary=:all:" if platform.system() == "Windows"
+         else "--prefer-binary"),
         "--timeout", "20", "--retries", "4",
     )
 
@@ -954,6 +963,10 @@ class RuntimeSupervisor:
         low = output.lower()
         if "no python at" in low or "did not find executable" in low:
             return "The runtime environment was broken — relaunch the app to rebuild it."
+        if "microsoft visual c++" in low or "build wheel did not run successfully" in low:
+            return ("A dependency has no prebuilt package for this Python "
+                    "version — update ClawMetry (packaging fix), or install "
+                    "python.org Python 3.12/3.13 and relaunch.")
         if "no matching distribution" in low or "could not find a version" in low:
             return ("Python too old or PyPI unreachable — "
                     "install python.org Python 3.11+ and relaunch.")

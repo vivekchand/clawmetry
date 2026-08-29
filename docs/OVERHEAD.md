@@ -15,7 +15,7 @@
 
 | Path | Added latency to your agent | Default? |
 |------|-----------------------------|----------|
-| Session-file tailing (how ClawMetry observes all 28 runtimes) | **0**. Separate process, no ClawMetry code in the agent | **on** |
+| Session-file tailing (how ClawMetry observes all 30 runtimes) | **0**. Separate process, no ClawMetry code in the agent | **on** |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** per LLM call (wall p50), +0.36 ms CPU | off |
 | Pre-tool hook gate, warm cache | **+44 ms** per gated tool call, over a 36 ms interpreter floor | off |
 | Pre-tool hook gate, 60s cache refresh | **+189 ms** on the one call that trips it, network-bound | off |

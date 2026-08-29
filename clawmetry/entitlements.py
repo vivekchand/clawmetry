@@ -122,6 +122,13 @@ PAID_RUNTIMES = frozenset(
         # OpenWorker (github.com/andrewyng/openworker) -- Andrew Ng's local-first
         # desktop worker. Generalist (25+ SaaS connectors), not a coding CLI.
         "openworker",
+        # Lovable (lovable.dev) -- cloud app builder observed via local clones
+        # of its GitHub-synced repos (one bot commit per accepted agent edit).
+        "lovable",
+        # Replit Agent (replit.com) -- cloud agent that serializes per-session
+        # transcript journals into the Repl workspace filesystem, where the
+        # daemon reads them (in-Repl install or a local clone).
+        "replit",
     }
 )
 
@@ -168,6 +175,8 @@ RUNTIME_LABELS = {
     "openhands": "OpenHands",
     "devin": "Devin",
     "openworker": "OpenWorker",
+    "lovable": "Lovable",
+    "replit": "Replit Agent",
 
 }
 
@@ -208,6 +217,8 @@ RUNTIME_LANDING_PATHS = {
     "cline": "/runtimes/cline",
     "openhands": "/runtimes/openhands",
     "openworker": "/runtimes/openworker",
+    "lovable": "/runtimes/lovable",
+    "replit": "/runtimes/replit",
 
 }
 

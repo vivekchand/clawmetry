@@ -133,6 +133,12 @@ RUNTIME_PROFILES: dict = {
     # exclusively through them looks like it made no progress at all. It also
     # drives a shell (``run_shell``), which the shell-mutation rule covers.
     "openworker": {"write_tools": ("replace_in_file", "apply_unified_diff")},
+    # Replit Agent writes through ``write``/``edit`` (both match the module
+    # defaults) and shells through ``bash`` (covered by the shell-mutation
+    # rule) — vocabulary verified against real in-workspace journals (pro
+    # adapter fixture PROVENANCE.md). Listed with an empty override so the
+    # next person checks rather than assumes.
+    "replit": {"write_tools": ()},
 }
 
 # Threshold key -> (module default, base env var). A per-runtime override is
