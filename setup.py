@@ -100,7 +100,12 @@ setup(
         # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
         # wheel; columnar storage gives 10-100x speed vs SQLite for the
         # dashboard's GROUP BY/time-window workloads (epic #964).
-        "duckdb>=0.10",
+        # duckdb 1.4.5 introduced a Python 3.9 regression that causes a
+        # SIGSEGV during `clawmetry --help` (Click eager-loads subcommands
+        # which trigger DuckDB C-extension init on py3.9). Exclude 1.4.5
+        # until DuckDB ships a fix. See clawmetry#5317 / heartbeat run
+        # #33214123048. Same class of bug as the cffi<2 pin above.
+        "duckdb>=0.10,!=1.4.5",
         # Cloud cold-data relay tunnel (epic #964 phase 3b). ~100 KB pure
         # Python. Was previously in extras_require["relay"]; the opt-in
         # made cloud users silently miss the relay. Now base install so
