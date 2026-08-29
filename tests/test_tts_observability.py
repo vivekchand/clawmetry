@@ -262,3 +262,113 @@ def test_non_tts_events_unaffected():
     assert "char_count" not in extra
     assert "voice_id" not in extra
     assert "audio_bytes" not in extra
+
+
+# ---------------------------------------------------------------------------
+# 4. query_tts_provider_rollup (#5289) — usage attribution
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def tts_store(tmp_path, monkeypatch):
+    """Isolated LocalStore for TTS rollup tests."""
+    import importlib
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "tts.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    s = ls.LocalStore()
+    s.start()
+    yield s
+    s.stop(flush=True)
+
+
+def _tts_ev(provider: str, char_count: int, cost: float, eid: str | None = None) -> dict:
+    import uuid
+    return {
+        "id":         eid or str(uuid.uuid4()),
+        "node_id":    "agent+test",
+        "agent_id":   "main",
+        "session_id": "sess-tts-1",
+        "event_type": "tts.speak",
+        "ts":         "2026-08-01T10:00:00Z",
+        "data":       {"provider": provider, "char_count": char_count},
+        "cost_usd":   cost,
+        "token_count": 0,
+        "model":       None,
+    }
+
+
+def test_query_tts_provider_rollup_aggregates_by_provider(tts_store):
+    """query_tts_provider_rollup groups Fish Audio and other TTS events by provider."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("fish-audio", 1000, 0.015))
+    tts_store.ingest_event(_tts_ev("fish-audio", 500, 0.0075))
+    tts_store.ingest_event(_tts_ev("openai", 2000, 0.030))
+
+    # Wait for the async flusher.
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    by_provider = {r["provider"]: r for r in rows}
+
+    assert "fish-audio" in by_provider, "fish-audio must appear in rollup"
+    fa = by_provider["fish-audio"]
+    assert fa["calls"] == 2
+    assert fa["char_count"] == 1500
+    assert abs(fa["cost_usd"] - 0.0225) < 1e-9, f"Expected $0.0225, got {fa['cost_usd']}"
+
+    assert "openai" in by_provider, "openai must appear in rollup"
+    oa = by_provider["openai"]
+    assert oa["calls"] == 1
+    assert abs(oa["cost_usd"] - 0.030) < 1e-9
+
+
+def test_query_tts_provider_rollup_excludes_zero_cost(tts_store):
+    """Local TTS events with cost_usd=0 must not appear in the rollup."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("fish-s2-pro", 1000, 0.0))  # local, no cost
+    tts_store.ingest_event(_tts_ev("fish-audio", 800, 0.012))
+
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    providers = {r["provider"] for r in rows}
+
+    assert "fish-s2-pro" not in providers, "Zero-cost local TTS must be excluded"
+    assert "fish-audio" in providers
+
+
+def test_query_tts_provider_rollup_empty_store(tts_store):
+    """Returns an empty list when there are no TTS events."""
+    rows = tts_store.query_tts_provider_rollup()
+    assert rows == []
+
+
+def test_query_tts_provider_rollup_sorted_by_cost_desc(tts_store):
+    """Result rows are sorted by cost_usd descending."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("openai", 100, 0.001))
+    tts_store.ingest_event(_tts_ev("elevenlabs", 2000, 0.200))
+    tts_store.ingest_event(_tts_ev("fish-audio", 500, 0.008))
+
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    costs = [r["cost_usd"] for r in rows]
+    assert costs == sorted(costs, reverse=True), "Rows must be sorted by cost_usd desc"
