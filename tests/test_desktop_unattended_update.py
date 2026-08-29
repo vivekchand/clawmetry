@@ -79,6 +79,9 @@ def _stub_shell(tmp_path):
     stub._venv_clawmetry = lambda: cli
     stub._get_installed_version = lambda: "0.12.999"
     stub._mark_upgraded = stub.upgraded.append
+    # a version is installed per _get_installed_version above, so the
+    # corpse-heal hook (called on any nonzero update rc) must be a no-op
+    stub._heal_package_corpse = lambda stderr: None
     return stub, cli
 
 
