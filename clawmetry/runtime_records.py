@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 29 runtimes, which is the bar that keeps this table true.
+# answer it for all 30 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -215,6 +215,19 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "fields do not exist rather than being empty. Transcripts and local "
              "tool-permission asks are complete; spend is not observable here at "
              "all, so no figure is derived.",
+    ),
+    "replit": _e(
+        UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
+        "No tokens, model, cost or timestamps in the workspace journal",
+        doc_label="Replit Agent",
+        note="Replit Agent runs its loop on Replit's infrastructure and "
+             "serializes the full transcript journal into the Repl workspace, "
+             "but an exhaustive walk of that state finds no token counts, no "
+             "model id, no cost and no per-message timestamps: Replit bills "
+             "effort-based checkpoints server-side and none of it reaches the "
+             "workspace. Transcripts and tool calls are complete; spend is "
+             "not observable here at all, so no figure is derived and times "
+             "come from file mtimes with the basis declared.",
     ),
     "openworker": _e(
         ON_DISK, DERIVED, ON_DISK,
