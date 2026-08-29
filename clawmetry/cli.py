@@ -7698,6 +7698,50 @@ def main() -> None:
             _v = "unknown"
         print(f"clawmetry {_v}")
         return
+    # Short-circuit --help / -h before loading dashboard + DuckDB.
+    # Same class as the --version SIGSEGV fixed for #5108: dashboard.py calls
+    # get_store() at module level when CLAWMETRY_ROLE=dashboard is set, and on
+    # some Linux / Python 3.9 runners that duckdb init SIGSEGVs. --help never
+    # needs the store — print the help text directly and return.
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(
+            "\U0001f99e ClawMetry -- See your agent think.\n"
+            "\n"
+            "Usage: clawmetry [command] [options]\n"
+            "\n"
+            "Commands:\n"
+            "  start          Start ClawMetry as a background service\n"
+            "  stop           Stop the background service\n"
+            "  restart        Restart the background service\n"
+            "  status         Show service status, port, and uptime\n"
+            "  uninstall      Remove the background service\n"
+            "\n"
+            "Cloud:\n"
+            "  login                  Log in / sign up for ClawMetry Cloud\n"
+            "  connect                Activate cloud sync with an API key\n"
+            "  disconnect             Stop cloud sync\n"
+            "  doctor                 Diagnose cloud connectivity\n"
+            "  --turn-on-cloud-sync   Resume cloud sync\n"
+            "  --turn-off-cloud-sync  Pause cloud sync\n"
+            "\n"
+            "Options:\n"
+            "  --port <port>        Port to listen on (default: 8900)\n"
+            "  --host <host>        Host to bind to (default: 127.0.0.1)\n"
+            "  --workspace <path>   OpenClaw workspace path (auto-detected)\n"
+            "  --name <name>        Your name in Flow visualization\n"
+            "  --no-debug           Disable Flask debug/auto-reload\n"
+            "  -v, --version        Show version\n"
+            "  -h, --help           Show this help\n"
+            "\n"
+            "Examples:\n"
+            "  clawmetry                    Start dashboard on port 8900\n"
+            "  clawmetry --port 9000        Custom port\n"
+            "  clawmetry start              Start as background service\n"
+            "  clawmetry connect            Connect to ClawMetry Cloud\n"
+            "\n"
+            "Docs: https://clawmetry.com/how-it-works\n"
+        )
+        return
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
     # DuckDB writer — only the sync daemon writes. Set before the import or a
