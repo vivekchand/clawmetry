@@ -96,11 +96,13 @@ def verify(version: str, verbose: bool = True) -> list:
 
         # Retry install up to 5 times for CDN propagation lag.
         install_ok = False
+        last_out = ""
         for attempt in range(1, 6):
             code, out = _run(
                 [py, "-m", "pip", "install", "--no-cache-dir", f"clawmetry=={version}"],
                 timeout=900,
             )
+            last_out = out
             if code == 0:
                 install_ok = True
                 break
@@ -112,7 +114,20 @@ def verify(version: str, verbose: bool = True) -> list:
                 break
 
         if not install_ok:
-            return [f"pip install clawmetry=={version} FAILED:\n{out[-1200:]}"]
+            # Use pip's own output to distinguish a probable publish failure
+            # ("No matching distribution found" after all retries) from other
+            # failures. The metadata endpoint is intentionally not consulted
+            # here — the installer's verdict is the only authoritative answer.
+            if "No matching distribution found" in last_out:
+                return [
+                    f"pip install clawmetry=={version} could not find a matching "
+                    f"distribution after 5 attempts.\n"
+                    "If the publish step did not complete (artifact never uploaded to "
+                    "PyPI), this is expected — check the publish workflow logs and "
+                    "re-trigger the upload, then re-run the canary.\n"
+                    f"pip output:\n{last_out[-600:]}"
+                ]
+            return [f"pip install clawmetry=={version} FAILED:\n{last_out[-1200:]}"]
 
         # A resolvable install is not a working one. This is the exact gap
         # 0.12.753 fell through: pip succeeded, then every entry point died.
