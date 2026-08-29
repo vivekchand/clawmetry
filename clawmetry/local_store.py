@@ -221,7 +221,14 @@ def _report_fatal_db_once(exc: BaseException) -> None:
         "(launchctl bootout / systemctl stop), then in a standalone python: "
         "con = duckdb.connect(<db>); con.execute('CHECKPOINT'); DROP INDEX "
         "each name from duckdb_indexes(); con.execute('CHECKPOINT'); then "
-        "start the daemon -- migrations recreate the indexes clean.",
+        "start the daemon -- migrations recreate the indexes clean. If the "
+        "error returns after that, the corrupt index is a PRIMARY KEY -- "
+        "those are not in duckdb_indexes() and cannot be dropped. Identify "
+        "the table from the error's Chunk column count, then copy-swap it "
+        "WITH the PK re-declared (CREATE TABLE t_new(<full DDL incl PRIMARY "
+        "KEY>); INSERT deduped rows; DROP old; RENAME; CHECKPOINT) -- a "
+        "plain CTAS drops the PK and every ON CONFLICT upsert then fails "
+        "differently. Verified 2026-08-29 on sessions + session_phase.",
         _brief_exc(exc),
     )
 
@@ -9060,6 +9067,61 @@ class LocalStore:
         except Exception:
             return 0
         return len(updates)
+
+    def query_tts_provider_rollup(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        runtime: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-provider TTS cost rollup for /api/usage attribution (#5289).
+
+        Fish Audio TTS costs land in ``events`` (``event_type LIKE 'tts.%'``,
+        ``cost_usd`` filled by ``backfill_tts_event_costs``) but the LLM-token-
+        only ``modelBreakdown`` leaves them invisible. This returns a flat list
+        ``[{provider, cost_usd, char_count, calls}]`` sorted by descending spend
+        so the usage endpoint can surface TTS spend alongside the model breakdown.
+
+        Provider name is extracted from the data blob in Python — same as
+        ``backfill_tts_event_costs`` — because the blob may be compressed."""
+        clauses: list[str] = ["event_type LIKE 'tts.%'", "cost_usd > 0"]
+        params: list[Any] = []
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"SELECT cost_usd, data FROM events {where} LIMIT 200000"
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        bucket: dict[str, dict[str, Any]] = {}
+        for (cost_usd, data) in rows:
+            try:
+                if isinstance(data, (bytes, bytearray)):
+                    data = _ccr.maybe_decompress(data)
+                    data = bytes(data).decode("utf-8", "replace")
+                obj: dict[str, Any] = json.loads(data) if isinstance(data, str) else (data or {})
+            except Exception:
+                obj = {}
+            provider = str(obj.get("provider") or obj.get("ttsModel") or "tts")
+            cost = float(cost_usd or 0.0)
+            char_count = int(obj.get("char_count") or 0)
+            b = bucket.setdefault(provider, {
+                "provider": provider, "cost_usd": 0.0, "char_count": 0, "calls": 0,
+            })
+            b["cost_usd"] += cost
+            b["char_count"] += char_count
+            b["calls"] += 1
+        return sorted(bucket.values(), key=lambda r: -r["cost_usd"])
 
     def backfill_benign_errors(self, *, after_id: str = "", batch: int = 5000):
         """#2196: clear the error flag on historical tool results whose body
