@@ -15373,7 +15373,7 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
 # call sites (and tests) have always reached for it via ``local_store``.
 #
 # The old implementation knew exactly two numbers, both Anthropic's, and
-# measured all 29 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# measured all 30 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
 # blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
 # DeepSeek turn read as a comfortable 65%. See that module's docstring.
 from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)
