@@ -185,6 +185,13 @@ jobs:
       - name: Merge gate is reachable without privileged secrets
         run: python3 -m pytest tests/test_gate_needs_no_secrets.py -q
 
+      # Desktop onboarding/auth-gate guards (founder report 2026-08-10: a
+      # fresh install landed on the signed-in dashboard with zero login).
+      # Not wired into any job before #5350 -- which is how its private-
+      # storage-path assertion rotted silently against a refactor on main.
+      - name: Desktop onboarding gate guards
+        run: python3 -m pytest tests/test_desktop_onboarding_gate.py -q
+
       # Silent-CLI class guard (#3791): rebinding sys.stdout/sys.stderr to a
       # new TextIOWrapper over the same buffer orphans the previous wrapper;
       # its GC finalizer closes the SHARED buffer, and every later print(),
@@ -382,6 +389,7 @@ jobs:
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
+            tests/test_transcript_local_store.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \
@@ -392,6 +400,7 @@ jobs:
             tests/test_goose_platform_paths.py \
             tests/test_license_sync_pro_from_config.py \
             tests/test_install_script_pro_upgrade.py \
+            tests/test_wake_poll.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
