@@ -229,3 +229,128 @@ def test_cffi_pin_is_split_per_interpreter():
     import re
     bare = re.search(r"""['"]cffi<2['"]""", setup_src)
     assert bare is None, "an unmarked cffi<2 would have no cp314 wheel"
+
+
+# ── 6. field-failure reporting (AC-FFR-001) ──────────────────────────────
+#
+# When bootstrap fails hard, the ONLY thing that leaves the machine is a
+# closed dict of aggregate facts: failure family, platform, which Python
+# the bootstrap found. The 2026-08-29 cffi/MSVC failure was diagnosed
+# from a photographed screen because nothing carried even that much.
+
+FAILURE_PAYLOAD_KEYS = {
+    "install_id", "event", "stage", "session_id", "failure_class",
+    "bootstrap_python", "desktop_version", "os", "os_version", "arch",
+}
+
+
+@pytest.mark.parametrize(
+    "snippet,code",
+    [
+        ("Error: No Python at 'C:\\Python312\\python.exe'", "broken_runtime"),
+        ("Microsoft Visual C++ 14.0 or greater is required.", "compiler_demand"),
+        ("ERROR: No matching distribution found for clawmetry", "no_distribution"),
+        ("SSLError(SSLCertVerificationError)", "tls_intercepted"),
+        ("Connection to pypi.org timed out.", "network"),
+        ("PermissionError: [WinError 5] Access is denied", "permissions"),
+        ("something novel exploded", "pip_unknown"),
+    ],
+)
+def test_pip_failures_classify_to_closed_codes(snippet, code):
+    assert dapp.RuntimeSupervisor._classify_pip_failure(snippet) == code
+    # every code renders a hint — the enum and the hint table move together
+    assert dapp._PIP_FAILURE_HINTS[code]
+
+
+def test_failure_payload_is_a_closed_dict_of_aggregates(tmp_path, monkeypatch):
+    monkeypatch.setattr(dapp, "_install_id", lambda: "0123456789abcdef0123456789abcdef")
+    p = dapp.bootstrap_failure_payload("sess-1", "compiler_demand", "3.14")
+    assert set(p) == FAILURE_PAYLOAD_KEYS, (
+        "the payload is a CLOSED contract — a new key is a new disclosure "
+        "and must be added here and in the blueprint deliberately"
+    )
+    assert p["stage"] == "bootstrap_failed"
+    assert p["failure_class"] == "compiler_demand"
+    assert p["bootstrap_python"] == "3.14"
+    import os as _os
+    for k, v in p.items():
+        s = str(v)
+        assert _os.sep not in s and "/" not in s and "\\" not in s, (
+            f"{k} carries a path-like value: {s!r} — paths never leave the machine"
+        )
+        assert _os.environ.get("USER", "\x00") not in s or not _os.environ.get("USER")
+
+
+def test_failure_payload_clamps_hostile_values(monkeypatch):
+    monkeypatch.setattr(dapp, "_install_id", lambda: "x")
+    p = dapp.bootstrap_failure_payload("s", "A" * 200, "9" * 50)
+    assert len(p["failure_class"]) <= 40
+    assert len(p["bootstrap_python"]) <= 8
+
+
+def test_failure_ping_respects_optout(monkeypatch):
+    sent = []
+    monkeypatch.setattr(dapp, "_telemetry_optout", lambda: True)
+    monkeypatch.setattr(dapp.threading, "Thread",
+                        lambda **kw: sent.append(kw) or _FakeThread())
+    assert dapp.bootstrap_failure_ping("s", "network", "3.12") is False
+    assert not sent, "opted-out machines send nothing (AC-FFR-001.2)"
+
+
+class _FakeThread:
+    def start(self):
+        pass
+
+
+def test_failure_ping_fires_when_allowed(monkeypatch):
+    captured = {}
+
+    def fake_thread(**kw):
+        captured.update(kw)
+        return _FakeThread()
+
+    monkeypatch.setattr(dapp, "_telemetry_optout", lambda: False)
+    monkeypatch.setattr(dapp, "_read_config", lambda: {})
+    monkeypatch.setattr(dapp, "_app_base", lambda cfg: "https://app.example")
+    monkeypatch.setattr(dapp, "_install_id", lambda: "abc123")
+    monkeypatch.setattr(dapp.threading, "Thread", fake_thread)
+    assert dapp.bootstrap_failure_ping("sess", "compiler_demand", "3.14") is True
+    payload = captured["args"][0]
+    assert payload["failure_class"] == "compiler_demand"
+    assert payload["session_id"] == "sess"
+    assert captured["target"] is dapp._post_open_ping
+
+
+def test_failure_ping_skips_selfhosted(monkeypatch):
+    # an enterprise/self-hosted endpoint means _app_base returns None —
+    # the deployment's data never phones the managed cloud
+    monkeypatch.setattr(dapp, "_telemetry_optout", lambda: False)
+    monkeypatch.setattr(dapp, "_read_config", lambda: {"endpoint": "https://own"})
+    assert dapp.bootstrap_failure_ping("s", "network", "") is False
+
+
+def test_bootstrap_records_failure_class_on_pip_failure(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    py = dapp._bootstrap_python()
+    assert py
+    assert sup._create_venv(py)
+    monkeypatch.setattr(
+        sup, "_pip_install_clawmetry",
+        lambda: (1, "Microsoft Visual C++ 14.0 or greater is required."))
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "compiler_demand"
+
+
+def test_probe_caches_interpreter_version(tmp_path):
+    cache = tmp_path / "bootstrap-python.json"
+    py = dapp._bootstrap_python(cache)
+    assert py
+    v = dapp._bootstrap_python_version(cache)
+    assert v and len(v.split(".")) == 2, f"cache must carry major.minor, got {v!r}"
+
+
+def test_version_reader_tolerates_legacy_cache(tmp_path):
+    cache = tmp_path / "bootstrap-python.json"
+    cache.write_text('{"python": "/usr/bin/python3"}')
+    assert dapp._bootstrap_python_version(cache) == ""
+    assert dapp._bootstrap_python_version(None) == ""

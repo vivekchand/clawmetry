@@ -36,6 +36,7 @@ import base64
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -603,6 +604,55 @@ def open_ping_state(session_id: str, attached: bool = False) -> dict:
     return state
 
 
+def bootstrap_failure_payload(
+    session_id: str, failure_class: str, bootstrap_python: str
+) -> dict:
+    """The COMPLETE field-failure report (AC-FFR-001.1). A closed dict of
+    aggregate facts — the failure family, the platform, which Python the
+    bootstrap found — and nothing else. No paths, no usernames, no
+    hostnames, no log or pip text, ever: the raw diagnostics stay in
+    bootstrap.log on the machine. Pure so the privacy contract is
+    testable key-by-key."""
+    return {
+        "install_id": _install_id(),
+        "event": "desktop_open",
+        "stage": "bootstrap_failed",
+        "session_id": session_id,
+        "failure_class": str(failure_class or "unknown")[:40],
+        "bootstrap_python": str(bootstrap_python or "")[:8],
+        "desktop_version": _desktop_version(),
+        "os": platform.system() or "unknown",
+        "os_version": platform.release() or "",
+        "arch": platform.machine() or "",
+    }
+
+
+def bootstrap_failure_ping(
+    session_id: str, failure_class: str, bootstrap_python: str
+) -> bool:
+    """Report a hard bootstrap failure to the open sink, correlated with
+    the shell-stage ping by session_id. Same gate, same sink, same
+    fire-and-forget posture as `open_ping_state` — a machine that opted
+    out of telemetry sends nothing and loses nothing locally
+    (AC-FFR-001.2 / AC-FFR-004.1). Returns whether a report was sent."""
+    if _telemetry_optout():
+        return False
+    cfg = _read_config()
+    base = _app_base(cfg)
+    if not base:
+        return False
+    payload = bootstrap_failure_payload(session_id, failure_class, bootstrap_python)
+    if not payload["install_id"]:
+        return False
+    threading.Thread(
+        target=_post_open_ping,
+        args=(payload, base, str(cfg.get("api_key") or "")),
+        daemon=True,
+        name="clawmetry-desktop-failure-ping",
+    ).start()
+    return True
+
+
 def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
@@ -641,8 +691,13 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     # — a dead end this probe must reject up front. venv+ensurepip is
     # all the BASE interpreter needs (the venv seeds its own pip);
     # requiring `import pip` here rejected perfectly usable pythons.
+    # The probe also prints "major.minor" so the winner's version rides
+    # along in the cache — the field-failure report wants to say WHICH
+    # Python a bootstrap died on (the 2026-08-29 cffi failure was
+    # invisible precisely because nothing recorded "3.14").
     probe = (
         "import sys, venv, ensurepip; "
+        "print('%d.%d' % sys.version_info[:2]); "
         "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
     )
     for p in paths:
@@ -661,13 +716,28 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
             if r.returncode == 0:
                 if cache_file is not None:
                     try:
-                        cache_file.write_text(json.dumps({"python": p}))
+                        cache_file.write_text(json.dumps({
+                            "python": p,
+                            "version": (r.stdout or "").strip()[:8],
+                        }))
                     except OSError:
                         pass
                 return p
         except Exception:
             continue
     return None
+
+
+def _bootstrap_python_version(cache_file: Optional[Path]) -> str:
+    """major.minor of the cached bootstrap interpreter, or "" when no
+    probe has succeeded (or the cache predates the version field)."""
+    if cache_file is None:
+        return ""
+    try:
+        v = str(json.loads(cache_file.read_text()).get("version") or "")
+        return v if re.fullmatch(r"\d+\.\d+", v) else ""
+    except Exception:
+        return ""
 
 
 def _winget_install_python(log: Callable[[str], None]) -> None:
@@ -704,6 +774,38 @@ def _winget_install_python(log: Callable[[str], None]) -> None:
         log(f"winget python install rc={r.returncode}")
     except Exception as e:
         log(f"winget python install failed: {e}")
+
+
+# User-facing hint per pip failure family (_classify_pip_failure). Keys
+# are the closed failure-class enum; the splash shows the value, the
+# field-failure report sends only the key.
+_PIP_FAILURE_HINTS = {
+    "broken_runtime": (
+        "The runtime environment was broken — relaunch the app to rebuild it."
+    ),
+    "compiler_demand": (
+        "A dependency has no prebuilt package for this Python "
+        "version — update ClawMetry (packaging fix), or install "
+        "python.org Python 3.12/3.13 and relaunch."
+    ),
+    "no_distribution": (
+        "Python too old or PyPI unreachable — "
+        "install python.org Python 3.11+ and relaunch."
+    ),
+    "tls_intercepted": (
+        "A firewall or proxy is intercepting TLS to pypi.org — "
+        "check proxy/antivirus settings."
+    ),
+    "network": (
+        "Could not reach pypi.org — check this network's "
+        "connectivity/proxy, then relaunch."
+    ),
+    "permissions": (
+        "Permissions or antivirus blocked the install — "
+        "allowlist the ClawMetry data folder and relaunch."
+    ),
+    "pip_unknown": "See the log for the pip error.",
+}
 
 
 class RuntimeSupervisor:
@@ -960,28 +1062,30 @@ class RuntimeSupervisor:
         """Map pip's error text to something the splash can show that a
         user can act on. 'PyPI install failed. See bootstrap.log.' told
         the affected machines nothing (and not where the log was)."""
+        return _PIP_FAILURE_HINTS[RuntimeSupervisor._classify_pip_failure(output)]
+
+    @staticmethod
+    def _classify_pip_failure(output: str) -> str:
+        """The machine-readable failure family for a failed pip run.
+        These codes are the vocabulary of the field-failure report
+        (AC-FFR-001) — a closed enum, never free text, because the code
+        is the ONLY part of a failure that ever leaves the machine."""
         low = output.lower()
         if "no python at" in low or "did not find executable" in low:
-            return "The runtime environment was broken — relaunch the app to rebuild it."
+            return "broken_runtime"
         if "microsoft visual c++" in low or "build wheel did not run successfully" in low:
-            return ("A dependency has no prebuilt package for this Python "
-                    "version — update ClawMetry (packaging fix), or install "
-                    "python.org Python 3.12/3.13 and relaunch.")
+            return "compiler_demand"
         if "no matching distribution" in low or "could not find a version" in low:
-            return ("Python too old or PyPI unreachable — "
-                    "install python.org Python 3.11+ and relaunch.")
+            return "no_distribution"
         if "certificate" in low or "sslerror" in low or "ssl:" in low:
-            return ("A firewall or proxy is intercepting TLS to pypi.org — "
-                    "check proxy/antivirus settings.")
+            return "tls_intercepted"
         if ("timed out" in low or "connection" in low
                 or "temporary failure" in low or "getaddrinfo" in low
                 or "name or service not known" in low):
-            return ("Could not reach pypi.org — check this network's "
-                    "connectivity/proxy, then relaunch.")
+            return "network"
         if "permission" in low or "access is denied" in low or "winerror 5" in low:
-            return ("Permissions or antivirus blocked the install — "
-                    "allowlist the ClawMetry data folder and relaunch.")
-        return "See the log for the pip error."
+            return "permissions"
+        return "pip_unknown"
 
     def bootstrap(self) -> bool:
         """Create the venv if missing; pip-install clawmetry if missing.
@@ -994,10 +1098,18 @@ class RuntimeSupervisor:
         (it restarts the daemon on version drift, so users still pick
         up releases without ever staring at a "Checking for updates"
         splash)."""
+        # Written on every False return: the closed failure-class code
+        # (plus the bootstrap interpreter's major.minor, when one was
+        # found) that the field-failure report sends. Assigned here, not
+        # in __init__, so tests building the supervisor via __new__ stay
+        # valid and a stale value can never outlive the attempt.
+        self.failure_class: Optional[str] = None
+        self.bootstrap_python_version: str = ""
         if self._venv_clawmetry().exists():
             return True
 
-        py = _bootstrap_python(self.runtime / "bootstrap-python.json")
+        cache = self.runtime / "bootstrap-python.json"
+        py = _bootstrap_python(cache)
         if not py and platform.system() == "Windows":
             # Python is a dependency we install, not one we ask for: the
             # NSIS installer bootstraps it at install time, and this
@@ -1005,14 +1117,16 @@ class RuntimeSupervisor:
             self.on_status("Installing Python 3 runtime (one-time, ~1 min)")
             self._log("no system python3; attempting winget auto-install")
             _winget_install_python(self._log)
-            py = _bootstrap_python(self.runtime / "bootstrap-python.json")
+            py = _bootstrap_python(cache)
         if not py:
             self.on_status(
                 "Python 3 not found and automatic install failed. "
                 "Install python.org 3.11+ then relaunch."
             )
             self._log("no usable python3 (need 3.9+ with venv+ensurepip)")
+            self.failure_class = "no_python"
             return False
+        self.bootstrap_python_version = _bootstrap_python_version(cache)
         self._log(f"bootstrap python: {py}")
 
         # Health check, not existence check: we only get here with no
@@ -1029,13 +1143,15 @@ class RuntimeSupervisor:
                 # The cached bootstrap python may itself be the stale
                 # part; drop the cache, re-probe, and try once more.
                 try:
-                    (self.runtime / "bootstrap-python.json").unlink()
+                    cache.unlink()
                 except OSError:
                     pass
-                py2 = _bootstrap_python(self.runtime / "bootstrap-python.json")
+                py2 = _bootstrap_python(cache)
                 if not (py2 and self._create_venv(py2)):
                     self.on_status(f"Runtime setup failed. Log: {self.log_file}")
+                    self.failure_class = "venv_setup_failed"
                     return False
+                self.bootstrap_python_version = _bootstrap_python_version(cache)
 
         self.on_status("Installing ClawMetry from PyPI")
         rc, out = self._pip_install_clawmetry()
@@ -1047,7 +1163,8 @@ class RuntimeSupervisor:
             if self._create_venv(py):
                 rc, out = self._pip_install_clawmetry()
         if rc != 0:
-            hint = self._explain_pip_failure(out)
+            self.failure_class = self._classify_pip_failure(out)
+            hint = _PIP_FAILURE_HINTS[self.failure_class]
             self.on_status(f"Install failed: {hint} Log: {self.log_file}")
             return False
         new_version = self._get_installed_version()
@@ -1059,6 +1176,7 @@ class RuntimeSupervisor:
             self._log(f"pip succeeded but entry point missing at "
                       f"{self._venv_clawmetry()}")
             self.on_status(f"Install incomplete. Log: {self.log_file}")
+            self.failure_class = "install_incomplete"
         return ok
 
     def ensure_sync_daemon(self) -> None:
@@ -2159,7 +2277,18 @@ def main() -> int:
         if not ok:
             # bootstrap() already set a status message on failure; leave
             # the carousel up with the failure text at the top so the
-            # user has something to read while filing a bug.
+            # user has something to read while filing a bug. Report the
+            # classified failure family (and nothing else) so the fleet
+            # learns about the failure class without anyone photographing
+            # a screen — see AC-FFR-001.
+            try:
+                bootstrap_failure_ping(
+                    _session_id,
+                    getattr(sup, "failure_class", None) or "unknown",
+                    getattr(sup, "bootstrap_python_version", ""),
+                )
+            except Exception:
+                pass
             return
 
         # Install the macOS app-vanished watchdog so drag-to-trash of
