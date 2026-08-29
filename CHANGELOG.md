@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Fix: cloud transcripts answer immediately, even on a busy machine (carries #5358) (2026-08-29)
+- **Who this reaches:** anyone reading a session on the hosted dashboard whose machine is deep in work. The previous release taught an idle machine to answer a transcript request within seconds; a busy one still finished its current round of housekeeping first, which on a machine with a lot of history took twenty seconds or more.
+- **The answer now goes to the front of the line.** The moment the machine learns someone is waiting, it responds first and returns to its housekeeping after, instead of the other way around. Measured before the fix: 22.5 seconds. Expected after: a few seconds.
+- **Verified:** the wake-path test suite passes unchanged; the reorder keeps the exact failure handling the old path had.
+
 ### Feature: cloud transcripts arrive in seconds, with a real spinner (carries #5342) (2026-08-29)
 - **Who this reaches:** anyone reading a session on the hosted dashboard. Clicking a session used to show a sentence — "It answers on its next check-in, usually within a minute" — and mean it: the transcript routinely took up to a minute to appear. It now lands in single-digit seconds, behind a spinner that shows something is actually happening.
 - **The wait was the schedule, not the network.** A transcript never sits in the cloud — it stays on the machine that ran the session, and the cloud has to ask that machine for it. But the machine only checked for questions on its regular check-in, once a minute when nobody was watching. Your question sat in a mailbox until the next scheduled pickup. Now, instead of napping between check-ins, the machine keeps one quiet open line to the cloud — "anything for me?" — and the moment you ask for a transcript, that line answers and the machine responds immediately. When idle it costs exactly what the nap did: one held request in place of one sleep.
