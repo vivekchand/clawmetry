@@ -221,7 +221,14 @@ def _report_fatal_db_once(exc: BaseException) -> None:
         "(launchctl bootout / systemctl stop), then in a standalone python: "
         "con = duckdb.connect(<db>); con.execute('CHECKPOINT'); DROP INDEX "
         "each name from duckdb_indexes(); con.execute('CHECKPOINT'); then "
-        "start the daemon -- migrations recreate the indexes clean.",
+        "start the daemon -- migrations recreate the indexes clean. If the "
+        "error returns after that, the corrupt index is a PRIMARY KEY -- "
+        "those are not in duckdb_indexes() and cannot be dropped. Identify "
+        "the table from the error's Chunk column count, then copy-swap it "
+        "WITH the PK re-declared (CREATE TABLE t_new(<full DDL incl PRIMARY "
+        "KEY>); INSERT deduped rows; DROP old; RENAME; CHECKPOINT) -- a "
+        "plain CTAS drops the PK and every ON CONFLICT upsert then fails "
+        "differently. Verified 2026-08-29 on sessions + session_phase.",
         _brief_exc(exc),
     )
 
