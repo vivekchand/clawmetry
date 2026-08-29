@@ -148,7 +148,15 @@ def test_pip_install_retries_with_cold_cache_and_safe_flags(tmp_path, monkeypatc
     assert "--no-cache-dir" in install_attempts[1], "retry must bypass the cache"
     for a in install_attempts:
         assert "--no-input" in a, "windowless app: pip must never prompt"
-        assert "--prefer-binary" in a, "never build duckdb/cryptography from sdist"
+        # On Windows nothing may ever compile (no MSVC on user machines —
+        # field failure 2026-08-29: cffi<2 had no cp314 wheel and pip fell
+        # back to an sdist that demanded Visual C++); elsewhere wheels are
+        # preferred but a source build is allowed to succeed.
+        import platform as _plat
+        if _plat.system() == "Windows":
+            assert "--only-binary=:all:" in a, "Windows must be wheels-only"
+        else:
+            assert "--prefer-binary" in a, "never build from sdist when a wheel exists"
 
 
 def test_pip_install_gives_up_after_two_attempts(tmp_path, monkeypatch):
@@ -178,6 +186,11 @@ def test_pip_install_gives_up_after_two_attempts(tmp_path, monkeypatch):
         ("SSLError(SSLCertVerificationError: certificate verify failed)", "proxy"),
         ("Connection to pypi.org timed out. (connect timeout=20)", "pypi.org"),
         ("PermissionError: [WinError 5] Access is denied", "antivirus"),
+        ("distutils.compilers.errors.PlatformError: Microsoft Visual C++ 14.0 "
+         "or greater is required.", "update ClawMetry"),
+        ("ERROR: Failed to build 'cffi' when getting requirements to build "
+         "wheel\n  Getting requirements to build wheel did not run successfully.",
+         "update ClawMetry"),
     ],
 )
 def test_pip_failures_classify_to_actionable_hints(snippet, expect):
@@ -197,3 +210,22 @@ def test_log_survives_unencodable_characters(tmp_path):
     sup = _sup(tmp_path)
     sup._log("pip said: ✓ — ünïcode \u2713")
     assert "ünïcode" in sup.log_file.read_text(encoding="utf-8")
+
+
+# ── 5. the cffi pin must stay split per interpreter ──────────────────────
+#
+# setup.py pins cffi<2 below Python 3.14 (cffi 2.0.0 SIGSEGVs py3.9, #5108,
+# and cffi 2.1+ ships no cp39 wheels) and cffi>=2 on 3.14+ (cffi 1.x ships
+# NO cp314 wheels, so an unconditional <2 forces an MSVC source build on
+# end-user Windows — the 2026-08-29 field failure). Both halves are
+# load-bearing; collapsing them back to a bare "cffi<2" re-bricks every
+# Windows install on a current python.org Python.
+
+
+def test_cffi_pin_is_split_per_interpreter():
+    setup_src = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    assert 'cffi<2; python_version < "3.14"' in setup_src
+    assert 'cffi>=2; python_version >= "3.14"' in setup_src
+    import re
+    bare = re.search(r"""['"]cffi<2['"]""", setup_src)
+    assert bare is None, "an unmarked cffi<2 would have no cp314 wheel"
