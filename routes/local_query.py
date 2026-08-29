@@ -617,6 +617,10 @@ _DAEMON_METHODS = frozenset({
     # split for the Tokens-tab daily chart. Replaces the legacy fast-path
     # that returned 0 for every split on real OpenClaw v3 installs.
     "query_daily_usage_splits",
+    # Issue #5289: Fish Audio TTS cost breakdown for /api/usage attribution.
+    # TTS events store cost_usd in ``events``; this rollup surfaces per-provider
+    # spend alongside the LLM model breakdown so audio synthesis costs are visible.
+    "query_tts_provider_rollup",
     "query_heartbeats",
     "query_channels",
     # MOAT Tier-1 sweep (refs #1565): /api/flow/runs was opening DuckDB

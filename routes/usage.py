@@ -518,6 +518,12 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     # usage tab can show "X substitutions saved $Y this month."
     routing_data = _ls_call("query_routing_savings") or {}
 
+    # Issue #5289: Fish Audio TTS cost attribution — per-provider rollup.
+    # TTS costs ARE included in the daily cost totals (query_aggregates sums
+    # all event_type values), but they're invisible in modelBreakdown because
+    # that section is token-based only. Surface them as a dedicated ttsBreakdown.
+    tts_breakdown = _ls_call("query_tts_provider_rollup", runtime=runtime) or []
+
     import dashboard as _d  # late import — same pattern as other paths
 
     return _stamp_usage({
@@ -531,6 +537,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "weekCost": round(week_cost, 4),
         "monthCost": round(month_cost, 4),
         "modelBreakdown": model_breakdown,
+        "ttsBreakdown": tts_breakdown,
         "modelBilling": [],
         "billingSummary": {},
         # Fast-path has no per-model tokens; fall back to "detected sub
