@@ -14,6 +14,7 @@ signed-in dashboard without any login):
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import sys
@@ -187,8 +188,61 @@ def test_attach_path_respects_first_launch():
     )
 
 
+def _real_webview_start_calls():
+    """Every ``webview.start(...)`` call site outside ``_run_self_test``.
+
+    ``_run_self_test`` opens an ephemeral, CI-only window over synthetic
+    onboarding HTML (no real user session, no credentials) to smoke-test
+    the native backend -- it isn't a real launch path and carries no
+    browser state worth isolating, so it's excluded here.
+    """
+    tree = ast.parse(APP_SRC)
+    self_test_lines = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_self_test":
+            self_test_lines = set(range(node.lineno, node.end_lineno + 1))
+            break
+
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "start"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "webview"
+        and node.lineno not in self_test_lines
+    ]
+
+
 def test_webview_uses_private_storage_path():
-    assert APP_SRC.count("storage_path=_webview_storage_dir()") >= 2, (
-        "every webview.start must use the private ClawMetry profile so the "
-        "uninstaller can remove browser state"
-    )
+    # Regex/literal-count assertions rot the moment the code binds the
+    # value to a local (`_storage = _webview_storage_dir()`) instead of
+    # inlining the call -- which is exactly what happened here (#5350).
+    # Walk the actual call sites instead of grepping for one spelling.
+    calls = _real_webview_start_calls()
+    assert calls, "expected at least one real webview.start() call site"
+
+    for call in calls:
+        kwargs = {kw.arg: kw.value for kw in call.keywords}
+        value = kwargs.get("storage_path")
+        assert value is not None, (
+            f"webview.start at desktop/app.py:{call.lineno} has no "
+            "storage_path -- every real launch must use the private "
+            "ClawMetry profile so the uninstaller can remove browser state"
+        )
+        if isinstance(value, ast.Call):
+            derives_from_helper = (
+                isinstance(value.func, ast.Name)
+                and value.func.id == "_webview_storage_dir"
+            )
+        elif isinstance(value, ast.Name):
+            derives_from_helper = (
+                f"{value.id} = _webview_storage_dir()" in APP_SRC
+            )
+        else:
+            derives_from_helper = False
+        assert derives_from_helper, (
+            f"webview.start at desktop/app.py:{call.lineno} storage_path "
+            "does not derive from _webview_storage_dir()"
+        )
