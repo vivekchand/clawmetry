@@ -5500,7 +5500,7 @@ var _Q_RUNTIME_NAMES = {
   qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
-  openworker: 'OpenWorker',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -11902,7 +11902,7 @@ var _CM_RT_LABEL = {
   copilot: 'GitHub Copilot', grok: 'Grok Build', grok_bot: 'Grok Bot', qm: 'QM',
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
-  openworker: 'OpenWorker',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -11914,7 +11914,7 @@ var _CM_RT_PREFIXES = {
   n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
   kimi: 1,
   devin: 1, gemini_cli: 1, cline: 1, openhands: 1,
-  openworker: 1, grok_bot: 1,
+  openworker: 1, grok_bot: 1, lovable: 1, replit: 1,
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -12081,6 +12081,9 @@ var _CM_RT_CAPS = {
   grok:        ['SESSIONS','EVENTS','COST'],
   // No COST: Grok Bot persists no tokens, model or spend locally.
   grok_bot:    ['SESSIONS','EVENTS'],
+  // No COST: Lovable bills credits in the vendor cloud; the local clone
+  // records commits, not tokens or spend.
+  lovable:     ['SESSIONS','EVENTS'],
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
@@ -23119,6 +23122,7 @@ var _RT_FLOW = {
   copilot:     { label:'GitHub Copilot', src:['⌨️','Terminal'], accent:'#8b5cf6', stroke:'#7c3aed', tools:[['⚡','Bash'],['📖','View'],['📝','Edit'],['🌐','Web']] },
   grok:        { label:'Grok Build',  src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
   grok_bot:    { label:'Grok Bot',    src:['🖥️','Desktop'],  accent:'#111827', stroke:'#374151', tools:[['🌐','Browser'],['📁','Files'],['⚡','Terminal'],['🔌','MCP']] },
+  lovable:     { label:'Lovable',     src:['☁️','Cloud'],    accent:'#ff3366', stroke:'#d9285a', tools:[['💬','Prompt'],['📝','Edit'],['🐙','GitHub Sync'],['🚀','Deploy']] },
   deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
   exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
   kimi: { label:'Kimi CLI', src:['⌨️','Terminal'], accent:'#0f172a', stroke:'#334155', tools:[['⚡','Shell'],['📖','ReadFile'],['📝','WriteFile'],['🔍','Grep']] },
@@ -28212,7 +28216,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 28 runtimes side by side. Respects the global
+// the headline demo path — the 30 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -29053,6 +29057,7 @@ function _cmRuntimeIcon(id) {
     qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
     picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
     n8n: '🅽', grok: '🅶', grok_bot: '🤖', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
+    lovable: '💗',
     kimi: '🌙',
     devin: '🅓',
     gemini_cli: '♊',
