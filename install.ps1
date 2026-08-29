@@ -159,7 +159,9 @@ if ((Test-Path $venvPython) -and (Test-Path "$installDir\pyvenv.cfg")) {
 
 # Install/upgrade clawmetry (python -m pip, so a running pip.exe can't lock it)
 Write-Host "→ Installing clawmetry from PyPI..."
-& $venvPython -m pip install --no-cache-dir --upgrade clawmetry 2>&1 | Out-Null
+# --only-binary: no compiler on user machines; a missing wheel must fail
+# clearly, not demand MSVC (field failure 2026-08-29, cffi on py3.14)
+& $venvPython -m pip install --no-cache-dir --only-binary=:all: --upgrade clawmetry 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ Failed to install clawmetry." -ForegroundColor Red
     exit 1
