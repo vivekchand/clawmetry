@@ -29,7 +29,7 @@ burns money without making progress.
 
 A utilization percentage is only as honest as what it divides by. Until
 recently ClawMetry's resolver knew exactly two numbers, both Anthropic's:
-200K, and 1M for the `[1m]` variants. It used them for all 28 runtimes.
+200K, and 1M for the `[1m]` variants. It used them for all 30 runtimes.
 The failures were symmetric, and both looked plausible on screen:
 
 - a **300K-token GPT-5 turn** rendered as *">100%, blown"*. GPT-5's window is

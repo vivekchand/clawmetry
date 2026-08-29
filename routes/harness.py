@@ -39,6 +39,8 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "openhands",
     "openworker",
     "grok_bot",
+    "lovable",
+    "replit",
 })
 
 
