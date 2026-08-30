@@ -1251,6 +1251,99 @@ def _nemoclaw_agents_manifest() -> dict:
     return out
 
 
+def _nemoclaw_onboard_trace_spans() -> dict:
+    """Read the most-recent NemoClaw onboarding OTel-style trace artifact (#5380).
+
+    The harness writes a structured trace artifact per onboarding run when
+    ``NEMOCLAW_TRACE=1`` is set (``src/lib/trace.ts``). Each artifact contains
+    ``resource_spans`` with per-phase spans (e.g. ``nemoclaw.onboard.phase.gateway``,
+    ``nemoclaw.onboard.phase.inference``), each carrying ``start_time``,
+    ``end_time``, ``duration_ms``, ``status.code`` (OK/ERROR/UNSET), sanitized
+    ``attributes``, and child ``events``.  The top-level ``summary.slowest_spans``
+    ranks the slowest phases.
+
+    Path resolution (first match wins):
+    1. ``NEMOCLAW_TRACE_FILE`` env var (explicit path to one artifact).
+    2. Most-recent ``*.json`` in ``NEMOCLAW_TRACE_DIR``.
+    3. Most-recent ``*.json`` in ``.e2e/traces/`` (default harness path).
+
+    Returns ``{}`` when ``NEMOCLAW_TRACE`` is not set or no file is found.
+    Never raises.
+    """
+    import json as _json
+
+    if not os.environ.get("NEMOCLAW_TRACE"):
+        return {}
+
+    trace_file: Optional[str] = None
+    explicit = os.environ.get("NEMOCLAW_TRACE_FILE", "")
+    if explicit and os.path.isfile(explicit):
+        trace_file = explicit
+    else:
+        trace_dir = os.environ.get("NEMOCLAW_TRACE_DIR", "") or os.path.join(
+            os.getcwd(), ".e2e", "traces"
+        )
+        if os.path.isdir(trace_dir):
+            try:
+                candidates = [
+                    os.path.join(trace_dir, f)
+                    for f in os.listdir(trace_dir)
+                    if f.endswith(".json")
+                ]
+                if candidates:
+                    trace_file = max(candidates, key=os.path.getmtime)
+            except OSError:
+                pass
+
+    if not trace_file:
+        return {}
+
+    try:
+        with open(trace_file, encoding="utf-8") as fh:
+            data = _json.loads(fh.read(524288))  # 512 KB cap
+    except Exception:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    out: dict = {}
+
+    raw_spans = data.get("resource_spans")
+    if isinstance(raw_spans, list):
+        phases = []
+        for span in raw_spans:
+            if not isinstance(span, dict):
+                continue
+            phase: dict = {}
+            for key in ("name", "start_time", "end_time", "duration_ms"):
+                if key in span:
+                    phase[key] = span[key]
+            status = span.get("status")
+            if isinstance(status, dict):
+                code = status.get("code")
+                if code is not None:
+                    phase["status"] = code
+                msg = status.get("message")
+                if msg:
+                    phase["statusMessage"] = msg
+            events = span.get("events")
+            if isinstance(events, list) and events:
+                phase["events"] = events
+            if phase:
+                phases.append(phase)
+        if phases:
+            out["onboardTracePhases"] = phases
+
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        slowest = summary.get("slowest_spans")
+        if isinstance(slowest, list) and slowest:
+            out["onboardTraceSlowestPhases"] = slowest
+
+    return out
+
+
 def _discover_model_router_port() -> Optional[int]:
     """Find the ``--port`` of a running ``model-router proxy`` process.
 
@@ -2271,6 +2364,12 @@ class OpenClawAdapter(AgentAdapter):
             # from ~/.nemoclaw/agents.yaml (written by harness onboarding,
             # commit 01e5525).
             meta.update(_nemoclaw_agents_manifest())
+            # Onboarding OTel trace spans (#5380): per-phase duration/status
+            # from the harness trace artifact (NEMOCLAW_TRACE=1). Only
+            # meaningful on NemoClaw installs; returns {} when tracing is
+            # disabled or no artifact is found, so plain OpenClaw is unaffected.
+            if "modelRouterFingerprint" in meta:
+                meta.update(_nemoclaw_onboard_trace_spans())
             # External-supervisor mode env-var fallback (#4023): surface
             # OPENCLAW_SUPERVISOR_MODE even when the gateway is down (e.g. during
             # a supervised restart handoff). _gateway_host_status() below will
