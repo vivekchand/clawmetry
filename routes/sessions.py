@@ -5032,12 +5032,15 @@ def _extract_decoding_params(obj):
     return out
 
 
-def _try_local_store_transcript(session_id: str, _events=None):
+def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 500):
     """Read a session transcript directly from the DuckDB events table.
 
     Returns the same response shape as the JSONL parser. Returns ``None``
     to defer to the JSONL fallback if the local_store module isn't importable,
     the events table has no rows for this session, or anything raises.
+    ``_msg_cap`` bounds the returned message list; page-scoped callers
+    (``/api/transcript-page``) pass a higher cap so a page never loses its
+    own newest messages to the whole-transcript bound.
 
     Handles two event shapes:
     * **Anthropic-style** messages — ``{role, content, usage, tool_calls}``,
@@ -5290,16 +5293,72 @@ def _try_local_store_transcript(session_id: str, _events=None):
         ext_calls = _ext or []
     except Exception:
         ext_calls = []
-    return {
+    # The transcript bound used to be ``messages[:500]`` — a HEAD keep, so a
+    # 1000-turn session served its oldest 500 messages and the LIVE end of
+    # the conversation was silently invisible. Cap to the newest window
+    # instead, preserving the opening prompt + an omission marker (same
+    # helper the cloud snapshot uses), and stamp paging metadata so the
+    # replay can fetch the elided middle on demand via /api/transcript-page.
+    out_messages = messages
+    truncated = False
+    oldest_contiguous_ts = None
+    if len(messages) > _msg_cap:
+        try:
+            from clawmetry.sync import _cap_transcript_messages
+            out_messages, truncated, oldest_contiguous_ts = (
+                _cap_transcript_messages(messages, _msg_cap))
+        except Exception:
+            out_messages = messages[:_msg_cap]
+    ret = {
         "name": session_id[:40],
         "messageCount": len(messages),
         "model": model,
         "totalTokens": total_tokens,
         "duration": duration,
-        "messages": messages[:500],
+        "messages": out_messages,
         "external_api_calls": ext_calls,
         "_source": "local_store",
     }
+    if truncated:
+        ret["_truncated"] = True
+        ret["_oldest_contiguous_ts"] = oldest_contiguous_ts
+    return ret
+
+
+@bp_sessions.route("/api/transcript-page/<session_id>")
+def api_transcript_page(session_id):
+    """One older-history page of a session transcript, newest-first.
+
+    The replay loads the newest window instantly (snapshot on cloud, capped
+    fast path locally) and calls this as the user asks for earlier history:
+    ``?before_ts=<ms>`` is an exclusive cursor (pass the previous page's
+    ``next_before_ts``), ``?limit=`` bounds the page in EVENTS (each event
+    can expand to several rendered messages). Dispatches through the same
+    shape bridge the cloud relay uses, so local and hosted answers agree.
+    """
+    before_ts = request.args.get("before_ts", type=int)
+    limit = request.args.get("limit", default=150, type=int)
+    try:
+        from routes.local_query import _dispatch
+        page = _dispatch("transcript_page", {
+            "session_id": session_id,
+            "before_ts": before_ts,
+            "limit": limit,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)[:300], "messages": [],
+                        "has_more": False, "next_before_ts": None}), 500
+    rows = page.get("rows") or []
+    msgs = []
+    if rows:
+        t = _try_local_store_transcript(session_id, _events=rows, _msg_cap=2000)
+        msgs = (t or {}).get("messages") or []
+    return jsonify({
+        "messages": msgs,
+        "count": len(msgs),
+        "has_more": bool(page.get("has_more")),
+        "next_before_ts": page.get("next_before_ts"),
+    })
 
 
 @bp_sessions.route("/api/transcript/<session_id>")
