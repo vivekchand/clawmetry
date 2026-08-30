@@ -78,6 +78,9 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                # backed shapes (models/runtimes plaintext
                                # aggregates; rollup_sessions e2e-classed).
                                "models", "runtimes", "rollup_sessions",
+                               # Replay history paging: capped replays fetch
+                               # older pages on demand (e2e-classed).
+                               "transcript_page",
                                # #1012 Agent Graph tab (Phase 6 Tracing):
                                # cross-session spawn topology from spans.
                                "agent_graph",
