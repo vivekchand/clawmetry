@@ -136,12 +136,54 @@ def hitl_decide():
 
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
-    if decision not in ("approve", "reject"):
-        return jsonify({"error": "decision must be 'approve' or 'reject'"}), 400
+    if decision not in ("approve", "reject", "answer"):
+        return jsonify({"error": "decision must be 'approve', 'reject' "
+                                 "or 'answer'"}), 400
 
     flag = _flag_path(session_id)
     if not flag.exists():
         return jsonify({"error": "session not flagged for HITL"}), 404
+
+    # ── question-set answers (WO-52 phase 1) ─────────────────────────────
+    # decision='answer' carries a structured ``answers`` map validated
+    # against the question set stored in the approval row's args
+    # (default row id: hitl_<session_id>; unknown question / option → 400).
+    # An accepted answer unblocks the session exactly like an approve.
+    if decision == "answer":
+        approval_id = (data.get("approval_id")
+                       or f"hitl_{session_id}").strip()
+        rows = _try_store_call("query_approvals", limit=500)
+        if isinstance(rows, dict):
+            rows = rows.get("result") or rows.get("rows") or []
+        rows = rows if isinstance(rows, list) else []
+        row = next((r for r in rows if r.get("id") == approval_id), None)
+        if row is None:
+            return jsonify({"error": "unknown approval id"}), 404
+        from clawmetry import question_sets as qsets
+        from routes.hooks import _ls_write as _writer
+        ok, msg, code = qsets.apply_answer_decision(
+            approval_id, row, data.get("answers"), resolver=operator,
+            reason=(reason or None), write=_writer)
+        if not ok:
+            return jsonify({"error": msg}), code
+        flag.unlink()
+        log.info("HITL answer: session=%s approval=%s operator=%s",
+                 session_id, approval_id, operator)
+        try:
+            from clawmetry import audit as _audit
+            _audit.audit_event(
+                "hitl.resume", actor=operator, target=session_id,
+                result="answered", source="hitl",
+                metadata={"decision": "answer", "approval_id": approval_id},
+            )
+        except Exception:
+            pass
+        return jsonify({
+            "decided": True,
+            "session_id": session_id,
+            "decision": "answer",
+            "operator": operator,
+        })
 
     flag.unlink()
     log.info(
