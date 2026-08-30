@@ -268,6 +268,10 @@ _WIN_FILETIME_EPOCH_DELTA = 11644473600.0
 _WIN_K32 = None
 _WIN_K32_TRIED = False
 
+# Allowlist of ntdll routines _win_ntdll_call may invoke.  Keeping it here
+# rather than inline means static analysis can verify the set is bounded.
+_WIN_NTDLL_ALLOWED = frozenset({"NtSuspendProcess", "NtResumeProcess"})
+
 
 def _win_kernel32():
     """kernel32 with argtypes/restypes declared, or None off Windows.
@@ -445,6 +449,8 @@ def _win_all_procs() -> List[Tuple[int, int, int]]:
 def _win_ntdll_call(fn_name: str, pid: int) -> bool:
     """Call a one-argument ntdll process routine (NtSuspendProcess /
     NtResumeProcess) on ``pid``. True when it returned STATUS_SUCCESS."""
+    if fn_name not in _WIN_NTDLL_ALLOWED:
+        return False
     if not _IS_WINDOWS:
         return False
     try:
