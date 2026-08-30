@@ -49,10 +49,11 @@ test enforces both directions).
 | `spans` | live | e2e | `query_spans` | `trace_id`, `session_id`, `agent_type`, `since`, `until`, `limit` (default 200, range 1..2000) | OTel span rows with full filters (trace/session/agent/time). |
 | `traces` | live | e2e | `query_traces` | `session_id`, `agent_type`, `since`, `until`, `limit` (default 100, range 1..1000) | One row per trace_id with aggregate span stats. |
 | `transcript` | live | e2e | `query_events` | `session_id` (required), `limit` (default 500, range 1..5000) | Alias of events scoped to one required session_id. |
+| `transcript_page` | live | e2e | `query_transcript_page` | `session_id` (required), `before_ts`, `limit` (default 150, range 1..250) | One older-history page of a session's events, newest-first. before_ts is an exclusive ms-epoch cursor (pass the previous page's next_before_ts to walk backward). Returns {rows, count, has_more, next_before_ts}. |
 | `approvals` | planned | plaintext | `query_approvals` | `status`, `limit` (default 100, range 1..1000) | Approval queue metadata (ids, states, timestamps; no content). |
 | `brain` | planned | e2e | `query_events` | `session_id`, `since`, `limit` (default 200, range 1..2000) | Reasoning/tool event slice powering the Brain feed. |
 | `glance` | planned | plaintext | `rollup_glance` | (none) | Device-facing top-line counters (sessions, cost, alerts). Non-goal: no per-model data in glance. |
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 14. Planned methods: 5.
+Live methods: 15. Planned methods: 5.
