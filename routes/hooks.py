@@ -189,18 +189,24 @@ def _find_approval(approval_id: str):
 
 # ── response helpers ───────────────────────────────────────────────────────
 
-def _hso(decision: str, reason: str) -> dict:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        },
+def _hso(decision: str, reason: str,
+         updated_input: "dict | None" = None) -> dict:
+    out = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": reason,
     }
+    if updated_input is not None:
+        # Question-set answers (WO-52): allow + updatedInput = the original
+        # tool_input plus the human's structured answers — the session
+        # resumes as if they had been picked in the terminal.
+        out["updatedInput"] = updated_input
+    return {"hookSpecificOutput": out}
 
 
-def _decided(decision: str, reason: str, approval_id: "str | None" = None):
-    body = _hso(decision, reason)
+def _decided(decision: str, reason: str, approval_id: "str | None" = None,
+             updated_input: "dict | None" = None):
+    body = _hso(decision, reason, updated_input)
     body["status"] = "decided"
     if approval_id:
         body["approval_id"] = approval_id
@@ -244,6 +250,37 @@ def _map_on_timeout(on_timeout: str) -> str:
 def _args_meta(row) -> dict:
     args = row.get("args")
     return args if isinstance(args, dict) else {}
+
+
+# ── question-set approvals (WO-52 phase 1) ─────────────────────────────────
+# Claude Code's AskUserQuestion tool is a question addressed to the human,
+# so it never needs a protection rule to be worth mirroring: when the gate
+# hook sees it, the question set is parked as an approval row the dashboard
+# renders full-fidelity, and an "answer" decision resumes the session with
+# the picked labels (hookSpecificOutput.updatedInput). Every failure mode —
+# window elapsed, malformed payload, unreadable answers, store down — falls
+# back to "ask" (the runtime's own terminal prompt). NEVER "deny" and NEVER
+# a fabricated answer: the worst case must be exactly today's behaviour.
+
+def _question_gate_enabled() -> bool:
+    return os.environ.get("CLAWMETRY_QUESTION_GATE", "1").strip() != "0"
+
+
+def _question_window_s() -> int:
+    """How long the dashboard/phone gets before the terminal prompt takes
+    over. Env override first, then the mirror window (same concept: a
+    bounded head start for the remote surface), then 180 s."""
+    raw = os.environ.get("CLAWMETRY_QUESTION_WINDOW_S", "").strip()
+    if raw:
+        try:
+            return max(10, int(raw))
+        except ValueError:
+            pass
+    try:
+        from clawmetry import approval_events as _ae
+        return int(_ae.mirror_window_s("claude_code"))
+    except Exception:
+        return 180
 
 
 # ── the receiver ───────────────────────────────────────────────────────────
@@ -312,6 +349,14 @@ def _pretooluse_impl(runtime: str):
     if not tool_name:
         return _decided("allow", "no tool_name in hook payload")
 
+    # ── AskUserQuestion: question-set approval (WO-52 phase 1) ───────────
+    # Intercepted BEFORE policy matching: the runtime is already asking its
+    # human a structured question, so no protection rule is required for
+    # the dashboard to be allowed to answer it.
+    if tool_name == "AskUserQuestion" and _question_gate_enabled():
+        return _park_question_set(runtime, session_id, cwd, tool_use_id,
+                                  tool_input)
+
     # ── fresh call: policy match ─────────────────────────────────────────
     try:
         from clawmetry import approvals as ap
@@ -365,34 +410,10 @@ def _pretooluse_impl(runtime: str):
         pass
 
     # ── park a pending row in the local queue ────────────────────────────
-    # Dedup: a client whose first POST timed out client-side retries without
-    # approval_id.  Primary key: tool_use_id.  Fallback (tool_use_id absent):
-    # (session_id, tool_name, md5(tool_input)) within a 30 s window.
-    if tool_use_id:
-        for r in _rows(_ls_read("query_approvals", status="pending",
-                                limit=100)):
-            if _args_meta(r).get("tool_use_id") == tool_use_id:
-                return _wait_on_row(str(r.get("id")), r, tool_name)
-    elif session_id:
-        ih = _input_hash(tool_input)
-        req_sid = f"{runtime}:{session_id}"
-        cutoff_ms = int(time.time() * 1000) - 30_000
-        for r in _rows(_ls_read("query_approvals", status="pending",
-                                limit=100)):
-            m = _args_meta(r)
-            if (m.get("tool_use_id") is None
-                    and m.get("input_hash") == ih
-                    and m.get("tool_name") == tool_name
-                    and r.get("requestor_session_id") == req_sid):
-                try:
-                    import datetime as _dt
-                    row_ms = int(_dt.datetime.fromisoformat(
-                        (r.get("created_at") or "").replace("Z", "+00:00")
-                    ).timestamp() * 1000)
-                except Exception:
-                    row_ms = 0
-                if row_ms >= cutoff_ms:
-                    return _wait_on_row(str(r.get("id")), r, tool_name)
+    dupe = _find_pending_dupe(runtime, session_id, tool_name, tool_input,
+                              tool_use_id)
+    if dupe is not None:
+        return _wait_on_row(str(dupe.get("id")), dupe, tool_name)
 
     approval_id = uuid.uuid4().hex
     now_ms = int(time.time() * 1000)
@@ -451,6 +472,143 @@ def _pretooluse_impl(runtime: str):
     return _wait_on_row(approval_id, row, tool_name)
 
 
+def _find_pending_dupe(runtime: str, session_id: str, tool_name: str,
+                       tool_input: dict, tool_use_id: str):
+    """Existing pending row for this exact call, or None.
+
+    Dedup: a client whose first POST timed out client-side retries without
+    approval_id.  Primary key: tool_use_id.  Fallback (tool_use_id absent):
+    (session_id, tool_name, md5(tool_input)) within a 30 s window.
+    """
+    if tool_use_id:
+        for r in _rows(_ls_read("query_approvals", status="pending",
+                                limit=100)):
+            if _args_meta(r).get("tool_use_id") == tool_use_id:
+                return r
+        return None
+    if session_id:
+        ih = _input_hash(tool_input)
+        req_sid = f"{runtime}:{session_id}"
+        cutoff_ms = int(time.time() * 1000) - 30_000
+        for r in _rows(_ls_read("query_approvals", status="pending",
+                                limit=100)):
+            m = _args_meta(r)
+            if (m.get("tool_use_id") is None
+                    and m.get("input_hash") == ih
+                    and m.get("tool_name") == tool_name
+                    and r.get("requestor_session_id") == req_sid):
+                try:
+                    import datetime as _dt
+                    row_ms = int(_dt.datetime.fromisoformat(
+                        (r.get("created_at") or "").replace("Z", "+00:00")
+                    ).timestamp() * 1000)
+                except Exception:
+                    row_ms = 0
+                if row_ms >= cutoff_ms:
+                    return r
+    return None
+
+
+def _park_question_set(runtime: str, session_id: str, cwd: str,
+                       tool_use_id: str, tool_input: dict):
+    """Park an AskUserQuestion call as a question-set approval row and wait.
+
+    The row carries the sanitized set in ``args["_cm_questions"]`` and
+    ``on_timeout="ask"`` — a question that nobody answers in the window
+    falls back to the runtime's own terminal prompt, NEVER the binary
+    deny default, and NEVER a fabricated answer.
+    """
+    from clawmetry import question_sets as qsets
+    questions = qsets.sanitize_question_set(tool_input)
+    if questions is None:
+        return _decided("ask", "AskUserQuestion payload not understood — "
+                               "falling back to the terminal prompt")
+
+    dupe = _find_pending_dupe(runtime, session_id, "AskUserQuestion",
+                              tool_input, tool_use_id)
+    if dupe is not None:
+        return _wait_on_row(str(dupe.get("id")), dupe, "AskUserQuestion")
+
+    approval_id = uuid.uuid4().hex
+    now_ms = int(time.time() * 1000)
+    window_s = _question_window_s()
+    summary = qsets.question_summary(questions)
+    ok = _ls_write("ingest_approval", approval={
+        "id": approval_id,
+        "requestor_session_id": f"{runtime}:{session_id}" if session_id
+                                else None,
+        "action": f"AskUserQuestion: {summary[:140]}",
+        "args": {
+            "source": "pretooluse-hook",
+            "runtime": runtime,
+            "kind": "question_set",
+            "tool_name": "AskUserQuestion",
+            "tool_input": tool_input,
+            "cwd": cwd,
+            "tool_use_id": tool_use_id or None,
+            "input_hash": None if tool_use_id else _input_hash(tool_input),
+            "policy": "AskUserQuestion",
+            "timeout": window_s,
+            "on_timeout": "ask",
+            "deadline_ms": now_ms + window_s * 1000,
+            "_cm_questions": questions,
+        },
+        "status": "pending",
+        "created_at": _utcnow(),
+    })
+    if not ok:
+        return _decided("ask", "approval store unavailable — falling back "
+                               "to the terminal prompt")
+    _audit("pending", "AskUserQuestion", {"approval_id": approval_id,
+                                          "kind": "question_set",
+                                          "session_id": session_id,
+                                          "questions": len(questions)})
+    _page_human({"id": approval_id, "runtime": runtime,
+                 "kind": "question_set", "tool_name": "AskUserQuestion",
+                 "command": summary[:140], "cwd": cwd,
+                 "policy": "AskUserQuestion",
+                 "requestor_session_id": session_id})
+    row = _find_approval(approval_id) or {"status": "pending", "args": {
+        "on_timeout": "ask",
+        "deadline_ms": now_ms + window_s * 1000,
+        "policy": "AskUserQuestion",
+        "tool_input": tool_input,
+        "_cm_questions": questions,
+    }}
+    return _wait_on_row(approval_id, row, "AskUserQuestion")
+
+
+def _answered_reply(approval_id: str, row: dict, tool_name: str):
+    """Turn an ``answered`` row into allow + updatedInput.
+
+    Re-validates the stored answers against the stored set before replying;
+    anything unreadable degrades to "ask" (the terminal prompt) — a broken
+    answer must never become a fabricated one.
+    """
+    meta = _args_meta(row)
+    try:
+        from clawmetry import question_sets as qsets
+        questions = meta.get("_cm_questions")
+        answers = meta.get("_cm_answers")
+        err = qsets.validate_answers(questions, answers)
+        if err:
+            raise ValueError(err)
+        updated = qsets.merge_answers_into_input(
+            meta.get("tool_input") or {}, answers)
+    except Exception as e:
+        _audit("answered:unreadable", tool_name,
+               {"approval_id": approval_id, "error": str(e)[:200]})
+        return _decided("ask", f"answers recorded but unreadable ({e}) — "
+                               "falling back to the terminal prompt",
+                        approval_id)
+    _audit("answered", tool_name, {"approval_id": approval_id})
+    return _decided(
+        "allow",
+        "Answered by the human via ClawMetry approvals — resuming with "
+        "their answers.",
+        approval_id, updated_input=updated)
+
+
 def _wait_on_row(approval_id: str, row: dict, tool_name: str):
     """Poll the approvals row for up to one wait slice; final answer or
     ``pending``. All state is in the row — safe under concurrent calls
@@ -470,7 +628,12 @@ def _wait_on_row(approval_id: str, row: dict, tool_name: str):
     slice_end = time.time() + _WAIT_SLICE_S
     status = str(row.get("status") or "pending").strip()
     reason = row.get("decision_reason")
+    is_question = bool(meta.get("_cm_questions"))
     while True:
+        if status == "answered":
+            # Question-set decision (WO-52): allow + updatedInput carrying
+            # the human's structured answers.
+            return _answered_reply(approval_id, row, tool_name)
         if status in ("approved", "auto_approved"):
             _audit("approved", tool_name, {"approval_id": approval_id,
                                            "policy": policy_name})
@@ -480,6 +643,13 @@ def _wait_on_row(approval_id: str, row: dict, tool_name: str):
                 f"(policy '{policy_name}')."
                 + (f" Reason: {reason}" if reason else ""),
                 approval_id)
+        if status == "expired" and is_question:
+            # A question that expired is NOT a refusal: hand the decision
+            # back to the runtime's own prompt (never the binary deny).
+            _audit("expired:ask", tool_name, {"approval_id": approval_id})
+            return _decided("ask", "question-set approval expired with no "
+                                   "answer — falling back to the terminal "
+                                   "prompt", approval_id)
         if status in ("denied", "expired"):
             _audit("denied", tool_name, {"approval_id": approval_id,
                                          "policy": policy_name})
@@ -526,6 +696,8 @@ def _wait_on_row(approval_id: str, row: dict, tool_name: str):
     # resolver == "timeout" is our own on_timeout write above).
     fresh = _find_approval(approval_id)
     final = str((fresh or {}).get("status") or "timeout").strip()
+    if final == "answered" and (fresh or {}).get("resolver") != "timeout":
+        return _answered_reply(approval_id, fresh or row, tool_name)
     if final in ("approved", "auto_approved") \
             and (fresh or {}).get("resolver") != "timeout":
         _audit("approved", tool_name, {"approval_id": approval_id,
