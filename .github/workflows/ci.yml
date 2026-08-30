@@ -401,6 +401,7 @@ jobs:
             tests/test_license_sync_pro_from_config.py \
             tests/test_install_script_pro_upgrade.py \
             tests/test_wake_poll.py \
+            tests/test_cli_unattended_update.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
