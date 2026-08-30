@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Feature: session replays load their full history, without giving up the instant open (carries #5362, #5369) (2026-08-30)
+- **Who this reaches:** anyone replaying a session, hosted or local. The hosted replay used to show only a session's last 80 messages — the opening message included, embarrassingly, was often missing, so a replay opened mid-conversation on a bare tool chip. The local dashboard had the opposite flaw: long sessions showed their FIRST 500 messages, hiding the live end of the conversation.
+- **The first message is back.** A capped replay now always keeps the conversation's opening message, an honest "N earlier messages not shown" marker, and the newest activity — so every replay opens on what was actually asked, and the turn list has its anchor. (#5362)
+- **And the rest is one click away.** Capped replays grow a "Load earlier messages" control: each click fetches the next older page — on the hosted dashboard the page travels the same encrypted channel as everything else (your machine renders and encrypts it; the cloud stores bytes it cannot read). When you reach the session's start, the marker disappears and the control retires. Nothing is fetched until you ask, so the instant first paint costs no extra requests. (#5369)
+- **Cheaper snapshots too.** The background snapshot no longer re-reads and re-renders every recent session's transcript on every cycle — an unchanged session now costs a single-row freshness check.
+- **Verified:** pre-merge against a real 7.8 GB store: a 1,263-message session opened instantly at 500 and five clicks walked back to exactly message one — no duplicates, no gaps. 7 new tests plus contract, relay, and golden pins.
+
 ### Fix: cloud transcripts answer immediately, even on a busy machine (carries #5358) (2026-08-29)
 - **Who this reaches:** anyone reading a session on the hosted dashboard whose machine is deep in work. The previous release taught an idle machine to answer a transcript request within seconds; a busy one still finished its current round of housekeeping first, which on a machine with a lot of history took twenty seconds or more.
 - **The answer now goes to the front of the line.** The moment the machine learns someone is waiting, it responds first and returns to its housekeeping after, instead of the other way around. Measured before the fix: 22.5 seconds. Expected after: a few seconds.
