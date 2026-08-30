@@ -168,6 +168,27 @@ def _matcher_from_policies(policies) -> str:
     return "|".join(parts) if parts else "Bash"
 
 
+def _question_gate_enabled() -> bool:
+    """Question-set approvals (WO-52): on by default, one env var off."""
+    return os.environ.get("CLAWMETRY_QUESTION_GATE", "1").strip() != "0"
+
+
+def _question_window_s() -> int:
+    """Mirror of routes.hooks._question_window_s (stdlib-only fast path
+    must not import Flask modules): env override → mirror window → 180 s."""
+    raw = os.environ.get("CLAWMETRY_QUESTION_WINDOW_S", "").strip()
+    if raw:
+        try:
+            return max(10, int(raw))
+        except ValueError:
+            pass
+    try:
+        from clawmetry import approval_events as _ae
+        return int(_ae.mirror_window_s("claude_code"))
+    except Exception:
+        return 180
+
+
 def _timeout_from_policies(policies) -> int:
     """Hook timeout: the longest matching policy window + buffer, so the
     receiver's own on_timeout mapping always answers first."""
@@ -544,6 +565,20 @@ def _install(policies) -> None:
     command = _hook_command(base)
     matcher = _matcher_from_policies(policies)
     timeout = _timeout_from_policies(policies)
+    # Question-set approvals (WO-52 phase 1): whenever the gate is armed,
+    # also watch AskUserQuestion so the receiver can mirror the runtime's
+    # structured questions to the dashboard, which answers with the actual
+    # option labels (hookSpecificOutput.updatedInput). No answer inside the
+    # question window → the receiver replies "ask" and the terminal prompt
+    # takes over, exactly today's flow. CLAWMETRY_QUESTION_GATE=0 opts out.
+    if _question_gate_enabled():
+        if "AskUserQuestion" not in matcher.split("|"):
+            matcher = f"{matcher}|AskUserQuestion"
+        # The hook timeout must outlive the question window, or Claude Code
+        # cancels the hook before our own "ask" fallback lands and the
+        # parked row is left pending with nobody waiting on it.
+        timeout = max(timeout, hook_ownership.clamp_hook_timeout(
+            _question_window_s() + _HOOK_TIMEOUT_BUFFER_S))
     desired = {
         "matcher": matcher,
         "hooks": [{"type": "command", "command": command,
