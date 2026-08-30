@@ -6644,8 +6644,11 @@ class LocalStore:
             last = float(last_ts or started)
             meta = {
                 "source": "otlp_spans",
-                # The liveness/roster bucketers read metadata.runtime and
-                # default to 'openclaw' without it (_live_counts_by_runtime).
+                # Liveness/roster bucketing keys on metadata.runtime, with
+                # 'openclaw' as the default for rows that lack it — so stamp
+                # the app's identity here. (The consumer already exists on
+                # main: sync.py _live_counts_by_runtime reads this field;
+                # pinned by test_live_counts_bucket_by_metadata_runtime.)
                 "runtime": str(agent_type or "custom"),
                 "service_name": str(service_name or ""),
                 "trace_count": int(trace_count or 0),
