@@ -421,7 +421,8 @@ def api_guard_control():
         "advisory_only": bool(result.get("advisory_only")),
         "mechanism": _detail_safe(result.get("mechanism"))[:80],
         "note": _detail_safe(result.get("note")),
-        "unsupported": result.get("unsupported"),
+        "unsupported": (None if result.get("unsupported") is None
+                        else _detail_safe(result.get("unsupported"))[:80]),
     })
 
 
