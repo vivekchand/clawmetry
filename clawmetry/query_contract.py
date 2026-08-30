@@ -115,6 +115,22 @@ QUERY_CONTRACT: dict = {
         "backing": "query_events",
         "doc": "Alias of events scoped to one required session_id.",
     },
+    "transcript_page": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "before_ts": _arg(),
+            "limit": _arg(default=150, lo=1, hi=250),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_transcript_page",
+        "doc": (
+            "One older-history page of a session's events, newest-first. "
+            "before_ts is an exclusive ms-epoch cursor (pass the previous "
+            "page's next_before_ts to walk backward). Returns "
+            "{rows, count, has_more, next_before_ts}."
+        ),
+    },
     "spans": {
         "status": STATUS_LIVE,
         "args": {
