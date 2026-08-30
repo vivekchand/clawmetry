@@ -1307,7 +1307,7 @@ def _nemoclaw_onboard_trace_spans() -> dict:
     if not isinstance(data, dict):
         return {}
 
-    out: dict = {}
+    out: dict = {"onboardTraceArtifact": trace_file}
 
     raw_spans = data.get("resource_spans")
     if isinstance(raw_spans, list):
