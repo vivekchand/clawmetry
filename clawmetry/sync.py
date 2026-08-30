@@ -8783,6 +8783,12 @@ _PENDING_SHAPES = {
     "runtimes", "models", "rollup_sessions",
     # Added in P3 (#2989): rollup-backed span/trace shapes.
     "spans", "traces", "external_calls", "search",
+    # Replay history paging: snapshot carries the capped tail, this shape
+    # serves older pages on demand (rendered daemon-side before encryption).
+    "transcript_page",
+    # #1012 Agent Graph: was live in the q/1 registry but never added here,
+    # so cloud-requested on-demand fetches of it silently no-oped.
+    "agent_graph",
 }
 
 
@@ -8813,12 +8819,18 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
         "transcript": "query_events",
+        "transcript_page": "query_transcript_page",
     }
     method = method_map.get(shape)
     if not method:
         raise ValueError(f"unknown shape: {shape}")
-    rows = getattr(store, method)(**_filter_store_kwargs(shape, args or {}))
-    return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
+    result = getattr(store, method)(**_filter_store_kwargs(shape, args or {}))
+    if isinstance(result, dict):
+        # transcript_page returns {rows, has_more, next_before_ts} directly.
+        result.setdefault("_shape", shape)
+        result["_via"] = "fallback"
+        return result
+    return {"rows": result, "count": len(result), "_shape": shape, "_via": "fallback"}
 
 
 # Per-shape allowlist of kwargs accepted by the underlying ``LocalStore``
@@ -8831,6 +8843,7 @@ _SHAPE_ALLOWED_KWARGS = {
     "sessions":   {"agent_id", "since", "until", "limit"},
     "aggregates": {"agent_id", "since", "until"},
     "transcript": {"session_id", "limit"},
+    "transcript_page": {"session_id", "before_ts", "limit"},
 }
 
 
@@ -11469,6 +11482,13 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                         "_source": "local_store",
                         "_shape":  "brain_history",
                     }
+            elif shape == "transcript_page":
+                # Replay history paging: render the raw event page into the
+                # SAME transcript messages routes/sessions serves locally, so
+                # the browser never re-implements the message builder. Raw
+                # payloads are stripped and tool detail trimmed — the relay
+                # blob has the same size discipline as the snapshot.
+                payload = _render_transcript_page(_local_dispatch(shape, args), args)
             else:
                 payload = _local_dispatch(shape, args)
             blob = encrypt_payload(payload, enc_key)
@@ -16053,6 +16073,41 @@ def _derive_transcript_title(msgs):
     return ""
 
 
+def _render_transcript_page(page: dict, args: dict) -> dict:
+    """Turn a ``transcript_page`` raw-event page into rendered transcript
+    messages for the cloud relay.
+
+    Reuses ``routes.sessions._try_local_store_transcript`` (the one message
+    builder every surface shares) on the page's rows, then strips raw
+    payloads / trims tool detail via ``_project_snapshot_messages`` so the
+    encrypted relay blob stays snapshot-sized. Never raises — a failed render
+    answers an empty page with paging intact so the browser can retry or
+    stop, not a poisoned blob.
+    """
+    page = page if isinstance(page, dict) else {}
+    out = {
+        "messages": [],
+        "count": 0,
+        "has_more": bool(page.get("has_more")),
+        "next_before_ts": page.get("next_before_ts"),
+        "_shape": "transcript_page",
+        "_source": "local_store",
+    }
+    try:
+        rows = page.get("rows") or []
+        if not rows:
+            return out
+        import routes.sessions as _s
+        t = _s._try_local_store_transcript(
+            (args or {}).get("session_id") or "", _events=rows)
+        msgs = (t or {}).get("messages") or []
+        out["messages"] = _project_snapshot_messages(msgs)
+        out["count"] = len(out["messages"])
+    except Exception as _e:
+        log.debug("transcript_page render failed: %s", _e)
+    return out
+
+
 def _first_user_prompt_index(msgs):
     """Index of the opening user prompt in a transcript message list, or
     ``None``. Mirrors what the replay's turn grouping treats as a turn anchor:
@@ -16068,7 +16123,11 @@ def _first_user_prompt_index(msgs):
 
 def _cap_transcript_messages(msgs, msg_cap):
     """Cap a transcript to ~``msg_cap`` messages for the snapshot WITHOUT
-    losing the opening user prompt. Returns ``(messages, truncated)``.
+    losing the opening user prompt. Returns ``(messages, truncated,
+    oldest_contiguous_ts)`` — the third element is the ms timestamp of the
+    first message of the kept TAIL (the contiguous newest window), i.e. the
+    ``before_ts`` cursor a "load earlier messages" fetch should start from;
+    ``None`` when nothing was cut or the tail carries no timestamps.
 
     The old ``msgs[-msg_cap:]`` tail-cap silently dropped the head of any
     session longer than the cap, including the first user message, so the
@@ -16082,7 +16141,7 @@ def _cap_transcript_messages(msgs, msg_cap):
     recent messages; the full transcript stays on the local dashboard.
     """
     if len(msgs) <= msg_cap:
-        return msgs, False
+        return msgs, False, None
     tail = msgs[-(msg_cap - 2):] if msg_cap > 2 else msgs[-msg_cap:]
     tail_start = len(msgs) - len(tail)
     keep = []
@@ -16113,7 +16172,21 @@ def _cap_transcript_messages(msgs, msg_cap):
             ),
             "timestamp": marker_ts,
         })
-    return keep + tail, True
+    oldest_contiguous_ts = None
+    for m in tail:
+        ts = m.get("timestamp") if isinstance(m, dict) else None
+        if isinstance(ts, (int, float)):
+            oldest_contiguous_ts = ts
+            break
+    return keep + tail, True, oldest_contiguous_ts
+
+
+# Freshness cache for _build_transcripts: sid -> {fp, cap, t}. The fp is the
+# newest event's (ts, id); while it holds, the finished transcript dict is
+# reused instead of re-fetched and re-rendered. Bounded FIFO — the daemon is
+# long-lived and sessions churn.
+_TRANSCRIPT_SNAP_CACHE: dict = {}
+_TRANSCRIPT_SNAP_CACHE_MAX = 32
 
 
 def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
@@ -16158,6 +16231,25 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
             return {}
         out = {}
         for sid in recent_sids:
+            # Perf: a snapshot cycle used to re-fetch up to 10k events and
+            # re-render the transcript for EVERY recent session, every cycle,
+            # even when nothing changed. Probe the newest (ts, id) with a
+            # 1-row query and reuse the previously built transcript when the
+            # fingerprint matches — an idle session costs one indexed row
+            # instead of a 10k-row scan + rebuild. (A backfill that inserts
+            # only OLDER events won't move the fingerprint; the cache heals
+            # on the session's next new event.)
+            fp = None
+            try:
+                head = store.query_events(session_id=sid, limit=1)
+                if head:
+                    fp = (str(head[0].get("ts")), str(head[0].get("id")))
+            except Exception:
+                fp = None
+            cached = _TRANSCRIPT_SNAP_CACHE.get(sid)
+            if fp and cached and cached.get("fp") == fp                     and cached.get("cap") == msg_cap:
+                out[sid] = cached["t"]
+                continue
             try:
                 rows = store.query_events(session_id=sid, limit=10000)
                 t = _s._try_local_store_transcript(sid, _events=rows)
@@ -16176,11 +16268,16 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                     title = _derive_transcript_title(msgs)
                 except Exception:
                     title = ""
-                msgs, _was_capped = _cap_transcript_messages(msgs, msg_cap)
+                msgs, _was_capped, _oldest_tail_ts = _cap_transcript_messages(
+                    msgs, msg_cap)
                 if _was_capped:
                     t = dict(t)
                     t["messages"] = msgs
                     t["_truncated"] = True
+                    # Paging cursor for the replay's "load earlier messages":
+                    # the first fetch asks for history strictly older than
+                    # the contiguous tail this snapshot carries.
+                    t["_oldest_contiguous_ts"] = _oldest_tail_ts
                 # Perf: the per-message `raw` payload (#1895) can be ~12 KB each
                 # and the tool deep-dive (#1911) carries input/output; shipping
                 # them in full for 8 sessions × 80 msgs would bloat the shared
@@ -16195,6 +16292,12 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 # openclaw, so "Claude Code" filter showed "no sessions").
                 t["runtime"] = _runtime_of_session(sid)
                 out[sid] = t
+                if fp:
+                    _TRANSCRIPT_SNAP_CACHE[sid] = {
+                        "fp": fp, "cap": msg_cap, "t": t}
+                    while len(_TRANSCRIPT_SNAP_CACHE) > _TRANSCRIPT_SNAP_CACHE_MAX:
+                        _TRANSCRIPT_SNAP_CACHE.pop(
+                            next(iter(_TRANSCRIPT_SNAP_CACHE)))
         return out
     except Exception as _e:
         log.debug("transcripts snapshot build failed: %s", _e)
