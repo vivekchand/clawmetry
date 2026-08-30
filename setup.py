@@ -90,7 +90,23 @@ setup(
     install_requires=[
         "flask>=2.0,<4",
         "waitress>=2.0",
-        "cryptography>=3.0",
+        # AES-256-GCM for the cloud-sync snapshot envelope. The floor was
+        # >=3.0, which accepts 42 releases carrying published advisories --
+        # the newest being CVE-2026-69247 (PKCS#7 Bleichenbacher oracle),
+        # first fixed in 50.0.0. Nothing pinned us to an old release; the
+        # open floor simply never forced the upgrade, so an existing
+        # environment that already had a vulnerable cryptography kept it.
+        # clawmetry-cloud floors its own copy at >=50.0.0 for this reason.
+        #
+        # Gated per interpreter, like the cffi ladder below, because
+        # cryptography's support window is narrower than ours
+        # (python_requires=">=3.8"): 48.0.0+ needs >=3.9, and every release
+        # from 46.0.4 on excludes 3.9.0/3.9.1. So 3.8.x, 3.9.0 and 3.9.1
+        # have NO advisory-clean release to move to and keep the old floor
+        # rather than become uninstallable -- an unconditional >=50.0.0
+        # would turn `pip install clawmetry` into a resolver error there.
+        'cryptography>=50.0.0; python_full_version >= "3.9.2"',
+        'cryptography>=3.0; python_full_version < "3.9.2"',
         # cffi is pinned per interpreter, and both halves are load-bearing:
         # - Below 3.14: cffi 2.0.0 introduced a Python 3.9 finalizer
         #   regression that SIGSEGVs at sys.exit() when argparse prints
