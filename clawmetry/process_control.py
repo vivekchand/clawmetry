@@ -1633,8 +1633,13 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
                 "reason": "no_qwen_projects_dir", "session_id": sid}
     import json
     fname = sid + ".runtime.json"
+    root_real = os.path.realpath(root)
     for h in hashes:
-        path = os.path.join(root, h, "chats", fname)
+        path = os.path.realpath(os.path.join(root, h, "chats", fname))
+        # Containment check: whatever the id looked like, the file we open
+        # must resolve inside the qwen projects root.
+        if not path.startswith(root_real + os.sep):
+            continue
         if not os.path.isfile(path):
             continue
         try:

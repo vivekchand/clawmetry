@@ -20313,8 +20313,11 @@ def _guard_actuate(runtime: str, session_id: str, cwd: str,
                         "advisory_only": not cap["effective"],
                         "note": cap["detail"]}
             return _pc.resume_session(rt, session_id, cwd)
-    except Exception as e:  # noqa: BLE001 — never raise into the daemon tick
-        return {"ok": False, "detail": f"actuator_error:{str(e)[:200]}"}
+    except Exception:  # noqa: BLE001 — never raise into the daemon tick
+        # The exception text stays in the log; the returned detail is a fixed
+        # token because this dict is recorded and can reach an HTTP response.
+        log.exception("guard actuator %s failed for %s", action, session_id)
+        return {"ok": False, "detail": "actuator_error"}
     return {"ok": False, "detail": "no-op"}
 
 

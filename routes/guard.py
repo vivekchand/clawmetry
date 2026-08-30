@@ -25,6 +25,11 @@ from flask import Blueprint, jsonify, request
 
 log = logging.getLogger("clawmetry.guard")
 
+
+def _log_safe(v) -> str:
+    """One log token from a request-supplied value: no line breaks, bounded."""
+    return str(v or "").replace("\r", " ").replace("\n", " ")[:128]
+
 bp_guard = Blueprint("guard", __name__)
 
 # Actions a caller may ask for. `resume` is control-only (there is no policy
@@ -361,7 +366,10 @@ def api_guard_control():
     except Exception:  # noqa: BLE001
         # Full detail goes to the server log; the client gets a generic
         # message so an exception can never leak internals to the page.
-        log.exception("guard control %s failed for %s", action, session_id)
+        # Request-supplied values are stripped of line breaks before logging
+        # so a crafted id cannot forge extra log lines.
+        log.exception("guard control %s failed for %s",
+                      _log_safe(action), _log_safe(session_id))
         return jsonify({"ok": False,
                         "error": "control action failed; see the server log",
                         "session_id": session_id, "action": action}), 500
