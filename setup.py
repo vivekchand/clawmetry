@@ -90,12 +90,46 @@ setup(
     install_requires=[
         "flask>=2.0,<4",
         "waitress>=2.0",
-        "cryptography>=3.0",
-        # cffi 2.0.0 introduced a Python 3.9 finalizer regression that causes
-        # a SIGSEGV at sys.exit() when argparse prints --help text, crashing
-        # `clawmetry uninstall --help` on py3.9. Pin below 2.0 until cffi
-        # ships a fix upstream. See issue #5108.
-        "cffi<3",
+        # AES-256-GCM for the cloud-sync snapshot envelope, so it is on the
+        # data path. The floor was >=3.0, which accepts 42 releases carrying
+        # published advisories. An open floor never FORCES an upgrade -- pip
+        # has no reason to move a requirement that is already satisfied -- so
+        # an environment that already had a vulnerable cryptography kept it.
+        #
+        # The CEILING here is set by the cffi pin below, not by taste.
+        # cryptography 46.0.1+ requires cffi>=2.0.0 on 3.9+, which
+        # contradicts the `cffi<2` we pin under 3.14 (issue #5108), so
+        # 46.0.0 is the newest release that resolves under 3.14. Above
+        # 3.14, where we already take cffi>=2, the newest is reachable.
+        #
+        # Interpreter bands, in the same conditional shape as cffi below:
+        #   3.14+            cffi>=2 already, so >=50.0.0 (advisory-clean)
+        #   3.9.2 - 3.13     capped at 46.0.0 by cffi<2
+        #   3.8/3.9.0/3.9.1  46.0.4+ excludes 3.9.0/3.9.1, so the old floor
+        #                    stays rather than making `pip install clawmetry`
+        #                    a resolver error on an interpreter we support
+        #
+        # Under 3.14 this closes the 36 advisories fixed up to 46.0.0. The
+        # six newer ones (fixed in 46.0.6, 46.0.7, 48.0.1, 49.0.0 x2 and
+        # 50.0.0, the last being CVE-2026-69247) are NOT reachable there at
+        # any floor: cffi<2 caps us at 46.0.0. Closing them means narrowing
+        # that pin -- it is load-bearing and retiring it is its own change.
+        'cryptography>=50.0.0; python_version >= "3.14"',
+        'cryptography>=46.0.0; python_full_version >= "3.9.2" and python_version < "3.14"',
+        'cryptography>=3.0; python_full_version < "3.9.2"',
+        # cffi is pinned per interpreter, and both halves are load-bearing:
+        # - Below 3.14: cffi 2.0.0 introduced a Python 3.9 finalizer
+        #   regression that SIGSEGVs at sys.exit() when argparse prints
+        #   --help text, crashing `clawmetry uninstall --help` on py3.9
+        #   (issue #5108) — and cffi 2.1+ ships no cp39 wheels at all, so
+        #   <2 stays correct there.
+        # - On 3.14+: cffi 1.x ships NO cp314 wheels, so an unconditional
+        #   <2 forces a source build that demands MSVC on end-user Windows
+        #   machines ("Microsoft Visual C++ 14.0 or greater is required")
+        #   and bricked a desktop first install in the field (2026-08-29).
+        #   cffi 2.x is the only series with 3.14 wheels.
+        'cffi<2; python_version < "3.14"',
+        'cffi>=2; python_version >= "3.14"',
         # Local store at ~/.clawmetry/clawmetry.duckdb. Holds events,
         # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
         # wheel; columnar storage gives 10-100x speed vs SQLite for the
@@ -163,7 +197,7 @@ setup(
     keywords=(
         "clawmetry observability monitoring dashboard "
         "ai agent llm llm-observability opentelemetry cost-tracking "
-        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker "
+        "claude-code codex cursor github-copilot gemini-cli cline openhands openworker lovable replit "
         "opencode aider goose qwen devin kimi grok n8n antigravity deepseek "
         "hermes exo grok-bot openclaw nemoclaw nanoclaw picoclaw moltbot"
     ),
