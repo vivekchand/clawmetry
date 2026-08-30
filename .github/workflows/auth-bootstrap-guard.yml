@@ -6,6 +6,10 @@ on:
       - "clawmetry/static/js/*.js"
       - ".github/workflows/auth-bootstrap-guard.yml"
 
+concurrency:
+  group: abg-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

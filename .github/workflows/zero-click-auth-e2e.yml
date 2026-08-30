@@ -28,6 +28,10 @@ on:
       - "tests/e2e/package.json"
       - ".github/workflows/zero-click-auth-e2e.yml"
 
+concurrency:
+  group: zca-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
