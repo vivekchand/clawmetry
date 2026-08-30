@@ -11878,6 +11878,9 @@ function renderLogs(elId, lines) {
 }
 
 function escHtml(s) { s=String(s||''); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Attribute context needs the quotes escaped too — escHtml alone lets a value
+// containing '"' terminate the attribute it sits in.
+function escAttr(s) { return escHtml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // Embed a JS string literal inside a double-quoted inline handler
 // (onclick="fn(...)"). JSON.stringify emits double quotes, which TERMINATE
 // the surrounding attribute and silently truncate the handler (the Context
@@ -13666,7 +13669,7 @@ async function loadSessions() {
       var _incColor = _sevCrit ? '#dc2626' : '#d97706';
       var _incBg = _sevCrit ? 'rgba(220,38,38,0.12)' : 'rgba(217,119,6,0.12)';
       var _incBorder = _sevCrit ? 'rgba(220,38,38,0.4)' : 'rgba(217,119,6,0.35)';
-      html += '<span class="session-rogue-warn" onclick="event.stopPropagation();switchTab(\'guard\')" title="' + escHtml(_incTitle) + '"' +
+      html += '<span class="session-rogue-warn" onclick="event.stopPropagation();switchTab(\'guard\')" title="' + escAttr(_incTitle) + '"' +
         ' style="margin-left:6px;color:' + _incColor + ';font-size:11px;font-weight:700;background:' + _incBg + ';border:1px solid ' + _incBorder + ';border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; ' +
         escHtml(_incLabel) + (_incMoney ? ' · ' + _incMoney : '') + '</span>';
     } else {
@@ -13683,28 +13686,30 @@ async function loadSessions() {
     // process_control.runtime_control_support); a control that cannot work is
     // disabled with the reason on it rather than quietly doing nothing. Cloud
     // keeps its own Stop dialog (its kill-switch JS overrides stopSession).
-    var _sidJs = escHtml(sid).replace(/'/g, "\\\\'");
+    // Data-attributes + one delegated listener, never string-built onclick
+    // handlers: a session id, cwd, or capability reason containing a quote
+    // must be inert markup, not a way out of the attribute.
     html += '<span style="display:flex;gap:5px;align-items:center;flex-shrink:0;">';
     if (_guard && !window.CLOUD_MODE) {
       var _acts = _guard.control_actions || [];
-      var _rtJs = escHtml(_guard.runtime || '').replace(/'/g, "\\\\'");
-      var _cwdJs = escHtml(_guard.cwd || '').replace(/'/g, "\\\\'");
       var _mk = function(action, glyph, label, bg) {
         var on = _acts.indexOf(action) !== -1;
         var why = on ? (_guard.control_note || (label + ' this session'))
                      : (_guard.control_reason || 'Not available for this session');
         if (on) {
-          return '<button onclick="event.stopPropagation();guardControl(\'' + _sidJs + '\',\'' + action + '\',\'' + _rtJs + '\',\'' + _cwdJs + '\')" title="' + escHtml(why) + '"' +
+          return '<button class="cm-guard-btn" data-action="' + action + '"' +
+            ' data-sid="' + escAttr(sid) + '" data-rt="' + escAttr(_guard.runtime || '') + '"' +
+            ' data-cwd="' + escAttr(_guard.cwd || '') + '" title="' + escAttr(why) + '"' +
             ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + label + '</button>';
         }
-        return '<button disabled title="' + escHtml(why) + '"' +
+        return '<button disabled title="' + escAttr(why) + '"' +
           ' style="background:var(--bg-tertiary,#2a2a2a);color:var(--text-muted,#888);border:1px solid var(--border-secondary,#3a3a3a);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:not-allowed;opacity:.6;">' + glyph + ' ' + label + '</button>';
       };
       html += _mk('pause', '⏸', 'Pause', '#b45309');
       html += _mk('resume', '▶', 'Resume', '#15803d');
       html += _mk('stop', '⏹', 'Stop', '#b91c1c');
     } else {
-      html += '<button onclick="event.stopPropagation();stopSession(\'' + _sidJs + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+      html += '<button class="cm-stop-btn" data-sid="' + escAttr(sid) + '" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
     }
     html += '</span>';
     html += '</div>';
@@ -13902,6 +13907,23 @@ function _renderSessionsRetentionCta(capped) {
   }
 }
 
+// Delegated click handler for the per-row session controls. The buttons carry
+// their arguments as data-attributes (see the row renderer) so no untrusted
+// value is ever interpolated into an inline handler.
+document.addEventListener('click', function(ev) {
+  var gb = ev.target.closest && ev.target.closest('.cm-guard-btn');
+  if (gb) {
+    ev.stopPropagation();
+    guardControl(gb.dataset.sid, gb.dataset.action, gb.dataset.rt, gb.dataset.cwd);
+    return;
+  }
+  var sb = ev.target.closest && ev.target.closest('.cm-stop-btn');
+  if (sb) {
+    ev.stopPropagation();
+    stopSession(sb.dataset.sid);
+  }
+});
+
 // Row-level session control. One endpoint, the same actuator the Guard tab
 // and the daemon's policies use, so a click here and an automatic policy
 // action are identical to the agent process. Reports the REAL outcome —
@@ -13924,7 +13946,7 @@ async function guardControl(sessionId, action, runtime, cwd) {
     if (!r.ok || !data.ok) {
       var why = (data && (data.detail || data.error)) || 'request failed';
       alert('Could not ' + action + ' this session: ' + why);
-    } else if (data.raw && data.raw.advisory_only) {
+    } else if (data.advisory_only) {
       alert('Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.');
     }
     loadSessions();

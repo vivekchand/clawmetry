@@ -1619,6 +1619,12 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "runtime": "qwen_code", "reason": "no_session_id"}
+    # The session id becomes a filename component below. A value carrying a
+    # path separator or dot-dot must be refused, not resolved — this function
+    # is reachable from an HTTP-supplied session id.
+    if "/" in sid or "\\" in sid or ".." in sid or os.path.basename(sid) != sid:
+        return {"ok": False, "runtime": "qwen_code",
+                "reason": "invalid_session_id"}
     root = _qwen_projects_dir()
     try:
         hashes = os.listdir(root)

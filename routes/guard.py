@@ -17,10 +17,13 @@ Naming note: ``/api/guard/policies`` is deliberately distinct from
 sandbox/permission surface, this one is mid-run enforcement. Different axis,
 different table, no shared state.
 """
+import logging
 import time
 import uuid
 
 from flask import Blueprint, jsonify, request
+
+log = logging.getLogger("clawmetry.guard")
 
 bp_guard = Blueprint("guard", __name__)
 
@@ -355,8 +358,12 @@ def api_guard_control():
         # are indistinguishable to the agent process.
         from clawmetry.sync import _guard_actuate
         result = _guard_actuate(runtime, session_id, cwd, action)
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(e)[:300],
+    except Exception:  # noqa: BLE001
+        # Full detail goes to the server log; the client gets a generic
+        # message so an exception can never leak internals to the page.
+        log.exception("guard control %s failed for %s", action, session_id)
+        return jsonify({"ok": False,
+                        "error": "control action failed; see the server log",
                         "session_id": session_id, "action": action}), 500
 
     result = result if isinstance(result, dict) else {"ok": False}
@@ -377,14 +384,20 @@ def api_guard_control():
     except Exception:
         pass
 
+    # A curated result, not the raw actuator dict: an actuator error string
+    # can carry an exception message, and the client only needs the fields
+    # the UI renders.
     return jsonify({
         "ok": ok,
         "action": action,
         "session_id": session_id,
         "runtime": runtime,
         "detail": str(result.get("detail") or result.get("reason")
-                      or result.get("error") or ""),
-        "raw": result,
+                      or result.get("error") or "")[:300],
+        "advisory_only": bool(result.get("advisory_only")),
+        "mechanism": str(result.get("mechanism") or "")[:80],
+        "note": str(result.get("note") or "")[:300],
+        "unsupported": result.get("unsupported"),
     })
 
 
