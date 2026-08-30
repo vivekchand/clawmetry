@@ -16053,6 +16053,69 @@ def _derive_transcript_title(msgs):
     return ""
 
 
+def _first_user_prompt_index(msgs):
+    """Index of the opening user prompt in a transcript message list, or
+    ``None``. Mirrors what the replay's turn grouping treats as a turn anchor:
+    ``role == "user"``, not a tool chip, non-empty text content."""
+    for i, m in enumerate(msgs):
+        if not isinstance(m, dict) or m.get("role") != "user" or m.get("tool"):
+            continue
+        c = m.get("content")
+        if isinstance(c, str) and c.strip():
+            return i
+    return None
+
+
+def _cap_transcript_messages(msgs, msg_cap):
+    """Cap a transcript to ~``msg_cap`` messages for the snapshot WITHOUT
+    losing the opening user prompt. Returns ``(messages, truncated)``.
+
+    The old ``msgs[-msg_cap:]`` tail-cap silently dropped the head of any
+    session longer than the cap, including the first user message, so the
+    cloud replay opened mid-session on a bare tool chip and long sessions
+    lost every turn anchor (user report 2026-08-29: 83-message session,
+    cap 80, opening prompt gone; 756-message session rendered as a single
+    turn). The title fix (_derive_transcript_title runs pre-cap) masked it
+    in the list view while the replay stayed headless.
+
+    Keep the opening user prompt, an honest omission marker, and the most
+    recent messages; the full transcript stays on the local dashboard.
+    """
+    if len(msgs) <= msg_cap:
+        return msgs, False
+    tail = msgs[-(msg_cap - 2):] if msg_cap > 2 else msgs[-msg_cap:]
+    tail_start = len(msgs) - len(tail)
+    keep = []
+    fu_idx = _first_user_prompt_index(msgs)
+    if fu_idx is not None and fu_idx < tail_start:
+        keep.append(msgs[fu_idx])
+    omitted = tail_start - len(keep)
+    if omitted > 0:
+        # Timestamp the marker just before the tail so the viewer's
+        # ts-sorted merge keeps it between the opening prompt and the
+        # recent messages.
+        marker_ts = None
+        for m in tail:
+            ts = m.get("timestamp") if isinstance(m, dict) else None
+            if isinstance(ts, (int, float)):
+                marker_ts = ts - 1
+                break
+        if marker_ts is None and keep:
+            ts = keep[0].get("timestamp")
+            if isinstance(ts, (int, float)):
+                marker_ts = ts + 1
+        keep.append({
+            "role": "system",
+            "content": (
+                "… %d earlier messages not shown here to keep cloud sync "
+                "light. Open your local ClawMetry dashboard for the full "
+                "transcript." % omitted
+            ),
+            "timestamp": marker_ts,
+        })
+    return keep + tail, True
+
+
 def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
     """Recent per-session transcripts for the cloud Embodied tab.
 
@@ -16113,9 +16176,9 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                     title = _derive_transcript_title(msgs)
                 except Exception:
                     title = ""
-                if len(msgs) > msg_cap:
+                msgs, _was_capped = _cap_transcript_messages(msgs, msg_cap)
+                if _was_capped:
                     t = dict(t)
-                    msgs = msgs[-msg_cap:]
                     t["messages"] = msgs
                     t["_truncated"] = True
                 # Perf: the per-message `raw` payload (#1895) can be ~12 KB each
