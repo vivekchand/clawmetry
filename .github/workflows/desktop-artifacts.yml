@@ -193,7 +193,30 @@ jobs:
           sync && sleep 2
           osascript -e 'tell application "Finder" to close every window' || true
           sleep 1
-          hdiutil detach "/Volumes/ClawMetry" -force
+          # Spotlight/fseventsd can hold the freshly-arranged volume busy
+          # for several seconds; a single -force detach failed two tagged
+          # builds in a row (v0.12.788 + v0.12.789: `hdiutil: couldn't
+          # eject "disk8" - Resource busy`, exit 16), which kept both
+          # Releases drafts and left /releases/latest serving the previous
+          # version's installers. Retry with backoff, fall back to
+          # diskutil, and only then fail.
+          detached=""
+          for i in 1 2 3 4 5 6; do
+            if hdiutil detach "/Volumes/ClawMetry" -force; then
+              detached=1; break
+            fi
+            echo "detach attempt $i failed; retrying in $((i * 3))s"
+            sleep $((i * 3))
+          done
+          if [ -z "$detached" ]; then
+            diskutil unmountDisk force "/Volumes/ClawMetry" || true
+            sleep 3
+            hdiutil detach "/Volumes/ClawMetry" -force || true
+          fi
+          if mount | grep -q "/Volumes/ClawMetry"; then
+            echo "::error::could not detach /Volumes/ClawMetry after retries"
+            exit 1
+          fi
 
           # Convert writable UDRW → compressed read-only UDZO (final shape).
           hdiutil convert "$TEMP_DMG" \
