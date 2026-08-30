@@ -18,6 +18,7 @@ sandbox/permission surface, this one is mid-run enforcement. Different axis,
 different table, no shared state.
 """
 import logging
+import re
 import time
 import uuid
 
@@ -29,6 +30,20 @@ log = logging.getLogger("clawmetry.guard")
 def _log_safe(v) -> str:
     """One log token from a request-supplied value: no line breaks, bounded."""
     return str(v or "").replace("\r", " ").replace("\n", " ")[:128]
+
+
+_DETAIL_OK = re.compile(r"[^A-Za-z0-9 _.,:;()'/-]")
+
+
+def _detail_safe(v) -> str:
+    """Reduce an actuator string to plain words before it reaches a response.
+
+    Actuator dicts can carry stderr fragments or (historically) exception
+    text; stripping to a conservative character set breaks that path while
+    keeping every legitimate token (``unsupported_no_primitive``,
+    ``paused_via_proxy_hitl``, capability notes) readable.
+    """
+    return _DETAIL_OK.sub("", str(v or ""))[:300]
 
 bp_guard = Blueprint("guard", __name__)
 
@@ -394,17 +409,18 @@ def api_guard_control():
 
     # A curated result, not the raw actuator dict: an actuator error string
     # can carry an exception message, and the client only needs the fields
-    # the UI renders.
+    # the UI renders. ``detail`` is reduced to a plain-word token set so no
+    # exception text or control characters can reach the page.
     return jsonify({
         "ok": ok,
         "action": action,
         "session_id": session_id,
         "runtime": runtime,
-        "detail": str(result.get("detail") or result.get("reason")
-                      or result.get("error") or "")[:300],
+        "detail": _detail_safe(result.get("detail") or result.get("reason")
+                               or result.get("error") or ""),
         "advisory_only": bool(result.get("advisory_only")),
-        "mechanism": str(result.get("mechanism") or "")[:80],
-        "note": str(result.get("note") or "")[:300],
+        "mechanism": _detail_safe(result.get("mechanism"))[:80],
+        "note": _detail_safe(result.get("note")),
         "unsupported": result.get("unsupported"),
     })
 

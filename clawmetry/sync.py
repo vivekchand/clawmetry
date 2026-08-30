@@ -20316,7 +20316,11 @@ def _guard_actuate(runtime: str, session_id: str, cwd: str,
     except Exception:  # noqa: BLE001 — never raise into the daemon tick
         # The exception text stays in the log; the returned detail is a fixed
         # token because this dict is recorded and can reach an HTTP response.
-        log.exception("guard actuator %s failed for %s", action, session_id)
+        # Line breaks are stripped from the interpolated values so a crafted
+        # session id cannot forge extra log lines.
+        log.exception("guard actuator %s failed for %s",
+                      str(action or "")[:32].replace("\n", " ").replace("\r", " "),
+                      str(session_id or "")[:128].replace("\n", " ").replace("\r", " "))
         return {"ok": False, "detail": "actuator_error"}
     return {"ok": False, "detail": "no-op"}
 
