@@ -20055,7 +20055,10 @@ function _updateLoadEarlierBtn() {
   if (!host) {
     host = document.createElement('div');
     host.id = 'replay-load-earlier';
-    host.style.cssText = 'margin:0 0 8px 0;text-align:center;';
+    // Span the full row of .transcript-layout's grid: as a plain auto-placed
+    // sibling this button would take the wide first column and push
+    // #transcript-messages into the narrow 240px TOC column.
+    host.style.cssText = 'margin:0 0 8px 0;text-align:center;grid-column:1 / -1;';
     wrap.parentNode.insertBefore(host, wrap);
   }
   var p = window._transcriptPaging;
