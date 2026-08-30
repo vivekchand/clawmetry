@@ -5192,6 +5192,43 @@ def _print_pro_sync_result() -> None:
         print(f"clawmetry-pro {after} kept — could not confirm entitlement right now")
 
 
+def _restore_previous_install(current: str) -> None:
+    """Best-effort pip-reinstall of ``current`` after a failed upgrade (#5357).
+
+    ``pip install --upgrade`` uninstalls the old version before installing
+    the new one; if the new install then fails (live-hit on Windows: the
+    daemon still holds ``clawmetry.exe`` open seconds after a fresh wheel
+    upload, so pip's overwrite fails AFTER the uninstall already ran), the
+    venv is left with the launcher stub but no ``clawmetry`` package at all.
+    ``--force-reinstall`` regenerates the console-script entry points
+    regardless of what site-packages metadata claims, matching the rollback
+    ``routes/meta.py::perform_self_update`` already does for the
+    daemon/dashboard self-update path. Never raises; ``current == "unknown"``
+    (the version probe itself failed) has nothing to roll back to.
+    """
+    if not current or current == "unknown":
+        return
+    import subprocess as _sp
+
+    try:
+        restore = _sp.run(
+            [
+                sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                "--force-reinstall", "--no-deps", "--break-system-packages",
+                f"clawmetry=={current}",
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+        if restore.returncode == 0:
+            print(f"Restored previous version ({current}) after the failed update")
+        else:
+            tail = ((restore.stdout or "") + (restore.stderr or "")).strip()[-300:]
+            print(f"Warning: could not restore previous version ({current}): "
+                  f"{tail or '(no output)'}")
+    except Exception as exc:
+        print(f"Warning: could not restore previous version ({current}): {exc}")
+
+
 def _cmd_update(args=None) -> None:
     """Self-update clawmetry to the latest PyPI version.
 
@@ -5277,9 +5314,16 @@ def _cmd_update(args=None) -> None:
                     print("Tip: restart the daemon to use the new version")
         else:
             print(f"Update failed:\n{result.stderr}")
+            # pip already ran the uninstall half of --upgrade; the venv may
+            # now have zero clawmetry installed (#5357). Never leave a failed
+            # update worse than a no-op.
+            _restore_previous_install(current)
             sys.exit(1)
     except subprocess.TimeoutExpired:
         print("Update timed out. Try manually: pip install --upgrade clawmetry")
+        # A pip KILLED mid-install can leave the same uninstall-without-
+        # reinstall gap as a nonzero exit (#5357).
+        _restore_previous_install(current)
         sys.exit(1)
     except Exception as e:
         print(f"Update error: {e}")

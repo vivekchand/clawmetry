@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -220,6 +222,97 @@ def test_cmd_update_plain_still_upgrades_unpinned(monkeypatch):
     monkeypatch.setattr(cli, "_unattended_update_target", _no_policy)
     cli._cmd_update(SimpleNamespace(unattended=False))
     assert "clawmetry" in calls[0]
+
+
+# ── #5357: a failed upgrade must never leave zero packages installed ───────
+#
+# `pip install --upgrade` uninstalls the old version before installing the
+# new one. Live-hit on Windows 2026-08-29: the daemon still held
+# `clawmetry.exe` open seconds after a fresh wheel upload, so pip's overwrite
+# failed AFTER the uninstall already ran, leaving the venv with the launcher
+# stub but no `clawmetry` package at all. `_cmd_update` must roll back to the
+# version that was running before the attempt, mirroring the rollback
+# `routes/meta.py::perform_self_update` already does for the daemon path
+# (tests/test_self_update_timeout_rollback.py).
+
+def _multi_run_recorder(monkeypatch, responses):
+    """Like ``_run_recorder`` but returns a DIFFERENT canned result per call,
+    so a test can tell the failed upgrade call apart from the rollback call
+    that follows it."""
+    import subprocess
+
+    calls = []
+
+    def _fake_run(cmd, **kw):
+        calls.append(cmd)
+        idx = len(calls) - 1
+        if idx < len(responses):
+            return responses[idx]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    return calls
+
+
+def test_cmd_update_failure_restores_previous_version(monkeypatch, capsys):
+    from dashboard import __version__ as current
+
+    calls = _multi_run_recorder(monkeypatch, [
+        SimpleNamespace(returncode=1, stdout="", stderr="boom"),  # failed upgrade
+        SimpleNamespace(returncode=0, stdout="", stderr=""),      # rollback reinstall
+    ])
+    with pytest.raises(SystemExit) as exc:
+        cli._cmd_update(SimpleNamespace(unattended=False))
+    assert exc.value.code == 1
+    assert len(calls) == 2, calls
+    rollback_cmd = calls[1]
+    assert "--force-reinstall" in rollback_cmd
+    assert f"clawmetry=={current}" in rollback_cmd
+    assert "Restored previous version" in capsys.readouterr().out
+
+
+def test_cmd_update_timeout_restores_previous_version(monkeypatch):
+    from dashboard import __version__ as current
+    import subprocess
+
+    calls = []
+
+    def _fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd, 120)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    with pytest.raises(SystemExit) as exc:
+        cli._cmd_update(SimpleNamespace(unattended=False))
+    assert exc.value.code == 1
+    assert len(calls) == 2, calls
+    assert "--force-reinstall" in calls[1]
+    assert f"clawmetry=={current}" in calls[1]
+
+
+def test_cmd_update_success_never_rolls_back(monkeypatch):
+    from dashboard import __version__ as current
+
+    # stdout echoes `current` back so the command takes the quiet
+    # "already latest" branch (no daemon-restart shell-out to record too).
+    calls = _run_recorder(monkeypatch, returncode=0, stdout=current + "\n")
+    cli._cmd_update(SimpleNamespace(unattended=False))
+    assert not any("--force-reinstall" in c for c in calls)
+
+
+def test_restore_previous_install_skips_unknown_version(monkeypatch):
+    """No version to roll back to (the pre-upgrade probe itself failed) must
+    never shell out — reinstalling ``clawmetry==unknown`` can only fail."""
+    import subprocess
+
+    def _boom(*a, **k):
+        raise AssertionError("must not attempt a reinstall with no known version")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    cli._restore_previous_install("unknown")
+    cli._restore_previous_install("")
 
 
 def test_real_parser_wires_unattended_into_cmd_update(monkeypatch):
