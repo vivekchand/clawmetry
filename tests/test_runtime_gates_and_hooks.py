@@ -430,7 +430,10 @@ def test_cc_gate_install_merges_and_uninstall_removes_only_ours(cc_gate):
     assert len(pre) == 2
     assert pre[0]["hooks"][0]["command"] == "my-linter"  # foreign preserved
     ours = pre[1]
-    assert ours["matcher"] == "Bash"
+    # WO-52: the installed matcher always also watches AskUserQuestion so
+    # the receiver can mirror question sets (the derivation helper itself
+    # stays policy-only — pinned below in the matcher-derivation test).
+    assert ours["matcher"] == "Bash|AskUserQuestion"
     cmd = ours["hooks"][0]["command"]
     assert ccg.HOOK_CMD_MARKER in cmd
     assert "--base http://127.0.0.1:8900" in cmd
@@ -438,7 +441,11 @@ def test_cc_gate_install_merges_and_uninstall_removes_only_ours(cc_gate):
     # hook never flashes (or parks) a console window under the desktop app.
     assert cmd.startswith(
         ccg._windowless_python(sys.executable, os.name == "nt"))
-    assert ours["hooks"][0]["timeout"] == 120 + 60  # policy + buffer
+    # Policy window (120) + buffer (60) = 180, raised to the question-set
+    # floor: question window (180 default) + buffer (60) = 240, so Claude
+    # Code never cancels the hook before the receiver's "ask" fallback for
+    # an unanswered AskUserQuestion lands (WO-52).
+    assert ours["hooks"][0]["timeout"] == 240
     assert s["model"] == "opus"                     # rest of file untouched
     st = json.loads(open(ccg._STATE_PATH).read())
     assert st["installed"] is True
@@ -461,7 +468,8 @@ def test_cc_gate_install_merges_and_uninstall_removes_only_ours(cc_gate):
     ours = [e for e in s["hooks"]["PreToolUse"]
             if ccg._entry_is_ours(e)]
     assert len(ours) == 1
-    assert ours[0]["matcher"] == "Write|Edit|MultiEdit|NotebookEdit"
+    assert ours[0]["matcher"] == \
+        "Write|Edit|MultiEdit|NotebookEdit|AskUserQuestion"
 
     # No policy wants the gate → only ours removed; foreign + Stop intact.
     ccg.gate_handler(False, [])
