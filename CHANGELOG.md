@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Fix: cloud transcripts answer immediately, even on a busy machine (carries #5358) (2026-08-29)
+- **Who this reaches:** anyone reading a session on the hosted dashboard whose machine is deep in work. The previous release taught an idle machine to answer a transcript request within seconds; a busy one still finished its current round of housekeeping first, which on a machine with a lot of history took twenty seconds or more.
+- **The answer now goes to the front of the line.** The moment the machine learns someone is waiting, it responds first and returns to its housekeeping after, instead of the other way around. Measured before the fix: 22.5 seconds. Expected after: a few seconds.
+- **Verified:** the wake-path test suite passes unchanged; the reorder keeps the exact failure handling the old path had.
+
 ### Fix: a botched self-update can no longer strand the desktop app (carries #5356) (2026-08-29)
 - **Who this reaches:** desktop app users on Windows, where the running app can hold files open in a way that makes an in-place update fail halfway. Seen live: an update fired seconds after a release, removed the old version, failed to install the new one, and left an app that errored every minute and would not recover on relaunch.
 - **The app now checks it is actually installed, not merely present.** A leftover launcher file used to be taken as proof the software was there, so a half-updated install stayed broken forever. The check now requires a complete installation, and anything less triggers a clean reinstall on the next launch — about fifteen seconds instead of a permanent dead end.
