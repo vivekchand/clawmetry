@@ -46,6 +46,7 @@ if sys.platform == "win32":
         pass
 
 import glob
+import ipaddress
 import json
 import socket
 from collections import deque, defaultdict
@@ -20696,9 +20697,36 @@ def _run_server(args):
         pass  # stdout may be closed/redirected on Windows
 
     if args.debug:
-        # Dev mode -- use Flask's reloader
+        # Dev mode -- use Flask's reloader.
+        #
+        # The Werkzeug debugger is only safe behind a loopback bind. With
+        # debug=True, any unhandled exception serves the interactive traceback
+        # page -- source, local variables, and a (PIN-gated) eval console -- to
+        # whoever reached the port. `--debug` is the DEFAULT here, so the user
+        # who adds `--host 0.0.0.0` for LAN access (which the banner above
+        # advertises) would otherwise publish all of that to the network
+        # without ever asking for it.
+        #
+        # Keep the reloader either way -- that is the part dev mode is for --
+        # and drop only the debugger when the bind is not loopback.
+        debugger_ok = _is_loopback_host(args.host)
+        if not debugger_ok:
+            try:
+                print(
+                    f"  Note: debugger off -- {args.host} is not loopback. "
+                    "Auto-reload stays on."
+                )
+                print()
+            except (ValueError, OSError):
+                # stdout may be closed/redirected on Windows, same as the
+                # banner above. Never let a status line stop the server.
+                pass
         app.run(
-            host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True
+            host=args.host,
+            port=args.port,
+            debug=debugger_ok,
+            use_reloader=True,
+            threaded=True,
         )
     else:
         # Prod mode -- use Waitress (no WSGI warning, multi-threaded)
@@ -20745,6 +20773,38 @@ def _init_data_provider():
     except Exception:
         return None
 
+
+def _is_loopback_host(host):
+    """True only when `host` binds the loopback interface alone.
+
+    Decides whether Flask's interactive debugger is safe to switch on. Fails
+    CLOSED: anything we cannot positively prove is loopback -- an empty value,
+    a hostname we do not resolve, an unparseable literal -- reads as remote and
+    turns the debugger off. Being wrong in that direction costs a developer a
+    traceback page; being wrong the other way publishes source and an eval
+    console to the network.
+
+    Note `0.0.0.0` and `::` are NOT loopback: they are wildcard binds that
+    include every routable interface on the machine.
+    """
+    if not host:
+        return False
+    candidate = str(host).strip()
+    if candidate.lower() in ("localhost", "localhost.localdomain"):
+        return True
+    # An IPv6 literal may arrive bracketed, as [::1].
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    # ...and may carry a zone id, as fe80::1%eth0.
+    candidate = candidate.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        # Not an IP literal. We do not resolve hostnames here: a name that
+        # resolves to loopback today can resolve elsewhere tomorrow, and DNS
+        # is not a thing to trust when the answer decides whether to expose
+        # an eval console.
+        return False
 
 
 def main():
