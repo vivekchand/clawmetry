@@ -18,6 +18,7 @@ sandbox/permission surface, this one is mid-run enforcement. Different axis,
 different table, no shared state.
 """
 import logging
+import os
 import re
 import time
 import uuid
@@ -371,6 +372,10 @@ def api_guard_control():
                         "error": f"action must be one of {list(_CONTROL_ACTIONS)}"}), 400
     if not session_id:
         return jsonify({"ok": False, "error": "session_id is required"}), 400
+    if "/" in session_id or "\\" in session_id or ".." in session_id or os.path.basename(session_id) != session_id:
+        return jsonify({"ok": False, "error": "invalid session_id"}), 400
+    if cwd and (".." in cwd.split(os.sep) or ".." in cwd.split("/")):
+        return jsonify({"ok": False, "error": "invalid cwd"}), 400
 
     try:
         # Every control action — resume included — goes through the actuator

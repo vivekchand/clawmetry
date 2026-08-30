@@ -464,8 +464,13 @@ def _win_ntdll_call(fn_name: str, pid: int) -> bool:
         from ctypes import wintypes
 
         ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-        fn = getattr(ntdll, fn_name, None)
-        if fn is None:
+        # Explicit branches instead of getattr so static analysis can verify
+        # the resolved name is one of the two allowed routines.
+        if fn_name == "NtSuspendProcess":
+            fn = ntdll.NtSuspendProcess
+        elif fn_name == "NtResumeProcess":
+            fn = ntdll.NtResumeProcess
+        else:
             return False
         # Same HANDLE-truncation trap as kernel32 (see _win_kernel32).
         fn.argtypes = [wintypes.HANDLE]
@@ -548,9 +553,16 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
     """
     if not _IS_WINDOWS:
         return False, "not_windows"
+    import tempfile
+    _helper_path = None
     try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as _tf:
+            _tf.write(_WIN_CTRLC_HELPER)
+            _helper_path = _tf.name
         proc = subprocess.run(
-            [sys.executable, "-c", _WIN_CTRLC_HELPER, str(int(pid))],
+            [sys.executable, _helper_path, str(int(pid))],
             timeout=max(1.0, float(timeout)),
             creationflags=_WIN_DETACHED_PROCESS,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -559,6 +571,12 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
         return False, "ctrl_c_helper_timeout"
     except Exception as exc:  # noqa: BLE001
         return False, f"ctrl_c_helper_error:{str(exc)[:120]}"
+    finally:
+        if _helper_path is not None:
+            try:
+                os.unlink(_helper_path)
+            except OSError:
+                pass
     if proc.returncode == 0:
         return True, "ctrl_c_sent_to_console"
     return False, _WIN_CTRLC_REASONS.get(proc.returncode,
@@ -966,9 +984,23 @@ def _proc_cmdline(pid: int) -> List[str]:
         # No /proc and no ps. CIM is the supported query surface; it is slow
         # (~1s) but bounded, and this path only runs on a psutil-less host
         # doing an argv match.
-        out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                    f"(Get-CimInstance Win32_Process -Filter "
-                    f"'ProcessId={int(pid)}').CommandLine"], timeout=15)
+        import os as _os
+        _pid_int = abs(int(pid))
+        _ps_env = dict(_c_locale_env())
+        _ps_env["_CLAWMETRY_QUERY_PID"] = str(_pid_int)
+        try:
+            import subprocess as _sp
+            _ps_result = _sp.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_Process -Filter "
+                 "('ProcessId=' + $Env:_CLAWMETRY_QUERY_PID)).CommandLine"],
+                capture_output=True, text=True, timeout=15, env=_ps_env,
+            )
+            out = _ps_result.stdout if (
+                _ps_result.returncode == 0 or _ps_result.stdout
+            ) else None
+        except Exception:  # noqa: BLE001
+            out = None
         if out and out.strip():
             return out.strip().split()
     return []
@@ -1643,8 +1675,13 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
     for h in hashes:
         path = os.path.realpath(os.path.join(root, h, "chats", fname))
         # Containment check: whatever the id looked like, the file we open
-        # must resolve inside the qwen projects root.
-        if not path.startswith(root_real + os.sep):
+        # must resolve inside the qwen projects root.  commonpath is the
+        # CodeQL-recognised sanitizer; startswith has an edge on Windows
+        # drive roots and is harder for static analysis to model.
+        try:
+            if os.path.commonpath([path, root_real]) != root_real:
+                continue
+        except ValueError:
             continue
         if not os.path.isfile(path):
             continue
