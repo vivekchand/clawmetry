@@ -31304,12 +31304,18 @@ def has_capacity_batch(
     caller supplying every other axis but leaving retention off would
     get a mis-routed live-grant answer instead of an omitted axis.
 
-    A blank or non-int value on any axis short-circuits that axis to
-    ``None`` (matches :func:`tiers_for_capacity_batch`'s per-axis
-    ``None``-on-bad-input posture -- the caller opts in per-axis by
-    supplying a value). Distinguishes "not supplied" from ``False``
-    (which is what the singular ``has_*`` helpers return on non-int
-    input) so a UI can tell a typo from a real deny.
+    Only an explicit ``None`` on an axis short-circuits that axis to
+    ``None`` in the envelope (the "not supplied" sentinel). A non-int
+    value is NOT converted to ``None`` here -- it delegates to the
+    axis's singular helper, which returns ``False`` on non-int input
+    by design (strict callsite-typo posture -- see
+    :func:`has_channel_count` / :func:`has_retention_window` /
+    :func:`has_node_count` docstrings). The HTTP endpoints normalise
+    blank / non-int query args to ``None`` via ``_parse_capacity_arg``
+    in ``routes/entitlement.py`` before calling this helper, so at the
+    HTTP layer a blank / non-int query arg does surface as an omitted
+    axis; in-process callers wanting the same "``None`` on bad input"
+    short-circuit should pre-normalise the same way.
 
     Never raises: any resolver blowup collapses the whole envelope to
     all-``None`` so a caller can bind this into a boolean AND-chain
