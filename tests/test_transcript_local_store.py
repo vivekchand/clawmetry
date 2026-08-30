@@ -263,3 +263,71 @@ def test_transcript_nested_message_thinking_block_emitted(app):
     # Row usage stamped exactly once (first message of the row).
     assert msgs[0].get("tokens") == 500
     assert "tokens" not in msgs[1]
+
+
+# ── Snapshot message cap keeps the opening user prompt ──────────────────────
+# The cloud replay renders the SNAPSHOT transcript (sync._build_transcripts),
+# which caps long sessions to the last N messages. The old tail-only cap
+# dropped the first user message, so the hosted replay opened mid-session on
+# a bare tool chip and its turn TOC lost the anchor turn (user report
+# 2026-08-29). _cap_transcript_messages must keep the opening prompt plus an
+# honest omission marker.
+
+
+def _msgs(n, first_user_at=0):
+    out = []
+    for i in range(n):
+        if i == first_user_at:
+            out.append({"role": "user", "content": f"the opening prompt {i}",
+                        "timestamp": 1000 + i})
+        else:
+            out.append({"role": "assistant", "content": f"reply {i}",
+                        "timestamp": 1000 + i})
+    return out
+
+
+def test_cap_keeps_short_transcripts_untouched():
+    from clawmetry.sync import _cap_transcript_messages
+    msgs = _msgs(10)
+    capped, truncated = _cap_transcript_messages(msgs, 80)
+    assert capped is msgs
+    assert truncated is False
+
+
+def test_cap_preserves_first_user_prompt_and_marks_omission():
+    from clawmetry.sync import _cap_transcript_messages
+    msgs = _msgs(83)  # the exact shape of the field report: 83 msgs, cap 80
+    capped, truncated = _cap_transcript_messages(msgs, 80)
+    assert truncated is True
+    assert len(capped) <= 80
+    # Opening user prompt survives, first in the list.
+    assert capped[0]["role"] == "user"
+    assert capped[0]["content"] == "the opening prompt 0"
+    # Honest omission marker sits between the prompt and the tail, timestamped
+    # so the viewer's ts-sorted merge keeps it in place.
+    marker = capped[1]
+    assert marker["role"] == "system"
+    assert "not shown" in marker["content"]
+    assert capped[0]["timestamp"] < marker["timestamp"] < capped[2]["timestamp"]
+    # Tail is the most recent messages, ending on the true last message.
+    assert capped[-1]["content"] == "reply 82"
+
+
+def test_cap_without_user_prompt_still_marks_omission():
+    from clawmetry.sync import _cap_transcript_messages
+    msgs = [{"role": "assistant", "content": f"reply {i}", "timestamp": 1000 + i}
+            for i in range(100)]
+    capped, truncated = _cap_transcript_messages(msgs, 80)
+    assert truncated is True
+    assert capped[0]["role"] == "system"
+    assert "not shown" in capped[0]["content"]
+    assert capped[-1]["content"] == "reply 99"
+
+
+def test_cap_first_user_prompt_already_in_tail_not_duplicated():
+    from clawmetry.sync import _cap_transcript_messages
+    msgs = _msgs(100, first_user_at=95)
+    capped, truncated = _cap_transcript_messages(msgs, 80)
+    assert truncated is True
+    user_turns = [m for m in capped if m.get("role") == "user"]
+    assert len(user_turns) == 1
