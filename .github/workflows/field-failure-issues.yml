@@ -1,0 +1,131 @@
+name: Field-failure issues
+
+# The last hop of the field-failure pipeline (Requirement: Field Failure
+# Reporting and Auto-Triage, AC-FFR-002):
+#
+#   desktop shell (0.12.790+)  →  classified bootstrap_failed ping
+#   cloud sink                 →  GET /api/desktop/_failures (public,
+#                                 aggregates only: failure family × OS ×
+#                                 bootstrap Python, distinct installs)
+#   THIS workflow              →  ONE deduped `field-failure` GitHub
+#                                 issue per signature, heartbeat-alarm
+#                                 style, which the hourly fixer routine
+#                                 picks up.
+#
+# The endpoint is deliberately public so this job needs no privileged
+# secret (see "Merge gate is reachable without privileged secrets" —
+# same principle for scheduled jobs). Everything it posts is an
+# aggregate over a closed enum + platform names; nothing identifying
+# exists at the endpoint to leak.
+#
+# Live example of what this catches: 2026-08-29, a Windows 11 machine
+# on Python 3.14 died on an MSVC demand (cffi<2 had no cp314 wheel) and
+# was diagnosed from a photographed screen. As `compiler_demand /
+# Windows / 3.14` this fires the day it starts happening.
+
+on:
+  schedule:
+    - cron: "37 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-failure-issues
+  cancel-in-progress: false
+
+jobs:
+  file-issues:
+    name: File deduped field-failure issues from cloud aggregates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Fetch aggregates and file/refresh issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # Distinct installs a signature needs before an issue is filed.
+          # 1 = a single field machine is enough (dedupe bounds the noise:
+          # at most one open issue per signature, refreshed at most daily).
+          MIN_INSTALLS: "1"
+          FAILURES_URL: "https://app.clawmetry.com/api/desktop/_failures"
+        run: |
+          set -euo pipefail
+
+          body=$(curl -sf --max-time 30 "$FAILURES_URL") || {
+            echo "endpoint unreachable; nothing filed (will retry next tick)"
+            exit 0
+          }
+          count=$(jq '.signatures | length' <<<"$body" 2>/dev/null || echo 0)
+          echo "signatures reported: $count"
+          [ "$count" = "0" ] && exit 0
+
+          # Make sure the label exists (idempotent; never fails the job).
+          gh label create field-failure \
+            --repo "$REPO" \
+            --description "Auto-filed from aggregated desktop bootstrap-failure telemetry" \
+            --color B60205 2>/dev/null || true
+
+          jq -c ".signatures[] | select(.installs >= ${MIN_INSTALLS})" <<<"$body" |
+          while read -r sig; do
+            cls=$(jq -r .failure_class <<<"$sig")
+            os=$(jq -r .os <<<"$sig")
+            py=$(jq -r .bootstrap_python <<<"$sig")
+            installs=$(jq -r .installs <<<"$sig")
+            events=$(jq -r .events <<<"$sig")
+            last=$(jq -r .last_seen <<<"$sig")
+            ver=$(jq -r .latest_desktop_version <<<"$sig")
+
+            pysuffix=""
+            [ -n "$py" ] && pysuffix=" (py $py)"
+            TITLE="[field-failure] $cls on $os$pysuffix"
+
+            ISSUE_BODY=$(printf '%s\n' \
+              "Aggregated desktop bootstrap-failure telemetry crossed the reporting threshold for this signature." \
+              "" \
+              "| signature | value |" \
+              "|---|---|" \
+              "| failure class | \`$cls\` |" \
+              "| OS | $os |" \
+              "| bootstrap Python | ${py:-unknown} |" \
+              "| distinct installs (30d) | $installs |" \
+              "| events (30d) | $events |" \
+              "| last seen | $last |" \
+              "| latest shell version seen | ${ver:-unknown} |" \
+              "" \
+              "These are aggregates over a closed enum — no machine ever sends paths, usernames, or log text. The class is the same one \`_explain_pip_failure\` shows on the machine's splash; \`desktop/app.py\` maps each class to its likely fix surface." \
+              "" \
+              "Live view: https://app.clawmetry.com/api/desktop/_failures" \
+              "" \
+              "_Auto-filed by field-failure-issues.yml (Requirement: Field Failure Reporting and Auto-Triage, AC-FFR-002)._")
+
+            EXISTING=$(gh issue list --repo "$REPO" \
+              --search "\"$TITLE\" in:title state:open" \
+              --json number,updatedAt --jq '.[0]' || echo "")
+
+            if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+              num=$(jq -r .number <<<"$EXISTING")
+              updated=$(jq -r .updatedAt <<<"$EXISTING")
+              # Refresh at most daily so a persistent signature does not
+              # turn the issue into a metronome.
+              age=$(( $(date -u +%s) - $(date -u -d "$updated" +%s 2>/dev/null || echo 0) ))
+              if [ "$age" -gt 86400 ]; then
+                gh issue comment "$num" --repo "$REPO" --body \
+                  "Still occurring: $installs distinct install(s), $events event(s) in the last 30 days (last seen $last, latest shell ${ver:-unknown})." \
+                  || echo "could not comment on #$num"
+                echo "refreshed #$num ($TITLE)"
+              else
+                echo "skip refresh (updated ${age}s ago): #$num ($TITLE)"
+              fi
+            else
+              gh issue create --repo "$REPO" \
+                --title "$TITLE" \
+                --label field-failure \
+                --body "$ISSUE_BODY" \
+                || echo "could not create issue for $TITLE"
+              echo "filed: $TITLE"
+            fi
+          done
