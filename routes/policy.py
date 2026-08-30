@@ -205,6 +205,18 @@ def _approval_kind(row) -> str:
     return "policy"
 
 
+def _row_questions(row) -> "list | None":
+    """The question set stored on a question-set approval row (WO-52),
+    full-fidelity — the dashboard renders the actual options, not a
+    preview. None on binary rows so their rendering is untouched."""
+    args = row.get("args")
+    if isinstance(args, dict):
+        q = args.get("_cm_questions")
+        if isinstance(q, list) and q:
+            return q
+    return None
+
+
 @bp_policy.route("/api/approvals")
 @gate("approval_queue")
 def api_approvals_queue():
@@ -236,6 +248,9 @@ def api_approvals_queue():
             # (the runtime itself stopped to ask) — the UI says which,
             # because they mean different things to the person deciding.
             "kind":                 _approval_kind(r),
+            # Question-set rows (WO-52) carry the full set so the UI can
+            # render radios/checkboxes and post decision='answer'.
+            "questions":            _row_questions(r),
         }
         for r in rows
     ]
@@ -251,7 +266,7 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
     rows = _filter_rows_by_runtime(rows, runtime)
 
     decisions = []
-    pending = approved = denied = simulated = 0
+    pending = approved = denied = simulated = answered = 0
     for r in rows:
         st = (r.get("status") or "pending")
         dec = (r.get("decision") or "")
@@ -260,6 +275,10 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
             simulated += 1
         elif st == "pending":
             pending += 1
+        elif st == "answered" or dec == "answered":
+            # Question-set decision (WO-52): the human answered with
+            # structured options — neither an approve nor a deny.
+            answered += 1
         elif st in ("approved", "allow", "allowed") or dec in ("approve", "allow"):
             approved += 1
         elif st in ("denied", "deny", "blocked", "rejected") or dec in ("deny", "block"):
@@ -284,6 +303,7 @@ def _approvals_audit_payload(status=None, limit=100, runtime=None):
         "pending": pending,
         "approved": approved,
         "denied": denied,
+        "answered": answered,
         "simulated": simulated,
     }
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
@@ -667,10 +687,10 @@ def api_approval_decide(approval_id: str):
     (grace mode preserves today's behaviour for free users)."""
     body = request.get_json(silent=True) or {}
     decision = str(body.get("decision") or "").strip().lower()
-    if decision not in ("approve", "deny"):
+    if decision not in ("approve", "deny", "answer"):
         return jsonify({
             "ok":    False,
-            "error": "decision must be 'approve' or 'deny'",
+            "error": "decision must be 'approve', 'deny' or 'answer'",
         }), 400
     reason = body.get("reason")
     if reason is not None:
@@ -694,10 +714,41 @@ def api_approval_decide(approval_id: str):
     if row is None:
         return jsonify({"ok": False, "error": "unknown approval id"}), 404
     existing = str(row.get("status") or "pending").strip()
-    if existing in ("approved", "denied", "timeout", "expired"):
+    if existing in ("approved", "denied", "answered", "timeout", "expired"):
         # Already decided — return the frozen status (idempotent). This is
         # the same "first click wins" the store method enforces.
         return jsonify({"ok": True, "status": existing, "already": True})
+
+    # ── question-set answers (WO-52 phase 1) ─────────────────────────────
+    # decision='answer' carries a structured ``answers`` map validated
+    # against the question set stored in the row's args (unknown question
+    # or unknown option label → 400). The shared core merges the answers
+    # into args BEFORE flipping the row to 'answered', so the hook waiting
+    # on it never sees the status without the answers.
+    if decision == "answer":
+        from clawmetry import question_sets as qsets
+        from routes.hooks import _ls_write as _writer
+        reason = body.get("reason")
+        ok, msg, code = qsets.apply_answer_decision(
+            aid, row, body.get("answers"), resolver="local",
+            reason=(str(reason)[:300] if reason else None), write=_writer)
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), code
+        # First-click-wins: the flip only ever transitions a pending row —
+        # re-read to report what actually stands (a racing binary decision
+        # keeps its result).
+        rows2 = _coerce_rows(_ls_call("query_approvals", limit=500))
+        row2 = next((r for r in rows2 if r.get("id") == aid), None)
+        final = str((row2 or {}).get("status") or "answered").strip()
+        try:
+            from clawmetry import approval_events as _ae
+            _ae.notify_resolved(aid, "answered", "dashboard")
+        except Exception:
+            pass
+        resp = {"ok": True, "status": final}
+        if final != "answered":
+            resp["already"] = True
+        return jsonify(resp)
 
     # Flip the row. Prefer the daemon proxy (owns the DuckDB writer lock
     # — same pattern the cloud-relay decision path uses); fall back to a
