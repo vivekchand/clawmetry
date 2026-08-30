@@ -20030,6 +20030,103 @@ function openSessionDeepDive(kind, sessionId) {
   }
 }
 
+// ── Replay history paging ───────────────────────────────────────────────────
+// The replay opens on the NEWEST window instantly (cloud: the snapshot's
+// capped transcript; local: the capped fast path) and pulls older history on
+// demand through /api/transcript-page — an exclusive before_ts cursor walk,
+// rendered by the same backend message builder. Nothing is fetched until the
+// user asks, so the fast first paint costs no extra requests.
+
+function _pagingMsgKey(m) {
+  if (!m || typeof m !== 'object') return String(m);
+  var toolBits = '';
+  if (m.tool) {
+    toolBits = (m.tool.name || '') + '|' + String(m.tool.input || '').slice(0, 40)
+             + '|' + String(m.tool.output || '').slice(0, 40);
+  }
+  return (m.timestamp || 0) + '|' + (m.role || '') + '|'
+       + String(m.content || '').slice(0, 80) + '|' + toolBits;
+}
+
+function _updateLoadEarlierBtn() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  var host = document.getElementById('replay-load-earlier');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'replay-load-earlier';
+    host.style.cssText = 'margin:0 0 8px 0;text-align:center;';
+    wrap.parentNode.insertBefore(host, wrap);
+  }
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  host.style.display = '';
+  if (p.loading) {
+    host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">⏳ '
+      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+  } else if (p.error) {
+    host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()" '
+      + 'style="color:#e0625a;">'
+      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + '</button>';
+  } else {
+    host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()">⬆ '
+      + escHtml(t('transcript.load_earlier', null, 'Load earlier messages'))
+      + '</button>';
+  }
+}
+
+async function loadEarlierMessages() {
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore || p.loading) return;
+  p.loading = true;
+  p.error = null;
+  _updateLoadEarlierBtn();
+  try {
+    var url = '/api/transcript-page/' + encodeURIComponent(p.sid) + '?limit=150'
+            + (p.cursor ? ('&before_ts=' + Math.floor(p.cursor)) : '');
+    var r = await fetch(url);
+    var body = await r.json();
+    if (!r.ok || body.error) throw new Error(body.error || ('HTTP ' + r.status));
+    var master = window._transcriptAllMessages || [];
+    // Dedupe: the preserved opening prompt reappears when paging reaches the
+    // session start; anything already on screen must not double up.
+    var seen = {};
+    for (var i = 0; i < master.length; i++) seen[_pagingMsgKey(master[i])] = 1;
+    var fresh = (body.messages || []).filter(function(m) { return !seen[_pagingMsgKey(m)]; });
+    if (!body.has_more) {
+      // Reached the session start — the omission marker no longer describes
+      // a gap, so drop it from the stream.
+      master = master.filter(function(m) {
+        return !(m && m.role === 'system' && /^…\s*\d+ earlier messages/.test(String(m.content || '')));
+      });
+    }
+    master = fresh.concat(master);
+    master.sort(function(a, b) { return (a.timestamp || 0) - (b.timestamp || 0); });
+    window._transcriptAllMessages = master;
+    p.cursor = body.next_before_ts || p.cursor;
+    p.hasMore = !!body.has_more;
+    var wasAtEnd = window._replayIndex >= (window._replayEvents.length - 1);
+    window._replayEvents = master.map(function(m, idx) { return _buildReplayEvent(m, idx); });
+    var scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) scrubber.max = Math.max(0, window._replayEvents.length - 1);
+    window._replayIndex = wasAtEnd
+      ? Math.max(0, window._replayEvents.length - 1)
+      : Math.min(window._replayIndex + fresh.length, window._replayEvents.length - 1);
+    if (scrubber) scrubber.value = window._replayIndex;
+    // Keep the viewport anchored on what the user was reading: content grows
+    // above, so restore scroll by the height delta.
+    var se = document.scrollingElement || document.documentElement;
+    var beforeH = se.scrollHeight, beforeTop = se.scrollTop;
+    _replayRenderCurrent();
+    se.scrollTop = beforeTop + (se.scrollHeight - beforeH);
+  } catch (e) {
+    p.error = String((e && e.message) || e);
+  }
+  p.loading = false;
+  _updateLoadEarlierBtn();
+}
+
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
@@ -20040,6 +20137,9 @@ async function viewTranscript(sessionId) {
   window._replayEvents = [];
   window._replayIndex = 0;
   window._replayFilter = 'all';
+  window._transcriptAllMessages = [];
+  window._transcriptPaging = null;
+  _updateLoadEarlierBtn();
   try {
     // Fetch transcript, compaction markers, config-drift, lexical drift, and policy events in parallel
     var [data, compactionsData, driftData, lexicalDriftData, policyData, evalMetricsData] = await Promise.all([
@@ -20167,6 +20267,20 @@ async function viewTranscript(sessionId) {
     window._replayEvents = allMessages.map(function(m, idx) {
       return _buildReplayEvent(m, idx);
     });
+    // Arm the "load earlier messages" control when the server said this is a
+    // capped newest-window (_truncated). The cursor is the start of the
+    // contiguous tail; older daemons don't stamp it, so fall back to the
+    // first message after the preserved prompt + omission marker.
+    window._transcriptAllMessages = allMessages;
+    window._transcriptPaging = {
+      sid: sessionId,
+      hasMore: !!data._truncated,
+      cursor: data._oldest_contiguous_ts
+           || (allMessages[2] && allMessages[2].timestamp) || null,
+      loading: false,
+      error: null
+    };
+    _updateLoadEarlierBtn();
     if (window._replayEvents.length > 0) {
       // Show replay controls and start at last event (show full conversation by default)
       window._replayIndex = window._replayEvents.length - 1;
