@@ -118,7 +118,7 @@ The daemon owns the DuckDB writer lock and runs a localhost query server so the 
 Minimal by design, and this list had drifted — `setup.py` is the source of truth:
 - **flask** (>=2.0,<4) — HTTP server framework
 - **waitress** (>=2.0) — WSGI application server
-- **cryptography** (>=50.0.0 on 3.9.2+; >=3.0 on 3.8/3.9.0/3.9.1, which have no advisory-clean release) — AES-256-GCM for cloud sync
+- **cryptography** (>=50.0.0 on 3.14+; >=46.0.0 on 3.9.2–3.13, capped there by the `cffi<2` pin; >=3.0 on 3.8/3.9.0/3.9.1) — AES-256-GCM for cloud sync
 - **duckdb** (>=0.10) — the local store at `~/.clawmetry/clawmetry.duckdb`
 - **websocket-client** (>=1.6) — cloud cold-data relay tunnel
 - **truststore** (>=0.8, 3.10+ only) — OS trust store, so corporate TLS-interception root CAs work
