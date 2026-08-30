@@ -15640,7 +15640,43 @@ def _merge_otlp_apps_into_summary(out: dict, store) -> None:
             continue
         # Never clobber a real session-prefix runtime that happens to share a key
         # (belt-and-braces; the query already excludes them).
-        if at.lower() in exclude or at in out:
+        if at.lower() in exclude:
+            continue
+        existing = out.get(at)
+        if existing is not None:
+            # WO-55: sessions materialized from these spans now surface the app
+            # in the sessions/daily-rollup passes, so a summary entry already
+            # exists. ENRICH it with the OTLP markers instead of skipping —
+            # without ``otlp=True`` + ``display_name`` the frontend treats the
+            # app as a session-prefix runtime and scopes it by a prefix it does
+            # not have. Numbers take the larger of the two measurements of the
+            # SAME underlying spans (never a sum — that would double-count).
+            if isinstance(existing, dict):
+                existing["otlp"] = True
+                if not existing.get("display_name"):
+                    existing["display_name"] = _humanize_service_name(
+                        r.get("service_name") or "", at)
+                existing["traces"] = int(r.get("traces") or 0)
+                existing["spans"] = int(r.get("spans") or 0)
+                for key in ("sessions", "turns", "tokens"):
+                    existing[key] = max(
+                        int(existing.get(key) or 0), int(r.get(key) or 0))
+                existing["total_turns"] = max(
+                    int(existing.get("total_turns") or 0),
+                    int(r.get("turns") or 0))
+                existing["cost_usd"] = round(max(
+                    float(existing.get("cost_usd") or 0.0),
+                    float(r.get("cost_usd") or 0.0)), 4)
+                primary = r.get("primary_model") or ""
+                if primary and not existing.get("primary_model"):
+                    existing["primary_model"] = primary
+                    if not existing.get("models"):
+                        existing["models"] = [{
+                            "model": primary,
+                            "turns": int(r.get("turns") or 0),
+                            "sessions": int(r.get("sessions") or 0),
+                            "share_pct": 100,
+                        }]
             continue
         primary = r.get("primary_model") or ""
         out[at] = {
