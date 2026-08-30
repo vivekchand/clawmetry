@@ -250,6 +250,27 @@ def test_runtime_summary_entry_keeps_otlp_markers(app):
     assert entry["tokens"] == 3700, "sessions pass + spans merge double-counted"
 
 
+def test_live_counts_bucket_by_metadata_runtime(app):
+    """The materialized session's metadata carries ``runtime`` because
+    ``sync._live_counts_by_runtime`` buckets liveness by ``metadata.runtime``
+    (defaulting to 'openclaw' without it). Proven end to end here: rows read
+    back through ``query_sessions_table`` (metadata JSON-decoded) land the
+    app's live count under its own runtime key, never under openclaw."""
+    a, ls = app
+    sid = "agentcore-sess-live"
+    _post(a, _agentcore_batch(sid, service="billing-agent-tst", environment="tst"))
+    rows = ls.get_store().query_sessions_table(limit=50)
+    ours = [r for r in rows if r.get("session_id") == sid]
+    assert ours and (ours[0].get("metadata") or {}).get("runtime") == "billing_agent_tst"
+    from clawmetry import sync as _sync
+    live = _sync._live_counts_by_runtime(ours)
+    assert "billing_agent_tst" in live, f"live buckets: {sorted(live)}"
+    assert "openclaw" not in live, "OTLP session liveness bucketed under openclaw"
+    # The batch's spans just happened, so the session must read as working/live.
+    b = live["billing_agent_tst"]
+    assert (b.get("working") or 0) + (b.get("waiting") or 0) >= 1
+
+
 def test_richer_ingest_owned_session_is_not_clobbered(app):
     a, ls = app
     sid = "agentcore-sess-owned"
