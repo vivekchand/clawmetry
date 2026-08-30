@@ -132,3 +132,59 @@ def test_trace_dir_env_resolves_to_trace_json(monkeypatch, tmp_path):
     result = oc._nemoclaw_onboard_trace()
     assert result["nemoclawOnboardTraceStatus"] == "OK"
     assert result["nemoclawOnboardTraceSpanCount"] == 1
+
+
+def test_resource_spans_otel_export_format(monkeypatch, tmp_path):
+    """Standard OTel resource_spans export shape is parsed correctly (snake_case keys)."""
+    trace_file = tmp_path / "trace.json"
+    data = {
+        "resource_spans": [
+            {
+                "scope_spans": [
+                    {
+                        "spans": [
+                            {"name": "nemoclaw.onboard.phase.gateway", "status": "OK"},
+                            {"name": "nemoclaw.onboard.phase.inference", "status": "ERROR"},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    with open(str(trace_file), "w") as fh:
+        json.dump(data, fh)
+    monkeypatch.setenv("NEMOCLAW_TRACE", "1")
+    monkeypatch.setenv("NEMOCLAW_TRACE_FILE", str(trace_file))
+    monkeypatch.delenv("NEMOCLAW_TRACE_DIR", raising=False)
+    oc = _reload_adapter()
+    result = oc._nemoclaw_onboard_trace()
+    assert result["nemoclawOnboardTraceStatus"] == "ERROR"
+    assert result["nemoclawOnboardTraceSpanCount"] == 2
+    assert "nemoclaw.onboard.phase.inference" in result["nemoclawOnboardTraceErrors"]
+
+
+def test_resource_spans_camel_case_scope_spans(monkeypatch, tmp_path):
+    """Standard OTel resource_spans export with camelCase scopeSpans key is parsed correctly."""
+    trace_file = tmp_path / "trace.json"
+    data = {
+        "resource_spans": [
+            {
+                "scopeSpans": [
+                    {
+                        "spans": [
+                            {"name": "nemoclaw.onboard.phase.gateway", "status": "OK"},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    with open(str(trace_file), "w") as fh:
+        json.dump(data, fh)
+    monkeypatch.setenv("NEMOCLAW_TRACE", "1")
+    monkeypatch.setenv("NEMOCLAW_TRACE_FILE", str(trace_file))
+    monkeypatch.delenv("NEMOCLAW_TRACE_DIR", raising=False)
+    oc = _reload_adapter()
+    result = oc._nemoclaw_onboard_trace()
+    assert result["nemoclawOnboardTraceStatus"] == "OK"
+    assert result["nemoclawOnboardTraceSpanCount"] == 1
