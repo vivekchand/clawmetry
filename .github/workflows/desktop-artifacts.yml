@@ -41,6 +41,8 @@ jobs:
       HAS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Same rule as the Windows job: signing is optional everywhere except
       # a release tag. An unsigned .dmg is refused by Gatekeeper outright,
@@ -288,6 +290,8 @@ jobs:
       HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && !(secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # A tag build that quietly produces an UNSIGNED artifact is worse
       # than a failed build: it reaches users as "unknown publisher", and
       # on Windows an unsigned uninstaller stub is blocked by Smart App
@@ -539,6 +543,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
