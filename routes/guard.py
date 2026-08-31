@@ -35,6 +35,11 @@ def _log_safe(v) -> str:
 
 _DETAIL_OK = re.compile(r"[^A-Za-z0-9 _.,:;()'/-]")
 
+# Allowlist for caller-supplied session identifiers: alphanumeric plus _ and -.
+# Refuses slashes, dots, null bytes, Windows reserved names, and any other
+# character that could influence a path operation or a shell command.
+_SID_SAFE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
+
 
 def _detail_safe(v) -> str:
     """Reduce an actuator string to plain words before it reaches a response.
@@ -372,10 +377,13 @@ def api_guard_control():
                         "error": f"action must be one of {list(_CONTROL_ACTIONS)}"}), 400
     if not session_id:
         return jsonify({"ok": False, "error": "session_id is required"}), 400
-    if "/" in session_id or "\\" in session_id or ".." in session_id or os.path.basename(session_id) != session_id:
+    if not _SID_SAFE_RE.match(session_id):
         return jsonify({"ok": False, "error": "invalid session_id"}), 400
-    if cwd and (".." in cwd.split(os.sep) or ".." in cwd.split("/")):
-        return jsonify({"ok": False, "error": "invalid cwd"}), 400
+    if cwd:
+        try:
+            cwd = os.path.realpath(cwd)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid cwd"}), 400
 
     try:
         # Every control action — resume included — goes through the actuator
