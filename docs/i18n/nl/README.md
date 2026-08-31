@@ -63,7 +63,7 @@ Een gebruikspercentage is alleen zo eerlijk als waar het door deelt. ClawMetry
 bepaalt de venstergrootte per provider aan de hand van [een tabel die je kunt
 lezen en waarvoor je een PR kunt indienen](clawmetry/context_windows.py), die
 Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama en GLM
-dekt. Het meet niet alle 26 runtimes met de liniaal van één leverancier. Dat
+dekt. Het meet niet alle 30 runtimes met de liniaal van één leverancier. Dat
 maakt uit: een 300K GPT-5-beurt gescoord tegen Anthropics 200K leest als
 ">100%, blown" terwijl deze in werkelijkheid op 75% van GPT-5's 400K zit.
 Diezelfde liniaal verbergt een écht overvolle 130K DeepSeek-beurt als een

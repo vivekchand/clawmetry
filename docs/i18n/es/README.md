@@ -61,7 +61,7 @@ Dos preguntas que vale la pena responder antes de confiar en cualquier herramien
 Un porcentaje de utilización es tan honesto como aquello por lo que se divide. ClawMetry
 dimensiona la ventana por proveedor a partir de [una tabla que puedes leer y
 proponer mediante PR](clawmetry/context_windows.py), que cubre Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama y GLM. No mide los 26 runtimes con la regla de un solo
+DeepSeek, Kimi, Qwen, Mistral, Llama y GLM. No mide los 30 runtimes con la regla de un solo
 proveedor. Eso importa: un turno de GPT-5 de 300K medido contra los 200K de Anthropic se lee
 como ">100%, desbordado" cuando en realidad está al 75% de los 400K de GPT-5. Esa misma regla
 oculta un turno de DeepSeek de 130K genuinamente desbordado como un cómodo 65%.
