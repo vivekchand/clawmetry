@@ -174,6 +174,7 @@ the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 | [Entitlements](docs/ENTITLEMENTS.md) | Free vs paid, tier matrix, license CLI |
 | [Approvals & policies](docs/APPROVALS.md) | Pre-execution gating, risk scoring, phone approvals |
 | [OpenTelemetry](docs/OPENTELEMETRY.md) | Export traces anywhere, ingest OTLP from anything |
+| [Bring your own agent](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain end to end, with runnable examples |
 | [SDK tracking](docs/SDK_TRACKING.md) | Cost attribution for agents you built yourself |
 | [Chat channels](docs/CHANNELS.md) | The chat adapters shown in Flow |
 | [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Sandboxed NVIDIA NemoClaw setups |
