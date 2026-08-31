@@ -27,10 +27,10 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
-permissions:
-  actions: write
-  checks: read
-  pull-requests: read
+# Nothing at the workflow level: each job below declares exactly the scopes it
+# spends. `actions: write` is the scope that cancels and re-runs other people's
+# jobs, so it is granted per job rather than to every job in the file.
+permissions: {}
 
 # One instance at a time; a queued follow-up collapses into the latest.
 concurrency:
@@ -47,6 +47,9 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Lists queued runs and cancels them. No checks or pull-request reads here.
+    permissions:
+      actions: write
     steps:
       - name: Cancel every queued run not on main
         run: |
@@ -68,15 +71,27 @@ jobs:
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # actions: re-run parked runs; checks: read drift-bot's conclusion;
+    # pull-requests: list the open PRs to consider.
+    permissions:
+      actions: write
+      checks: read
+      pull-requests: read
     steps:
       - name: Skip while main still has queued or running jobs
         id: gate
+        # SELF is read by jq through `env`, not expanded into the filter. A
+        # `${{ }}` expression is substituted as text before jq (or bash) parses
+        # the line, so a workflow name containing a quote or a backslash would
+        # otherwise land in the filter as jq source rather than as a string.
+        env:
+          SELF: ${{ github.workflow }}
         run: |
           set -u
           busy=$(gh api "/repos/$REPO/actions/runs?branch=main&per_page=100" \
-                   --jq "[.workflow_runs[]
-                          | select(.status == \"queued\" or .status == \"in_progress\")
-                          | select(.name != \"${{ github.workflow }}\")] | length")
+                   --jq '[.workflow_runs[]
+                          | select(.status == "queued" or .status == "in_progress")
+                          | select(.name != env.SELF)] | length')
           echo "main busy runs: $busy"
           echo "idle=$([ "$busy" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
