@@ -30641,7 +30641,11 @@ function loadGuardSessions() {
         // Say WHY rather than showing a button that quietly does nothing.
         control = '<span class="muted" title="' + guardEsc(s.control_reason) + '">Not controllable</span>';
       } else {
-        var args = "'" + guardEsc(s.session_id) + "','" + guardEsc(s.runtime) + "','" + guardEsc(s.cwd) + "'";
+        // Store session fields in data-attributes so onclick handlers read
+        // them after HTML parsing — HTML entity encoding alone is insufficient
+        // in a JS string context (the browser decodes entities before evaluating
+        // the JS, so guardEsc("'") -> &#39; -> ' still breaks out of the string).
+        var dataSid = ' data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime || '') + '" data-cwd="' + guardEsc(s.cwd || '') + '"';
         // Which buttons this SESSION supports, answered by the server. Older
         // builds only sent no_pause, so fall back to that rather than
         // rendering nothing at all.
@@ -30654,13 +30658,13 @@ function loadGuardSessions() {
         var noteAttr = s.control_note ? ' title="' + guardEsc(s.control_note) + '"' : '';
         control = '';
         if (allowed.indexOf('pause') >= 0) {
-          control += '<button class="btn btn-xs"' + noteAttr + ' onclick="guardControl(' + args + ",'pause')\">Pause</button> ";
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'pause\')">Pause</button> ';
         }
         if (allowed.indexOf('stop') >= 0) {
-          control += '<button class="btn btn-xs"' + noteAttr + ' onclick="guardControl(' + args + ",'stop')\">Stop</button> ";
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'stop\')">Stop</button> ';
         }
         if (allowed.indexOf('kill') >= 0) {
-          control += '<button class="btn btn-xs btn-danger"' + noteAttr + ' onclick="guardControl(' + args + ",'kill')\">Kill</button>";
+          control += '<button class="btn btn-xs btn-danger"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'kill\')">Kill</button>';
         }
         // Pause is unavailable but the reason is worth reading (no proxy).
         if (allowed.indexOf('pause') < 0 && s.control_note) {
@@ -30742,7 +30746,7 @@ function loadGuardPolicies() {
       '<th>Name</th><th>When</th><th>Thresholds</th><th>Action</th><th></th>' +
       '</tr></thead><tbody>';
     rows.forEach(function (p) {
-      var when = GUARD_KIND_LABEL[p.trigger_kind] || (p.trigger_kind || 'any signal');
+      var when = GUARD_KIND_LABEL[p.trigger_kind] || guardEsc(p.trigger_kind || 'any signal');
       if (p.scope_runtime) when += ' on ' + guardEsc(p.scope_runtime);
       var th = [];
       if (p.min_repeat) th.push('>= ' + p.min_repeat + ' events');
@@ -30765,7 +30769,7 @@ function loadGuardPolicies() {
         '<td>' + guardEsc(when) + '</td>' +
         '<td>' + guardEsc(th.join(', ') || 'none') + '</td>' +
         '<td>' + actionCell + '</td>' +
-        '<td><button class="btn btn-xs" onclick="guardDeletePolicy(\'' + guardEsc(p.policy_id) + '\')">Delete</button></td></tr>';
+        '<td><button class="btn btn-xs" data-pid="' + guardEsc(p.policy_id) + '" onclick="guardDeletePolicy(this.dataset.pid)">Delete</button></td></tr>';
     });
     html += '</tbody></table>';
     el.innerHTML = html;
