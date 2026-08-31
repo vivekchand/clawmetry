@@ -1845,6 +1845,18 @@ def _clean_str(value: Any, limit: int = _MAX_PATH_LEN) -> str | None:
     return s[:limit] if s else None
 
 
+def _iso_utc(ts: float) -> str | None:
+    """Unix seconds -> ISO-8601 UTC string (the sessions table's timestamp
+    dialect). None for a missing/zero timestamp rather than the epoch."""
+    if not ts:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -6526,6 +6538,143 @@ class LocalStore:
             "events_skipped_daemon_owned": ev_skipped,
         }
 
+    def materialize_otlp_sessions(
+        self,
+        *,
+        session_ids: list[str] | None = None,
+        environments: dict[str, str] | None = None,
+    ) -> int:
+        """Upsert ``sessions`` rows derived from OTLP spans (WO-55).
+
+        A fleet that only ever sends OTLP traces (AWS Bedrock AgentCore, an
+        OpenLLMetry app, …) fills the ``spans`` table and the Tracing tab but
+        never creates a ``sessions`` row — so the Sessions tab and the runtime
+        switcher stay empty for exactly the app the person just wired up. This
+        closes that seam: a FULL recompute of the named sessions from their
+        spans, then one idempotent batch upsert.
+
+        Safety rails, each load-bearing:
+          * Full recompute per session (aggregate over ALL of its spans), so
+            OTLP's at-least-once delivery can never double a total — a retried
+            batch REPLACEs the same numbers.
+          * ``agent_type='openclaw'`` spans are ignored. OpenClaw sessions come
+            from transcripts via the daemon; materializing them here would mint
+            ghost sessions next to the real ones (the log-session-id burn).
+          * A pre-existing row for the same session_id NOT stamped
+            ``metadata.source='otlp_spans'`` belongs to a richer ingest path
+            (transcripts, WO-7 logs) and is left alone — same ownership rule
+            as ``put_otlp_batch``'s events_skipped_daemon_owned.
+
+        ``environments`` carries the per-session ``deployment.environment``
+        resource attribute the receiver saw (dev / tst / prod), stored on the
+        session metadata so an AgentCore-style fleet stays separable by stage.
+
+        Call by KEYWORD through the daemon proxy — it forwards **kwargs only
+        (the put_span trap). Returns the number of sessions upserted.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: materialize_otlp_sessions() on read-only store"
+            )
+        ids = sorted({str(s) for s in (session_ids or []) if s})
+        if not ids:
+            return 0
+        envs = environments if isinstance(environments, dict) else {}
+
+        rollups: list[tuple] = []
+        owned_elsewhere: set[str] = set()
+        for off in range(0, len(ids), 500):
+            chunk = ids[off:off + 500]
+            ph = ",".join("?" * len(chunk))
+            rollups.extend(self._fetch(
+                f"""
+                SELECT
+                    session_id,
+                    MAX(agent_type)                                   AS agent_type,
+                    MAX(service_name)                                 AS service_name,
+                    MAX(node_id)                                      AS node_id,
+                    MAX(agent_id)                                     AS agent_id,
+                    MIN(start_ts)                                     AS started_ts,
+                    MAX(COALESCE(end_ts, start_ts))                   AS last_ts,
+                    SUM(COALESCE(tokens_input, 0)
+                        + COALESCE(tokens_output, 0))                 AS tok_io,
+                    SUM(COALESCE(token_count, 0))                     AS tok_total,
+                    SUM(COALESCE(cost_usd, 0.0))                      AS cost_usd,
+                    COUNT(*)                                          AS span_count,
+                    COUNT(DISTINCT trace_id)                          AS trace_count,
+                    COUNT(CASE WHEN model IS NOT NULL AND model <> ''
+                          THEN 1 END)                                 AS llm_calls,
+                    arg_min(name, start_ts)                           AS root_name
+                FROM spans
+                WHERE session_id IN ({ph})
+                  AND agent_type IS NOT NULL AND agent_type <> 'openclaw'
+                GROUP BY session_id
+                """,
+                chunk,
+            ))
+            for row in self._fetch(
+                f"SELECT session_id, metadata FROM sessions"
+                f" WHERE session_id IN ({ph})",
+                chunk,
+            ):
+                src = None
+                meta = row[1]
+                try:
+                    if isinstance(meta, (bytes, bytearray, memoryview)):
+                        meta = bytes(meta).decode("utf-8", "replace")
+                    if isinstance(meta, str) and meta:
+                        meta = json.loads(meta)
+                    if isinstance(meta, dict):
+                        src = meta.get("source")
+                except Exception:
+                    src = None
+                if src != "otlp_spans":
+                    owned_elsewhere.add(str(row[0]))
+
+        now = time.time()
+        batch: list[dict[str, Any]] = []
+        for r in rollups:
+            (sid, agent_type, service_name, node_id, agent_id, started_ts,
+             last_ts, tok_io, tok_total, cost_usd, span_count, trace_count,
+             llm_calls, root_name) = r
+            sid = str(sid)
+            if sid in owned_elsewhere:
+                continue
+            started = float(started_ts or 0.0)
+            last = float(last_ts or started)
+            meta = {
+                "source": "otlp_spans",
+                # Liveness/roster bucketing keys on metadata.runtime, with
+                # 'openclaw' as the default for rows that lack it — so stamp
+                # the app's identity here. (The consumer already exists on
+                # main: sync.py _live_counts_by_runtime reads this field;
+                # pinned by test_live_counts_bucket_by_metadata_runtime.)
+                "runtime": str(agent_type or "custom"),
+                "service_name": str(service_name or ""),
+                "trace_count": int(trace_count or 0),
+                "span_count": int(span_count or 0),
+            }
+            env = envs.get(sid)
+            if env:
+                meta["deployment_environment"] = str(env)
+            batch.append({
+                "session_id": sid,
+                "agent_type": str(agent_type or "custom"),
+                "agent_id": str(agent_id or "main"),
+                "node_id": node_id,
+                "title": str(root_name or service_name or sid)[:200],
+                "started_at": _iso_utc(started),
+                "last_active_at": _iso_utc(last),
+                "status": "active" if (now - last) < 600 else "inactive",
+                "total_tokens": max(int(tok_io or 0), int(tok_total or 0)),
+                "cost_usd": float(cost_usd or 0.0),
+                "message_count": int(llm_calls or 0),
+                "metadata": meta,
+            })
+        if not batch:
+            return 0
+        return self.ingest_sessions_batch(batch)
+
     def query_otlp_records(
         self,
         *,
@@ -7116,6 +7265,21 @@ class LocalStore:
                 f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
                 f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
             )
+            # Sessions-side variant (WO-55): a session materialized from OTLP
+            # spans has NO session-id prefix but a foreign ``agent_type`` (the
+            # slugified service.name). The prefix-only CASE dumped those into
+            # the 'openclaw' bucket, so a bring-your-own-agent app's tokens and
+            # cost showed under OpenClaw the moment its sessions materialized.
+            # Prefix stays authoritative for the family runtimes; the row's own
+            # agent_type wins only when it is a foreign slug.
+            rt_case_sessions = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) "
+                f"WHEN agent_type IS NOT NULL AND agent_type <> '' "
+                f"AND LOWER(agent_type) NOT IN ('openclaw', 'nemoclaw', 'clawmetry') "
+                f"AND agent_type NOT IN ({placeholders}) THEN agent_type "
+                f"ELSE 'openclaw' END"
+            )
             by_runtime: dict[str, dict[str, Any]] = {}
             # Per-runtime TOTALS use the same GREATEST(stored, SUM(events)) bridge
             # query_sessions_table uses — NOT a raw events sum. Family adapters
@@ -7146,6 +7310,7 @@ class LocalStore:
                 ),
                 combined AS (
                     SELECT COALESCE(s.session_id, ev.session_id) AS session_id,
+                           s.agent_type                          AS agent_type,
                            GREATEST(COALESCE(s.total_tokens, 0),
                                     COALESCE(ev.tok, 0))         AS tokens,
                            GREATEST(COALESCE(s.cost_usd, 0.0),
@@ -7157,7 +7322,7 @@ class LocalStore:
                     FROM sessions s
                     FULL OUTER JOIN ev ON s.session_id = ev.session_id
                 )
-                SELECT {rt_case} AS runtime,
+                SELECT {rt_case_sessions} AS runtime,
                        COUNT(*)      AS sessions,
                        SUM(tokens)   AS tokens,
                        SUM(cost_usd) AS cost_usd,
@@ -7165,7 +7330,9 @@ class LocalStore:
                 FROM combined
                 GROUP BY 1
             """
-            for r in self._fetch(sql_rt, list(prefixes)):
+            # rt_case_sessions binds the prefix list twice (prefix branch +
+            # foreign-agent_type NOT IN branch).
+            for r in self._fetch(sql_rt, list(prefixes) + list(prefixes)):
                 rt = r[0] or "openclaw"
                 by_runtime[rt] = {
                     "sessions": int(r[1] or 0),
