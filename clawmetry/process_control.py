@@ -553,16 +553,12 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
     """
     if not _IS_WINDOWS:
         return False, "not_windows"
-    import tempfile
-    _helper_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        ) as _tf:
-            _tf.write(_WIN_CTRLC_HELPER)
-            _helper_path = _tf.name
+        # Pass the script inline via -c so no temp file is written to disk
+        # and there is no TOCTOU window between write and exec.
+        # sys.argv[1] inside the helper receives the pid string as normal.
         proc = subprocess.run(
-            [sys.executable, _helper_path, str(int(pid))],
+            [sys.executable, "-c", _WIN_CTRLC_HELPER, str(int(pid))],
             timeout=max(1.0, float(timeout)),
             creationflags=_WIN_DETACHED_PROCESS,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -571,12 +567,6 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
         return False, "ctrl_c_helper_timeout"
     except Exception as exc:  # noqa: BLE001
         return False, f"ctrl_c_helper_error:{str(exc)[:120]}"
-    finally:
-        if _helper_path is not None:
-            try:
-                os.unlink(_helper_path)
-            except OSError:
-                pass
     if proc.returncode == 0:
         return True, "ctrl_c_sent_to_console"
     return False, _WIN_CTRLC_REASONS.get(proc.returncode,
@@ -987,13 +977,13 @@ def _proc_cmdline(pid: int) -> List[str]:
         import os as _os
         _pid_int = abs(int(pid))
         _ps_env = dict(_c_locale_env())
-        _ps_env["_CLAWMETRY_QUERY_PID"] = str(_pid_int)
         try:
             import subprocess as _sp
+            # _pid_int is abs(int(...)) — guaranteed non-negative integer,
+            # only decimal digits reach the WMI filter string.
             _ps_result = _sp.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                 "(Get-CimInstance Win32_Process -Filter "
-                 "('ProcessId=' + $Env:_CLAWMETRY_QUERY_PID)).CommandLine"],
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={_pid_int}').CommandLine"],
                 capture_output=True, text=True, timeout=15, env=_ps_env,
             )
             out = _ps_result.stdout if (
