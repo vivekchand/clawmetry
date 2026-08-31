@@ -787,6 +787,13 @@ _DAEMON_METHODS = frozenset({
     # put_otlp_batch(records=[...], events=[...]) — the proxy forwards
     # **kwargs only. One call per OTLP export batch, not per record.
     "put_otlp_batch",
+    # WO-55: sessions materialized from OTLP spans. The /v1/traces receiver
+    # (dashboard process, no writer lock) recomputes the touched sessions'
+    # rollups from the spans table and upserts sessions rows through the
+    # daemon, so a span-only app (AgentCore, OpenLLMetry) shows in the
+    # Sessions tab + runtime switcher. Keyword-only through the proxy:
+    # materialize_otlp_sessions(session_ids=[...], environments={...}).
+    "materialize_otlp_sessions",
     # Read side of the same table: per-team / per-repo / per-person rollups
     # over the daemon-free path, and the persisted-row count /api/otel-status
     # shows so an operator can tell durable storage from the in-memory cache.
