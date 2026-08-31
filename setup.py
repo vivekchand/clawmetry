@@ -97,39 +97,48 @@ setup(
         # an environment that already had a vulnerable cryptography kept it.
         #
         # The CEILING here is set by the cffi pin below, not by taste.
-        # cryptography 46.0.1+ requires cffi>=2.0.0 on 3.9+, which
-        # contradicts the `cffi<2` we pin under 3.14 (issue #5108), so
-        # 46.0.0 is the newest release that resolves under 3.14. Above
-        # 3.14, where we already take cffi>=2, the newest is reachable.
+        # cryptography 46.0.1+ requires cffi>=2.0.0 on 3.9+, so wherever we
+        # pin `cffi<2` the newest resolvable cryptography is exactly 46.0.0
+        # -- which carries nine published advisories (PYSEC-2026-2141, -35,
+        # -36, GHSA-537c-gmf6-5ccf, PYSEC-2026-3552/3553/3554), fixed across
+        # 46.0.5 through 50.0.0.
+        #
+        # That cap used to span every interpreter below 3.14. It no longer
+        # does, because both reasons behind `cffi<2` are specific to Python
+        # 3.9 (see the cffi comment below): the 2.0.0 finalizer SIGSEGV is a
+        # py3.9 bug, and the missing cp39 wheels on cffi 2.1+ are a py3.9
+        # packaging fact. cffi 2.x publishes wheels for 3.10, 3.11, 3.12 and
+        # 3.13, so holding those four at cffi<2 bought nothing and cost the
+        # nine advisories above on the interpreters most installs run.
         #
         # Interpreter bands, in the same conditional shape as cffi below:
-        #   3.14+            cffi>=2 already, so >=50.0.0 (advisory-clean)
-        #   3.9.2 - 3.13     capped at 46.0.0 by cffi<2
+        #   3.10+            cffi>=2, so >=50.0.0 (advisory-clean)
+        #   3.9.2 - 3.9.x    still capped at 46.0.0 by cffi<2 on py3.9
         #   3.8/3.9.0/3.9.1  46.0.4+ excludes 3.9.0/3.9.1, so the old floor
         #                    stays rather than making `pip install clawmetry`
         #                    a resolver error on an interpreter we support
         #
-        # Under 3.14 this closes the 36 advisories fixed up to 46.0.0. The
-        # six newer ones (fixed in 46.0.6, 46.0.7, 48.0.1, 49.0.0 x2 and
-        # 50.0.0, the last being CVE-2026-69247) are NOT reachable there at
-        # any floor: cffi<2 caps us at 46.0.0. Closing them means narrowing
-        # that pin -- it is load-bearing and retiring it is its own change.
-        'cryptography>=50.0.0; python_version >= "3.14"',
-        'cryptography>=46.0.0; python_full_version >= "3.9.2" and python_version < "3.14"',
+        # py3.9 keeps the nine open advisories, and that is the residual risk
+        # this change accepts rather than hides: closing them there requires
+        # cffi>=2, which reintroduces #5108 on the one interpreter it breaks.
+        # Python 3.9 reached end of life in October 2025.
+        'cryptography>=50.0.0; python_version >= "3.10"',
+        'cryptography>=46.0.0; python_full_version >= "3.9.2" and python_version < "3.10"',
         'cryptography>=3.0; python_full_version < "3.9.2"',
         # cffi is pinned per interpreter, and both halves are load-bearing:
-        # - Below 3.14: cffi 2.0.0 introduced a Python 3.9 finalizer
+        # - On 3.9 only: cffi 2.0.0 introduced a Python 3.9 finalizer
         #   regression that SIGSEGVs at sys.exit() when argparse prints
         #   --help text, crashing `clawmetry uninstall --help` on py3.9
-        #   (issue #5108) — and cffi 2.1+ ships no cp39 wheels at all, so
-        #   <2 stays correct there.
-        # - On 3.14+: cffi 1.x ships NO cp314 wheels, so an unconditional
-        #   <2 forces a source build that demands MSVC on end-user Windows
-        #   machines ("Microsoft Visual C++ 14.0 or greater is required")
-        #   and bricked a desktop first install in the field (2026-08-29).
-        #   cffi 2.x is the only series with 3.14 wheels.
-        'cffi<2; python_version < "3.14"',
-        'cffi>=2; python_version >= "3.14"',
+        #   (issue #5108) — and cffi 2.1+ ships no cp39 wheels at all
+        #   (it requires >=3.10), so <2 stays correct there.
+        # - On 3.10+: neither reason applies. cffi 1.x ships NO cp314
+        #   wheels, so an unconditional <2 forces a source build that
+        #   demands MSVC on end-user Windows machines ("Microsoft Visual
+        #   C++ 14.0 or greater is required") and bricked a desktop first
+        #   install in the field (2026-08-29). cffi 2.x is the only series
+        #   with 3.14 wheels, and it covers 3.10-3.13 as well.
+        'cffi<2; python_version < "3.10"',
+        'cffi>=2; python_version >= "3.10"',
         # Local store at ~/.clawmetry/clawmetry.duckdb. Holds events,
         # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
         # wheel; columnar storage gives 10-100x speed vs SQLite for the
