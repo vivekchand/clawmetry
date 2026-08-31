@@ -2749,6 +2749,18 @@ def _otel_to_row(span, resource_attrs):
     for attr in span.attributes:
         attrs[attr.key] = _otel_attr_value(attr.value)
 
+    # deployment.environment is a RESOURCE attribute (deployment.environment
+    # .name since semconv 1.27; the bare key before that), so it used to be
+    # dropped with the rest of the resource. Keep it on the span's attribute
+    # blob so a dev/tst/prod fleet (AgentCore's normal shape) stays separable
+    # after ingest; the session materializer lifts it onto session metadata.
+    if "deployment.environment" not in attrs:
+        for _env_key in ("deployment.environment.name", "deployment.environment"):
+            _env_val = attrs.get(_env_key) or resource_attrs.get(_env_key)
+            if _env_val not in (None, ""):
+                attrs["deployment.environment"] = str(_env_val)
+                break
+
     # Time columns. OTel proto carries unix-nano; we store unix-seconds in
     # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
     # without converting twice.
@@ -2990,6 +3002,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     """
     req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
+    # session_id -> deployment.environment (or None) for every non-OpenClaw
+    # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
+    # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
+    _otlp_sessions_seen = {}
+
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
     # cost upfront.
@@ -3109,7 +3126,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # real install). put_span is allowlisted in
                         # routes/local_query._DAEMON_METHODS so the daemon
                         # executes the real write.
-                        _store.put_span(span=_otel_to_row(span, resource_attrs))
+                        _row = _otel_to_row(span, resource_attrs)
+                        _store.put_span(span=_row)
+                        # Track for session materialization (WO-55). OpenClaw
+                        # sessions come from transcripts; only foreign apps
+                        # need a span-derived sessions row.
+                        _sid = _row.get("session_id")
+                        if _sid and (_row.get("agent_type") or "") != "openclaw":
+                            _env = (_row.get("attributes") or {}).get(
+                                "deployment.environment")
+                            if _env or str(_sid) not in _otlp_sessions_seen:
+                                _otlp_sessions_seen[str(_sid)] = _env
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -3118,6 +3145,25 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             )
                         except Exception:
                             pass
+
+    # One materialization call per export batch (not per span — get_store()
+    # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
+    # touched sessions from their spans and upserts sessions rows so the
+    # Sessions tab and runtime switcher show a span-only OTLP app (WO-55).
+    if _store is not None and _otlp_sessions_seen:
+        try:
+            _store.materialize_otlp_sessions(
+                session_ids=sorted(_otlp_sessions_seen),
+                environments={k: v for k, v in _otlp_sessions_seen.items() if v},
+            )
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "materialize_otlp_sessions failed: %s", e
+                )
+            except Exception:
+                pass
 
 
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
@@ -11570,6 +11616,18 @@ def _otel_to_row(span, resource_attrs):
     for attr in span.attributes:
         attrs[attr.key] = _otel_attr_value(attr.value)
 
+    # deployment.environment is a RESOURCE attribute (deployment.environment
+    # .name since semconv 1.27; the bare key before that), so it used to be
+    # dropped with the rest of the resource. Keep it on the span's attribute
+    # blob so a dev/tst/prod fleet (AgentCore's normal shape) stays separable
+    # after ingest; the session materializer lifts it onto session metadata.
+    if "deployment.environment" not in attrs:
+        for _env_key in ("deployment.environment.name", "deployment.environment"):
+            _env_val = attrs.get(_env_key) or resource_attrs.get(_env_key)
+            if _env_val not in (None, ""):
+                attrs["deployment.environment"] = str(_env_val)
+                break
+
     # Time columns. OTel proto carries unix-nano; we store unix-seconds in
     # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
     # without converting twice.
@@ -11811,6 +11869,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     """
     req = _otlp_request(pb_data, "traces", content_encoding, content_type)
 
+    # session_id -> deployment.environment (or None) for every non-OpenClaw
+    # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
+    # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
+    _otlp_sessions_seen = {}
+
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
     # cost upfront.
@@ -11930,7 +11993,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # real install). put_span is allowlisted in
                         # routes/local_query._DAEMON_METHODS so the daemon
                         # executes the real write.
-                        _store.put_span(span=_otel_to_row(span, resource_attrs))
+                        _row = _otel_to_row(span, resource_attrs)
+                        _store.put_span(span=_row)
+                        # Track for session materialization (WO-55). OpenClaw
+                        # sessions come from transcripts; only foreign apps
+                        # need a span-derived sessions row.
+                        _sid = _row.get("session_id")
+                        if _sid and (_row.get("agent_type") or "") != "openclaw":
+                            _env = (_row.get("attributes") or {}).get(
+                                "deployment.environment")
+                            if _env or str(_sid) not in _otlp_sessions_seen:
+                                _otlp_sessions_seen[str(_sid)] = _env
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -11939,6 +12012,25 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             )
                         except Exception:
                             pass
+
+    # One materialization call per export batch (not per span — get_store()
+    # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
+    # touched sessions from their spans and upserts sessions rows so the
+    # Sessions tab and runtime switcher show a span-only OTLP app (WO-55).
+    if _store is not None and _otlp_sessions_seen:
+        try:
+            _store.materialize_otlp_sessions(
+                session_ids=sorted(_otlp_sessions_seen),
+                environments={k: v for k, v in _otlp_sessions_seen.items() if v},
+            )
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "materialize_otlp_sessions failed: %s", e
+                )
+            except Exception:
+                pass
 
 
 # ── Daemon-free OTLP intake (WO-7) ───────────────────────────────────────────
