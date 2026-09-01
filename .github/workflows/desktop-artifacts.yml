@@ -18,12 +18,6 @@ on:
       - 'v*.*.*'
   workflow_dispatch: {}
 
-# Least-privilege floor for the three BUILD jobs (macos / linux inherit this;
-# windows re-declares it alongside id-token). The `release` job, and only that
-# job, elevates to `contents: write` so softprops/action-gh-release can attach
-# installers to the tag's Release and publish it. Keep the elevation on that
-# job — a workflow-wide `contents: write` would hand every build job, and each
-# third-party action it runs, the ability to write to the repository.
 permissions:
   contents: read
 
@@ -31,46 +25,29 @@ jobs:
   macos:
     name: macOS .app + .dmg (signed + notarized when secrets are set)
     runs-on: macos-latest
-    # The `secrets` context is not available in step-level `if:` conditionals
-    # (the workflow parser rejects it — GitHub restricts `secrets` to `env:`,
-    # `with:`, and `run:`). Hoist the presence checks into job-level `env` so
-    # steps can gate on `env.HAS_*`, which IS legal in `if:`. The values are
-    # 'true' / 'false' strings because that is what `!= ''` evaluates to.
     env:
       HAS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
       HAS_SIGN: ${{ secrets.MACOS_SIGN_IDENTITY != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Same rule as the Windows job: signing is optional everywhere except
-      # a release tag. An unsigned .dmg is refused by Gatekeeper outright,
-      # so shipping one is a broken download, not a degraded one.
       - name: Require signing on release tags
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGN != 'true'
         shell: bash
         run: |
-          echo "::error::${{ github.ref_name }} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
+          echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
           exit 1
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
       - name: Install build deps
         run: |
           pip install --upgrade pip wheel
-          # Thin shell: no clawmetry install needed here. Bundle only
-          # ships pywebview + PIL. Runtime pip-installs clawmetry on
-          # user's machine on first launch.
           pip install -r desktop/requirements-dev.txt
 
-      # PyInstaller (not py2app). py2app 0.28.x has a broken macOS
-      # version check on Tahoe / macOS 26 and refuses to build; the
-      # setup_py2app.py spec is kept in-tree for the day py2app
-      # catches up but is not on the shipping path.
-      # Stamp the bundle version into desktop/assets/version.txt so the
-      # shipped shell can report WHICH build the user opened (the open
-      # ping in desktop/app.py reads it). Tag-first, same resolution the
-      # packaging steps below use.
       - name: Stamp bundle version
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -84,23 +61,9 @@ jobs:
       - name: Build .app
         run: pyinstaller --clean --noconfirm desktop/build_mac.spec
 
-      # Gate: launch what we just built (see desktop/smoke_test.py).
-      # Runs before signing so a broken bundle fails in seconds instead
-      # of after a notarization round trip. macOS runners have a window
-      # server, so no Xvfb equivalent is needed.
       - name: Smoke test the built .app
         run: python3 desktop/smoke_test.py dist/ClawMetry.app
 
-      # --- Code-signing + notarization ---
-      # These steps NO-OP when the secrets aren't configured, so PRs
-      # from forks and unsigned dev builds still succeed. Add these
-      # repo secrets in Settings → Secrets and variables → Actions:
-      #   MACOS_CERT_P12_BASE64         Developer ID Application .p12 (base64)
-      #   MACOS_CERT_P12_PASSWORD       password used when exporting the .p12
-      #   MACOS_SIGN_IDENTITY           e.g. "Developer ID Application: InstaLabs LLC (8LVH596RA5)"
-      #   APPLE_ID                      Apple ID email
-      #   APPLE_TEAM_ID                 e.g. 8LVH596RA5
-      #   APPLE_APP_SPECIFIC_PASSWORD   from https://appleid.apple.com → App-Specific Passwords
       - name: Import Developer ID cert into a build keychain
         if: env.HAS_CERT == 'true'
         env:
@@ -119,7 +82,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$PASS" "$KEYCHAIN"
           rm -f "$RUNNER_TEMP/cert.p12"
-          # Show what we imported (identities only — no keys)
           security find-identity -p codesigning -v "$KEYCHAIN"
 
       - name: Sign + notarize + staple .app
@@ -133,39 +95,22 @@ jobs:
 
       - name: Wrap into .dmg (drag-to-Applications layout)
         run: |
-          # Prefer the tag ref (v0.12.<n> → 0.12.<n>) over dashboard.py's
-          # __version__ because release-on-merge commits the version bump
-          # in a SEPARATE follow-up PR, so at the tag ref dashboard.py is
-          # still stale by one release. Falls back to dashboard.py for
-          # non-tag runs (manual dispatch on main, PR CI).
           if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
             VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
           fi
-
-          # Stage the .dmg contents so the mounted volume has BOTH the
-          # .app and a symlink to /Applications, giving users the standard
-          # macOS drag-to-install UX. Without this the DMG mounts to an
-          # otherwise-empty window with just ClawMetry.app, and users have
-          # to figure out on their own that they should drag it somewhere.
-          # Pattern mirrored from clawmetry-mac/.github/workflows/build-sign-release.yml.
           STAGING="$RUNNER_TEMP/dmg-stage"
           rm -rf "$STAGING"
           mkdir -p "$STAGING"
           cp -R dist/ClawMetry.app "$STAGING/"
           ln -s /Applications "$STAGING/Applications"
-
-          # Build a writable DMG first so we can osascript the Finder into
-          # arranging the icons + hiding the toolbar, then convert to the
-          # final compressed read-only UDZO the release ships.
           TEMP_DMG="$RUNNER_TEMP/ClawMetry-temp.dmg"
           hdiutil create -volname "ClawMetry" \
             -srcfolder "$STAGING" \
             -ov -format UDRW -fs HFS+ \
             "$TEMP_DMG"
           hdiutil attach "$TEMP_DMG" -readwrite -noverify -mountpoint /Volumes/ClawMetry
-
           osascript <<'AS'
           tell application "Finder"
             tell disk "ClawMetry"
@@ -187,23 +132,30 @@ jobs:
             end tell
           end tell
           AS
-
           sync && sleep 2
           osascript -e 'tell application "Finder" to close every window' || true
           sleep 1
-          hdiutil detach "/Volumes/ClawMetry" -force
-
-          # Convert writable UDRW → compressed read-only UDZO (final shape).
+          detached=""
+          for i in 1 2 3 4 5 6; do
+            if hdiutil detach "/Volumes/ClawMetry" -force; then
+              detached=1; break
+            fi
+            echo "detach attempt $i failed; retrying in $((i * 3))s"
+            sleep $((i * 3))
+          done
+          if [ -z "$detached" ]; then
+            diskutil unmountDisk force "/Volumes/ClawMetry" || true
+            sleep 3
+            hdiutil detach "/Volumes/ClawMetry" -force || true
+          fi
+          if mount | grep -q "/Volumes/ClawMetry"; then
+            echo "::error::could not detach /Volumes/ClawMetry after retries"
+            exit 1
+          fi
           hdiutil convert "$TEMP_DMG" \
             -format UDZO -imagekey zlib-level=9 \
             -o "dist/ClawMetry-${VERSION}.dmg"
           rm -f "$TEMP_DMG"
-
-          # Fixed-name copy so clawmetry.com/download/mac can link a stable
-          # URL (GitHub's /releases/latest/download/<name>) instead of
-          # bookkeeping the current version anywhere else. Placed BEFORE
-          # the sign step below so it rides the same `dist/*.dmg` signing
-          # loop as the versioned file.
           cp "dist/ClawMetry-${VERSION}.dmg" "dist/ClawMetry-mac.dmg"
 
       - name: Sign + notarize + staple the .dmg itself
@@ -218,7 +170,7 @@ jobs:
             desktop/sign_mac.sh "$dmg"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clawmetry-macos
           path: dist/*.dmg
@@ -226,59 +178,24 @@ jobs:
   windows:
     name: Windows .exe (signed when secrets are set)
     runs-on: windows-latest
-    # Same secrets-presence hoisting trick as the macOS job above. Signing
-    # activates when these repo secrets exist (OV/EV PFX export):
-    #   WINDOWS_CERT_PFX_BASE64   code-signing cert + key as base64 .pfx
-    #   WINDOWS_CERT_PASSWORD     password protecting the .pfx
-    # Without them every step NO-OPs, so forks and dev builds stay green
-    # and simply produce unsigned artifacts (SmartScreen warns; Smart App
-    # Control blocks the uninstaller - see the .nsi comment).
-    # OIDC token for azure/login (Artifact Signing path). Harmless when
-    # the Azure secrets are absent; `contents: read` restores the default
-    # that declaring any permission block would otherwise drop.
     permissions:
       id-token: write
       contents: read
-    # Federated-credential subjects cannot contain wildcards, and this
-    # workflow fires on `v*.*.*` tags - an unbounded set no exact subject
-    # can match. Declaring an environment pins the OIDC `sub` claim to the
-    # stable `repo:<owner>/<repo>:environment:release`, covering tag pushes
-    # and workflow_dispatch alike. No protection rules are set, so this
-    # neither gates nor delays the job.
     environment: release
     env:
-      # Two mutually exclusive signing backends, both optional:
-      #   HAS_AZ_SIGN   Azure Artifact Signing - Microsoft-managed FIPS
-      #                 140-3 Level 3 HSM, OIDC auth, no key material ever
-      #                 on the runner. PREFERRED.
-      #   HAS_WIN_CERT  legacy OV/EV .pfx export. Kept as a fallback.
-      # Azure wins when both are configured. Gate on the certificate
-      # profile too, not just the credential: the profile is the last
-      # resource to exist (it is blocked on identity validation), so
-      # credential-only gating would arm the Azure path while
-      # metadata.json still had an empty CertificateProfileName, turning a
-      # green unsigned build into a hard signtool failure for anyone who
-      # pushed a tag in the meantime.
-      # Downstream steps gate on SIGN_ENABLED, which whichever prep step
-      # ran writes to $GITHUB_ENV.
       HAS_AZ_SIGN: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '' }}
       HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && !(secrets.AZURE_CLIENT_ID != '' && secrets.AZ_SIGN_PROFILE != '') }}
     steps:
-      - uses: actions/checkout@v7
-      # A tag build that quietly produces an UNSIGNED artifact is worse
-      # than a failed build: it reaches users as "unknown publisher", and
-      # on Windows an unsigned uninstaller stub is blocked by Smart App
-      # Control, leaving the app impossible to remove from Settings > Apps.
-      # Signing config is optional everywhere EXCEPT a release tag, where
-      # it is mandatory. Runs before the build so a misconfiguration costs
-      # seconds, not a full compile.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Require signing on release tags
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_AZ_SIGN != 'true' && env.HAS_WIN_CERT != 'true'
         shell: bash
         run: |
-          echo "::error::${{ github.ref_name }} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
+          echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
           exit 1
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -287,14 +204,11 @@ jobs:
           python -m pip install --upgrade pip wheel
           pip install -r desktop/requirements-dev.txt
 
-      # Stamp the bundle version into desktop/assets/version.txt — see
-      # the macOS job for why. -NoNewline so the shell reads a clean
-      # value, and ASCII so no BOM lands in the file.
       - name: Stamp bundle version
         shell: pwsh
         run: |
-          $refName = "${{ github.ref_name }}"
-          if ("${{ github.ref_type }}" -eq "tag") {
+          $refName = $Env:GITHUB_REF_NAME
+          if ($Env:GITHUB_REF_TYPE -eq "tag") {
             $version = $refName.Substring(1)
           } else {
             $version = (Select-String -Path dashboard.py -Pattern '__version__ = "(.+?)"').Matches.Groups[1].Value
@@ -305,22 +219,9 @@ jobs:
       - name: Build tray .exe
         run: pyinstaller --clean --noconfirm desktop/build_windows.spec
 
-      # Gate: launch what we just built (see desktop/smoke_test.py).
-      # Runs before signing and before the installer is packed, so a
-      # broken exe can't reach either. windows-latest ships the Edge
-      # WebView2 runtime the backend needs.
       - name: Smoke test the built .exe
         run: python desktop/smoke_test.py dist\ClawMetry\ClawMetry.exe
 
-      # --- Azure Artifact Signing (preferred) ---
-      # Why a signtool wrapper instead of azure/artifact-signing-action:
-      # windows.nsi's !uninstfinalize hook needs a command makensis can
-      # invoke PER FILE mid-build to sign the embedded uninstaller stub.
-      # A workflow-step action only signs a folder after the fact, and the
-      # stub is regenerated inside makensis, so the action can never reach
-      # it - and an unsigned stub is exactly what Smart App Control blocks.
-      # Same SIGN_CMD contract as the .pfx path below, so windows.nsi and
-      # every downstream step stay untouched.
       - name: Azure login (OIDC)
         if: env.HAS_AZ_SIGN == 'true'
         uses: azure/login@v3
@@ -337,9 +238,6 @@ jobs:
           AZ_SIGN_ACCOUNT: ${{ secrets.AZ_SIGN_ACCOUNT }}
           AZ_SIGN_PROFILE: ${{ secrets.AZ_SIGN_PROFILE }}
         run: |
-          # The dlib needs signtool >= 10.0.2261.755; the SDK preinstalled
-          # on the runner image is not reliably that new, so pull both from
-          # NuGet rather than probing C:\Program Files (x86)\Windows Kits.
           nuget install Microsoft.ArtifactSigning.Client -Version 1.0.128 `
             -OutputDirectory $Env:RUNNER_TEMP\ts -ExcludeVersion -NonInteractive
           nuget install Microsoft.Windows.SDK.BuildTools `
@@ -349,19 +247,12 @@ jobs:
           $signtool = Get-ChildItem "$Env:RUNNER_TEMP\ts\Microsoft.Windows.SDK.BuildTools\bin\*\x64\signtool.exe" |
             Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
           if (-not $signtool) { throw "signtool.exe not found in SDK BuildTools package" }
-
-          # Endpoint MUST match the signing account's region or every sign
-          # call 403s.
           $meta = Join-Path $Env:RUNNER_TEMP "signing-metadata.json"
           @{
             Endpoint               = $Env:AZ_SIGN_ENDPOINT
             CodeSigningAccountName = $Env:AZ_SIGN_ACCOUNT
             CertificateProfileName = $Env:AZ_SIGN_PROFILE
           } | ConvertTo-Json | Set-Content -Path $meta -Encoding ascii
-
-          # Artifact Signing certificates are valid for THREE DAYS by
-          # design, so the RFC 3161 countersignature is what keeps shipped
-          # binaries valid after the cert expires. It is not optional here.
           $cmd = Join-Path $Env:RUNNER_TEMP "sign.cmd"
           @(
             '@echo off'
@@ -371,13 +262,6 @@ jobs:
           "SIGNTOOL=$signtool" >> $Env:GITHUB_ENV
           "SIGN_ENABLED=true" >> $Env:GITHUB_ENV
 
-      # --- Authenticode signing setup ---
-      # Decodes the cert and writes a sign.cmd wrapper that both this
-      # workflow AND makensis (via /DSIGN_CMD + !finalize/!uninstfinalize
-      # in windows.nsi) invoke. The wrapper reads the password from the
-      # environment at run time so it never appears in a command line or
-      # on disk. SHA-256 digest + RFC 3161 timestamp so signatures outlive
-      # the cert's expiry.
       - name: Prepare signing cert + wrapper
         if: env.HAS_WIN_CERT == 'true'
         shell: pwsh
@@ -398,9 +282,6 @@ jobs:
           "SIGNTOOL=$signtool" >> $Env:GITHUB_ENV
           "SIGN_ENABLED=true" >> $Env:GITHUB_ENV
 
-      # Sign the app exe BEFORE the zip + installer steps so both the
-      # portable .zip and the NSIS-packed install tree ship a signed
-      # ClawMetry.exe (Smart App Control evaluates it at launch too).
       - name: Sign ClawMetry.exe
         if: env.SIGN_ENABLED == 'true'
         shell: pwsh
@@ -413,9 +294,6 @@ jobs:
       - name: Resolve version
         id: ver
         shell: pwsh
-        # Tag-first version selection, same as the macOS job — see comment
-        # there. Falls back to dashboard.py __version__ for non-tag runs.
-        # Shared across the zip + installer steps below so it's computed once.
         run: |
           $refName = $Env:GITHUB_REF_NAME
           if ($refName -and $refName -match '^v\d+\.\d+\.\d+$') {
@@ -431,24 +309,10 @@ jobs:
         run: |
           $version = "${{ steps.ver.outputs.version }}"
           Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
-          # Fixed-name copy so clawmetry.com/download/windows-zip can link a
-          # stable URL (GitHub's /releases/latest/download/<name>) instead
-          # of bookkeeping the current version anywhere else.
           Copy-Item "ClawMetry-$version-windows.zip" "ClawMetry-windows.zip" -Force
 
-      # Real installer (FLYWHEEL.md §0b): Start Menu + Desktop shortcuts,
-      # an uninstaller registered in Add/Remove Programs, per-user install
-      # (no UAC prompt). NSIS ships preinstalled on the windows-latest
-      # runner image; the `where.exe` probe + choco fallback keeps this
-      # working if that ever changes upstream.
       - name: Build NSIS installer
         shell: pwsh
-        # When the cert secrets are set, /DSIGN_CMD turns on the
-        # !finalize/!uninstfinalize hooks in windows.nsi: makensis signs the
-        # embedded uninstaller stub (the only place a WriteUninstaller-
-        # regenerated Uninstall.exe can ever get a signature - see the .nsi
-        # comment on Smart App Control) and the setup exe itself. The
-        # wrapper reads CLAWMETRY_SIGN_PW from this step's environment.
         env:
           CLAWMETRY_SIGN_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
@@ -457,9 +321,6 @@ jobs:
             choco install nsis -y --no-progress
             $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
           }
-          # VIVERSION must be numeric x.y.z.w for VIProductVersion; releases
-          # are x.y.z so append .0 (non-numeric dev versions fall back to
-          # the script's 0.0.0.0 default by passing nothing).
           $nsisArgs = @("/DVERSION=${{ steps.ver.outputs.version }}")
           if ("${{ steps.ver.outputs.version }}" -match '^\d+\.\d+\.\d+$') { $nsisArgs += "/DVIVERSION=${{ steps.ver.outputs.version }}.0" }
           if ($Env:SIGN_ENABLED -eq 'true') { $nsisArgs += "/DSIGN_CMD=$Env:SIGN_CMD" }
@@ -467,31 +328,15 @@ jobs:
           & $makensis @nsisArgs
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
           Move-Item "desktop\installer\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe"
-          # Fixed-name copy — same stable-URL convention as the zip above.
           Copy-Item "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-windows-setup.exe" -Force
 
-      # Verify the artifact, not the build log (FLYWHEEL §0b.5): a chained
-      # Authenticode signature must actually be on the setup exe and the
-      # app exe, or the SAC uninstall fix silently didn't ship. Also
-      # removes the decoded cert so it never lands in an artifact.
       - name: Verify signatures + scrub cert
         if: env.SIGN_ENABLED == 'true'
         shell: pwsh
         run: |
           foreach ($t in @("dist\ClawMetry-windows-setup.exe", "dist\ClawMetry\ClawMetry.exe")) {
-            # /pa = Authenticode chain policy.
             & $Env:SIGNTOOL verify /pa $t
             if ($LASTEXITCODE -ne 0) { throw "$t is not validly signed" }
-
-            # Assert the RFC 3161 countersignature explicitly rather than
-            # via /tw, whose failure semantics are documented only as
-            # "generates a warning" - unclear whether that sets a nonzero
-            # exit code, and a gate you cannot reason about is not a gate.
-            # Artifact Signing certificates last three days, so an
-            # un-countersigned binary would go invalid in users' hands
-            # within the week; this is the one property most worth
-            # asserting. Printing both subjects also makes the build log
-            # self-evidencing instead of merely "Successfully verified".
             $sig = Get-AuthenticodeSignature $t
             if (-not $sig.TimeStamperCertificate) {
               throw "$t has no RFC 3161 countersignature; it would go invalid when the three-day certificate expires"
@@ -500,11 +345,10 @@ jobs:
             Write-Host "    signer:    $($sig.SignerCertificate.Subject)"
             Write-Host "    timestamp: $($sig.TimeStamperCertificate.Subject)"
           }
-          # Only the .pfx backend leaves key material on the runner.
           $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfx) { Remove-Item $pfx -Force }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clawmetry-windows
           path: |
@@ -515,39 +359,16 @@ jobs:
     name: Linux single-folder + AppImage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
       - name: Install system deps
         run: |
           sudo apt-get update
-          # GTK WebKit2 is the pywebview backend on Linux. The
-          # libgirepository-2.0-dev / libcairo2-dev / pkg-config trio is
-          # needed to compile PyGObject (see requirements-dev.txt) against
-          # THIS job's actions/setup-python interpreter — without a
-          # matching build, the frozen binary can't import `gi` at all
-          # and crashes before ever opening a window.
-          #
-          # PyGObject 3.52+ (we pin 3.56.3) requires girepository-2.0 —
-          # 3.50.x was the last release on girepository-1.0. This job was
-          # installing ONLY libgirepository1.0-dev, so every meson build
-          # failed at `Dependency 'girepository-2.0' is required but not
-          # found`, the whole Linux job errored out, the strict attach
-          # step (fail_on_unmatched_files: true) skipped publishing, every
-          # release since 2026-08-10 stayed a draft, and
-          # ``releases/latest`` kept serving the 2026-08-10 build. Users
-          # downloading from clawmetry.com never got any fix shipped
-          # after that date — including the SSL cert verify fix (#4752)
-          # that the "Send code" button depends on. Install both -1.0
-          # (still needed for webkit2gtk-4.1 headers on older subdeps)
-          # and -2.0 (what PyGObject 3.52+ compiles against). ubuntu-24.04
-          # (current ubuntu-latest) has both in the default archive.
-          #
-          # xvfb gives the smoke-test step a display: GTK/WebKit refuse
-          # to open a window without one, and the whole point of that
-          # step is to open a window.
           sudo apt-get install -y \
             libgtk-3-0 libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 \
             libayatana-appindicator3-1 libnotify4 \
@@ -557,17 +378,8 @@ jobs:
       - name: Install build deps
         run: |
           pip install --upgrade pip wheel
-          # --ignore-installed: if the runner image ever ships an apt
-          # python3-gi, pip's "already satisfied" check would otherwise
-          # skip building the pinned PyGObject wheel THIS interpreter
-          # actually needs (see requirements-dev.txt), and re-introduce
-          # the "cannot import _gi" crash the pin exists to avoid.
           pip install --ignore-installed -r desktop/requirements-dev.txt
 
-      # Stamp the bundle version into desktop/assets/version.txt so the
-      # shipped shell can report WHICH build the user opened (the open
-      # ping in desktop/app.py reads it). Tag-first, same resolution the
-      # packaging steps below use.
       - name: Stamp bundle version
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -581,18 +393,11 @@ jobs:
       - name: Build tray binary
         run: pyinstaller --clean --noconfirm desktop/build_linux.spec
 
-      # Gate: launch what we just built (see desktop/smoke_test.py).
-      # `pyinstaller` exiting 0 says nothing about whether the binary
-      # opens a window — the 2026-08-15 AppImage built clean and showed
-      # users a black rectangle with a traceback per page load.
       - name: Smoke test the built binary
         run: python3 desktop/smoke_test.py dist/clawmetry/clawmetry
 
       - name: Resolve version
         id: ver
-        # Same tag-first version selection as the macOS job — see comment
-        # there. Falls back to dashboard.py __version__ for non-tag runs.
-        # Shared across the tarball + AppImage steps below.
         run: |
           if [ -n "${GITHUB_REF_NAME:-}" ] && [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
@@ -606,18 +411,8 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
-          # Fixed-name copy so clawmetry.com/download/linux-tarball can link
-          # a stable URL (GitHub's /releases/latest/download/<name>) instead
-          # of bookkeeping the current version anywhere else.
           cp "clawmetry-${VERSION}-linux-x86_64.tar.gz" "clawmetry-linux.tar.gz"
 
-      # Real installer (FLYWHEEL.md §0b): this job was literally named
-      # "Linux single-folder + AppImage" from day one but only ever shipped
-      # the tarball above — the AppImage step was never written. AppImage is
-      # the universal pick across "all flavours Linux": no root, no distro
-      # package manager, works on Ubuntu/Fedora/Arch/etc via FUSE (or
-      # --appimage-extract-and-run where FUSE is unavailable, e.g. some
-      # containers).
       - name: Build AppImage
         working-directory: dist
         run: |
@@ -626,10 +421,6 @@ jobs:
           APPDIR="ClawMetry.AppDir"
           mkdir -p "$APPDIR/usr/bin"
           cp -r clawmetry/. "$APPDIR/usr/bin/"
-          # AppRun is the entry point appimagetool/the runtime execs. Written
-          # with printf (not a heredoc) since this whole step is one indented
-          # YAML block scalar — a heredoc terminator needs to sit at column
-          # zero, which YAML's indentation would break.
           printf '%s\n' \
             '#!/bin/sh' \
             'HERE="$(dirname "$(readlink -f "$0")")"' \
@@ -649,24 +440,15 @@ jobs:
           curl -fsSL -o appimagetool \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
-          # appimagetool itself needs FUSE to run as an AppImage on the
-          # runner; --appimage-extract-and-run sidesteps that dependency.
           ./appimagetool --appimage-extract-and-run "$APPDIR" \
             "ClawMetry-${VERSION}-x86_64.AppImage"
-          # Fixed-name copy — same stable-URL convention as the tarball above.
           cp "ClawMetry-${VERSION}-x86_64.AppImage" "clawmetry-linux.AppImage"
           rm -rf "$APPDIR" appimagetool
 
-      # The AppImage is a second artifact, not a rename of the first: it
-      # adds AppRun, the squashfs layout and a different working
-      # directory. This is the file clawmetry.com/download/linux hands
-      # out, so it gets its own launch, not just the folder build's.
-      # (APPIMAGE_EXTRACT_AND_RUN is set by smoke_test.py — the runner
-      # has no FUSE.)
       - name: Smoke test the AppImage
         run: python3 desktop/smoke_test.py dist/clawmetry-linux.AppImage
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: clawmetry-linux
           path: |
@@ -678,30 +460,18 @@ jobs:
     needs: [macos, windows, linux]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # softprops/action-gh-release needs write access to the Contents API
-    # to attach files to the existing tag's Release. Default GITHUB_TOKEN
-    # scope is read-only when the org sets that as the default; declare
-    # explicitly so the step never silently 403s.
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
       - name: List artifacts
         run: find artifacts -type f
 
-      # release-on-merge.yml creates the Release as a DRAFT so GitHub's
-      # /releases/latest (which every clawmetry.com download button
-      # resolves through) keeps pointing at the previous COMPLETE release
-      # while these installers build. This step attaches all assets and
-      # then publishes in one go (draft: false + make_latest).
-      # fail_on_unmatched_files is deliberately true: a missing installer
-      # must keep the release draft rather than publish a "latest" whose
-      # download links 404 (seen live on v0.12.674, 2026-08-10).
       - name: Attach to release and publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: false
           make_latest: "true"
