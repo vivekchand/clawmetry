@@ -16178,8 +16178,13 @@ def _cap_transcript_messages(msgs, msg_cap):
     turn). The title fix (_derive_transcript_title runs pre-cap) masked it
     in the list view while the replay stayed headless.
 
-    Keep the opening user prompt, an honest omission marker, and the most
-    recent messages; the full transcript stays on the local dashboard.
+    Keep the opening user prompt, a structured history-gap marker, and the
+    most recent messages. The marker (``type: history_gap``, ``omitted: N``)
+    is a paging affordance, not a dead end: the replay renders it as an
+    inline "load earlier messages" row and pages the elided middle in via
+    ``/api/transcript-page`` until the gap closes. ``content`` is a plain
+    fallback for viewers that predate the structured marker; the role stays
+    ``system`` for the same reason.
     """
     if len(msgs) <= msg_cap:
         return msgs, False, None
@@ -16206,10 +16211,11 @@ def _cap_transcript_messages(msgs, msg_cap):
                 marker_ts = ts + 1
         keep.append({
             "role": "system",
+            "type": "history_gap",
+            "omitted": omitted,
             "content": (
-                "… %d earlier messages not shown here to keep cloud sync "
-                "light. Open your local ClawMetry dashboard for the full "
-                "transcript." % omitted
+                "%d earlier messages are not loaded yet. Scroll up or use "
+                "Load earlier messages to page them in." % omitted
             ),
             "timestamp": marker_ts,
         })
