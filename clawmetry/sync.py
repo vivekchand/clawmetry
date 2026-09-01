@@ -17688,6 +17688,98 @@ _RELIABILITY_FAILURE_LABELS = {
 }
 
 
+_QUALITY_SNAPSHOT_WINDOW_HOURS = 168  # 7d — what the Quality tab asks for
+
+
+def _build_quality_snapshot():
+    """The Quality report card, node-wide and per runtime, for the snapshot.
+
+    Founder live-hit 2026-08-22: the hosted Quality tab said "Nothing to grade
+    yet" for a machine whose local tab showed an A over 119 graded runs. The
+    grade had never ridden the snapshot at all, and the hosted container
+    answered the request from its OWN DuckDB — which exists but is empty, so
+    it reported "no runs" instead of failing. An empty answer and an
+    unreachable machine looked identical on screen and meant opposite things.
+
+    Read once, compose many: the node's sessions are queried ONCE (current
+    window, prior window, and a 30-day history for calibration) and grouped in
+    Python, so a card per runtime costs no extra queries. Sessions are graded
+    at ingest, so composing is mostly dict lookups; the bounded deep scan runs
+    once over the node's rows and every per-runtime card reuses that map.
+
+    Returns ``{}`` on any failure — a snapshot must never fail to build over
+    one optional slice, and the cloud falls back to saying the grade lives on
+    your machine.
+    """
+    try:
+        from datetime import timedelta  # module scope imports datetime/timezone only
+
+        from clawmetry import local_store as _ls
+        from clawmetry import quality_thresholds as _qt
+        from routes.quality import _assess_rows, compose_report_card
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+
+        hours = _QUALITY_SNAPSHOT_WINDOW_HOURS
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(hours=hours)).isoformat()
+        prior_since = (now - timedelta(hours=hours * 2)).isoformat()
+        hist_since = (now - timedelta(hours=24 * 30)).isoformat()
+
+        rows = store.query_quality_sessions(since=since, limit=400) or []
+        prior_rows = store.query_quality_sessions(
+            since=prior_since, until=since, limit=400) or []
+        hist_rows = store.query_quality_sessions(since=hist_since, limit=1500) or []
+
+        by_rt_hist = {}
+        for h in hist_rows:
+            by_rt_hist.setdefault(h.get("runtime") or "openclaw", []).append(h)
+        thresholds = _qt.calibrate_all(by_rt_hist)
+        assessments = _assess_rows(rows, thresholds)
+        prior_assessments = _assess_rows(prior_rows, thresholds, deep_limit=0)
+
+        def _card(sub_rows, sub_prior, runtime):
+            return compose_report_card(
+                sub_rows, sub_prior, hist_rows,
+                window_hours=hours, runtime=runtime,
+                assessments=assessments, prior_assessments=prior_assessments,
+            )
+
+        out = {
+            "window_hours": hours,
+            "all": _card(rows, prior_rows, None),
+            "byRuntime": {},
+        }
+        # Calibration is identical in every card (same 30-day history), so it
+        # is carried ONCE here and re-attached client-side. Left inline it was
+        # ~1.9 kB duplicated across fourteen cards, a quarter of the slice
+        # spent saying the same thing.
+        out["thresholds"] = out["all"].get("thresholds") or {}
+        # Per-runtime cards so the hosted tab stays honest under the runtime
+        # switcher: a grade shown while a single runtime is selected must be
+        # THAT runtime's grade, never the node's total wearing its name.
+        # Every runtime the machine has run in the last 30 days, not only those
+        # with sessions THIS week: a runtime that was quiet this week needs a
+        # card saying so in its own name. Without one the hosted tab would fall
+        # back to the node-wide card and show another runtime's grade under
+        # this runtime's filter.
+        runtimes = {(r.get("runtime") or "openclaw") for r in rows}
+        runtimes |= {(h.get("runtime") or "openclaw") for h in hist_rows}
+        for rt in runtimes:
+            sub = [r for r in rows if (r.get("runtime") or "openclaw") == rt]
+            sub_prior = [r for r in prior_rows
+                         if (r.get("runtime") or "openclaw") == rt]
+            out["byRuntime"][rt] = _card(sub, sub_prior, rt)
+        for _c in [out["all"], *out["byRuntime"].values()]:
+            _c.pop("thresholds", None)
+        return out
+    except Exception as exc:
+        log.debug(f"quality snapshot build failed (continuing): {exc}")
+        return {}
+
+
 def _build_reliability(limit_sessions=25, min_sessions=4):
     """Agent Reliability score for the cloud Pro Reliability tab (P1).
 
@@ -21546,6 +21638,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "governance": _build_governance(),
         "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
+        "quality": _build_quality_snapshot(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
         "turnAnatomy": _build_turn_anatomy(),
