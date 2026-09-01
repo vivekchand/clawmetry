@@ -1285,5 +1285,7 @@
   "bench.work_heading": "For your work",
   "bench.work_note": "Recommendations name the qualities a job needs, then list options. Never a single winner.",
   "bench.lab_heading": "From the lab",
-  "bench.lab_summary": "Published benchmark results for your harnesses and models. Third-party runs, dated."
+  "bench.lab_summary": "Published benchmark results for your harnesses and models. Third-party runs, dated.",
+  "bench.h2h_heading": "Head to head: the same kind of work, side by side",
+  "bench.h2h_note": "Two harnesses compare only when they did the same kind of work with enough verified runs each. Unlike work is never compared."
 }

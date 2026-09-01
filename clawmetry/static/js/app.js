@@ -29809,6 +29809,64 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     empty.innerHTML = '<div class="bench-card bench-empty-card">' + esc(msg) + '</div>';
   }
 
+  function benchWatchFooter(s) {
+    var dpd = (s.dollars_per_done || {}).value;
+    if (dpd == null) return '';
+    if (window.CLOUD_MODE) {
+      return '<div class="bench-cfoot"><button class="bench-btn" disabled>Watch $/done</button>' +
+        '<span class="bench-whydisabled">watching runs on your node, not the hosted view</span></div>';
+    }
+    var suggested = Math.max(1, Math.round(dpd * 1.5));
+    return '<div class="bench-cfoot"><button class="bench-btn" id="bench-watch-' + esc(s.runtime) + '"' +
+      ' onclick="_benchWatch(&quot;' + esc(s.runtime) + '&quot;,' + suggested + ')">Watch $/done</button>' +
+      '<span class="bench-whydisabled">alerts if a finished job starts costing over ' + esc(usd(suggested)) + '</span></div>';
+  }
+
+  window._benchWatch = async function (runtime, threshold) {
+    var btn = document.getElementById('bench-watch-' + runtime);
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving watch...'; }
+    var r = await fetch('/api/alerts/rules', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alert_type: 'dollars_per_done_above', runtime: runtime,
+        threshold_value: threshold, channels: ['banner'],
+        name: 'Watch $/done · ' + runtime
+      })
+    }).catch(function () { return null; });
+    if (btn) {
+      if (r && r.ok) {
+        btn.textContent = 'Watching (over ' + usd(threshold) + ')';
+      } else {
+        var msg = 'could not save';
+        try { var j = r ? await r.json() : null; if (j && (j.error || j.message)) msg = j.error || j.message; } catch (e) {}
+        btn.disabled = false; btn.textContent = 'Watch $/done';
+        btn.insertAdjacentHTML('afterend', ' <span class="bench-whydisabled">' + esc(msg).slice(0, 120) + '</span>');
+      }
+    }
+  };
+
+  window._benchCheaper = async function (runtime, slotId) {
+    var slot = document.getElementById(slotId);
+    if (!slot) return;
+    slot.innerHTML = '<span class="bench-faint">checking...</span>';
+    if (window.CLOUD_MODE) {
+      slot.innerHTML = '<span class="bench-faint">cheaper-model advice computes on your node; open the local dashboard</span>';
+      return;
+    }
+    var r = await fetch('/api/efficiency/routing-advisor?days=30').catch(function () { return null; });
+    var d = r && r.ok ? await r.json().catch(function () { return null; }) : null;
+    var scope = d && ((d.byRuntime || {})[runtime] || d.node) || null;
+    var sugg = (scope && scope.suggestions) || [];
+    if (!sugg.length) {
+      slot.innerHTML = '<span class="bench-faint">no cheaper-model swap found for this work right now</span>';
+      return;
+    }
+    slot.innerHTML = sugg.slice(0, 2).map(function (g) {
+      return '<div class="bench-say">' + esc(g.current_model) + ' to ' + esc(g.suggested_model) +
+        ' could save about ' + esc(usd(g.potential_savings_monthly_usd)) + '/mo. Apply via routing rules in ~/.clawmetry/proxy.json.</div>';
+    }).join('');
+  };
+
   function renderVerdict(bench) {
     var by = bench.byRuntime || {};
     var earning = [], burning = [], fog = [];
@@ -29861,6 +29919,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       (s.stamp_reason ? '<div class="bench-say">' + esc(s.stamp_reason) + '</div>' : '') +
       '<div class="bench-say bench-faint">' + s.sessions + ' sessions · ' + esc(usd(s.spend_usd) || '$0.00') + ' in the window' +
       (s.coverage && s.coverage.unmeasured_sessions ? ' · ' + s.coverage.unmeasured_sessions + ' not gradeable' : '') + '</div>' +
+      benchWatchFooter(s) +
       '</div>';
   }
 
@@ -29875,6 +29934,39 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       html += un.map(function (rt) { return crewCard(by[rt]); }).join('');
     }
     el.innerHTML = html || '<div class="bench-say">No harness activity observed in this window.</div>';
+  }
+
+
+  function renderHeadToHead(h2h) {
+    var el = document.getElementById('bench-h2h');
+    if (!el) return;
+    var matchups = (h2h && h2h.matchups) || [];
+    if (!matchups.length) {
+      el.innerHTML = '<div class="bench-say bench-faint">No comparable cohorts yet: comparing needs two harnesses with ' +
+        ((h2h && h2h.matchups && h2h.min_cohort) || 5) + '+ verified runs on the same kind of work. Honest silence beats an unfair chart.</div>';
+      return;
+    }
+    el.innerHTML = matchups.map(function (m) {
+      var rows = [
+        ['Finished jobs', function (s) { return s.done_rate == null ? 'unseen' : Math.round(s.done_rate * 100) + '%'; }],
+        ['Cost per finished job', function (s) { return s.dollars_per_done == null ? 'not priced' : usd(s.dollars_per_done); }],
+        ['Cost per run', function (s) { return usd(s.avg_cost_usd); }],
+        ['Rough runs (loops, thrash)', function (s) { return s.rough_rate == null ? 'unseen' : Math.round(s.rough_rate * 100) + '%'; }],
+        ['Tokens per run', function (s) { return s.avg_tokens == null ? 'unseen' : Number(s.avg_tokens).toLocaleString(); }],
+        ['Verified runs', function (s) { return String(s.sessions); }]
+      ];
+      var head = '<tr><th></th>' + m.sides.map(function (s) { return '<th>' + esc(RT_LABEL(s.runtime)) + '</th>'; }).join('') + '</tr>';
+      var body = rows.map(function (r) {
+        return '<tr><td>' + esc(r[0]) + '</td>' + m.sides.map(function (s) { return '<td>' + esc(r[1](s)) + '</td>'; }).join('') + '</tr>';
+      }).join('');
+      var title = m.basis === 'workspace'
+        ? esc(m.workspace) : esc(PROFILE_WORDS[m.profile] || m.profile);
+      var scopeNote = m.basis === 'workspace'
+        ? 'same workspace, measurable runs only' : 'same workload, measurable runs only';
+      return '<div class="bench-lane"><div class="bench-lanehead"><b>' + title + '</b> ' +
+        '<span class="bench-faint">' + scopeNote + '</span></div>' +
+        '<div style="overflow-x:auto"><table class="bench-labt bench-h2ht">' + head + body + '</table></div></div>';
+    }).join('');
   }
 
   function renderFlow(trace) {
@@ -29978,10 +30070,13 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
           (cand.evidence === 'published' ? ' lab' : '') + '">' + ev + '</span></div>';
       }).join('');
       var rankNote = c.ranked ? '' : '<div class="bench-say bench-faint">Options are unranked: not enough evidence to order them honestly.</div>';
+      var topRt = (c.candidates && c.candidates[0] && c.candidates[0].runtime) || '';
+      var slotId = 'bench-cheaper-' + c.profile;
+      var cheaper = topRt ? '<div class="bench-cfoot"><button class="bench-btn" onclick="_benchCheaper(&quot;' + esc(topRt) + '&quot;,&quot;' + slotId + '&quot;)">See cheaper options</button></div><div id="' + slotId + '"></div>' : '';
       return '<div class="bench-wcard"><div class="bench-wname">' + esc(PROFILE_WORDS[c.profile] || c.profile) + '</div>' +
         '<div class="bench-say bench-faint">' + Math.round((c.spend_share || 0) * 100) + '% of spend</div>' +
         '<div class="bench-say">Wants: <b>' + (c.qualities || []).map(esc).join('</b>, <b>') + '</b>.</div>' +
-        '<div class="bench-opts">' + opts + '</div>' + rankNote + '</div>';
+        '<div class="bench-opts">' + opts + '</div>' + rankNote + cheaper + '</div>';
     }).join('') : '<div class="bench-say">Workload profiles appear once sessions are observed.</div>';
   }
 
@@ -30008,7 +30103,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     if (!empty || !body) return;
     var r = await fetch('/api/bench?days=30').catch(function () { return null; });
     if (!r || !r.ok) {
-      benchEmpty('The bench is computed on your node from your own traffic. If you are on the hosted dashboard, this view lands in an upcoming release; on a local install, start the sync daemon and check back.');
+      benchEmpty('The bench is measured on your node from your own traffic. On the hosted dashboard it fills in from your node\'s encrypted snapshot once the daemon reports; on a local install, start the sync daemon and refresh.');
       return;
     }
     var bench = await r.json().catch(function () { return null; });
@@ -30036,6 +30131,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var ccP = fetch('/api/bench/context-curves').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
     var pub = await pubP, cc = await ccP;
     renderWork({ cards: bench.recommendations || [] });
+    renderHeadToHead(bench.headtohead);
     renderLab(pub);
     renderLanes(cc);
     var sid = cc && cc.curves && cc.curves.length ? cc.curves[0].session_id : null;

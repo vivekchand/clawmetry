@@ -401,3 +401,114 @@ def build_context_curves(econ: dict | None, *, max_sessions: int = 6) -> dict[st
     curves.sort(key=lambda c: (len(c["points"]), c["points"][-1]["ts"] or 0
                                if c["points"] else 0), reverse=True)
     return {"curves": curves[:max_sessions], "session_count": len(by_sid)}
+
+
+# ---------------------------------------------------------------------------
+# Head-to-head (REQ-HB-005): like-for-like cohort comparison. Two harnesses
+# compare only when they did the same kind of work (same workload profile)
+# with enough measurable sessions each; anything less is declined rather
+# than compared (AC-HB-005.2).
+# ---------------------------------------------------------------------------
+
+HEADTOHEAD_MIN_COHORT = 5
+
+
+def build_headtohead(
+    sessions_by_runtime: dict[str, list[dict]] | None,
+    *,
+    min_cohort: int = HEADTOHEAD_MIN_COHORT,
+    max_profiles: int = 4,
+) -> dict[str, Any]:
+    """Cohort comparison per workload profile.
+
+    Returns {"matchups": [...], "declined_reason": str|None}. A matchup
+    exists only for a profile where at least two harnesses each have
+    ``min_cohort`` measurable sessions; cohort stats cover only measurable
+    sessions so a blind harness cannot look cheap by having invisible
+    failures (same rule as $/done).
+    """
+    from clawmetry.workload_profiles import classify_session
+
+    # Two cohort bases (AC-HB-005.1): same workload profile, and same
+    # workspace (cwd) where sessions carry one. A workspace matchup is the
+    # cleaner like-for-like signal; the profile matchup is the fallback.
+    cohorts: dict[str, dict[str, list[dict]]] = {}
+    ws_cohorts: dict[str, dict[str, list[dict]]] = {}
+    try:
+        for rt, rows in (sessions_by_runtime or {}).items():
+            for row in rows or []:
+                feats = _session_features(row)
+                if not feats["measurable"]:
+                    continue
+                if isinstance(row, dict):
+                    rough_meta = row.get("metadata")
+                    cwd = str(row.get("cwd") or "").rstrip("/")
+                else:
+                    cwd = ""
+                profile = classify_session(row)
+                cohorts.setdefault(profile, {}).setdefault(rt, []).append(feats)
+                if cwd:
+                    ws_cohorts.setdefault(cwd, {}).setdefault(rt, []).append(feats)
+    except Exception:
+        return {"matchups": [], "declined_reason": "cohorts_unavailable"}
+
+    def _sides_for(by_rt: dict[str, list[dict]]) -> list[dict]:
+        eligible = {rt: fl for rt, fl in by_rt.items() if len(fl) >= min_cohort}
+        if len(eligible) < 2:
+            return []
+        sides = []
+        for rt, fl in eligible.items():
+            finished = [f for f in fl if f["outcome"] not in ("ongoing", "")]
+            done = sum(1 for f in finished if f["done"])
+            spend = sum(f["cost_usd"] for f in fl)
+            rough = sum(1 for f in fl if f["rough"])
+            sides.append({
+                "runtime": rt,
+                "sessions": len(fl),
+                "done_rate": (round(done / len(finished), 3)
+                              if finished else None),
+                "avg_cost_usd": round(spend / len(fl), 2),
+                "avg_tokens": int(sum(f["tokens"] for f in fl) / len(fl)),
+                "spend_usd": round(spend, 2),
+                "dollars_per_done": (round(spend / done, 2) if done else None),
+                # Trajectory roughness (loop/recovery proxy): share of
+                # measurable sessions with a rough quality verdict.
+                "rough_rate": round(rough / len(fl), 3),
+            })
+        # Cheapest verified completion first; unpriceable sides last.
+        sides.sort(key=lambda s: (s["dollars_per_done"] is None,
+                                  s["dollars_per_done"] or 0))
+        return sides[:4]
+
+    matchups = []
+    seen_ws_runtimes: set = set()
+    for cwd, by_rt in ws_cohorts.items():
+        sides = _sides_for(by_rt)
+        if not sides:
+            continue
+        seen_ws_runtimes.update(s["runtime"] for s in sides)
+        matchups.append({
+            "basis": "workspace",
+            "workspace": cwd.rsplit("/", 1)[-1] or cwd,
+            "min_cohort": min_cohort,
+            "sides": sides,
+        })
+    for profile, by_rt in cohorts.items():
+        sides = _sides_for(by_rt)
+        if not sides:
+            continue
+        # A workspace matchup over the same runtimes already tells this
+        # story more precisely; skip the coarser duplicate.
+        if {s["runtime"] for s in sides} <= seen_ws_runtimes and matchups:
+            continue
+        matchups.append({
+            "basis": "workload_profile",
+            "profile": profile,
+            "min_cohort": min_cohort,
+            "sides": sides,
+        })
+    matchups.sort(key=lambda m: -sum(s["spend_usd"] for s in m["sides"]))
+    declined = None
+    if not matchups:
+        declined = "no_comparable_cohorts"
+    return {"matchups": matchups[:max_profiles], "declined_reason": declined}

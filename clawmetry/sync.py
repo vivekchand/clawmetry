@@ -20645,6 +20645,51 @@ def _build_evals_judge_status() -> dict | None:
         return None
 
 
+def _build_bench_slice(store, *, days: int = 30) -> dict:
+    """Harness Engineering bench slice for the encrypted snapshot.
+
+    Mirrors GET /api/bench (routes/bench.py) so the cloud interceptor is a
+    pass-through: byRuntime scorecards, ranked/unranked, workload profiles,
+    recommendation cards, head-to-head. One quality-session scan + the two
+    cheap rollups, on the daemon's own store handle, per 60s snapshot.
+    Bounded for the multi-hundred-KB snapshot budget: 1500 session rows in,
+    8 recommendation cards / 4 matchups out (engine caps candidates and
+    sides already). Raises to the caller's honest-empty on failure.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from clawmetry.efficiency import build_efficiency_slice
+    from clawmetry.harness_bench import build_bench, build_headtohead
+    from clawmetry.published_benchmarks import published_pairs
+    from clawmetry.workload_profiles import build_recommendations, profile_spend
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    rows = store.query_quality_sessions(since=since, limit=1500) or []
+    grouped: dict = {}
+    for r in rows:
+        if isinstance(r, dict):
+            grouped.setdefault(str(r.get("runtime") or "openclaw"), []).append(r)
+
+    eff = build_efficiency_slice(store.query_efficiency_rollup(days=days) or [],
+                                 days=days)
+    sub_stats = store.query_subagent_stats_by_runtime(days=days)
+    out = build_bench(
+        grouped,
+        efficiency_by_runtime=eff.get("byRuntime") or {},
+        subagent_stats_by_runtime=sub_stats if isinstance(sub_stats, dict) else {},
+        days=days,
+    )
+    spend = profile_spend(grouped)
+    out["profiles"] = spend.get("profiles", [])[:8]
+    out["total_spend_usd"] = spend.get("total_spend_usd", 0.0)
+    out["recommendations"] = build_recommendations(
+        spend, out.get("byRuntime"), published_pairs())[:8]
+    out["headtohead"] = build_headtohead(grouped)
+    out["store_available"] = True
+    return out
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -21200,6 +21245,21 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 
+    # Harness Engineering bench slice, so the hosted tab renders real verdicts
+    # from the encrypted snapshot instead of its honest empty state. Built on
+    # the daemon's OWN store handle (same DuckDB pass as the slices above).
+    # Shape mirrors GET /api/bench so the cm-cloud-bench interceptor is a
+    # pass-through. Best-effort; honest empty on any failure.
+    bench_slice = {"schema": 1, "byRuntime": {}, "ranked": [], "unranked": [],
+                   "store_available": False}
+    try:
+        from clawmetry import local_store as _ls_bench
+        _bench_store = _ls_bench.get_store()
+        if _bench_store is not None:
+            bench_slice = _build_bench_slice(_bench_store)
+    except Exception as _e_bench:
+        log.debug("snapshot: bench slice failed: %s", _e_bench)
+
     # Eval (LLM-judge) scores, so the hosted dashboard's Eval card populates from
     # the encrypted snapshot (cloud stays blind; E2E preserved). Built on the
     # daemon's own store handle. Best-effort; empty until evals run (needs a
@@ -21403,6 +21463,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "toolCatalog": tool_catalog_slice,
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
+        # Harness Engineering bench: verdict stamps, $/done, profiles,
+        # recommendations, head-to-head. Read by cm-cloud-bench as sp.bench.
+        "bench": bench_slice,
         "autonomy": _build_autonomy_snapshot(),
         "flowRuns": _build_flow_runs_snapshot(),
         "flowLanes": _build_flow_lanes_snapshot(),
@@ -22012,6 +22075,21 @@ def run_daemon() -> None:
         configure_outbound_network(role="daemon")
     except Exception as _net_e:
         log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Raise the file-descriptor soft limit. Under launchd the default soft
+    # limit is 256; a busy daemon (DuckDB + local-query server + relay
+    # sockets) runs right at that ceiling and every request past it dies
+    # with EMFILE in werkzeug (seen live 2026-09-01: 244 fds open, then
+    # "OSError: [Errno 24] Too many open files" on the query server).
+    # Never raises; keeps whatever the platform allows.
+    try:
+        import resource
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        _want = min(4096, _hard if _hard != resource.RLIM_INFINITY else 4096)
+        if _soft < _want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (_want, _hard))
+            log.info("raised RLIMIT_NOFILE soft limit %d -> %d", _soft, _want)
+    except Exception as _fd_e:
+        log.debug("could not raise fd limit: %s", _fd_e)
     # Outbound OTLP exporter (enterprise): activated by the ``otlp_endpoint``
     # key in ~/.clawmetry/config.json. scope="config" is daemon-only — the
     # dashboard's env-var-activated exporter is a separate scope, so both
