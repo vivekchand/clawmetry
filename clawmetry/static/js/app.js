@@ -3564,7 +3564,10 @@ function toggleTheme() {
 }
 
 function initTheme() {
-  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
+  // Dark is the default, but a saved light preference is honoured again
+  // now that the light palette is first-class (UI reskin, 2026-09).
+  let savedTheme = 'dark';
+  try { savedTheme = localStorage.getItem('openclaw-theme') || 'dark'; } catch (e) {}
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
   
