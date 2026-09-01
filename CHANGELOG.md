@@ -1,6 +1,6 @@
 ## Unreleased
 
-### Feature: the Harness Engineering tab, a scoreboard for the scaffold itself (2026-09-01)
+### Feature: the Harness Engineering tab, a scoreboard for the scaffold itself (carries #5415) (2026-09-01)
 - **Who this reaches:** anyone running more than one agent harness and wondering which one is engineered better for their work. The industry now agrees the harness often matters more than the model (a 2026 controlled study measured 7.8x more score variance from the scaffold than from the model), but every public leaderboard scores synthetic tasks. ClawMetry already watches your real traffic, so this tab measures harness engineering from it.
 - **One honest number per harness: $/done.** What a finished job costs, derived as the window's spend on measurable sessions (failed runs included, because failed runs burn real money) divided by the sessions that verifiably finished. Below 12 measurable runs the tab says "not enough runs" instead of printing a wobbly figure, and every price carries its uncertainty band and run count.
 - **Verdict stamps, not a fabricated index.** Each harness is stamped Earning it / Burning it / Coasting / Can't see by stated rules, with the reason printed beside the stamp. Five dimension marks in plain words (keeps its head clear, picks the right brain, shares the work, knows what can wait, finishes the job) each carry their coverage state, so a harness that records nothing shows as unseen, never as a zero.
