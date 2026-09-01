@@ -289,17 +289,21 @@ def _msgs(n, first_user_at=0):
 def test_cap_keeps_short_transcripts_untouched():
     from clawmetry.sync import _cap_transcript_messages
     msgs = _msgs(10)
-    capped, truncated = _cap_transcript_messages(msgs, 80)
+    capped, truncated, oldest_ts = _cap_transcript_messages(msgs, 80)
     assert capped is msgs
     assert truncated is False
+    assert oldest_ts is None
 
 
 def test_cap_preserves_first_user_prompt_and_marks_omission():
     from clawmetry.sync import _cap_transcript_messages
     msgs = _msgs(83)  # the exact shape of the field report: 83 msgs, cap 80
-    capped, truncated = _cap_transcript_messages(msgs, 80)
+    capped, truncated, oldest_ts = _cap_transcript_messages(msgs, 80)
     assert truncated is True
     assert len(capped) <= 80
+    # Paging cursor = the first message of the contiguous tail (capped[2]:
+    # opening prompt, marker, then the tail).
+    assert oldest_ts == capped[2]["timestamp"]
     # Opening user prompt survives, first in the list.
     assert capped[0]["role"] == "user"
     assert capped[0]["content"] == "the opening prompt 0"
@@ -317,7 +321,7 @@ def test_cap_without_user_prompt_still_marks_omission():
     from clawmetry.sync import _cap_transcript_messages
     msgs = [{"role": "assistant", "content": f"reply {i}", "timestamp": 1000 + i}
             for i in range(100)]
-    capped, truncated = _cap_transcript_messages(msgs, 80)
+    capped, truncated, _oldest = _cap_transcript_messages(msgs, 80)
     assert truncated is True
     assert capped[0]["role"] == "system"
     assert "not shown" in capped[0]["content"]
@@ -327,7 +331,132 @@ def test_cap_without_user_prompt_still_marks_omission():
 def test_cap_first_user_prompt_already_in_tail_not_duplicated():
     from clawmetry.sync import _cap_transcript_messages
     msgs = _msgs(100, first_user_at=95)
-    capped, truncated = _cap_transcript_messages(msgs, 80)
+    capped, truncated, _oldest = _cap_transcript_messages(msgs, 80)
     assert truncated is True
     user_turns = [m for m in capped if m.get("role") == "user"]
     assert len(user_turns) == 1
+
+
+# ── Transcript history paging (transcript_page shape + endpoint) ───────────
+# The replay serves the newest window instantly (snapshot on cloud, capped
+# fast path locally) and pages older history on demand: before_ts is an
+# exclusive ms cursor, so walking next_before_ts backward covers the whole
+# session with no duplicates and no gaps.
+
+
+def _seed_paged_session(ls, sid, n=10):
+    store = ls.get_store()
+    for i in range(n):
+        ts = f"2026-05-12T10:00:{i:02d}Z"
+        role = "user" if i % 4 == 0 else "assistant"
+        store.ingest(_ev(f"pg{i}", sid, role, f"msg {i}", ts))
+    _drain(store)
+    return store
+
+
+def test_query_transcript_page_walks_backward_without_dupes_or_gaps(app):
+    a, ls = app
+    sid = "sess-paging"
+    store = _seed_paged_session(ls, sid, n=10)
+
+    seen = []
+    cursor = None
+    for _ in range(20):  # bounded walk
+        page = store.query_transcript_page(
+            session_id=sid, before_ts=cursor, limit=3)
+        if not page["rows"]:
+            assert page["has_more"] is False
+            break
+        seen.extend(r["id"] for r in page["rows"])
+        cursor = page["next_before_ts"]
+        if not page["has_more"]:
+            break
+    # Every event exactly once, newest-first.
+    assert seen == [f"pg{i}" for i in range(9, -1, -1)]
+
+
+def test_query_transcript_page_cursor_is_exclusive(app):
+    a, ls = app
+    sid = "sess-paging-excl"
+    store = _seed_paged_session(ls, sid, n=5)
+    first = store.query_transcript_page(session_id=sid, limit=2)
+    assert [r["id"] for r in first["rows"]] == ["pg4", "pg3"]
+    assert first["has_more"] is True
+    second = store.query_transcript_page(
+        session_id=sid, before_ts=first["next_before_ts"], limit=2)
+    assert [r["id"] for r in second["rows"]] == ["pg2", "pg1"]
+
+
+def test_transcript_page_endpoint_renders_messages(app):
+    a, ls = app
+    sid = "sess-paging-http"
+    _seed_paged_session(ls, sid, n=8)
+    c = a.test_client()
+    r = c.get(f"/api/transcript-page/{sid}?limit=3")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["has_more"] is True
+    assert body["next_before_ts"]
+    # Rendered messages come oldest-first within the page and carry content.
+    contents = [m["content"] for m in body["messages"]]
+    assert contents == ["msg 5", "msg 6", "msg 7"]
+    # Walk one page older through the cursor.
+    r2 = c.get(
+        f"/api/transcript-page/{sid}?limit=3&before_ts={body['next_before_ts']}")
+    body2 = r2.get_json()
+    assert [m["content"] for m in body2["messages"]] == ["msg 2", "msg 3", "msg 4"]
+
+
+def test_transcript_fast_path_caps_to_newest_window(app, monkeypatch):
+    """A session past the message cap serves the NEWEST window (opening
+    prompt + omission marker + tail) and stamps paging metadata — the old
+    head-keep bound hid the live end of long sessions."""
+    a, ls = app
+    import routes.sessions as sessions_mod
+    store = ls.get_store()
+    sid = "sess-longcap"
+    for i in range(30):
+        ts = f"2026-05-12T11:{i // 60:02d}:{i % 60:02d}Z"
+        role = "user" if i == 0 else "assistant"
+        store.ingest(_ev(f"lc{i}", sid, role, f"turn {i}", ts))
+    _drain(store)
+    t = sessions_mod._try_local_store_transcript(sid, _msg_cap=10)
+    assert t["_truncated"] is True
+    assert t["messageCount"] == 30
+    msgs = t["messages"]
+    assert len(msgs) <= 10
+    assert msgs[0]["content"] == "turn 0"          # opening prompt kept
+    assert msgs[1]["role"] == "system"             # omission marker
+    assert msgs[-1]["content"] == "turn 29"        # newest end visible
+    assert t["_oldest_contiguous_ts"] == msgs[2]["timestamp"]
+
+
+def test_render_transcript_page_renders_and_strips_for_relay(app, monkeypatch):
+    """Daemon-side relay answer: raw page rows become rendered messages via
+    the shared builder, with paging metadata carried through and raw payloads
+    stripped (snapshot size discipline)."""
+    a, ls = app
+    from clawmetry import sync as sync_mod
+    rows = [
+        _ev("r2", "sess-relay", "assistant", "the reply", "2026-05-12T10:00:02Z"),
+        _ev("r1", "sess-relay", "user", "the ask", "2026-05-12T10:00:01Z"),
+    ]
+    # _ev returns ingest-shaped rows (data is a JSON string); query rows carry
+    # decoded dicts — decode to match what query_transcript_page hands over.
+    for r in rows:
+        r["data"] = json.loads(r["data"])
+    page = {"rows": rows, "has_more": True, "next_before_ts": 1234}
+    out = sync_mod._render_transcript_page(page, {"session_id": "sess-relay"})
+    assert out["has_more"] is True
+    assert out["next_before_ts"] == 1234
+    contents = [m["content"] for m in out["messages"]]
+    assert contents == ["the ask", "the reply"]
+    assert all("raw" not in m for m in out["messages"])
+
+
+def test_render_transcript_page_never_raises_on_garbage():
+    from clawmetry import sync as sync_mod
+    out = sync_mod._render_transcript_page(None, None)
+    assert out["messages"] == [] and out["has_more"] is False
+    out2 = sync_mod._render_transcript_page({"rows": [{"broken": True}]}, {})
+    assert isinstance(out2["messages"], list)
