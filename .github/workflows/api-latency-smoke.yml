@@ -52,10 +52,19 @@ jobs:
           python -m build --wheel
 
       - name: Install into isolated venv
+        # `matrix.source` is bound to an env var rather than expanded into the
+        # script. GitHub substitutes `${{ }}` textually before bash parses the
+        # line, so an expression in a run: block is script source, not data --
+        # the surrounding quotes give no protection. This matrix is closed
+        # (both fromJSON arrays above are literals), so nothing here is
+        # reachable today; binding it keeps that true if the matrix ever
+        # starts deriving a value from an input or event payload.
+        env:
+          SOURCE: ${{ matrix.source }}
         run: |
           python -m venv /tmp/vsmoke
           /tmp/vsmoke/bin/pip install --upgrade pip
-          if [ "${{ matrix.source }}" = "pypi" ]; then
+          if [ "$SOURCE" = "pypi" ]; then
             /tmp/vsmoke/bin/pip install --no-cache-dir clawmetry flask waitress cryptography duckdb requests
           else
             /tmp/vsmoke/bin/pip install dist/clawmetry-*.whl flask waitress cryptography duckdb requests
