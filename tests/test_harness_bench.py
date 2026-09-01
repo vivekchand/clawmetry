@@ -366,3 +366,41 @@ class TestBenchSnapshotSlice:
         import pytest as _pytest
         with _pytest.raises(RuntimeError):
             _build_bench_slice(BrokenStore())
+
+
+class TestHeadToHeadBases:
+    """AC-HB-005.1: cohorts match by workload profile OR same workspace."""
+
+    def _ws_session(self, rt, cost, cwd, i=0, rough=False):
+        row = _session(cost, rough=rough, session_id="%s:w%d" % (rt, i))
+        row["cwd"] = cwd
+        return row
+
+    def test_same_workspace_produces_a_workspace_matchup(self):
+        from clawmetry.harness_bench import build_headtohead
+        grouped = {
+            "claude_code": [self._ws_session("claude_code", 2.0,
+                                             "/Users/x/projects/app", i=i)
+                            for i in range(6)],
+            "codex": [self._ws_session("codex", 3.0,
+                                       "/Users/x/projects/app", i=i)
+                      for i in range(6)],
+        }
+        out = build_headtohead(grouped)
+        ws = [m for m in out["matchups"] if m["basis"] == "workspace"]
+        assert ws and ws[0]["workspace"] == "app"
+        assert {s["runtime"] for s in ws[0]["sides"]} == {"claude_code", "codex"}
+
+    def test_rough_rate_is_reported_per_side(self):
+        from clawmetry.harness_bench import build_headtohead
+        grouped = {
+            "claude_code": [self._ws_session("claude_code", 1.0, "/r/app",
+                                             i=i, rough=(i < 3))
+                            for i in range(6)],
+            "codex": [self._ws_session("codex", 1.0, "/r/app", i=i)
+                      for i in range(6)],
+        }
+        out = build_headtohead(grouped)
+        sides = {s["runtime"]: s for m in out["matchups"] for s in m["sides"]}
+        assert sides["claude_code"]["rough_rate"] == 0.5
+        assert sides["codex"]["rough_rate"] == 0.0

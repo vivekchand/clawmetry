@@ -29951,14 +29951,19 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
         ['Finished jobs', function (s) { return s.done_rate == null ? 'unseen' : Math.round(s.done_rate * 100) + '%'; }],
         ['Cost per finished job', function (s) { return s.dollars_per_done == null ? 'not priced' : usd(s.dollars_per_done); }],
         ['Cost per run', function (s) { return usd(s.avg_cost_usd); }],
+        ['Rough runs (loops, thrash)', function (s) { return s.rough_rate == null ? 'unseen' : Math.round(s.rough_rate * 100) + '%'; }],
         ['Verified runs', function (s) { return String(s.sessions); }]
       ];
       var head = '<tr><th></th>' + m.sides.map(function (s) { return '<th>' + esc(RT_LABEL(s.runtime)) + '</th>'; }).join('') + '</tr>';
       var body = rows.map(function (r) {
         return '<tr><td>' + esc(r[0]) + '</td>' + m.sides.map(function (s) { return '<td>' + esc(r[1](s)) + '</td>'; }).join('') + '</tr>';
       }).join('');
-      return '<div class="bench-lane"><div class="bench-lanehead"><b>' + esc(PROFILE_WORDS[m.profile] || m.profile) + '</b> ' +
-        '<span class="bench-faint">same workload, measurable runs only</span></div>' +
+      var title = m.basis === 'workspace'
+        ? esc(m.workspace) : esc(PROFILE_WORDS[m.profile] || m.profile);
+      var scopeNote = m.basis === 'workspace'
+        ? 'same workspace, measurable runs only' : 'same workload, measurable runs only';
+      return '<div class="bench-lane"><div class="bench-lanehead"><b>' + title + '</b> ' +
+        '<span class="bench-faint">' + scopeNote + '</span></div>' +
         '<div style="overflow-x:auto"><table class="bench-labt bench-h2ht">' + head + body + '</table></div></div>';
     }).join('');
   }
