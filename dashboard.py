@@ -139,6 +139,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.bench import bp_bench
 from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
@@ -13152,6 +13153,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_bench)
     app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
@@ -13776,6 +13778,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
         <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
+      <div class="left-nav-item" data-tab="bench" onclick="switchTab('bench')" data-i18n-title="nav.bench_tooltip" title="Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.">
+        <span class="left-nav-icon" aria-hidden="true">&#128736;</span>
+        <span class="left-nav-label" data-i18n="nav.bench">Harness Engineering</span>
+      </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
          header must not steal the overview highlight from Home). Collapsed by
@@ -13885,6 +13891,9 @@ DASHBOARD_HTML = r"""
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->
 {% include 'tabs/evals.html' %}
+
+<!-- BENCH (Harness Engineering: verdict stamps, $/done, flow deep dive, context lanes) -->
+{% include 'tabs/bench.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}

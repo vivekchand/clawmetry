@@ -1,0 +1,56 @@
+{# BENCH — the Harness Engineering tab (Blueprint: Harness Benchmarks &
+   Comparison; REQ-HB-001..007).
+
+   DOM contract with app.js (loadBenchTab):
+     #bench-verdict   one-sentence verdict line
+     #bench-window    observation window + coverage note
+     #bench-crew      crew cards grid (one per harness, unranked divider)
+     #bench-flow      follow-a-job flow trace (SVG, drawn by JS)
+     #bench-lanes     context-window curves (per-session, side-by-side)
+     #bench-minis     per-harness typical context strip
+     #bench-work      workload recommendation cards
+     #bench-lab       published third-party pairs drawer
+     #bench-empty     honest empty / cloud state
+
+   Data: /api/bench, /api/bench/recommendations, /api/bench/published,
+   /api/bench/context-curves, /api/bench/flow/<sid> (routes/bench.py).
+   Scoring math: clawmetry/harness_bench.py (pure). This tab is inherently
+   cross-runtime (it IS the runtime comparison), so it sits in
+   _CM_RT_NODEWIDE and carries the node-wide honesty banner. #}
+<div class="page" id="page-bench" data-bench-tab="1">
+  <div class="page-header">
+    <div>
+      <h2 style="margin:0" data-i18n="bench.title">Harness Engineering</h2>
+      <div class="bench-sub" data-i18n="bench.subtitle">Which harness is engineered better for your work, measured from your own traffic. Every claim has receipts; a harness we cannot see is never ranked.</div>
+    </div>
+    <button class="q-picker" type="button" onclick="loadBenchTab()" title="Refresh" data-i18n-title="common.refresh">&#8635;</button>
+  </div>
+
+  <div id="bench-empty" hidden></div>
+
+  <div id="bench-body" hidden>
+    <p id="bench-verdict" class="bench-verdict"></p>
+    <div id="bench-window" class="bench-window"></div>
+
+    <h3 class="bench-sec" data-i18n="bench.crew_heading">The crew, sorted by what a finished job costs</h3>
+    <div id="bench-crew" class="bench-crew"></div>
+
+    <h3 class="bench-sec" data-i18n="bench.flow_heading">Follow a job, under the hood</h3>
+    <div class="bench-flow-note" data-i18n="bench.flow_note">Every box comes from recorded events. A station this harness does not record renders as fog, never guessed.</div>
+    <div id="bench-flow" class="bench-card"></div>
+
+    <h3 class="bench-sec" data-i18n="bench.lanes_heading">Head clearance: how full each harness lets the context window get</h3>
+    <div id="bench-lanes" class="bench-lanes"></div>
+    <div id="bench-minis" class="bench-minis"></div>
+
+    <h3 class="bench-sec" data-i18n="bench.work_heading">For your work</h3>
+    <div class="bench-flow-note" data-i18n="bench.work_note">Recommendations name the qualities a job needs, then list options. Never a single winner.</div>
+    <div id="bench-work" class="bench-work"></div>
+
+    <h3 class="bench-sec" data-i18n="bench.lab_heading">From the lab</h3>
+    <details class="bench-lab">
+      <summary data-i18n="bench.lab_summary">Published benchmark results for your harnesses and models. Third-party runs, dated.</summary>
+      <div id="bench-lab" class="bench-lab-body"></div>
+    </details>
+  </div>
+</div>
