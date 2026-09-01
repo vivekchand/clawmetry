@@ -918,9 +918,89 @@ def _sandbox_egress_denied_count(name: str, count: int = 100) -> dict:
         return {}
 
 
+class _MergedProc:
+    """Wraps multiple Popen objects and merges their stdout into one stream.
+
+    The sync daemon expects a single (proc, PipeLineReader) pair per sandbox.
+    This shim provides the same interface — ``.stdout``, ``.poll()``,
+    ``.terminate()``, ``.wait()`` — when the live-tail path needs two child
+    processes simultaneously (OCSF audit stream + gateway log follow for
+    container-backed sandboxes, issue #5398).
+    """
+
+    def __init__(self, procs):
+        import os as _os
+        import threading as _th
+        self._procs = list(procs)
+        r_fd, w_fd = _os.pipe()
+        self.stdout = _os.fdopen(r_fd, "r", buffering=1)
+        self._wfile = _os.fdopen(w_fd, "w", buffering=1)
+        self._threads = []
+        for p in self._procs:
+            t = _th.Thread(target=self._pump, args=(p.stdout,), daemon=True)
+            t.start()
+            self._threads.append(t)
+        closer = _th.Thread(target=self._close_write_end, daemon=True)
+        closer.start()
+
+    def _pump(self, src):
+        try:
+            for line in src:
+                try:
+                    self._wfile.write(line)
+                    self._wfile.flush()
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    def _close_write_end(self):
+        for t in self._threads:
+            t.join()
+        try:
+            self._wfile.close()
+        except Exception:
+            pass
+
+    def poll(self):
+        """Return None if any child is still alive; 0 when all have exited."""
+        for p in self._procs:
+            if p.poll() is None:
+                return None
+        return 0
+
+    def terminate(self):
+        for p in self._procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
+    def wait(self):
+        for p in self._procs:
+            try:
+                p.wait()
+            except Exception:
+                pass
+
+
 def _openshell_sandbox_logs_tail(name: str):
     """Spawn ``openshell logs <name> --source all --tail`` as a long-lived child
     process and return the ``subprocess.Popen`` handle.
+
+    For container-backed (non-terminal) sandboxes also spawns a ``tail -f`` on
+    the OpenClaw gateway log, matching the harness's two-source merge in the
+    live-follow path (issue #5398).  When both sources are active the return
+    value is a :class:`_MergedProc` that multiplexes both streams under the
+    same ``.stdout`` / ``.poll()`` / ``.terminate()`` / ``.wait()`` interface,
+    so the sync daemon's drain loop in ``clawmetry/sync.py`` needs no changes.
+
+    Gateway log resolution order for non-terminal sandboxes mirrors
+    ``_openshell_sandbox_logs()``:
+    1. ``OPENSHELL_GATEWAY_LOG`` env override.
+    2. Host-side rotating log files from ``_gateway_log_files()``.
+    3. ``openshell sandbox exec -n <name> -- tail -n 200 -f /tmp/gateway.log``
+       for container-internal gateway logs.
 
     The caller owns process lifetime — drain stdout non-blockingly each sync
     tick and call ``proc.terminate()`` + ``proc.wait()`` on daemon shutdown.
@@ -931,10 +1011,38 @@ def _openshell_sandbox_logs_tail(name: str):
         if not _sh.which("openshell"):
             return None
         import subprocess as _sp
-        return _sp.Popen(
+        ocsf_proc = _sp.Popen(
             ["openshell", "logs", name, "--source", "all", "--tail"],
             stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
         )
+        # For container-backed (non-terminal) sandboxes also follow the gateway
+        # log, matching the harness's two-source merge for `alpha logs --follow`
+        # (#5398).  Follows the same resolution order as _openshell_sandbox_logs().
+        phase_info = _openshell_sandbox_phase_policy(name)
+        if phase_info.get("sandboxRuntimeKind", "").lower() != "terminal":
+            _gw_log_override = os.environ.get("OPENSHELL_GATEWAY_LOG")
+            _gw_candidates = (
+                [_gw_log_override] if _gw_log_override else _gateway_log_files()
+            )
+            _gw_log_path = _gw_candidates[-1] if _gw_candidates else None
+            gw_proc = None
+            try:
+                if _gw_log_path:
+                    gw_proc = _sp.Popen(
+                        ["tail", "-n", "200", "-f", _gw_log_path],
+                        stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
+                    )
+                elif not _gw_log_override:
+                    gw_proc = _sp.Popen(
+                        ["openshell", "sandbox", "exec", "-n", name, "--",
+                         "tail", "-n", "200", "-f", "/tmp/gateway.log"],
+                        stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
+                    )
+            except Exception:
+                gw_proc = None
+            if gw_proc is not None:
+                return _MergedProc([ocsf_proc, gw_proc])
+        return ocsf_proc
     except Exception:
         return None
 
