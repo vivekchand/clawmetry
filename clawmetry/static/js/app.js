@@ -29904,7 +29904,10 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       '<div class="bench-flowcol"><div class="bench-station"><div class="bench-st-title">Message in</div><div class="bench-st-sub">observed origin</div></div>' +
       '<div class="bench-station"><div class="bench-st-title">' + esc(RT_LABEL(trace.runtime)) + '</div><div class="bench-st-sub">the session</div></div></div>' +
       '<div class="bench-flowcol">' + ['model', 'tool', 'subagent', 'deferred'].map(function (t) {
-        return groups[t].map(stationBox).join('');
+        var list = groups[t].slice();
+        if (t === 'tool') list.sort(function (a, b) { return (b.calls || 0) - (a.calls || 0); });
+        var extra = list.length > 8 ? '<div class="bench-say bench-faint">and ' + (list.length - 8) + ' more tools</div>' : '';
+        return list.slice(0, 8).map(stationBox).join('') + extra;
       }).join('') + '</div>' +
       '<div class="bench-flowcol">' + (reply ? '<div class="bench-station"><div class="bench-st-title">Reply</div><div class="bench-st-sub">' +
         (reply.latency_secs != null ? reply.latency_secs + 's end to end' : 'observed') + '</div></div>' : '') + '</div></div>';

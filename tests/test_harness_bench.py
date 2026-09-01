@@ -259,3 +259,21 @@ class TestOutcomeAvailability:
         scope = bench["byRuntime"]["codex"]
         assert scope["dollars_per_done"]["basis"] == "no_success_outcomes"
         assert scope["stamp_reason"] == "no completed jobs recorded in the window"
+
+
+class TestFlowTraceOrdering:
+    """Regression: the store returns events newest-first; a reversed input
+    once produced a reply station with negative end-to-end latency."""
+
+    def test_reversed_events_still_yield_positive_latency(self):
+        events = [
+            {"session_id": "s", "event_type": "message", "ts": 1030,
+             "data": {"role": "assistant", "content": "done"}},
+            {"session_id": "s", "event_type": "model.completed", "ts": 1010,
+             "model": "claude-opus-4-5", "data": {}},
+            {"session_id": "s", "event_type": "message", "ts": 1000,
+             "data": {"role": "user", "content": "go"}},
+        ]
+        trace = build_flow_trace({}, events, [], runtime="claude_code")
+        reply = next(s for s in trace["stations"] if s["type"] == "reply")
+        assert reply["latency_secs"] == 30.0

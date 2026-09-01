@@ -87,6 +87,11 @@ def build_flow_trace(
     """Assemble the station/hop trace for one session."""
     session_row = session_row if isinstance(session_row, dict) else {}
     rows = [r for r in (event_rows or []) if isinstance(r, dict)]
+    # The store returns events newest-first; a trace walks oldest-first.
+    # Sort here rather than trusting the caller (a reversed input once
+    # rendered a reply with negative end-to-end latency).
+    rows.sort(key=lambda r: (_epoch_of(r.get("ts")) is None,
+                             _epoch_of(r.get("ts")) or 0.0))
     now_ts = time.time() if now is None else now
 
     hops: list[dict[str, Any]] = []
@@ -165,9 +170,11 @@ def build_flow_trace(
         stations.append({"id": "deferred:" + s["id"], "type": "deferred",
                          "state": "observed", **s})
     if last_assistant_ts is not None:
+        latency = None
+        if first_user_ts is not None and last_assistant_ts >= first_user_ts:
+            latency = round(last_assistant_ts - first_user_ts, 1)
         stations.append({"id": "reply", "type": "reply", "state": "observed",
-                         "latency_secs": (round(last_assistant_ts - first_user_ts, 1)
-                                          if first_user_ts is not None else None)})
+                         "latency_secs": latency})
 
     # Coverage: station types this trace could not observe. Whether that is
     # "recorded nothing this session" or "the harness cannot record it" is a
