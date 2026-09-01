@@ -11943,7 +11943,11 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                 "enabled": j.get("enabled", True),
                 "expr": expr,
                 "schedule": sched,
-                "model": j.get("model", ""),
+                # Try known key-name variants across harness builds (#5409 /
+                # openclaw PR #95341) — mirrors the session-level alias pattern
+                # in clawmetry/adapters/openclaw.py:2545-2549.
+                "model": (j.get("model") or j.get("agentModel")
+                          or j.get("configuredModel") or ""),
                 "state": {
                     "lastStatus": job_state.get("lastStatus"),
                     "lastRunAtMs": job_state.get("lastRunAtMs"),
@@ -12003,7 +12007,8 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "next_run_at": str(job_state.get("nextRunAtMs") or ""),
                     # All other freeform fields go into the BLOB
                     "task":        (j.get("task") or "")[:500],
-                    "model":       j.get("model"),
+                    "model":       (j.get("model") or j.get("agentModel")
+                                   or j.get("configuredModel")),
                     "lastDurationMs":      job_state.get("lastDurationMs"),
                     "lastError":           job_state.get("lastError"),
                     "consecutiveFailures": job_state.get("consecutiveFailures"),
