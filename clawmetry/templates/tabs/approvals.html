@@ -439,6 +439,78 @@
     } catch(e) { alert('Failed: ' + e); }
   };
 
+  /* ── Question-set approvals (WO-52 phase 1) ──
+   * A row whose args carry _cm_questions (served as `questions` by
+   * /api/approvals) is a structured question from the runtime — Claude
+   * Code's AskUserQuestion tool first. Render it full-fidelity and post
+   * decision='answer' with an answers map keyed by question text; the
+   * blocked PreToolUse hook resumes the session with those answers.
+   */
+  var _questionSets = {};   // approval id -> question set (rebuilt per render)
+
+  function _escAttr(s) { return escHtml(s).replace(/"/g, '&quot;'); }
+
+  function _renderQuestion(id, q, qi) {
+    var name = 'qa-' + escHtml(id) + '-' + qi;
+    var html = '<div style="margin-top:8px;padding:10px 12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">'
+      + (q.header ? '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;border-radius:4px;padding:1px 6px;font-size:10px;margin-right:6px;">' + escHtml(q.header) + '</span>' : '')
+      + escHtml(q.question)
+      + (q.multiSelect ? ' <span style="font-size:10px;color:var(--text-muted);font-weight:400;">(select all that apply)</span>' : '')
+      + '</div>';
+    var type = q.multiSelect ? 'checkbox' : 'radio';
+    (q.options || []).forEach(function(o) {
+      html += '<label style="display:flex;align-items:flex-start;gap:8px;margin:4px 0;cursor:pointer;">'
+        + '<input type="' + type + '" name="' + name + '" value="' + _escAttr(o.label) + '" style="margin-top:3px;cursor:pointer;">'
+        + '<span><span style="font-size:12px;color:var(--text-primary);">' + escHtml(o.label) + '</span>'
+        + (o.description ? '<span style="display:block;font-size:11px;color:var(--text-muted);">' + escHtml(o.description) + '</span>' : '')
+        + '</span></label>';
+    });
+    if (q.allow_free_text) {
+      html += '<input type="text" id="qa-ft-' + escHtml(id) + '-' + qi + '" placeholder="Or type your own answer…" style="width:100%;box-sizing:border-box;margin-top:6px;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">';
+    }
+    return html + '</div>';
+  }
+
+  window.sendQuestionAnswers = async function(id) {
+    var qs = _questionSets[id] || [];
+    if (!qs.length) { alert('Question set is no longer available — refresh.'); return; }
+    var answers = {};
+    for (var qi = 0; qi < qs.length; qi++) {
+      var q = qs[qi];
+      var name = 'qa-' + id + '-' + qi;
+      var ft = document.getElementById('qa-ft-' + id + '-' + qi);
+      var ftVal = ft && ft.value ? ft.value.trim() : '';
+      if (q.multiSelect) {
+        var picked = [].slice.call(document.querySelectorAll('input[name="' + name + '"]:checked'))
+          .map(function(el){ return el.value; });
+        if (ftVal) picked.push(ftVal);
+        if (!picked.length) { alert('Please answer: ' + q.question); return; }
+        answers[q.question] = picked;
+      } else {
+        var sel = document.querySelector('input[name="' + name + '"]:checked');
+        var val = sel ? sel.value : ftVal;
+        if (!val) { alert('Please answer: ' + q.question); return; }
+        answers[q.question] = val;
+      }
+    }
+    var reasonEl = document.getElementById('dec-reason-' + id);
+    var reason = reasonEl && reasonEl.value ? reasonEl.value.trim() : '';
+    try {
+      var body = {decision: 'answer', answers: answers};
+      if (reason) body.reason = reason;
+      var r = await fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      var d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      loadApprovalsTab();
+    } catch (e) {
+      alert('Sending answers failed: ' + e);
+    }
+  };
+
   /* ── Approval row renderer ──
    * Phase 1.2 (#1343): richer per-row context.
    *   - Pretty-printed args (2-space indent, capped at 800 chars vs old 200)
@@ -447,8 +519,13 @@
    */
   function _renderRow(r, pending) {
     var statusColors = {pending:'#f59e0b', approved:'#22c55e', denied:'#ef4444',
-                        timeout:'#6b7280', expired:'#6b7280'};
+                        answered:'#3b82f6', timeout:'#6b7280', expired:'#6b7280'};
     var c = statusColors[r.status] || '#6b7280';
+    // Question-set rows (WO-52): the runtime asked a structured question;
+    // pending ones render the actual options + a "Send answers" submit.
+    var qSet = (r.questions && r.questions.length) ? r.questions : null;
+    var isQuestionRow = !!(qSet && pending);
+    if (isQuestionRow) _questionSets[r.id] = qSet;
     var argsPretty = '';
     try {
       if (r.args === undefined && r.args_preview) {
@@ -476,6 +553,13 @@
       // Not one of the user's rules: the runtime itself stopped to ask.
       html += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">asked by the agent</span>';
     }
+    if (qSet) {
+      // Pending chip: question count + headers, so the queue scans well.
+      var qHeads = qSet.map(function(q){return q.header || '';}).filter(Boolean).join(' · ');
+      html += '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">'
+        + qSet.length + (qSet.length === 1 ? ' question' : ' questions')
+        + (qHeads ? ' · ' + escHtml(qHeads).slice(0, 60) : '') + '</span>';
+    }
     if (r.risk && r.risk.level) {
       var riskColors = {low:'#6b7280', medium:'#f59e0b', high:'#f97316', critical:'#ef4444'};
       var rc = riskColors[r.risk.level] || '#6b7280';
@@ -496,8 +580,26 @@
     if (r.context) {
       html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;" data-i18n="app.eschtml_r_context">' + escHtml(r.context) + '</div>';
     }
-    html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
-    if (pending) {
+    if (isQuestionRow) {
+      // Full-fidelity question form: radios for single-choice, checkboxes
+      // for multiSelect, a free-text input when the question set says so.
+      html += qSet.map(function(q, qi){ return _renderQuestion(r.id, q, qi); }).join('');
+    } else {
+      html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
+    }
+    if (pending && isQuestionRow) {
+      html += '<div style="margin-top:10px;">';
+      html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Note (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
+      html += '</div>';
+      html += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">';
+      html += '<button onclick="sendQuestionAnswers(\'' + escHtml(r.id) + '\')" style="background:#3b82f6;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Send answers</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" title="Skip answering here — the question appears in the terminal instead" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Answer in terminal</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:transparent;color:#ef4444;border:1px solid #ef444444;padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
+      if (r.expires_at) {
+        html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      }
+      html += '</div>';
+    } else if (pending) {
       html += '<div style="margin-top:10px;">';
       html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Reason (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
       html += '</div>';
@@ -540,7 +642,8 @@
       session_id: r.requestor_session_id,
       args_preview: r.args_preview,
       risk: r.risk,
-      kind: r.kind
+      kind: r.kind,
+      questions: r.questions
     };
   }
   function _mapLocalDecision(r) {

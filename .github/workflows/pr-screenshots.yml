@@ -66,11 +66,19 @@ jobs:
 
     steps:
       # -- 1. Check out PR head ------------------------------------------------
+      # Both checkouts below are read-only source trees: they are rendered and
+      # screenshotted, never pushed from. The publish step (step 11) does not
+      # use either working copy -- it `git init`s a fresh temp repo and pushes
+      # to an explicit https://x-access-token:${GH_TOKEN}@... remote. So no
+      # consumer exists for a credential persisted in .git/config here, and it
+      # would otherwise sit readable by every step of a job that executes PR
+      # head code.
       - name: Checkout PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: head
+          persist-credentials: false
 
       # -- 2. Check out PR base for "before" screenshots ----------------------
       - name: Checkout PR base
@@ -78,6 +86,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
+          persist-credentials: false
 
       # -- 3. Toolchains -------------------------------------------------------
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

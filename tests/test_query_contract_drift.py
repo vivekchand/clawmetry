@@ -166,6 +166,8 @@ EXPECTED_TRUST = {
     "rollup_sessions": "e2e",
     "session": "e2e",
     "transcript": "e2e",
+    # Replay history paging: pages carry full message content -> e2e.
+    "transcript_page": "e2e",
     "brain": "e2e",
     "spans": "e2e",
     "traces": "e2e",
