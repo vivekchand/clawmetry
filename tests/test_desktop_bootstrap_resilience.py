@@ -214,21 +214,45 @@ def test_log_survives_unencodable_characters(tmp_path):
 
 # ── 5. the cffi pin must stay split per interpreter ──────────────────────
 #
-# setup.py pins cffi<2 below Python 3.14 (cffi 2.0.0 SIGSEGVs py3.9, #5108,
-# and cffi 2.1+ ships no cp39 wheels) and cffi>=2 on 3.14+ (cffi 1.x ships
-# NO cp314 wheels, so an unconditional <2 forces an MSVC source build on
-# end-user Windows — the 2026-08-29 field failure). Both halves are
-# load-bearing; collapsing them back to a bare "cffi<2" re-bricks every
-# Windows install on a current python.org Python.
+# setup.py pins cffi<2 on Python 3.9 only (cffi 2.0.0 SIGSEGVs py3.9, #5108,
+# and cffi 2.1+ requires >=3.10 so it ships no cp39 wheels) and cffi>=2 from
+# 3.10 up (cffi 1.x ships NO cp314 wheels, so an unconditional <2 forces an
+# MSVC source build on end-user Windows — the 2026-08-29 field failure).
+# Both halves are load-bearing; collapsing them back to a bare "cffi<2"
+# re-bricks every Windows install on a current python.org Python.
+#
+# The boundary sits at 3.10, not 3.14, because that is where the two py3.9
+# reasons stop applying. Holding 3.10-3.13 at cffi<2 capped cryptography at
+# 46.0.0 (46.0.1+ needs cffi>=2.0.0 on 3.9+) and so kept nine published
+# advisories open on the interpreters most installs run. Moving the boundary
+# back up would silently reopen them.
 
 
 def test_cffi_pin_is_split_per_interpreter():
     setup_src = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
-    assert 'cffi<2; python_version < "3.14"' in setup_src
-    assert 'cffi>=2; python_version >= "3.14"' in setup_src
+    assert 'cffi<2; python_version < "3.10"' in setup_src
+    assert 'cffi>=2; python_version >= "3.10"' in setup_src
     import re
     bare = re.search(r"""['"]cffi<2['"]""", setup_src)
     assert bare is None, "an unmarked cffi<2 would have no cp314 wheel"
+
+
+def test_cryptography_floor_tracks_the_cffi_boundary():
+    """Wherever cffi>=2 is allowed, cryptography must be advisory-clean.
+
+    The two pins are coupled: cryptography 46.0.1+ requires cffi>=2.0.0 on
+    3.9+, so a cffi<2 band caps cryptography at 46.0.0 no matter what floor
+    is written. Raising the cffi boundary without raising the cryptography
+    floor to match would leave the newer band pinned to a version whose
+    advisories are fixed and reachable.
+    """
+    setup_src = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    assert 'cryptography>=50.0.0; python_version >= "3.10"' in setup_src
+    assert (
+        'cryptography>=46.0.0; python_full_version >= "3.9.2" '
+        'and python_version < "3.10"' in setup_src
+    )
+    assert 'cryptography>=3.0; python_full_version < "3.9.2"' in setup_src
 
 
 # ── 6. field-failure reporting (AC-FFR-001) ──────────────────────────────
