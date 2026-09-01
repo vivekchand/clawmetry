@@ -6,7 +6,7 @@
 - **Light and dark are a click apart again.** The header regains its sun/moon toggle (it had quietly become dark-only), your choice is remembered across visits, and the wordmark stays readable in both themes.
 - **Verified:** rendered live in a browser on a real store — dark, light, the toggle round-trip surviving a reload, both collapsible drawers, and tab switching; before/after screenshots on the PR.
 
-### Feature: the Harness Engineering tab goes deeper: head-to-head, a real $/done watch, and cloud data (2026-09-01)
+### Feature: the Harness Engineering tab goes deeper: head-to-head, a real $/done watch, and cloud data (carries #5422) (2026-09-01)
 - **Who this reaches:** everyone who opened the new Harness Engineering tab. Hosted users saw a deliberate empty state; local users could compare aggregates but not like-for-like work, and the tab ended in reading with nothing to act on.
 - **Head to head.** Two harnesses now compare side by side, but only when they did the same kind of work with at least 5 verified runs each: finish rate, cost per run, cost per finished job. Unlike work is never compared; the tab says so instead of drawing an unfair chart.
 - **The hosted dashboard fills in.** The sync daemon now bakes the bench (verdicts, $/done, profiles, recommendations, head-to-head) into the encrypted snapshot, bounded to a few kilobytes. Your machine computes and encrypts; the cloud stores bytes it cannot read; the browser decrypts and renders. The hosted interceptor ships in the matching cloud release.
