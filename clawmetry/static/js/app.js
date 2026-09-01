@@ -29952,6 +29952,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
         ['Cost per finished job', function (s) { return s.dollars_per_done == null ? 'not priced' : usd(s.dollars_per_done); }],
         ['Cost per run', function (s) { return usd(s.avg_cost_usd); }],
         ['Rough runs (loops, thrash)', function (s) { return s.rough_rate == null ? 'unseen' : Math.round(s.rough_rate * 100) + '%'; }],
+        ['Tokens per run', function (s) { return s.avg_tokens == null ? 'unseen' : Number(s.avg_tokens).toLocaleString(); }],
         ['Verified runs', function (s) { return String(s.sessions); }]
       ];
       var head = '<tr><th></th>' + m.sides.map(function (s) { return '<th>' + esc(RT_LABEL(s.runtime)) + '</th>'; }).join('') + '</tr>';
