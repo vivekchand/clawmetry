@@ -528,8 +528,9 @@ def _eval_dollars_per_done(
     return {
         "event": _quality_pseudo_event("dollars_per_done_above", window_minutes),
         "summary": (f"rule fired: cost per finished job ${dpd:.2f} "
-                    f"(${spend:.2f} across {total} sessions, {done} finished) "
-                    f"in {window_minutes}m (threshold=${threshold:.2f})"),
+                    f"(${spend:.2f} across {total} classified sessions, "
+                    f"{done} finished) in {window_minutes}m "
+                    f"(threshold=${threshold:.2f}; basis: classified sessions)"),
         "metadata": {
             "dollars_per_done":  round(dpd, 2),
             "window_spend_usd":  round(spend, 2),
