@@ -860,6 +860,9 @@
   "nav.quality": "Quality",
   "nav.quality_tooltip": "Is your agent doing good work? See this week's report card and the runs that need attention.",
   "nav.runtime_extras": "Runtime extras",
+  "nav.section_analyze": "Analyze",
+  "nav.section_govern": "Govern",
+  "nav.section_observe": "Observe",
   "nav.security": "Security",
   "nav.self_evolve": "Improvement tips",
   "nav.session_replay": "Sessions",
@@ -1270,5 +1273,17 @@
   "trial.verifying": "Verifying key…",
   "trial.activated": "License installed — reloading…",
   "trial.activate_failed": "License activation failed.",
-  "trial.pill_sub_expired": "Subscription expired"
+  "trial.pill_sub_expired": "Subscription expired",
+  "nav.bench": "Harness Engineering",
+  "nav.bench_tooltip": "Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.",
+  "bench.title": "Harness Engineering",
+  "bench.subtitle": "Which harness is engineered better for your work, measured from your own traffic. Every claim has receipts; a harness we cannot see is never ranked.",
+  "bench.crew_heading": "The crew, sorted by what a finished job costs",
+  "bench.flow_heading": "Follow a job, under the hood",
+  "bench.flow_note": "Every box comes from recorded events. A station this harness does not record renders as fog, never guessed.",
+  "bench.lanes_heading": "Head clearance: how full each harness lets the context window get",
+  "bench.work_heading": "For your work",
+  "bench.work_note": "Recommendations name the qualities a job needs, then list options. Never a single winner.",
+  "bench.lab_heading": "From the lab",
+  "bench.lab_summary": "Published benchmark results for your harnesses and models. Third-party runs, dated."
 }
