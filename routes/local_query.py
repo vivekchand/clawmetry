@@ -209,6 +209,20 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "session_id": sid,
             "limit":      _safe_int(raw.get("limit"), default=500, lo=1, hi=5000),
         }
+    if shape == "transcript_page":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("transcript_page shape requires session_id")
+        bt = raw.get("before_ts")
+        try:
+            bt = int(bt) if bt is not None and str(bt).strip() != "" else None
+        except (TypeError, ValueError):
+            bt = None
+        return {
+            "session_id": sid,
+            "before_ts":  bt,
+            "limit":      _safe_int(raw.get("limit"), default=150, lo=1, hi=250),
+        }
     if shape == "health":
         return {}
     if shape == "spans":
@@ -359,9 +373,10 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape == "agent_graph":
-        # agent_graph returns a dict directly (nodes/edges/count), not a list,
-        # so pass it through like health rather than wrapping in {"rows": ...}.
+    elif shape in ("agent_graph", "transcript_page"):
+        # These return a dict directly (nodes/edges/count for agent_graph,
+        # rows/has_more/next_before_ts for transcript_page), not a list, so
+        # pass them through like health rather than wrapping in {"rows": ...}.
         body = getattr(store, _SHAPES[shape])(**args)
     else:
         method_name = _SHAPES[shape]
@@ -772,6 +787,13 @@ _DAEMON_METHODS = frozenset({
     # put_otlp_batch(records=[...], events=[...]) — the proxy forwards
     # **kwargs only. One call per OTLP export batch, not per record.
     "put_otlp_batch",
+    # WO-55: sessions materialized from OTLP spans. The /v1/traces receiver
+    # (dashboard process, no writer lock) recomputes the touched sessions'
+    # rollups from the spans table and upserts sessions rows through the
+    # daemon, so a span-only app (AgentCore, OpenLLMetry) shows in the
+    # Sessions tab + runtime switcher. Keyword-only through the proxy:
+    # materialize_otlp_sessions(session_ids=[...], environments={...}).
+    "materialize_otlp_sessions",
     # Read side of the same table: per-team / per-repo / per-person rollups
     # over the daemon-free path, and the persisted-row count /api/otel-status
     # shows so an operator can tell durable storage from the in-memory cache.

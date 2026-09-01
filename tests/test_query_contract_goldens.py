@@ -38,6 +38,7 @@ DISPATCH_ARGS = {
     "aggregates": {},
     "health": {},
     "transcript": {"session_id": "sess-a"},
+    "transcript_page": {"session_id": "sess-a", "limit": 2},
     "spans": {},
     "traces": {},
     "external_calls": {},
