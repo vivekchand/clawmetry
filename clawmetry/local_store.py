@@ -12051,6 +12051,28 @@ class LocalStore:
             log.warning("local store: session quality outcome window failed: %s", e)
         failure_rate = (failed_count / classified_total) if classified_total else None
 
+        # ── Spend over the same outcome window ──────────────────────────────
+        # Feeds the ``dollars_per_done_above`` rule: total cost of the
+        # classified terminal sessions, so the evaluator can price a finished
+        # job (spend / success count) on the exact cohort counted above.
+        window_spend_usd = 0.0
+        try:
+            rows = self._fetch(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0)
+                  FROM sessions
+                 WHERE outcome IS NOT NULL
+                   AND outcome <> 'ongoing'
+                   AND outcome_classified_at IS NOT NULL
+                   AND outcome_classified_at >= ?""" + _rt_sql + """
+                """,
+                [cutoff_ms, *_rt_params],
+            )
+            if rows and rows[0] and rows[0][0] is not None:
+                window_spend_usd = round(float(rows[0][0]), 4)
+        except Exception as e:
+            log.warning("local store: session quality spend window failed: %s", e)
+
         return {
             "window_minutes":    window_minutes,
             "eval_count":        eval_count,
@@ -12060,6 +12082,7 @@ class LocalStore:
             "classified_total":  classified_total,
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
+            "window_spend_usd":  window_spend_usd,
         }
 
     def query_session_eval_detail(

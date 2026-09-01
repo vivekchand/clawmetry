@@ -277,3 +277,92 @@ class TestFlowTraceOrdering:
         trace = build_flow_trace({}, events, [], runtime="claude_code")
         reply = next(s for s in trace["stations"] if s["type"] == "reply")
         assert reply["latency_secs"] == 30.0
+
+
+class TestHeadToHead:
+    """REQ-HB-005: like-for-like cohorts only; declined otherwise."""
+
+    def _chat_session(self, rt, cost, outcome="success", i=0):
+        return {
+            "session_id": "%s:h%d" % (rt, i),
+            "cost_usd": cost,
+            "total_tokens": 1000,
+            "outcome": outcome,
+            "metadata": {"channel": "telegram",
+                         "quality": {"measurable": True, "verdicts": []}},
+        }
+
+    def test_comparable_cohorts_produce_a_matchup(self):
+        from clawmetry.harness_bench import build_headtohead
+        grouped = {
+            "openclaw": [self._chat_session("openclaw", 1.0, i=i) for i in range(6)],
+            "nanoclaw": [self._chat_session("nanoclaw", 2.0, i=i) for i in range(6)],
+        }
+        out = build_headtohead(grouped)
+        assert out["declined_reason"] is None
+        m = out["matchups"][0]
+        assert m["profile"] == "chat_automation"
+        assert [s["runtime"] for s in m["sides"]] == ["openclaw", "nanoclaw"]
+        assert m["sides"][0]["dollars_per_done"] < m["sides"][1]["dollars_per_done"]
+
+    def test_incomparable_work_is_declined_not_compared(self):
+        from clawmetry.harness_bench import build_headtohead
+        grouped = {
+            "openclaw": [self._chat_session("openclaw", 1.0, i=i) for i in range(6)],
+            # Only 2 sessions: below the cohort floor.
+            "codex": [self._chat_session("codex", 1.0, i=i) for i in range(2)],
+        }
+        out = build_headtohead(grouped)
+        assert out["matchups"] == []
+        assert out["declined_reason"] == "no_comparable_cohorts"
+
+    def test_blind_sessions_never_enter_a_cohort(self):
+        from clawmetry.harness_bench import build_headtohead
+        blind = [dict(self._chat_session("cursor", 0.5, i=i),
+                      metadata={"channel": "telegram",
+                                "quality": {"measurable": False}})
+                 for i in range(10)]
+        grouped = {
+            "openclaw": [self._chat_session("openclaw", 1.0, i=i) for i in range(6)],
+            "cursor": blind,
+        }
+        out = build_headtohead(grouped)
+        assert out["matchups"] == []
+
+
+class TestBenchSnapshotSlice:
+    """The daemon's snapshot slice must mirror GET /api/bench so the cloud
+    interceptor can be a pass-through, and must stay bounded."""
+
+    def test_slice_shape_mirrors_the_api_payload(self):
+        from clawmetry.sync import _build_bench_slice
+
+        class FakeStore:
+            def query_quality_sessions(self, **kw):
+                return [_session(1.0, session_id="openclaw:s%d" % i)
+                        | {"runtime": "openclaw"} for i in range(15)]
+
+            def query_efficiency_rollup(self, **kw):
+                return []
+
+            def query_subagent_stats_by_runtime(self, **kw):
+                return {}
+
+        out = _build_bench_slice(FakeStore())
+        for key in ("byRuntime", "ranked", "unranked", "profiles",
+                    "recommendations", "headtohead", "store_available",
+                    "min_sessions", "window_days"):
+            assert key in out, key
+        assert out["store_available"] is True
+        assert "openclaw" in out["byRuntime"]
+
+    def test_slice_failure_stays_with_the_caller(self):
+        from clawmetry.sync import _build_bench_slice
+
+        class BrokenStore:
+            def query_quality_sessions(self, **kw):
+                raise RuntimeError("db gone")
+
+        import pytest as _pytest
+        with _pytest.raises(RuntimeError):
+            _build_bench_slice(BrokenStore())
