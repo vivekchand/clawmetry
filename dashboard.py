@@ -139,6 +139,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.bench import bp_bench
 from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
@@ -5029,7 +5030,7 @@ function clawmetryLogout(){
 </div>
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -13153,6 +13154,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_bench)
     app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
@@ -13609,7 +13611,7 @@ DASHBOARD_HTML = r"""
 {% include 'partials/overlays.html' %}
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -13636,6 +13638,9 @@ DASHBOARD_HTML = r"""
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
+  {# Light/dark toggle restored (UI reskin 2026-09): initTheme() in app.js
+     fills the sun/moon icon and honours the saved openclaw-theme value. #}
+  <div class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light / dark theme" style="cursor:pointer;display:flex;align-items:center;"></div>
 
   <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
        through Enterprise), so it's a one-click UX toggle here rather than a
@@ -13732,57 +13737,71 @@ DASHBOARD_HTML = r"""
          Tier-1 items, every expert view inside the default-collapsed Developer
          group below, config-ish tabs under Advanced. data-tab ids are STABLE -
          only labels and grouping changed. #}
+      {# Reskin 2026-09: entity-glyph icons became 16px stroke SVGs and the
+         Tier-1 list gained labeled sections (Observe / Analyze / Govern),
+         Future-AGI-console style. data-tab ids, tooltips and i18n keys are
+         UNCHANGED; only icons, ordering and section labels moved. The
+         Approvals/Alerts/Notifications adjacency (founder request
+         2026-07-29) is preserved inside Govern. #}
       <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
-        <span class="left-nav-icon" aria-hidden="true">&#8962;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.home">Home</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_observe">Observe</div>
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
-        <span class="left-nav-icon" aria-hidden="true">&#9783;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
-        <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.brain">Activity</span>
       </div>
-      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
-        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
-        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
-      </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Dig into sessions across channels (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_analyze">Analyze</div>
+      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
+      </div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
+      </div>
+      <div class="left-nav-item" data-tab="bench" onclick="switchTab('bench')" data-i18n-title="nav.bench_tooltip" title="Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.bench">Harness Engineering</span>
+      </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_govern">Govern</div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
-        <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       {# Notifications sits directly under its two consumers (Approvals,
          Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
          nobody could find where to connect a delivery channel, so enabled
-         alert rules dead-ended at "no channels". Evals (#4295) rides Tier-1
-         below that trio so it can't split the Approvals/Alerts/Notifications
-         adjacency. #}
+         alert rules dead-ended at "no channels". #}
       <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
-        <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
-      </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
-        <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
-        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
          header must not steal the overview highlight from Home). Collapsed by
          default; a stored cm_live_open=1 re-opens it. #}
       <div class="left-nav-item left-nav-item-group" onclick="toggleLiveDrawer()" data-i18n-title="nav.developer_tooltip" title="Deep-dive views for debugging your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.developer">Developer</span>
         <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="false" aria-controls="left-nav-live-list" aria-label="Toggle Developer sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
       </div>
@@ -13886,6 +13905,9 @@ DASHBOARD_HTML = r"""
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->
 {% include 'tabs/evals.html' %}
+
+<!-- BENCH (Harness Engineering: verdict stamps, $/done, flow deep dive, context lanes) -->
+{% include 'tabs/bench.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}

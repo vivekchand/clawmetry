@@ -2079,6 +2079,7 @@ function switchTab(name) {
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
+  if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
   if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
@@ -3563,7 +3564,10 @@ function toggleTheme() {
 }
 
 function initTheme() {
-  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
+  // Dark is the default, but a saved light preference is honoured again
+  // now that the light palette is first-class (UI reskin, 2026-09).
+  let savedTheme = 'dark';
+  try { savedTheme = localStorage.getItem('openclaw-theme') || 'dark'; } catch (e) {}
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
   
@@ -12051,7 +12055,11 @@ var _CM_RT_NODEWIDE = {
   // runtime is selected. Instead it highlights the selected runtime's row and
   // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
   // path still honours per-runtime via agentInventoryByRuntime.
-  inventory: 1
+  inventory: 1,
+  // Bench IS the cross-runtime comparison (Harness Engineering): hiding
+  // other harnesses under a runtime filter would defeat the tab's purpose,
+  // so it declares node-wide and carries the honesty banner.
+  bench: 1
 };
 // Per-runtime sidebar tab visibility, DERIVED from each adapter's DECLARED
 // Capability enum — the authoritative contract, not an LLM "analysis" (founder
@@ -29754,4 +29762,290 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     registerKindRenderer: registerKindRenderer,
   };
   window._debugReplayTree = debugReplayTree;
+})();
+
+// ============================================================================
+// BENCH — Harness Engineering tab (routes/bench.py; clawmetry/harness_bench.py)
+// Verdict stamps + $/done crew cards, follow-a-job flow trace, context lanes,
+// workload recommendations, published third-party pairs. Every cell carries
+// its coverage state; a harness we cannot see is never ranked (REQ-HB-001/2).
+// ============================================================================
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function usd(v) {
+    if (v == null || isNaN(v)) return null;
+    return '$' + Number(v).toFixed(2);
+  }
+  var RT_LABEL = function (rt) {
+    try {
+      if (typeof _CM_RT_LABEL === 'object' && _CM_RT_LABEL[rt]) return _CM_RT_LABEL[rt];
+    } catch (e) {}
+    return rt;
+  };
+  var STAMPS = {
+    earning: 'Earning it', burning: 'Burning it',
+    coasting: 'Coasting', cant_see: "Can't see"
+  };
+  var MARK_WORDS = {
+    context: 'keeps its head clear', model_use: 'picks the right brain',
+    subagents: 'shares the work', delegation: 'knows what can wait',
+    completion: 'finishes the job'
+  };
+  var PROFILE_WORDS = {
+    coding: 'Heavy coding', chat_automation: 'Message automation',
+    scheduled_background: 'Scheduled and background',
+    research_long_horizon: 'Research and long-horizon', general: 'General work'
+  };
+
+  function benchEmpty(msg) {
+    var empty = document.getElementById('bench-empty');
+    var body = document.getElementById('bench-body');
+    if (!empty || !body) return;
+    empty.hidden = false; body.hidden = true;
+    empty.innerHTML = '<div class="bench-card bench-empty-card">' + esc(msg) + '</div>';
+  }
+
+  function renderVerdict(bench) {
+    var by = bench.byRuntime || {};
+    var earning = [], burning = [], fog = [];
+    Object.keys(by).forEach(function (rt) {
+      var s = by[rt];
+      if (s.stamp === 'earning') earning.push(RT_LABEL(rt));
+      else if (s.stamp === 'burning') burning.push(RT_LABEL(rt));
+      else if (s.stamp === 'cant_see') fog.push(RT_LABEL(rt));
+    });
+    var parts = [];
+    if (earning.length) parts.push('<span class="bench-v-good">' + esc(earning.join(' and ')) + (earning.length > 1 ? ' are' : ' is') + ' earning it.</span>');
+    if (burning.length) parts.push('<span class="bench-v-bad">' + esc(burning.join(' and ')) + (burning.length > 1 ? ' are' : ' is') + ' burning it.</span>');
+    if (fog.length) parts.push('<span class="bench-v-fog">' + esc(fog.join(' and ')) + (fog.length > 1 ? ' work' : ' works') + " with the door closed, so we won't judge " + (fog.length > 1 ? 'them' : 'it') + '.</span>');
+    var el = document.getElementById('bench-verdict');
+    if (el) el.innerHTML = parts.length ? 'For your work: ' + parts.join(' ') : 'Not enough observed work to hand down a verdict yet.';
+  }
+
+  function markChips(marks) {
+    return Object.keys(MARK_WORDS).map(function (k) {
+      var m = (marks || {})[k] || {};
+      var cls = m.verdict === 'strong' ? 'strong' : (m.verdict === 'weak' ? 'weak' : 'unseen');
+      var note = m.note ? ' title="' + esc(m.note) + '"' : '';
+      return '<span class="bench-mark ' + cls + '"' + note + '><i></i>' + esc(MARK_WORDS[k]) + '</span>';
+    }).join('');
+  }
+
+  function crewCard(s) {
+    var stamp = '<span class="bench-stamp ' + esc(s.stamp) + '">' + esc(STAMPS[s.stamp] || s.stamp) + '</span>';
+    var dpd = s.dollars_per_done || {};
+    var money;
+    if (dpd.value != null) {
+      var band = dpd.band ? (' <span class="bench-band">' + esc(usd(dpd.band[0])) + ' to ' + esc(usd(dpd.band[1])) + '</span>') : '';
+      money = '<span class="bench-big">' + esc(usd(dpd.value)) + '</span><span class="bench-unit">/ finished job</span>' + band +
+              ' <span class="bench-band">' + dpd.n_measurable + ' runs</span>';
+    } else if (s.stamp === 'cant_see') {
+      money = '<span class="bench-nodata">completion not verifiable from what this harness records</span>';
+    } else {
+      money = '<span class="bench-nodata">not enough runs (' + (dpd.n_measurable || 0) + ' of ' + (window._benchMin || 12) + ' needed)</span>';
+    }
+    var burn = '';
+    if (s.failed_spend_share != null) {
+      var pct = Math.round(s.failed_spend_share * 100);
+      burn = '<div class="bench-burnbar"><i style="width:' + (100 - pct) + '%"></i><b style="width:' + pct + '%"></b></div>' +
+             '<div class="bench-burncap">' + pct + '% of its spend went into runs that produced nothing</div>';
+    }
+    return '<div class="bench-ccard' + (s.stamp === 'cant_see' ? ' ghost' : '') + '">' +
+      '<div class="bench-chead"><span class="bench-cname">' + esc(RT_LABEL(s.runtime)) + '</span>' + stamp + '</div>' +
+      '<div class="bench-money">' + money + '</div>' + burn +
+      '<div class="bench-marks">' + markChips(s.marks) + '</div>' +
+      (s.stamp_reason ? '<div class="bench-say">' + esc(s.stamp_reason) + '</div>' : '') +
+      '<div class="bench-say bench-faint">' + s.sessions + ' sessions · ' + esc(usd(s.spend_usd) || '$0.00') + ' in the window' +
+      (s.coverage && s.coverage.unmeasured_sessions ? ' · ' + s.coverage.unmeasured_sessions + ' not gradeable' : '') + '</div>' +
+      '</div>';
+  }
+
+  function renderCrew(bench) {
+    var el = document.getElementById('bench-crew');
+    if (!el) return;
+    var by = bench.byRuntime || {};
+    var html = (bench.ranked || []).map(function (rt) { return crewCard(by[rt]); }).join('');
+    var un = (bench.unranked || []).filter(function (rt) { return by[rt]; });
+    if (un.length) {
+      html += '<div class="bench-divider">unranked · completion below this line is not verifiable or not yet priced</div>';
+      html += un.map(function (rt) { return crewCard(by[rt]); }).join('');
+    }
+    el.innerHTML = html || '<div class="bench-say">No harness activity observed in this window.</div>';
+  }
+
+  function renderFlow(trace) {
+    var el = document.getElementById('bench-flow');
+    if (!el) return;
+    if (!trace || !trace.available) {
+      el.innerHTML = '<div class="bench-say">Pick up a session once one is observed; the flow view draws only recorded events.</div>';
+      return;
+    }
+    var live = trace.live ? '<span class="bench-live"><i></i>LIVE</span>' : '';
+    var head = '<div class="bench-flowhead"><b>' + esc(RT_LABEL(trace.runtime)) + '</b> · session ' +
+      esc(String(trace.session_id).slice(-8)) + ' ' + live +
+      ' <span class="bench-faint">' + trace.event_count + ' recorded events</span></div>';
+    var groups = { model: [], tool: [], subagent: [], deferred: [] };
+    var reply = null;
+    (trace.stations || []).forEach(function (st) {
+      if (groups[st.type]) groups[st.type].push(st);
+      if (st.type === 'reply') reply = st;
+    });
+    function stationBox(st) {
+      var label, sub;
+      if (st.type === 'model') { label = st.model; sub = st.turns + ' turns' + (st.cost_usd ? ' · ' + usd(st.cost_usd) : ''); }
+      else if (st.type === 'tool') { label = st.tool; sub = st.calls + ' calls' + (st.errors ? ' · ' + st.errors + ' errors' : ''); }
+      else if (st.type === 'subagent') { label = 'Subagent ' + (st.label || st.id || ''); sub = (st.status || '') + (st.cost_usd ? ' · ' + usd(st.cost_usd) : ''); }
+      else { label = 'Deferred ' + (st.label || ''); sub = st.status || 'scheduled'; }
+      return '<div class="bench-station' + (st.type === 'subagent' && st.status === 'running' ? ' live' : '') + '">' +
+        '<div class="bench-st-title">' + esc(label) + '</div><div class="bench-st-sub">' + esc(sub) + '</div></div>';
+    }
+    var cols = '<div class="bench-flowgrid">' +
+      '<div class="bench-flowcol"><div class="bench-station"><div class="bench-st-title">Message in</div><div class="bench-st-sub">observed origin</div></div>' +
+      '<div class="bench-station"><div class="bench-st-title">' + esc(RT_LABEL(trace.runtime)) + '</div><div class="bench-st-sub">the session</div></div></div>' +
+      '<div class="bench-flowcol">' + ['model', 'tool', 'subagent', 'deferred'].map(function (t) {
+        var list = groups[t].slice();
+        if (t === 'tool') list.sort(function (a, b) { return (b.calls || 0) - (a.calls || 0); });
+        var extra = list.length > 8 ? '<div class="bench-say bench-faint">and ' + (list.length - 8) + ' more tools</div>' : '';
+        return list.slice(0, 8).map(stationBox).join('') + extra;
+      }).join('') + '</div>' +
+      '<div class="bench-flowcol">' + (reply ? '<div class="bench-station"><div class="bench-st-title">Reply</div><div class="bench-st-sub">' +
+        (reply.latency_secs != null ? reply.latency_secs + 's end to end' : 'observed') + '</div></div>' : '') + '</div></div>';
+    var fog = (trace.unobserved || []).map(function (u) { return esc(u.type); }).join(', ');
+    var fogNote = fog ? '<div class="bench-say bench-faint">Not observed for this session: ' + fog + '. Unseen is unseen, never guessed.</div>' : '';
+    el.innerHTML = head + cols + fogNote;
+  }
+
+  function laneSvg(curve) {
+    var pts = curve.points || [];
+    if (!pts.length) return '';
+    var W = 420, H = 130, L = 30, R = 6, T = 22, B = 18;
+    var pw = W - L - R, ph = H - T - B;
+    function X(i) { return L + (pts.length === 1 ? 0 : i / (pts.length - 1) * pw); }
+    function Y(p) { return T + (1 - Math.max(0, Math.min(100, p)) / 100) * ph; }
+    var d = 'M' + X(0) + ',' + Y(pts[0].pct);
+    for (var i = 1; i < pts.length; i++) d += ' L' + X(i) + ',' + Y(pts[i].pct);
+    var comp = (curve.compactions || []).length;
+    var flag = curve.overflowed ? ' · overflowed' : (comp ? ' · ' + comp + ' compactions' : '');
+    return '<div class="bench-lane"><div class="bench-lanehead">' + esc(String(curve.session_id).slice(-8)) +
+      ' <span class="bench-faint">peak ' + Math.round(curve.peak_pct) + '%' + esc(flag) + '</span></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="bench-lanesvg">' +
+      '<line x1="' + L + '" y1="' + Y(100) + '" x2="' + (W - R) + '" y2="' + Y(100) + '" stroke="currentColor" stroke-dasharray="3 4" opacity="0.4"></line>' +
+      '<text x="' + (W - R) + '" y="' + (Y(100) - 4) + '" text-anchor="end" font-size="9" fill="currentColor" opacity="0.6">window</text>' +
+      '<path d="' + d + ' L' + X(pts.length - 1) + ',' + Y(0) + ' L' + X(0) + ',' + Y(0) + ' Z" fill="currentColor" opacity="0.10"></path>' +
+      '<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="2"></path>' +
+      '</svg></div>';
+  }
+
+  function renderLanes(cc) {
+    var lanes = document.getElementById('bench-lanes');
+    var minis = document.getElementById('bench-minis');
+    if (lanes) {
+      var curves = (cc && cc.curves) || [];
+      lanes.innerHTML = curves.length
+        ? curves.slice(0, 2).map(laneSvg).join('')
+        : '<div class="bench-say">No context-utilization signal observed yet. Harnesses that do not record prompt sizes show as fog here.</div>';
+    }
+    if (minis) {
+      var by = (cc && cc.byRuntime) || {};
+      minis.innerHTML = Object.keys(by).sort().map(function (rt) {
+        var m = by[rt];
+        var peak = m.median_peak_pct;
+        var bar = peak != null
+          ? '<div class="bench-minibar"><i style="width:' + Math.min(100, Math.round(peak)) + '%"></i></div><span class="bench-faint">median peak ' + Math.round(peak) + '%' + (m.overflows ? ' · ' + m.overflows + ' overflows' : '') + '</span>'
+          : '<span class="bench-faint">no context signal recorded</span>';
+        return '<div class="bench-mini' + (peak == null ? ' ghost' : '') + '"><div class="bench-mininame">' + esc(RT_LABEL(rt)) + '</div>' + bar + '</div>';
+      }).join('');
+    }
+  }
+
+  function renderWork(rec) {
+    var el = document.getElementById('bench-work');
+    if (!el) return;
+    var cards = (rec && rec.cards) || [];
+    el.innerHTML = cards.length ? cards.map(function (c) {
+      var opts = (c.candidates || []).map(function (cand) {
+        var ev;
+        if (cand.evidence === 'measured') ev = 'your ' + usd(cand.dollars_per_done) + '/done';
+        else if (cand.evidence === 'published' && cand.published) {
+          var p = cand.published;
+          ev = 'lab: ' + esc(p.result || '') + ' · ' + esc(p.benchmark || '') + (p.historical ? ' · historical' : '');
+        } else ev = 'observed · not yet priced';
+        return '<div class="bench-opt"><span>' + esc(RT_LABEL(cand.runtime)) + '</span><span class="bench-ev' +
+          (cand.evidence === 'published' ? ' lab' : '') + '">' + ev + '</span></div>';
+      }).join('');
+      var rankNote = c.ranked ? '' : '<div class="bench-say bench-faint">Options are unranked: not enough evidence to order them honestly.</div>';
+      return '<div class="bench-wcard"><div class="bench-wname">' + esc(PROFILE_WORDS[c.profile] || c.profile) + '</div>' +
+        '<div class="bench-say bench-faint">' + Math.round((c.spend_share || 0) * 100) + '% of spend</div>' +
+        '<div class="bench-say">Wants: <b>' + (c.qualities || []).map(esc).join('</b>, <b>') + '</b>.</div>' +
+        '<div class="bench-opts">' + opts + '</div>' + rankNote + '</div>';
+    }).join('') : '<div class="bench-say">Workload profiles appear once sessions are observed.</div>';
+  }
+
+  function renderLab(pub) {
+    var el = document.getElementById('bench-lab');
+    if (!el) return;
+    var pairs = (pub && pub.pairs) || [];
+    var models = (pub && pub.observed_models) || [];
+    if (!pairs.length) { el.innerHTML = '<div class="bench-say">No published pairs in the shipped catalog.</div>'; return; }
+    var rows = pairs.map(function (p) {
+      var mine = models.indexOf(p.model) >= 0 ? ' class="bench-lab-mine"' : '';
+      return '<tr' + (p.historical ? ' class="stale"' : mine) + '><td>' + esc(RT_LABEL(p.harness)) + ' · ' + esc(p.model) + '</td><td>' +
+        esc(p.benchmark) + '</td><td>' + esc(p.result) + '</td><td>' + esc(p.runner === 'third_party' ? 'third party' : 'vendor') +
+        '</td><td>' + esc((p.result_date || '').slice(0, 7)) + (p.historical ? ' · historical' : '') +
+        '</td><td><a href="' + esc(p.source_url) + '" target="_blank" rel="noopener">source</a></td></tr>';
+    }).join('');
+    el.innerHTML = '<div class="bench-say bench-faint">Results on benchmark tasks, not your work. When they disagree with your bench above, trust the bench.</div>' +
+      '<div style="overflow-x:auto"><table class="bench-labt"><tr><th>Harness + model</th><th>Benchmark</th><th>Result</th><th>Run by</th><th>Date</th><th>Source</th></tr>' + rows + '</table></div>';
+  }
+
+  async function loadBenchTab() {
+    var empty = document.getElementById('bench-empty');
+    var body = document.getElementById('bench-body');
+    if (!empty || !body) return;
+    var r = await fetch('/api/bench?days=30').catch(function () { return null; });
+    if (!r || !r.ok) {
+      benchEmpty('The bench is computed on your node from your own traffic. If you are on the hosted dashboard, this view lands in an upcoming release; on a local install, start the sync daemon and check back.');
+      return;
+    }
+    var bench = await r.json().catch(function () { return null; });
+    if (!bench || bench.store_available === false) {
+      benchEmpty('The local store is not reachable, so nothing here would be honest. Start the clawmetry daemon and refresh.');
+      return;
+    }
+    window._benchMin = bench.min_sessions || 12;
+    var by = bench.byRuntime || {};
+    if (!Object.keys(by).length) {
+      benchEmpty('No agent sessions observed in the last ' + (bench.window_days || 30) + ' days. Run some work through a harness and the bench fills in.');
+      return;
+    }
+    empty.hidden = true; body.hidden = false;
+    renderVerdict(bench);
+    renderCrew(bench);
+    var win = document.getElementById('bench-window');
+    if (win) {
+      var total = 0; Object.keys(by).forEach(function (rt) { total += (by[rt].sessions || 0); });
+      win.textContent = 'Measured from your own traffic · last ' + (bench.window_days || 30) + ' days · ' +
+        total + ' sessions across ' + Object.keys(by).length + ' harnesses. Needs ' + (bench.min_sessions || 12) +
+        ' measurable runs to price a job.';
+    }
+    var pubP = fetch('/api/bench/published').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    var ccP = fetch('/api/bench/context-curves').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    var pub = await pubP, cc = await ccP;
+    renderWork({ cards: bench.recommendations || [] });
+    renderLab(pub);
+    renderLanes(cc);
+    var sid = cc && cc.curves && cc.curves.length ? cc.curves[0].session_id : null;
+    if (sid) {
+      var fr = await fetch('/api/bench/flow/' + encodeURIComponent(sid)).catch(function () { return null; });
+      renderFlow(fr && fr.ok ? await fr.json().catch(function () { return null; }) : null);
+    } else {
+      renderFlow(null);
+    }
+  }
+
+  window.loadBenchTab = loadBenchTab;
 })();
