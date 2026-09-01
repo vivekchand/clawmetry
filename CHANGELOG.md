@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Feature: the dashboard grows up visually, and light mode is back (carries #5420) (2026-09-01)
+- **Who this reaches:** everyone who opens the dashboard, and especially the person seeing it for the first time while deciding whether to trust it. The shell now reads like the enterprise consoles it sits next to: a flat near-black dark theme with hairline borders instead of blue-tinted panels and a glow, and a sidebar whose 10+ entries finally group under plain-word section labels — Observe (Agents, Activity, Sessions), Analyze (Cost, Quality, Harness Engineering), Govern (Approvals, Alerts, Notifications).
+- **Consistent icons, quieter selection.** Navigation icons are now one matched set of line icons instead of mixed text glyphs, and the selected entry is marked with a calm raised state rather than a loud blue pill. Nothing moved behind your back: every tab keeps its name, its tooltip, and its deep link.
+- **Light and dark are a click apart again.** The header regains its sun/moon toggle (it had quietly become dark-only), your choice is remembered across visits, and the wordmark stays readable in both themes.
+- **Verified:** rendered live in a browser on a real store — dark, light, the toggle round-trip surviving a reload, both collapsible drawers, and tab switching; before/after screenshots on the PR.
+
 ### Feature: the Harness Engineering tab, a scoreboard for the scaffold itself (carries #5415) (2026-09-01)
 - **Who this reaches:** anyone running more than one agent harness and wondering which one is engineered better for their work. The industry now agrees the harness often matters more than the model (a 2026 controlled study measured 7.8x more score variance from the scaffold than from the model), but every public leaderboard scores synthetic tasks. ClawMetry already watches your real traffic, so this tab measures harness engineering from it.
 - **One honest number per harness: $/done.** What a finished job costs, derived as the window's spend on measurable sessions (failed runs included, because failed runs burn real money) divided by the sessions that verifiably finished. Below 12 measurable runs the tab says "not enough runs" instead of printing a wobbly figure, and every price carries its uncertainty band and run count.
