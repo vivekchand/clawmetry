@@ -22070,6 +22070,21 @@ def run_daemon() -> None:
         configure_outbound_network(role="daemon")
     except Exception as _net_e:
         log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Raise the file-descriptor soft limit. Under launchd the default soft
+    # limit is 256; a busy daemon (DuckDB + local-query server + relay
+    # sockets) runs right at that ceiling and every request past it dies
+    # with EMFILE in werkzeug (seen live 2026-09-01: 244 fds open, then
+    # "OSError: [Errno 24] Too many open files" on the query server).
+    # Never raises; keeps whatever the platform allows.
+    try:
+        import resource
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        _want = min(4096, _hard if _hard != resource.RLIM_INFINITY else 4096)
+        if _soft < _want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (_want, _hard))
+            log.info("raised RLIMIT_NOFILE soft limit %d -> %d", _soft, _want)
+    except Exception as _fd_e:
+        log.debug("could not raise fd limit: %s", _fd_e)
     # Outbound OTLP exporter (enterprise): activated by the ``otlp_endpoint``
     # key in ~/.clawmetry/config.json. scope="config" is daemon-only — the
     # dashboard's env-var-activated exporter is a separate scope, so both
