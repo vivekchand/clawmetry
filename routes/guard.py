@@ -39,6 +39,7 @@ _DETAIL_OK = re.compile(r"[^A-Za-z0-9 _.,:;()'/-]")
 # Refuses slashes, dots, null bytes, Windows reserved names, and any other
 # character that could influence a path operation or a shell command.
 _SID_SAFE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
+_POLICY_ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
 
 
 def _detail_safe(v) -> str:
@@ -384,6 +385,17 @@ def api_guard_control():
             cwd = os.path.realpath(cwd)
         except Exception:
             return jsonify({"ok": False, "error": "invalid cwd"}), 400
+        # Validate the caller-supplied cwd against the session's recorded
+        # location so a crafted request cannot redirect signals to an arbitrary
+        # working directory.
+        try:
+            recorded = _ls_call("get_session_location", session_id=session_id)
+            recorded_cwd = (recorded or {}).get("cwd") or ""
+            if recorded_cwd and os.path.realpath(recorded_cwd) != cwd:
+                return jsonify({"ok": False,
+                                "error": "cwd does not match session record"}), 400
+        except Exception:  # noqa: BLE001
+            pass  # No recorded location — allow; guard-log entry is enough
 
     try:
         # Every control action — resume included — goes through the actuator
@@ -564,6 +576,8 @@ def api_guard_policy_delete(policy_id):
     """Delete one Guard policy."""
     if not _same_origin_ok():
         return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    if not _POLICY_ID_RE.match(policy_id or ""):
+        return jsonify({"ok": False, "error": "invalid policy_id"}), 400
     _ls_write("delete_session_policy", policy_id=policy_id)
     rows = _ls_call("query_session_policies") or []
     still_there = any(r.get("policy_id") == policy_id for r in rows)

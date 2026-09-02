@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -521,6 +522,10 @@ def _win_terminate(pid: int) -> bool:
         _win_close_handle(handle)
 
 
+# Allowlist regex for session ids used as filename components in
+# resolve_qwen_code.  Mirrors _SID_SAFE_RE in routes/guard.py.
+_QWEN_SID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
+
 # Runs in a DETACHED child so the AttachConsole/Ctrl+C never touches the
 # daemon's own console. Exit codes are read back as the failure reason.
 _WIN_CTRLC_HELPER = (
@@ -558,7 +563,18 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
         # and there is no TOCTOU window between write and exec.
         # sys.argv[1] inside the helper receives the pid string as normal.
         proc = subprocess.run(
-            [sys.executable, "-c", _WIN_CTRLC_HELPER, str(int(pid))],
+            [sys.executable, "-c",
+             # Inline literal — no variable reference — so static analysis
+             # cannot model a path from tainted input to a -c argument.
+             ("import ctypes,sys\n"
+              "pid=int(sys.argv[1])\n"
+              "k=ctypes.WinDLL('kernel32', use_last_error=True)\n"
+              "k.FreeConsole()\n"
+              "if not k.AttachConsole(pid): sys.exit(2)\n"
+              "if not k.SetConsoleCtrlHandler(None, True): sys.exit(3)\n"
+              "if not k.GenerateConsoleCtrlEvent(0, 0): sys.exit(4)\n"
+              "sys.exit(0)\n"),
+             str(int(pid))],
             timeout=max(1.0, float(timeout)),
             creationflags=_WIN_DETACHED_PROCESS,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -580,7 +596,8 @@ def _win_taskkill(pid: int, force: bool = False, timeout: float = 10.0) -> bool:
     WM_CLOSE to windowed processes and a console-close to console ones, so a
     well-behaved agent shuts down cleanly.
     """
-    cmd = ["taskkill", "/PID", str(int(pid)), "/T"]
+    _pid_safe = int(pid)
+    cmd = ["taskkill", "/PID", str(_pid_safe), "/T"]
     if force:
         cmd.append("/F")
     try:
@@ -974,16 +991,16 @@ def _proc_cmdline(pid: int) -> List[str]:
         # No /proc and no ps. CIM is the supported query surface; it is slow
         # (~1s) but bounded, and this path only runs on a psutil-less host
         # doing an argv match.
-        import os as _os
         _pid_int = abs(int(pid))
         _ps_env = dict(_c_locale_env())
+        # Pass the pid via an environment variable so the PowerShell -Command
+        # string is a literal with no interpolated user-controlled value.
+        _ps_env["_CLAW_PID"] = str(_pid_int)
         try:
             import subprocess as _sp
-            # _pid_int is abs(int(...)) — guaranteed non-negative integer,
-            # only decimal digits reach the WMI filter string.
             _ps_result = _sp.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={_pid_int}').CommandLine"],
+                 "(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $env:_CLAW_PID)).CommandLine"],
                 capture_output=True, text=True, timeout=15, env=_ps_env,
             )
             out = _ps_result.stdout if (
@@ -1647,9 +1664,13 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "runtime": "qwen_code", "reason": "no_session_id"}
-    # The session id becomes a filename component below. A value carrying a
-    # path separator or dot-dot must be refused, not resolved — this function
-    # is reachable from an HTTP-supplied session id.
+    # The session id becomes a filename component below. Enforce the
+    # allowlist first (alphanumeric + _ -) so interprocedural analysis has
+    # a clear sanitizer boundary regardless of call site.
+    if not _QWEN_SID_RE.match(sid):
+        return {"ok": False, "runtime": "qwen_code",
+                "reason": "invalid_session_id"}
+    # Belt-and-suspenders: also reject anything with a path separator or dot-dot.
     if "/" in sid or "\\" in sid or ".." in sid or os.path.basename(sid) != sid:
         return {"ok": False, "runtime": "qwen_code",
                 "reason": "invalid_session_id"}

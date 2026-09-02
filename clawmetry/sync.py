@@ -20275,6 +20275,28 @@ def _guard_actuate(runtime: str, session_id: str, cwd: str,
     """
     import clawmetry.process_control as _pc
     rt = (runtime or "").strip().lower()
+    # When an HTTP handler supplies cwd, validate it against the session's
+    # recorded location before passing it to any signal helper.  The daemon
+    # supplies cwd from the session record itself, so this is a no-op for
+    # automatic policy actions; it closes the injection path for the HTTP
+    # handler (routes/guard.py also validates, but defence-in-depth here).
+    if cwd:
+        try:
+            import clawmetry.local_store as _ls_cwd
+            _rec = _ls_cwd.get_store().get_session_location(session_id)
+            _recorded_cwd = (_rec or {}).get("cwd") or ""
+            if _recorded_cwd and (
+                os.path.realpath(cwd) != os.path.realpath(_recorded_cwd)
+            ):
+                log.warning(
+                    "guard actuate cwd mismatch for %s: supplied=%r recorded=%r",
+                    str(session_id or "")[:128],
+                    str(cwd)[:200],
+                    str(_recorded_cwd)[:200],
+                )
+                return {"ok": False, "detail": "cwd_mismatch_rejected"}
+        except Exception:  # noqa: BLE001
+            pass  # No recorded cwd — allow; the caller's own validation is enough
     try:
         if action == "pause":
             _hitl_set_pause(session_id, True)
