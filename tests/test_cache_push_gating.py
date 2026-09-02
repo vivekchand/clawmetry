@@ -87,9 +87,11 @@ def test_changed_snapshot_is_rate_limited(sync_mod, monkeypatch):
     import clawmetry.local_store as ls
     monkeypatch.setattr(ls, "get_store", lambda read_only=False: object())
     assert len(s._build_memory_cache_pushes(cfg)) == 1      # first push
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
     assert s._build_memory_cache_pushes(cfg) == []          # changed, but within the limit
     monkeypatch.setattr(s, "MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC", 0)
     assert len(s._build_memory_cache_pushes(cfg)) == 1      # limit lifted: the change ships
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
 
 
 def test_unchanged_snapshot_is_not_repushed_inside_the_interval(sync_mod, monkeypatch):
@@ -101,6 +103,7 @@ def test_unchanged_snapshot_is_not_repushed_inside_the_interval(sync_mod, monkey
     import clawmetry.local_store as ls
     monkeypatch.setattr(ls, "get_store", lambda read_only=False: object())
     assert len(s._build_memory_cache_pushes(cfg)) == 1
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
     assert s._build_memory_cache_pushes(cfg) == []
     assert s._build_memory_cache_pushes(cfg) == []
 
@@ -111,9 +114,11 @@ def test_brain_push_skips_when_events_are_unchanged(sync_mod, monkeypatch):
     events = [{"id": "e1", "ts": 1.0}, {"id": "e2", "ts": 2.0}]
     monkeypatch.setattr(s, "_build_brain_events", lambda: list(events))
     assert len(s._build_brain_cache_pushes(cfg)) == 1
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
     assert s._build_brain_cache_pushes(cfg) == []
     events.append({"id": "e3", "ts": 3.0})
     assert len(s._build_brain_cache_pushes(cfg)) == 1
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
 
 
 def test_brain_push_repushes_after_the_interval_even_if_unchanged(sync_mod, monkeypatch):
@@ -123,5 +128,20 @@ def test_brain_push_repushes_after_the_interval_even_if_unchanged(sync_mod, monk
     cfg = {"encryption_key": s.generate_encryption_key(), "api_key": "cm_x", "node_id": "n1"}
     monkeypatch.setattr(s, "_build_brain_events", lambda: [{"id": "e1", "ts": 1.0}])
     assert len(s._build_brain_cache_pushes(cfg)) == 1
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
     monkeypatch.setattr(s, "BRAIN_PUSH_MIN_INTERVAL_SEC", 0)
     assert len(s._build_brain_cache_pushes(cfg)) == 1
+    s._commit_cache_push_gates()  # the heartbeat carrying it succeeded
+
+
+def test_a_build_the_cloud_never_received_does_not_gate_the_next(sync_mod, monkeypatch):
+    """The MOAT round-trip test builds a push directly, then sends a real
+    heartbeat that must still carry it. More generally: a heartbeat that
+    failed must not silence the next cycle for TTL/2."""
+    s = sync_mod
+    cfg = {"encryption_key": s.generate_encryption_key(), "api_key": "cm_x", "node_id": "n1"}
+    monkeypatch.setattr(s, "_build_brain_events", lambda: [{"id": "e1", "ts": 1.0}])
+    assert len(s._build_brain_cache_pushes(cfg)) == 1     # never committed
+    assert len(s._build_brain_cache_pushes(cfg)) == 1     # so it ships again
+    s._commit_cache_push_gates()                          # heartbeat 2xx
+    assert s._build_brain_cache_pushes(cfg) == []         # now it is gated

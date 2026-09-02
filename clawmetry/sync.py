@@ -8745,6 +8745,7 @@ def send_heartbeat(config: dict) -> bool:
             # so `_pick_heartbeat_interval` always sees a sensible shape even
             # if `_post` ever decides to return None on a 204.
             _LAST_HEARTBEAT_RESPONSE = resp_json if isinstance(resp_json, dict) else {}
+            _commit_cache_push_gates()
             # Phase 1 of relay-v2 (#1053): the cloud may piggyback a small
             # batch of `pending_queries` on the heartbeat response. Each is
             # a shape-allowlisted read against the local DuckDB; we run them,
@@ -9438,8 +9439,10 @@ def _build_brain_cache_pushes(config: dict) -> list:
         blob = encrypt_payload(payload, enc_key)
     except Exception:
         return []
-    _brain_push_state["fingerprint"] = fp
-    _brain_push_state["ts"] = _now
+    # Pending until the heartbeat that carries it returns 2xx (see
+    # _commit_cache_push_gates): a build the cloud never received must not
+    # silence the next one.
+    _brain_push_state["pending"] = (fp, _now)
     owner_hash = _owner_hash_for_token(api_key)
     return [{
         "key":    f"brain:{owner_hash}:{node_id}:recent",
@@ -9481,6 +9484,20 @@ MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC = 600
 # deciding when it ships.
 MEMORY_PUSH_VOLATILE_AFTER = 3
 _memory_push_state: dict = {"fingerprint": None, "ts": 0.0, "seen": {}, "churn": {}}
+
+
+def _commit_cache_push_gates() -> None:
+    """Arm the brain/memory skip gates for the pushes the cloud just accepted.
+
+    A builder records only a *pending* fingerprint; ``send_heartbeat`` calls
+    this once ``/ingest/heartbeat`` returned 2xx. So a build whose heartbeat
+    failed, or a build made outside the heartbeat (tests, a one-off tool),
+    never suppresses the next push: the gate only ever remembers a snapshot
+    the cloud actually holds."""
+    for _st in (_brain_push_state, _memory_push_state):
+        _p = _st.pop("pending", None)
+        if _p:
+            _st["fingerprint"], _st["ts"] = _p
 
 
 def _memory_push_fingerprint(rows: list) -> str | None:
@@ -9702,8 +9719,7 @@ def _build_memory_cache_pushes(config: dict) -> list:
         return []
     # Only arm the gate once we have a blob to hand back — a failed encode
     # must not suppress the next attempt for three hours.
-    _memory_push_state["fingerprint"] = fp
-    _memory_push_state["ts"] = _now
+    _memory_push_state["pending"] = (fp, _now)
     log.info("memory cache push: %d files, %.1f MB plaintext",
              len(files), spent / 1_000_000.0)
     owner_hash = _owner_hash_for_token(api_key)
