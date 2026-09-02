@@ -72,12 +72,14 @@ def test_each_thread_gets_its_own_cursor(store):
 
     def worker(name):
         st._fetch("SELECT 1", [])
-        seen[name] = id(st._read_local.cur)
+        # Hold the object, not its id: a cursor freed when its thread ends
+        # can be reallocated at the same address for the next thread.
+        seen[name] = st._read_local.cur
 
     ts = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(3)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    assert len(set(seen.values())) == 3
+    assert len({id(c) for c in seen.values()}) == 3
 
 
 def test_concurrent_reads_see_committed_writes(store):
