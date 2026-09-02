@@ -14885,6 +14885,34 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # oldest-first, so a low cap drops the freshest activity); the
                 # high-water filter below keeps the actual ingest to new events.
                 _events = list(adapter.list_events(s.id, limit=_family_event_read_cap()))
+                # A session the adapter could not place in time (no started_at,
+                # no ended_at) is placed by its events; with none of those
+                # either it is skipped. Upserting it with NULL timestamps made
+                # the cloud stamp it "just now" on EVERY push, because the
+                # high-water check above can never match a NULL activity, so
+                # the row was re-sent each cycle and sat at the top of
+                # /sessions for a week (live-hit 2026-09-02: a Cursor legacy
+                # prompt bucket, "where is my code?", with zero replies).
+                _time_basis = ""
+                if not started and not ended:
+                    _ev_ts = []
+                    for _e in _events:
+                        try:
+                            _t = float(getattr(_e, "ts", 0) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if _t > 0:
+                            _ev_ts.append(_t)
+                    if _ev_ts:
+                        started = _epoch_to_iso(min(_ev_ts))
+                        ended = _epoch_to_iso(max(_ev_ts))
+                        # Source timestamps the runtime wrote on its own
+                        # events, never the wall clock; say so on the row.
+                        _time_basis = "events"
+                    else:
+                        log.debug("family session %s: no timestamp and no "
+                                  "events; not a session, skipped", ns_id)
+                        continue
                 # Delegated agents: the vendor agent ids this session handed
                 # work to. Recording them here is what BOUNDS attribution --
                 # delegated usage may only ever land on a session whose own
@@ -14893,6 +14921,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _delegated_ids = _harvest_delegated_agent_ids(_events)
                 if _delegated_ids:
                     metadata["delegatedAgentIds"] = _delegated_ids
+                if _time_basis:
+                    metadata["timeBasis"] = _time_basis
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
