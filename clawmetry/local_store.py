@@ -3483,7 +3483,8 @@ class LocalStore:
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT session_id, title, started_at, last_active_at, ended_at,
-                   status, cost_usd, total_tokens, message_count, metadata
+                   status, cost_usd, total_tokens, message_count, metadata,
+                   outcome, outcome_confidence, cwd, git_branch
             FROM sessions
             {where}
             ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
@@ -3492,7 +3493,8 @@ class LocalStore:
         params.append(int(limit))
         cols = ["session_id", "title", "started_at", "last_active_at",
                 "ended_at", "status", "cost_usd", "total_tokens",
-                "message_count", "metadata"]
+                "message_count", "metadata", "outcome", "outcome_confidence",
+                "cwd", "git_branch"]
         out: list[dict[str, Any]] = []
         for r in self._fetch(sql, params):
             d = dict(zip(cols, r))
@@ -10413,6 +10415,71 @@ class LocalStore:
         except Exception:
             return []
 
+    def query_subagent_stats_by_runtime(self, days: int = 30) -> dict[str, Any]:
+        """Per-runtime sub-agent fan-out stats for the Harness Engineering
+        tab (routes/bench.py).
+
+        Runtime is derived from the parent session id prefix (the
+        ``subagents`` table has no session_id column; ``parent_session_id``
+        carries the ``<runtime>:`` prefix for family runtimes and a bare
+        UUID for OpenClaw). Rows are decoded in Python because ``kind``
+        (subagent vs workflow vs cron hand-off) lives in the ``data`` blob.
+        Bounded: one window-filtered SELECT, LIMIT 5000. Read-only -> {}.
+        """
+        try:
+            days_i = max(1, min(365, int(days)))
+        except (TypeError, ValueError):
+            days_i = 30
+        since_ms = int((time.time() - days_i * 86400) * 1000)
+        sql = """
+            SELECT parent_session_id, status, cost_usd, token_count, data
+            FROM subagents
+            WHERE updated_at >= ?
+            ORDER BY updated_at DESC
+            LIMIT 5000
+        """
+        cols = ["parent_session_id", "status", "cost_usd", "token_count", "data"]
+        try:
+            rows = _decode_data_blob_rows(self._fetch(sql, [since_ms]), cols)
+        except Exception:
+            return {}
+        non_oc = set(_NON_OPENCLAW_RUNTIME_PREFIXES)
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            parent = str(r.get("parent_session_id") or "")
+            prefix = parent.split(":", 1)[0] if ":" in parent else ""
+            rt = prefix if prefix in non_oc else "openclaw"
+            s = out.setdefault(rt, {
+                "spawned": 0, "completed": 0, "failed": 0, "running": 0,
+                "orphaned": 0, "deferred": 0, "cost_usd": 0.0, "tokens": 0,
+            })
+            data = r.get("data") if isinstance(r.get("data"), dict) else {}
+            kind = str(data.get("kind") or "").lower()
+            if kind in ("workflow", "cron"):
+                s["deferred"] += 1
+                continue
+            s["spawned"] += 1
+            status = str(r.get("status") or "").lower()
+            if status in ("completed", "done", "success", "succeeded"):
+                s["completed"] += 1
+            elif status in ("failed", "error", "killed", "cancelled"):
+                s["failed"] += 1
+            elif status in ("running", "active", "pending", "spawned"):
+                s["running"] += 1
+            else:
+                s["orphaned"] += 1
+            try:
+                s["cost_usd"] += float(r.get("cost_usd") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                s["tokens"] += int(r.get("token_count") or 0)
+            except (TypeError, ValueError):
+                pass
+        for s in out.values():
+            s["cost_usd"] = round(s["cost_usd"], 4)
+        return out
+
     def query_subagents(
         self,
         *,
@@ -11984,6 +12051,28 @@ class LocalStore:
             log.warning("local store: session quality outcome window failed: %s", e)
         failure_rate = (failed_count / classified_total) if classified_total else None
 
+        # ── Spend over the same outcome window ──────────────────────────────
+        # Feeds the ``dollars_per_done_above`` rule: total cost of the
+        # classified terminal sessions, so the evaluator can price a finished
+        # job (spend / success count) on the exact cohort counted above.
+        window_spend_usd = 0.0
+        try:
+            rows = self._fetch(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0)
+                  FROM sessions
+                 WHERE outcome IS NOT NULL
+                   AND outcome <> 'ongoing'
+                   AND outcome_classified_at IS NOT NULL
+                   AND outcome_classified_at >= ?""" + _rt_sql + """
+                """,
+                [cutoff_ms, *_rt_params],
+            )
+            if rows and rows[0] and rows[0][0] is not None:
+                window_spend_usd = round(float(rows[0][0]), 4)
+        except Exception as e:
+            log.warning("local store: session quality spend window failed: %s", e)
+
         return {
             "window_minutes":    window_minutes,
             "eval_count":        eval_count,
@@ -11993,6 +12082,7 @@ class LocalStore:
             "classified_total":  classified_total,
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
+            "window_spend_usd":  window_spend_usd,
         }
 
     def query_session_eval_detail(
