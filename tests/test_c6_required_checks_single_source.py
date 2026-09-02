@@ -175,9 +175,13 @@ def test_a_failed_drift_bot_fails_the_gate():
     assert result.state == "failed"
 
 
-def test_a_missing_drift_bot_does_not_pass_the_gate():
-    """No status at all must block, not silently satisfy the spec."""
+def test_a_missing_drift_bot_skips_not_blocks():
+    """When skip_if_unreported=True and no status has been posted, the spec
+    passes as 'skipped' so frontend-only PRs are not held waiting forever.
+    A real failure (status posted + failing) still blocks -- see the test above."""
     gate = _gate()
     spec = next(s for s in gate.REQUIRED_SPECS if s.pattern == "drift-bot")
+    assert spec.skip_if_unreported, "Drift Bot spec must carry skip_if_unreported=True"
     (result,) = gate.evaluate([spec], [])
-    assert result.state == "pending"
+    assert result.state == "passed"
+    assert "skipped" in result.detail
