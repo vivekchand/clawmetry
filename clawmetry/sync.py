@@ -14893,6 +14893,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # the row was re-sent each cycle and sat at the top of
                 # /sessions for a week (live-hit 2026-09-02: a Cursor legacy
                 # prompt bucket, "where is my code?", with zero replies).
+                _time_basis = ""
                 if not started and not ended:
                     _ev_ts = []
                     for _e in _events:
@@ -14905,6 +14906,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     if _ev_ts:
                         started = _epoch_to_iso(min(_ev_ts))
                         ended = _epoch_to_iso(max(_ev_ts))
+                        # Source timestamps the runtime wrote on its own
+                        # events, never the wall clock; say so on the row.
+                        _time_basis = "events"
                     else:
                         log.debug("family session %s: no timestamp and no "
                                   "events; not a session, skipped", ns_id)
@@ -14917,6 +14921,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _delegated_ids = _harvest_delegated_agent_ids(_events)
                 if _delegated_ids:
                     metadata["delegatedAgentIds"] = _delegated_ids
+                if _time_basis:
+                    metadata["timeBasis"] = _time_basis
                 _thealth = _session_tool_health(_events)
                 metadata.update(_thealth)
                 _idle = _session_idle_gaps(_events)
