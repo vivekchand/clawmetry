@@ -2111,6 +2111,52 @@ def invalidate_aggregate_cache() -> None:
     this is only needed when a caller wants sub-TTL freshness after an ingest."""
     with _AGG_CACHE_LOCK:
         _AGG_CACHE.clear()
+    invalidate_read_cache()
+
+
+# Result cache for the scans the dashboard polls hardest (2026-09-02, founder
+# Mac with two tabs open: ``query_events`` 145 calls/min, ``query_outcomes``
+# 41/min, ``query_tool_call_invocations`` 40/min -- the last one a 32,600-row,
+# 1.9 MB scan costing 1.5 s live, so that single shape kept one core busy on
+# its own). Same TTL as the aggregates cache, plus two things it lacks:
+#   * it is CLEARED ON EVERY FLUSH, so a poll after new events never reads a
+#     stale answer -- staleness is bounded by the flush cadence (~1 s live),
+#     the TTL only collapses duplicate polls between writes;
+#   * ``since``/``until`` are bucketed to the TTL for the KEY only (the SQL
+#     still runs with the caller's exact bounds on a miss), because callers
+#     recompute "now minus N days" per request and would otherwise never hit.
+# Bounded to ``_READ_CACHE_MAX`` entries so a burst of distinct filters cannot
+# grow it without limit; a 2,000-row events page is ~3 MB.
+_READ_CACHE: dict = {}
+_READ_CACHE_MAX = 32
+_READ_CACHE_HITS = {"hit": 0, "miss": 0}
+
+
+def invalidate_read_cache() -> None:
+    with _AGG_CACHE_LOCK:
+        _READ_CACHE.clear()
+
+
+def _bucket_iso(value: Any, secs: float) -> Any:
+    """Floor an ISO timestamp string to ``secs`` for use in a cache key.
+    Anything unparseable is used as-is (still a valid, just narrower, key)."""
+    if not isinstance(value, str) or secs <= 0:
+        return value
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return int(dt.timestamp() // secs) * int(secs)
+    except Exception:
+        return value
+
+
+def _read_cache_key(method: str, kw: dict) -> tuple:
+    items = []
+    for k in sorted(kw):
+        v = kw[k]
+        if k in ("since", "until"):
+            v = _bucket_iso(v, _AGG_CACHE_TTL)
+        items.append((k, v))
+    return (method, tuple(items))
 
 
 def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -3686,6 +3732,21 @@ class LocalStore:
         return (outcome, conf)
 
     def query_outcomes(
+        self,
+        *,
+        agent_type: str = "openclaw",
+        since: str | None = None,
+        until: str | None = None,
+        runtime: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        # Cached scan (see ``_READ_CACHE``); the real query is ``_query_outcomes_impl``.
+        return self._cached_read(
+            "query_outcomes", {"agent_type": agent_type, "since": since, "until": until, "runtime": runtime, "limit": limit},
+            lambda: self._query_outcomes_impl(agent_type=agent_type, since=since, until=until, runtime=runtime, limit=limit),
+        )
+
+    def _query_outcomes_impl(
         self,
         *,
         agent_type: str = "openclaw",
@@ -7926,6 +7987,19 @@ class LocalStore:
         runtime: str | None = None,
         limit: int = 50_000,
     ) -> list[dict[str, Any]]:
+        # Cached scan (see ``_READ_CACHE``); the real query is ``_query_tool_call_invocations_impl``.
+        return self._cached_read(
+            "query_tool_call_invocations", {"since": since, "runtime": runtime, "limit": limit},
+            lambda: self._query_tool_call_invocations_impl(since=since, runtime=runtime, limit=limit),
+        )
+
+    def _query_tool_call_invocations_impl(
+        self,
+        *,
+        since: str | None = None,
+        runtime: str | None = None,
+        limit: int = 50_000,
+    ) -> list[dict[str, Any]]:
         """Tier-1 MOAT: /api/plugins fast-path.
 
         Returns one row per tool invocation since ``since`` (ISO-8601
@@ -8257,6 +8331,8 @@ class LocalStore:
                 if self._ring:
                     self._ring.popleft()
         self._last_flush_ts = time.monotonic()
+        # New rows landed: the scan cache must not answer from before them.
+        invalidate_read_cache()
         # Issue #1594 — accumulate an approximation of bytes flushed; the
         # real on-disk size is checked only when this crosses
         # ``AUTO_VACUUM_CHECK_EVERY_BYTES`` to keep the hot path fast.
@@ -9101,6 +9177,24 @@ class LocalStore:
     # ── queries ─────────────────────────────────────────────────────────
 
     def query_events(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        runtime: str | None = None,
+        exclude_daemon: bool = False,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        # Cached scan (see ``_READ_CACHE``); the real query is ``_query_events_impl``.
+        return self._cached_read(
+            "query_events", {"session_id": session_id, "agent_id": agent_id, "event_type": event_type, "since": since, "until": until, "runtime": runtime, "exclude_daemon": exclude_daemon, "limit": limit},
+            lambda: self._query_events_impl(session_id=session_id, agent_id=agent_id, event_type=event_type, since=since, until=until, runtime=runtime, exclude_daemon=exclude_daemon, limit=limit),
+        )
+
+    def _query_events_impl(
         self,
         *,
         session_id: str | None = None,
@@ -14703,6 +14797,28 @@ class LocalStore:
         rows = self._fetch("SELECT COUNT(*) FROM sync_dlq", [])
         return int(rows[0][0]) if rows else 0
 
+    def _cached_read(self, method: str, kw: dict, compute):
+        """Serve ``compute()`` from the bounded read cache (see ``_READ_CACHE``)."""
+        if _AGG_CACHE_TTL <= 0:
+            return compute()
+        key = _read_cache_key(method, kw)
+        now = time.monotonic()
+        with _AGG_CACHE_LOCK:
+            hit = _READ_CACHE.get(key)
+            if hit is not None and (now - hit[0]) < _AGG_CACHE_TTL:
+                _READ_CACHE_HITS["hit"] += 1
+                return hit[1]
+        rows = compute()
+        with _AGG_CACHE_LOCK:
+            _READ_CACHE_HITS["miss"] += 1
+            if len(_READ_CACHE) >= _READ_CACHE_MAX:
+                for k in [k for k, v in _READ_CACHE.items() if (now - v[0]) >= _AGG_CACHE_TTL]:
+                    _READ_CACHE.pop(k, None)
+                while len(_READ_CACHE) >= _READ_CACHE_MAX:
+                    _READ_CACHE.pop(min(_READ_CACHE, key=lambda k: _READ_CACHE[k][0]), None)
+            _READ_CACHE[key] = (now, rows)
+        return rows
+
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""
@@ -14755,6 +14871,9 @@ class LocalStore:
             # health read, not a guess.
             "duckdb_memory_limit": self._current_memory_limit(),
             "duckdb_oom_reopens": int(_oom_bumps),
+            "read_cache_entries": len(_READ_CACHE),
+            "read_cache_hits": int(_READ_CACHE_HITS["hit"]),
+            "read_cache_misses": int(_READ_CACHE_HITS["miss"]),
             "event_count": int(n or 0),
             "oldest_ts": oldest,
             "newest_ts": newest,

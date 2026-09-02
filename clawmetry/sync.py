@@ -8745,6 +8745,7 @@ def send_heartbeat(config: dict) -> bool:
             # so `_pick_heartbeat_interval` always sees a sensible shape even
             # if `_post` ever decides to return None on a 204.
             _LAST_HEARTBEAT_RESPONSE = resp_json if isinstance(resp_json, dict) else {}
+            _commit_cache_push_gates()
             # Phase 1 of relay-v2 (#1053): the cloud may piggyback a small
             # batch of `pending_queries` on the heartbeat response. Each is
             # a shape-allowlisted read against the local DuckDB; we run them,
@@ -9120,6 +9121,10 @@ def _rows_to_brain_events(rows: list) -> list:
 # that stale data doesn't linger after a node is decommissioned.
 BRAIN_CACHE_TTL_SEC = 21600
 BRAIN_CACHE_LIMIT = 50
+# Unchanged brain events are re-pushed at most this often (cloud TTL / 2, so
+# the cache never expires between pushes).
+BRAIN_PUSH_MIN_INTERVAL_SEC = BRAIN_CACHE_TTL_SEC // 2
+_brain_push_state: dict = {"fingerprint": None, "ts": 0.0}
 # Per-session fairness for the brain blob (the device "no activity for this
 # session" fix): guarantee each of the most-recently-active sessions at least
 # BRAIN_PER_SESSION renderable events, across up to BRAIN_SESSION_FANOUT
@@ -9410,6 +9415,20 @@ def _build_brain_cache_pushes(config: dict) -> list:
     events = _build_brain_events()
     if not events:
         return []
+    # Skip the encrypt + upload when the picked events are the ones already
+    # in the cloud cache (2026-09-02: the ~8.7 MB brain blob was rebuilt and
+    # re-sent on every heartbeat whether or not anything had happened).
+    try:
+        import hashlib as _hl
+        fp = _hl.sha256("|".join(
+            str(e.get("id") or e.get("ts") or "") for e in events
+        ).encode()).hexdigest()
+    except Exception:
+        fp = None
+    _now = time.time()
+    if (fp is not None and fp == _brain_push_state.get("fingerprint")
+            and (_now - float(_brain_push_state.get("ts") or 0)) < BRAIN_PUSH_MIN_INTERVAL_SEC):
+        return []
     payload = {
         "events":  events,
         "count":   len(events),
@@ -9420,6 +9439,10 @@ def _build_brain_cache_pushes(config: dict) -> list:
         blob = encrypt_payload(payload, enc_key)
     except Exception:
         return []
+    # Pending until the heartbeat that carries it returns 2xx (see
+    # _commit_cache_push_gates): a build the cloud never received must not
+    # silence the next one.
+    _brain_push_state["pending"] = (fp, _now)
     owner_hash = _owner_hash_for_token(api_key)
     return [{
         "key":    f"brain:{owner_hash}:{node_id}:recent",
@@ -9449,7 +9472,64 @@ MEMORY_CACHE_TOTAL_BUDGET = 6_000_000
 # hourly at best. Push when the content actually changed, or when we're
 # halfway to the cache TTL and the cloud copy needs refreshing either way.
 MEMORY_PUSH_MIN_INTERVAL_SEC = MEMORY_CACHE_TTL_SEC // 2
-_memory_push_state: dict = {"fingerprint": None, "ts": 0.0}
+# A CHANGED snapshot is re-pushed at most this often. The cloud Memory tab is
+# not a live feed; a fresh file reaching it within ten minutes is plenty, and
+# the push is the whole 5.9 MB snapshot encrypted and uploaded, not a delta.
+MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC = 600
+# A file whose hash has changed on this many consecutive builds is runtime
+# state, not memory (2026-09-02: Grok Bot's ``local-exec-supervisor.json`` and
+# ``local-exec-daemon-connection.json`` rewrote every cycle, so the fingerprint
+# never matched and the full snapshot went out every 95 s -- 5.2 GB a day of
+# upload for nothing). Such files still ship in the snapshot; they just stop
+# deciding when it ships.
+MEMORY_PUSH_VOLATILE_AFTER = 3
+_memory_push_state: dict = {"fingerprint": None, "ts": 0.0, "seen": {}, "churn": {}}
+
+
+def _commit_cache_push_gates() -> None:
+    """Arm the brain/memory skip gates for the pushes the cloud just accepted.
+
+    A builder records only a *pending* fingerprint; ``send_heartbeat`` calls
+    this once ``/ingest/heartbeat`` returned 2xx. So a build whose heartbeat
+    failed, or a build made outside the heartbeat (tests, a one-off tool),
+    never suppresses the next push: the gate only ever remembers a snapshot
+    the cloud actually holds."""
+    for _st in (_brain_push_state, _memory_push_state):
+        _p = _st.pop("pending", None)
+        if _p:
+            _st["fingerprint"], _st["ts"] = _p
+
+
+def _memory_push_fingerprint(rows: list) -> str | None:
+    """Fingerprint of the memory snapshot that ignores files which churn.
+
+    Tracks each file's hash across builds; a file that changed on
+    ``MEMORY_PUSH_VOLATILE_AFTER`` consecutive builds is left out of the
+    fingerprint until it holds still again. Returns None only if hashing fails."""
+    try:
+        import hashlib as _hl
+        seen = _memory_push_state.setdefault("seen", {})
+        churn = _memory_push_state.setdefault("churn", {})
+        stable: list = []
+        current: set = set()
+        for r in rows:
+            key = f"{r.get('agent_type')}:{r.get('path')}"
+            sha = r.get("sha256")
+            current.add(key)
+            prev = seen.get(key)
+            if prev is not None and prev != sha:
+                churn[key] = churn.get(key, 0) + 1
+            elif prev == sha:
+                churn[key] = 0
+            seen[key] = sha
+            if churn.get(key, 0) < MEMORY_PUSH_VOLATILE_AFTER:
+                stable.append(f"{key}:{sha}")
+        for key in [k for k in seen if k not in current]:
+            seen.pop(key, None)
+            churn.pop(key, None)
+        return _hl.sha256("|".join(sorted(stable)).encode()).hexdigest()
+    except Exception:
+        return None
 
 
 def _memory_rows_by_runtime(store) -> list:
@@ -9531,18 +9611,15 @@ def _build_memory_cache_pushes(config: dict) -> list:
     # Keyed by (runtime, path): the same file can be registered by several
     # runtimes, and a path-only key would collapse them into one fingerprint
     # entry that misses a change on all but the first.
-    try:
-        import hashlib as _hl
-        fp = _hl.sha256("|".join(sorted(
-            f"{r.get('agent_type')}:{r.get('path')}:{r.get('sha256')}"
-            for r in rows
-        )).encode()).hexdigest()
-    except Exception:
-        fp = None
+    fp = _memory_push_fingerprint(rows)
     _now = time.time()
-    if (fp is not None
-            and fp == _memory_push_state.get("fingerprint")
-            and (_now - float(_memory_push_state.get("ts") or 0)) < MEMORY_PUSH_MIN_INTERVAL_SEC):
+    _age = _now - float(_memory_push_state.get("ts") or 0)
+    if fp is not None and fp == _memory_push_state.get("fingerprint"):
+        if _age < MEMORY_PUSH_MIN_INTERVAL_SEC:
+            return []
+    elif _memory_push_state.get("fingerprint") is not None and _age < MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC:
+        # Changed, but we pushed recently: let the change ride the next
+        # eligible heartbeat instead of re-encrypting the snapshot now.
         return []
 
     # Catalog labels for the roots these rows came from, so a cloud viewer can
@@ -9642,8 +9719,7 @@ def _build_memory_cache_pushes(config: dict) -> list:
         return []
     # Only arm the gate once we have a blob to hand back — a failed encode
     # must not suppress the next attempt for three hours.
-    _memory_push_state["fingerprint"] = fp
-    _memory_push_state["ts"] = _now
+    _memory_push_state["pending"] = (fp, _now)
     log.info("memory cache push: %d files, %.1f MB plaintext",
              len(files), spent / 1_000_000.0)
     owner_hash = _owner_hash_for_token(api_key)
