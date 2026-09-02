@@ -83,13 +83,17 @@ _LEGACY_ALERT_TYPE_MAP = {
     # ``_evaluate_one`` below.
     "eval_score_below":     "eval_score_below",
     "outcome_failure_rate": "outcome_failure_rate",
+    # Harness Engineering "Watch $/done": cost per finished job crossed a
+    # dollar threshold. Quality-slice fed, maps to itself.
+    "dollars_per_done_above": "dollars_per_done_above",
 }
 
 # Rule types that read the per-session quality slice (eval scores + outcome
 # labels) instead of the raw event stream. The daemon only bothers to query
 # that slice when at least one such rule is enabled (it is otherwise wasted
 # DuckDB work — see ``sync.py:evaluate_alerts``).
-QUALITY_RULE_TYPES = frozenset({"eval_score_below", "outcome_failure_rate"})
+QUALITY_RULE_TYPES = frozenset({"eval_score_below", "outcome_failure_rate",
+                                "dollars_per_done_above"})
 
 # Default window + min-sample floors for the quality rules, used when the
 # rule body omits them. Tuned so a single low-scoring session can't trip an
@@ -345,6 +349,8 @@ def _evaluate_one(
         return _eval_eval_score_below(rule, quality)
     if rt == "outcome_failure_rate":
         return _eval_outcome_failure_rate(rule, quality)
+    if rt == "dollars_per_done_above":
+        return _eval_dollars_per_done(rule, quality)
     # Unknown type — log once and skip. (PRD says: leave a TODO. Here we
     # explicitly under-fire instead of mis-firing.)
     log.debug("alerts: unsupported rule type %r — skipped (rule_id=%s)",
@@ -475,6 +481,65 @@ def _eval_outcome_failure_rate(
             "outcome_counts":   quality.get("outcome_counts") or {},
             "min_sessions":     min_sessions,
             "window_minutes":   window_minutes,
+        },
+    }
+
+
+def _eval_dollars_per_done(
+    rule: dict[str, Any],
+    quality: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fire when the window's cost per finished job EXCEEDS ``threshold``
+    dollars: total spend of classified terminal sessions divided by the
+    sessions that ended ``success``. Basis is the classified cohort (the
+    Harness Engineering tab's headline uses the measurable cohort; the fired
+    alert names its basis so the two are never conflated). With zero
+    successes there is no price, so the rule under-fires rather than
+    dividing by hope; ``min_sessions`` keeps one expensive run from
+    tripping it."""
+    if not isinstance(quality, dict):
+        return None
+    threshold = rule.get("threshold")
+    if threshold is None:
+        return None
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        return None
+    if threshold <= 0:
+        return None
+    min_sessions = _quality_min_sessions(rule)
+    window_minutes = _quality_window_minutes(rule)
+
+    total = int(quality.get("classified_total") or 0)
+    if total < min_sessions:
+        return None
+    done = int((quality.get("outcome_counts") or {}).get("success") or 0)
+    if done <= 0:
+        return None
+    try:
+        spend = float(quality.get("window_spend_usd") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    dpd = spend / done
+    if dpd <= threshold:
+        return None
+
+    return {
+        "event": _quality_pseudo_event("dollars_per_done_above", window_minutes),
+        "summary": (f"rule fired: cost per finished job ${dpd:.2f} "
+                    f"(${spend:.2f} across {total} classified sessions, "
+                    f"{done} finished) in {window_minutes}m "
+                    f"(threshold=${threshold:.2f}; basis: classified sessions)"),
+        "metadata": {
+            "dollars_per_done":  round(dpd, 2),
+            "window_spend_usd":  round(spend, 2),
+            "done_count":        done,
+            "classified_total":  total,
+            "threshold_usd":     round(threshold, 2),
+            "basis":             "classified_sessions",
+            "min_sessions":      min_sessions,
+            "window_minutes":    window_minutes,
         },
     }
 

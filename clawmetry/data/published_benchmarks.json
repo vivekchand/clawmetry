@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "updated": "2026-09-01",
+  "note": "Third-party benchmark results per (harness, model) pair. Rows render only with source, benchmark version, and date; anything older than one quarter is marked historical at read time. Prefer third-party runs over vendor self-reports. Update via normal PRs; the dashboard never fetches benchmark data at runtime.",
+  "pairs": [
+    {
+      "harness": "codex",
+      "model": "gpt-5.2",
+      "benchmark": "Terminal-Bench 2.1",
+      "result": "63% resolved",
+      "runner": "third_party",
+      "result_date": "2026-05-01",
+      "source_url": "https://www.tbench.ai/leaderboard"
+    },
+    {
+      "harness": "claude_code",
+      "model": "claude-opus-4-5",
+      "benchmark": "Terminal-Bench 2.1",
+      "result": "59% resolved",
+      "runner": "third_party",
+      "result_date": "2026-05-01",
+      "source_url": "https://www.tbench.ai/leaderboard"
+    },
+    {
+      "harness": "openhands",
+      "model": "claude-opus-4-5",
+      "benchmark": "Terminal-Bench 2.1",
+      "result": "51% resolved",
+      "runner": "third_party",
+      "result_date": "2026-05-01",
+      "source_url": "https://www.tbench.ai/leaderboard"
+    },
+    {
+      "harness": "cursor",
+      "model": "gpt-5.2",
+      "benchmark": "LiveSWEBench (agentic tier)",
+      "result": "41% resolved",
+      "runner": "third_party",
+      "result_date": "2026-07-01",
+      "source_url": "https://liveswebench.ai/"
+    },
+    {
+      "harness": "claude_code",
+      "model": "claude-opus-4-5",
+      "benchmark": "CORE-Bench Hard (HAL)",
+      "result": "outperformed CORE-Agent scaffold",
+      "runner": "third_party",
+      "result_date": "2026-02-01",
+      "source_url": "https://hal.cs.princeton.edu/"
+    }
+  ]
+}

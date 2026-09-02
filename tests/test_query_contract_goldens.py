@@ -58,6 +58,9 @@ _HEALTH_VOLATILE = {
     "db_path", "size_bytes", "size_mb", "size_cap_bytes", "cap_exceeded",
     "auto_vacuum_enabled", "ring_depth", "ring_max", "ring_dropped_total",
     "schema_version", "last_flush_ago_s", "sync_dlq_depth",
+    # The DuckDB ceiling is derived from store size and physical RAM
+    # (PR #5434), so its rendered value depends on the machine.
+    "duckdb_memory_limit",
 }
 
 
