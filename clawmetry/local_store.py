@@ -26,8 +26,10 @@ NOT in this module (deliberately):
 
 Concurrency model:
 * DuckDB connections are heavyweight; we keep a process-wide singleton
-  connection guarded by a ``threading.Lock`` for writes. Reads are issued
-  via ``.cursor()`` instances which are thread-safe.
+  connection guarded by a ``threading.Lock`` for writes. Reads go through
+  one ``.cursor()`` per thread (a second connection on the same database)
+  and never take that lock, so a dashboard fan-out does not queue behind
+  the flusher or behind itself (``_fetch``).
 * DuckDB allows only one *writer* process per file; multiple *readers* are
   allowed. The daemon process owns the writer; future external readers
   (e.g. a separate dashboard process per #960) will open with
@@ -2585,6 +2587,8 @@ class LocalStore:
         # predates the latest reopen can tell it has already been healed.
         self._recovery_lock = threading.Lock()
         self._conn_generation = 0
+        # Per-thread read cursors (see ``_read_cursor``).
+        self._read_local = threading.local()
         self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
@@ -15291,18 +15295,46 @@ class LocalStore:
 
     # ── internals ───────────────────────────────────────────────────────
 
+    def _read_cursor(self):
+        """This thread's DuckDB cursor on the current connection.
+
+        ``connection.cursor()`` is a second connection to the same database
+        instance, so reads on it run concurrently with each other and with
+        the writer under DuckDB's MVCC; they see committed data, which is
+        what every read here wants (the flusher commits per batch). One per
+        thread, rebuilt whenever the connection generation moves (a recovery
+        reopened the handle) so no read runs on a closed parent."""
+        loc = self._read_local
+        cur = getattr(loc, "cur", None)
+        if cur is None or getattr(loc, "gen", -1) != self._conn_generation:
+            cur = self._conn.cursor()
+            loc.cur = cur
+            loc.gen = self._conn_generation
+        return cur
+
     def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
-        """Issue a read, returning raw row tuples. DuckDB's ``.cursor()`` is
-        thread-safe; we don't take the write lock for reads. We do however
-        serialise with the writer through the lock to dodge transaction-state
-        edge cases — DuckDB's reader-vs-writer story within one connection is
-        better with light serialisation. At our scale (hundreds of qps max)
-        this costs nothing."""
+        """Issue a read, returning raw row tuples.
+
+        Reads used to take ``_write_lock`` for their whole execute-and-fetch,
+        which serialised every dashboard query behind every other query and
+        behind each flush. On 2026-09-02, with one open tab issuing ~85
+        requests per 25 s, that queue put 1-3 s on calls that cost 0.05-0.2 s
+        in isolation, so the overview endpoint (17-23 store calls) took 4-18 s
+        and the page's 3-5 s client timeouts fired on every tab. Reads now go
+        through a per-thread cursor and never touch the write lock; measured
+        on a 4.4 GB store with 8 readers and a writer: p50 0.21 s -> 0.06 s,
+        p95 1.02 s -> 0.44 s, 2.7x the throughput, single-reader cost
+        unchanged."""
         try:
             gen = self._conn_generation
-            with self._write_lock:
-                cur = self._conn.execute(sql, params)
-                return cur.fetchall()
+            try:
+                return self._read_cursor().execute(sql, params).fetchall()
+            except Exception as first:
+                # A recovery closed the parent (and with it this cursor)
+                # between our generation read and the execute: refresh once.
+                if gen == self._conn_generation or _is_fatal_db_state(first):
+                    raise
+                return self._read_cursor().execute(sql, params).fetchall()
         except Exception as exc:
             # An invalidated handle fails every read the same way. Until
             # 2026-09-02 only the flush path knew how to recover, so a daemon
@@ -15315,9 +15347,7 @@ class LocalStore:
             _report_fatal_db_once(exc)
             if not self.recover_invalidated_db(exc, seen_generation=gen):
                 raise
-            with self._write_lock:
-                cur = self._conn.execute(sql, params)
-                return cur.fetchall()
+            return self._read_cursor().execute(sql, params).fetchall()
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
