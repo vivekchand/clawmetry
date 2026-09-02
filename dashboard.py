@@ -139,6 +139,7 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.bench import bp_bench
 from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
@@ -3962,7 +3963,7 @@ DASHBOARD_HTML = r"""
   .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
   .theme-toggle:active { transform: scale(0.98); }
-  
+
   /* === Zoom Controls === */
   .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
@@ -4390,7 +4391,7 @@ DASHBOARD_HTML = r"""
   .usage-table th { text-align: left; font-size: 12px; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
   .usage-table td { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-secondary); }
   .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: var(--text-accent); }
-  
+
   /* === Cost Warnings === */
   .cost-warning { padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
   /* === Markdown Rendered Content === */
@@ -4575,7 +4576,7 @@ DASHBOARD_HTML = r"""
   .comp-modal-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
   .comp-modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
   .comp-modal-close:hover { background: var(--bg-error); color: var(--text-error); }
-  
+
   /* Time Travel Controls */
   .time-travel-bar { display: none; padding: 12px 20px; border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
   .time-travel-bar.active { display: block; }
@@ -4821,18 +4822,18 @@ DASHBOARD_HTML = r"""
     .heatmap-grid { min-width: 500px; }
     .chat-msg { max-width: 95%; }
     .usage-chart { height: 150px; }
-    
+
     /* Enhanced Flow mobile optimizations */
-    .flow-container { 
-      padding-bottom: 20px; 
-      overflow: visible; 
+    .flow-container {
+      padding-bottom: 20px;
+      overflow: visible;
     }
     #flow-svg text { font-size: 11px !important; }
     .flow-label { font-size: 7px !important; }
     .flow-node rect { stroke-width: 1 !important; }
     .flow-node.active rect { stroke-width: 1.5 !important; }
     .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
-    
+
     /* Mobile zoom controls */
     .zoom-controls { margin-left: 8px; gap: 2px; }
     .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
@@ -4871,7 +4872,7 @@ DASHBOARD_HTML = r"""
     .card { padding: 12px 14px; }
     .card-label { font-size: 10px; }
     .card-value { font-size: 20px; }
-    
+
     /* Overview grid already 1-col, just tighten gap */
     .grid { gap: 8px; }
 
@@ -5029,7 +5030,7 @@ function clawmetryLogout(){
 </div>
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -5562,7 +5563,7 @@ function clawmetryLogout(){
     <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
     <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
   </div>
-  
+
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
 
@@ -6178,7 +6179,7 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      
+
     </div>
     <!-- Source filter chips -->
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
@@ -7499,7 +7500,7 @@ function toggleTheme() {
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
   const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
-  
+
   if (isLight) {
     body.setAttribute('data-theme', 'dark');
     toggle.innerHTML = _sunSVG;
@@ -7517,7 +7518,7 @@ function initTheme() {
   const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
-  
+
   if (savedTheme === 'dark') {
     body.setAttribute('data-theme', 'dark');
     if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
@@ -7544,14 +7545,14 @@ function initZoom() {
 function applyZoom() {
   const wrapper = document.getElementById('zoom-wrapper');
   const levelDisplay = document.getElementById('zoom-level');
-  
+
   if (wrapper) {
     wrapper.style.transform = `scale(${currentZoom})`;
   }
   if (levelDisplay) {
     levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
   }
-  
+
   // Save to localStorage
   localStorage.setItem('openclaw-zoom', currentZoom.toString());
 }
@@ -8124,12 +8125,12 @@ async function loadContextAnatomy() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker 
+  // 💰 Cost Ticker
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
   document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
-  
+
   var trend = '';
   if (usage.trend && usage.trend.trend) {
     var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
@@ -8202,15 +8203,15 @@ async function loadMiniWidgets(overview, usage) {
     if (burnFallback) burnFallback.textContent = '--';
     if (projFallback) projFallback.textContent = '--';
   }
-  
+
   // ⚡ Tool Activity (load from logs)
   loadToolActivity();
-  
+
   // 📊 Token Burn Rate
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
-  
+
   // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
@@ -8228,7 +8229,7 @@ async function loadMiniWidgets(overview, usage) {
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
-  
+
   // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
   var modelLabel = document.getElementById('main-activity-model');
@@ -8250,10 +8251,10 @@ async function loadMiniWidgets(overview, usage) {
     modelBreakdown = 'Primary model';
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
-  
+
   // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
-  
+
 }
 
 async function loadSubAgents() {
@@ -8261,10 +8262,10 @@ async function loadSubAgents() {
     var data = await fetch('/api/subagents').then(r => r.json());
     var counts = data.counts;
     var subagents = data.subagents;
-    
+
     // Update main counter
     document.getElementById('subagents-count').textContent = counts.total;
-    
+
     // Update status text
     var statusText = '';
     if (counts.active > 0) {
@@ -8277,7 +8278,7 @@ async function loadSubAgents() {
       statusText = 'All idle/stale';
     }
     document.getElementById('subagents-status').textContent = statusText;
-    
+
     // Update preview with top sub-agents (human-readable)
     var previewHtml = '';
     if (subagents.length === 0) {
@@ -8296,14 +8297,14 @@ async function loadSubAgents() {
         previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
         previewHtml += '</div>';
       });
-      
+
       if (subagents.length > 3) {
         previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
       }
     }
-    
+
     document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
+
   } catch(e) {
     document.getElementById('subagents-count').textContent = '?';
     document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
@@ -8426,28 +8427,28 @@ async function loadToolActivity() {
     var logs = await fetch('/api/logs?lines=100').then(r => r.json());
     var toolCounts = { exec: 0, browser: 0, search: 0, other: 0 };
     var recentTools = [];
-    
+
     logs.lines.forEach(function(line) {
       var msg = line.toLowerCase();
       if (msg.includes('tool') || msg.includes('invoke')) {
-        if (msg.includes('exec') || msg.includes('shell')) { 
-          toolCounts.exec++; recentTools.push('exec'); 
-        } else if (msg.includes('browser') || msg.includes('screenshot')) { 
-          toolCounts.browser++; recentTools.push('browser'); 
-        } else if (msg.includes('web_search') || msg.includes('web_fetch')) { 
-          toolCounts.search++; recentTools.push('search'); 
+        if (msg.includes('exec') || msg.includes('shell')) {
+          toolCounts.exec++; recentTools.push('exec');
+        } else if (msg.includes('browser') || msg.includes('screenshot')) {
+          toolCounts.browser++; recentTools.push('browser');
+        } else if (msg.includes('web_search') || msg.includes('web_fetch')) {
+          toolCounts.search++; recentTools.push('search');
         } else {
           toolCounts.other++;
         }
       }
     });
-    
+
     document.getElementById('tools-active').textContent = recentTools.slice(0, 3).join(', ') || 'Idle';
     document.getElementById('tools-recent').textContent = 'Last ' + Math.min(logs.lines.length, 100) + ' log entries';
-    
+
     var sparks = document.querySelectorAll('.tool-spark span');
     sparks[0].textContent = toolCounts.exec;
-    sparks[1].textContent = toolCounts.browser;  
+    sparks[1].textContent = toolCounts.browser;
     sparks[2].textContent = toolCounts.search;
   } catch(e) {
     document.getElementById('tools-active').textContent = '--';
@@ -8458,26 +8459,26 @@ async function loadActivityStream() {
   try {
     var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
-    
+
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
         var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
-        
+
         recentMessages.forEach(function(msg) {
           if (msg.role === 'assistant' && msg.content) {
             var content = msg.content.toLowerCase();
             var activity = '';
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
-            
+
             if (content.includes('searching') || content.includes('search')) {
               activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
               activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
-              activity = time + ' ✏️ Editing files'; 
+              activity = time + ' ✏️ Editing files';
             } else if (content.includes('exec') || content.includes('command')) {
               activity = time + ' ⚡ Running commands';
             } else if (content.includes('browser') || content.includes('screenshot')) {
@@ -8486,24 +8487,24 @@ async function loadActivityStream() {
               var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
               activity = time + ' 💭 ' + preview + '...';
             }
-            
+
             if (activity) activities.push(activity);
           }
         });
       } catch(e) {}
     }
-    
+
     if (activities.length === 0) {
       activities = [
         new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
         new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
       ];
     }
-    
+
     var html = activities.slice(-8).map(function(a) {
       return '<div style="padding:4px 0; border-bottom:1px solid #1a1a30; color:#ccc;">' + escHtml(a) + '</div>';
     }).join('');
-    
+
     document.getElementById('activity-stream').innerHTML = html;
   } catch(e) {
     document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">Error loading activity stream</div>';
@@ -12769,11 +12770,11 @@ def validate_configuration():
         path = os.path.join(WORKSPACE, f)
         if os.path.exists(path):
             found_files.append(f)
-    
+
     if not found_files:
         warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
         tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
-    
+
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
@@ -12781,17 +12782,17 @@ def validate_configuration():
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [f for f in glob.glob(log_pattern) 
+        recent_logs = [f for f in glob.glob(log_pattern)
                       if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
         if not recent_logs:
             warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
             tips.append("[tip] Start your OpenClaw agent to see real-time data")
-    
+
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
+
     return warnings, tips
 
 
@@ -12869,13 +12870,14 @@ def detect_config(args=None):
     else:
         # Auto-detect: check common locations including Docker volumes
         data_dir = _auto_detect_data_dir()
-    
+
     if data_dir and os.path.isdir(data_dir):
         # Auto-set workspace, sessions, crons from data dir
         ws = os.path.join(data_dir, 'workspace')
         if os.path.isdir(ws) and not (args and args.workspace):
             if not args:
-                import argparse; args = argparse.Namespace()
+                import argparse
+                args = argparse.Namespace()
             args.workspace = ws
         sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
         if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
@@ -13152,6 +13154,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_bench)
     app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
@@ -13608,7 +13611,7 @@ DASHBOARD_HTML = r"""
 {% include 'partials/overlays.html' %}
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -13635,6 +13638,9 @@ DASHBOARD_HTML = r"""
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
+  {# Light/dark toggle restored (UI reskin 2026-09): initTheme() in app.js
+     fills the sun/moon icon and honours the saved openclaw-theme value. #}
+  <div class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light / dark theme" style="cursor:pointer;display:flex;align-items:center;"></div>
 
   <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
        through Enterprise), so it's a one-click UX toggle here rather than a
@@ -13731,57 +13737,71 @@ DASHBOARD_HTML = r"""
          Tier-1 items, every expert view inside the default-collapsed Developer
          group below, config-ish tabs under Advanced. data-tab ids are STABLE -
          only labels and grouping changed. #}
+      {# Reskin 2026-09: entity-glyph icons became 16px stroke SVGs and the
+         Tier-1 list gained labeled sections (Observe / Analyze / Govern),
+         Future-AGI-console style. data-tab ids, tooltips and i18n keys are
+         UNCHANGED; only icons, ordering and section labels moved. The
+         Approvals/Alerts/Notifications adjacency (founder request
+         2026-07-29) is preserved inside Govern. #}
       <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
-        <span class="left-nav-icon" aria-hidden="true">&#8962;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.home">Home</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_observe">Observe</div>
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
-        <span class="left-nav-icon" aria-hidden="true">&#9783;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
-        <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.brain">Activity</span>
       </div>
-      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
-        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
-        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
-      </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Dig into sessions across channels (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
         <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
       </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_analyze">Analyze</div>
+      <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
+      </div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
+      </div>
+      <div class="left-nav-item" data-tab="bench" onclick="switchTab('bench')" data-i18n-title="nav.bench_tooltip" title="Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.bench">Harness Engineering</span>
+      </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_govern">Govern</div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
-        <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
       {# Notifications sits directly under its two consumers (Approvals,
          Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
          nobody could find where to connect a delivery channel, so enabled
-         alert rules dead-ended at "no channels". Evals (#4295) rides Tier-1
-         below that trio so it can't split the Approvals/Alerts/Notifications
-         adjacency. #}
+         alert rules dead-ended at "no channels". #}
       <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
-        <span class="left-nav-icon" aria-hidden="true">&#9993;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
-      </div>
-      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
-        <span class="left-nav-icon" aria-hidden="true">&#128221;</span>
-        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
          header must not steal the overview highlight from Home). Collapsed by
          default; a stored cm_live_open=1 re-opens it. #}
       <div class="left-nav-item left-nav-item-group" onclick="toggleLiveDrawer()" data-i18n-title="nav.developer_tooltip" title="Deep-dive views for debugging your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.developer">Developer</span>
         <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="false" aria-controls="left-nav-live-list" aria-label="Toggle Developer sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
       </div>
@@ -13885,6 +13905,9 @@ DASHBOARD_HTML = r"""
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->
 {% include 'tabs/evals.html' %}
+
+<!-- BENCH (Harness Engineering: verdict stamps, $/done, flow deep dive, context lanes) -->
+{% include 'tabs/bench.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
