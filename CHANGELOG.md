@@ -1,6 +1,6 @@
 ## Unreleased
 
-### Fix: the daemon heals itself after DuckDB runs out of memory, and the memory ceiling follows the store (2026-09-02)
+### Fix: heartbeat rows stop storing 8 MB cache pushes, the daemon heals itself after DuckDB runs out of memory, and the memory ceiling follows the store (carries #5434) (2026-09-02)
 - **Who this reaches:** anyone whose local store has grown past about 1.3 GB. On 2026-09-02 a 4.2 GB store overran the flat 2 GB DuckDB buffer pool on the daily cost rollup, the rollback ran out too, and DuckDB invalidated the connection. The daemon kept running and looked healthy to launchd and to `clawmetry status`, but every dashboard query answered 500 for two hours until someone restarted it by hand.
 - **Reads heal the handle now, not only writes.** The one recovery that existed ran only when a batch of events failed to flush. On a quiet morning nothing was queued, so it never ran. A failed read now detects the invalidated handle, recovers once, and answers; a burst of concurrent failures on the same dead handle costs one recovery, not one per request thread.
 - **Out of memory gets the right recovery.** Nothing on disk is wrong after an OOM, so the store reopens under a ceiling one notch higher instead of spending its one index rebuild. A second OOM inside five minutes is refused and logged with the query, because a ceiling that already moved once and still does not fit needs a person, not a loop.
