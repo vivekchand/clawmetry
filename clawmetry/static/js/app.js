@@ -1069,7 +1069,7 @@ function _cmBannerDestination(alert) {
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
+    var alerts = (data.alerts || []).filter(function(a) { return !(a && _cmDismissedAlertIds[a.id]); });
     var count = alerts.length;
     // Update bell icon badge and Alerts nav tab badge
     var bellBadge = document.getElementById('alerts-bell-badge');
@@ -1127,15 +1127,33 @@ async function checkActiveAlerts() {
   } catch(e) {}
 }
 
+// Ids the user has dismissed but the server may not have acknowledged yet.
+// The banner poller skips them, so a slow or failed acknowledge can never
+// make the banner reappear seconds after the click (2026-09-02: twenty stale
+// agent-down alerts, acknowledged one request at a time, each request queued
+// behind a loaded server; the poller re-rendered the banner before the loop
+// finished, so Dismiss looked broken).
+var _cmDismissedAlertIds = {};
+
 async function ackAllAlerts() {
+  var banner = document.getElementById('alert-banner');
+  if (banner) banner.style.display = 'none';
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
-    for(var i=0; i<alerts.length; i++) {
-      await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
+    var ids = [];
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i] && alerts[i].id != null) { ids.push(alerts[i].id); _cmDismissedAlertIds[alerts[i].id] = true; }
     }
-    document.getElementById('alert-banner').style.display = 'none';
+    // All at once, not one after another: twenty sequential round trips on a
+    // busy server take longer than the poller's interval.
+    await Promise.all(ids.map(function(id) {
+      return fetch('/api/alerts/history/' + id + '/ack', {method: 'POST'})
+        .then(function(r) { if (!r.ok) delete _cmDismissedAlertIds[id]; })
+        .catch(function() { delete _cmDismissedAlertIds[id]; });
+    }));
   } catch(e) {}
+  try { checkActiveAlerts(); } catch (e) {}
 }
 
 // PRD #1252 Phase 1 — visibility-gated setInterval. The 5 module-init
