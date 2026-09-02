@@ -11943,7 +11943,11 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                 "enabled": j.get("enabled", True),
                 "expr": expr,
                 "schedule": sched,
-                "model": j.get("model", ""),
+                # Try known key-name variants across harness builds (#5409 /
+                # openclaw PR #95341) — mirrors the session-level alias pattern
+                # in clawmetry/adapters/openclaw.py:2545-2549.
+                "model": (j.get("model") or j.get("agentModel")
+                          or j.get("configuredModel") or ""),
                 "state": {
                     "lastStatus": job_state.get("lastStatus"),
                     "lastRunAtMs": job_state.get("lastRunAtMs"),
@@ -12003,7 +12007,8 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     "next_run_at": str(job_state.get("nextRunAtMs") or ""),
                     # All other freeform fields go into the BLOB
                     "task":        (j.get("task") or "")[:500],
-                    "model":       j.get("model"),
+                    "model":       (j.get("model") or j.get("agentModel")
+                                   or j.get("configuredModel")),
                     "lastDurationMs":      job_state.get("lastDurationMs"),
                     "lastError":           job_state.get("lastError"),
                     "consecutiveFailures": job_state.get("consecutiveFailures"),
@@ -16173,8 +16178,13 @@ def _cap_transcript_messages(msgs, msg_cap):
     turn). The title fix (_derive_transcript_title runs pre-cap) masked it
     in the list view while the replay stayed headless.
 
-    Keep the opening user prompt, an honest omission marker, and the most
-    recent messages; the full transcript stays on the local dashboard.
+    Keep the opening user prompt, a structured history-gap marker, and the
+    most recent messages. The marker (``type: history_gap``, ``omitted: N``)
+    is a paging affordance, not a dead end: the replay renders it as an
+    inline "load earlier messages" row and pages the elided middle in via
+    ``/api/transcript-page`` until the gap closes. ``content`` is a plain
+    fallback for viewers that predate the structured marker; the role stays
+    ``system`` for the same reason.
     """
     if len(msgs) <= msg_cap:
         return msgs, False, None
@@ -16201,10 +16211,11 @@ def _cap_transcript_messages(msgs, msg_cap):
                 marker_ts = ts + 1
         keep.append({
             "role": "system",
+            "type": "history_gap",
+            "omitted": omitted,
             "content": (
-                "… %d earlier messages not shown here to keep cloud sync "
-                "light. Open your local ClawMetry dashboard for the full "
-                "transcript." % omitted
+                "%d earlier messages are not loaded yet. Scroll up or use "
+                "Load earlier messages to page them in." % omitted
             ),
             "timestamp": marker_ts,
         })
@@ -17675,6 +17686,98 @@ _RELIABILITY_FAILURE_LABELS = {
     "no_loop": "Repeated the same action (loop)",
     "acted": "All talk, no action",
 }
+
+
+_QUALITY_SNAPSHOT_WINDOW_HOURS = 168  # 7d — what the Quality tab asks for
+
+
+def _build_quality_snapshot():
+    """The Quality report card, node-wide and per runtime, for the snapshot.
+
+    Founder live-hit 2026-08-22: the hosted Quality tab said "Nothing to grade
+    yet" for a machine whose local tab showed an A over 119 graded runs. The
+    grade had never ridden the snapshot at all, and the hosted container
+    answered the request from its OWN DuckDB — which exists but is empty, so
+    it reported "no runs" instead of failing. An empty answer and an
+    unreachable machine looked identical on screen and meant opposite things.
+
+    Read once, compose many: the node's sessions are queried ONCE (current
+    window, prior window, and a 30-day history for calibration) and grouped in
+    Python, so a card per runtime costs no extra queries. Sessions are graded
+    at ingest, so composing is mostly dict lookups; the bounded deep scan runs
+    once over the node's rows and every per-runtime card reuses that map.
+
+    Returns ``{}`` on any failure — a snapshot must never fail to build over
+    one optional slice, and the cloud falls back to saying the grade lives on
+    your machine.
+    """
+    try:
+        from datetime import timedelta  # module scope imports datetime/timezone only
+
+        from clawmetry import local_store as _ls
+        from clawmetry import quality_thresholds as _qt
+        from routes.quality import _assess_rows, compose_report_card
+
+        store = _ls.get_store()
+        if store is None:
+            return {}
+
+        hours = _QUALITY_SNAPSHOT_WINDOW_HOURS
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(hours=hours)).isoformat()
+        prior_since = (now - timedelta(hours=hours * 2)).isoformat()
+        hist_since = (now - timedelta(hours=24 * 30)).isoformat()
+
+        rows = store.query_quality_sessions(since=since, limit=400) or []
+        prior_rows = store.query_quality_sessions(
+            since=prior_since, until=since, limit=400) or []
+        hist_rows = store.query_quality_sessions(since=hist_since, limit=1500) or []
+
+        by_rt_hist = {}
+        for h in hist_rows:
+            by_rt_hist.setdefault(h.get("runtime") or "openclaw", []).append(h)
+        thresholds = _qt.calibrate_all(by_rt_hist)
+        assessments = _assess_rows(rows, thresholds)
+        prior_assessments = _assess_rows(prior_rows, thresholds, deep_limit=0)
+
+        def _card(sub_rows, sub_prior, runtime):
+            return compose_report_card(
+                sub_rows, sub_prior, hist_rows,
+                window_hours=hours, runtime=runtime,
+                assessments=assessments, prior_assessments=prior_assessments,
+            )
+
+        out = {
+            "window_hours": hours,
+            "all": _card(rows, prior_rows, None),
+            "byRuntime": {},
+        }
+        # Calibration is identical in every card (same 30-day history), so it
+        # is carried ONCE here and re-attached client-side. Left inline it was
+        # ~1.9 kB duplicated across fourteen cards, a quarter of the slice
+        # spent saying the same thing.
+        out["thresholds"] = out["all"].get("thresholds") or {}
+        # Per-runtime cards so the hosted tab stays honest under the runtime
+        # switcher: a grade shown while a single runtime is selected must be
+        # THAT runtime's grade, never the node's total wearing its name.
+        # Every runtime the machine has run in the last 30 days, not only those
+        # with sessions THIS week: a runtime that was quiet this week needs a
+        # card saying so in its own name. Without one the hosted tab would fall
+        # back to the node-wide card and show another runtime's grade under
+        # this runtime's filter.
+        runtimes = {(r.get("runtime") or "openclaw") for r in rows}
+        runtimes |= {(h.get("runtime") or "openclaw") for h in hist_rows}
+        for rt in runtimes:
+            sub = [r for r in rows if (r.get("runtime") or "openclaw") == rt]
+            sub_prior = [r for r in prior_rows
+                         if (r.get("runtime") or "openclaw") == rt]
+            out["byRuntime"][rt] = _card(sub, sub_prior, rt)
+        for _c in [out["all"], *out["byRuntime"].values()]:
+            _c.pop("thresholds", None)
+        return out
+    except Exception as exc:
+        log.debug(f"quality snapshot build failed (continuing): {exc}")
+        return {}
 
 
 def _build_reliability(limit_sessions=25, min_sessions=4):
@@ -20640,6 +20743,51 @@ def _build_evals_judge_status() -> dict | None:
         return None
 
 
+def _build_bench_slice(store, *, days: int = 30) -> dict:
+    """Harness Engineering bench slice for the encrypted snapshot.
+
+    Mirrors GET /api/bench (routes/bench.py) so the cloud interceptor is a
+    pass-through: byRuntime scorecards, ranked/unranked, workload profiles,
+    recommendation cards, head-to-head. One quality-session scan + the two
+    cheap rollups, on the daemon's own store handle, per 60s snapshot.
+    Bounded for the multi-hundred-KB snapshot budget: 1500 session rows in,
+    8 recommendation cards / 4 matchups out (engine caps candidates and
+    sides already). Raises to the caller's honest-empty on failure.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from clawmetry.efficiency import build_efficiency_slice
+    from clawmetry.harness_bench import build_bench, build_headtohead
+    from clawmetry.published_benchmarks import published_pairs
+    from clawmetry.workload_profiles import build_recommendations, profile_spend
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    rows = store.query_quality_sessions(since=since, limit=1500) or []
+    grouped: dict = {}
+    for r in rows:
+        if isinstance(r, dict):
+            grouped.setdefault(str(r.get("runtime") or "openclaw"), []).append(r)
+
+    eff = build_efficiency_slice(store.query_efficiency_rollup(days=days) or [],
+                                 days=days)
+    sub_stats = store.query_subagent_stats_by_runtime(days=days)
+    out = build_bench(
+        grouped,
+        efficiency_by_runtime=eff.get("byRuntime") or {},
+        subagent_stats_by_runtime=sub_stats if isinstance(sub_stats, dict) else {},
+        days=days,
+    )
+    spend = profile_spend(grouped)
+    out["profiles"] = spend.get("profiles", [])[:8]
+    out["total_spend_usd"] = spend.get("total_spend_usd", 0.0)
+    out["recommendations"] = build_recommendations(
+        spend, out.get("byRuntime"), published_pairs())[:8]
+    out["headtohead"] = build_headtohead(grouped)
+    out["store_available"] = True
+    return out
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -21195,6 +21343,21 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_ce:
         log.debug("snapshot: context_economics slice failed: %s", _e_ce)
 
+    # Harness Engineering bench slice, so the hosted tab renders real verdicts
+    # from the encrypted snapshot instead of its honest empty state. Built on
+    # the daemon's OWN store handle (same DuckDB pass as the slices above).
+    # Shape mirrors GET /api/bench so the cm-cloud-bench interceptor is a
+    # pass-through. Best-effort; honest empty on any failure.
+    bench_slice = {"schema": 1, "byRuntime": {}, "ranked": [], "unranked": [],
+                   "store_available": False}
+    try:
+        from clawmetry import local_store as _ls_bench
+        _bench_store = _ls_bench.get_store()
+        if _bench_store is not None:
+            bench_slice = _build_bench_slice(_bench_store)
+    except Exception as _e_bench:
+        log.debug("snapshot: bench slice failed: %s", _e_bench)
+
     # Eval (LLM-judge) scores, so the hosted dashboard's Eval card populates from
     # the encrypted snapshot (cloud stays blind; E2E preserved). Built on the
     # daemon's own store handle. Best-effort; empty until evals run (needs a
@@ -21398,6 +21561,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "toolCatalog": tool_catalog_slice,
         "mcpServers": mcp_servers_slice,
         "contextEconomics": context_economics_slice,
+        # Harness Engineering bench: verdict stamps, $/done, profiles,
+        # recommendations, head-to-head. Read by cm-cloud-bench as sp.bench.
+        "bench": bench_slice,
         "autonomy": _build_autonomy_snapshot(),
         "flowRuns": _build_flow_runs_snapshot(),
         "flowLanes": _build_flow_lanes_snapshot(),
@@ -21472,6 +21638,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "governance": _build_governance(),
         "dailyUsage": _du,  # #2142: computed once above, shared with `spending`
         "reliability": _build_reliability(),
+        "quality": _build_quality_snapshot(),
         "memoryAccess": _build_memory_access(),
         "traces": _build_traces(),
         "turnAnatomy": _build_turn_anatomy(),
@@ -22007,6 +22174,21 @@ def run_daemon() -> None:
         configure_outbound_network(role="daemon")
     except Exception as _net_e:
         log.warning("TLS/proxy bootstrap failed: %s", _net_e)
+    # Raise the file-descriptor soft limit. Under launchd the default soft
+    # limit is 256; a busy daemon (DuckDB + local-query server + relay
+    # sockets) runs right at that ceiling and every request past it dies
+    # with EMFILE in werkzeug (seen live 2026-09-01: 244 fds open, then
+    # "OSError: [Errno 24] Too many open files" on the query server).
+    # Never raises; keeps whatever the platform allows.
+    try:
+        import resource
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        _want = min(4096, _hard if _hard != resource.RLIM_INFINITY else 4096)
+        if _soft < _want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (_want, _hard))
+            log.info("raised RLIMIT_NOFILE soft limit %d -> %d", _soft, _want)
+    except Exception as _fd_e:
+        log.debug("could not raise fd limit: %s", _fd_e)
     # Outbound OTLP exporter (enterprise): activated by the ``otlp_endpoint``
     # key in ~/.clawmetry/config.json. scope="config" is daemon-only — the
     # dashboard's env-var-activated exporter is a separate scope, so both
