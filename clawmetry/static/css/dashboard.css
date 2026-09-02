@@ -649,6 +649,17 @@
   .chat-msg.thinking .chat-role { color: #22d3ee; opacity: 1; }
   .chat-msg.thinking .chat-content-truncated::after { background: linear-gradient(transparent, rgba(16,34,40,0.9)); }
   .chat-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
+  /* History gap: where the server cut the transcript to its newest window.
+     A quiet divider with the live "N not loaded" count and the load control,
+     not a chat bubble; it shrinks as pages arrive and leaves when the gap
+     closes. */
+  .replay-history-gap { display: flex; align-items: center; gap: 12px; align-self: stretch; margin: 6px 0; padding: 4px 0; font-size: 12px; color: var(--text-muted); }
+  .replay-history-gap-line { flex: 1; height: 1px; background: var(--border-secondary); }
+  .replay-history-gap-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .replay-history-gap-status { white-space: nowrap; }
+  .replay-history-gap-btn { white-space: nowrap; }
+  .replay-history-gap-all { white-space: nowrap; font-size: 11px; color: var(--text-muted); text-decoration: underline dotted; }
+  .replay-history-gap-all:hover { color: var(--text-secondary); }
   /* Compact chip for tool turns (no prose) so they don't render as blank
      bubbles. Role-accented left border keeps them consistent with the prose
      bubbles while reading as secondary. */
@@ -3379,3 +3390,14 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .bench-labt tr.bench-lab-mine td { font-weight: 600; }
 .bench-empty-card { color: var(--text-secondary); font-size: 13.5px; }
 @media (prefers-reduced-motion: reduce) { .bench-live i { animation: none; } }
+.bench-h2ht td:first-child { color: var(--text-muted); }
+.bench-h2ht td:not(:first-child), .bench-h2ht th:not(:first-child) { text-align: right; }
+.bench-cfoot { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.bench-btn {
+  font-size: 12px; border: 1px solid var(--border-primary); background: var(--button-bg);
+  color: var(--text-secondary); border-radius: 7px; padding: 4px 11px; cursor: pointer;
+}
+.bench-btn:hover { background: var(--button-hover); }
+.bench-btn:focus-visible { outline: 2px solid var(--bg-accent); outline-offset: 1px; }
+.bench-btn[disabled] { opacity: .55; cursor: not-allowed; }
+.bench-whydisabled { font-size: 11px; color: var(--text-faint); }

@@ -19399,6 +19399,15 @@ function _buildReplayEvent(m, idx) {
   if (role === 'assistant' && m.content && m.content.indexOf('[tool_use]') !== -1) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('<antml_thinking>') !== -1) type = 'thinking';
   if (role === 'compaction') type = 'compaction';
+  // History-gap marker: the server capped this transcript to its newest
+  // window and left a structured placeholder where the elided middle sits.
+  // Older daemons/snapshots shipped it as a prose system message — recognise
+  // that shape too so the gap always renders as a paging affordance.
+  var omitted = null;
+  if (_isHistoryGapMsg(m)) {
+    type = 'history_gap';
+    omitted = _historyGapOmitted(m);
+  }
   // Capture compaction-specific fields
   var extra = {};
   if (role === 'compaction') {
@@ -19426,9 +19435,25 @@ function _buildReplayEvent(m, idx) {
     raw: (m.raw !== undefined ? m.raw : null),
     originalIndex: idx,
     extra: extra,
+    omitted: omitted,
     modelId: m.modelId || null,
     thinkingLevel: m.thinkingLevel || null
   };
+}
+
+// Is this message the server's history-gap placeholder? New daemons stamp
+// type=history_gap + omitted; pre-0.12.800 snapshots carried only the prose
+// "… N earlier messages not shown here…" system message.
+var _LEGACY_GAP_RE = /^…?\s*(\d+) earlier messages/;
+function _isHistoryGapMsg(m) {
+  if (!m || typeof m !== 'object') return false;
+  if (m.type === 'history_gap') return true;
+  return m.role === 'system' && _LEGACY_GAP_RE.test(String(m.content || ''));
+}
+function _historyGapOmitted(m) {
+  if (typeof m.omitted === 'number') return Math.max(0, m.omitted);
+  var mm = String(m.content || '').match(_LEGACY_GAP_RE);
+  return mm ? parseInt(mm[1], 10) : null;
 }
 
 // ── Raw payload toggle (issue #1895) ───────────────────────────────────────
@@ -19601,6 +19626,10 @@ function _renderReplayEvent(ev, highlighted) {
   if (role === 'compaction') {
     return _renderCompactionEvent(ev, highlighted);
   }
+  // The history gap is a paging control, never a chat bubble.
+  if (ev.type === 'history_gap') {
+    return _renderHistoryGap(ev);
+  }
   // Raw mode (#1895): show the verbatim payload bubble when this turn has one.
   // Compaction markers carry no captured payload, so they fall through above.
   if (window._transcriptRawMode && ev.raw != null) {
@@ -19727,7 +19756,11 @@ function toggleCompaction(idx) {
 function _replayFilteredEvents() {
   var f = window._replayFilter;
   if (!f || f === 'all') return window._replayEvents;
-  return window._replayEvents.filter(function(ev) { return ev.type === f || ev.role === f; });
+  // The history gap survives every filter: it is how the user reaches the
+  // rest of the session, and the filtered view has the same hole in it.
+  return window._replayEvents.filter(function(ev) {
+    return ev.type === f || ev.role === f || ev.type === 'history_gap';
+  });
 }
 
 // Group a flat event list into "turns" anchored on each USER event, so a long
@@ -19924,6 +19957,8 @@ function _replayRenderCurrent() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
   _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
+  _updateLoadEarlierBtn();
+  _armHistoryGapAutoload();
 }
 
 function replayNext() {
@@ -20071,6 +20106,10 @@ function _updateLoadEarlierBtn() {
   }
   var p = window._transcriptPaging;
   if (!p || !p.hasMore) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  // When the inline history-gap row is on screen it IS the control (with the
+  // live count and loading/error state); a second identical button above the
+  // stream is just noise.
+  if (wrap.querySelector('.replay-history-gap')) { host.innerHTML = ''; host.style.display = 'none'; return; }
   host.style.display = '';
   if (p.loading) {
     host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">⏳ '
@@ -20087,12 +20126,81 @@ function _updateLoadEarlierBtn() {
   }
 }
 
+// Inline row rendered where the server cut the transcript: "N earlier
+// messages not loaded" + the load control, carrying the same loading / error
+// state as the top button. The count is decremented as pages arrive and the
+// row disappears when has_more goes false, so it always describes the gap
+// that is actually still there.
+function _renderHistoryGap(ev) {
+  var p = window._transcriptPaging || {};
+  var n = (typeof ev.omitted === 'number') ? ev.omitted : null;
+  var countLabel = n != null
+    ? t('transcript.history_gap_count', {count: n, n: n}, n + ' earlier messages not loaded')
+    : t('transcript.history_gap', null, 'Earlier messages not loaded');
+  var action;
+  if (p.loading || p.draining) {
+    action = '<span class="replay-history-gap-status">⏳ '
+      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+  } else if (p.error) {
+    action = '<button class="refresh-btn replay-history-gap-btn" style="color:#e0625a;" onclick="loadEarlierMessages()">'
+      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + '</button>';
+  } else if (p.hasMore) {
+    action = '<button class="refresh-btn replay-history-gap-btn" onclick="loadEarlierMessages()">⬆ '
+      + escHtml(t('transcript.load_earlier', null, 'Load earlier messages'))
+      + '</button>'
+      + '<a href="#" class="replay-history-gap-all" onclick="loadAllEarlierMessages(); return false;">'
+      + escHtml(t('transcript.load_all_earlier', null, 'Load all')) + '</a>';
+  } else {
+    action = '';
+  }
+  return '<div class="replay-history-gap" id="replay-msg-' + ev.originalIndex + '" role="status">'
+    + '<span class="replay-history-gap-line"></span>'
+    + '<span class="replay-history-gap-label">' + escHtml(countLabel) + '</span>'
+    + action
+    + '<span class="replay-history-gap-line"></span>'
+    + '</div>';
+}
+
+// Reverse infinite scroll: when the gap row scrolls into view, pull the next
+// page without a click. After each page the viewport is re-anchored on what
+// the user was reading, which pushes the row back out of view, so it fires
+// once per scroll-up rather than draining the whole session at once. A failed
+// page stops the auto-pull (the row shows tap-to-retry) and newest-first
+// ordering opts out because its anchoring runs the other way.
+function _armHistoryGapAutoload() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  if (window._historyGapObserver) { try { window._historyGapObserver.disconnect(); } catch (e) {} }
+  var row = wrap.querySelector('.replay-history-gap');
+  var p = window._transcriptPaging;
+  if (!row || !p || !p.hasMore || typeof IntersectionObserver !== 'function') return;
+  if (window._transcriptSort === 'newest') return;
+  var obs = new IntersectionObserver(function(entries) {
+    var q = window._transcriptPaging;
+    if (!q) return;
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].isIntersecting) { q.autoArmed = true; continue; }
+      // One auto page per approach: the row must leave the viewport before
+      // it can pull again, otherwise a gap that stays on screen after a page
+      // lands would drain the whole session in a request storm.
+      if (q.autoArmed === false || !q.hasMore || q.loading || q.error || q.draining) return;
+      q.autoArmed = false;
+      loadEarlierMessages();
+      return;
+    }
+  }, { rootMargin: '120px 0px 120px 0px' });
+  obs.observe(row);
+  window._historyGapObserver = obs;
+}
+
 async function loadEarlierMessages() {
   var p = window._transcriptPaging;
   if (!p || !p.hasMore || p.loading) return;
   p.loading = true;
   p.error = null;
   _updateLoadEarlierBtn();
+  _refreshHistoryGapRow();
   try {
     var url = '/api/transcript-page/' + encodeURIComponent(p.sid) + '?limit=150'
             + (p.cursor ? ('&before_ts=' + Math.floor(p.cursor)) : '');
@@ -20106,10 +20214,19 @@ async function loadEarlierMessages() {
     for (var i = 0; i < master.length; i++) seen[_pagingMsgKey(master[i])] = 1;
     var fresh = (body.messages || []).filter(function(m) { return !seen[_pagingMsgKey(m)]; });
     if (!body.has_more) {
-      // Reached the session start — the omission marker no longer describes
-      // a gap, so drop it from the stream.
-      master = master.filter(function(m) {
-        return !(m && m.role === 'system' && /^…\s*\d+ earlier messages/.test(String(m.content || '')));
+      // Reached the session start — the gap marker no longer describes a
+      // hole, so drop it from the stream.
+      master = master.filter(function(m) { return !_isHistoryGapMsg(m); });
+    } else {
+      // Shrink the marker's count by what just arrived so it keeps telling
+      // the truth about how much is still unloaded.
+      master = master.map(function(m) {
+        if (!_isHistoryGapMsg(m)) return m;
+        var left = _historyGapOmitted(m);
+        if (left == null) return m;
+        var next = Math.max(0, left - fresh.length);
+        return Object.assign({}, m, { type: 'history_gap', omitted: next,
+          content: next + ' earlier messages are not loaded yet.' });
       });
     }
     master = fresh.concat(master);
@@ -20128,14 +20245,61 @@ async function loadEarlierMessages() {
     // Keep the viewport anchored on what the user was reading: content grows
     // above, so restore scroll by the height delta.
     var se = document.scrollingElement || document.documentElement;
+    var wrapEl = document.getElementById('transcript-messages');
+    var gapBefore = wrapEl ? wrapEl.querySelector('.replay-history-gap') : null;
+    var gapTopBefore = gapBefore ? gapBefore.getBoundingClientRect().top : null;
     var beforeH = se.scrollHeight, beforeTop = se.scrollTop;
     _replayRenderCurrent();
-    se.scrollTop = beforeTop + (se.scrollHeight - beforeH);
+    var gapAfter = wrapEl ? wrapEl.querySelector('.replay-history-gap') : null;
+    if (gapAfter && gapTopBefore != null) {
+      // Pin the gap row where it was: pages land directly beneath it.
+      se.scrollTop = se.scrollTop + (gapAfter.getBoundingClientRect().top - gapTopBefore);
+    } else if (gapTopBefore != null && gapTopBefore >= 0) {
+      // Gap closed while the user was above it: content grew below, stay put.
+    } else {
+      se.scrollTop = beforeTop + (se.scrollHeight - beforeH);
+    }
   } catch (e) {
     p.error = String((e && e.message) || e);
   }
   p.loading = false;
   _updateLoadEarlierBtn();
+  _refreshHistoryGapRow();
+}
+
+// Walk every remaining page in sequence (still one bounded request at a
+// time, never a single giant fetch) until the gap closes or a page fails.
+async function loadAllEarlierMessages() {
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore || p.draining) return;
+  p.draining = true;
+  try {
+    var guard = 0;
+    while (p.hasMore && !p.error && guard++ < 400) {
+      if (window._transcriptPaging !== p) break;  // user opened another session
+      await loadEarlierMessages();
+    }
+  } finally {
+    p.draining = false;
+    _refreshHistoryGapRow();
+  }
+}
+
+// Re-render just the inline gap row (loading / error / count) without
+// rebuilding the whole stream.
+function _refreshHistoryGapRow() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  var row = wrap.querySelector('.replay-history-gap');
+  if (!row) return;
+  var evs = window._replayEvents || [];
+  for (var i = 0; i < evs.length; i++) {
+    if (evs[i].type === 'history_gap') {
+      row.outerHTML = _renderHistoryGap(evs[i]);
+      _armHistoryGapAutoload();
+      return;
+    }
+  }
 }
 
 async function viewTranscript(sessionId) {
@@ -29809,6 +29973,64 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     empty.innerHTML = '<div class="bench-card bench-empty-card">' + esc(msg) + '</div>';
   }
 
+  function benchWatchFooter(s) {
+    var dpd = (s.dollars_per_done || {}).value;
+    if (dpd == null) return '';
+    if (window.CLOUD_MODE) {
+      return '<div class="bench-cfoot"><button class="bench-btn" disabled>Watch $/done</button>' +
+        '<span class="bench-whydisabled">watching runs on your node, not the hosted view</span></div>';
+    }
+    var suggested = Math.max(1, Math.round(dpd * 1.5));
+    return '<div class="bench-cfoot"><button class="bench-btn" id="bench-watch-' + esc(s.runtime) + '"' +
+      ' onclick="_benchWatch(&quot;' + esc(s.runtime) + '&quot;,' + suggested + ')">Watch $/done</button>' +
+      '<span class="bench-whydisabled">alerts if a finished job starts costing over ' + esc(usd(suggested)) + '</span></div>';
+  }
+
+  window._benchWatch = async function (runtime, threshold) {
+    var btn = document.getElementById('bench-watch-' + runtime);
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving watch...'; }
+    var r = await fetch('/api/alerts/rules', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alert_type: 'dollars_per_done_above', runtime: runtime,
+        threshold_value: threshold, channels: ['banner'],
+        name: 'Watch $/done · ' + runtime
+      })
+    }).catch(function () { return null; });
+    if (btn) {
+      if (r && r.ok) {
+        btn.textContent = 'Watching (over ' + usd(threshold) + ')';
+      } else {
+        var msg = 'could not save';
+        try { var j = r ? await r.json() : null; if (j && (j.error || j.message)) msg = j.error || j.message; } catch (e) {}
+        btn.disabled = false; btn.textContent = 'Watch $/done';
+        btn.insertAdjacentHTML('afterend', ' <span class="bench-whydisabled">' + esc(msg).slice(0, 120) + '</span>');
+      }
+    }
+  };
+
+  window._benchCheaper = async function (runtime, slotId) {
+    var slot = document.getElementById(slotId);
+    if (!slot) return;
+    slot.innerHTML = '<span class="bench-faint">checking...</span>';
+    if (window.CLOUD_MODE) {
+      slot.innerHTML = '<span class="bench-faint">cheaper-model advice computes on your node; open the local dashboard</span>';
+      return;
+    }
+    var r = await fetch('/api/efficiency/routing-advisor?days=30').catch(function () { return null; });
+    var d = r && r.ok ? await r.json().catch(function () { return null; }) : null;
+    var scope = d && ((d.byRuntime || {})[runtime] || d.node) || null;
+    var sugg = (scope && scope.suggestions) || [];
+    if (!sugg.length) {
+      slot.innerHTML = '<span class="bench-faint">no cheaper-model swap found for this work right now</span>';
+      return;
+    }
+    slot.innerHTML = sugg.slice(0, 2).map(function (g) {
+      return '<div class="bench-say">' + esc(g.current_model) + ' to ' + esc(g.suggested_model) +
+        ' could save about ' + esc(usd(g.potential_savings_monthly_usd)) + '/mo. Apply via routing rules in ~/.clawmetry/proxy.json.</div>';
+    }).join('');
+  };
+
   function renderVerdict(bench) {
     var by = bench.byRuntime || {};
     var earning = [], burning = [], fog = [];
@@ -29861,6 +30083,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       (s.stamp_reason ? '<div class="bench-say">' + esc(s.stamp_reason) + '</div>' : '') +
       '<div class="bench-say bench-faint">' + s.sessions + ' sessions · ' + esc(usd(s.spend_usd) || '$0.00') + ' in the window' +
       (s.coverage && s.coverage.unmeasured_sessions ? ' · ' + s.coverage.unmeasured_sessions + ' not gradeable' : '') + '</div>' +
+      benchWatchFooter(s) +
       '</div>';
   }
 
@@ -29875,6 +30098,39 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       html += un.map(function (rt) { return crewCard(by[rt]); }).join('');
     }
     el.innerHTML = html || '<div class="bench-say">No harness activity observed in this window.</div>';
+  }
+
+
+  function renderHeadToHead(h2h) {
+    var el = document.getElementById('bench-h2h');
+    if (!el) return;
+    var matchups = (h2h && h2h.matchups) || [];
+    if (!matchups.length) {
+      el.innerHTML = '<div class="bench-say bench-faint">No comparable cohorts yet: comparing needs two harnesses with ' +
+        ((h2h && h2h.matchups && h2h.min_cohort) || 5) + '+ verified runs on the same kind of work. Honest silence beats an unfair chart.</div>';
+      return;
+    }
+    el.innerHTML = matchups.map(function (m) {
+      var rows = [
+        ['Finished jobs', function (s) { return s.done_rate == null ? 'unseen' : Math.round(s.done_rate * 100) + '%'; }],
+        ['Cost per finished job', function (s) { return s.dollars_per_done == null ? 'not priced' : usd(s.dollars_per_done); }],
+        ['Cost per run', function (s) { return usd(s.avg_cost_usd); }],
+        ['Rough runs (loops, thrash)', function (s) { return s.rough_rate == null ? 'unseen' : Math.round(s.rough_rate * 100) + '%'; }],
+        ['Tokens per run', function (s) { return s.avg_tokens == null ? 'unseen' : Number(s.avg_tokens).toLocaleString(); }],
+        ['Verified runs', function (s) { return String(s.sessions); }]
+      ];
+      var head = '<tr><th></th>' + m.sides.map(function (s) { return '<th>' + esc(RT_LABEL(s.runtime)) + '</th>'; }).join('') + '</tr>';
+      var body = rows.map(function (r) {
+        return '<tr><td>' + esc(r[0]) + '</td>' + m.sides.map(function (s) { return '<td>' + esc(r[1](s)) + '</td>'; }).join('') + '</tr>';
+      }).join('');
+      var title = m.basis === 'workspace'
+        ? esc(m.workspace) : esc(PROFILE_WORDS[m.profile] || m.profile);
+      var scopeNote = m.basis === 'workspace'
+        ? 'same workspace, measurable runs only' : 'same workload, measurable runs only';
+      return '<div class="bench-lane"><div class="bench-lanehead"><b>' + title + '</b> ' +
+        '<span class="bench-faint">' + scopeNote + '</span></div>' +
+        '<div style="overflow-x:auto"><table class="bench-labt bench-h2ht">' + head + body + '</table></div></div>';
+    }).join('');
   }
 
   function renderFlow(trace) {
@@ -29978,10 +30234,13 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
           (cand.evidence === 'published' ? ' lab' : '') + '">' + ev + '</span></div>';
       }).join('');
       var rankNote = c.ranked ? '' : '<div class="bench-say bench-faint">Options are unranked: not enough evidence to order them honestly.</div>';
+      var topRt = (c.candidates && c.candidates[0] && c.candidates[0].runtime) || '';
+      var slotId = 'bench-cheaper-' + c.profile;
+      var cheaper = topRt ? '<div class="bench-cfoot"><button class="bench-btn" onclick="_benchCheaper(&quot;' + esc(topRt) + '&quot;,&quot;' + slotId + '&quot;)">See cheaper options</button></div><div id="' + slotId + '"></div>' : '';
       return '<div class="bench-wcard"><div class="bench-wname">' + esc(PROFILE_WORDS[c.profile] || c.profile) + '</div>' +
         '<div class="bench-say bench-faint">' + Math.round((c.spend_share || 0) * 100) + '% of spend</div>' +
         '<div class="bench-say">Wants: <b>' + (c.qualities || []).map(esc).join('</b>, <b>') + '</b>.</div>' +
-        '<div class="bench-opts">' + opts + '</div>' + rankNote + '</div>';
+        '<div class="bench-opts">' + opts + '</div>' + rankNote + cheaper + '</div>';
     }).join('') : '<div class="bench-say">Workload profiles appear once sessions are observed.</div>';
   }
 
@@ -30008,7 +30267,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     if (!empty || !body) return;
     var r = await fetch('/api/bench?days=30').catch(function () { return null; });
     if (!r || !r.ok) {
-      benchEmpty('The bench is computed on your node from your own traffic. If you are on the hosted dashboard, this view lands in an upcoming release; on a local install, start the sync daemon and check back.');
+      benchEmpty('The bench is measured on your node from your own traffic. On the hosted dashboard it fills in from your node\'s encrypted snapshot once the daemon reports; on a local install, start the sync daemon and refresh.');
       return;
     }
     var bench = await r.json().catch(function () { return null; });
@@ -30036,6 +30295,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var ccP = fetch('/api/bench/context-curves').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
     var pub = await pubP, cc = await ccP;
     renderWork({ cards: bench.recommendations || [] });
+    renderHeadToHead(bench.headtohead);
     renderLab(pub);
     renderLanes(cc);
     var sid = cc && cc.curves && cc.curves.length ? cc.curves[0].session_id : null;

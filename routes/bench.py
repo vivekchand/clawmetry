@@ -81,7 +81,7 @@ def api_bench():
     proxy is not cheap and the quality-session scan must not run twice
     (FLYWHEEL performance budget)."""
     from clawmetry.efficiency import build_efficiency_slice
-    from clawmetry.harness_bench import build_bench
+    from clawmetry.harness_bench import build_bench, build_headtohead
     from clawmetry.published_benchmarks import published_pairs
     from clawmetry.workload_profiles import build_recommendations, profile_spend
 
@@ -105,6 +105,7 @@ def api_bench():
     out["total_spend_usd"] = spend.get("total_spend_usd", 0.0)
     out["recommendations"] = build_recommendations(
         spend, out.get("byRuntime"), published_pairs())
+    out["headtohead"] = build_headtohead(grouped or {})
     out["store_available"] = store_available
     out["_source"] = "local_store" if store_available else "none"
     return jsonify(out)
