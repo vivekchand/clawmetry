@@ -1005,6 +1005,94 @@ def _read_onboard_trace_timing() -> dict:
     return {}
 
 
+def _read_onboard_otel_trace() -> dict:
+    """Read the NemoClaw onboarding OTel-format trace artifact (#5411).
+
+    The harness (``src/lib/trace.ts``) writes this artifact when
+    ``NEMOCLAW_TRACE=1``. Path resolution order:
+    1. ``NEMOCLAW_TRACE_FILE`` env var (absolute or relative path).
+    2. Most-recently-modified ``*.json`` under ``NEMOCLAW_TRACE_DIR`` env var.
+    3. Most-recently-modified ``*.json`` under ``~/.nemoclaw/.e2e/traces/``.
+
+    Surfaces these keys into the adapter ``meta`` dict:
+    - ``onboardOtelTraceId``      (str)  — top-level ``trace_id``
+    - ``onboardOtelTotalMs``      (int)  — top-level ``total_duration_ms``
+    - ``onboardOtelSlowestSpans`` (list) — top-level ``slowest_spans`` list
+    - ``onboardOtelHasError``     (bool) — True if any span carries
+                                           ``status.code == "ERROR"``
+
+    Returns ``{}`` when no file is found, the JSON is malformed, or any
+    other error occurs — never raises.
+    """
+    import os as _os
+    import json as _json
+    from pathlib import Path
+
+    def _find_latest_json(directory: Path):
+        if not directory.is_dir():
+            return None
+        candidates = sorted(directory.glob("*.json"),
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True)
+        return candidates[0] if candidates else None
+
+    artifact_path = None
+    env_file = _os.environ.get("NEMOCLAW_TRACE_FILE", "")
+    if env_file:
+        p = Path(env_file)
+        if p.exists():
+            artifact_path = p
+
+    if artifact_path is None:
+        env_dir = _os.environ.get("NEMOCLAW_TRACE_DIR", "")
+        if env_dir:
+            artifact_path = _find_latest_json(Path(env_dir))
+
+    if artifact_path is None:
+        artifact_path = _find_latest_json(Path.home() / ".nemoclaw" / ".e2e" / "traces")
+
+    if artifact_path is None:
+        return {}
+
+    try:
+        raw = _json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug("nemoclaw otel trace read failed (%s): %s", artifact_path, exc)
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict = {}
+    if isinstance(raw.get("trace_id"), str) and raw["trace_id"]:
+        out["onboardOtelTraceId"] = raw["trace_id"]
+    total = raw.get("total_duration_ms")
+    if isinstance(total, (int, float)) and total >= 0:
+        out["onboardOtelTotalMs"] = int(total)
+    if isinstance(raw.get("slowest_spans"), list):
+        out["onboardOtelSlowestSpans"] = raw["slowest_spans"]
+
+    has_error = False
+    for rs in raw.get("resource_spans", []):
+        if not isinstance(rs, dict):
+            continue
+        for ss in rs.get("scope_spans", []):
+            if not isinstance(ss, dict):
+                continue
+            for span in ss.get("spans", []):
+                if not isinstance(span, dict):
+                    continue
+                status = span.get("status")
+                code = (status.get("code") if isinstance(status, dict)
+                        else status)
+                if code == "ERROR":
+                    has_error = True
+                    break
+    out["onboardOtelHasError"] = has_error
+
+    return out
+
+
 # Orchestration capture (nemoclaw leg) ---------------------------------------
 # A sandboxed OpenClaw child is "running" only while the registry row shows
 # no endedAt AND recent activity — a child killed with the sandbox never gets
@@ -1171,6 +1259,7 @@ class NemoClawAdapter(AgentAdapter):
         meta.update(_read_nemoclaw_sandbox_lifecycle())
         meta["ollama_inference"] = _read_nemoclaw_ollama_inference()
         meta.update(_read_onboard_trace_timing())
+        meta.update(_read_onboard_otel_trace())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
