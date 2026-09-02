@@ -311,7 +311,12 @@ def test_cap_preserves_first_user_prompt_and_marks_omission():
     # so the viewer's ts-sorted merge keeps it in place.
     marker = capped[1]
     assert marker["role"] == "system"
-    assert "not shown" in marker["content"]
+    # Structured paging affordance: the replay renders type=history_gap as an
+    # inline "load earlier" row with a live count, not as a system message.
+    assert marker["type"] == "history_gap"
+    assert marker["omitted"] == 83 - 1 - len(capped[2:])
+    assert "not loaded yet" in marker["content"]
+    assert "cloud" not in marker["content"].lower()
     assert capped[0]["timestamp"] < marker["timestamp"] < capped[2]["timestamp"]
     # Tail is the most recent messages, ending on the true last message.
     assert capped[-1]["content"] == "reply 82"
@@ -324,7 +329,8 @@ def test_cap_without_user_prompt_still_marks_omission():
     capped, truncated, _oldest = _cap_transcript_messages(msgs, 80)
     assert truncated is True
     assert capped[0]["role"] == "system"
-    assert "not shown" in capped[0]["content"]
+    assert capped[0]["type"] == "history_gap"
+    assert capped[0]["omitted"] == 100 - len(capped[1:])
     assert capped[-1]["content"] == "reply 99"
 
 
