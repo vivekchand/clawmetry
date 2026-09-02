@@ -44,6 +44,8 @@ test-moat:
 	    tests/test_channel_event_chokepoint.py \
 	    tests/test_no_direct_get_store_in_routes.py \
 	    tests/test_local_query_api.py \
+	    tests/test_harness_bench.py \
+	    tests/test_bench_route.py \
 	    -q
 
 # MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent
