@@ -8,6 +8,8 @@
   "db_last_error": null,
   "db_path": "<volatile>",
   "db_recoveries": 0,
+  "duckdb_memory_limit": "<volatile>",
+  "duckdb_oom_reopens": 0,
   "engine": "duckdb",
   "event_count": 4,
   "last_flush_ago_s": "<volatile>",
