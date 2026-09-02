@@ -1569,7 +1569,14 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
             # plist stays valid if the venv is rebuilt without entry points.
             # The console-script path rots silently; the interpreter path is
             # stable across venv rebuilds (#4297).
-            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--port", str(port)]
+            # ``--no-debug`` because dashboard.py's ``--debug`` DEFAULTS TO
+            # TRUE: without it the service ran Flask's development server
+            # with the stat reloader, which restarts on any file change
+            # (every self-update), polls thousands of files a second, and is
+            # not the waitress server every other launcher (systemd unit,
+            # desktop app, CI) starts. Found 2026-09-02 on a machine whose
+            # dashboard log read "Debugger is active!" under launchd.
+            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--no-debug", "--port", str(port)]
             _args_xml = "\n".join(f"        <string>{a}</string>" for a in _launchd_cmd)
             # launchd starts agents with cwd="/" and does not always export
             # HOME. dashboard.py's workspace auto-detect ends in os.getcwd(),
