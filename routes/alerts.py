@@ -304,6 +304,10 @@ _EVALUATOR_ONLY = frozenset({
     "error_rate",
     "eval_score_below",
     "outcome_failure_rate",
+    # Harness Engineering "Watch $/done": cost per finished job for a
+    # runtime crossed a dollar threshold (clawmetry/alert_evaluator.py
+    # _eval_dollars_per_done, quality-window fed).
+    "dollars_per_done_above",
 })
 
 # Local ``type`` values with a real ``rtype ==`` branch in dashboard.py's

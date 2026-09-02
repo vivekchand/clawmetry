@@ -1009,6 +1009,10 @@ _DAEMON_METHODS = frozenset({
     "ingest_git_scan",
     "query_git_repos",
     "query_git_outcomes",
+    # Harness Engineering tab (routes/bench.py): per-runtime sub-agent
+    # fan-out stats. Unlisted -> the proxy 400s, the fast path returns
+    # None, and the bench silently shows every harness as unseen.
+    "query_subagent_stats_by_runtime",
 })
 
 
