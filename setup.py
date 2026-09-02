@@ -71,6 +71,9 @@ setup(
         "clawmetry": [
             "resources/*.sh",
             "py.typed",
+            # Curated third-party benchmark pairs for the Harness Engineering
+            # tab (clawmetry/published_benchmarks.py). No runtime fetch.
+            "data/*.json",
             "static/**/*",
             "static/**/*.*",
             # v2 React SPA bundle (pre-built by `cd frontend && npm run build`
