@@ -1131,6 +1131,11 @@
   "tracing.waterfall": "Waterfall",
   "transcript.compare": "Compare",
   "transcript.deep_dive": "Deep dive",
+  "transcript.history_gap": "Earlier messages not loaded",
+  "transcript.history_gap_count": "{n} earlier messages not loaded",
+  "transcript.history_gap_count_one": "{n} earlier message not loaded",
+  "transcript.history_gap_count_other": "{n} earlier messages not loaded",
+  "transcript.load_all_earlier": "Load all",
   "transcript.load_earlier": "Load earlier messages",
   "transcript.load_earlier_failed": "Couldn't load older messages - tap to retry",
   "transcript.loading_earlier": "Loading earlier messages...",
@@ -1285,5 +1290,7 @@
   "bench.work_heading": "For your work",
   "bench.work_note": "Recommendations name the qualities a job needs, then list options. Never a single winner.",
   "bench.lab_heading": "From the lab",
-  "bench.lab_summary": "Published benchmark results for your harnesses and models. Third-party runs, dated."
+  "bench.lab_summary": "Published benchmark results for your harnesses and models. Third-party runs, dated.",
+  "bench.h2h_heading": "Head to head: the same kind of work, side by side",
+  "bench.h2h_note": "Two harnesses compare only when they did the same kind of work with enough verified runs each. Unlike work is never compared."
 }

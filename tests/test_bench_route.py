@@ -83,6 +83,9 @@ class TestApiBench:
         # per tab load, never a second quality-session scan.
         assert isinstance(data["recommendations"], list)
         assert data["profiles"] is not None
+        # Head-to-head rides the same payload too (REQ-HB-005); this
+        # fixture has no comparable cohorts, so it declines honestly.
+        assert data["headtohead"]["declined_reason"] == "no_comparable_cohorts"
 
     def test_days_is_clamped(self, client, monkeypatch):
         seen = {}

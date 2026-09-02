@@ -41,6 +41,7 @@ import inspect
 import json
 import logging
 import os
+import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 import threading
 import time
@@ -193,6 +194,30 @@ def _is_fatal_db_state(exc: BaseException) -> bool:
         return False
 
 
+def _is_oom_error(exc: BaseException | None) -> bool:
+    """True when DuckDB's message says the buffer pool ran out, not that an
+    index is stale. The two invalidations need different recoveries: an OOM
+    handle just needs reopening under a larger ``memory_limit``; dropping
+    every index for it would be a minute of pointless churn on a 4 GB store.
+    """
+    if exc is None:
+        return False
+    try:
+        return "Out of Memory" in str(exc)
+    except Exception:
+        return False
+
+
+# Each OOM-triggered reopen raises the computed memory ceiling by one notch
+# (x1.5, still capped at the RAM fraction) so the same query does not take the
+# fresh handle down again. Process-wide, because the ceiling is per DuckDB
+# instance, not per LocalStore.
+_oom_bumps = 0
+
+# A second OOM reopen inside this window is refused: the ceiling has already
+# moved once and a query that still does not fit needs the log, not a loop.
+_OOM_REOPEN_COOLDOWN_SECS = 300.0
+
 # Log the invalidated-database recovery once per process, not once per tick.
 _fatal_db_reported = False
 
@@ -287,7 +312,20 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
+
+# A heartbeat row is a liveness ping, not a transport envelope. The daemon's
+# heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
+# hosted dashboard (the Brain "recent" push alone is ~8.7 MB) -- and until
+# 2026-09-02 the whole payload was stored in ``heartbeats.data``: 231 rows x
+# 8.7 MB = 2 GB, the entire bulk of a 4.2 GB store holding 97 MB of events.
+# Any statement touching that column then needed >2 GB of buffer pool, which is
+# what ran the daemon out of memory (see ``recover_invalidated_db``) and, after
+# a restart, held the store lock for tens of seconds per dashboard poll. Keys
+# named here are never stored; any other value over the byte cap is dropped
+# too, and the row records what it dropped so the omission is visible.
+_HEARTBEAT_DATA_DROP_KEYS = frozenset({"cache_pushes"})
+_HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 
 # Day buckets are node-local calendar days, matching the cost windows that
 # filter them (clawmetry/cost_windows.py, ADR-046). Before v13 a day was the
@@ -1857,6 +1895,38 @@ def _iso_utc(ts: float) -> str | None:
         return None
 
 
+def _slim_heartbeat_data(hb: dict[str, Any]) -> dict[str, Any]:
+    """The part of a heartbeat payload worth keeping in the row: everything
+    except the columns stored beside it, the transport-only keys in
+    ``_HEARTBEAT_DATA_DROP_KEYS``, and any value larger than
+    ``_HEARTBEAT_DATA_MAX_VALUE_BYTES``. Dropped keys are listed under
+    ``_dropped`` with their byte size, so a reader sees a gap, not a lie."""
+    column_keys = {"node_id", "ts", "agent_type", "version", "e2e",
+                   "size_mb", "events_total"}
+    out: dict[str, Any] = {}
+    dropped: dict[str, int] = {}
+    for k, v in hb.items():
+        if k in column_keys:
+            continue
+        if k in _HEARTBEAT_DATA_DROP_KEYS:
+            try:
+                dropped[k] = len(json.dumps(v, separators=(",", ":"), default=str))
+            except Exception:
+                dropped[k] = -1
+            continue
+        try:
+            size = len(json.dumps(v, separators=(",", ":"), default=str))
+        except Exception:
+            size = -1
+        if size > _HEARTBEAT_DATA_MAX_VALUE_BYTES:
+            dropped[k] = size
+            continue
+        out[k] = v
+    if dropped:
+        out["_dropped"] = dropped
+    return out
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -1880,7 +1950,110 @@ def _to_blob(value: Any) -> bytes | None:
 # a small number and bound the buffer pool so no query can take over the
 # machine. Both are env-overridable for power users with big stores.
 #   CLAWMETRY_DUCKDB_THREADS       (default 2; 0/blank = DuckDB default = all cores)
-#   CLAWMETRY_DUCKDB_MEMORY_LIMIT  (default "2GB"; blank = DuckDB default)
+#   CLAWMETRY_DUCKDB_MEMORY_LIMIT  (default: sized to the store, see below;
+#                                   blank = DuckDB default)
+#
+# The memory limit is a CEILING on DuckDB's buffer pool, not a reservation:
+# idle, the daemon sits near 50 MB whatever the number says. It used to be a
+# flat 2GB, and on 2026-09-02 a 4.2 GB store overflowed it on the
+# ``query_aggregates`` full-table dedupe: the rollback ran out of memory too,
+# DuckDB invalidated the handle, and the daemon served 500s for two hours while
+# looking healthy. A flat number is wrong in both directions -- too small for a
+# store that grew past it, needlessly large on a 1 GB store -- so the default is
+# now derived from the file: 1.5x the on-disk size, floored at 2GB, capped at
+# half of physical RAM. The env var still wins when set.
+_DUCKDB_MEMORY_FLOOR_BYTES = 2 * 1024 ** 3
+_DUCKDB_MEMORY_STORE_MULTIPLIER = 1.5
+_DUCKDB_MEMORY_RAM_FRACTION = 0.5
+_DUCKDB_OOM_BUMP_MULTIPLIER = 1.5
+
+
+def _physical_ram_bytes() -> int | None:
+    """Total physical RAM, or None when the platform will not say.
+    sysconf covers Linux and macOS; Windows goes through kernel32."""
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page = os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page > 0:
+            return int(pages * page)
+    except (AttributeError, ValueError, OSError):
+        pass
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            st = _MemStatus()
+            st.dwLength = ctypes.sizeof(_MemStatus)
+            fn = ctypes.windll.kernel32.GlobalMemoryStatusEx
+            fn.argtypes = [ctypes.POINTER(_MemStatus)]
+            fn.restype = ctypes.c_int
+            if fn(ctypes.byref(st)):
+                return int(st.ullTotalPhys)
+        except Exception:
+            pass
+    return None
+
+
+def _duckdb_memory_limit_bytes(
+    store_bytes: int | None = None,
+    ram_bytes: int | None = None,
+    oom_bumps: int | None = None,
+) -> int:
+    """The buffer-pool ceiling for this store: 1.5x its on-disk size, never
+    below 2GB, never above half of RAM, raised one notch per OOM reopen this
+    process. Pure so the sizing rule is testable without a real file."""
+    if store_bytes is None:
+        store_bytes = _on_disk_bytes()
+    if ram_bytes is None:
+        ram_bytes = _physical_ram_bytes()
+    if oom_bumps is None:
+        oom_bumps = _oom_bumps
+    want = max(
+        _DUCKDB_MEMORY_FLOOR_BYTES,
+        int(store_bytes * _DUCKDB_MEMORY_STORE_MULTIPLIER),
+    )
+    want = int(want * (_DUCKDB_OOM_BUMP_MULTIPLIER ** max(0, oom_bumps)))
+    if ram_bytes:
+        cap = int(ram_bytes * _DUCKDB_MEMORY_RAM_FRACTION)
+        # A box with less than 4 GB still gets the 2GB floor: DuckDB only
+        # pins what a query needs, and the floor is what the store was
+        # tuned against for years.
+        want = max(_DUCKDB_MEMORY_FLOOR_BYTES, min(want, cap))
+    return want
+
+
+def _format_duckdb_bytes(n: int) -> str:
+    """Render a byte count the way DuckDB's ``memory_limit`` wants it.
+    Whole gigabytes stay ``NGB`` (the value the older flat default used and
+    the tests pin); anything else is expressed in MB."""
+    gb = 1024 ** 3
+    if n % gb == 0:
+        return f"{n // gb}GB"
+    return f"{max(1, n // (1024 ** 2))}MB"
+
+
+def _duckdb_memory_limit_setting() -> str:
+    """``memory_limit`` for a new connection: the env override verbatim, else
+    the store-sized ceiling. Empty string means "let DuckDB decide"."""
+    mem = os.environ.get("CLAWMETRY_DUCKDB_MEMORY_LIMIT")
+    if mem is not None:
+        return mem
+    return _format_duckdb_bytes(_duckdb_memory_limit_bytes())
+
+
 def _duckdb_runtime_config() -> dict:
     cfg: dict = {}
     try:
@@ -1889,7 +2062,7 @@ def _duckdb_runtime_config() -> dict:
         threads = 2
     if threads > 0:
         cfg["threads"] = threads
-    mem = os.environ.get("CLAWMETRY_DUCKDB_MEMORY_LIMIT", "2GB")
+    mem = _duckdb_memory_limit_setting()
     if mem:
         cfg["memory_limit"] = mem
     return cfg
@@ -2405,6 +2578,14 @@ class LocalStore:
         # ``recover_invalidated_db``). A second invalidation is not a stale
         # index and must not become a loop.
         self._recovery_attempted = False
+        # Serialises recovery between the sync loop and the local query
+        # server's request threads: with several readers failing on the same
+        # dead handle at once, exactly one rebuilds and the rest wait for it.
+        # ``_conn_generation`` counts reopens so a caller whose failure
+        # predates the latest reopen can tell it has already been healed.
+        self._recovery_lock = threading.Lock()
+        self._conn_generation = 0
+        self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
             try:
@@ -2429,8 +2610,27 @@ class LocalStore:
                     pass
                 raise
 
-    def recover_invalidated_db(self) -> bool:
+    def recover_invalidated_db(
+        self,
+        exc: BaseException | None = None,
+        *,
+        seen_generation: int | None = None,
+    ) -> bool:
         """Apply DuckDB's own prescribed recovery for an invalidated handle.
+
+        Two causes, two recoveries. When ``exc`` carries DuckDB's
+        ``Out of Memory`` wording the handle is dead because a query overran
+        the buffer pool, not because an index is stale: the connection is
+        reopened under a ceiling one notch higher and nothing on disk is
+        touched. That reopen may repeat, but not within
+        ``_OOM_REOPEN_COOLDOWN_SECS`` of the last one. Any other invalidation
+        gets the index rebuild below, at most once per process.
+
+        ``seen_generation`` is the ``_conn_generation`` the caller observed
+        before its statement failed. If another thread has already reopened
+        since, the caller's handle is not the one that is dead and this
+        returns True without doing anything, so a burst of concurrent
+        failures on one dead handle costs one recovery, not several.
 
         DuckDB says it plainly: "the database must be restarted prior to being
         used again". Until now nothing acted on that. The daemon kept running
@@ -2459,10 +2659,79 @@ class LocalStore:
         global _fatal_db_reported
         if self._read_only:
             return False
-        if self._recovery_attempted:
-            return False
-        self._recovery_attempted = True
+        with self._recovery_lock:
+            if (seen_generation is not None
+                    and seen_generation != self._conn_generation):
+                return True
+            if _is_oom_error(exc):
+                return self._reopen_after_oom(exc)
+            if self._recovery_attempted:
+                return False
+            self._recovery_attempted = True
+            return self._rebuild_indexes_locked()
 
+    def _reopen_after_oom(self, exc: BaseException) -> bool:
+        """The OOM half of ``recover_invalidated_db``: close the dead handle,
+        raise the ceiling one notch, reopen. Caller holds ``_recovery_lock``.
+        """
+        global _oom_bumps, _fatal_db_reported
+        now = time.monotonic()
+        last = self._last_oom_reopen_ts
+        if last is not None and (now - last) < _OOM_REOPEN_COOLDOWN_SECS:
+            log.error(
+                "local store: DuckDB ran out of memory again %.0fs after the "
+                "last reopen; not reopening within %.0fs. Raise "
+                "CLAWMETRY_DUCKDB_MEMORY_LIMIT or find the query (%s).",
+                now - last, _OOM_REOPEN_COOLDOWN_SECS, _brief_exc(exc),
+            )
+            return False
+        self._last_oom_reopen_ts = now
+        _oom_bumps += 1
+        with self._write_lock:
+            try:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = _open_connection(read_only=False)
+                # A closed handle usually frees the instance, and the reopen
+                # above then took the new ceiling from config. If a stray
+                # cursor kept the old instance alive the connect reused it
+                # with the old limit, so set the ceiling explicitly as well.
+                limit = _duckdb_memory_limit_setting()
+                if limit:
+                    # SET takes no bind parameters; the value is ours (env
+                    # or the formatter), quotes stripped for good measure.
+                    self._conn.execute(
+                        "SET memory_limit = '%s'" % limit.replace("'", ""))
+                try:
+                    self._conn.execute("CHECKPOINT")
+                except Exception:
+                    pass
+                self._conn_generation += 1
+            except Exception as reopen_exc:
+                log.error(
+                    "local store: could not reopen DuckDB after the "
+                    "out-of-memory invalidation (%s). The store still needs "
+                    "a daemon restart.", _brief_exc(reopen_exc),
+                )
+                return False
+        _fatal_db_state["invalidated"] = False
+        _fatal_db_state["recovered"] = int(_fatal_db_state.get("recovered") or 0) + 1
+        _fatal_db_reported = False
+        log.warning(
+            "local store: DuckDB ran out of memory (%s) and invalidated the "
+            "handle; reopened with memory_limit=%s (bump %d). Table rows and "
+            "indexes were not touched.",
+            _brief_exc(exc), limit or "duckdb default", _oom_bumps,
+        )
+        return True
+
+    def _rebuild_indexes_locked(self) -> bool:
+        """The stale-index half of ``recover_invalidated_db``: reopen,
+        CHECKPOINT, drop every index, CHECKPOINT, migrate. Caller holds
+        ``_recovery_lock``."""
+        global _fatal_db_reported
         log.error(
             "local store: DuckDB invalidated the connection; rebuilding "
             "indexes in place. Table rows are not touched."
@@ -2494,6 +2763,7 @@ class LocalStore:
                             name, _brief_exc(drop_exc),
                         )
                 self._conn.execute("CHECKPOINT")
+                self._conn_generation += 1
             except Exception as exc:
                 log.error(
                     "local store: index rebuild could not open or clean the "
@@ -2729,6 +2999,59 @@ class LocalStore:
                         log.exception(
                             "local store: v13 rollup wipe FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 14:
+                    # v13 -> v14: heartbeat rows stop carrying the transport
+                    # envelope. Existing rows may hold multi-megabyte
+                    # ``cache_pushes`` blobs (2 GB on the dev Mac, 2026-09-02),
+                    # and DuckDB reads the whole column vector for ANY
+                    # statement that names it -- a one-row UPDATE with a key
+                    # predicate ran out of memory at 1 GB. So the column is
+                    # never read: copy every OTHER column into a fresh table
+                    # with the same DDL (PK re-declared; CTAS would lose it),
+                    # swap, and recreate the index. ``data`` becomes NULL for
+                    # history; the next heartbeat (within a minute) writes a
+                    # slim one, and the single caller that reads it only
+                    # reads the newest row.
+                    try:
+                        self._conn.execute("""
+                            CREATE TABLE heartbeats_v14 (
+                                agent_type        VARCHAR NOT NULL DEFAULT 'openclaw',
+                                node_id           VARCHAR NOT NULL,
+                                ts                VARCHAR NOT NULL,
+                                version           VARCHAR,
+                                e2e               BOOLEAN,
+                                size_mb           DOUBLE,
+                                events_total      INTEGER,
+                                data              BLOB,
+                                PRIMARY KEY (agent_type, node_id, ts)
+                            )
+                        """)
+                        _moved = self._conn.execute("""
+                            INSERT INTO heartbeats_v14
+                            SELECT agent_type, node_id, ts, version, e2e,
+                                   size_mb, events_total, NULL
+                            FROM heartbeats
+                        """).fetchone()
+                        self._conn.execute("DROP TABLE heartbeats")
+                        self._conn.execute(
+                            "ALTER TABLE heartbeats_v14 RENAME TO heartbeats")
+                        for stmt in _DDL:
+                            if "ON heartbeats(" in stmt:
+                                self._conn.execute(stmt)
+                        log.info(
+                            "local store: v14 heartbeat rows no longer carry "
+                            "the transport envelope; %s row(s) rewritten "
+                            "without stored payloads",
+                            _moved[0] if _moved else "?",
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v14 heartbeat slimming FAILED — "
+                            "schema version will NOT be stamped; next boot "
+                            "will retry"
                         )
                         migration_failed = True
                         _migration_err = str(exc)
@@ -6239,10 +6562,7 @@ class LocalStore:
         if not node_id or not ts:
             raise ValueError("heartbeat must include 'node_id' and 'ts'")
         atype = hb.get("agent_type") or "openclaw"
-        data_blob = _to_blob({k: v for k, v in hb.items()
-                              if k not in {"node_id", "ts", "agent_type",
-                                           "version", "e2e", "size_mb",
-                                           "events_total"}})
+        data_blob = _to_blob(_slim_heartbeat_data(hb))
         with self._write_lock:
             self._conn.execute("""
                 INSERT OR IGNORE INTO heartbeats (
@@ -7905,7 +8225,7 @@ class LocalStore:
                     # leaving the daemon alive but permanently unable to
                     # write. If recovery declines or fails we fall through to
                     # exactly the previous behaviour: stop retrying, report.
-                    if self.recover_invalidated_db():
+                    if self.recover_invalidated_db(exc):
                         continue
                     break
                 if attempt + 1 < FLUSH_MAX_ATTEMPTS:
@@ -9673,13 +9993,20 @@ class LocalStore:
         since: str | None = None,
         until: str | None = None,
         limit: int = 500,
+        include_data: bool = False,
     ) -> list[dict[str, Any]]:
         """Read heartbeat rows. Defaults to most recent first.
 
         Each row is a single daemon liveness ping (one per heartbeat
         interval, typically every 60s). Use ``since=<iso ts>`` to filter to
-        a recent window (e.g. last 24h). The ``data`` BLOB is decoded back
-        to a JSON dict when valid, str otherwise, None when empty.
+        a recent window (e.g. last 24h).
+
+        ``data`` is returned as None unless ``include_data`` is set: every
+        caller but one wants timestamps, and reading the BLOB column meant
+        reading every heartbeat's stored payload -- 2 GB on a store where
+        those payloads carried cache pushes (schema v14 strips them; see
+        ``_HEARTBEAT_DATA_DROP_KEYS``). With ``include_data`` the BLOB is
+        decoded to a JSON dict when valid, str otherwise, None when empty.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -9696,9 +10023,10 @@ class LocalStore:
             clauses.append("ts <= ?")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        data_col = "data" if include_data else "NULL AS data"
         sql = f"""
             SELECT agent_type, node_id, ts, version, e2e, size_mb,
-                   events_total, data
+                   events_total, {data_col}
             FROM heartbeats
             {where}
             ORDER BY ts DESC
@@ -12051,6 +12379,28 @@ class LocalStore:
             log.warning("local store: session quality outcome window failed: %s", e)
         failure_rate = (failed_count / classified_total) if classified_total else None
 
+        # ── Spend over the same outcome window ──────────────────────────────
+        # Feeds the ``dollars_per_done_above`` rule: total cost of the
+        # classified terminal sessions, so the evaluator can price a finished
+        # job (spend / success count) on the exact cohort counted above.
+        window_spend_usd = 0.0
+        try:
+            rows = self._fetch(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0)
+                  FROM sessions
+                 WHERE outcome IS NOT NULL
+                   AND outcome <> 'ongoing'
+                   AND outcome_classified_at IS NOT NULL
+                   AND outcome_classified_at >= ?""" + _rt_sql + """
+                """,
+                [cutoff_ms, *_rt_params],
+            )
+            if rows and rows[0] and rows[0][0] is not None:
+                window_spend_usd = round(float(rows[0][0]), 4)
+        except Exception as e:
+            log.warning("local store: session quality spend window failed: %s", e)
+
         return {
             "window_minutes":    window_minutes,
             "eval_count":        eval_count,
@@ -12060,6 +12410,7 @@ class LocalStore:
             "classified_total":  classified_total,
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
+            "window_spend_usd":  window_spend_usd,
         }
 
     def query_session_eval_detail(
@@ -14356,10 +14707,18 @@ class LocalStore:
         # real disk footprint by an order of magnitude during active
         # ingest, which is exactly when the dashboard most wants to know.
         size_bytes = _on_disk_bytes()
-        rows = self._fetch(
-            "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
-            []
-        )
+        try:
+            rows = self._fetch(
+                "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
+                []
+            )
+        except Exception as exc:
+            # ``db_invalidated`` below is the whole point of this row; a
+            # health() that raises on a dead handle reports nothing, which
+            # is exactly the invisible-brick this field exists to end.
+            if not _is_fatal_db_state(exc):
+                raise
+            rows = []
         n, oldest, newest = (rows[0] if rows else (0, None, None))
         with self._ring_lock:
             ring_depth = len(self._ring)
@@ -14386,6 +14745,12 @@ class LocalStore:
             "db_invalidated": bool(_fatal_db_state.get("invalidated")),
             "db_recoveries": int(_fatal_db_state.get("recovered") or 0),
             "db_last_error": _fatal_db_state.get("last_error"),
+            # The buffer-pool ceiling this handle actually runs under, as
+            # DuckDB reports it. Derived from the store size since
+            # 2026-09-02; shown so "did the ceiling follow the store" is a
+            # health read, not a guess.
+            "duckdb_memory_limit": self._current_memory_limit(),
+            "duckdb_oom_reopens": int(_oom_bumps),
             "event_count": int(n or 0),
             "oldest_ts": oldest,
             "newest_ts": newest,
@@ -14396,6 +14761,15 @@ class LocalStore:
             "last_flush_ago_s": round(time.monotonic() - self._last_flush_ts, 2),
             "sync_dlq_depth": self.dlq_count(),
         }
+
+    def _current_memory_limit(self) -> str | None:
+        try:
+            with self._write_lock:
+                row = self._conn.execute(
+                    "SELECT current_setting('memory_limit')").fetchone()
+            return str(row[0]) if row else None
+        except Exception:
+            return None
 
     def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
         """Reclaim space. If ``prune_to_bytes`` is set (or the DB has exceeded
@@ -14924,9 +15298,26 @@ class LocalStore:
         edge cases — DuckDB's reader-vs-writer story within one connection is
         better with light serialisation. At our scale (hundreds of qps max)
         this costs nothing."""
-        with self._write_lock:
-            cur = self._conn.execute(sql, params)
-            return cur.fetchall()
+        try:
+            gen = self._conn_generation
+            with self._write_lock:
+                cur = self._conn.execute(sql, params)
+                return cur.fetchall()
+        except Exception as exc:
+            # An invalidated handle fails every read the same way. Until
+            # 2026-09-02 only the flush path knew how to recover, so a daemon
+            # with nothing queued to write (a quiet morning) answered 500s
+            # to every dashboard query for two hours without once trying the
+            # rebuild. Reads now heal the handle too, then retry once; a
+            # second failure is the caller's to report.
+            if not _is_fatal_db_state(exc):
+                raise
+            _report_fatal_db_once(exc)
+            if not self.recover_invalidated_db(exc, seen_generation=gen):
+                raise
+            with self._write_lock:
+                cur = self._conn.execute(sql, params)
+                return cur.fetchall()
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
