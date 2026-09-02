@@ -391,6 +391,9 @@ jobs:
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
+            tests/test_duckdb_invalidated_recovery.py \
+            tests/test_duckdb_cpu_cap.py \
+            tests/test_heartbeat_rows_stay_small.py \
             tests/test_transcript_local_store.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \

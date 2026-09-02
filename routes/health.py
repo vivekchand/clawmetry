@@ -2023,7 +2023,7 @@ def _try_local_store_service_status():
         except Exception:
             return None
 
-    hb_rows = _query("query_heartbeats", limit=1)
+    hb_rows = _query("query_heartbeats", limit=1, include_data=True)
     if not hb_rows:
         return None
     hb = hb_rows[0]
