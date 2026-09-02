@@ -30,6 +30,7 @@ so a capped scan is never mistaken for full coverage.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
@@ -91,72 +92,49 @@ def _iso_cutoff(hours: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
-@bp_quality.route("/api/quality/report-card", methods=["GET"])
-def quality_report_card():
-    """Everything the Quality tab renders, in one fetch.
+def compose_report_card(
+    rows: list,
+    prior_rows: list,
+    hist_rows: list,
+    *,
+    window_hours: int = 168,
+    runtime: str | None = None,
+    assessments: dict | None = None,
+    prior_assessments: dict | None = None,
+) -> dict:
+    """Build the Quality payload from rows already read out of the store.
 
-    ``?window=7d`` (default), ``?runtime=<id>`` (optional scope). No auth gate
-    — this is the free-tier home for the "is my agent OK?" answer, same
-    rationale as /api/evaluators and /api/evals/metrics.
+    Split out of the request handler so the sync daemon can build the SAME
+    payload for the cloud snapshot without re-querying per runtime (founder
+    live-hit 2026-08-22: the hosted Quality tab said "Nothing to grade yet"
+    for a machine showing an A and 119 graded runs locally — the hosted
+    container answered from its own empty DuckDB, because nothing ever put
+    quality in the snapshot).
+
+    Taking rows as arguments rather than a fetch callable is deliberate: the
+    daemon reads the node's sessions ONCE and groups them in Python, so
+    emitting a card per runtime costs no extra queries.
     """
     from clawmetry import quality as _q
     from clawmetry import quality_thresholds as _qt
 
-    window_hours = _parse_window(request.args.get("window", "7d"))
-    runtime = (request.args.get("runtime") or "").strip() or None
-    if runtime == "all":
-        runtime = None
-
-    since = _iso_cutoff(window_hours)
-    prior_since = _iso_cutoff(window_hours * 2)
-
-    raw_rows = _store_via_daemon_or_direct(
-        "query_quality_sessions",
-        runtime=runtime, since=since, limit=400,
-    )
-    # None means the store could not be reached at all (the hosted dashboard
-    # has no local DuckDB); [] means it answered and there is nothing there.
-    # Collapsing the two would tell a cloud user "nothing to grade yet" about
-    # a machine that is in fact working fine — a wrong answer dressed as an
-    # empty state. FLYWHEEL cloud-parity gate: be honestly unavailable.
-    if raw_rows is None:
-        payload = _q.compute_report_card([], {})
-        payload.update({
-            "window_hours": window_hours,
-            "runtime": runtime or "all",
-            "store_available": False,
-            "headline": "Quality is graded on your own machine.",
-            "subline": (
-                "This view reads the run history stored locally by the "
-                "collector, which isn't reachable from here right now. "
-                "Open ClawMetry on the machine your agents run on, or start "
-                "the collector there, and the grade appears."
-            ),
-        })
-        return jsonify(payload)
-    rows = raw_rows
-    prior_rows = _store_via_daemon_or_direct(
-        "query_quality_sessions",
-        runtime=runtime, since=prior_since, until=since, limit=400,
-    ) or []
-
-    # Calibrate per runtime off a 30-day history of the SAME runtime, so
-    # "rough" means unusual for this runtime on this install.
-    hist = _store_via_daemon_or_direct(
-        "query_quality_sessions",
-        runtime=runtime, since=_iso_cutoff(24 * 30), limit=1500,
-    ) or []
-    by_runtime_hist: dict[str, list[dict]] = {}
-    for h in hist:
+    by_runtime_hist: dict = {}
+    for h in hist_rows or []:
         by_runtime_hist.setdefault(h.get("runtime") or "openclaw", []).append(h)
     thresholds = _qt.calibrate_all(by_runtime_hist)
 
-    assessments = _assess_rows(rows, thresholds)
-    prior_assessments = _assess_rows(prior_rows, thresholds, deep_limit=0)
+    # Pre-computed assessments are how the daemon emits a card PER RUNTIME
+    # without paying for a deep scan per runtime: it assesses the node's rows
+    # once and hands the same map to every card, which then reads only the
+    # sessions it contains. Passing none keeps the request-path behaviour.
+    if assessments is None:
+        assessments = _assess_rows(rows, thresholds)
+    if prior_assessments is None:
+        prior_assessments = _assess_rows(prior_rows or [], thresholds, deep_limit=0)
 
     payload = _q.compute_report_card(
         rows, assessments,
-        prior_rows=prior_rows, prior_assessments=prior_assessments,
+        prior_rows=prior_rows or [], prior_assessments=prior_assessments,
     )
     payload["window_hours"] = window_hours
     payload["runtime"] = runtime or "all"
@@ -180,7 +158,85 @@ def quality_report_card():
     }
     payload["benign_filter"] = _benign_filter_state()
     payload["store_available"] = True
-    return jsonify(payload)
+    return payload
+
+
+def unavailable_report_card(window_hours: int = 168, runtime: str | None = None) -> dict:
+    """The honest answer when this process cannot see the run history.
+
+    Never an empty grade: "nothing to grade" and "I cannot see your machine
+    from here" look identical on screen and mean opposite things. The hosted
+    dashboard hit exactly that — it has a DuckDB file, it is simply empty, so
+    the store answered [] and the tab reported a working machine as having
+    produced nothing.
+    """
+    from clawmetry import quality as _q
+
+    payload = _q.compute_report_card([], {})
+    payload.update({
+        "window_hours": window_hours,
+        "runtime": runtime or "all",
+        "store_available": False,
+        "headline": "Quality is graded on your own machine.",
+        "subline": (
+            "This view reads the run history stored locally by the "
+            "collector, which isn't reachable from here right now. "
+            "Open ClawMetry on the machine your agents run on, or start "
+            "the collector there, and the grade appears."
+        ),
+    })
+    return payload
+
+
+@bp_quality.route("/api/quality/report-card", methods=["GET"])
+def quality_report_card():
+    """Everything the Quality tab renders, in one fetch.
+
+    ``?window=7d`` (default), ``?runtime=<id>`` (optional scope). No auth gate
+    — this is the free-tier home for the "is my agent OK?" answer, same
+    rationale as /api/evaluators and /api/evals/metrics.
+    """
+    window_hours = _parse_window(request.args.get("window", "7d"))
+    runtime = (request.args.get("runtime") or "").strip() or None
+    if runtime == "all":
+        runtime = None
+
+    # The hosted dashboard has no run history of its own — it ships with an
+    # EMPTY DuckDB, which answers queries rather than failing them. Reading it
+    # here produced "Nothing to grade yet" for machines that were grading
+    # fine, so the hosted process refuses to answer from it at all. The real
+    # grade reaches the cloud through the daemon's encrypted snapshot; when
+    # that slice is missing (older daemon) this honest message is what shows.
+    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+        return jsonify(unavailable_report_card(window_hours, runtime))
+
+    since = _iso_cutoff(window_hours)
+    prior_since = _iso_cutoff(window_hours * 2)
+
+    raw_rows = _store_via_daemon_or_direct(
+        "query_quality_sessions",
+        runtime=runtime, since=since, limit=400,
+    )
+    # None means the store could not be reached at all; [] means it answered
+    # and there is nothing there. Collapsing the two would tell a user
+    # "nothing to grade yet" about a machine that is in fact working fine.
+    if raw_rows is None:
+        return jsonify(unavailable_report_card(window_hours, runtime))
+
+    prior_rows = _store_via_daemon_or_direct(
+        "query_quality_sessions",
+        runtime=runtime, since=prior_since, until=since, limit=400,
+    ) or []
+    # Calibrate per runtime off a 30-day history of the SAME runtime, so
+    # "rough" means unusual for this runtime on this install.
+    hist = _store_via_daemon_or_direct(
+        "query_quality_sessions",
+        runtime=runtime, since=_iso_cutoff(24 * 30), limit=1500,
+    ) or []
+    return jsonify(compose_report_card(
+        raw_rows, prior_rows, hist,
+        window_hours=window_hours, runtime=runtime,
+    ))
 
 
 def _assess_rows(
