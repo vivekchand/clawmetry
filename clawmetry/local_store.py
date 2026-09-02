@@ -312,7 +312,20 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
+
+# A heartbeat row is a liveness ping, not a transport envelope. The daemon's
+# heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
+# hosted dashboard (the Brain "recent" push alone is ~8.7 MB) -- and until
+# 2026-09-02 the whole payload was stored in ``heartbeats.data``: 231 rows x
+# 8.7 MB = 2 GB, the entire bulk of a 4.2 GB store holding 97 MB of events.
+# Any statement touching that column then needed >2 GB of buffer pool, which is
+# what ran the daemon out of memory (see ``recover_invalidated_db``) and, after
+# a restart, held the store lock for tens of seconds per dashboard poll. Keys
+# named here are never stored; any other value over the byte cap is dropped
+# too, and the row records what it dropped so the omission is visible.
+_HEARTBEAT_DATA_DROP_KEYS = frozenset({"cache_pushes"})
+_HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 
 # Day buckets are node-local calendar days, matching the cost windows that
 # filter them (clawmetry/cost_windows.py, ADR-046). Before v13 a day was the
@@ -1882,6 +1895,38 @@ def _iso_utc(ts: float) -> str | None:
         return None
 
 
+def _slim_heartbeat_data(hb: dict[str, Any]) -> dict[str, Any]:
+    """The part of a heartbeat payload worth keeping in the row: everything
+    except the columns stored beside it, the transport-only keys in
+    ``_HEARTBEAT_DATA_DROP_KEYS``, and any value larger than
+    ``_HEARTBEAT_DATA_MAX_VALUE_BYTES``. Dropped keys are listed under
+    ``_dropped`` with their byte size, so a reader sees a gap, not a lie."""
+    column_keys = {"node_id", "ts", "agent_type", "version", "e2e",
+                   "size_mb", "events_total"}
+    out: dict[str, Any] = {}
+    dropped: dict[str, int] = {}
+    for k, v in hb.items():
+        if k in column_keys:
+            continue
+        if k in _HEARTBEAT_DATA_DROP_KEYS:
+            try:
+                dropped[k] = len(json.dumps(v, separators=(",", ":"), default=str))
+            except Exception:
+                dropped[k] = -1
+            continue
+        try:
+            size = len(json.dumps(v, separators=(",", ":"), default=str))
+        except Exception:
+            size = -1
+        if size > _HEARTBEAT_DATA_MAX_VALUE_BYTES:
+            dropped[k] = size
+            continue
+        out[k] = v
+    if dropped:
+        out["_dropped"] = dropped
+    return out
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -2954,6 +2999,59 @@ class LocalStore:
                         log.exception(
                             "local store: v13 rollup wipe FAILED — schema "
                             "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
+                if not migration_failed and current < 14:
+                    # v13 -> v14: heartbeat rows stop carrying the transport
+                    # envelope. Existing rows may hold multi-megabyte
+                    # ``cache_pushes`` blobs (2 GB on the dev Mac, 2026-09-02),
+                    # and DuckDB reads the whole column vector for ANY
+                    # statement that names it -- a one-row UPDATE with a key
+                    # predicate ran out of memory at 1 GB. So the column is
+                    # never read: copy every OTHER column into a fresh table
+                    # with the same DDL (PK re-declared; CTAS would lose it),
+                    # swap, and recreate the index. ``data`` becomes NULL for
+                    # history; the next heartbeat (within a minute) writes a
+                    # slim one, and the single caller that reads it only
+                    # reads the newest row.
+                    try:
+                        self._conn.execute("""
+                            CREATE TABLE heartbeats_v14 (
+                                agent_type        VARCHAR NOT NULL DEFAULT 'openclaw',
+                                node_id           VARCHAR NOT NULL,
+                                ts                VARCHAR NOT NULL,
+                                version           VARCHAR,
+                                e2e               BOOLEAN,
+                                size_mb           DOUBLE,
+                                events_total      INTEGER,
+                                data              BLOB,
+                                PRIMARY KEY (agent_type, node_id, ts)
+                            )
+                        """)
+                        _moved = self._conn.execute("""
+                            INSERT INTO heartbeats_v14
+                            SELECT agent_type, node_id, ts, version, e2e,
+                                   size_mb, events_total, NULL
+                            FROM heartbeats
+                        """).fetchone()
+                        self._conn.execute("DROP TABLE heartbeats")
+                        self._conn.execute(
+                            "ALTER TABLE heartbeats_v14 RENAME TO heartbeats")
+                        for stmt in _DDL:
+                            if "ON heartbeats(" in stmt:
+                                self._conn.execute(stmt)
+                        log.info(
+                            "local store: v14 heartbeat rows no longer carry "
+                            "the transport envelope; %s row(s) rewritten "
+                            "without stored payloads",
+                            _moved[0] if _moved else "?",
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v14 heartbeat slimming FAILED — "
+                            "schema version will NOT be stamped; next boot "
+                            "will retry"
                         )
                         migration_failed = True
                         _migration_err = str(exc)
@@ -6464,10 +6562,7 @@ class LocalStore:
         if not node_id or not ts:
             raise ValueError("heartbeat must include 'node_id' and 'ts'")
         atype = hb.get("agent_type") or "openclaw"
-        data_blob = _to_blob({k: v for k, v in hb.items()
-                              if k not in {"node_id", "ts", "agent_type",
-                                           "version", "e2e", "size_mb",
-                                           "events_total"}})
+        data_blob = _to_blob(_slim_heartbeat_data(hb))
         with self._write_lock:
             self._conn.execute("""
                 INSERT OR IGNORE INTO heartbeats (
@@ -9898,13 +9993,20 @@ class LocalStore:
         since: str | None = None,
         until: str | None = None,
         limit: int = 500,
+        include_data: bool = False,
     ) -> list[dict[str, Any]]:
         """Read heartbeat rows. Defaults to most recent first.
 
         Each row is a single daemon liveness ping (one per heartbeat
         interval, typically every 60s). Use ``since=<iso ts>`` to filter to
-        a recent window (e.g. last 24h). The ``data`` BLOB is decoded back
-        to a JSON dict when valid, str otherwise, None when empty.
+        a recent window (e.g. last 24h).
+
+        ``data`` is returned as None unless ``include_data`` is set: every
+        caller but one wants timestamps, and reading the BLOB column meant
+        reading every heartbeat's stored payload -- 2 GB on a store where
+        those payloads carried cache pushes (schema v14 strips them; see
+        ``_HEARTBEAT_DATA_DROP_KEYS``). With ``include_data`` the BLOB is
+        decoded to a JSON dict when valid, str otherwise, None when empty.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -9921,9 +10023,10 @@ class LocalStore:
             clauses.append("ts <= ?")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        data_col = "data" if include_data else "NULL AS data"
         sql = f"""
             SELECT agent_type, node_id, ts, version, e2e, size_mb,
-                   events_total, data
+                   events_total, {data_col}
             FROM heartbeats
             {where}
             ORDER BY ts DESC
