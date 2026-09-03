@@ -1069,7 +1069,7 @@ function _cmBannerDestination(alert) {
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
+    var alerts = (data.alerts || []).filter(function(a) { return !(a && _cmDismissedAlertIds[a.id]); });
     var count = alerts.length;
     // Update bell icon badge and Alerts nav tab badge
     var bellBadge = document.getElementById('alerts-bell-badge');
@@ -1127,15 +1127,33 @@ async function checkActiveAlerts() {
   } catch(e) {}
 }
 
+// Ids the user has dismissed but the server may not have acknowledged yet.
+// The banner poller skips them, so a slow or failed acknowledge can never
+// make the banner reappear seconds after the click (2026-09-02: twenty stale
+// agent-down alerts, acknowledged one request at a time, each request queued
+// behind a loaded server; the poller re-rendered the banner before the loop
+// finished, so Dismiss looked broken).
+var _cmDismissedAlertIds = {};
+
 async function ackAllAlerts() {
+  var banner = document.getElementById('alert-banner');
+  if (banner) banner.style.display = 'none';
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
-    for(var i=0; i<alerts.length; i++) {
-      await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
+    var ids = [];
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i] && alerts[i].id != null) { ids.push(alerts[i].id); _cmDismissedAlertIds[alerts[i].id] = true; }
     }
-    document.getElementById('alert-banner').style.display = 'none';
+    // All at once, not one after another: twenty sequential round trips on a
+    // busy server take longer than the poller's interval.
+    await Promise.all(ids.map(function(id) {
+      return fetch('/api/alerts/history/' + id + '/ack', {method: 'POST'})
+        .then(function(r) { if (!r.ok) delete _cmDismissedAlertIds[id]; })
+        .catch(function() { delete _cmDismissedAlertIds[id]; });
+    }));
   } catch(e) {}
+  try { checkActiveAlerts(); } catch (e) {}
 }
 
 // PRD #1252 Phase 1 — visibility-gated setInterval. The 5 module-init
@@ -19881,8 +19899,102 @@ function _renderTurnTOC(turns, activeTurn) {
 function _jumpToTurn(turnIdx) {
   var el = document.getElementById('turn-chapter-' + turnIdx);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  _setActiveTurnTOC(turnIdx);
+  // Hold the clicked turn active until the smooth scroll lands; otherwise
+  // the scroll-spy would flicker through every turn in between.
+  window._turnTocPin = { turn: turnIdx, until: Date.now() + 2500 };
   return false;
 }
+
+// --- Scroll-spy for the turn TOC -------------------------------------------
+// _renderTurnTOC() marks the turn that owns the replay cursor as active, but
+// that only reflects the scrubber — not what the reader has scrolled to. This
+// keeps the highlighted TOC row in sync with the chapter under the top of the
+// viewport, whichever ancestor happens to be the scroll container (window on
+// the local dashboard, an overflow:auto pane on cloud).
+function _setActiveTurnTOC(turnIdx) {
+  var toc = document.getElementById('transcript-toc');
+  if (!toc) return;
+  var items = toc.querySelectorAll('.turn-toc-item');
+  var target = null;
+  for (var i = 0; i < items.length; i++) {
+    var isIt = (items[i].getAttribute('href') === '#turn-chapter-' + turnIdx);
+    items[i].classList.toggle('turn-toc-item-active', isIt);
+    if (isIt) target = items[i];
+  }
+  // Keep the active row visible inside a long, independently-scrolling TOC.
+  if (target && typeof target.scrollIntoView === 'function') {
+    var tr = target.getBoundingClientRect(), cr = toc.getBoundingClientRect();
+    if (tr.top < cr.top || tr.bottom > cr.bottom) target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function _turnTocScrollContainer(el) {
+  var node = el && el.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    var oy = getComputedStyle(node).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 1) return node;
+    node = node.parentElement;
+  }
+  return null; // the window scrolls
+}
+
+function _syncTurnTOCToScroll() {
+  var toc = document.getElementById('transcript-toc');
+  var wrap = document.getElementById('transcript-messages');
+  if (!toc || !wrap || !toc.firstChild) return;
+  var chapters = wrap.querySelectorAll('.turn-chapter');
+  if (!chapters.length) return;
+  var container = _turnTocScrollContainer(wrap);
+  var viewTop = container ? container.getBoundingClientRect().top : 0;
+  var viewBottom = container ? container.getBoundingClientRect().bottom : (window.innerHeight || document.documentElement.clientHeight);
+  // Reference line a little below the top edge so the sticky chapter header
+  // (and anything just scrolled past) counts as "current".
+  var refY = viewTop + Math.min(120, Math.max(48, (viewBottom - viewTop) * 0.25));
+  var pin = window._turnTocPin;
+  if (pin) {
+    var pinned = document.getElementById('turn-chapter-' + pin.turn);
+    var pTop = pinned ? pinned.getBoundingClientRect().top : NaN;
+    var arrived = !pinned || (pTop >= viewTop - 4 && pTop <= refY);
+    if (arrived || Date.now() >= pin.until) { window._turnTocPin = null; }
+    else { _setActiveTurnTOC(pin.turn); window._turnTocActive = pin.turn; return; }
+  }
+  var current = chapters[0];
+  for (var i = 0; i < chapters.length; i++) {
+    if (chapters[i].getBoundingClientRect().top <= refY) current = chapters[i];
+    else break;
+  }
+  // At the very end of the trace the last turn may be too short to ever reach
+  // the reference line — if we're scrolled to the bottom, it is the current one.
+  var atBottom = container
+    ? (container.scrollTop + container.clientHeight >= container.scrollHeight - 4)
+    : ((window.scrollY || window.pageYOffset || 0) + window.innerHeight >= (document.documentElement.scrollHeight - 4));
+  if (atBottom && chapters[chapters.length - 1].getBoundingClientRect().top < viewBottom) current = chapters[chapters.length - 1];
+  var id = current.id || '';
+  var turn = parseInt(id.replace('turn-chapter-', ''), 10);
+  if (isNaN(turn)) return;
+  if (window._turnTocActive === turn) return;
+  window._turnTocActive = turn;
+  _setActiveTurnTOC(turn);
+}
+
+(function _installTurnTOCScrollSpy() {
+  if (window._turnTocSpyInstalled) return;
+  window._turnTocSpyInstalled = true;
+  var scheduled = false;
+  function onScroll() {
+    if (scheduled) return;
+    scheduled = true;
+    (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
+      scheduled = false;
+      _syncTurnTOCToScroll();
+    });
+  }
+  // Capture phase: scroll events don't bubble, but they do reach document in
+  // capture, so this sees scrolling on the window *and* any inner pane.
+  document.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onScroll);
+})();
 
 // Toolbar toggle — flip the whole trace between oldest-first (default,
 // chat-native) and newest-first (skim recent activity for long sessions).
@@ -19942,6 +20054,14 @@ function _replayRenderCurrent() {
   }
   wrap.innerHTML = html;
   if (tocEl) tocEl.innerHTML = _renderTurnTOC(turns, activeTurn);
+  window._turnTocActive = activeTurn;
+  // Re-sync to the actual scroll position once the new DOM has laid out, so a
+  // re-render (filter change, sort flip, live refresh) never leaves the TOC
+  // pointing at the scrubber's turn while the reader is looking at another.
+  (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
+    window._turnTocActive = null;
+    _syncTurnTOCToScroll();
+  });
 
   document.getElementById('replay-pos').textContent = (idx + 1) + '/' + filtered.length;
   var scrubber = document.getElementById('replay-scrubber');

@@ -394,6 +394,10 @@ jobs:
             tests/test_duckdb_invalidated_recovery.py \
             tests/test_duckdb_cpu_cap.py \
             tests/test_heartbeat_rows_stay_small.py \
+            tests/test_reads_never_take_the_write_lock.py \
+            tests/test_launchd_dashboard_runs_waitress.py \
+            tests/test_scan_read_cache.py \
+            tests/test_cache_push_gating.py \
             tests/test_transcript_local_store.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
@@ -407,6 +411,7 @@ jobs:
             tests/test_install_script_pro_upgrade.py \
             tests/test_wake_poll.py \
             tests/test_cli_unattended_update.py \
+            tests/test_cli_help_no_dashboard_import.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
