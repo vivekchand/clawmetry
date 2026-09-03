@@ -352,7 +352,10 @@ def test_claude_limit_probe_does_not_impersonate_claude_code():
 
 def test_claim_watcher_sends_the_key_in_a_header_not_the_url():
     """The server logs the request line; a ``?token=cm_…`` query writes a
-    whole account credential into its access logs on every daemon start."""
+    whole account credential into its access logs on every daemon start.
+
+    * AC-OBS-LADC-003.8 -- the account credential travels in a header, never the URL.
+    """
     import inspect
 
     src = inspect.getsource(sync.start_claim_watcher)
@@ -399,7 +402,10 @@ def test_cli_status_lookup_has_no_token_in_the_url():
 def test_memory_push_never_carries_runtime_config_files():
     """settings.json / openclaw.json / mcp.json are catalogued locally so the
     Memory tab can show hooks and servers, but they hold tokens. Sealed or
-    not, they have no reason to leave the machine."""
+    not, they have no reason to leave the machine.
+
+    * AC-OBS-LADC-003.9 -- runtime configuration files are never uploaded.
+    """
     assert {"hooks", "mcp"} <= set(sync.MEMORY_PUSH_EXCLUDED_CATEGORIES)
     import inspect
 
@@ -411,6 +417,9 @@ def test_memory_push_never_carries_runtime_config_files():
 
 
 def test_every_relayed_action_is_written_to_the_local_audit_log(monkeypatch):
+    """
+    * AC-OBS-LADC-003.7 -- every relayed action is audited locally on arrival, body excluded.
+    """
     calls = []
     from clawmetry import audit as _audit
 

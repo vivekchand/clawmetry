@@ -361,7 +361,10 @@ def test_disabled_env_var_short_circuits(monkeypatch):
 
 def test_disabled_by_default_when_env_unset(monkeypatch, tmp_path):
     """The judge sends a transcript excerpt to a third-party model API, so a
-    key in the environment is not consent: scoring is opt-in."""
+    key in the environment is not consent: scoring is opt-in.
+
+    * AC-OBS-LADC-003.6 -- transcript scoring is off until the operator opts in.
+    """
     monkeypatch.delenv("CLAWMETRY_EVALS_ENABLED", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert eval_runner.is_enabled() is False
