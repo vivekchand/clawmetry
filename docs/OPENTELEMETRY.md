@@ -25,7 +25,11 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8900 OTEL_EXPORTER_OTLP_PROTOCOL=ht
 
 OTLP/JSON traces, logs **and metrics** work on a plain `pip install clawmetry`, no extras. Protobuf ingest needs `pip install clawmetry[otel]`. An app that sets its own `service.name` shows up as its own agent in the runtime switcher, with its cost and tokens.
 
-**Claude Code, one command.** Claude Code ships its own OpenTelemetry exporter, off by default and with no default protocol. `clawmetry instrument claude` turns it on and points it at the local receiver by writing this `env` block into `~/.claude/settings.json` (add `--project` for the repo-local `.claude/settings.json`):
+**Switch a runtime's own exporter on, one command.** Several runtimes ship an OpenTelemetry exporter of their own (Claude Code, Codex, Gemini CLI, Cursor, Copilot, OpenCode and more), each off by default and each configured differently. `clawmetry instrument <runtime>` writes that runtime's settings so its exporter reports to the local receiver, and `--uninstall` removes exactly what it wrote. The mechanics are shared: it merges into the existing settings, never overwrites a value it did not write, keeps a per-file record of its keys, refuses when managed policy pins the destination, and keeps prompt and tool content OFF unless you pass `--content`. Raw request and response bodies are never enabled.
+
+Which runtimes are available depends on which **exporter profiles** are registered. A profile is what tells the vendor-neutral receiver a runtime's metric names, event names, span attribute spellings, session-id form and settings file. Free runtimes' profiles ship in this repo; paid runtimes' profiles ship in the `clawmetry-pro` wheel alongside their transcript adapters, and register through the same plugin entry point. `clawmetry instrument --help` lists what is registered on this install. With no profile registered, an emitter is treated as any other OpenTelemetry app: spans, ledger rows and the generic tiles, nothing runtime-specific.
+
+Claude Code, for example: its profile (in clawmetry-pro) writes the `env` block below into `~/.claude/settings.json` (`--project` for the repo-local file). Claude Code has no default protocol, so the protocol key is required; `http/json` works on a vanilla install.
 
 ```json
 {
@@ -42,11 +46,9 @@ OTLP/JSON traces, logs **and metrics** work on a plain `pip install clawmetry`, 
 }
 ```
 
-The endpoint is whichever local receiver is listening when you run the command (the 4318 compatibility listener, otherwise the dashboard port). Prompt text and tool output stay OFF unless you pass `--content` (`OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`); raw API bodies are never enabled. The command merges into an existing `env` object, never overwrites a key it did not write, and `--uninstall` removes only its own keys. Restart Claude Code afterwards: a running session keeps the configuration it started with. `clawmetry instrument claude --status` and `GET /api/otel-status` report whether the block is in place and when the last Claude Code batch arrived.
+Restart the runtime afterwards: a running session keeps the configuration it started with. `clawmetry status` and `GET /api/otel-status` (`runtimes`) report, per profiled runtime, whether the block is in place and when its last batch arrived.
 
-Claude Code is a paid runtime. The receiver accepts its batches on every plan, but the Claude Code specific parts (this command, the join to the transcript session, the typed permission / refusal / MCP events, cache tokens by type, waiting-on-you time) follow the runtime entitlement, like the transcript adapter does. During the grace rollout they are on for everyone; in enforce mode a free install keeps the generic ledger and span rows only, and `clawmetry instrument claude` says so instead of writing the block.
-
-What arrives that the transcript does not carry: permission decisions and their source, permission-mode changes, API refusals and errors, MCP server connection health, time spent waiting on you (`claude_code.tool.blocked_on_user` spans), lines of code, commits and pull requests, and `skill.name` / `agent.name` / `mcp_server.name` attribution on every request.
+What a profiled runtime's exporter adds over its transcript: permission decisions and their source, permission-mode changes, API refusals and errors, MCP server connection health, time spent waiting on you, lines of code, commits and pull requests, and per-skill, per-agent and per-MCP-server attribution on every request, all joined to the same session the transcript adapter builds.
 
 You get the zero-config, local-first ClawMetry dashboard **and** your data in whatever backend your team already runs — no lock-in, no second agent to install.
 

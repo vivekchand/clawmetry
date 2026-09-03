@@ -1355,52 +1355,59 @@ def api_otel_status():
             # is still there tomorrow. ``None`` means we could not ask the
             # store, which is not the same as zero.
             "persisted": _otlp_persisted_count(),
-            # WO-57: is Claude Code's own exporter pointed here, and has a
-            # batch actually arrived? ``configured`` comes from the block
-            # ``clawmetry instrument claude`` recorded; ``last_batch_*`` from
-            # the newest ledger row the ``claude-code`` emitter wrote. A
-            # receiver that refuses a batch does so silently on the developer
-            # side, so "configured but never received" must be visible here.
-            "claude_code": _claude_code_exporter_status(),
+            # WO-57: per profiled runtime, is its own exporter pointed here
+            # and has a batch actually arrived? ``configured`` comes from the
+            # block ``clawmetry instrument <runtime>`` recorded; ``last_batch_*``
+            # from the newest ledger row that emitter wrote. A receiver that
+            # refuses a batch does so silently on the developer side, so
+            # "configured but never received" must be visible here.
+            "runtimes": _instrumented_runtimes_status(),
         }
     )
 
 
-def _claude_code_exporter_status():
-    """``{configured, settings_path, endpoint, content, last_batch_ts,
-    last_batch_age_s, records}`` for the Claude Code native exporter.
-    ``last_batch_*`` are ``None`` when the store could not be asked."""
-    # ``configured`` starts as None: "could not ask" is not "no".
-    out = {"configured": None, "settings_path": None, "endpoint": None,
-           "content": False, "telemetry_enabled": None, "entitled": None,
-           "last_batch_ts": None, "last_batch_age_s": None, "records": None}
+def _instrumented_runtimes_status():
+    """``{runtime: {configured, settings_path, endpoint, content, entitled,
+    telemetry_enabled, last_batch_ts, last_batch_age_s, records}}`` for
+    every registered exporter profile. ``last_batch_*`` are ``None`` when
+    the store could not be asked; ``configured`` is ``None`` when the
+    profile's status could not be read."""
+    out = {}
     try:
-        from clawmetry.instrument_claude import status as _instr_status
-        st = _instr_status(probe=False)
-        out.update({
-            "configured": bool(st.get("configured")),
-            "settings_path": st.get("settings_path"),
-            "endpoint": st.get("endpoint"),
-            "content": bool(st.get("content")),
-            "telemetry_enabled": bool(st.get("telemetry_enabled")),
-            # Paid runtime: false means batches are accepted but only the
-            # generic ledger/span rows are kept (no session join, no typed
-            # events); the UI can say why rather than look broken.
-            "entitled": st.get("entitled"),
-        })
+        from clawmetry import otel_profiles
+        from clawmetry.instrument import status_all
+        statuses = status_all(probe=False)
+        profiles = {p.runtime: p for p in otel_profiles.all_profiles()}
     except Exception:
-        pass
-    try:
-        latest = _ls_call("latest_otlp_record", service_name="claude-code")
-        if isinstance(latest, dict):
-            out["records"] = latest.get("count")
-            ts = latest.get("received_at") or latest.get("ts")
-            if ts:
-                import time as _t
-                out["last_batch_ts"] = float(ts)
-                out["last_batch_age_s"] = max(0.0, _t.time() - float(ts))
-    except Exception:
-        pass
+        return out
+    import time as _t
+    for rt, st in statuses.items():
+        row = {"configured": None, "settings_path": None, "endpoint": None,
+               "content": False, "telemetry_enabled": None, "entitled": None,
+               "label": st.get("label") or rt,
+               "last_batch_ts": None, "last_batch_age_s": None, "records": None}
+        if "error" not in st:
+            row.update({
+                "configured": bool(st.get("configured")),
+                "settings_path": st.get("settings_path"),
+                "endpoint": st.get("endpoint"),
+                "content": bool(st.get("content")),
+                "telemetry_enabled": bool(st.get("telemetry_enabled")),
+                "entitled": st.get("entitled"),
+            })
+        prof = profiles.get(rt)
+        names = tuple(prof.service_names) if prof is not None else ()
+        try:
+            latest = _ls_call("latest_otlp_record", service_name=names[0]) if names else None
+            if isinstance(latest, dict):
+                row["records"] = latest.get("count")
+                ts = latest.get("received_at") or latest.get("ts")
+                if ts:
+                    row["last_batch_ts"] = float(ts)
+                    row["last_batch_age_s"] = max(0.0, _t.time() - float(ts))
+        except Exception:
+            pass
+        out[rt] = row
     return out
 
 

@@ -110,13 +110,13 @@ export OTEL_RESOURCE_ATTRIBUTES="team.id=platform,repository=payments-api"
 ```
 
 On a developer machine that runs ClawMetry locally, `clawmetry instrument claude`
-writes the same block (minus the headers) into `~/.claude/settings.json` for you,
-pointed at the local receiver, with prompt and tool content OFF unless you pass
-`--content`. `clawmetry instrument claude --uninstall` removes exactly the keys it
-wrote. Running Claude Code sessions keep their old configuration until restarted.
-Claude Code is a paid runtime: the command and the Claude Code specific mapping
-(session join, typed events, cache tokens by type) follow the runtime entitlement;
-the generic ledger rows and rollups on this page do not.
+writes the same block (minus the headers) into `~/.claude/settings.json`, pointed at
+the local receiver, with prompt and tool content OFF unless you pass `--content`;
+`--uninstall` removes exactly the keys it wrote. The command is generic
+(`clawmetry instrument <runtime>`) and needs the runtime's exporter profile: Claude
+Code's ships in the clawmetry-pro wheel, so it is a paid-runtime feature like the
+transcript adapter. The receiver on this page accepts Claude Code batches on every
+plan; the generic ledger rows and rollups do not need the profile.
 
 The header is not optional off the loopback interface. `/v1/*` is gated like
 `/api/*`: loopback is trusted, anything else needs the gateway token, and an

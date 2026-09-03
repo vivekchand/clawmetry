@@ -3206,12 +3206,13 @@ def _status_snapshot(args) -> dict:
         except Exception:
             snap["sync_state"] = {"last_sync": None, "files_seen": 0}
 
-    # Claude Code native telemetry block (WO-57). Same source as the human line.
+    # Native exporter blocks per profiled runtime (WO-57). Same source as
+    # the human line.
     try:
-        from clawmetry.instrument_claude import status as _instr_status
-        snap["claude_code_telemetry"] = _instr_status(probe=False)
+        from clawmetry.instrument import status_all as _instr_status_all
+        snap["instrumented_runtimes"] = _instr_status_all(probe=False)
     except Exception:
-        snap["claude_code_telemetry"] = None
+        snap["instrumented_runtimes"] = None
 
     # Runtimes. Same resolution as the human path.
     try:
@@ -3685,25 +3686,26 @@ def _cmd_status(args) -> None:
     except Exception:
         pass
 
-    # Claude Code native telemetry (WO-57): is the exporter block in place?
-    # Printed only when Claude Code is on this machine or the block exists,
-    # so a node without Claude Code sees no extra line.
+    # Native exporter blocks (WO-57): one line per runtime that has an
+    # instrument profile registered, so a node without any prints nothing.
     try:
-        from clawmetry.instrument_claude import status as _instr_status
-        _cc = _instr_status(probe=False)
-        if _cc.get("configured") or _cc.get("telemetry_enabled"):
+        from clawmetry.instrument import status_all as _instr_status_all
+        _all = _instr_status_all(probe=False)
+        if _all:
             print()
-            _who = "by clawmetry" if _cc.get("configured") else "not by clawmetry"
-            print(f"  Claude Code telemetry: on ({_who}) -> "
-                  f"{_cc.get('endpoint') or '?'}")
-        elif os.path.isdir(os.path.expanduser("~/.claude")):
-            print()
-            if _cc.get("entitled") is False:
-                print("  Claude Code telemetry: off  (paid runtime; not on "
-                      "this plan)")
+        for _rt, _st in sorted(_all.items()):
+            _lbl = _st.get("label") or _rt
+            if _st.get("configured"):
+                print(f"  {_lbl} telemetry: on (by clawmetry) -> "
+                      f"{_st.get('endpoint') or '?'}")
+            elif _st.get("telemetry_enabled"):
+                print(f"  {_lbl} telemetry: on (not by clawmetry) -> "
+                      f"{_st.get('endpoint') or '?'}")
+            elif _st.get("entitled") is False:
+                print(f"  {_lbl} telemetry: off  (paid runtime; not on this plan)")
             else:
-                print("  Claude Code telemetry: off  (run `clawmetry instrument "
-                      "claude` for permission, refusal and waiting-on-you signals)")
+                print(f"  {_lbl} telemetry: off  (run `clawmetry instrument "
+                      f"{_rt}` for the runtime's own exporter signals)")
     except Exception:
         pass
 
@@ -7655,11 +7657,12 @@ def main() -> None:
     # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
     if len(sys.argv) > 1 and sys.argv[1] == "trace":
         raise SystemExit(trace_main(sys.argv[2:]))
-    # FAST PATH — `clawmetry instrument claude …` (WO-57): writes Claude
-    # Code's own OpenTelemetry env block into its settings file so its
-    # exporter reports to this ClawMetry. Stdlib-only, no dashboard import.
+    # FAST PATH — `clawmetry instrument <runtime> …` (WO-57): writes the
+    # runtime's own OpenTelemetry exporter settings so it reports to this
+    # ClawMetry. Which runtimes: whatever profiles are registered (free ones
+    # here, paid ones from the clawmetry-pro wheel). No dashboard import.
     if len(sys.argv) > 1 and sys.argv[1] == "instrument":
-        from clawmetry.instrument_claude import cli_main as _instr_cli
+        from clawmetry.instrument import cli_main as _instr_cli
         raise SystemExit(_instr_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry hook claude-code --base <url>`: the LOCAL-first
     # PreToolUse gate client (auto-installed by the policy watcher — see
@@ -8704,8 +8707,8 @@ def main() -> None:
     p_instr = sub.add_parser(
         "instrument",
         help="Turn on a runtime's own OpenTelemetry export and point it at "
-             "this ClawMetry: instrument claude [--project] [--content] "
-             "[--uninstall | --status]")
+             "this ClawMetry: instrument <runtime> [--project] [--content] "
+             "[--uninstall | --status]  (--help lists runtimes)")
     p_instr.add_argument("instrument_args", nargs="*")
 
     # `hook` (singular) is likewise intercepted by its fast path in main();
