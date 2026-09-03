@@ -61,7 +61,10 @@ make them.
 After `clawmetry connect`, two kinds of data leave the machine.
 
 **Sealed.** Encrypted on the node with AES-256-GCM (96-bit random nonce per
-blob) under a key the server never receives. The server stores the blob; the
+blob) under a key the server never receives. Large blobs are gzip-compressed
+*before* encryption (about 4x smaller; ciphertext itself does not compress),
+but only once the server has said every reader it serves can inflate
+(heartbeat `caps.blob_gzip`); `CLAWMETRY_BLOB_GZIP=0` turns it off. The server stores the blob; the
 browser decrypts it. A node with no key **skips** these uploads rather than
 sending them in the clear (`content_egress_permitted` in `clawmetry/sync.py`,
 enforced by `tests/test_e2e_invariants.py`).
@@ -182,7 +185,7 @@ Codex sessions on the machine.
 |---|---|---|---|
 | `POST /ingest/heartbeat` | every 3 s while a viewer is open, else 60 s | node_id, platform, version, e2e flag, install_id, detected runtimes with session counts, tool names and counts today, last tool used, detector messages, Ollama model names, billing plan labels, activity counters, store size, cache-key names | `cache_pushes` blobs: last 50 brain events, memory files, cron list, alert rules, approval queue |
 | `POST /ingest/sessions` | every 60 s when rows change | session_id, runtime, model, status, timestamps, total_tokens, cost_usd, token_split, cache stats, tool_error_pct, tool_call_count, message_count, surface | `title_blob` (the readable title) |
-| `POST /ingest/system-snapshot` | every ~60 s, 1.2 to 1.4 MB | node_id | 80 keys: transcripts with full message text, machine info, security posture, audit log, agent inventory with workspace paths, MCP servers, tool catalog, spending, traces, skills |
+| `POST /ingest/system-snapshot` | every ~60 s; about 300 KB once the server advertises gzip (1.2 to 1.4 MB before) | node_id | 80 keys: transcripts with full message text, machine info, security posture, audit log, agent inventory with workspace paths, MCP servers, tool catalog, spending, traces, skills |
 | `POST /ingest/events` | as transcripts change (OpenClaw JSONL path) | node_id | raw transcript events |
 | `POST /ingest/logs` | every 60 s when the gateway log grows | node_id | gateway log records |
 | `POST /ingest/stream` | every 2 s when the log tail moves | node_id | raw gateway log lines |
