@@ -643,6 +643,30 @@
       "text": "When the operator disables cloud synchronization, the system shall stop new optional synchronization activity."
     },
     {
+      "id": "AC-OBS-LADC-003.6",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall not send a transcript excerpt to a third-party model for quality scoring unless the operator has turned scoring on for the node. The presence of a model provider credential in the environment shall not count as consent."
+    },
+    {
+      "id": "AC-OBS-LADC-003.7",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall record every cloud-relayed action in the node's local audit log when it arrives, whether it is then carried out or refused, so the operator holds their own record of what the service asked of the machine. The record shall name the action and its identifiers and shall not store the action body."
+    },
+    {
+      "id": "AC-OBS-LADC-003.8",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "A request the node makes to the cloud service shall carry the account credential in a request header, never in the request URL."
+    },
+    {
+      "id": "AC-OBS-LADC-003.9",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "The system shall not include a runtime's configuration files, meaning hook settings, MCP server manifests and gateway configuration, in any upload to the cloud service, encrypted or not. Such files may remain in the local catalog."
+    },
+    {
       "id": "AC-OBS-LADC-004.1",
       "doc": "Local Audit and Data Control",
       "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
