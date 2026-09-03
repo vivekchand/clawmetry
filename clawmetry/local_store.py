@@ -7194,6 +7194,13 @@ class LocalStore:
         "tool_name", "decision", "success", "attributes",
     )
 
+    # Event types the daemon's transcript read ALSO produces. For a session
+    # the daemon owns, an OTLP copy of one of these is a duplicate and is
+    # dropped; every other OTLP event type (permission_mode_changed,
+    # api_refusal, waiting_on_user, ...) is a fact the transcript does not
+    # carry and is attached to that session with its ``_otlp`` marker (WO-57).
+    _OTLP_DAEMON_DUPLICATE_TYPES = frozenset({"tool_call", "tool_result", "llm_call"})
+
     def put_otlp_batch(
         self,
         records: list[dict[str, Any]] | None = None,
@@ -7303,7 +7310,8 @@ class LocalStore:
         # spend and show every tool call twice — and a cost figure that
         # doubles because two collectors both worked is worse than a missing
         # one. The transcript read is strictly richer (real tool arguments,
-        # assistant text), so the daemon wins and the OTLP events are dropped.
+        # assistant text), so the daemon wins and the OTLP copies of what it
+        # already records are dropped; OTLP-only facts still attach (WO-57).
         # The identity/spend LEDGER above is unaffected: it is a separate
         # table with its own dedup key, and the org rollups still see every
         # record.
@@ -7335,7 +7343,9 @@ class LocalStore:
         for ev in events or []:
             if not isinstance(ev, dict):
                 continue
-            if str(ev.get("session_id") or "") in owned_by_daemon:
+            if (str(ev.get("session_id") or "") in owned_by_daemon
+                    and str(ev.get("event_type") or "")
+                    in self._OTLP_DAEMON_DUPLICATE_TYPES):
                 ev_skipped += 1
                 continue
             try:
@@ -7606,6 +7616,39 @@ class LocalStore:
         cols = ("key", "records", "sessions", "cost_usd", "tokens",
                 "tokens_input", "tokens_output", "first_ts", "last_ts")
         return [dict(zip(cols, r)) for r in self._fetch(sql, params)]
+
+    def latest_otlp_record(self, *, service_name: str | None = None,
+                           agent_type: str | None = None) -> dict | None:
+        """Newest ledger row for one emitter, by ``service_name`` and/or
+        ``agent_type``: ``{"ts", "received_at", "count"}``. ``count`` 0 means
+        nothing from that emitter has ever arrived; ``None`` means the store
+        could not be asked, which is not the same thing. Feeds the
+        "Claude Code exporter: last batch N s ago" line (WO-57).
+        """
+        try:
+            where, params = [], []
+            if service_name:
+                where.append("service_name = ?")
+                params.append(service_name)
+            if agent_type:
+                where.append("agent_type = ?")
+                params.append(agent_type)
+            w = ("WHERE " + " AND ".join(where)) if where else ""
+            rows = self._fetch(
+                f"SELECT MAX(ts), MAX(received_at), COUNT(*) FROM otlp_records {w}",
+                params,
+            )
+            if not rows or not rows[0] or not rows[0][2]:
+                return {"ts": None, "received_at": None, "count": 0}
+            r = rows[0]
+            return {
+                "ts": float(r[0]) if r[0] is not None else None,
+                "received_at": float(r[1]) if r[1] is not None else None,
+                "count": int(r[2]),
+            }
+        except Exception:
+            log.warning("latest_otlp_record failed", exc_info=True)
+            return None
 
     def count_otlp_records(self) -> int | None:
         """Row count for the daemon-free intake table. Used by
