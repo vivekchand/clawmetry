@@ -389,6 +389,7 @@ jobs:
             tests/test_local_query_dispatch_edge_cases.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
+            tests/test_cohort_compare.py \
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \

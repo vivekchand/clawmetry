@@ -177,6 +177,8 @@ EXPECTED_TRUST = {
     "agent_graph": "plaintext",
     # #4813 replay events: carry LLM message/tool-arg payloads -> e2e.
     "replay_events": "e2e",
+    # WO-60 similar runs: neighbour rows carry session titles -> e2e.
+    "similar_sessions": "e2e",
 }
 
 
