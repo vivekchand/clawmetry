@@ -29,12 +29,14 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   c6-health:
     name: C6 required-status-checks audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Audit branch protection and notify tracking issue
         env:
