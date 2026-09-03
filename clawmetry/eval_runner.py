@@ -45,11 +45,35 @@ log = logging.getLogger("clawmetry.eval_runner")
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-# Disable the whole eval surface (env switch). Default-on per PRD; user
-# escape hatch for cost-sensitive or air-gapped setups.
+# The judge posts a redacted transcript excerpt to a third-party model API.
+# That is content leaving the machine, so it is OPT-IN: the presence of an
+# ANTHROPIC_API_KEY / OPENAI_API_KEY in the environment is not consent.
+# Enable with CLAWMETRY_EVALS_ENABLED=1 or ``"evals": true`` in
+# ~/.clawmetry/config.json. CLAWMETRY_EVALS_ENABLED=0 always wins.
+_TRUTHY = ("1", "true", "True", "yes", "on")
+_FALSY = ("0", "false", "False", "no", "off")
+
+
+def _config_opt_in() -> bool:
+    try:
+        path = Path(os.path.expanduser("~/.clawmetry/config.json"))
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return bool(isinstance(data, dict) and data.get("evals") is True)
+    except Exception:
+        return False
+
+
 def is_enabled() -> bool:
-    """Env-gated kill switch. Default True (Phase 1 ships default-on)."""
-    return os.environ.get("CLAWMETRY_EVALS_ENABLED", "1") not in ("0", "false", "False", "")
+    """Opt-in switch. Default False: no transcript excerpt leaves the machine
+    for scoring until the user asks for it."""
+    env = os.environ.get("CLAWMETRY_EVALS_ENABLED", "").strip()
+    if env in _FALSY:
+        return False
+    if env in _TRUTHY:
+        return True
+    return _config_opt_in()
 
 
 # Rate-limit knobs — bound worst-case spend even with a chatty workspace.
