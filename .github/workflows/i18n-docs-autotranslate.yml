@@ -28,6 +28,15 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Same reasoning as i18n-autotranslate.yml: this working copy is
+          # never pushed from. The only networked git operation is the
+          # `Open sync PR` step, and peter-evans/create-pull-request supplies
+          # its own credential from its `token` input rather than reading a
+          # persisted one. scripts/i18n_translate_docs.py does not touch git
+          # at all. So this credential has no consumer, and would otherwise
+          # stay readable in .git/config across the Claude Code CLI run.
+          persist-credentials: false
 
       - name: Guard - require Claude Code token
         run: |
