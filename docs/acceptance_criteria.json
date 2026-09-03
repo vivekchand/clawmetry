@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-08-25",
+    "synced_at": "2026-09-03",
     "synced_by": "claude-code"
   },
   "_scope": [
@@ -989,6 +989,66 @@
       "doc": "Onboarding Gate Funnel Visibility",
       "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
       "text": "When the hosted cloud dashboard serves onboarding state, the system shall not send a gate_shown ping, because hosted accounts never see the gate."
+    },
+    {
+      "id": "AC-RSO-CCT-001.1",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "`clawmetry instrument claude` writes the Claude Code telemetry block into the env object of the settings file (user or --project), merging without clobbering keys it did not write, idempotently, with protocol http/json and the endpoint of whichever local receiver is listening; --uninstall removes only keys it wrote; it states that running sessions keep their old configuration until restarted."
+    },
+    {
+      "id": "AC-RSO-CCT-001.2",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Content flags (OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT) are off unless --content is passed; OTEL_LOG_RAW_API_BODIES is never written."
+    },
+    {
+      "id": "AC-RSO-CCT-001.3",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "On a machine where Claude Code managed settings lock the OTLP destination, the command refuses and says so; it never leaves a half-written block."
+    },
+    {
+      "id": "AC-RSO-CCT-001.4",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Every claude_code.* metric is mapped: token usage by type (input, output, cacheRead, cacheCreation) with model, cost, session count, lines of code, commits, pull requests, active time and edit-tool decisions; cache tokens land in the same cache fields the JSONL path fills."
+    },
+    {
+      "id": "AC-RSO-CCT-001.5",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Every Claude Code event is retained with its typed fields and surfaced: permission decisions with source, permission-mode changes, API refusals, API errors, MCP server connection status, auth events, user-prompt and assistant-response lengths; a rejected tool decision is never recorded as a tool call."
+    },
+    {
+      "id": "AC-RSO-CCT-001.6",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Tracing-beta spans render with real durations: LLM request spans carry input/output/cache tokens under Claude Code's attribute names, tool spans carry the tool name, and tool.blocked_on_user is surfaced as time waiting on you per session and per turn."
+    },
+    {
+      "id": "AC-RSO-CCT-001.7",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "A session observed by both the daemon and the exporter is one session: transcript cost and tokens remain authoritative and are never added twice; OTel-only fields attach to that session with a provenance marker."
+    },
+    {
+      "id": "AC-RSO-CCT-001.8",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "`clawmetry status` and /api/otel-status report whether the Claude Code exporter is configured, at which path and endpoint, and when the last Claude Code batch arrived, so a silently dropped batch is visible."
+    },
+    {
+      "id": "AC-RSO-CCT-001.9",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "docs/enterprise.md and docs/OPENTELEMETRY.md name CLAUDE_CODE_ENABLE_TELEMETRY, state that Claude Code has no default protocol, and show the block the command writes."
+    },
+    {
+      "id": "AC-RSO-CCT-001.10",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     }
   ]
 }
