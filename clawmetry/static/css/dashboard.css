@@ -3287,7 +3287,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
   opacity: 0.65;
 }
 
-/* ============================================================================
+/* =====================================================================
    BENCH — Harness Engineering tab (templates/tabs/bench.html + loadBenchTab)
    ========================================================================== */
 .bench-sub { color: var(--text-muted); font-size: 13px; max-width: 62em; }
@@ -3401,3 +3401,96 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .bench-btn:focus-visible { outline: 2px solid var(--bg-accent); outline-offset: 1px; }
 .bench-btn[disabled] { opacity: .55; cursor: not-allowed; }
 .bench-whydisabled { font-size: 11px; color: var(--text-faint); }
+/* ── Guard tab ─────────────────────────────────────────────────────────
+   The Guard markup was written against a utility vocabulary this codebase
+   never had (.data-table, .pill, .btn-xs, .empty-state …), so the tab
+   rendered as unstyled browser defaults: raw buttons, borderless tables,
+   pills that were plain text. These definitions follow the existing
+   .inv-table / .card idioms and the shared token set, so Guard reads as
+   part of the dashboard rather than a bolted-on page.
+   Scoped to #guard so short names cannot collide with other tabs. */
+#guard .section-header { margin-bottom: 18px; }
+/* No global h2 rule exists and .section-header is used only here, so the tab
+   title inherited the browser default and rendered near-black on the dark
+   ground. Matches .inv-heading, the house style for a tab title. */
+#guard .section-header h2 {
+  margin: 0; font-size: 19px; font-weight: 600; color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+#guard .section-sub { color: var(--text-muted); font-size: 13px; line-height: 1.55; margin: 6px 0 0; max-width: 78ch; }
+#guard .card { margin-bottom: 16px; }
+#guard .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+#guard .card-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+#guard .card-head .btn { margin-left: auto; }
+#guard .card-head .btn ~ .btn { margin-left: 0; }
+
+#guard .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#guard .data-table thead th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 600; padding: 8px 12px; white-space: nowrap;
+  border-bottom: 1px solid var(--border-primary);
+}
+#guard .data-table tbody td {
+  padding: 10px 12px; border-bottom: 1px solid var(--border-secondary);
+  color: var(--text-secondary); vertical-align: middle;
+}
+#guard .data-table tbody tr:last-child td { border-bottom: none; }
+#guard .data-table tbody tr:hover { background: var(--bg-hover); }
+/* Money and counts line up column-wise. */
+#guard .data-table td:nth-child(n+4) { font-variant-numeric: tabular-nums; }
+
+#guard .empty-state {
+  padding: 22px 12px; text-align: center; color: var(--text-muted);
+  font-size: 13px; background: var(--bg-primary);
+  border: 1px dashed var(--border-primary); border-radius: 8px;
+}
+
+/* Status pills. pill-ok / pill-warn carry SEMANTIC state (running, flagged),
+   which is deliberately separate from the accent colour. */
+#guard .pill {
+  display: inline-block; font-size: 11px; font-weight: 600; line-height: 1.6;
+  padding: 1px 9px; border-radius: 999px; white-space: nowrap;
+  background: var(--bg-secondary); color: var(--text-muted);
+  border: 1px solid var(--border-secondary);
+}
+#guard .pill-ok { background: rgba(34,197,94,0.13); color: var(--text-success); border-color: transparent; }
+#guard .pill-warn { background: rgba(245,158,11,0.15); color: var(--text-warning); border-color: transparent; }
+#guard .pill-crit { background: rgba(239,68,68,0.15); color: var(--text-error); border-color: transparent; }
+
+#guard .btn {
+  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  padding: 5px 11px; border-radius: 7px;
+  background: var(--button-bg); color: var(--text-secondary);
+  border: 1px solid var(--border-primary); transition: background 0.12s, color 0.12s;
+}
+#guard .btn:hover { background: var(--button-hover); color: var(--text-primary); }
+#guard .btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+#guard .btn-sm { font-size: 12px; padding: 4px 10px; }
+#guard .btn-xs { font-size: 11px; padding: 3px 8px; border-radius: 6px; }
+#guard .btn-primary { background: var(--bg-accent); border-color: var(--bg-accent); color: #fff; }
+#guard .btn-primary:hover { filter: brightness(1.08); color: #fff; }
+/* Kill is irreversible; it reads as destructive before it is pressed. */
+#guard .btn-danger { color: var(--text-error); border-color: rgba(239,68,68,0.35); background: transparent; }
+#guard .btn-danger:hover { background: rgba(239,68,68,0.12); color: var(--text-error); }
+#guard td .btn + .btn, #guard td .btn + .muted { margin-left: 5px; }
+
+#guard .muted { color: var(--text-faint); font-size: 12px; }
+
+#guard .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
+#guard .form-row > label { flex: 0 0 190px; font-size: 12px; color: var(--text-muted); }
+#guard .form-row input, #guard .form-row select {
+  font: inherit; font-size: 13px; padding: 5px 9px; border-radius: 7px;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+#guard #guard-policy-form {
+  background: var(--bg-primary); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 16px; margin-bottom: 14px;
+}
+#guard .gp-step { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
+
+#guard .banner {
+  display: flex; gap: 10px; padding: 11px 14px; border-radius: 9px;
+  font-size: 13px; margin-bottom: 16px; border: 1px solid transparent;
+}
+#guard .banner-info { background: var(--bg-warning); color: var(--text-warning); border-color: rgba(245,158,11,0.3); }
