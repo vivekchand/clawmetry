@@ -12,9 +12,13 @@ Design constraints (read these before editing):
 * **Dependency-light & host-testable.** No Flask, no DuckDB, no cloud imports.
   ``psutil`` is used *if available* (import-guarded) and we degrade to ``ps`` /
   ``lsof`` shelling otherwise, so OSS keeps deps minimal.
-* **Cross-platform.** macOS and Linux are first-class. Windows / other POSIX
-  return an honest ``unsupported`` result rather than guessing (POSIX job-control
-  signals like SIGSTOP/SIGCONT do not exist on Windows).
+* **Cross-platform.** macOS, Linux AND Windows are first-class. Windows has no
+  POSIX job-control signals, so each action maps to its native equivalent:
+  pause/resume -> ``NtSuspendProcess``/``NtResumeProcess`` (what psutil's
+  ``suspend()`` calls), stop -> a console Ctrl+C delivered from a short-lived
+  helper process, kill -> ``taskkill /T`` then ``TerminateProcess`` over the
+  tree. Every other platform still returns an honest ``unsupported`` result
+  rather than guessing.
 * **Never crashes.** A missing file, a dead pid, or a permission error returns
   ``ok=False`` with a ``reason`` — it never raises into the caller. Respects the
   never-hang contract: every wait is bounded, no unbounded loops.
@@ -42,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -58,8 +63,217 @@ except Exception:  # noqa: BLE001
 
 _IS_MACOS = sys.platform == "darwin"
 _IS_LINUX = sys.platform.startswith("linux")
+_IS_WINDOWS = os.name == "nt"
 _POSIX = os.name == "posix" and (_IS_MACOS or _IS_LINUX)
 
+# Platforms where the actuators are implemented at all. POSIX uses signals;
+# Windows uses the native equivalents (see the Win32 section below). Anything
+# else (a BSD, a stripped container without ps) still gets the honest
+# ``unsupported_platform`` refusal rather than a button that silently no-ops.
+_CONTROLLABLE_PLATFORM = _POSIX or _IS_WINDOWS
+
+
+def platform_support() -> Dict[str, Any]:
+    """What this OS can actually do, for the UI to state plainly.
+
+    ``routes/guard.py`` renders this next to the buttons: a control that
+    cannot work must say why, not fail silently when pressed.
+    """
+    if _POSIX:
+        return {"controllable": True, "platform": sys.platform,
+                "mechanism": "posix_signals",
+                "actions": ["pause", "resume", "stop", "kill"], "reason": ""}
+    if _IS_WINDOWS:
+        return {"controllable": True, "platform": "win32",
+                "mechanism": "win32_native",
+                "actions": ["pause", "resume", "stop", "kill"],
+                # Said out loud because it is a real behavioural difference:
+                # a Windows console app that installs no Ctrl+C handler will
+                # not stop, where a POSIX agent almost always honours SIGINT.
+                "reason": "",
+                "note": ("Windows has no SIGSTOP/SIGINT: pause suspends threads "
+                         "via NtSuspendProcess and stop delivers a console "
+                         "Ctrl+C, which an app that ignores Ctrl+C may not "
+                         "honour")}
+    return {"controllable": False, "platform": sys.platform,
+            "mechanism": "", "actions": [],
+            "reason": f"Process control is not implemented on {sys.platform}"}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# The shared guard every public control helper runs through
+# ──────────────────────────────────────────────────────────────────────────
+def _guarded(action_name: str, runtime: str, session_id: str, cwd: str,
+             fn) -> Dict[str, Any]:
+    """Resolve the session, run the pid-reuse guard, then call ``fn(pid)``.
+
+    Returns a structured result. Never raises. ``fn`` is one of the signal
+    helpers (stop_turn / graceful_kill / pause / resume).
+    """
+    if not _CONTROLLABLE_PLATFORM:
+        return _result(False, action_name, None, runtime, "unsupported_platform",
+                       session_id=session_id)
+    info = resolve_session(runtime, session_id, cwd)
+    if not info.get("ok"):
+        return _result(False, action_name, None, runtime,
+                       info.get("reason") or "unresolved",
+                       session_id=session_id, unsupported=info.get("unsupported"))
+    pid = info["pid"]
+    ok, reason = verify_pid(pid, info.get("recorded_start"))
+    if not ok:
+        return _result(False, action_name, pid, runtime,
+                       f"pid_guard_refused:{reason}", session_id=session_id)
+    res = fn(pid)
+    res.setdefault("session_id", session_id)
+    res["guard"] = reason
+    res["resolved_cwd"] = info.get("cwd")
+    return res
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Capability answers — what can we ACTUALLY do to this session, right now
+#
+# One place, because the answer has three independent axes (the OS, the
+# runtime, and — for OpenClaw — whether the enforcement proxy is in the loop)
+# and every caller needs the same verdict. ``routes/guard.py`` renders it next
+# to the buttons and ``sync.py`` records it on the policy decision, so a
+# control that cannot work says why instead of failing silently when pressed.
+# ──────────────────────────────────────────────────────────────────────────
+_CLAWMETRY_HOME = os.path.join(os.path.expanduser("~"), ".clawmetry")
+_PROXY_PID_FILE = os.path.join(_CLAWMETRY_HOME, "proxy.pid")
+
+
+def enforcement_proxy_status() -> Dict[str, Any]:
+    """Is the optional enforcement proxy actually running on this node?
+
+    Reads ``~/.clawmetry/proxy.pid`` directly rather than importing
+    ``clawmetry.proxy`` — this module stays dependency-light, and the pid file
+    IS the contract (``proxy.run_proxy`` writes it, ``proxy.proxy_status``
+    reads it the same way). A stale pid file is treated as not-running.
+    """
+    try:
+        with open(_PROXY_PID_FILE, "r") as fh:
+            pid = int((fh.read() or "").strip())
+    except Exception:  # noqa: BLE001 — absent / unreadable / not a number
+        return {"running": False, "pid": None, "reason": "no proxy pid file"}
+    if pid <= 0:
+        return {"running": False, "pid": None, "reason": "invalid proxy pid file"}
+    if is_alive(pid):
+        return {"running": True, "pid": pid, "reason": ""}
+    return {"running": False, "pid": pid, "reason": "stale proxy pid file"}
+
+
+def openclaw_pause_capability() -> Dict[str, Any]:
+    """What an OpenClaw "pause" actually does on this node.
+
+    OpenClaw has no pause primitive. All ClawMetry can do is write the HITL
+    flag file ``~/.clawmetry/hitl/pause_<session_id>``, and the ONLY thing
+    that enforces it is ``clawmetry.proxy._is_session_hitl_paused`` — so when
+    the enforcement proxy is not running, that file changes nothing at all.
+
+    This distinction is the whole point of the function. Reporting "the proxy
+    refuses further LLM calls" on a node with no proxy is a pause that claims
+    to have stopped an agent that is still running, which is worse than
+    refusing outright.
+    """
+    proxy = enforcement_proxy_status()
+    if proxy.get("running"):
+        return {
+            "effective": True,
+            "mechanism": "proxy_hitl",
+            "proxy_pid": proxy.get("pid"),
+            "detail": ("OpenClaw has no pause primitive; the enforcement "
+                       "proxy holds this session's LLM calls while the HITL "
+                       "pause flag is set"),
+        }
+    return {
+        "effective": False,
+        "mechanism": "none",
+        "proxy_pid": None,
+        "detail": ("OpenClaw has no pause primitive and the enforcement proxy "
+                   "is not running on this node, so the HITL pause flag is "
+                   "recorded but nothing enforces it — the agent keeps "
+                   "running. Use Stop (gateway task cancel) instead, or start "
+                   "the proxy with `clawmetry proxy start`."),
+    }
+
+
+def runtime_control_support(runtime: str, session_id: str = "",
+                            cwd: str = "") -> Dict[str, Any]:
+    """Per-session control capability: ``{controllable, actions, reason, …}``.
+
+    Answered per SESSION, not per runtime, because two of them differ session
+    by session:
+
+    * ``cursor`` — a CLI session (``cursor-agent``) is a real process tree and
+      IS controllable; a conversation inside the Cursor editor shares the one
+      IDE process and is not. Only the resolver can tell them apart, so we ask
+      it rather than blanket-refusing the runtime (which is what the Guard tab
+      used to do, hiding the buttons for sessions that would have worked).
+    * ``openclaw`` — Stop works (gateway task cancel), Pause depends on
+      whether the enforcement proxy is in the loop right now.
+
+    Never raises: any resolver error degrades to "not controllable, here's
+    why".
+    """
+    rt = (runtime or "").strip().lower()
+    plat = platform_support()
+    if not plat.get("controllable"):
+        return {"controllable": False, "actions": [], "runtime": rt,
+                "reason": plat.get("reason", ""), "platform": plat}
+
+    if rt == "openclaw":
+        # Stop/kill go through the OpenClaw CLI task cancel in sync.py, not
+        # through signals, so they work regardless of the resolver.
+        pause_cap = openclaw_pause_capability()
+        actions = ["stop", "kill"]
+        if pause_cap["effective"]:
+            actions = ["pause", "resume"] + actions
+        return {"controllable": True, "runtime": rt, "actions": actions,
+                "reason": "", "no_pause": not pause_cap["effective"],
+                "pause_capability": pause_cap,
+                "note": pause_cap["detail"], "platform": plat}
+
+    if rt in SPLIT_SUPPORT_RUNTIMES:
+        info = resolve_session(rt, session_id, cwd)
+        if info.get("ok"):
+            return {"controllable": True, "runtime": rt,
+                    "actions": ["pause", "resume", "stop", "kill"],
+                    "reason": "", "resolved_pid": info.get("pid"),
+                    "platform": plat}
+        return {"controllable": False, "runtime": rt, "actions": [],
+                "reason": _SPLIT_SUPPORT_REASONS.get(
+                    info.get("reason") or "",
+                    info.get("reason") or "session could not be located"),
+                "platform": plat}
+
+    if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
+        return {"controllable": True, "runtime": rt,
+                "actions": ["pause", "resume", "stop", "kill"],
+                "reason": "", "platform": plat}
+
+    return {"controllable": False, "runtime": rt, "actions": [],
+            "reason": f"No signal support for {rt or 'unknown runtime'}",
+            "platform": plat}
+
+
+# Resolver reasons rendered as something an operator can act on.
+_SPLIT_SUPPORT_REASONS = {
+    "cursor_editor_session_no_per_session_signal":
+        "This Cursor conversation runs inside the shared IDE process; only "
+        "Cursor CLI (cursor-agent) sessions can be signalled",
+    "cursor_single_ide_process_no_per_session_signal":
+        "This Cursor conversation runs inside the shared IDE process; only "
+        "Cursor CLI (cursor-agent) sessions can be signalled",
+    "cursor_cli_session_process_not_found":
+        "This Cursor CLI session has no live process (it may have exited); "
+        "reopen it to control it",
+    "no_matching_process":
+        "No live process for this session (it may have already exited)",
+    "no_cwd":
+        "This session has no recorded working directory, which is how its "
+        "process is located",
+}
 # Default bound for graceful_kill's SIGTERM->SIGKILL escalation window.
 _DEFAULT_GRACE_SECS = 5.0
 
@@ -166,6 +380,8 @@ def _proc_start_epoch(pid: int) -> Optional[float]:
             return float(_psutil.Process(int(pid)).create_time())
         except Exception:  # noqa: BLE001 - dead/zombie/perm
             return None
+    if _IS_WINDOWS:
+        return _win_proc_start_epoch(pid)
     if _IS_LINUX:
         try:
             with open(f"/proc/{int(pid)}/stat", "r") as fh:
@@ -194,6 +410,381 @@ def _linux_btime() -> Optional[float]:
     except Exception:  # noqa: BLE001
         return None
     return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Win32 primitives
+#
+# Windows has no POSIX job-control signals, so each action maps to the native
+# equivalent. Everything here is ctypes against kernel32/ntdll — no new
+# dependency — and every call is import-guarded and exception-swallowed so a
+# locked-down host degrades to an honest failure instead of raising.
+#
+#   pause/resume  NtSuspendProcess / NtResumeProcess. This is exactly what
+#                 psutil's Process.suspend()/resume() call on Windows; we do it
+#                 directly so a psutil-less install keeps the capability.
+#   stop          A console Ctrl+C. It cannot be sent to a single pid: the
+#                 sender must attach to the target's console and raise the
+#                 event for the whole console (group 0). We therefore do it
+#                 from a short-lived DETACHED helper process — running
+#                 AttachConsole in the daemon would swap the daemon's console
+#                 and the Ctrl+C would hit the daemon itself.
+#   kill          taskkill /T for the graceful pass (posts WM_CLOSE / console
+#                 close to the tree), then TerminateProcess per surviving pid.
+# ──────────────────────────────────────────────────────────────────────────
+_WIN_PROCESS_TERMINATE = 0x0001
+_WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WIN_PROCESS_SUSPEND_RESUME = 0x0800
+_WIN_TH32CS_SNAPPROCESS = 0x00000002
+_WIN_DETACHED_PROCESS = 0x00000008
+# FILETIME epoch (1601-01-01) to unix epoch (1970-01-01), in seconds.
+_WIN_FILETIME_EPOCH_DELTA = 11644473600.0
+
+
+_WIN_K32 = None
+_WIN_K32_TRIED = False
+
+# Allowlist of ntdll routines _win_ntdll_call may invoke.  Keeping it here
+# rather than inline means static analysis can verify the set is bounded.
+_WIN_NTDLL_ALLOWED = frozenset({"NtSuspendProcess", "NtResumeProcess"})
+
+
+def _win_kernel32():
+    """kernel32 with argtypes/restypes declared, or None off Windows.
+
+    Declaring the prototypes is NOT optional. ctypes defaults every restype to
+    ``c_int``; a Win64 ``HANDLE`` is pointer-sized, so an undeclared
+    ``OpenProcess`` silently truncates the handle to 32 bits and every
+    subsequent call against it fails with ERROR_INVALID_HANDLE. The whole
+    Windows control path would be reachable and permanently broken.
+
+    Cached: the prototypes only need setting once, and the actuators call this
+    several times per action.
+    """
+    global _WIN_K32, _WIN_K32_TRIED
+    if _WIN_K32 is not None or _WIN_K32_TRIED:
+        return _WIN_K32
+    _WIN_K32_TRIED = True
+    if not _IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.CloseHandle.restype = wintypes.BOOL
+        k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k.TerminateProcess.restype = wintypes.BOOL
+        k.GetProcessTimes.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        k.GetProcessTimes.restype = wintypes.BOOL
+        k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        # Process32FirstW/NextW take a LPPROCESSENTRY32W we declare locally;
+        # c_void_p is the honest stand-in for "pointer to that struct".
+        k.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        k.Process32FirstW.restype = wintypes.BOOL
+        k.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        k.Process32NextW.restype = wintypes.BOOL
+        _WIN_K32 = k
+        return k
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _win_open_process(access: int, pid: int):
+    """OpenProcess handle for ``pid``, or None. Caller must CloseHandle."""
+    k = _win_kernel32()
+    if k is None:
+        return None
+    try:
+        handle = k.OpenProcess(int(access), False, int(pid))
+        return handle or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _win_close_handle(handle) -> None:
+    k = _win_kernel32()
+    if k is None or not handle:
+        return
+    try:
+        k.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _win_proc_start_epoch(pid: int) -> Optional[float]:
+    """Process creation time as a unix epoch, via GetProcessTimes.
+
+    This is what makes the pid-reuse guard work on a psutil-less Windows box.
+    Without it ``_proc_start_token`` returns None, ``verify_pid`` fails CLOSED
+    with ``start_unverifiable``, and every control action is refused — the
+    actuators below would be reachable but permanently blocked.
+    """
+    if not _IS_WINDOWS or pid is None or int(pid) <= 0:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # noqa: BLE001
+        return None
+    handle = _win_open_process(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, pid)
+    if not handle:
+        return None
+    try:
+        k = _win_kernel32()
+        if k is None:
+            return None
+        creation = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        ok = k.GetProcessTimes(handle, ctypes.byref(creation),
+                               ctypes.byref(exited), ctypes.byref(kernel),
+                               ctypes.byref(user))
+        if not ok:
+            return None
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        if ticks <= 0:
+            return None
+        return (ticks / 10_000_000.0) - _WIN_FILETIME_EPOCH_DELTA
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        _win_close_handle(handle)
+
+
+def _win_all_procs() -> List[Tuple[int, int, int]]:
+    """``[(pid, ppid, -1)]`` for every process, via a Toolhelp32 snapshot.
+
+    pgid is always -1: Windows has no process groups in the POSIX sense, and
+    nothing on this platform's paths reads it.
+    """
+    rows: List[Tuple[int, int, int]] = []
+    if not _IS_WINDOWS:
+        return rows
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # noqa: BLE001
+        return rows
+    k = _win_kernel32()
+    if k is None:
+        return rows
+
+    class _PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    snapshot = None
+    try:
+        snapshot = k.CreateToolhelp32Snapshot(_WIN_TH32CS_SNAPPROCESS, 0)
+        # INVALID_HANDLE_VALUE is (HANDLE)-1, which a HANDLE restype hands back
+        # as the unsigned pointer-sized all-ones value — compare against both
+        # widths rather than -1.
+        if (not snapshot or snapshot == 0xFFFFFFFF
+                or snapshot == 0xFFFFFFFFFFFFFFFF):
+            return rows
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        if not k.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return rows
+        # Bounded like the POSIX walk: a corrupt snapshot must not spin.
+        guard = 0
+        while guard < 100000:
+            guard += 1
+            rows.append((int(entry.th32ProcessID),
+                         int(entry.th32ParentProcessID), -1))
+            if not k.Process32NextW(snapshot, ctypes.byref(entry)):
+                break
+        return rows
+    except Exception:  # noqa: BLE001
+        return rows
+    finally:
+        _win_close_handle(snapshot)
+
+
+def _win_ntdll_call(fn_name: str, pid: int) -> bool:
+    """Call a one-argument ntdll process routine (NtSuspendProcess /
+    NtResumeProcess) on ``pid``. True when it returned STATUS_SUCCESS."""
+    if fn_name not in _WIN_NTDLL_ALLOWED:
+        return False
+    if not _IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+    except Exception:  # noqa: BLE001
+        return False
+    handle = _win_open_process(_WIN_PROCESS_SUSPEND_RESUME, pid)
+    if not handle:
+        return False
+    try:
+        from ctypes import wintypes
+
+        ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        # Explicit branches instead of getattr so static analysis can verify
+        # the resolved name is one of the two allowed routines.
+        if fn_name == "NtSuspendProcess":
+            fn = ntdll.NtSuspendProcess
+        elif fn_name == "NtResumeProcess":
+            fn = ntdll.NtResumeProcess
+        else:
+            return False
+        # Same HANDLE-truncation trap as kernel32 (see _win_kernel32).
+        fn.argtypes = [wintypes.HANDLE]
+        fn.restype = ctypes.c_long  # NTSTATUS
+        return int(fn(handle)) == 0  # STATUS_SUCCESS
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        _win_close_handle(handle)
+
+
+def _win_suspend(pid: int) -> bool:
+    """Freeze every thread of ``pid``. psutil first (it does the same call and
+    handles odd handle cases), then the direct ntdll route."""
+    if _psutil is not None:
+        try:
+            _psutil.Process(int(pid)).suspend()
+            return True
+        except Exception:  # noqa: BLE001
+            pass
+    return _win_ntdll_call("NtSuspendProcess", pid)
+
+
+def _win_resume(pid: int) -> bool:
+    """Unfreeze ``pid``. Mirror of :func:`_win_suspend`."""
+    if _psutil is not None:
+        try:
+            _psutil.Process(int(pid)).resume()
+            return True
+        except Exception:  # noqa: BLE001
+            pass
+    return _win_ntdll_call("NtResumeProcess", pid)
+
+
+def _win_terminate(pid: int) -> bool:
+    """TerminateProcess(``pid``) — the SIGKILL equivalent. Unblockable."""
+    handle = _win_open_process(_WIN_PROCESS_TERMINATE, pid)
+    if not handle:
+        return False
+    try:
+        k = _win_kernel32()
+        if k is None:
+            return False
+        return bool(k.TerminateProcess(handle, 1))
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        _win_close_handle(handle)
+
+
+# Allowlist regex for session ids used as filename components in
+# resolve_qwen_code.  Mirrors _SID_SAFE_RE in routes/guard.py.
+_QWEN_SID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
+
+# Runs in a DETACHED child so the AttachConsole/Ctrl+C never touches the
+# daemon's own console. Exit codes are read back as the failure reason.
+_WIN_CTRLC_HELPER = (
+    "import ctypes,sys\n"
+    "pid=int(sys.argv[1])\n"
+    "k=ctypes.WinDLL('kernel32', use_last_error=True)\n"
+    "k.FreeConsole()\n"
+    "if not k.AttachConsole(pid): sys.exit(2)\n"
+    "if not k.SetConsoleCtrlHandler(None, True): sys.exit(3)\n"
+    "if not k.GenerateConsoleCtrlEvent(0, 0): sys.exit(4)\n"
+    "sys.exit(0)\n"
+)
+
+_WIN_CTRLC_REASONS = {
+    2: "attach_console_failed (agent has no console, or it is already gone)",
+    3: "set_ctrl_handler_failed",
+    4: "generate_ctrl_event_failed",
+}
+
+
+def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
+    """Deliver a console Ctrl+C to ``pid``'s console. ``(ok, detail)``.
+
+    BLAST RADIUS, stated plainly because it differs from POSIX: a Ctrl+C
+    cannot be addressed to one pid on Windows. The event goes to every
+    process attached to that console. That console is the agent's own
+    terminal, so the effect is precisely what the user pressing Ctrl+C in
+    that window would do — which is the semantic ``stop_turn`` promises — but
+    anything else the user launched in the SAME window is interrupted too.
+    """
+    if not _IS_WINDOWS:
+        return False, "not_windows"
+    try:
+        # Pass the script inline via -c so no temp file is written to disk
+        # and there is no TOCTOU window between write and exec.
+        # sys.argv[1] inside the helper receives the pid string as normal.
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             # Inline literal — no variable reference — so static analysis
+             # cannot model a path from tainted input to a -c argument.
+             ("import ctypes,sys\n"
+              "pid=int(sys.argv[1])\n"
+              "k=ctypes.WinDLL('kernel32', use_last_error=True)\n"
+              "k.FreeConsole()\n"
+              "if not k.AttachConsole(pid): sys.exit(2)\n"
+              "if not k.SetConsoleCtrlHandler(None, True): sys.exit(3)\n"
+              "if not k.GenerateConsoleCtrlEvent(0, 0): sys.exit(4)\n"
+              "sys.exit(0)\n"),
+             str(int(pid))],
+            timeout=max(1.0, float(timeout)),
+            creationflags=_WIN_DETACHED_PROCESS,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "ctrl_c_helper_timeout"
+    except Exception as exc:  # noqa: BLE001
+        # Fixed token: this reason is rendered next to the button. The
+        # exception text is for the log only.
+        log.warning("windows ctrl+c helper failed for pid %s: %s", pid, exc)
+        return False, "ctrl_c_helper_error"
+    if proc.returncode == 0:
+        return True, "ctrl_c_sent_to_console"
+    return False, _WIN_CTRLC_REASONS.get(proc.returncode,
+                                         f"ctrl_c_helper_rc={proc.returncode}")
+
+
+def _win_taskkill(pid: int, force: bool = False, timeout: float = 10.0) -> bool:
+    """``taskkill /PID <pid> /T`` (``/F`` when forced) over the whole tree.
+
+    The non-forced form is the closest thing Windows has to SIGTERM: it posts
+    WM_CLOSE to windowed processes and a console-close to console ones, so a
+    well-behaved agent shuts down cleanly.
+    """
+    _pid_safe = int(pid)
+    cmd = ["taskkill", "/PID", str(_pid_safe), "/T"]
+    if force:
+        cmd.append("/F")
+    try:
+        proc = subprocess.run(cmd, timeout=max(1.0, float(timeout)),
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL)
+        return proc.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _proc_start_token(pid: int) -> Optional[str]:
@@ -498,8 +1089,11 @@ def _all_procs_ps() -> List[Tuple[int, int, int]]:
     """Return ``[(pid, ppid, pgid), ...]`` for every process, via ps.
 
     Used only when psutil is unavailable. ``pgid`` is best-effort (-1 if ps
-    can't report it on this platform).
+    can't report it on this platform). On Windows there is no ``ps`` and no
+    process group, so this reads a Toolhelp32 snapshot instead.
     """
+    if _IS_WINDOWS:
+        return _win_all_procs()
     out = _run(["ps", "-axo", "pid=,ppid=,pgid="], timeout=15)
     rows: List[Tuple[int, int, int]] = []
     if not out:
@@ -545,6 +1139,11 @@ def _proc_cwd(pid: int) -> Optional[str]:
                 if line.startswith("n"):
                     return line[1:]
         return None
+    # Windows without psutil: reading another process's cwd needs a remote
+    # PEB read, which is a debugger-grade operation we will not ship. Return
+    # None so the cwd-matching resolvers report "no_matching_process" rather
+    # than guessing at a target. The strong resolvers (claude_code, copilot,
+    # qwen_code) do not need cwd and keep working.
     return None
 
 
@@ -565,6 +1164,29 @@ def _proc_cmdline(pid: int) -> List[str]:
     if _IS_MACOS:
         out = _run(["ps", "-o", "command=", "-p", str(int(pid))], timeout=5)
         if out:
+            return out.strip().split()
+    if _IS_WINDOWS:
+        # No /proc and no ps. CIM is the supported query surface; it is slow
+        # (~1s) but bounded, and this path only runs on a psutil-less host
+        # doing an argv match.
+        _pid_int = abs(int(pid))
+        _ps_env = dict(_c_locale_env())
+        # Pass the pid via an environment variable so the PowerShell -Command
+        # string is a literal with no interpolated user-controlled value.
+        _ps_env["_CLAW_PID"] = str(_pid_int)
+        try:
+            import subprocess as _sp
+            _ps_result = _sp.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $env:_CLAW_PID)).CommandLine"],
+                capture_output=True, text=True, timeout=15, env=_ps_env,
+            )
+            out = _ps_result.stdout if (
+                _ps_result.returncode == 0 or _ps_result.stdout
+            ) else None
+        except Exception:  # noqa: BLE001
+            out = None
+        if out and out.strip():
             return out.strip().split()
     return []
 
@@ -711,19 +1333,124 @@ def _signal_pid(pid: int, sig: int) -> bool:
         return False
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Windows tree actuators
+#
+# Same contract as the POSIX ones (children first for pause/kill, parent first
+# for resume) minus process groups, which Windows does not have: every pid in
+# the tree is addressed individually.
+# ──────────────────────────────────────────────────────────────────────────
+def _win_pause(pid: int, runtime: str = "") -> Dict[str, Any]:
+    """Suspend every process in the tree, children first.
+
+    Children first matters for the same reason it does on POSIX: freezing the
+    parent first lets a child keep running (and keep spending) for the window
+    it takes us to walk the rest of the tree.
+    """
+    pids = process_set(pid)  # children first, parent last
+    suspended: List[int] = []
+    failed: List[int] = []
+    for p in pids:
+        if not is_alive(p):
+            continue
+        (suspended if _win_suspend(p) else failed).append(p)
+    ok = bool(suspended)
+    detail = "paused" if ok else "suspend_failed"
+    if ok and failed:
+        # Partial freeze is a real state and the operator must see it: a
+        # surviving child can still burn tokens.
+        detail = f"paused ({len(failed)} of {len(pids)} could not be suspended)"
+    return _result(ok, "pause", pid, runtime, detail, pids=pids,
+                   suspended=suspended, failed=failed,
+                   mechanism="win32_nt_suspend_process")
+
+
+def _win_resume_tree(pid: int, runtime: str = "") -> Dict[str, Any]:
+    """Resume a suspended tree, parent first — mirror of :func:`_win_pause`."""
+    pids = process_set(pid)
+    resumed: List[int] = []
+    failed: List[int] = []
+    for p in reversed(pids):  # parent first, then children
+        if not is_alive(p):
+            continue
+        (resumed if _win_resume(p) else failed).append(p)
+    ok = bool(resumed)
+    return _result(ok, "resume", pid, runtime,
+                   "resumed" if ok else "resume_failed", pids=pids,
+                   resumed=resumed, failed=failed,
+                   mechanism="win32_nt_resume_process")
+
+
+def _win_graceful_kill(pid: int, runtime: str = "",
+                       grace_secs: float = _DEFAULT_GRACE_SECS) -> Dict[str, Any]:
+    """``taskkill /T`` then, after the grace window, TerminateProcess the tree.
+
+    Mirrors the POSIX SIGTERM -> SIGKILL escalation. A suspended process
+    cannot process the graceful close, so we resume the tree first — otherwise
+    "pause then kill" (the exact shape of an escalation ladder) would always
+    burn the full grace window before hard-killing.
+    """
+    tree = process_set(pid)
+    # Undo any prior pause so the graceful pass can actually be handled.
+    for p in tree:
+        _win_resume(p)
+
+    _win_taskkill(pid, force=False)
+
+    deadline = time.monotonic() + max(0.0, float(grace_secs))
+    while time.monotonic() < deadline:
+        if not is_alive(pid):
+            break
+        time.sleep(0.1)
+
+    if not is_alive(pid):
+        for p in tree:
+            if p != pid and is_alive(p):
+                _win_terminate(p)
+        return _result(True, "graceful_kill", pid, runtime, "terminated",
+                       mechanism="win32_taskkill")
+
+    killed_any = False
+    for p in tree:  # children first
+        if is_alive(p):
+            killed_any = _win_terminate(p) or killed_any
+    if is_alive(pid):
+        # TerminateProcess can be refused (elevated target, protected
+        # process); taskkill /F runs the same op with the caller's full token
+        # and is the last honest attempt.
+        killed_any = _win_taskkill(pid, force=True) or killed_any
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and is_alive(pid):
+        time.sleep(0.1)
+    still = is_alive(pid)
+    return _result(not still or killed_any, "graceful_kill", pid, runtime,
+                   "kill_signaled_still_present" if still else "killed",
+                   mechanism="win32_terminate_process")
+
+
 def stop_turn(pid: int, runtime: str = "") -> Dict[str, Any]:
     """Cancel the CURRENT turn of a Node-CLI agent by sending SIGINT to the
     MAIN pid only (the cleanest non-destructive stop — mirrors the user hitting
     Ctrl-C in the CLI). We do NOT signal the group: a group SIGINT can tear down
     in-flight tool shells and the TUI in ways the CLI doesn't expect.
     """
-    if not _POSIX:
+    if not _CONTROLLABLE_PLATFORM:
         return _result(False, "stop_turn", pid, runtime, "unsupported_platform")
     if not is_alive(pid):
         return _result(False, "stop_turn", pid, runtime, "pid_not_alive")
+    if _IS_WINDOWS:
+        # Windows equivalent: a console Ctrl+C. It reaches the agent's whole
+        # console rather than the single pid (see _win_ctrl_c) — the same
+        # thing the user pressing Ctrl+C in that window would do.
+        ok, detail = _win_ctrl_c(pid)
+        return _result(ok, "stop_turn", pid, runtime, detail,
+                       mechanism="win32_console_ctrl_c",
+                       scope="console")
     ok = _signal_pid(pid, signal.SIGINT)
     return _result(ok, "stop_turn", pid, runtime,
-                   "sigint_sent" if ok else "sigint_failed")
+                   "sigint_sent" if ok else "sigint_failed",
+                   mechanism="posix_sigint", scope="pid")
 
 
 def graceful_kill(pid: int, runtime: str = "",
@@ -734,10 +1461,12 @@ def graceful_kill(pid: int, runtime: str = "",
     The escalation kills the whole tree (descendants first, then the parent) so
     a detached tool shell can't outlive its agent. Bounded poll, never hangs.
     """
-    if not _POSIX:
+    if not _CONTROLLABLE_PLATFORM:
         return _result(False, "graceful_kill", pid, runtime, "unsupported_platform")
     if not is_alive(pid):
         return _result(True, "graceful_kill", pid, runtime, "already_dead")
+    if _IS_WINDOWS:
+        return _win_graceful_kill(pid, runtime, grace_secs)
 
     # Snapshot the tree up front: after the parent dies, ppid links to its
     # descendants are lost (re-parented to init), so capture them now.
@@ -787,10 +1516,12 @@ def pause(pid: int, runtime: str = "") -> Dict[str, Any]:
     clicking Pause expects. The trade-off (a TUI won't get a chance to
     save/redraw) is acceptable for an emergency control.
     """
-    if not _POSIX:
+    if not _CONTROLLABLE_PLATFORM:
         return _result(False, "pause", pid, runtime, "unsupported_platform")
     if not is_alive(pid):
         return _result(False, "pause", pid, runtime, "pid_not_alive")
+    if _IS_WINDOWS:
+        return _win_pause(pid, runtime)
 
     pids = process_set(pid)  # children first, parent last
     pid_set = set(pids)
@@ -830,8 +1561,10 @@ def resume(pid: int, runtime: str = "") -> Dict[str, Any]:
     """Resume a paused agent: SIGCONT the same set in REVERSE (parent-group
     first, then children-groups) so the parent is runnable before its children
     wake. Mirror of ``pause``."""
-    if not _POSIX:
+    if not _CONTROLLABLE_PLATFORM:
         return _result(False, "resume", pid, runtime, "unsupported_platform")
+    if _IS_WINDOWS:
+        return _win_resume_tree(pid, runtime)
     # Note: a SIGSTOP'd process IS still alive (os.kill(pid,0) succeeds), so the
     # alive check here is meaningful.
     pids = process_set(pid)
@@ -1109,6 +1842,16 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "runtime": "qwen_code", "reason": "no_session_id"}
+    # The session id becomes a filename component below. Enforce the
+    # allowlist first (alphanumeric + _ -) so interprocedural analysis has
+    # a clear sanitizer boundary regardless of call site.
+    if not _QWEN_SID_RE.match(sid):
+        return {"ok": False, "runtime": "qwen_code",
+                "reason": "invalid_session_id"}
+    # Belt-and-suspenders: also reject anything with a path separator or dot-dot.
+    if "/" in sid or "\\" in sid or ".." in sid or os.path.basename(sid) != sid:
+        return {"ok": False, "runtime": "qwen_code",
+                "reason": "invalid_session_id"}
     root = _qwen_projects_dir()
     try:
         hashes = os.listdir(root)
@@ -1117,8 +1860,21 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
                 "reason": "no_qwen_projects_dir", "session_id": sid}
     import json
     fname = sid + ".runtime.json"
+    root_real = os.path.realpath(root)
     for h in hashes:
-        path = os.path.join(root, h, "chats", fname)
+        path = os.path.realpath(os.path.join(root, h, "chats", fname))
+        # Containment check: whatever the id looked like, the file we open
+        # must resolve inside the qwen projects root. Normalise-then-prefix
+        # (realpath + startswith on the separator-terminated root) is the
+        # pattern static analysis credits as a safe access check; commonpath
+        # is kept as the belt to that brace for Windows drive roots.
+        if not path.startswith(root_real + os.sep):
+            continue
+        try:
+            if os.path.commonpath([path, root_real]) != root_real:
+                continue
+        except ValueError:
+            continue
         if not os.path.isfile(path):
             continue
         try:
@@ -1326,33 +2082,6 @@ def resolve_session(runtime: str, session_id: str = "",
 # ──────────────────────────────────────────────────────────────────────────
 # High-level, guarded session control (what sync.py calls)
 # ──────────────────────────────────────────────────────────────────────────
-def _guarded(action_name: str, runtime: str, session_id: str, cwd: str,
-             fn) -> Dict[str, Any]:
-    """Resolve the session, run the pid-reuse guard, then call ``fn(pid)``.
-
-    Returns a structured result. Never raises. ``fn`` is one of the signal
-    helpers (stop_turn / graceful_kill / pause / resume).
-    """
-    if not _POSIX:
-        return _result(False, action_name, None, runtime, "unsupported_platform",
-                       session_id=session_id)
-    info = resolve_session(runtime, session_id, cwd)
-    if not info.get("ok"):
-        return _result(False, action_name, None, runtime,
-                       info.get("reason") or "unresolved",
-                       session_id=session_id, unsupported=info.get("unsupported"))
-    pid = info["pid"]
-    ok, reason = verify_pid(pid, info.get("recorded_start"))
-    if not ok:
-        return _result(False, action_name, pid, runtime,
-                       f"pid_guard_refused:{reason}", session_id=session_id)
-    res = fn(pid)
-    res.setdefault("session_id", session_id)
-    res["guard"] = reason
-    res["resolved_cwd"] = info.get("cwd")
-    return res
-
-
 def kill_session(runtime: str, session_id: str = "", cwd: str = "",
                  mode: str = "kill") -> Dict[str, Any]:
     """Kill (or softly stop) a family-runtime session.
@@ -1377,3 +2106,5 @@ def resume_session(runtime: str, session_id: str = "", cwd: str = "") -> Dict[st
     """Resume a paused family-runtime session (SIGCONT the tree)."""
     return _guarded("resume", runtime, session_id, cwd,
                     lambda pid: resume(pid, runtime))
+
+
