@@ -3582,33 +3582,37 @@ class LocalStore:
         try:
             if agent_type:
                 rows = self._fetch(
-                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "SELECT session_id, cwd, git_branch, metadata FROM sessions "
                     "WHERE agent_type = ? AND session_id = ? LIMIT 1",
                     [str(agent_type), sid],
                 )
             else:
                 rows = self._fetch(
-                    "SELECT cwd, git_branch, metadata FROM sessions "
+                    "SELECT session_id, cwd, git_branch, metadata FROM sessions "
                     "WHERE session_id = ? LIMIT 1",
                     [sid],
                 )
         except Exception:
             log.debug("local store: get_session_location failed for %s",
-                      sid, exc_info=True)
+                      sid.replace("\r", " ").replace("\n", " "), exc_info=True)
             return None
         if not rows:
             return None
         row = rows[0]
         meta: dict[str, Any] = {}
-        if row[2]:
+        if row[3]:
             try:
-                decoded = json.loads(row[2])
+                decoded = json.loads(row[3])
                 if isinstance(decoded, dict):
                     meta = decoded
             except Exception:
                 pass
-        return {"session_id": sid, "cwd": row[0], "git_branch": row[1],
-                "metadata": meta}
+        # ``session_id`` is the STORED value (the row's own column), not the
+        # caller's argument echoed back: control handlers act on this copy so
+        # a request can name a session but never supply the string a process
+        # is located or signalled with.
+        return {"session_id": str(row[0] or sid), "cwd": row[1],
+                "git_branch": row[2], "metadata": meta}
 
     def apply_session_attention(self, items: list[dict[str, Any]]) -> int:
         """Publish the daemon's INFERRED "needs you" pass onto session rows.

@@ -33,6 +33,10 @@ from typing import Any
 from clawmetry import error_signal as _error_signal
 from clawmetry import session_titles as _session_titles
 from clawmetry.adapters import phase as _phase
+# The ONE actuator both the Guard tab and the policy pass call. A leaf
+# module (it imports this one lazily), so there is no cycle. Bound under
+# the historical name so tests and routes keep patching ``sync._guard_actuate``.
+from clawmetry.guard_actuator import guard_actuate as _guard_actuate  # noqa: F401
 
 
 def _get_openclaw_dir():
@@ -10241,7 +10245,8 @@ def _hitl_set_pause(session_id: str, paused: bool) -> None:
         elif f.exists():
             f.unlink()
     except Exception as e:
-        log.debug("hitl pause file set failed for %s: %s", session_id, e)
+        log.debug("hitl pause file set failed for %s: %s",
+                  str(session_id)[:128].replace("\r", " ").replace("\n", " "), e)
 
 
 def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
@@ -10266,8 +10271,12 @@ def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
     except subprocess.TimeoutExpired:
         return {"ok": False, "scope_pending": False,
                 "error": "openclaw tasks cancel timed out", "raw": ""}
-    except Exception as e:
-        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
+    except Exception as e:  # noqa: BLE001
+        # The exception text stays in the log; the result dict can reach an
+        # HTTP response, so it carries a fixed token instead.
+        log.warning("openclaw tasks cancel could not run: %s", e)
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw_cli_error", "raw": ""}
     blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
     low = blob.lower()
     scope_pending = ("pairing required" in low or "scope upgrade" in low
@@ -10336,7 +10345,7 @@ def _registered_kill(runtime: str, session_id: str) -> dict | None:
         log.warning("registered kill handler (%s) raised: %s", runtime, e)
         return {"ok": False, "action": "kill", "runtime": runtime,
                 "session_id": session_id,
-                "detail": f"kill handler error: {str(e)[:200]}"}
+                "detail": "kill_handler_error"}
     return {"ok": ok, "action": "kill", "runtime": runtime,
             "session_id": session_id,
             "detail": ("stopped via %s kill handler" % runtime) if ok
@@ -10412,8 +10421,11 @@ def _run_process_control(config: dict, action: dict) -> None:
                 result = _pc.resume_session(runtime, session_id, cwd)
         else:
             return
-    except Exception as e:  # never raise from the worker thread
-        result = {"ok": False, "error": str(e)[:300], "runtime": runtime,
+    except Exception:  # noqa: BLE001 — never raise from the worker thread
+        # Exception text goes to the log only; the result is relayed onward.
+        log.exception("process control %s failed for %s", atype,
+                      str(session_id)[:128].replace("\r", " ").replace("\n", " "))
+        result = {"ok": False, "error": "control_error", "runtime": runtime,
                   "action": atype, "session_id": session_id}
     _post_process_control_result(config, action, result)
 
@@ -20296,96 +20308,6 @@ def _epoch_of(ts: Any) -> int:
     if dt.tzinfo is None:
         return int(dt.timestamp())
     return int(dt.timestamp())
-
-
-def _guard_actuate(runtime: str, session_id: str, cwd: str,
-                   action: str) -> dict:
-    """Send the signal for one policy decision, or one human button press.
-
-    Deliberately mirrors ``_run_process_control`` (the cloud-relayed path)
-    including its OpenClaw special-casing, so an automatic pause and a
-    hand-pressed pause do exactly the same thing to the process. Never
-    raises — returns a structured result the caller records verbatim.
-
-    ``resume`` is accepted here even though no policy can request it (it is
-    not in ``policy_engine.ACTIONS``): the Guard tab's Resume button used to
-    call ``process_control.resume_session`` directly, which meant one of the
-    four controls did NOT go through the shared actuator and silently
-    returned "unsupported" for OpenClaw sessions the proxy could have
-    released.
-    """
-    import clawmetry.process_control as _pc
-    rt = (runtime or "").strip().lower()
-    # When an HTTP handler supplies cwd, validate it against the session's
-    # recorded location before passing it to any signal helper.  The daemon
-    # supplies cwd from the session record itself, so this is a no-op for
-    # automatic policy actions; it closes the injection path for the HTTP
-    # handler (routes/guard.py also validates, but defence-in-depth here).
-    if cwd:
-        try:
-            import clawmetry.local_store as _ls_cwd
-            _rec = _ls_cwd.get_store().get_session_location(session_id)
-            _recorded_cwd = (_rec or {}).get("cwd") or ""
-            if _recorded_cwd and (
-                os.path.realpath(cwd) != os.path.realpath(_recorded_cwd)
-            ):
-                log.warning(
-                    "guard actuate cwd mismatch for %s: supplied=%r recorded=%r",
-                    str(session_id or "")[:128],
-                    str(cwd)[:200],
-                    str(_recorded_cwd)[:200],
-                )
-                return {"ok": False, "detail": "cwd_mismatch_rejected"}
-        except Exception:  # noqa: BLE001
-            pass  # No recorded cwd — allow; the caller's own validation is enough
-    try:
-        if action == "pause":
-            _hitl_set_pause(session_id, True)
-            if rt == "openclaw":
-                # OpenClaw has no pause primitive. The HITL flag file is the
-                # only lever, and the ONLY thing that enforces it is the
-                # optional enforcement proxy. Claiming "the proxy refuses
-                # further LLM calls" on a node with no proxy reported a
-                # stopped agent that was still running — so ask first and
-                # report what actually happened.
-                cap = _pc.openclaw_pause_capability()
-                return {"ok": bool(cap["effective"]),
-                        "detail": ("paused_via_proxy_hitl" if cap["effective"]
-                                   else "unsupported_no_primitive"),
-                        "mechanism": cap["mechanism"],
-                        "advisory_only": not cap["effective"],
-                        "note": cap["detail"]}
-            return _pc.pause_session(rt, session_id, cwd)
-        if action in ("stop", "kill"):
-            _hitl_set_pause(session_id, True)
-            if rt == "openclaw":
-                cr = _openclaw_cancel_task(session_id)
-                return {"ok": bool(cr.get("ok")), "action": "cancel",
-                        "scope_pending": bool(cr.get("scope_pending")),
-                        "detail": (cr.get("error") or "task cancel requested")}
-            mode = "stop" if action == "stop" else "kill"
-            return _pc.kill_session(rt, session_id, cwd, mode=mode)
-        if action == "resume":
-            _hitl_set_pause(session_id, False)
-            if rt == "openclaw":
-                cap = _pc.openclaw_pause_capability()
-                return {"ok": bool(cap["effective"]),
-                        "detail": ("resumed_via_proxy_hitl" if cap["effective"]
-                                   else "nothing_was_holding_this_session"),
-                        "mechanism": cap["mechanism"],
-                        "advisory_only": not cap["effective"],
-                        "note": cap["detail"]}
-            return _pc.resume_session(rt, session_id, cwd)
-    except Exception:  # noqa: BLE001 — never raise into the daemon tick
-        # The exception text stays in the log; the returned detail is a fixed
-        # token because this dict is recorded and can reach an HTTP response.
-        # Line breaks are stripped from the interpolated values so a crafted
-        # session id cannot forge extra log lines.
-        log.exception("guard actuator %s failed for %s",
-                      str(action or "")[:32].replace("\n", " ").replace("\r", " "),
-                      str(session_id or "")[:128].replace("\n", " ").replace("\r", " "))
-        return {"ok": False, "detail": "actuator_error"}
-    return {"ok": False, "detail": "no-op"}
 
 
 def _apply_guard_policies(store, state: dict, incidents: list,

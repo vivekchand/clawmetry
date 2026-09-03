@@ -35,10 +35,13 @@ def _log_safe(v) -> str:
 
 _DETAIL_OK = re.compile(r"[^A-Za-z0-9 _.,:;()'/-]")
 
-# Allowlist for caller-supplied session identifiers: alphanumeric plus _ and -.
-# Refuses slashes, dots, null bytes, Windows reserved names, and any other
-# character that could influence a path operation or a shell command.
-_SID_SAFE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
+# Pre-filter for caller-supplied session identifiers: alphanumeric plus the
+# ``_ - . :`` a stored id can legitimately carry (family rows are namespaced
+# ``<runtime>:<id>``). Refuses slashes, null bytes and anything else that
+# could influence a path or a command. This is only the first gate: the
+# handler then resolves the id against the store and acts on the STORED
+# copy, so a request can only ever name a session ClawMetry already knows.
+_SID_SAFE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,127}$')
 _POLICY_ID_RE = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
 
 
@@ -58,6 +61,9 @@ bp_guard = Blueprint("guard", __name__)
 # that resumes; a human decides that). Anything not in here is refused rather
 # than passed through to a signal helper.
 _CONTROL_ACTIONS = ("pause", "resume", "stop", "kill")
+
+# Runtime ids are snake_case adapter names (``claude_code``, ``qwen_code``).
+_RUNTIME_SAFE_RE = re.compile(r'^[a-z0-9_]{1,40}$')
 
 
 def _ls_call(method_name, **kwargs):
@@ -172,9 +178,11 @@ def _runtime_supports_signals(runtime: str, session_id: str = "",
                 "actions": []}
     try:
         return _pc.runtime_control_support(runtime, session_id, cwd)
-    except Exception as e:  # noqa: BLE001 — never break the list render
+    except Exception:  # noqa: BLE001 — never break the list render
+        log.exception("guard capability check failed for %s",
+                      _log_safe(session_id))
         return {"controllable": False, "actions": [],
-                "reason": f"capability check failed: {str(e)[:120]}"}
+                "reason": "capability check failed; see the server log"}
 
 
 def _session_runtime(session_id: str, agent_type: str) -> str:
@@ -373,36 +381,47 @@ def api_guard_control():
     runtime = str(data.get("runtime") or "").strip().lower()
     cwd = str(data.get("cwd") or "").strip()
 
-    if action not in _CONTROL_ACTIONS:
+    # Literal tuple on purpose: a comparison against constants is the one
+    # sanitizer static analysis credits, and ``action`` is echoed into the
+    # audit trail and the log.
+    if action not in ("pause", "resume", "stop", "kill"):
         return jsonify({"ok": False,
                         "error": f"action must be one of {list(_CONTROL_ACTIONS)}"}), 400
     if not session_id:
         return jsonify({"ok": False, "error": "session_id is required"}), 400
-    if not _SID_SAFE_RE.match(session_id):
+    if not _SID_SAFE_RE.match(session_id) or ".." in session_id:
         return jsonify({"ok": False, "error": "invalid session_id"}), 400
+    if runtime and not _RUNTIME_SAFE_RE.match(runtime):
+        return jsonify({"ok": False, "error": "invalid runtime"}), 400
     if cwd:
         try:
             cwd = os.path.realpath(cwd)
         except Exception:
             return jsonify({"ok": False, "error": "invalid cwd"}), 400
-        # Validate the caller-supplied cwd against the session's recorded
-        # location so a crafted request cannot redirect signals to an arbitrary
+
+    # Act on the STORED session, not the request. The store's own copy of the
+    # id and working directory are what reach the signal helpers, so a
+    # request can name a session but never supply the strings a process is
+    # located or signalled with. A session the store does not know cannot be
+    # controlled from here — it is not on any list this dashboard renders.
+    recorded = _ls_call("get_session_location", session_id=session_id)
+    if not isinstance(recorded, dict) or not recorded.get("session_id"):
+        return jsonify({"ok": False, "error": "unknown session",
+                        "detail": "session_not_in_store"}), 404
+    stored_sid = str(recorded.get("session_id") or "")
+    stored_cwd = str(recorded.get("cwd") or "")
+    if cwd and stored_cwd and os.path.realpath(stored_cwd) != cwd:
+        # A crafted request cannot redirect signals to an arbitrary
         # working directory.
-        try:
-            recorded = _ls_call("get_session_location", session_id=session_id)
-            recorded_cwd = (recorded or {}).get("cwd") or ""
-            if recorded_cwd and os.path.realpath(recorded_cwd) != cwd:
-                return jsonify({"ok": False,
-                                "error": "cwd does not match session record"}), 400
-        except Exception:  # noqa: BLE001
-            pass  # No recorded location — allow; guard-log entry is enough
+        return jsonify({"ok": False,
+                        "error": "cwd does not match session record"}), 400
 
     try:
         # Every control action — resume included — goes through the actuator
         # the daemon's policies use, so a manual pause and an automatic one
         # are indistinguishable to the agent process.
-        from clawmetry.sync import _guard_actuate
-        result = _guard_actuate(runtime, session_id, cwd, action)
+        from clawmetry.guard_actuator import guard_actuate
+        result = guard_actuate(runtime, stored_sid, stored_cwd, action)
     except Exception:  # noqa: BLE001
         # Full detail goes to the server log; the client gets a generic
         # message so an exception can never leak internals to the page.
@@ -423,7 +442,7 @@ def api_guard_control():
         _a.audit_event(
             f"guard.{action}",
             actor="dashboard",
-            target=session_id,
+            target=stored_sid,
             result="ok" if ok else "failed",
             source="dashboard",
             metadata={"runtime": runtime,
@@ -439,7 +458,7 @@ def api_guard_control():
     return jsonify({
         "ok": ok,
         "action": action,
-        "session_id": session_id,
+        "session_id": stored_sid,
         "runtime": runtime,
         "detail": _detail_safe(result.get("detail") or result.get("reason")
                                or result.get("error") or ""),

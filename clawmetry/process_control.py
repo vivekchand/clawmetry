@@ -99,6 +99,181 @@ def platform_support() -> Dict[str, Any]:
             "mechanism": "", "actions": [],
             "reason": f"Process control is not implemented on {sys.platform}"}
 
+
+# ──────────────────────────────────────────────────────────────────────────
+# The shared guard every public control helper runs through
+# ──────────────────────────────────────────────────────────────────────────
+def _guarded(action_name: str, runtime: str, session_id: str, cwd: str,
+             fn) -> Dict[str, Any]:
+    """Resolve the session, run the pid-reuse guard, then call ``fn(pid)``.
+
+    Returns a structured result. Never raises. ``fn`` is one of the signal
+    helpers (stop_turn / graceful_kill / pause / resume).
+    """
+    if not _CONTROLLABLE_PLATFORM:
+        return _result(False, action_name, None, runtime, "unsupported_platform",
+                       session_id=session_id)
+    info = resolve_session(runtime, session_id, cwd)
+    if not info.get("ok"):
+        return _result(False, action_name, None, runtime,
+                       info.get("reason") or "unresolved",
+                       session_id=session_id, unsupported=info.get("unsupported"))
+    pid = info["pid"]
+    ok, reason = verify_pid(pid, info.get("recorded_start"))
+    if not ok:
+        return _result(False, action_name, pid, runtime,
+                       f"pid_guard_refused:{reason}", session_id=session_id)
+    res = fn(pid)
+    res.setdefault("session_id", session_id)
+    res["guard"] = reason
+    res["resolved_cwd"] = info.get("cwd")
+    return res
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Capability answers — what can we ACTUALLY do to this session, right now
+#
+# One place, because the answer has three independent axes (the OS, the
+# runtime, and — for OpenClaw — whether the enforcement proxy is in the loop)
+# and every caller needs the same verdict. ``routes/guard.py`` renders it next
+# to the buttons and ``sync.py`` records it on the policy decision, so a
+# control that cannot work says why instead of failing silently when pressed.
+# ──────────────────────────────────────────────────────────────────────────
+_CLAWMETRY_HOME = os.path.join(os.path.expanduser("~"), ".clawmetry")
+_PROXY_PID_FILE = os.path.join(_CLAWMETRY_HOME, "proxy.pid")
+
+
+def enforcement_proxy_status() -> Dict[str, Any]:
+    """Is the optional enforcement proxy actually running on this node?
+
+    Reads ``~/.clawmetry/proxy.pid`` directly rather than importing
+    ``clawmetry.proxy`` — this module stays dependency-light, and the pid file
+    IS the contract (``proxy.run_proxy`` writes it, ``proxy.proxy_status``
+    reads it the same way). A stale pid file is treated as not-running.
+    """
+    try:
+        with open(_PROXY_PID_FILE, "r") as fh:
+            pid = int((fh.read() or "").strip())
+    except Exception:  # noqa: BLE001 — absent / unreadable / not a number
+        return {"running": False, "pid": None, "reason": "no proxy pid file"}
+    if pid <= 0:
+        return {"running": False, "pid": None, "reason": "invalid proxy pid file"}
+    if is_alive(pid):
+        return {"running": True, "pid": pid, "reason": ""}
+    return {"running": False, "pid": pid, "reason": "stale proxy pid file"}
+
+
+def openclaw_pause_capability() -> Dict[str, Any]:
+    """What an OpenClaw "pause" actually does on this node.
+
+    OpenClaw has no pause primitive. All ClawMetry can do is write the HITL
+    flag file ``~/.clawmetry/hitl/pause_<session_id>``, and the ONLY thing
+    that enforces it is ``clawmetry.proxy._is_session_hitl_paused`` — so when
+    the enforcement proxy is not running, that file changes nothing at all.
+
+    This distinction is the whole point of the function. Reporting "the proxy
+    refuses further LLM calls" on a node with no proxy is a pause that claims
+    to have stopped an agent that is still running, which is worse than
+    refusing outright.
+    """
+    proxy = enforcement_proxy_status()
+    if proxy.get("running"):
+        return {
+            "effective": True,
+            "mechanism": "proxy_hitl",
+            "proxy_pid": proxy.get("pid"),
+            "detail": ("OpenClaw has no pause primitive; the enforcement "
+                       "proxy holds this session's LLM calls while the HITL "
+                       "pause flag is set"),
+        }
+    return {
+        "effective": False,
+        "mechanism": "none",
+        "proxy_pid": None,
+        "detail": ("OpenClaw has no pause primitive and the enforcement proxy "
+                   "is not running on this node, so the HITL pause flag is "
+                   "recorded but nothing enforces it — the agent keeps "
+                   "running. Use Stop (gateway task cancel) instead, or start "
+                   "the proxy with `clawmetry proxy start`."),
+    }
+
+
+def runtime_control_support(runtime: str, session_id: str = "",
+                            cwd: str = "") -> Dict[str, Any]:
+    """Per-session control capability: ``{controllable, actions, reason, …}``.
+
+    Answered per SESSION, not per runtime, because two of them differ session
+    by session:
+
+    * ``cursor`` — a CLI session (``cursor-agent``) is a real process tree and
+      IS controllable; a conversation inside the Cursor editor shares the one
+      IDE process and is not. Only the resolver can tell them apart, so we ask
+      it rather than blanket-refusing the runtime (which is what the Guard tab
+      used to do, hiding the buttons for sessions that would have worked).
+    * ``openclaw`` — Stop works (gateway task cancel), Pause depends on
+      whether the enforcement proxy is in the loop right now.
+
+    Never raises: any resolver error degrades to "not controllable, here's
+    why".
+    """
+    rt = (runtime or "").strip().lower()
+    plat = platform_support()
+    if not plat.get("controllable"):
+        return {"controllable": False, "actions": [], "runtime": rt,
+                "reason": plat.get("reason", ""), "platform": plat}
+
+    if rt == "openclaw":
+        # Stop/kill go through the OpenClaw CLI task cancel in sync.py, not
+        # through signals, so they work regardless of the resolver.
+        pause_cap = openclaw_pause_capability()
+        actions = ["stop", "kill"]
+        if pause_cap["effective"]:
+            actions = ["pause", "resume"] + actions
+        return {"controllable": True, "runtime": rt, "actions": actions,
+                "reason": "", "no_pause": not pause_cap["effective"],
+                "pause_capability": pause_cap,
+                "note": pause_cap["detail"], "platform": plat}
+
+    if rt in SPLIT_SUPPORT_RUNTIMES:
+        info = resolve_session(rt, session_id, cwd)
+        if info.get("ok"):
+            return {"controllable": True, "runtime": rt,
+                    "actions": ["pause", "resume", "stop", "kill"],
+                    "reason": "", "resolved_pid": info.get("pid"),
+                    "platform": plat}
+        return {"controllable": False, "runtime": rt, "actions": [],
+                "reason": _SPLIT_SUPPORT_REASONS.get(
+                    info.get("reason") or "",
+                    info.get("reason") or "session could not be located"),
+                "platform": plat}
+
+    if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
+        return {"controllable": True, "runtime": rt,
+                "actions": ["pause", "resume", "stop", "kill"],
+                "reason": "", "platform": plat}
+
+    return {"controllable": False, "runtime": rt, "actions": [],
+            "reason": f"No signal support for {rt or 'unknown runtime'}",
+            "platform": plat}
+
+
+# Resolver reasons rendered as something an operator can act on.
+_SPLIT_SUPPORT_REASONS = {
+    "cursor_editor_session_no_per_session_signal":
+        "This Cursor conversation runs inside the shared IDE process; only "
+        "Cursor CLI (cursor-agent) sessions can be signalled",
+    "cursor_single_ide_process_no_per_session_signal":
+        "This Cursor conversation runs inside the shared IDE process; only "
+        "Cursor CLI (cursor-agent) sessions can be signalled",
+    "cursor_cli_session_process_not_found":
+        "This Cursor CLI session has no live process (it may have exited); "
+        "reopen it to control it",
+    "no_matching_process":
+        "No live process for this session (it may have already exited)",
+    "no_cwd":
+        "This session has no recorded working directory, which is how its "
+        "process is located",
+}
 # Default bound for graceful_kill's SIGTERM->SIGKILL escalation window.
 _DEFAULT_GRACE_SECS = 5.0
 
@@ -582,7 +757,10 @@ def _win_ctrl_c(pid: int, timeout: float = 10.0) -> Tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return False, "ctrl_c_helper_timeout"
     except Exception as exc:  # noqa: BLE001
-        return False, f"ctrl_c_helper_error:{str(exc)[:120]}"
+        # Fixed token: this reason is rendered next to the button. The
+        # exception text is for the log only.
+        log.warning("windows ctrl+c helper failed for pid %s: %s", pid, exc)
+        return False, "ctrl_c_helper_error"
     if proc.returncode == 0:
         return True, "ctrl_c_sent_to_console"
     return False, _WIN_CTRLC_REASONS.get(proc.returncode,
@@ -1686,9 +1864,12 @@ def resolve_qwen_code(session_id: str) -> Dict[str, Any]:
     for h in hashes:
         path = os.path.realpath(os.path.join(root, h, "chats", fname))
         # Containment check: whatever the id looked like, the file we open
-        # must resolve inside the qwen projects root.  commonpath is the
-        # CodeQL-recognised sanitizer; startswith has an edge on Windows
-        # drive roots and is harder for static analysis to model.
+        # must resolve inside the qwen projects root. Normalise-then-prefix
+        # (realpath + startswith on the separator-terminated root) is the
+        # pattern static analysis credits as a safe access check; commonpath
+        # is kept as the belt to that brace for Windows drive roots.
+        if not path.startswith(root_real + os.sep):
+            continue
         try:
             if os.path.commonpath([path, root_real]) != root_real:
                 continue
@@ -1901,33 +2082,6 @@ def resolve_session(runtime: str, session_id: str = "",
 # ──────────────────────────────────────────────────────────────────────────
 # High-level, guarded session control (what sync.py calls)
 # ──────────────────────────────────────────────────────────────────────────
-def _guarded(action_name: str, runtime: str, session_id: str, cwd: str,
-             fn) -> Dict[str, Any]:
-    """Resolve the session, run the pid-reuse guard, then call ``fn(pid)``.
-
-    Returns a structured result. Never raises. ``fn`` is one of the signal
-    helpers (stop_turn / graceful_kill / pause / resume).
-    """
-    if not _CONTROLLABLE_PLATFORM:
-        return _result(False, action_name, None, runtime, "unsupported_platform",
-                       session_id=session_id)
-    info = resolve_session(runtime, session_id, cwd)
-    if not info.get("ok"):
-        return _result(False, action_name, None, runtime,
-                       info.get("reason") or "unresolved",
-                       session_id=session_id, unsupported=info.get("unsupported"))
-    pid = info["pid"]
-    ok, reason = verify_pid(pid, info.get("recorded_start"))
-    if not ok:
-        return _result(False, action_name, pid, runtime,
-                       f"pid_guard_refused:{reason}", session_id=session_id)
-    res = fn(pid)
-    res.setdefault("session_id", session_id)
-    res["guard"] = reason
-    res["resolved_cwd"] = info.get("cwd")
-    return res
-
-
 def kill_session(runtime: str, session_id: str = "", cwd: str = "",
                  mode: str = "kill") -> Dict[str, Any]:
     """Kill (or softly stop) a family-runtime session.
@@ -1954,147 +2108,3 @@ def resume_session(runtime: str, session_id: str = "", cwd: str = "") -> Dict[st
                     lambda pid: resume(pid, runtime))
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Capability answers — what can we ACTUALLY do to this session, right now
-#
-# One place, because the answer has three independent axes (the OS, the
-# runtime, and — for OpenClaw — whether the enforcement proxy is in the loop)
-# and every caller needs the same verdict. ``routes/guard.py`` renders it next
-# to the buttons and ``sync.py`` records it on the policy decision, so a
-# control that cannot work says why instead of failing silently when pressed.
-# ──────────────────────────────────────────────────────────────────────────
-_CLAWMETRY_HOME = os.path.join(os.path.expanduser("~"), ".clawmetry")
-_PROXY_PID_FILE = os.path.join(_CLAWMETRY_HOME, "proxy.pid")
-
-
-def enforcement_proxy_status() -> Dict[str, Any]:
-    """Is the optional enforcement proxy actually running on this node?
-
-    Reads ``~/.clawmetry/proxy.pid`` directly rather than importing
-    ``clawmetry.proxy`` — this module stays dependency-light, and the pid file
-    IS the contract (``proxy.run_proxy`` writes it, ``proxy.proxy_status``
-    reads it the same way). A stale pid file is treated as not-running.
-    """
-    try:
-        with open(_PROXY_PID_FILE, "r") as fh:
-            pid = int((fh.read() or "").strip())
-    except Exception:  # noqa: BLE001 — absent / unreadable / not a number
-        return {"running": False, "pid": None, "reason": "no proxy pid file"}
-    if pid <= 0:
-        return {"running": False, "pid": None, "reason": "invalid proxy pid file"}
-    if is_alive(pid):
-        return {"running": True, "pid": pid, "reason": ""}
-    return {"running": False, "pid": pid, "reason": "stale proxy pid file"}
-
-
-def openclaw_pause_capability() -> Dict[str, Any]:
-    """What an OpenClaw "pause" actually does on this node.
-
-    OpenClaw has no pause primitive. All ClawMetry can do is write the HITL
-    flag file ``~/.clawmetry/hitl/pause_<session_id>``, and the ONLY thing
-    that enforces it is ``clawmetry.proxy._is_session_hitl_paused`` — so when
-    the enforcement proxy is not running, that file changes nothing at all.
-
-    This distinction is the whole point of the function. Reporting "the proxy
-    refuses further LLM calls" on a node with no proxy is a pause that claims
-    to have stopped an agent that is still running, which is worse than
-    refusing outright.
-    """
-    proxy = enforcement_proxy_status()
-    if proxy.get("running"):
-        return {
-            "effective": True,
-            "mechanism": "proxy_hitl",
-            "proxy_pid": proxy.get("pid"),
-            "detail": ("OpenClaw has no pause primitive; the enforcement "
-                       "proxy holds this session's LLM calls while the HITL "
-                       "pause flag is set"),
-        }
-    return {
-        "effective": False,
-        "mechanism": "none",
-        "proxy_pid": None,
-        "detail": ("OpenClaw has no pause primitive and the enforcement proxy "
-                   "is not running on this node, so the HITL pause flag is "
-                   "recorded but nothing enforces it — the agent keeps "
-                   "running. Use Stop (gateway task cancel) instead, or start "
-                   "the proxy with `clawmetry proxy start`."),
-    }
-
-
-def runtime_control_support(runtime: str, session_id: str = "",
-                            cwd: str = "") -> Dict[str, Any]:
-    """Per-session control capability: ``{controllable, actions, reason, …}``.
-
-    Answered per SESSION, not per runtime, because two of them differ session
-    by session:
-
-    * ``cursor`` — a CLI session (``cursor-agent``) is a real process tree and
-      IS controllable; a conversation inside the Cursor editor shares the one
-      IDE process and is not. Only the resolver can tell them apart, so we ask
-      it rather than blanket-refusing the runtime (which is what the Guard tab
-      used to do, hiding the buttons for sessions that would have worked).
-    * ``openclaw`` — Stop works (gateway task cancel), Pause depends on
-      whether the enforcement proxy is in the loop right now.
-
-    Never raises: any resolver error degrades to "not controllable, here's
-    why".
-    """
-    rt = (runtime or "").strip().lower()
-    plat = platform_support()
-    if not plat.get("controllable"):
-        return {"controllable": False, "actions": [], "runtime": rt,
-                "reason": plat.get("reason", ""), "platform": plat}
-
-    if rt == "openclaw":
-        # Stop/kill go through the OpenClaw CLI task cancel in sync.py, not
-        # through signals, so they work regardless of the resolver.
-        pause_cap = openclaw_pause_capability()
-        actions = ["stop", "kill"]
-        if pause_cap["effective"]:
-            actions = ["pause", "resume"] + actions
-        return {"controllable": True, "runtime": rt, "actions": actions,
-                "reason": "", "no_pause": not pause_cap["effective"],
-                "pause_capability": pause_cap,
-                "note": pause_cap["detail"], "platform": plat}
-
-    if rt in SPLIT_SUPPORT_RUNTIMES:
-        info = resolve_session(rt, session_id, cwd)
-        if info.get("ok"):
-            return {"controllable": True, "runtime": rt,
-                    "actions": ["pause", "resume", "stop", "kill"],
-                    "reason": "", "resolved_pid": info.get("pid"),
-                    "platform": plat}
-        return {"controllable": False, "runtime": rt, "actions": [],
-                "reason": _SPLIT_SUPPORT_REASONS.get(
-                    info.get("reason") or "",
-                    info.get("reason") or "session could not be located"),
-                "platform": plat}
-
-    if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
-        return {"controllable": True, "runtime": rt,
-                "actions": ["pause", "resume", "stop", "kill"],
-                "reason": "", "platform": plat}
-
-    return {"controllable": False, "runtime": rt, "actions": [],
-            "reason": f"No signal support for {rt or 'unknown runtime'}",
-            "platform": plat}
-
-
-# Resolver reasons rendered as something an operator can act on.
-_SPLIT_SUPPORT_REASONS = {
-    "cursor_editor_session_no_per_session_signal":
-        "This Cursor conversation runs inside the shared IDE process; only "
-        "Cursor CLI (cursor-agent) sessions can be signalled",
-    "cursor_single_ide_process_no_per_session_signal":
-        "This Cursor conversation runs inside the shared IDE process; only "
-        "Cursor CLI (cursor-agent) sessions can be signalled",
-    "cursor_cli_session_process_not_found":
-        "This Cursor CLI session has no live process (it may have exited); "
-        "reopen it to control it",
-    "no_matching_process":
-        "No live process for this session (it may have already exited)",
-    "no_cwd":
-        "This session has no recorded working directory, which is how its "
-        "process is located",
-}
