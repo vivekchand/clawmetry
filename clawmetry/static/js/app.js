@@ -2096,6 +2096,7 @@ function switchTab(name) {
   if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -11877,6 +11878,9 @@ function renderLogs(elId, lines) {
 }
 
 function escHtml(s) { s=String(s||''); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Attribute context needs the quotes escaped too — escHtml alone lets a value
+// containing '"' terminate the attribute it sits in.
+function escAttr(s) { return escHtml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // Embed a JS string literal inside a double-quoted inline handler
 // (onclick="fn(...)"). JSON.stringify emits double quotes, which TERMINATE
 // the surrounding attribute and silently truncate the handler (the Context
@@ -12167,7 +12171,7 @@ var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','s
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','alerts','usage','dives','crons','memory',
+  'context-economics','approvals','guard','alerts','usage','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -13571,6 +13575,20 @@ async function loadSessions() {
     // running or the local store is unreachable.
     fetch('/api/loop-signals?limit=200&since_minutes=60').then(r => r.json()).catch(function() { return {signals:[]}; })
   ]);
+  // Guard join: per-session control capability (which of Pause/Resume/Stop can
+  // actually work HERE, and why not when not) plus the ranked incident, from
+  // the same resolver the Guard tab and the daemon's policies use. Absent on
+  // cloud (the cloud has its own kill-switch dialogs) and on older daemons —
+  // rows then degrade to the legacy lone Stop button.
+  var guardBySid = {};
+  if (!window.CLOUD_MODE) {
+    try {
+      var _gd = await fetch('/api/guard/sessions?limit=200').then(function(r) { return r.ok ? r.json() : {sessions:[]}; });
+      ((_gd && _gd.sessions) || []).forEach(function(g) {
+        if (g && g.session_id) guardBySid[g.session_id] = g;
+      });
+    } catch (e) { /* guard endpoints absent: legacy rendering */ }
+  }
   // Build a session_id → eval lookup for O(1) overlay.
   var evalMap = {};
   ((evalData && evalData.evals) || []).forEach(function(e) {
@@ -13635,16 +13653,65 @@ async function loadSessions() {
         ' in this session. Open the Brain tab for per-call detail."' +
         ' style="margin-left:6px;color:#dc2626;font-size:13px;">&#9888;</span>';
     }
-    // Issue #1364 — loop-detection badge. Shown when the proxy's LoopDetector
-    // has recorded repeated identical requests from this session in the last
-    // hour. Data comes from the loop_signals DuckDB table via /api/loop-signals.
-    var _loopCount = loopSessions[sid] || 0;
-    if (_loopCount > 0) {
-      html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
-        ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+    // Rogue flag on the row itself, not only the banner: the highest-ranked
+    // detector incident for this session (same ranking the Guard tab and the
+    // daemon use), named in plain words and colored by severity. Falls back
+    // to the legacy proxy loop badge when Guard data is unavailable.
+    var _guard = guardBySid[sid] || null;
+    var _inc = _guard && _guard.incident ? _guard.incident : null;
+    if (_inc) {
+      var _sevCrit = String(_inc.severity || '') === 'critical';
+      var _incLabel = LOOP_KIND_LABEL[_inc.kind] || _inc.title || 'Off track';
+      var _incMoney = loopMoney(_inc.spend_at_risk_usd);
+      var _incTitle = (_inc.title || _incLabel) + (_inc.detail ? ' — ' + _inc.detail : '') +
+        (_incMoney ? ' · est. ' + _incMoney + ' at risk (' + (_inc.spend_basis || 'unknown') + ')' : '') +
+        '. Click to open the Guard tab.';
+      var _incColor = _sevCrit ? '#dc2626' : '#d97706';
+      var _incBg = _sevCrit ? 'rgba(220,38,38,0.12)' : 'rgba(217,119,6,0.12)';
+      var _incBorder = _sevCrit ? 'rgba(220,38,38,0.4)' : 'rgba(217,119,6,0.35)';
+      html += '<span class="session-rogue-warn" onclick="event.stopPropagation();switchTab(\'guard\')" title="' + escAttr(_incTitle) + '"' +
+        ' style="margin-left:6px;color:' + _incColor + ';font-size:11px;font-weight:700;background:' + _incBg + ';border:1px solid ' + _incBorder + ';border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; ' +
+        escHtml(_incLabel) + (_incMoney ? ' · ' + _incMoney : '') + '</span>';
+    } else {
+      // Issue #1364 — legacy loop badge (proxy LoopDetector repeats).
+      var _loopCount = loopSessions[sid] || 0;
+      if (_loopCount > 0) {
+        html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
+          ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+      }
     }
     html += '</span>';
-    html += '<button onclick="event.stopPropagation();stopSession(\'' + escHtml(sid).replace(/'/g, "\\\\'") + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    // Session controls, right on the row. Pause/Resume render only where this
+    // node can actually deliver them (per-session capability from
+    // process_control.runtime_control_support); a control that cannot work is
+    // disabled with the reason on it rather than quietly doing nothing. Cloud
+    // keeps its own Stop dialog (its kill-switch JS overrides stopSession).
+    // Data-attributes + one delegated listener, never string-built onclick
+    // handlers: a session id, cwd, or capability reason containing a quote
+    // must be inert markup, not a way out of the attribute.
+    html += '<span style="display:flex;gap:5px;align-items:center;flex-shrink:0;">';
+    if (_guard && !window.CLOUD_MODE) {
+      var _acts = _guard.control_actions || [];
+      var _mk = function(action, glyph, label, bg) {
+        var on = _acts.indexOf(action) !== -1;
+        var why = on ? (_guard.control_note || (label + ' this session'))
+                     : (_guard.control_reason || 'Not available for this session');
+        if (on) {
+          return '<button class="cm-guard-btn" data-action="' + action + '"' +
+            ' data-sid="' + escAttr(sid) + '" data-rt="' + escAttr(_guard.runtime || '') + '"' +
+            ' data-cwd="' + escAttr(_guard.cwd || '') + '" title="' + escAttr(why) + '"' +
+            ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + label + '</button>';
+        }
+        return '<button disabled title="' + escAttr(why) + '"' +
+          ' style="background:var(--bg-tertiary,#2a2a2a);color:var(--text-muted,#888);border:1px solid var(--border-secondary,#3a3a3a);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:not-allowed;opacity:.6;">' + glyph + ' ' + label + '</button>';
+      };
+      html += _mk('pause', '⏸', 'Pause', '#b45309');
+      html += _mk('resume', '▶', 'Resume', '#15803d');
+      html += _mk('stop', '⏹', 'Stop', '#b91c1c');
+    } else {
+      html += '<button class="cm-stop-btn" data-sid="' + escAttr(sid) + '" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    }
+    html += '</span>';
     html += '</div>';
     var sessCost = costMap[sid] || costMap[(sid||'').slice(-16)] || null;
     html += '<div class="session-meta">';
@@ -13837,6 +13904,54 @@ function _renderSessionsRetentionCta(capped) {
   } else {
     cta.style.display = 'none';
     cta.innerHTML = '';
+  }
+}
+
+// Delegated click handler for the per-row session controls. The buttons carry
+// their arguments as data-attributes (see the row renderer) so no untrusted
+// value is ever interpolated into an inline handler.
+document.addEventListener('click', function(ev) {
+  var gb = ev.target.closest && ev.target.closest('.cm-guard-btn');
+  if (gb) {
+    ev.stopPropagation();
+    guardControl(gb.dataset.sid, gb.dataset.action, gb.dataset.rt, gb.dataset.cwd);
+    return;
+  }
+  var sb = ev.target.closest && ev.target.closest('.cm-stop-btn');
+  if (sb) {
+    ev.stopPropagation();
+    stopSession(sb.dataset.sid);
+  }
+});
+
+// Row-level session control. One endpoint, the same actuator the Guard tab
+// and the daemon's policies use, so a click here and an automatic policy
+// action are identical to the agent process. Reports the REAL outcome —
+// including advisory_only, where a "pause" is only a proxy flag and no
+// enforcement proxy is running to honor it.
+async function guardControl(sessionId, action, runtime, cwd) {
+  var sid = String(sessionId || '').trim();
+  if (!sid || !action) return;
+  if (action === 'stop' || action === 'kill') {
+    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' session "' + sid + '"?')) return;
+  }
+  try {
+    var r = await fetch('/api/guard/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sid, action: action,
+                            runtime: runtime || '', cwd: cwd || ''})
+    });
+    var data = await r.json();
+    if (!r.ok || !data.ok) {
+      var why = (data && (data.detail || data.error)) || 'request failed';
+      alert('Could not ' + action + ' this session: ' + why);
+    } else if (data.advisory_only) {
+      alert('Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.');
+    }
+    loadSessions();
+  } catch (e) {
+    alert('Could not ' + action + ' this session: ' + e.message);
   }
 }
 
@@ -30048,7 +30163,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   window._debugReplayTree = debugReplayTree;
 })();
 
-// ============================================================================
+// =====================================================================
 // BENCH — Harness Engineering tab (routes/bench.py; clawmetry/harness_bench.py)
 // Verdict stamps + $/done crew cards, follow-a-job flow trace, context lanes,
 // workload recommendations, published third-party pairs. Every cell carries
@@ -30429,3 +30544,405 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
 
   window.loadBenchTab = loadBenchTab;
 })();
+var GUARD_KIND_LABEL = {
+  // Trajectory shape: is this agent stuck?
+  stuck_loop: 'Looping',
+  no_progress: 'Not progressing',
+  repeated_tool_failure: 'Tool failing repeatedly',
+  action_discrepancy: 'Continued after a failure',
+  // Behaviour: is this agent doing something it does not normally do?
+  file_blast_radius: 'Wide or destructive file changes',
+  credential_access: 'Read credentials',
+  network_egress: 'Unusual network destination',
+  privilege_change: 'Privilege change'
+};
+
+// Money first: "$1.20 at risk" is the number that decides what to open next.
+function guardMoney(n) {
+  var v = Number(n) || 0;
+  if (v <= 0) return '';
+  return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
+}
+
+function guardSeverityClass(sev) {
+  if (sev === 'critical') return 'pill-danger';
+  if (sev === 'info') return '';
+  return 'pill-warn';
+}
+
+function guardEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function guardAgo(ts) {
+  if (!ts) return '';
+  var t = new Date(ts).getTime();
+  if (!t || isNaN(t)) return '';
+  var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
+}
+
+function loadGuardTab() {
+  loadGuardSessions();
+  loadGuardPolicies();
+  loadGuardActions();
+}
+
+function loadGuardSessions() {
+  var el = document.getElementById('guard-sessions-body');
+  if (!el) return;
+  fetch('/api/guard/sessions').then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.sessions) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No sessions running right now.</div>';
+      guardSetBadge(0);
+      return;
+    }
+    var flagged = 0;
+    var atRisk = document.getElementById('guard-at-risk');
+    if (atRisk) {
+      var total = Number(d && d.spend_at_risk_usd) || 0;
+      atRisk.textContent = total > 0
+        ? guardMoney(total) + ' at risk across ' + (d.flagged || 0) + ' flagged session' + ((d.flagged === 1) ? '' : 's')
+        : '';
+    }
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>Session</th><th>Runtime</th><th>Status</th><th>At risk</th><th>Cost</th><th>Last active</th><th>Control</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (s) {
+      var inc = s.incident;
+      if (inc) flagged++;
+      var statusCell = inc
+        ? '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
+          guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
+          (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
+        : '<span class="pill pill-ok">Running</span>';
+      // The estimate says what it is: a burn-rate figure and a
+      // window-fraction figure are not the same kind of number, and the
+      // tooltip is where that distinction lives instead of being hidden.
+      var riskCell = '<span class="muted">&mdash;</span>';
+      if (inc && Number(inc.spend_at_risk_usd) > 0) {
+        var basis = inc.spend_basis === 'burn_rate'
+          ? 'Estimated from this session\'s burn rate over the time it has been off track.'
+          : (inc.spend_basis === 'window_fraction'
+             ? 'Rough estimate: session cost apportioned to the flagged part of the window.'
+             : 'Basis unknown.');
+        riskCell = '<span title="' + guardEsc(basis) + '">' +
+          guardMoney(inc.spend_at_risk_usd) + '</span>';
+      }
+
+      var control;
+      if (!s.controllable) {
+        // Say WHY rather than showing a button that quietly does nothing.
+        control = '<span class="muted" title="' + guardEsc(s.control_reason) + '">Not controllable</span>';
+      } else {
+        // Store session fields in data-attributes so onclick handlers read
+        // them after HTML parsing — HTML entity encoding alone is insufficient
+        // in a JS string context (the browser decodes entities before evaluating
+        // the JS, so guardEsc("'") -> &#39; -> ' still breaks out of the string).
+        var dataSid = ' data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime || '') + '" data-cwd="' + guardEsc(s.cwd || '') + '"';
+        // Which buttons this SESSION supports, answered by the server. Older
+        // builds only sent no_pause, so fall back to that rather than
+        // rendering nothing at all.
+        var allowed = s.control_actions;
+        if (!allowed || !allowed.length) {
+          allowed = s.no_pause ? ['stop', 'kill'] : ['pause', 'stop', 'kill'];
+        }
+        // A control that behaves differently here (OpenClaw's proxy-backed
+        // pause, the Windows console-wide Ctrl+C) explains itself on hover.
+        var noteAttr = s.control_note ? ' title="' + guardEsc(s.control_note) + '"' : '';
+        control = '';
+        if (allowed.indexOf('pause') >= 0) {
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'pause\')">Pause</button> ';
+        }
+        if (allowed.indexOf('stop') >= 0) {
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'stop\')">Stop</button> ';
+        }
+        if (allowed.indexOf('kill') >= 0) {
+          control += '<button class="btn btn-xs btn-danger"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'kill\')">Kill</button>';
+        }
+        // Pause is unavailable but the reason is worth reading (no proxy).
+        if (allowed.indexOf('pause') < 0 && s.control_note) {
+          control += ' <span class="muted" title="' + guardEsc(s.control_note) + '">no pause</span>';
+        }
+      }
+
+      html += '<tr><td title="' + guardEsc(s.session_id) + '">' +
+        guardEsc((s.title || s.session_id || '').slice(0, 48)) + '</td>' +
+        '<td>' + guardEsc(s.runtime) + '</td>' +
+        '<td>' + statusCell + '</td>' +
+        '<td>' + riskCell + '</td>' +
+        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
+        '<td>' + control + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    guardSetBadge(flagged);
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load sessions.</div>';
+  });
+}
+
+// 300 -> "5m". Used wherever a ladder delay is shown.
+function guardHumanSecs(n) {
+  n = Math.max(0, Number(n) || 0);
+  if (n < 60) return n + 's';
+  if (n < 3600) return Math.round(n / 60) + 'm';
+  return Math.round(n / 3600) + 'h';
+}
+
+function guardSetBadge(n) {
+  var b = document.getElementById('nav-guard-badge');
+  if (!b) return;
+  if (n > 0) { b.textContent = n; b.style.display = ''; }
+  else { b.style.display = 'none'; }
+}
+
+function guardControl(sessionId, runtime, cwd, action) {
+  var verb = action === 'kill' ? 'Kill' : (action === 'stop' ? 'Stop' : 'Pause');
+  if (action !== 'pause' &&
+      !confirm(verb + ' this agent?\n\n' + sessionId + '\n\nThis signals the real process.')) {
+    return;
+  }
+  fetch('/api/guard/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, runtime: runtime, cwd: cwd, action: action })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) {
+      alert(verb + ' did not succeed: ' + ((d && d.detail) || 'unknown reason'));
+    }
+    loadGuardSessions();
+  }).catch(function () { alert(verb + ' request failed.'); });
+}
+
+function loadGuardPolicies() {
+  var el = document.getElementById('guard-policies-body');
+  if (!el) return;
+  fetch('/api/guard/policies').then(function (r) { return r.json(); }).then(function (d) {
+    var banner = document.getElementById('guard-enforce-banner');
+    var text = document.getElementById('guard-enforce-text');
+    if (banner && text) {
+      if (d && d.policies && d.policies.length && !d.enforcement_enabled) {
+        // Never let someone believe a rule is protecting them when it is not.
+        text.textContent = 'Policies are in monitor mode. They record what they would do but take no action. Set CLAWMETRY_POLICY_ENFORCE=1 on this node to enforce.';
+        banner.style.display = '';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+    var rows = (d && d.policies) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No policies yet. Add one to act on a stuck agent automatically.</div>';
+      return;
+    }
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>Name</th><th>When</th><th>Thresholds</th><th>Action</th><th></th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (p) {
+      var when = GUARD_KIND_LABEL[p.trigger_kind] || guardEsc(p.trigger_kind || 'any signal');
+      if (p.scope_runtime) when += ' on ' + guardEsc(p.scope_runtime);
+      var th = [];
+      if (p.min_repeat) th.push('>= ' + p.min_repeat + ' events');
+      if (p.min_duration_s) th.push('>= ' + Math.round(p.min_duration_s / 60) + 'm');
+      if (p.min_spend_usd) th.push('>= $' + Number(p.min_spend_usd).toFixed(2) + ' spent');
+      if (p.min_spend_at_risk_usd) th.push('>= $' + Number(p.min_spend_at_risk_usd).toFixed(2) + ' at risk');
+      if (p.min_severity && p.min_severity !== 'info') th.push(p.min_severity + '+');
+      // Render the LADDER, because "pause" reads very differently when a
+      // kill is queued five minutes behind it.
+      var steps = (p.steps && p.steps.length) ? p.steps
+                                              : [{ action: p.action, after_secs: 0 }];
+      var actionCell = steps.map(function (st, i) {
+        var c = st.action === 'monitor' ? '' : 'pill-warn';
+        var wait = (i > 0 && st.after_secs)
+          ? '<span class="muted"> +' + guardHumanSecs(st.after_secs) + '</span> '
+          : (i > 0 ? '<span class="muted"> &rarr; </span>' : '');
+        return wait + '<span class="pill ' + c + '">' + guardEsc(st.action) + '</span>';
+      }).join(' ');
+      html += '<tr><td>' + guardEsc(p.name || p.policy_id) + '</td>' +
+        '<td>' + guardEsc(when) + '</td>' +
+        '<td>' + guardEsc(th.join(', ') || 'none') + '</td>' +
+        '<td>' + actionCell + '</td>' +
+        '<td><button class="btn btn-xs" data-pid="' + guardEsc(p.policy_id) + '" onclick="guardDeletePolicy(this.dataset.pid)">Delete</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load policies.</div>';
+  });
+}
+
+function guardShowPolicyForm() {
+  var el = document.getElementById('guard-policy-form');
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML =
+    '<div class="form-row"><label>Name</label><input id="gp-name" placeholder="Pause loopers"></div>' +
+    '<div class="form-row"><label>When</label><select id="gp-kind">' +
+      '<option value="">any signal</option>' +
+      '<option value="stuck_loop">Looping</option>' +
+      '<option value="no_progress">Not progressing</option>' +
+      '<option value="repeated_tool_failure">Tool failing repeatedly</option>' +
+      '<option value="action_discrepancy">Continued after a failure</option>' +
+      '<option value="file_blast_radius">Wide or destructive file changes</option>' +
+      '<option value="credential_access">Read credentials</option>' +
+      '<option value="network_egress">Unusual network destination</option>' +
+      '<option value="privilege_change">Privilege change</option>' +
+    '</select></div>' +
+    '<div class="form-row"><label>At least this severe</label><select id="gp-severity">' +
+      '<option value="info">info</option>' +
+      '<option value="warning" selected>warning</option>' +
+      '<option value="critical">critical (expensive or irreversible)</option>' +
+    '</select></div>' +
+    '<div class="form-row"><label>Runtime</label><input id="gp-runtime" placeholder="(all runtimes)"></div>' +
+    '<div class="form-row"><label>At least N events</label><input id="gp-repeat" type="number" min="0" value="0"></div>' +
+    '<div class="form-row"><label>Bad for (minutes)</label><input id="gp-mins" type="number" min="0" value="5"></div>' +
+    '<div class="form-row"><label>Session spent at least ($)</label><input id="gp-spend" type="number" min="0" step="0.5" value="0"></div>' +
+    '<div class="form-row"><label title="The estimated cost of the flagged stretch, not the whole session. This is the threshold most people actually want.">At risk at least ($)</label><input id="gp-at-risk" type="number" min="0" step="0.5" value="0"></div>' +
+    '<div class="form-row"><label>Then do this</label><div id="gp-steps"></div></div>' +
+    '<div class="form-row"><label></label><div>' +
+      '<button class="btn btn-xs" onclick="guardAddStep()">Add escalation step</button> ' +
+      '<span class="muted">Each step runs only if the agent is still flagged when its wait is up.</span>' +
+    '</div></div>' +
+    '<button class="btn btn-primary btn-sm" onclick="guardSavePolicy()">Save policy</button>';
+  guardAddStep();
+}
+
+// ── Escalation ladder editor ──────────────────────────────────────────
+// The shape operations actually want is "pause, tell me, then kill if it is
+// still stuck 5 minutes later". One <select> could only express the first
+// rung, so the form builds a list.
+var GUARD_STEP_SEQ = 0;
+
+function guardAddStep(action, afterSecs) {
+  var host = document.getElementById('gp-steps');
+  if (!host) return;
+  var rows = host.querySelectorAll('.gp-step');
+  if (rows.length >= 8) return;                 // mirrors MAX_LADDER_STEPS
+  var first = rows.length === 0;
+  var id = 'gp-step-' + (++GUARD_STEP_SEQ);
+  var div = document.createElement('div');
+  div.className = 'gp-step';
+  div.style.marginBottom = '6px';
+  div.setAttribute('data-step-id', id);
+  // Step 0 fires on the match itself, so it has no wait to configure —
+  // showing a disabled box would invite people to set a value we ignore.
+  var waitHtml = first
+    ? '<span class="muted">immediately</span>'
+    : 'after <input type="number" min="0" step="30" class="gp-step-wait" ' +
+      'value="' + (Number(afterSecs) || 300) + '" style="width:5.5em"> seconds';
+  div.innerHTML =
+    '<select class="gp-step-action">' +
+      '<option value="monitor">monitor (record only)</option>' +
+      '<option value="alert">alert</option>' +
+      '<option value="pause">pause</option>' +
+      '<option value="stop">stop</option>' +
+      '<option value="kill">kill</option>' +
+    '</select> ' + waitHtml +
+    (first ? '' : ' <button class="btn btn-xs" onclick="guardRemoveStep(\'' + id + '\')">Remove</button>');
+  host.appendChild(div);
+  var sel = div.querySelector('.gp-step-action');
+  if (sel && action) sel.value = action;
+}
+
+function guardRemoveStep(id) {
+  var el = document.querySelector('[data-step-id="' + id + '"]');
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function guardReadSteps() {
+  var out = [];
+  var rows = document.querySelectorAll('#gp-steps .gp-step');
+  for (var i = 0; i < rows.length; i++) {
+    var sel = rows[i].querySelector('.gp-step-action');
+    var wait = rows[i].querySelector('.gp-step-wait');
+    if (!sel) continue;
+    out.push({
+      action: sel.value,
+      // Step 0 has no wait input; the server forces it to 0 anyway.
+      after_secs: wait ? (parseInt(wait.value || '0', 10) || 0) : 0
+    });
+  }
+  return out;
+}
+
+function guardSavePolicy() {
+  function v(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+  var body = {
+    name: v('gp-name'),
+    trigger_kind: v('gp-kind'),
+    scope_runtime: v('gp-runtime'),
+    min_repeat: parseInt(v('gp-repeat') || '0', 10) || 0,
+    min_duration_s: (parseInt(v('gp-mins') || '0', 10) || 0) * 60,
+    min_spend_usd: parseFloat(v('gp-spend') || '0') || 0,
+    min_spend_at_risk_usd: parseFloat(v('gp-at-risk') || '0') || 0,
+    min_severity: v('gp-severity') || 'info'
+  };
+  var steps = guardReadSteps();
+  if (!steps.length) { alert('Add at least one action.'); return; }
+  // `action` stays the first rung so a node running an older daemon (which
+  // ignores `steps`) still does something sane rather than nothing.
+  body.action = steps[0].action;
+  if (steps.length > 1) { body.steps = steps; }
+  fetch('/api/guard/policies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) { alert('Could not save policy: ' + ((d && d.error) || 'unknown')); return; }
+    var f = document.getElementById('guard-policy-form');
+    if (f) { f.style.display = 'none'; }
+    loadGuardPolicies();
+  }).catch(function () { alert('Could not save policy.'); });
+}
+
+function guardDeletePolicy(pid) {
+  if (!confirm('Delete this policy?')) return;
+  fetch('/api/guard/policies/' + encodeURIComponent(pid), { method: 'DELETE' })
+    .then(function () { loadGuardPolicies(); })
+    .catch(function () { alert('Could not delete policy.'); });
+}
+
+function loadGuardActions() {
+  var el = document.getElementById('guard-actions-body');
+  if (!el) return;
+  fetch('/api/guard/actions?limit=25').then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.actions) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No policy has fired yet.</div>';
+      return;
+    }
+    // A ladder writes one row per rung. Without the Step column three rungs
+    // of ONE policy are indistinguishable from three unrelated decisions.
+    var anyLadder = rows.some(function (a) { return Number(a.step_index) > 0; });
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>When</th><th>Session</th>' + (anyLadder ? '<th>Step</th>' : '') +
+      '<th>Action</th><th>Enforced</th><th>Why</th><th>Result</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (a) {
+      var stepCell = '';
+      if (anyLadder) {
+        var si = Number(a.step_index) || 0;
+        stepCell = '<td class="muted" title="Rung of this policy\'s escalation ladder">' +
+          (si + 1) + '</td>';
+      }
+      html += '<tr><td>' + guardEsc(guardAgo(new Date(a.created_at).toISOString())) + '</td>' +
+        '<td title="' + guardEsc(a.session_id) + '">' + guardEsc(String(a.session_id).slice(0, 20)) + '</td>' +
+        stepCell +
+        '<td>' + guardEsc(a.action) + '</td>' +
+        '<td>' + (a.enforced ? 'yes' : '<span class="muted">dry run</span>') + '</td>' +
+        '<td>' + guardEsc(a.reason) + '</td>' +
+        '<td>' + guardEsc(a.result_detail) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load decisions.</div>';
+  });
+}
