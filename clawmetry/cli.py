@@ -3018,13 +3018,15 @@ def _resolve_account_email(api_key: str):
             return None, None
         import json as _json
         import os as _os
-        import urllib.parse as _up
         import urllib.request as _ur
 
         from clawmetry.endpoints import app_url as _resolve_app_url
         base = _resolve_app_url()
-        url = base + "/api/cloud/account?token=" + _up.quote(api_key)
-        with _ur.urlopen(url, timeout=2.5) as resp:
+        # Key in a header, never the query string: the server logs the
+        # request line, and a cm_ key is a whole account credential.
+        req = _ur.Request(base + "/api/cloud/account",
+                          headers={"X-Api-Key": api_key}, method="GET")
+        with _ur.urlopen(req, timeout=2.5) as resp:
             data = _json.loads(resp.read() or b"{}")
         email = (data.get("email") or "").strip()
         plan = (data.get("plan") or "").strip()
