@@ -345,3 +345,89 @@ def test_claude_limit_probe_does_not_impersonate_claude_code():
     assert '"claude-code/' not in src, (
         "sending another product's User-Agent to its own API is impersonation"
     )
+
+
+# ── Wire audit 2026-09-03: the key never rides a query string ────────────────
+
+
+def test_claim_watcher_sends_the_key_in_a_header_not_the_url():
+    """The server logs the request line; a ``?token=cm_…`` query writes a
+    whole account credential into its access logs on every daemon start.
+
+    * AC-OBS-LADC-003.8 -- the account credential travels in a header, never the URL.
+    """
+    import inspect
+
+    src = inspect.getsource(sync.start_claim_watcher)
+    assert "token=" not in src, "claim watcher still puts the key in the URL"
+    assert "api_key=token" in src
+
+
+def test_cloud_get_json_puts_the_key_in_x_api_key(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def _fake_urlopen(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["headers"] = dict(req.header_items())
+        return _Resp()
+
+    import urllib.request as _ur
+
+    monkeypatch.setattr(_ur, "urlopen", _fake_urlopen)
+    out = sync._cloud_get_json("/api/cloud/account", api_key="cm_secret")
+    assert out == {"ok": True}
+    assert "cm_secret" not in seen["url"]
+    assert seen["headers"].get("X-api-key") == "cm_secret"
+
+
+def test_cli_status_lookup_has_no_token_in_the_url():
+    path = os.path.join(os.path.dirname(sync.__file__), "cli.py")
+    src = open(path, encoding="utf-8").read()
+    assert "/api/cloud/account?token=" not in src
+
+
+# ── Wire audit 2026-09-03: config files stay home ────────────────────────────
+
+
+def test_memory_push_never_carries_runtime_config_files():
+    """settings.json / openclaw.json / mcp.json are catalogued locally so the
+    Memory tab can show hooks and servers, but they hold tokens. Sealed or
+    not, they have no reason to leave the machine.
+
+    * AC-OBS-LADC-003.9 -- runtime configuration files are never uploaded.
+    """
+    assert {"hooks", "mcp"} <= set(sync.MEMORY_PUSH_EXCLUDED_CATEGORIES)
+    import inspect
+
+    src = inspect.getsource(sync._build_memory_cache_pushes)
+    assert "MEMORY_PUSH_EXCLUDED_CATEGORIES" in src
+
+
+# ── Wire audit 2026-09-03: cloud-relayed actions are audited locally ────────
+
+
+def test_every_relayed_action_is_written_to_the_local_audit_log(monkeypatch):
+    """
+    * AC-OBS-LADC-003.7 -- every relayed action is audited locally on arrival, body excluded.
+    """
+    calls = []
+    from clawmetry import audit as _audit
+
+    monkeypatch.setattr(_audit, "audit_event", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.delenv("CLAWMETRY_ALLOW_REMOTE_PROMPTS", raising=False)
+    monkeypatch.setattr(sync, "_action_selfevolve_fix", lambda *a, **k: None)
+    sync._dispatch_pending_action({}, {"type": "selfevolve_fix", "id": "x1"})
+    assert calls and calls[0][0][0] == "remote_action.refused"
+    assert calls[0][1]["target"] == "selfevolve_fix"
+    # The action body (which may carry a server-supplied prompt) is not stored.
+    assert "suggestion" not in json.dumps(calls[0][1].get("metadata") or {})
