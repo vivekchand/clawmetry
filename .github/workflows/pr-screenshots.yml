@@ -38,7 +38,7 @@ env:
   # clawmetry/templates/tabs/*.html and be reachable via window.switchTab().
   # See routes/* for the API endpoints each tab calls.
   # Must stay in sync with CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py.
-  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench"
+  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,guard,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench"
   HEAD_PORT: "8082"
   BASE_PORT: "8081"
   # Local-store fast-paths must be on so the dashboard renders the seeded
@@ -58,7 +58,7 @@ jobs:
     timeout-minutes: 20
     # Non-blocking: the bot is allowed to fail without holding up a merge.
     continue-on-error: true
-    # Trial-end hard block is default-ON in code — opt out so the screenshot
+    # Trial-end hard block is default-ON in code -- opt out so the screenshot
     # bot can render the actual observability tabs instead of the paywall
     # overlay. Hard-block coverage lives in tests/test_trial_hard_block.py.
     env:
@@ -343,19 +343,20 @@ jobs:
         if: ${{ always() && !github.event.pull_request.head.repo.fork }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Bind event data to an env var rather than interpolating it into the
-          # script, so no `run:` block in this repo expands ${{ github.event.* }}.
+          # Bind all event data and context to env vars rather than interpolating
+          # directly into the run: block -- prevents expression injection.
           PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -e
           MARKER="<!-- visual-diff-bot -->"
           BODY="$(printf '%s\n\n%s' "$MARKER" "$(cat /tmp/visual-diff-body.md)")"
-          existing_id=$(gh api -X GET "repos/${{ github.repository }}/issues/${PR}/comments" --paginate \
+          existing_id=$(gh api -X GET "repos/${REPO}/issues/${PR}/comments" --paginate \
             --jq "map(select(.body | contains(\"${MARKER}\"))) | .[0].id // empty")
           if [ -n "$existing_id" ]; then
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_id}" -f body="$BODY"
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" -f body="$BODY"
           else
-            gh pr comment "$PR" --repo "${{ github.repository }}" --body "$BODY"
+            gh pr comment "$PR" --repo "${REPO}" --body "$BODY"
           fi
 
       # -- 12. Belt + suspenders: upload PNGs as artefact ----------------------

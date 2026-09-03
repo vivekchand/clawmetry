@@ -659,6 +659,16 @@ _DAEMON_METHODS = frozenset({
     # by nobody and sat on "never triggered" forever. routes/alerts.py now
     # mirrors on write/update/delete through these two.
     "ingest_alert_rule",
+    # ── Guard: live session control + enforcement policies ──────────────
+    # The Guard tab authors policies from the dashboard process, but the
+    # daemon owns the DuckDB writer lock, so every one of these has to be
+    # reachable through the proxy. Without them the reads return None and the
+    # tab renders an empty state that looks like "no policies" rather than
+    # "could not reach the store" — and the writes silently no-op.
+    "query_session_policies",
+    "upsert_session_policy",
+    "delete_session_policy",
+    "query_policy_actions",
     "delete_alert_rule",
     "query_channel_config_status",
     "query_crons",
