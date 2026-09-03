@@ -328,6 +328,26 @@ def _ping_onboarded(choice: str) -> None:
         pass
 
 
+def _ping_gate_shown() -> None:
+    """Report, once per install, that the gate was served to a browser.
+
+    The funnel (2026-09-03: 285 first launches → 13 choices in 14 days)
+    could not tell an install that never opened the dashboard from one that
+    saw the three cards and left. ``telemetry.ping_once`` dedups on disk,
+    so the every-page-load nature of this endpoint sends one row, and the
+    same opt-out as every other lifecycle ping applies."""
+    try:
+        from clawmetry import telemetry as _telemetry
+
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.ping_once("gate_shown", _ver)
+    except Exception:
+        pass
+
+
 def _apply_marker_semantics(choice: str) -> None:
     """Managed clears the local-only marker (the June '0 nodes' bug class:
     connect without enable_cloud() silently no-ops sync). Self-host writes
@@ -412,7 +432,10 @@ def api_onboarding_state():
                                 "source": "ci"})
         except Exception:
             pass
-        return jsonify(_resolve_state())
+        state = _resolve_state()
+        if state.get("required"):
+            _ping_gate_shown()
+        return jsonify(state)
     except Exception as exc:
         # Never let gate plumbing brick the dashboard: fail open.
         log.warning("onboarding: state resolution failed: %s", exc)
