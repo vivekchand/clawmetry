@@ -95,3 +95,8 @@ Advisory accepted as documented: (3) spans arriving before the daemon's first tr
 ## Round 3 (2026-09-03) — founder review
 
 Finding (blocking, requirements / tiering): Claude Code is a paid runtime; the feature added a second, ungated door into it through the free OTLP receiver. Decision: option 1, gate the Claude Code specific enrichment and the instrument command on the `claude_code` runtime entitlement, keep the generic OTLP door free. Delivered in commit 4 with AC-RSO-CCT-001.10, three tests (denied path end to end, grace default, fail-closed lookup), docs, CHANGELOG, requirement risk entry and blueprint contract.
+
+
+## Round 4 (2026-09-03) — founder review, architecture
+
+Finding (blocking, blueprint alignment / open-core placement): every runtime with a native exporter will need the same treatment, and Claude Code's names in the public repo leak paid-runtime code. Decision: a vendor-neutral seam in OSS (`clawmetry/otel_profiles.py`, `clawmetry/instrument.py`), the Claude Code profile in clawmetry-pro. Delivered in commit 5: receiver reads profiles; no profile = prior behaviour; OSS tests use a fixture runtime; `instrument_claude.py` and its tests removed; docs and CHANGELOG rewritten. The entitlement gate from round 3 is now structural (no wheel, no profile) plus the install-path check.
