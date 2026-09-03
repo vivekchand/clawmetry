@@ -8,8 +8,8 @@
     "after coverage improves, so the ratchet is tightened in the same PR.",
     "Regenerate with: python3 scripts/check_ac_coverage.py --update-baseline"
   ],
-  "covered_count": 52,
-  "total_count": 117,
+  "covered_count": 79,
+  "total_count": 149,
   "uncovered": [
     "AC-GOV-001.1",
     "AC-GOV-001.2",
@@ -73,6 +73,11 @@
     "AC-OBS-RSO-003.7",
     "AC-OBS-RSO-003.8",
     "AC-OBS-RSO-003.9",
+    "AC-OGV-001.1",
+    "AC-OGV-001.2",
+    "AC-OGV-001.3",
+    "AC-OGV-001.4",
+    "AC-OGV-001.5",
     "AC-RSO-CWD-001.1",
     "AC-RSO-CWD-001.2",
     "AC-RSO-CWD-001.3"
