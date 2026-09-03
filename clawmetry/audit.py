@@ -101,7 +101,9 @@ def record_audit(
         finally:
             conn.close()
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("audit: record failed (%s): %s", event_type, exc)
+        logger.warning("audit: record failed (%s): %s",
+                       str(event_type or "")[:64].replace("\r", " ").replace("\n", " "),
+                       exc)
 
 
 def audit_event(
@@ -133,7 +135,9 @@ def audit_event(
             details["source"] = source
         record_audit(action, actor=actor, target=target, details=details)
     except Exception as exc:  # pragma: no cover - defensive; record_audit already guards
-        logger.warning("audit: audit_event failed (%s): %s", action, exc)
+        logger.warning("audit: audit_event failed (%s): %s",
+                       str(action or "")[:64].replace("\r", " ").replace("\n", " "),
+                       exc)
 
 
 def read_audit_log(
