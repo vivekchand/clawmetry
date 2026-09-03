@@ -437,3 +437,19 @@ def test_status_without_path_reports_any_intact_install(paths, tmp_path, monkeyp
     st = ic.status(marker_path=marker, probe=False)
     assert st["settings_path"] == ic._norm(user)
     assert {i["settings_path"] for i in st["installs"]} == {ic._norm(user), ic._norm(proj)}
+
+
+def test_unwritable_marker_is_surfaced(paths, tmp_path):
+    """AC-RSO-CCT-001.1 -- when the ownership record cannot be written the
+    result says so instead of claiming a clean install.
+
+    AC-RSO-CCT-001.1
+    """
+    settings, _ = paths
+    bad_marker = str(tmp_path / "nodir" / "sub" / "hooks_installed.json")
+    os.makedirs(os.path.dirname(os.path.dirname(bad_marker)))
+    with open(os.path.dirname(bad_marker), "w") as f:  # a FILE where a dir is needed
+        f.write("x")
+    res = ic.install(settings, probe=_probe(), managed={}, marker_path=bad_marker)
+    assert res["status"] == "installed"
+    assert res["marker_written"] is False

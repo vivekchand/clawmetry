@@ -81,3 +81,12 @@ Blocking, all fixed in commit 2:
 Advisory, fixed: A3 cross-batch parent lookup for `blocked_on_user` tool names (store read); A4 Claude Code no longer excluded from span materialization (existing transcript row is left alone by the materializer's own guard); A5 `user_prompt` is a turn boundary on daemon-free sessions only, `api_error`/`api_refusal`/rejected `tool_decision` render as zero-width markers; A6 absent data-point values stored as null; A7 temporality preference pinned to `delta` in the block and cumulative sums kept off tiles; A8 prompt/response text capped at 4000 chars and tagged `content: true`, literal `<REDACTED>` dropped; A9 decoder docstring, `configured: null` when status cannot be asked; B4 realpath write-through for symlinks; B5 non-object `env` refused; B6 explicit-endpoint message; B8 `== "1"` test.
 
 Advisory, not done (stated): B4 read-modify-write has no lock against Claude Code's own saves (window is one JSON dump; comment added). Registry/plist/server-managed policy not checked (output says so).
+
+
+## Round 2 (2026-09-03) — fresh delegate over both buckets
+
+Verdict: APPROVED. Every round-1 blocking item verified against code (A1, A2, B1, B2, B3), seven targeted probes passed (vanished marker path, deleted env block, legacy marker shape, `query_spans` signature and allowlist, no duplicate session on a daemon machine, protobuf temporality enum, typed-event field namespace).
+
+Advisories, addressed in commit 3: (1) `_dp_value_or_none` on the protobuf path used `HasField("sum")`, which raises for NumberDataPoint, so an absent value became 0; now `WhichOneof("value")` first, per-name guards after, with a protobuf test. (2) `_write_marker` swallowed failures and install still reported success; now returns a bool, surfaced as `marker_written` plus a printed warning, with a test. (4) `OSError` on the settings file read no longer reads as "not valid JSON". (5) `content` tag renamed `has_content` so a future attribute of that name is not clobbered.
+
+Advisory accepted as documented: (3) spans arriving before the daemon's first transcript poll create an OTLP-sourced row that the transcript upsert replaces on the next cycle (blueprint ADR-003 states it).

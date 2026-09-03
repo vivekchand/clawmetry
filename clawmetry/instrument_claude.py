@@ -112,7 +112,7 @@ def _read_json_strict(path: str) -> dict:
     except FileNotFoundError:
         return {}
     except OSError as e:
-        raise SettingsUnreadable(f"{path}: {e}")
+        raise SettingsUnreadable(f"{path}: cannot read ({e.strerror or e})")
     if not txt:
         return {}
     try:
@@ -160,7 +160,9 @@ def _read_marker(path: str, marker_path: str | None = None) -> dict:
 
 
 def _write_marker(path: str, entry: dict | None,
-                  marker_path: str | None = None) -> None:
+                  marker_path: str | None = None) -> bool:
+    """True when the ownership record was written. A False from install is
+    surfaced: without the record, uninstall cannot know what is ours."""
     mp = marker_path or _MARKER_PATH
     try:
         data = _read_json(mp)
@@ -176,8 +178,9 @@ def _write_marker(path: str, entry: dict | None,
         else:
             data.pop(_MARKER_KEY, None)
         _write_json(mp, data)
+        return True
     except Exception:
-        pass
+        return False
 
 
 # ── receiver probe + managed lock ───────────────────────────────────────────
@@ -278,8 +281,8 @@ def install(settings_path: str | None = None, *, content: bool = False,
         except SettingsUnreadable as e:
             return {"status": "error", "path": path, "reason": "settings_unreadable",
                     "error": str(e),
-                    "message": ("The settings file is not valid JSON; nothing "
-                                "was written. Fix the file and run again.")}
+                    "message": ("The settings file could not be read as a JSON "
+                                "object; nothing was written. " + str(e))}
         env = settings.get("env")
         if "env" in settings and not isinstance(env, dict):
             return {"status": "refused", "path": path, "reason": "env_not_object",
@@ -343,7 +346,7 @@ def install(settings_path: str | None = None, *, content: bool = False,
         if file_changed:
             _write_json(path, settings)
 
-        _write_marker(path, {
+        marker_written = _write_marker(path, {
             "keys": written,
             "created_env": bool(created_env),
             "endpoint": target,
@@ -353,6 +356,7 @@ def install(settings_path: str | None = None, *, content: bool = False,
 
         return {
             "status": "installed" if file_changed else "already_present",
+            "marker_written": marker_written,
             "path": path, "endpoint": target,
             "receiver_listening": probe.get("listening"),
             "receiver_via": probe.get("via"),
@@ -556,6 +560,10 @@ def _print_install(res: dict) -> None:
         print(f"  left alone {c['key']}={c['current']!r} (wanted {c['wanted']!r})")
     for k in res.get("removed") or []:
         print(f"  removed {k} (content flag; pass --content to keep it)")
+    if res.get("marker_written") is False:
+        print(f"  WARNING: could not record what was written (is "
+              f"{os.path.dirname(_MARKER_PATH)} writable?); --uninstall "
+              f"will not know these keys are ours")
     print("  checked: file-based managed settings only (plist, registry and "
           "server-managed policy are not visible from here)")
     print(res["note"])

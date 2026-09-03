@@ -57,19 +57,28 @@
 
 ### Review
 
-- [ ] Review subagent spawned per `execution/review-phase.md` and returned a verdict
-- [ ] All acceptance criteria from the Work Order and linked requirements are satisfied
-- [ ] Architecture is aligned with linked blueprints, or documented drift is accepted
-- [ ] Exploratory pass on user-visible or external behavior — not only automated tests; for browser apps, use browser-based testing if available. Brief notes in `review-log.md` or evidence.
-- [ ] Latest `review-log.md` verdict is `APPROVED`
+- [x] Review subagent spawned per `execution/review-phase.md` and returned a verdict
+  Evidence: round 1: two delegates, CHANGES_REQUESTED (5 blocking, fixed); round 2: fresh delegate, APPROVED
+- [x] All acceptance criteria from the Work Order and linked requirements are satisfied
+  Evidence: AC-RSO-CCT-001.1..9 each cited by a passing test (ratchet 92/162); REQ-OBS-006 rules re-verified by round 2
+- [x] Architecture is aligned with linked blueprints, or documented drift is accepted
+  Evidence: blueprint 9ae95403 updated: two key forms, cost counted once, wait named by parent, ADR-003 revised to materialize-and-leave-alone
+- [x] Exploratory pass on user-visible or external behavior — not only automated tests; for browser apps, use browser-based testing if available. Brief notes in `review-log.md` or evidence.
+  Evidence: Two live runs (Claude Code 2.1.259, `claude -p`) against isolated dashboards :8917/:8918: 51 and 56 ledger rows, cost counted once, session row materialized on the daemon-free store, turn anatomy prompt/model/wait(Bash)/tool/reply, /api/otel-status configured+age, uninstall restored the scratch file and cleared the marker; no tracebacks in the dashboard log.
+- [x] Latest `review-log.md` verdict is `APPROVED`
+  Evidence: round 2
 
-- [ ] **Certification: Phase 3 complete. Proceeding to Final Completion.**
+- [x] **Certification: Phase 3 complete. Proceeding to Final Completion.**
 
 ## Final Completion Check
 
-- [ ] All phase certifications above are complete
-- [ ] Checklist is fully filled out with evidence
-- [ ] Review log is complete (`review-log.md`)
-- [ ] Implementation plan was followed (`implementation-plan.md`)
-- [ ] All intended files are present in the working tree
-- [ ] Work order status updated to `in_review`
+- [x] All phase certifications above are complete
+- [x] Checklist is fully filled out with evidence
+- [x] Review log is complete (`review-log.md`)
+  Evidence: rounds 1 and 2
+- [x] Implementation plan was followed (`implementation-plan.md`)
+  Evidence: steps 1-10 landed; step 5 amended (Claude Code spans DO materialize, per review)
+- [x] All intended files are present in the working tree
+  Evidence: git status clean after commit 3
+- [x] Work order status updated to `in_review`
+  Evidence: set via MCP at handoff

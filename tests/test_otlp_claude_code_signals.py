@@ -309,7 +309,7 @@ def test_typed_claude_code_events_are_persisted_with_their_fields(store):
         _log("claude_code.assistant_response", now + 21, response_length=4, response="<REDACTED>"),
     ]), content_type="application/json")
     ups = [e for e in _events(store, _STORED) if e["event_type"] == "user_prompt"]
-    tagged = [e for e in ups if _data(e).get("content")]
+    tagged = [e for e in ups if _data(e).get("has_content")]
     assert len(tagged) == 1 and len(_data(tagged[0])["prompt"]) == 4000
     assert _data(tagged[0])["prompt_truncated"] is True
     resp = [e for e in _events(store, _STORED) if e["event_type"] == "assistant_response"]
@@ -521,3 +521,17 @@ def test_otel_status_reports_claude_code_exporter(client, monkeypatch):
     monkeypatch.setattr(meta, "_ls_call", lambda name, **kw: None)
     cc = c.get("/api/otel-status").get_json()["claude_code"]
     assert cc["last_batch_ts"] is None and cc["records"] is None
+
+
+def test_absent_value_is_null_on_the_protobuf_path_too():
+    """AC-RSO-CCT-001.4 -- a protobuf NumberDataPoint with no number set
+    stores null, never 0 (HasField on an undefined name raises there)."""
+    pytest.importorskip("opentelemetry.proto.metrics.v1.metrics_pb2")
+    from opentelemetry.proto.metrics.v1 import metrics_pb2 as m
+    dp = m.NumberDataPoint()
+    assert _d._dp_value_or_none(dp) is None
+    dp.as_int = 0
+    assert _d._dp_value_or_none(dp) == 0
+    dp2 = m.NumberDataPoint()
+    dp2.as_double = 1.5
+    assert _d._dp_value_or_none(dp2) == 1.5

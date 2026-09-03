@@ -11380,20 +11380,28 @@ def _dp_value_or_none(dp):
     """The data point's number, or ``None`` when it carried none. Never turn
     "absent" into ``0``: a zero that was sent is a fact, a zero we invented
     is not (blueprint: no fabricated figures)."""
-    has = getattr(dp, "HasField", None)
-    try:
-        if callable(has):
-            if has("as_int"):
+    # protobuf NumberDataPoint: the number is a oneof; HasField on a name
+    # the message does not define RAISES, so ask the oneof by name first.
+    which = getattr(dp, "WhichOneof", None)
+    if callable(which):
+        try:
+            field = which("value")
+            if field == "as_int":
                 return int(dp.as_int)
-            if has("as_double"):
+            if field == "as_double":
                 return float(dp.as_double)
-            if has("sum"):
-                return float(dp.sum)
-            if has("count"):
-                return int(dp.count)
-            return None
-    except Exception:
-        pass
+        except Exception:
+            pass
+    has = getattr(dp, "HasField", None)
+    if callable(has):
+        for name, cast in (("as_int", int), ("as_double", float),
+                           ("sum", float), ("count", int)):
+            try:
+                if has(name):
+                    return cast(getattr(dp, name))
+            except Exception:
+                continue
+        return None
     try:
         return _get_dp_value(dp)
     except Exception:
@@ -12367,7 +12375,7 @@ def _otlp_typed_event_data(suffix, attrs, pick):
             if txt == "<REDACTED>":
                 continue
             out[k] = txt[:_OTLP_TEXT_CAP]
-            out["content"] = True
+            out["has_content"] = True
             if len(txt) > _OTLP_TEXT_CAP:
                 out[k + "_truncated"] = True
             continue
