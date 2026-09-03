@@ -21,12 +21,14 @@ on:
         default: ''
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   autotranslate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       # Claude Code subscription token (from `claude setup-token`), NOT an Anthropic API key.
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
