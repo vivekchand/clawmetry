@@ -108,6 +108,7 @@ from routes.crons import bp_crons
 from routes.harness import bp_harness
 from routes.delegated import bp_delegated
 from routes.readiness import bp_readiness
+from routes.guard import bp_guard
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -12987,6 +12988,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_harness)
     app.register_blueprint(bp_delegated)
     app.register_blueprint(bp_readiness)
+    app.register_blueprint(bp_guard)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
@@ -13783,6 +13785,11 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="See what is running, detect agents that go off track, and stop them">
+        <span class="left-nav-icon" aria-hidden="true">&#128737;</span>
+        <span class="left-nav-label" data-i18n="nav.guard">Guard</span>
+        <span id="nav-guard-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
@@ -13901,6 +13908,7 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/inventory.html' %}
 
 <!-- ALERTS (Cloud-Pro feature) -->
+{% include 'tabs/guard.html' %}
 {% include 'tabs/alerts.html' %}
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->

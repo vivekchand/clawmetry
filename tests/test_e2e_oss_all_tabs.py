@@ -130,6 +130,7 @@ CANONICAL_TABS = [
     "harness",           # harness.html: harness observability
     "inventory",         # inventory.html: tool/resource inventory
     "nemoclaw",          # nemoclaw.html: NeMo Guardrails governance
+    "guard",             # guard.html: Guard incidents + session controls + policies
     "policy",            # policy.html: policy management
     "selfevolve",        # selfevolve.html: self-evolve feature
     "swimlane",          # swimlane.html: swimlane visualization
