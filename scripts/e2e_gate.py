@@ -19,7 +19,7 @@ Two matching modes:
 
 * an exact name (``"Syntax & Lint"``) for a single job;
 * an fnmatch pattern plus ``min_count`` for a matrix job, where the pattern
-  expands to one check per leg (``"pip install (*)"`` -> four legs). ``min_count``
+  expands to one check per leg (``"pip install (*)"``) -> four legs). ``min_count``
   is what stops a *shrinking* matrix from quietly passing: drop macOS from the
   matrix and the pattern still matches, but the count no longer does.
 
@@ -39,7 +39,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 POLL_INTERVAL = 30
-DEFAULT_MAX_WAIT = 1800
+DEFAULT_MAX_WAIT = 3000  # 50 min default; workflow sets 3600 (60 min)
 
 # GitHub treats skipped/neutral as non-blocking; match that.
 PASSING = {"success", "skipped", "neutral"}
@@ -59,11 +59,19 @@ class Spec:
     before the spec can pass. For a single job that is 1. For a matrix it is the
     number of legs, so removing a leg fails the gate instead of silently
     reducing coverage.
+
+    ``skip_if_unreported`` marks a spec whose reporter may legitimately never
+    post on certain PR types (e.g. a GitHub App that only evaluates Python or
+    product-record changes). When True and zero check-runs/statuses have been
+    posted for this spec, evaluate() returns "passed" (skipped) rather than
+    "pending". A failing status still fails the gate -- the guard is preserved
+    whenever the reporter does post.
     """
 
     label: str
     pattern: str
     min_count: int = 1
+    skip_if_unreported: bool = False
 
     def matches(self, name: str) -> bool:
         return fnmatch.fnmatchcase(name, self.pattern)
@@ -111,7 +119,14 @@ REQUIRED_SPECS = [
     # Unlike everything above, drift-bot is a COMMIT STATUS from the
     # 8090-software-factory GitHub App, not an Actions check run. It never
     # appears in /check-runs, which is why list_commit_statuses exists.
-    Spec("Drift Bot", "drift-bot"),
+    #
+    # skip_if_unreported=True: the 8090 App only posts drift-bot on PRs that
+    # touch Python or product-record files. Frontend-only npm bumps (dependabot
+    # i18next / postcss / react-router / etc.) never receive a status -- making
+    # this spec a guaranteed 30-min hang on every such PR. When the App does
+    # post (on any PR touching Python or product files), the gate still enforces
+    # it. Only the "never posted" case is treated as skipped.
+    Spec("Drift Bot", "drift-bot", skip_if_unreported=True),
 ]
 
 
@@ -165,6 +180,14 @@ def evaluate(specs, runs):
 
     for spec in specs:
         matched = {n: r for n, r in best.items() if spec.matches(n)}
+
+        # When skip_if_unreported is set and no status has been posted at all,
+        # treat the spec as passed (skipped). A reporter that posts but fails
+        # is still caught below -- this only short-circuits the "never posted"
+        # hang that occurs when a GitHub App does not evaluate this PR type.
+        if spec.skip_if_unreported and not matched:
+            results.append(SpecResult(spec, "passed", "no status reported, treated as skipped"))
+            continue
 
         failing = [
             run
@@ -312,7 +335,8 @@ def main():
     if args.list:
         for spec in REQUIRED_SPECS:
             legs = f" x{spec.min_count}" if spec.min_count > 1 else ""
-            print(f"{spec.label}{legs}: {spec.pattern}")
+            suffix = " [skip_if_unreported]" if spec.skip_if_unreported else ""
+            print(f"{spec.label}{legs}: {spec.pattern}{suffix}")
         return 0
 
     token = os.environ.get("GITHUB_TOKEN", "")

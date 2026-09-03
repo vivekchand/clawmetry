@@ -1569,7 +1569,14 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
             # plist stays valid if the venv is rebuilt without entry points.
             # The console-script path rots silently; the interpreter path is
             # stable across venv rebuilds (#4297).
-            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--port", str(port)]
+            # ``--no-debug`` because dashboard.py's ``--debug`` DEFAULTS TO
+            # TRUE: without it the service ran Flask's development server
+            # with the stat reloader, which restarts on any file change
+            # (every self-update), polls thousands of files a second, and is
+            # not the waitress server every other launcher (systemd unit,
+            # desktop app, CI) starts. Found 2026-09-02 on a machine whose
+            # dashboard log read "Debugger is active!" under launchd.
+            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--no-debug", "--port", str(port)]
             _args_xml = "\n".join(f"        <string>{a}</string>" for a in _launchd_cmd)
             # launchd starts agents with cwd="/" and does not always export
             # HOME. dashboard.py's workspace auto-detect ends in os.getcwd(),
@@ -7742,35 +7749,6 @@ def main() -> None:
             _v = "unknown"
         print(f"clawmetry {_v}")
         return
-    # Tag this process as the dashboard BEFORE importing dashboard, so every
-    # get_store() in dashboard.py (module-level + handlers) is barred from the
-    # DuckDB writer — only the sync daemon writes. Set before the import or a
-    # module-level open would race in before the gate is active. The daemon
-    # (-m clawmetry.sync) never takes this path and calls mark_writer_owner(),
-    # which overrides the gate.
-    os.environ["CLAWMETRY_ROLE"] = "dashboard"
-    from dashboard import main as dashboard_main
-
-    # Anonymous, opt-out install-lifecycle ping (install once ever, update
-    # once per new version). See clawmetry/telemetry.py for the privacy
-    # contract. Fires on a daemon thread so a network failure can't slow
-    # CLI startup; honours CLAWMETRY_NO_TELEMETRY=1 and
-    # ~/.clawmetry/notelemetry.
-    try:
-        from clawmetry import telemetry as _telemetry
-        try:
-            from dashboard import __version__ as _ver
-        except Exception:
-            _ver = "unknown"
-        _telemetry.maybe_ping(_ver)
-        # Desktop shell launched us? Report the open (which runtimes this
-        # machine has, cloud vs local) once things settle. No-ops for a
-        # plain `pip install clawmetry && clawmetry`.
-        _telemetry.maybe_desktop_ping(_ver)
-    except Exception:
-        # Never let telemetry plumbing break startup.
-        pass
-
     # Windows: protect against closed/detached stdout/stderr before any library
     # (argparse colour detection, click._winconsole) calls fileno() on them.
     #
@@ -7782,6 +7760,8 @@ def main() -> None:
     # click._winconsole._is_console() calls f.fileno() → ValueError when closed.
     # NO_COLOR suppresses argparse / click colour paths (Python 3.14+).
     # We *also* replace closed handles with devnull sinks so later code is safe.
+    # (Moved ahead of the parser build below so it also guards the `<subcmd>
+    # --help` short-circuit's own printing, not just the post-import path.)
     if sys.platform == "win32":
         import io as _io
 
@@ -8729,6 +8709,52 @@ def main() -> None:
         "compliance",
         "nemoclaw-daemons",
     )
+
+    # Short-circuit `<subcmd> --help`/`-h` (e.g. `clawmetry connect --help`)
+    # before importing dashboard. A subcommand's help is printed entirely by
+    # argparse's own subparser -h action (every sub.add_parser() above gets
+    # one for free) and never touches dashboard_main or the store, but the
+    # dashboard import below still ran first because it used to sit ahead of
+    # the parser build — paying for get_store()'s module-level DuckDB init
+    # just to print text argparse already knows how to print. That init
+    # SIGSEGVs on some Python 3.9/Linux runners (#5108, #5309: `clawmetry
+    # connect --help` observed crashing in CI while `status`/`sync --help`
+    # in the same run did not). Let argparse handle it and exit first.
+    if len(sys.argv) > 1 and sys.argv[1] in _subcmds and (
+        "-h" in sys.argv[2:] or "--help" in sys.argv[2:]
+    ):
+        parser.parse_args()
+        return  # argparse's -h action always exits; unreachable in practice
+
+    # Tag this process as the dashboard BEFORE importing dashboard, so every
+    # get_store() in dashboard.py (module-level + handlers) is barred from the
+    # DuckDB writer — only the sync daemon writes. Set before the import or a
+    # module-level open would race in before the gate is active. The daemon
+    # (-m clawmetry.sync) never takes this path and calls mark_writer_owner(),
+    # which overrides the gate.
+    os.environ["CLAWMETRY_ROLE"] = "dashboard"
+    from dashboard import main as dashboard_main
+
+    # Anonymous, opt-out install-lifecycle ping (install once ever, update
+    # once per new version). See clawmetry/telemetry.py for the privacy
+    # contract. Fires on a daemon thread so a network failure can't slow
+    # CLI startup; honours CLAWMETRY_NO_TELEMETRY=1 and
+    # ~/.clawmetry/notelemetry.
+    try:
+        from clawmetry import telemetry as _telemetry
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.maybe_ping(_ver)
+        # Desktop shell launched us? Report the open (which runtimes this
+        # machine has, cloud vs local) once things settle. No-ops for a
+        # plain `pip install clawmetry && clawmetry`.
+        _telemetry.maybe_desktop_ping(_ver)
+    except Exception:
+        # Never let telemetry plumbing break startup.
+        pass
+
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
         args = parser.parse_args()
         # Issue #322: Set OpenClaw config directory from CLI flag
