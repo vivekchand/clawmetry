@@ -56,7 +56,14 @@ jobs:
           set -u
           ok=0; fail=0
           for id in $(gh api "/repos/$REPO/actions/runs?status=queued&per_page=100" --paginate \
-                        --jq '.workflow_runs[] | select(.head_branch != "main") | .id'); do
+                        --jq '.workflow_runs[]
+                              | select(.head_branch != "main")
+                              # The PyPI publish fires on pull_request:closed, so its
+                              # head branch is the merged PR branch, not main. Cancelling
+                              # it left a [RELEASE] commit on main with nothing
+                              # published (2026-09-03, #5464 vs #5455). Never park it.
+                              | select(.name != "Auto-release on [RELEASE] merge")
+                              | .id'); do
             if gh api -X POST "/repos/$REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
               ok=$((ok+1))
             else
