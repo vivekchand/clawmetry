@@ -405,6 +405,31 @@ def maybe_ping(version: str = "unknown") -> threading.Thread | None:
     return t
 
 
+def ping_once(event: str, version: str = "unknown",
+              extra: dict | None = None) -> threading.Thread | None:
+    """Fire ``event`` at most once per install, ever.
+
+    ``ping_event`` leaves dedup to the caller; some events have no natural
+    caller-side "already happened" (the onboarding gate is *served* on every
+    page load until a choice lands). The state file records which once-only
+    events this install has already reported under ``once_events``, so a
+    reload, a second browser, or a restart sends nothing. Same opt-out and
+    fire-and-forget contract as :func:`maybe_ping`; returns ``None`` when
+    nothing was sent."""
+    if _is_optout():
+        return None
+    state = _read_state()
+    sent = state.get("once_events")
+    if not isinstance(sent, dict):
+        sent = {}
+    if event in sent:
+        return None
+    sent[event] = int(time.time())
+    state["once_events"] = sent
+    _write_state(state)
+    return ping_event(event, version, extra)
+
+
 def ping_event(event: str, version: str = "unknown",
                extra: dict | None = None) -> threading.Thread | None:
     """Fire one explicit lifecycle event (e.g. ``onboarded`` with
