@@ -264,6 +264,13 @@ _INDEX_FATAL = (
 )
 
 
+def _poison_reads(st, error, match="SELECT", times=1):
+    """Reads run on this thread's cursor (a second connection), not on
+    ``st._conn``; poison the cursor so the fatal surfaces where reads look."""
+    st._read_local.cur = _PoisonedConn(st._read_cursor(), error, match=match, times=times)
+    st._read_local.gen = st._conn_generation
+
+
 def _limit_gib(st) -> float:
     txt = st._conn.execute("SELECT current_setting('memory_limit')").fetchone()[0]
     num, unit = txt.split()
@@ -286,7 +293,7 @@ def test_a_failed_read_heals_the_handle_and_answers(store, monkeypatch):
         return real(exc, **kw)
 
     monkeypatch.setattr(st, "recover_invalidated_db", _recover)
-    st._conn = _PoisonedConn(st._conn, _INDEX_FATAL, match="SELECT")
+    _poison_reads(st, _INDEX_FATAL)
 
     rows = st._fetch("SELECT COUNT(*) FROM events", [])
 
@@ -311,7 +318,7 @@ def test_an_out_of_memory_invalidation_reopens_with_a_bigger_ceiling(store):
     ls, st = store
     before_idx = _index_names(st)
     before_gib = _limit_gib(st)
-    st._conn = _PoisonedConn(st._conn, _OOM_FATAL, match="SELECT")
+    _poison_reads(st, _OOM_FATAL)
 
     rows = st._fetch("SELECT COUNT(*) FROM events", [])
 
@@ -361,8 +368,7 @@ def test_health_still_answers_on_a_dead_handle(store, monkeypatch):
     store is bricked. When recovery declines, the row still comes back."""
     ls, st = store
     monkeypatch.setattr(st, "recover_invalidated_db", lambda *a, **k: False)
-    st._conn = _PoisonedConn(st._conn, _INDEX_FATAL, match="SELECT COUNT(*) AS N",
-                             times=10)
+    _poison_reads(st, _INDEX_FATAL, match="SELECT COUNT(*) AS N", times=10)
     h = st.health()
     assert h["db_invalidated"] is True
     assert "invalidated" in (h["db_last_error"] or "")

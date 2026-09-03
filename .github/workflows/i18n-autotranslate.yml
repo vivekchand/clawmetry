@@ -34,6 +34,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2  # need the previous en.json to detect CHANGED keys
+          # Nothing in this job pushes from this working copy. The only git
+          # operation that reaches the network is the `Open sync PR` step, and
+          # peter-evans/create-pull-request configures its own credential from
+          # its `token` input (default `${{ github.token }}`) -- it unsets any
+          # persisted http.<url>.extraheader first and restores it afterwards,
+          # so it never reads this one. The script below only runs
+          # `git show <ref>:<path>`, a local object read needing no credential.
+          # Left persisted, a `contents: write` token would instead sit
+          # readable in .git/config for the whole job, which installs a global
+          # npm package and runs the Claude Code CLI over repository content.
+          persist-credentials: false
 
       - name: Guard - require Claude Code token
         run: |
