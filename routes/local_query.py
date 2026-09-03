@@ -810,6 +810,8 @@ _DAEMON_METHODS = frozenset({
     "query_otlp_records",
     "query_otlp_rollup",
     "count_otlp_records",
+    # latest_otlp_record(service_name=..., agent_type=...) — WO-57 status.
+    "latest_otlp_record",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.

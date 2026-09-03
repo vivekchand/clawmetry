@@ -346,13 +346,18 @@ def test_json_logs_accepted_without_protobuf(app, no_proto):
     assert r.status_code == 200, r.get_data(as_text=True)[:300]
 
 
-def test_json_metrics_501s_with_an_honest_hint(app, no_proto):
-    """Metrics still need protobuf (its mapper reaches into sum/gauge/histogram
-    point types). Say so rather than pretending, and never 400 it."""
+def test_json_metrics_decode_without_protobuf(app, no_proto):
+    """OTLP/JSON metrics no longer need the extra (WO-57: Claude Code's own
+    exporter sends all three signals as JSON when told ``http/json``, and a
+    vanilla install used to 501 every metrics batch). A JSON body is 200;
+    a binary body without protobuf is still an honest 501."""
     a, _ls = app
     c = a.test_client()
     r = c.post("/v1/metrics", data=b'{"resourceMetrics":[]}',
                content_type="application/json")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    r = c.post("/v1/metrics", data=b"\x0a\x00",
+               content_type="application/x-protobuf")
     assert r.status_code == 501
     assert "opentelemetry-proto" in r.get_json()["error"]
 
@@ -466,10 +471,28 @@ def test_decoder_rejects_unknown_kind():
         decode("{}", "profiles")
 
 
-def test_decoder_metrics_raises_the_typed_error():
-    from clawmetry.otlp_json import OtlpProtobufUnavailable, decode
-    with pytest.raises(OtlpProtobufUnavailable):
-        decode("{}", "metrics")
+def test_decoder_metrics_duck_types_the_proto_shape():
+    """The metrics shim exposes what ``dashboard._get_data_points`` /
+    ``_get_dp_value`` / ``_get_dp_attrs`` read: ``HasField`` for the kind
+    oneof, ``data_points`` with ``as_int`` (int64-as-string), ``as_double``,
+    histogram ``sum`` / ``count``, and attributes."""
+    from clawmetry.otlp_json import decode
+    req = decode("{}", "metrics")
+    assert req.resource_metrics == []
+    req = decode(json.dumps({"resourceMetrics": [{"scopeMetrics": [{"metrics": [
+        {"name": "claude_code.token.usage", "sum": {"dataPoints": [
+            {"asInt": "42", "attributes": [{"key": "type", "value": {"stringValue": "cacheRead"}}]}]}},
+        {"name": "g", "gauge": {"dataPoints": [{"asDouble": 1.5}]}},
+        {"name": "h", "histogram": {"data_points": [{"sum": 3.0, "count": "2"}]}},
+    ]}]}]}), "metrics")
+    ms = req.resource_metrics[0].scope_metrics[0].metrics
+    assert [m.name for m in ms] == ["claude_code.token.usage", "g", "h"]
+    assert ms[0].HasField("sum") and not ms[0].HasField("gauge")
+    dp = ms[0].sum.data_points[0]
+    assert dp.as_int == 42 and dp.attributes[0].key == "type"
+    assert ms[1].gauge.data_points[0].as_double == 1.5
+    h = ms[2].histogram.data_points[0]
+    assert h.sum == 3.0 and h.count == 2
 
 
 def test_decoder_tolerates_missing_resource():
