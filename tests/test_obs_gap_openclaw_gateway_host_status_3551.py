@@ -131,3 +131,33 @@ def test_fallback_key_variants_resolved():
     assert result.get("gatewayHostCPU") == 15.2
     assert result.get("gatewayHostMemory") == {"total": 8589934592, "used": 2147483648}
     assert result.get("gatewayHostDisk") == {"total": 53687091200, "used": 10737418240}
+
+
+def test_host_status_available_when_rpc_live_but_not_running_locally():
+    """Host fields are returned even when _gateway_live() would be False.
+
+    Regression guard for #5431: remote/fleet gateways pass the localhost
+    liveness check as False, but _gw_ws_rpc is still connected. The call
+    must be unconditional so host status surfaces in that case.
+    """
+    _make_mock_dashboard({
+        "hostName": "remote-gateway.fleet",
+        "networkAddress": "10.20.0.5",
+        "os": "linux",
+        "cpu": 12.3,
+    })
+    oc = _reload_adapter()
+    result = oc._gateway_host_status()
+    assert result["gatewayHostName"] == "remote-gateway.fleet"
+    assert result["gatewayNetworkAddress"] == "10.20.0.5"
+    assert result["gatewayHostOS"] == "linux"
+    assert result["gatewayHostCPU"] == 12.3
+
+
+def test_no_rpc_gives_empty_dict():
+    """When _gw_ws_rpc is absent (no connection), return {}."""
+    mod = __import__("types").ModuleType("dashboard")
+    __import__("sys").modules["dashboard"] = mod
+    oc = _reload_adapter()
+    result = oc._gateway_host_status()
+    assert result == {}

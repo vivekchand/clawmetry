@@ -1,35 +1,36 @@
 name: E2E Gate (required)
 
-# Aggregates the 4 required OSS E2E checks into one required status check.
-# The owner adds ONE check name to branch protection instead of four:
+# Aggregates the 12 required CI and E2E checks into one required status check.
+# The owner adds ONE check name to branch protection instead of twelve:
 #   "E2E Gate (required)"
 #
 # Polls the Check Runs API every 30s until all required checks complete.
 # Fails immediately if any required check fails (fast-fail).
-# Passes only when all 4 required checks have a success conclusion.
-# Times out after 15 min (oss-golden-path budget is 12 min -- on a cold
-# runner Playwright download alone takes ~4.5 min, then C1+C5 sweeps add
-# ~5 min; the previous 8-min limit caused premature timeout before the
-# underlying check could pass).
+# Passes only when all required checks have a success conclusion.
+# Times out after 60 min (scripts/e2e_gate.py MAX_WAIT=3600). This ceiling
+# exists to handle runner starvation on days with many concurrent PRs; on a
+# quiet day the gate exits as soon as all checks pass, typically in 20-30 min.
 #
-# Required checks aggregated (keep in sync with REQUIRED_CHECKS in
-# scripts/apply_required_status_checks.py):
+# Required checks aggregated (authoritative list: scripts/e2e_gate.py):
 #   - OSS golden path (wheel + OpenClaw + 9 tabs)
 #   - Cross-repo handoff (C4)
 #   - MOAT Keystone (13-endpoint bar)
 #   - E2E Browser Tests (critical subset)
-#
-# To close C6 after this PR merges:
-#   GitHub Settings > Branches > main > Required status checks:
-#   add "E2E Gate (required)"
-#   (1 check name instead of 4)
+#   - Syntax & Lint
+#   - API Tests (3 OS)
+#   - MOAT Verifier (72 tests)
+#   - Entitlement API tests
+#   - pip install matrix (x4)
+#   - Wheel install & asset presence
+#   - Store invariants (property-based)
+#   - Drift Bot  [skip_if_unreported: only enforced when 8090 App posts]
 #
 # Tracking: vivekchand/clawmetry#4029 (C6)
 #
 # This workflow intentionally runs on pull_request only -- not on push events.
 # Drift Bot (8090-software-factory app) posts its commit status to PR head
 # SHAs only; the app never re-posts to the merge commit that lands on main.
-# If the gate ran on push events, it would wait the full 35 min timeout for
+# If the gate ran on push events, it would wait the full timeout for
 # a Drift Bot status that never arrives (confirmed on run #33224218966).
 # The enforcement that matters happens on the PR; no extra run is needed after
 # the merge. Supersedes PR #5323 which fixed the same issue via code but was
@@ -51,7 +52,7 @@ jobs:
   e2e-gate:
     name: E2E Gate (required)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 65
 
     steps:
       # Required because the gate logic is a repo script now. This job had no
@@ -71,7 +72,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REPO: ${{ github.repository }}
-          MAX_WAIT: "1800"
+          MAX_WAIT: "3600"
         run: python3 scripts/e2e_gate.py
 
       - name: Write job summary

@@ -61,6 +61,8 @@ _HEALTH_VOLATILE = {
     # The DuckDB ceiling is derived from store size and physical RAM
     # (PR #5434), so its rendered value depends on the machine.
     "duckdb_memory_limit",
+    # Read-cache counters depend on how many reads ran before health().
+    "read_cache_entries", "read_cache_hits", "read_cache_misses",
 }
 
 
