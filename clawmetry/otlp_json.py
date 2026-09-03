@@ -340,6 +340,125 @@ class _ResourceLogs:
         self.scope_logs = [_ScopeLogs(s) for s in scopes if isinstance(s, dict)]
 
 
+class _NumberDataPoint:
+    """One ``NumberDataPoint`` (sum / gauge) or ``HistogramDataPoint``.
+
+    Duck-types the protobuf fields ``dashboard._get_dp_value`` and
+    ``_get_dp_attrs`` read: ``as_int`` / ``as_double`` for numbers,
+    ``sum`` / ``count`` for histograms, ``attributes``, ``time_unix_nano``.
+    OTLP/JSON encodes ``asInt`` as a STRING (int64) and ``asDouble`` as a
+    number; both aliases and both spellings are accepted.
+    """
+    __slots__ = ("as_int", "as_double", "sum", "count", "attributes",
+                 "time_unix_nano", "start_time_unix_nano", "_present")
+
+    def __init__(self, raw: dict):
+        self._present = {
+            "as_int": _get(raw, "asInt", "as_int") is not None,
+            "as_double": _get(raw, "asDouble", "as_double") is not None,
+            "sum": raw.get("sum") is not None,
+            "count": raw.get("count") is not None,
+        }
+        self.as_int = _as_int(_get(raw, "asInt", "as_int"))
+        d = _get(raw, "asDouble", "as_double")
+        try:
+            self.as_double = float(d) if d is not None else 0.0
+        except (TypeError, ValueError):
+            self.as_double = 0.0
+        sm = raw.get("sum")
+        try:
+            self.sum = float(sm) if sm is not None else 0.0
+        except (TypeError, ValueError):
+            self.sum = 0.0
+        self.count = _as_int(raw.get("count"))
+        self.attributes = _attrs(raw.get("attributes"))
+        self.time_unix_nano = _as_int(_get(raw, "timeUnixNano", "time_unix_nano"))
+        self.start_time_unix_nano = _as_int(
+            _get(raw, "startTimeUnixNano", "start_time_unix_nano"))
+
+    def HasField(self, name: str) -> bool:  # noqa: N802 - mirrors the proto API
+        return bool(self._present.get(name))
+
+
+_AGG_TEMPORALITY = {
+    "AGGREGATION_TEMPORALITY_UNSPECIFIED": 0,
+    "AGGREGATION_TEMPORALITY_DELTA": 1,
+    "AGGREGATION_TEMPORALITY_CUMULATIVE": 2,
+}
+
+
+class _MetricData:
+    """The ``sum`` / ``gauge`` / ``histogram`` / ``summary`` container.
+    ``aggregation_temporality`` is kept (sum / histogram) so the mapper can
+    refuse to add a CUMULATIVE running total to a tile."""
+    __slots__ = ("data_points", "aggregation_temporality", "is_monotonic")
+
+    def __init__(self, raw: dict):
+        pts = _get(raw, "dataPoints", "data_points", default=[]) or []
+        self.data_points = [_NumberDataPoint(x) for x in pts if isinstance(x, dict)]
+        self.aggregation_temporality = _as_enum(
+            _get(raw, "aggregationTemporality", "aggregation_temporality"),
+            _AGG_TEMPORALITY)
+        self.is_monotonic = bool(_get(raw, "isMonotonic", "is_monotonic", default=False))
+
+
+class _Metric:
+    """One OTLP Metric. ``HasField("sum"|"gauge"|"histogram"|"summary")``
+    mirrors the proto oneof so ``dashboard._get_data_points`` runs unchanged."""
+    __slots__ = ("name", "description", "unit", "_kinds")
+
+    _KIND_NAMES = ("sum", "gauge", "histogram", "summary",
+                   "exponentialHistogram", "exponential_histogram")
+
+    def __init__(self, raw: dict):
+        self.name = str(raw.get("name", "") or "")
+        self.description = str(raw.get("description", "") or "")
+        self.unit = str(raw.get("unit", "") or "")
+        self._kinds = {}
+        for k in self._KIND_NAMES:
+            v = raw.get(k)
+            if isinstance(v, dict):
+                key = "exponential_histogram" if k.startswith("exponential") else k
+                self._kinds[key] = _MetricData(v)
+
+    def HasField(self, name: str) -> bool:  # noqa: N802 - mirrors the proto API
+        return name in self._kinds
+
+    def __getattr__(self, name):
+        # Only reached for names NOT in __slots__ (sum / gauge / ...).
+        kinds = object.__getattribute__(self, "_kinds")
+        if name in kinds:
+            return kinds[name]
+        if name in ("sum", "gauge", "histogram", "summary", "exponential_histogram"):
+            return _MetricData({})
+        raise AttributeError(name)
+
+
+class _ScopeMetrics:
+    __slots__ = ("metrics",)
+
+    def __init__(self, raw: dict):
+        self.metrics = [_Metric(m) for m in (raw.get("metrics") or []) if isinstance(m, dict)]
+
+
+class _ResourceMetrics:
+    __slots__ = ("resource", "scope_metrics")
+
+    def __init__(self, raw: dict):
+        res = raw.get("resource")
+        self.resource = _Resource(res) if isinstance(res, dict) else None
+        scopes = _get(raw, "scopeMetrics", "scope_metrics", default=[]) or []
+        self.scope_metrics = [_ScopeMetrics(s) for s in scopes if isinstance(s, dict)]
+
+
+class _MetricsRequest:
+    __slots__ = ("resource_metrics",)
+
+    def __init__(self, raw: dict):
+        items = _get(raw, "resourceMetrics", "resource_metrics", default=[]) or []
+        self.resource_metrics = [_ResourceMetrics(r) for r in items if isinstance(r, dict)]
+
+
 class _TraceRequest:
     __slots__ = ("resource_spans",)
 
@@ -370,19 +489,16 @@ def decode(payload, kind: str, content_encoding: str | None = None):
 
     Args:
       payload: raw request body (bytes or str), optionally gzipped.
-      kind: ``"traces"`` or ``"logs"``. ``"metrics"`` raises
-        :class:`OtlpProtobufUnavailable` -- its mapper still needs protobuf.
+      kind: ``"traces"``, ``"logs"`` or ``"metrics"``. Metrics gained a
+        JSON shape for Claude Code's native exporter (WO-57), which sends all
+        three signals as OTLP/JSON when told ``http/json``; before that a
+        vanilla install answered 501 to every metrics batch.
       content_encoding: the request's ``Content-Encoding`` header.
 
     Raises:
-      OtlpProtobufUnavailable: for ``kind="metrics"``.
       ValueError: on a malformed body (the caller turns this into a 400).
     """
-    if kind == "metrics":
-        raise OtlpProtobufUnavailable(
-            "OTLP/JSON metrics need opentelemetry-proto; traces and logs do not"
-        )
-    if kind not in ("traces", "logs"):
+    if kind not in ("traces", "logs", "metrics"):
         raise ValueError(f"unknown OTLP kind: {kind}")
 
     if "gzip" in (content_encoding or "").lower():
@@ -394,4 +510,8 @@ def decode(payload, kind: str, content_encoding: str | None = None):
     if not isinstance(raw, dict):
         raise ValueError("OTLP/JSON body must be an object")
 
-    return _TraceRequest(raw) if kind == "traces" else _LogsRequest(raw)
+    if kind == "traces":
+        return _TraceRequest(raw)
+    if kind == "metrics":
+        return _MetricsRequest(raw)
+    return _LogsRequest(raw)
