@@ -431,3 +431,79 @@ def test_every_relayed_action_is_written_to_the_local_audit_log(monkeypatch):
     assert calls[0][1]["target"] == "selfevolve_fix"
     # The action body (which may carry a server-supplied prompt) is not stored.
     assert "suggestion" not in json.dumps(calls[0][1].get("metadata") or {})
+
+
+# ── Bandwidth: gzip before encrypt, negotiated, never assumed ────────────────
+
+
+def _big_payload():
+    return {"rows": [{"i": i, "text": "the same line of transcript " * 8} for i in range(200)]}
+
+
+def test_gzip_blob_round_trips_and_is_smaller(monkeypatch):
+    monkeypatch.delenv("CLAWMETRY_BLOB_GZIP", raising=False)
+    key = sync.generate_encryption_key()
+    payload = _big_payload()
+    plain_blob = sync.encrypt_payload(payload, key, compress=False)
+    gz_blob = sync.encrypt_payload(payload, key, compress=True)
+    assert sync.decrypt_payload(gz_blob, key) == payload
+    assert sync.decrypt_payload(plain_blob, key) == payload
+    assert len(gz_blob) < len(plain_blob) / 3, "gzip should shrink repetitive JSON several-fold"
+
+
+def test_small_blobs_are_never_compressed():
+    """A session title is a few dozen bytes; gzip would grow it."""
+    key = sync.generate_encryption_key()
+    tiny = {"display_name": "Reset prod DB password"}
+    blob = sync.encrypt_payload(tiny, key, compress=True)
+    raw = sync.base64.urlsafe_b64decode(blob + "==")
+    plain = sync._get_aesgcm(key).decrypt(raw[:12], raw[12:], None)
+    assert plain[:1] == b"{"
+
+
+def test_compression_is_off_until_the_server_advertises_it(monkeypatch):
+    monkeypatch.delenv("CLAWMETRY_BLOB_GZIP", raising=False)
+    monkeypatch.setattr(sync, "_SERVER_CAPS", {})
+    assert sync.blob_gzip_enabled() is False
+    key = sync.generate_encryption_key()
+    blob = sync.encrypt_payload(_big_payload(), key)  # default follows the negotiation
+    raw = sync.base64.urlsafe_b64decode(blob + "==")
+    plain = sync._get_aesgcm(key).decrypt(raw[:12], raw[12:], None)
+    assert plain[:1] == b"{", "no cap advertised: plaintext must stay plain JSON"
+    sync._record_server_caps({"sync_allowed": True, "caps": {"blob_gzip": True}})
+    assert sync.blob_gzip_enabled() is True
+    blob = sync.encrypt_payload(_big_payload(), key)
+    raw = sync.base64.urlsafe_b64decode(blob + "==")
+    plain = sync._get_aesgcm(key).decrypt(raw[:12], raw[12:], None)
+    assert plain[:2] == b"\x1f\x8b"
+
+
+def test_env_override_beats_the_server_cap(monkeypatch):
+    monkeypatch.setattr(sync, "_SERVER_CAPS", {"blob_gzip": True})
+    monkeypatch.setenv("CLAWMETRY_BLOB_GZIP", "0")
+    assert sync.blob_gzip_enabled() is False
+    monkeypatch.setattr(sync, "_SERVER_CAPS", {})
+    monkeypatch.setenv("CLAWMETRY_BLOB_GZIP", "1")
+    assert sync.blob_gzip_enabled() is True
+
+
+def test_post_records_caps_from_any_cloud_response(monkeypatch):
+    monkeypatch.setattr(sync, "_SERVER_CAPS", {})
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "caps": {"blob_gzip": true}}'
+
+    import urllib.request as _ur
+
+    monkeypatch.setattr(_ur, "urlopen", lambda req, timeout=0: _Resp())
+    monkeypatch.setattr(sync, "is_cloud_disabled", lambda: False, raising=False)
+    out = sync._post("/ingest/heartbeat", {"node_id": "n1"}, "cm_test")
+    assert out.get("ok") is True
+    assert sync._SERVER_CAPS.get("blob_gzip") is True

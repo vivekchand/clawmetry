@@ -653,15 +653,58 @@ def _get_aesgcm(key_b64: str):
         )
 
 
-def encrypt_payload(data: dict, key_b64: str) -> str:
+# ── Blob compression (negotiated) ───────────────────────────────────────────
+# A system snapshot is 1.2 to 1.4 MB of JSON every minute, roughly 2 GB a day
+# per node, and JSON shrinks about 4x under gzip. Ciphertext does not compress,
+# so the compression happens BEFORE encryption: plaintext = gzip(json), and the
+# reader recognises it by the gzip magic (0x1f 0x8b), which no JSON document
+# can start with. There is no marker to strip and an uncompressed blob decrypts
+# exactly as before.
+#
+# The daemon compresses only when the server has said every reader it serves
+# can inflate (heartbeat response ``caps.blob_gzip``): the browser decryptor
+# (cm-e2e.js) needs DecompressionStream, and a paired desk device decrypts
+# blobs in firmware with no inflater at all, so the cloud withholds the cap
+# for a node with a paired device. ``CLAWMETRY_BLOB_GZIP=1|0`` overrides for
+# self-hosted deployments. Tiny blobs (session titles) are never compressed:
+# gzip grows them.
+_SERVER_CAPS: dict = {}
+BLOB_GZIP_MIN_BYTES = 4096
+
+
+def _record_server_caps(resp: dict) -> None:
+    caps = resp.get("caps") if isinstance(resp, dict) else None
+    if isinstance(caps, dict):
+        _SERVER_CAPS.update(caps)
+
+
+def blob_gzip_enabled() -> bool:
+    env = str(os.environ.get("CLAWMETRY_BLOB_GZIP", "")).strip().lower()
+    if env in ("1", "true", "yes"):
+        return True
+    if env in ("0", "false", "no"):
+        return False
+    return _SERVER_CAPS.get("blob_gzip") is True
+
+
+def encrypt_payload(data: dict, key_b64: str, compress: bool | None = None) -> str:
     """
     Encrypt a dict as AES-256-GCM.
     Returns base64url(nonce || ciphertext) — a single opaque string.
     Cloud stores this blob and never sees plaintext.
+
+    ``compress`` forces gzip-before-encrypt on or off; ``None`` (the default)
+    follows ``blob_gzip_enabled()``, so every call site gains compression the
+    moment the server advertises it and none of them has to know.
     """
     cipher = _get_aesgcm(key_b64)
     nonce = secrets.token_bytes(12)  # 96-bit nonce (GCM standard)
     plain = json.dumps(data).encode()
+    if compress is None:
+        compress = blob_gzip_enabled()
+    if compress and len(plain) >= BLOB_GZIP_MIN_BYTES:
+        import gzip as _gzip
+        plain = _gzip.compress(plain, compresslevel=6, mtime=0)
     ct = cipher.encrypt(nonce, plain, None)
     return base64.urlsafe_b64encode(nonce + ct).decode()
 
@@ -735,7 +778,11 @@ def decrypt_payload(blob: str, key_b64: str) -> dict:
     cipher = _get_aesgcm(key_b64)
     raw = base64.urlsafe_b64decode(blob + "==")
     nonce, ct = raw[:12], raw[12:]
-    return json.loads(cipher.decrypt(nonce, ct, None))
+    plain = cipher.decrypt(nonce, ct, None)
+    if plain[:2] == b"\x1f\x8b":  # gzip magic; see encrypt_payload
+        import gzip as _gzip
+        plain = _gzip.decompress(plain)
+    return json.loads(plain)
 
 
 # ── Sync DLQ for AES-GCM encryption failures (#1601) ────────────────────────
@@ -1204,6 +1251,7 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
             # fields leave the cache untouched.
             if isinstance(resp_body, dict) and "sync_allowed" in resp_body:
                 _update_trial_state(resp_body)
+            _record_server_caps(resp_body)
             return resp_body
         except urllib.error.HTTPError as e:
             code = e.code

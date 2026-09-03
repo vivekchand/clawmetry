@@ -34,7 +34,16 @@ _PLUMBING_TYPES = frozenset({
     "session.started", "session.ended", "session.created",
     "model.changed", "thinking_level_change", "context.compiled",
     "agent.heartbeat", "queue-operation",
+    # Claude Code native-telemetry events (WO-57) that carry no timeline
+    # meaning of their own. ``assistant_response`` would read as a second
+    # model call next to the request event; ``user_prompt`` is handled in
+    # ``_classify`` (a boundary only when the transcript gave none).
+    "assistant_response", "permission_mode_changed",
+    "mcp_server_connection", "auth",
 })
+
+# Zero-width markers on the waterfall: they explain a gap rather than fill it.
+_MARKER_TYPES = frozenset({"api_error", "api_refusal", "tool_decision"})
 
 # How long (minutes) a session's latest turn may sit with no new event before
 # we flag it as stalled / long-running.
@@ -92,8 +101,12 @@ def _data(e):
     return d if isinstance(d, dict) else {}
 
 
-def _classify(e):
+def _classify(e, otlp_prompt_ok=False):
     """Classify an event into a turn-anatomy kind.
+
+    ``otlp_prompt_ok``: treat a Claude Code ``user_prompt`` telemetry event
+    as a prompt boundary. Only set when the session has NO transcript prompt
+    (a daemon-free machine), otherwise every turn would be split twice.
 
     Handles BOTH OpenClaw v3 normalized types (prompt.submitted /
     model.completed / tool_call / tool_result) AND the multi-runtime adapter
@@ -107,6 +120,18 @@ def _classify(e):
     et = (e.get("event_type") or "").lower()
     if et in _PLUMBING_TYPES:
         return ""
+    if et == "user_prompt":
+        return "prompt" if otlp_prompt_ok else ""
+    if et in _MARKER_TYPES:
+        return "marker"
+    if et == "llm_call":
+        # The receiver's api_request row (daemon-free intake / WO-57): a
+        # model call with no transcript twin, else it would have been dropped.
+        return "model"
+    if et == "waiting_on_user":
+        # Claude Code ``tool.blocked_on_user`` span: the agent sat waiting
+        # for a human decision. Its own span kind, its own per-turn total.
+        return "wait"
     if "compact" in et:
         return "compaction"
     d = _data(e)
@@ -196,8 +221,11 @@ def _build_turns(rows):
     next event's ts (so a bar's width is the wall-clock gap until the next
     activity); a tool span instead ends at its matched result.
     """
+    # A Claude Code ``user_prompt`` telemetry event is a boundary only when
+    # the transcript gave none (daemon-free machine, WO-57).
+    otlp_prompt_ok = not any(_classify(e) == "prompt" for e in rows)
     evs = sorted(
-        (e for e in rows if _classify(e)),
+        (e for e in rows if _classify(e, otlp_prompt_ok)),
         key=lambda e: _ts_ms(e.get("ts")) or 0,
     )
     if not evs:
@@ -208,7 +236,7 @@ def _build_turns(rows):
     turns = []
     cur = None
     for i, e in enumerate(evs):
-        kind = _classify(e)
+        kind = _classify(e, otlp_prompt_ok)
         if kind == "prompt" or cur is None:
             if kind == "prompt" or not turns:
                 cur = {"events": [], "idx": []}
@@ -226,7 +254,7 @@ def _build_turns(rows):
         n = len(turn["events"])
         for j, e in enumerate(turn["events"]):
             gi = turn["idx"][j]
-            kind = _classify(e)
+            kind = _classify(e, otlp_prompt_ok)
             s_ms = start_ms[gi]
             # Default end = next event's start within the WHOLE session.
             nxt = start_ms[gi + 1] if gi + 1 < len(start_ms) else s_ms
@@ -272,6 +300,38 @@ def _build_turns(rows):
                     tool_open[tuid] = sp
                 continue
 
+            if kind == "marker":
+                d = _data(e)
+                et = (e.get("event_type") or "").lower()
+                if et == "api_error":
+                    label = "API error" + (f" {d.get('status_code')}" if d.get("status_code") else "")
+                elif et == "api_refusal":
+                    label = "API refusal"
+                else:
+                    label = f"{d.get('tool') or 'tool'} {d.get('decision') or 'rejected'}"
+                    if d.get("source"):
+                        label += f" by {d['source']}"
+                spans.append({
+                    "kind": "marker", "label": label,
+                    "started_ms": s_ms, "ended_ms": s_ms, "duration_ms": 0,
+                    "status": "error" if et == "api_error" else "ok",
+                })
+                continue
+
+            if kind == "wait":
+                try:
+                    _w = float(_data(e).get("duration_ms") or 0.0)
+                except (TypeError, ValueError):
+                    _w = 0.0
+                _tool = _data(e).get("tool") or ""
+                spans.append({
+                    "kind": "wait",
+                    "label": "waiting on you" + (f" ({_tool})" if _tool else ""),
+                    "started_ms": s_ms, "ended_ms": s_ms + int(_w),
+                    "duration_ms": int(_w), "status": "ok",
+                })
+                continue
+
             if kind == "compaction":
                 spans.append({
                     "kind": "compaction", "label": "context compaction",
@@ -282,6 +342,9 @@ def _build_turns(rows):
 
             if kind == "prompt":
                 txt = _prompt_text(e)
+                if not txt and (e.get("event_type") or "").lower() == "user_prompt":
+                    _n = _data(e).get("prompt_length")
+                    txt = f"prompt ({_n} chars)" if _n else "prompt"
                 spans.append({
                     "kind": "prompt",
                     "label": (txt[:80] or "prompt").replace("\n", " "),
@@ -316,6 +379,14 @@ def _build_turns(rows):
         total_tokens = sum(int(s.get("tokens") or 0) for s in spans)
         total_cost = sum(float(s.get("cost") or 0.0) for s in spans)
         has_error = any(s.get("status") == "error" for s in spans)
+        # Time the agent spent blocked on a human this turn. Present only
+        # when a Claude Code ``blocked_on_user`` span was received (WO-57);
+        # absent spans give no figure, never a zero that reads as "instant".
+        _wait_spans = [s for s in spans if s["kind"] == "wait"]
+        waiting_on_you_ms = (
+            sum(int(s.get("duration_ms") or 0) for s in _wait_spans)
+            if _wait_spans else None
+        )
         out.append({
             "turn": tn + 1,
             "started_ms": turn_start,
@@ -327,6 +398,7 @@ def _build_turns(rows):
             "total_cost": round(total_cost, 6),
             "span_count": len(spans),
             "status": "error" if has_error else "ok",
+            "waiting_on_you_ms": waiting_on_you_ms,
             "spans": spans,
         })
     return out
