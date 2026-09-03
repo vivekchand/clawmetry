@@ -26,7 +26,8 @@
   "in_repo_prefixes": [
     "AC-OBS-",
     "AC-RSO-",
-    "AC-GOV-"
+    "AC-GOV-",
+    "AC-OGV-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -898,6 +899,36 @@
       "doc": "Local Agent Observability",
       "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
       "text": "Remain available on every plan, including free, with no entitlement gate."
+    },
+    {
+      "id": "AC-OGV-001.1",
+      "doc": "Onboarding Gate Funnel Visibility",
+      "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
+      "text": "When the dashboard resolves that an onboarding choice is required and serves that state to a browser, the system shall send one install lifecycle ping with event gate_shown carrying the same anonymous fields as the install ping."
+    },
+    {
+      "id": "AC-OGV-001.2",
+      "doc": "Onboarding Gate Funnel Visibility",
+      "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
+      "text": "When the gate state is served again for the same install, the system shall not send a second gate_shown ping, regardless of how many browser sessions or page reloads occur."
+    },
+    {
+      "id": "AC-OGV-001.3",
+      "doc": "Onboarding Gate Funnel Visibility",
+      "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
+      "text": "When telemetry is opted out by any existing mechanism (environment variable, do-not-track, marker file), the system shall not send the gate_shown ping."
+    },
+    {
+      "id": "AC-OGV-001.4",
+      "doc": "Onboarding Gate Funnel Visibility",
+      "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
+      "text": "When the ping fails for any reason, the system shall serve the gate state unchanged and shall not surface an error to the user."
+    },
+    {
+      "id": "AC-OGV-001.5",
+      "doc": "Onboarding Gate Funnel Visibility",
+      "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
+      "text": "When the hosted cloud dashboard serves onboarding state, the system shall not send a gate_shown ping, because hosted accounts never see the gate."
     }
   ]
 }
