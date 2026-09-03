@@ -39,6 +39,7 @@ def ob(monkeypatch, tmp_path):
     _shell_dir.mkdir()
     monkeypatch.setattr(mod, "_desktop_shell_runtime_dir", lambda: _shell_dir)
     monkeypatch.setattr(mod, "_ping_onboarded", lambda choice: None)
+    monkeypatch.setattr(mod, "_ping_gate_shown", lambda: None)
     monkeypatch.setattr(mod, "_apply_marker_semantics", lambda choice: None)
     # Must never actually register/spawn a real daemon during a unit test —
     # see test_ensure_daemon_for_choice_* below for the real coverage.
@@ -427,3 +428,56 @@ def test_ensure_daemon_for_choice_dispatches_off_request_thread(monkeypatch):
     mod._ensure_daemon_for_choice("selfhost_trial")
     assert len(calls) == 1
     assert calls[0][1] is True, "must be a daemon thread so it never blocks process exit"
+
+
+# ── gate_shown ping (REQ-OGV-001) ────────────────────────────────────────────
+
+def test_required_state_reports_gate_shown(ob, client, monkeypatch):
+    """AC-OGV-001.1: serving ``required: true`` fires the once-per-install
+    ping. Dedup itself is telemetry.ping_once's job (tests/test_telemetry.py);
+    here we assert the route delegates to it."""
+    calls = []
+    monkeypatch.setattr(ob, "_ping_gate_shown", lambda: calls.append(1))
+    d = client.get("/api/onboarding/state").get_json()
+    assert d["required"] is True
+    assert calls == [1]
+
+
+def test_not_required_state_never_reports_gate_shown(ob, client, monkeypatch):
+    """A machine that already chose (here: a trial license on disk) never
+    sends gate_shown — it never sees the gate."""
+    calls = []
+    monkeypatch.setattr(ob, "_ping_gate_shown", lambda: calls.append(1))
+    monkeypatch.setattr(ob, "_license_state", lambda: "selfhost_trial")
+    d = client.get("/api/onboarding/state").get_json()
+    assert d["required"] is False
+    assert calls == []
+
+
+def test_cloud_mode_never_reports_gate_shown(ob, client, monkeypatch):
+    """AC-OGV-001.5: the hosted dashboard short-circuits before the gate."""
+    calls = []
+    monkeypatch.setattr(ob, "_ping_gate_shown", lambda: calls.append(1))
+    monkeypatch.setenv("CLAWMETRY_CLOUD", "1")
+    d = client.get("/api/onboarding/state").get_json()
+    assert d["required"] is False and calls == []
+
+
+def test_ping_gate_shown_uses_ping_once(monkeypatch):
+    """AC-OGV-001.2 wiring: the helper goes through telemetry.ping_once,
+    not ping_event, so the on-disk dedup applies. AC-OGV-001.4: a raising
+    telemetry module never escapes. Deliberately not using the ``ob``
+    fixture: it stubs ``_ping_gate_shown`` out, and this test needs the
+    real one."""
+    import routes.onboarding as ob
+    importlib.reload(ob)
+    import clawmetry.telemetry as t
+    seen = []
+    monkeypatch.setattr(t, "ping_once", lambda e, v, x=None: seen.append((e, v)))
+    ob._ping_gate_shown()
+    assert seen and seen[0][0] == "gate_shown"
+
+    def _boom(*a, **k):
+        raise RuntimeError("telemetry down")
+    monkeypatch.setattr(t, "ping_once", _boom)
+    ob._ping_gate_shown()  # must not raise
