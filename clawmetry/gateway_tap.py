@@ -84,9 +84,10 @@ log = logging.getLogger("clawmetry-sync")  # share the daemon logger sink
 # so a future per-channel subscribe API can plug in without touching
 # the call sites in sync.py.
 #
-# Entries are verbatim ``~/.openclaw/<name>/`` directory names as
-# OpenClaw names them — hyphens are part of the name where present
-# (e.g. ``fish-audio``), not a formatting choice made here.
+# Gateway tap identifiers are compound words without hyphens (matching
+# the convention used throughout this file). ``_CHANNEL_DIRS`` in
+# sync.py is the authoritative source of filesystem directory names and
+# may differ (e.g. ``fish-audio`` on disk vs ``fishaudio`` here).
 CHANNEL_NAMES: tuple[str, ...] = (
     "telegram",
     "signal",
@@ -111,7 +112,7 @@ CHANNEL_NAMES: tuple[str, ...] = (
     "nextcloudtalk",
     "clickclack",
     "buzz",
-    "fish-audio",
+    "fishaudio",
 )
 
 
