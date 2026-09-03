@@ -169,3 +169,18 @@ def test_storage_key_requires_both_node_and_account():
     assert a is None and b is None
     # slice(0, 16) of the account token — the namespace, not the whole key
     assert c == "cm-enc-key-mac-cm_acct_abcdef12"
+
+
+def test_published_js_inflates_a_gzip_blob():
+    """The daemon gzips large blobs before encrypting them once the server
+    advertises the codec; the published decryptor must read both forms."""
+    key = generate_encryption_key()
+    payload = {"rows": [{"i": i, "line": "same transcript line " * 6} for i in range(300)]}
+    blob = encrypt_payload(payload, key, compress=True)
+    plain_blob = encrypt_payload(payload, key, compress=False)
+    assert len(blob) < len(plain_blob) / 3
+    out = _node(
+        f"window.cmE2E.decryptBlob({json.dumps(blob)}, {json.dumps(key)})"
+        f".then(r => console.log(JSON.stringify(r)));"
+    )
+    assert json.loads(out) == payload
