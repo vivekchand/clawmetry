@@ -33,6 +33,10 @@ from typing import Any
 from clawmetry import error_signal as _error_signal
 from clawmetry import session_titles as _session_titles
 from clawmetry.adapters import phase as _phase
+# The ONE actuator both the Guard tab and the policy pass call. A leaf
+# module (it imports this one lazily), so there is no cycle. Bound under
+# the historical name so tests and routes keep patching ``sync._guard_actuate``.
+from clawmetry.guard_actuator import guard_actuate as _guard_actuate  # noqa: F401
 
 
 def _get_openclaw_dir():
@@ -10241,7 +10245,8 @@ def _hitl_set_pause(session_id: str, paused: bool) -> None:
         elif f.exists():
             f.unlink()
     except Exception as e:
-        log.debug("hitl pause file set failed for %s: %s", session_id, e)
+        log.debug("hitl pause file set failed for %s: %s",
+                  str(session_id)[:128].replace("\r", " ").replace("\n", " "), e)
 
 
 def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
@@ -10266,8 +10271,12 @@ def _openclaw_cancel_task(lookup, timeout: int = 30) -> dict:
     except subprocess.TimeoutExpired:
         return {"ok": False, "scope_pending": False,
                 "error": "openclaw tasks cancel timed out", "raw": ""}
-    except Exception as e:
-        return {"ok": False, "scope_pending": False, "error": str(e)[:400], "raw": ""}
+    except Exception as e:  # noqa: BLE001
+        # The exception text stays in the log; the result dict can reach an
+        # HTTP response, so it carries a fixed token instead.
+        log.warning("openclaw tasks cancel could not run: %s", e)
+        return {"ok": False, "scope_pending": False,
+                "error": "openclaw_cli_error", "raw": ""}
     blob = (proc.stdout or "") + "\n" + (proc.stderr or "")
     low = blob.lower()
     scope_pending = ("pairing required" in low or "scope upgrade" in low
@@ -10336,7 +10345,7 @@ def _registered_kill(runtime: str, session_id: str) -> dict | None:
         log.warning("registered kill handler (%s) raised: %s", runtime, e)
         return {"ok": False, "action": "kill", "runtime": runtime,
                 "session_id": session_id,
-                "detail": f"kill handler error: {str(e)[:200]}"}
+                "detail": "kill_handler_error"}
     return {"ok": ok, "action": "kill", "runtime": runtime,
             "session_id": session_id,
             "detail": ("stopped via %s kill handler" % runtime) if ok
@@ -10381,25 +10390,42 @@ def _run_process_control(config: dict, action: dict) -> None:
         elif atype == "pause_session":
             _hitl_set_pause(session_id, True)
             if runtime == "openclaw":
-                result = {"ok": False, "action": "pause", "runtime": "openclaw",
-                          "session_id": session_id, "detail": "unsupported_no_primitive",
-                          "note": ("OpenClaw has no pause primitive; the HITL pause "
-                                   "file is set so the proxy refuses further LLM "
-                                   "calls for this session")}
+                _cap = _pc.openclaw_pause_capability()
+                result = {"ok": bool(_cap["effective"]), "action": "pause",
+                          "runtime": "openclaw", "session_id": session_id,
+                          "mechanism": _cap["mechanism"],
+                          "advisory_only": not _cap["effective"],
+                          "detail": ("paused_via_proxy_hitl"
+                                     if _cap["effective"]
+                                     else "unsupported_no_primitive"),
+                          "note": _cap["detail"]}
             else:
                 result = _pc.pause_session(runtime, session_id, cwd)
         elif atype == "resume_session":
             _hitl_set_pause(session_id, False)
             if runtime == "openclaw":
-                result = {"ok": False, "action": "resume", "runtime": "openclaw",
-                          "session_id": session_id, "detail": "unsupported_no_primitive",
-                          "note": "OpenClaw has no resume primitive; HITL pause file cleared"}
+                # Symmetric with pause: when the proxy is in the loop, clearing
+                # the flag genuinely releases the held calls, so this IS a real
+                # resume. With no proxy there was nothing holding the session
+                # in the first place.
+                _cap = _pc.openclaw_pause_capability()
+                result = {"ok": bool(_cap["effective"]), "action": "resume",
+                          "runtime": "openclaw", "session_id": session_id,
+                          "mechanism": _cap["mechanism"],
+                          "advisory_only": not _cap["effective"],
+                          "detail": ("resumed_via_proxy_hitl"
+                                     if _cap["effective"]
+                                     else "nothing_was_holding_this_session"),
+                          "note": _cap["detail"]}
             else:
                 result = _pc.resume_session(runtime, session_id, cwd)
         else:
             return
-    except Exception as e:  # never raise from the worker thread
-        result = {"ok": False, "error": str(e)[:300], "runtime": runtime,
+    except Exception:  # noqa: BLE001 — never raise from the worker thread
+        # Exception text goes to the log only; the result is relayed onward.
+        log.exception("process control %s failed for %s", atype,
+                      str(session_id)[:128].replace("\r", " ").replace("\n", " "))
+        result = {"ok": False, "error": "control_error", "runtime": runtime,
                   "action": atype, "session_id": session_id}
     _post_process_control_result(config, action, result)
 
@@ -19975,6 +20001,42 @@ def _candidate_active_sessions(store) -> list[dict]:
     return out
 
 
+# ── Guard policies: detector incident -> enforcement action ────────────────
+#
+# The wire between clawmetry.detectors (finds agents that went off track) and
+# clawmetry.process_control (can pause/stop/kill them). Before this the only
+# edge between the two was a human seeing a banner and pressing Stop, which
+# capped enforcement at "someone is watching the dashboard".
+#
+# THREE independent safety locks, all of which must be open before any signal
+# reaches a real process:
+#   1. the policy's own action must be an actuating one (pause/stop/kill);
+#      the DEFAULT action for a new policy is "monitor", which never acts.
+#   2. CLAWMETRY_POLICY_ENFORCE must be 1 (default 0). One env var disables
+#      every policy on the node without editing rules.
+#   3. the install must be entitled to autonomous action (same rule the
+#      budget auto-pause uses: detection is free, acting is paid), fail-closed.
+# Plus a DURABLE one-shot latch in DuckDB so a policy fires at most once per
+# session even across a daemon restart.
+_GUARD_POLICIES_ON = "CLAWMETRY_GUARD_POLICIES"   # "0" disables evaluation
+_GUARD_ENFORCE = "CLAWMETRY_POLICY_ENFORCE"       # "1" permits real signals
+
+
+def _guard_enforcement_allowed() -> bool:
+    """Entitlement gate for AUTONOMOUS action. Fail-closed.
+
+    Mirrors ``dashboard._auto_pause_allowed``: detection and the banner are
+    free on every tier; a machine deciding on its own to stop your agent is
+    the paid capability. Any resolver error returns False so a flaky read can
+    never escalate a free node into acting.
+    """
+    try:
+        from clawmetry import entitlements as _ent
+        return bool(_ent.get_entitlement().allows_feature("budget_limits"))
+    except Exception:
+        return False
+
+
 # ── What the detectors cannot see for themselves ───────────────────────────
 # A detector is pure: it reads a session's event sequence and nothing else. It
 # therefore cannot know what the session cost, how long it has been off track,
@@ -20248,6 +20310,196 @@ def _epoch_of(ts: Any) -> int:
     return int(dt.timestamp())
 
 
+def _apply_guard_policies(store, state: dict, incidents: list,
+                          facts: dict) -> int:
+    """Evaluate Guard policies against this tick's incidents and act.
+
+    Returns the number of decisions reached (including dry-run ones, which
+    are recorded but never signal a process). Never raises into the daemon
+    loop: a policy failure must not stop telemetry ingest.
+    """
+    if os.environ.get(_GUARD_POLICIES_ON, "1") == "0":
+        return 0
+    if not incidents:
+        return 0
+    try:
+        from clawmetry import policy_engine as _pe
+    except Exception as e:  # noqa: BLE001
+        log.warning("guard: policy_engine import failed: %s", e)
+        return 0
+    try:
+        policies = store.query_session_policies(enabled_only=True) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("guard: policy read failed: %s", e)
+        return 0
+    if not policies:
+        return 0
+
+    # How far each escalation ladder has already climbed. An unreadable
+    # ladder table degrades to {} — every ladder treated as being at rung 0,
+    # which is still protected by the per-rung latch below.
+    try:
+        ladder_state = store.query_policy_ladder_state() or {}
+    except Exception as e:  # noqa: BLE001
+        log.debug("guard: ladder state read failed (%s); assuming rung 0", e)
+        ladder_state = {}
+
+    try:
+        decisions = _pe.evaluate(incidents, policies, facts,
+                                 ladder_state=ladder_state) or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("guard: evaluate errored: %s", e)
+        return 0
+    if not decisions:
+        return 0
+
+    enforce_env = os.environ.get(_GUARD_ENFORCE, "0") == "1"
+    entitled = _guard_enforcement_allowed() if enforce_env else False
+    acted = 0
+
+    for d in decisions:
+        sid = d.get("session_id") or ""
+        pid = d.get("policy_id") or ""
+        action = d.get("action") or "monitor"
+        # Which rung of the ladder this decision is. A policy with no ladder
+        # is rung 0, which is exactly the old one-shot-per-session latch.
+        try:
+            step = max(0, int(d.get("step_index") or 0))
+        except (TypeError, ValueError):
+            step = 0
+        if _policy_step_already_fired(store, sid, pid, step):
+            continue
+
+        actuating = _pe.is_actuating(action)
+        will_enforce = bool(actuating and enforce_env and entitled)
+
+        # Record BEFORE acting. The row is the latch, so closing it first
+        # means a crash mid-signal can never re-fire on the next tick.
+        if not actuating:
+            detail = "recorded (no action for this policy type)"
+        elif not enforce_env:
+            detail = (f"DRY RUN: would {action} — set {_GUARD_ENFORCE}=1 "
+                      f"to enforce")
+        elif not entitled:
+            detail = (f"would {action}, but autonomous action is not "
+                      f"enabled on this plan")
+        else:
+            detail = "pending"
+        try:
+            _record_policy_step(
+                store, session_id=sid, policy_id=pid,
+                runtime=d.get("runtime") or "", action=action,
+                kind=d.get("kind") or "", reason=d.get("reason") or "",
+                evidence=d.get("evidence"), enforced=will_enforce,
+                result_ok=False, result_detail=detail, step_index=step)
+        except Exception as e:  # noqa: BLE001
+            log.warning("guard: could not record decision for %s: %s", sid, e)
+            continue
+        acted += 1
+
+        if not will_enforce:
+            log.info("guard: %s [%s] %s%s", sid, action, detail,
+                     _ladder_suffix(d))
+            continue
+
+        result = _guard_actuate(d.get("runtime") or "", sid,
+                                d.get("cwd") or "", action)
+        ok = bool(result.get("ok"))
+        rdetail = str(result.get("detail") or result.get("reason")
+                      or result.get("error") or ("signalled" if ok else "failed"))
+        try:
+            _record_policy_step(
+                store, session_id=sid, policy_id=pid,
+                runtime=d.get("runtime") or "", action=action,
+                kind=d.get("kind") or "", reason=d.get("reason") or "",
+                evidence=d.get("evidence"), enforced=True,
+                result_ok=ok, result_detail=rdetail, step_index=step)
+        except Exception:
+            pass
+        log.info("guard: %s %s -> %s (%s)%s", action, sid,
+                 "ok" if ok else "FAILED", rdetail[:120], _ladder_suffix(d))
+
+    return acted
+
+
+def _record_policy_step(store, **kw) -> None:
+    """Write one policy-decision row, tolerating a pre-ladder store.
+
+    Same version-skew hazard as ``_policy_step_already_fired``: the daemon
+    holding the writer lock may run an older wheel whose
+    ``record_policy_action`` has no ``step_index``. Dropping the argument
+    keeps rung 0 (i.e. every non-ladder policy) recording and enforcing
+    normally instead of taking the whole node out of enforcement.
+
+    Raises on a genuine store failure so the caller's fail-closed handler
+    still refuses to act on an unlatched decision.
+    """
+    try:
+        store.record_policy_action(**kw)
+        return
+    except TypeError:
+        pass
+    kw.pop("step_index", None)
+    store.record_policy_action(**kw)
+
+
+def _policy_step_already_fired(store, session_id: str, policy_id: str,
+                               step: int) -> bool:
+    """Per-rung latch check that tolerates an older store.
+
+    ``policy_already_fired`` grew a ``step_index`` argument when escalation
+    ladders landed. The dashboard reaches the store through the daemon proxy,
+    and the daemon can be running an OLDER wheel than the code making the
+    call — so the three-argument form can land on a two-argument method.
+    Without this fallback that raises ``TypeError``, the fail-closed handler
+    swallows it, and every policy on the node silently stops enforcing. A
+    silent global disable is exactly the failure mode we most need to not
+    have.
+
+    Fails CLOSED (returns True = do not act) for any *other* error, which is
+    the right direction when the alternative is acting twice.
+    """
+    try:
+        return bool(store.policy_already_fired(session_id, policy_id, step))
+    except TypeError:
+        pass  # older signature — fall through
+    except Exception:
+        return True
+    try:
+        # Pre-ladder store: it can only latch per (session, policy). Rungs
+        # above 0 would be blocked forever by rung 0's row, so a ladder
+        # degrades to its first rung until the daemon is upgraded. Say so
+        # once rather than escalating on a latch that cannot track rungs.
+        if step > 0:
+            log.warning("guard: store predates escalation ladders; step %d of "
+                        "policy %s will not fire until the daemon is upgraded",
+                        step + 1, policy_id)
+            return True
+        return bool(store.policy_already_fired(session_id, policy_id))
+    except Exception:
+        return True
+
+
+def _ladder_suffix(decision: dict) -> str:
+    """`` [step 1/3, then kill in 300s]`` — appended to the guard log line.
+
+    An escalation ladder is the one case where the log needs to say what
+    happens NEXT: reading "guard: sess-1 pause ok" gives no hint that a kill
+    is queued behind it.
+    """
+    try:
+        count = int(decision.get("step_count") or 1)
+        if count <= 1:
+            return ""
+        idx = int(decision.get("step_index") or 0)
+        nxt = str(decision.get("next_action") or "")
+        tail = (f", then {nxt} in {int(decision.get('next_after_secs') or 0)}s"
+                if nxt else ", final step")
+        return f" [step {idx + 1}/{count}{tail}]"
+    except Exception:  # noqa: BLE001 — a log decoration must never raise
+        return ""
+
+
 def _emit_detector_incidents(store, state: dict) -> int:
     """Run ``clawmetry.detectors`` over each active session, emit each incident
     as a ``loop_signals`` row (reusing the stuck detector's device-alert path)
@@ -20286,6 +20538,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
     baseline_cache: dict = {}
     bad_sessions: set = set()
     emitted = 0
+    all_incidents: list = []
     for s in candidates:
         sid = s.get("session_id") or ""
         try:
@@ -20322,6 +20575,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
             continue
         if not incidents:
             continue
+        all_incidents.extend(incidents)
 
         # Remember when this session FIRST looked wrong, so the next tick can
         # say how long it has been that way (and price the stretch).
@@ -20429,6 +20683,15 @@ def _emit_detector_incidents(store, state: dict) -> int:
             memo.pop(k, None)
     except Exception:
         pass
+    # Guard policies: turn this tick's incidents into at most one enforcement
+    # decision per session. Isolated from the emit path above — a policy
+    # failure must never stop telemetry ingest.
+    try:
+        if all_incidents:
+            _apply_guard_policies(store, state, all_incidents, facts_by_session)
+    except Exception as e:  # noqa: BLE001
+        log.warning("guard: policy pass failed: %s", e)
+
     return emitted
 
 
