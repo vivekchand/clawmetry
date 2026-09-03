@@ -240,3 +240,52 @@ def test_ping_event_respects_optout(telemetry, monkeypatch):
     with patch("urllib.request.urlopen") as urlopen:
         assert telemetry.ping_event("onboarded", "1.0.0") is None
         urlopen.assert_not_called()
+
+
+# ── ping_once: once-per-install events (REQ-OGV-001) ─────────────────────────
+
+def test_ping_once_sends_first_time_then_never_again(telemetry):
+    """AC-OGV-001.1 / AC-OGV-001.2: the first call posts, every later call
+    for the same event is a no-op, even across a module reload (state is on
+    disk, not in memory)."""
+    sent = []
+    with patch.object(telemetry, "ping_event",
+                      side_effect=lambda e, v, x=None: sent.append(e) or object()):
+        assert telemetry.ping_once("gate_shown", "1.0.0") is not None
+        assert telemetry.ping_once("gate_shown", "1.0.0") is None
+        assert telemetry.ping_once("gate_shown", "1.0.1") is None
+    assert sent == ["gate_shown"]
+    state = json.loads((telemetry.STATE_FILE).read_text())
+    assert "gate_shown" in state["once_events"]
+
+
+def test_ping_once_is_per_event(telemetry):
+    sent = []
+    with patch.object(telemetry, "ping_event",
+                      side_effect=lambda e, v, x=None: sent.append(e) or object()):
+        telemetry.ping_once("gate_shown", "1.0.0")
+        telemetry.ping_once("something_else", "1.0.0")
+    assert sent == ["gate_shown", "something_else"]
+
+
+def test_ping_once_keeps_existing_lifecycle_state(telemetry):
+    """The once-marker must not clobber the version bookkeeping
+    ``_derive_event`` relies on, or the next startup would re-send
+    ``install``."""
+    telemetry._record_reported("abc", "1.0.0", "install")
+    with patch.object(telemetry, "ping_event", return_value=object()):
+        telemetry.ping_once("gate_shown", "1.0.0")
+    state = telemetry._read_state()
+    assert state["last_version"] == "1.0.0"
+    assert state["install_id"] == "abc"
+    assert telemetry._derive_event("abc", "1.0.0") is None
+
+
+def test_ping_once_respects_optout(telemetry, monkeypatch):
+    """AC-OGV-001.3: opted out means nothing is sent AND nothing is
+    recorded (so opting back in later still reports the first sighting)."""
+    monkeypatch.setenv("CLAWMETRY_NO_TELEMETRY", "1")
+    with patch("urllib.request.urlopen") as urlopen:
+        assert telemetry.ping_once("gate_shown", "1.0.0") is None
+        urlopen.assert_not_called()
+    assert "once_events" not in telemetry._read_state()
