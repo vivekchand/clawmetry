@@ -186,6 +186,12 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("moonshot", "moonshot-v1-128k"): (2.00, 5.00),
     ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
     ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
+    # Meta muse-spark (ClawHub/npm standalone distribution), per-token rates not
+    # yet officially published — $1.00/$3.00 per 1M is a best-effort placeholder.
+    # Update once Meta publishes official pricing. Encrypted reasoning-replay
+    # turns are counted as regular output tokens (no separate rate known).
+    ("meta", "muse-spark-1.1"): (1.00, 3.00),
+    ("meta", "muse-spark"): (1.00, 3.00),
 }
 
 
@@ -301,7 +307,7 @@ def provider_for_model(model: str) -> str:
     m = (model or "").lower()
     if not m:
         return ""
-    for prov in ("openai", "anthropic", "google", "openrouter", "xai"):
+    for prov in ("openai", "anthropic", "google", "openrouter", "xai", "meta"):
         if m.startswith(prov + "/"):
             return prov
     if any(m.startswith(p + "/") for p in _LOCAL_PROVIDERS) or any(
@@ -326,6 +332,8 @@ def provider_for_model(model: str) -> str:
     # slash is a strong signal that the model is running locally on Ollama.
     if ":" in m and "/" not in m:
         return "local"
+    if "muse-spark" in m:
+        return "meta"
     return ""
 
 
