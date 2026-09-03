@@ -112,7 +112,10 @@ def _kv(key, s=None, i=None, d=None, b=None):
     return common_pb2.KeyValue(key=key, value=v)
 
 
-# Identity exactly as Claude Code emits it, per record.
+# Identity exactly as Claude Code emits it, per record. The LEDGER keeps this
+# bare id as sent (AC-OBS-006.2); EVENTS are keyed ``claude_code:sess-wo7``,
+# the form the daemon stamps on the transcript session, so the two sources
+# join and the runtime buckets correctly (WO-57).
 def _identity(session_id="sess-wo7"):
     return [
         _kv("session.id", s=session_id),
@@ -306,7 +309,7 @@ def test_tool_records_become_tool_events(store):
     ]
     _d._process_otlp_logs(_export(recs))
 
-    events = store.query_events(session_id="sess-wo7", limit=50)
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=50)
     types = {e["event_type"] for e in events}
     assert "tool_call" in types and "tool_result" in types, types
     result = next(e for e in events if e["event_type"] == "tool_result")
@@ -333,8 +336,8 @@ def test_trajectory_detectors_fire_on_the_otlp_path(store):
         )
     _d._process_otlp_logs(_export(recs))
 
-    events = store.query_events(session_id="sess-wo7", limit=200)
-    incident = detectors.repeated_tool_failure(events, "sess-wo7", "claude_code")
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=200)
+    incident = detectors.repeated_tool_failure(events, "claude_code:sess-wo7", "claude_code")
     assert incident is not None, "repeated tool failures went unseen"
     assert incident["kind"] == "repeated_tool_failure"
 
@@ -351,14 +354,14 @@ def test_unknown_tool_arguments_do_not_fabricate_a_loop(store):
     ]
     _d._process_otlp_logs(_export(recs))
 
-    events = store.query_events(session_id="sess-wo7", limit=200)
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=200)
     steps = [e for e in events if e["event_type"] == "tool_call"]
     assert len(steps) == 10
     hashes = {
         detectors._args_hash(e["data"].get("args")) for e in steps
     }
     assert len(hashes) == 10, "identical arg hashes would read as a loop"
-    assert detectors.stuck_loop(events, "sess-wo7", "claude_code") is None
+    assert detectors.stuck_loop(events, "claude_code:sess-wo7", "claude_code") is None
 
 
 def test_a_rejected_permission_is_not_a_tool_call(store):
@@ -370,7 +373,7 @@ def test_a_rejected_permission_is_not_a_tool_call(store):
     _d._process_otlp_logs(_export([
         _tool_decision(int(now * 1e9), "Bash", decision="reject"),
     ]))
-    events = store.query_events(session_id="sess-wo7", limit=50)
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=50)
     assert [e for e in events if e["event_type"] == "tool_call"] == []
     # The decision itself is still on the record, for the audit trail.
     row = store.query_otlp_records(session_id="sess-wo7")[0]
@@ -459,7 +462,7 @@ def test_a_session_the_daemon_already_owns_is_not_duplicated(store):
         "id": "daemon-evt-1",
         "node_id": "mac-of-dana",
         "agent_type": "claude_code",
-        "session_id": "sess-wo7",
+        "session_id": "claude_code:sess-wo7",
         "event_type": "tool_call",
         "ts": "2026-08-25T10:00:00+00:00",
         "cost_usd": 4.10,
@@ -472,7 +475,7 @@ def test_a_session_the_daemon_already_owns_is_not_duplicated(store):
         _tool_decision(int(now * 1e9), "Bash"),
     ]))
 
-    events = store.query_events(session_id="sess-wo7", limit=50)
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=50)
     assert [e for e in events if str(e["id"]).startswith("otlp:")] == []
     assert sum(e.get("cost_usd") or 0 for e in events) == pytest.approx(4.10)
 
@@ -489,7 +492,7 @@ def test_a_daemon_free_session_still_gets_its_events(store):
         _api_request(int(now * 1e9)),
         _tool_decision(int(now * 1e9), "Bash"),
     ]))
-    events = store.query_events(session_id="sess-wo7", limit=50)
+    events = store.query_events(session_id="claude_code:sess-wo7", limit=50)
     assert [e for e in events if str(e["id"]).startswith("otlp:")]
     assert sum(e.get("cost_usd") or 0 for e in events) == pytest.approx(4.10)
 

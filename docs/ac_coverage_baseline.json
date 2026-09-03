@@ -8,8 +8,8 @@
     "after coverage improves, so the ratchet is tightened in the same PR.",
     "Regenerate with: python3 scripts/check_ac_coverage.py --update-baseline"
   ],
-  "covered_count": 83,
-  "total_count": 153,
+  "covered_count": 92,
+  "total_count": 162,
   "uncovered": [
     "AC-GOV-001.1",
     "AC-GOV-001.2",

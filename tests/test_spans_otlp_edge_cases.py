@@ -533,9 +533,13 @@ def test_explicit_agent_type_wins_over_service_name(app):
                        service_name="my-app"))
     _drain(ls)
     store = ls.get_store()
+    # A claude_code span is stored under the daemon's session key
+    # (``claude_code:<id>``) so it joins the transcript session (WO-57).
     rows = store._fetch(
-        "SELECT agent_type FROM spans WHERE session_id='s-at'", [])
+        "SELECT agent_type FROM spans WHERE session_id='claude_code:s-at'", [])
     assert rows and rows[0][0] == "claude_code", rows
+    assert not store._fetch(
+        "SELECT 1 FROM spans WHERE session_id='s-at'", [])
 
 
 # ── gen_ai.* live tiles ─────────────────────────────────────────────────────

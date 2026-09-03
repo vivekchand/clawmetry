@@ -96,13 +96,23 @@ config value, pushed by MDM, points the runtime at a ClawMetry the org already
 runs:
 
 ```bash
-export CLAWMETRY_TELEMETRY=1                 # Claude Code: turn on its exporter
+export CLAUDE_CODE_ENABLE_TELEMETRY=1        # Claude Code: turn on its exporter
+export OTEL_LOGS_EXPORTER=otlp               # events (api_request, tool_decision, ...)
+export OTEL_METRICS_EXPORTER=otlp            # token / cost / lines-of-code counters
+export OTEL_TRACES_EXPORTER=otlp             # spans (needs the beta flag below)
+export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json # REQUIRED: Claude Code has no default protocol
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://clawmetry.internal.example
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $CLAWMETRY_GATEWAY_TOKEN"
 # Optional, and what makes the rollups useful:
 export OTEL_RESOURCE_ATTRIBUTES="team.id=platform,repository=payments-api"
 ```
+
+On a developer machine that runs ClawMetry locally, `clawmetry instrument claude`
+writes the same block (minus the headers) into `~/.claude/settings.json` for you,
+pointed at the local receiver, with prompt and tool content OFF unless you pass
+`--content`. `clawmetry instrument claude --uninstall` removes exactly the keys it
+wrote. Running Claude Code sessions keep their old configuration until restarted.
 
 The header is not optional off the loopback interface. `/v1/*` is gated like
 `/api/*`: loopback is trusted, anything else needs the gateway token, and an

@@ -34,6 +34,12 @@ _PLUMBING_TYPES = frozenset({
     "session.started", "session.ended", "session.created",
     "model.changed", "thinking_level_change", "context.compiled",
     "agent.heartbeat", "queue-operation",
+    # Claude Code native-telemetry events (WO-57). Facts, not spans: a
+    # ``user_prompt`` here would duplicate the transcript's own prompt
+    # boundary and ``assistant_response`` would read as a second model call.
+    "user_prompt", "assistant_response", "permission_mode_changed",
+    "api_refusal", "api_error", "mcp_server_connection", "auth",
+    "tool_decision",
 })
 
 # How long (minutes) a session's latest turn may sit with no new event before
@@ -107,6 +113,14 @@ def _classify(e):
     et = (e.get("event_type") or "").lower()
     if et in _PLUMBING_TYPES:
         return ""
+    if et == "llm_call":
+        # The receiver's api_request row (daemon-free intake / WO-57): a
+        # model call with no transcript twin, else it would have been dropped.
+        return "model"
+    if et == "waiting_on_user":
+        # Claude Code ``tool.blocked_on_user`` span: the agent sat waiting
+        # for a human decision. Its own span kind, its own per-turn total.
+        return "wait"
     if "compact" in et:
         return "compaction"
     d = _data(e)
@@ -272,6 +286,20 @@ def _build_turns(rows):
                     tool_open[tuid] = sp
                 continue
 
+            if kind == "wait":
+                try:
+                    _w = float(_data(e).get("duration_ms") or 0.0)
+                except (TypeError, ValueError):
+                    _w = 0.0
+                _tool = _data(e).get("tool") or ""
+                spans.append({
+                    "kind": "wait",
+                    "label": "waiting on you" + (f" ({_tool})" if _tool else ""),
+                    "started_ms": s_ms, "ended_ms": s_ms + int(_w),
+                    "duration_ms": int(_w), "status": "ok",
+                })
+                continue
+
             if kind == "compaction":
                 spans.append({
                     "kind": "compaction", "label": "context compaction",
@@ -316,6 +344,14 @@ def _build_turns(rows):
         total_tokens = sum(int(s.get("tokens") or 0) for s in spans)
         total_cost = sum(float(s.get("cost") or 0.0) for s in spans)
         has_error = any(s.get("status") == "error" for s in spans)
+        # Time the agent spent blocked on a human this turn. Present only
+        # when a Claude Code ``blocked_on_user`` span was received (WO-57);
+        # absent spans give no figure, never a zero that reads as "instant".
+        _wait_spans = [s for s in spans if s["kind"] == "wait"]
+        waiting_on_you_ms = (
+            sum(int(s.get("duration_ms") or 0) for s in _wait_spans)
+            if _wait_spans else None
+        )
         out.append({
             "turn": tn + 1,
             "started_ms": turn_start,
@@ -327,6 +363,7 @@ def _build_turns(rows):
             "total_cost": round(total_cost, 6),
             "span_count": len(spans),
             "status": "error" if has_error else "ok",
+            "waiting_on_you_ms": waiting_on_you_ms,
             "spans": spans,
         })
     return out

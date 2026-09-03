@@ -1295,7 +1295,9 @@ def _otlp_receive(signal, process):
 
 @bp_otel.route("/v1/metrics", methods=["POST"])
 def otlp_metrics():
-    """OTLP/HTTP receiver for metrics (protobuf; JSON needs the otel extra)."""
+    """OTLP/HTTP receiver for metrics (protobuf or OTLP/JSON; JSON metrics
+    decode through the stdlib shim since WO-57, so Claude Code's native
+    exporter works on a vanilla install)."""
     import dashboard as _d
     return _otlp_receive("metrics", _d._process_otlp_metrics)
 
@@ -1353,8 +1355,48 @@ def api_otel_status():
             # is still there tomorrow. ``None`` means we could not ask the
             # store, which is not the same as zero.
             "persisted": _otlp_persisted_count(),
+            # WO-57: is Claude Code's own exporter pointed here, and has a
+            # batch actually arrived? ``configured`` comes from the block
+            # ``clawmetry instrument claude`` recorded; ``last_batch_*`` from
+            # the newest ledger row the ``claude-code`` emitter wrote. A
+            # receiver that refuses a batch does so silently on the developer
+            # side, so "configured but never received" must be visible here.
+            "claude_code": _claude_code_exporter_status(),
         }
     )
+
+
+def _claude_code_exporter_status():
+    """``{configured, settings_path, endpoint, content, last_batch_ts,
+    last_batch_age_s, records}`` for the Claude Code native exporter.
+    ``last_batch_*`` are ``None`` when the store could not be asked."""
+    out = {"configured": False, "settings_path": None, "endpoint": None,
+           "content": False, "telemetry_enabled": False,
+           "last_batch_ts": None, "last_batch_age_s": None, "records": None}
+    try:
+        from clawmetry.instrument_claude import status as _instr_status
+        st = _instr_status(probe=False)
+        out.update({
+            "configured": bool(st.get("configured")),
+            "settings_path": st.get("settings_path"),
+            "endpoint": st.get("endpoint"),
+            "content": bool(st.get("content")),
+            "telemetry_enabled": bool(st.get("telemetry_enabled")),
+        })
+    except Exception:
+        pass
+    try:
+        latest = _ls_call("latest_otlp_record", service_name="claude-code")
+        if isinstance(latest, dict):
+            out["records"] = latest.get("count")
+            ts = latest.get("received_at") or latest.get("ts")
+            if ts:
+                import time as _t
+                out["last_batch_ts"] = float(ts)
+                out["last_batch_age_s"] = max(0.0, _t.time() - float(ts))
+    except Exception:
+        pass
+    return out
 
 
 def _otlp_persisted_count():

@@ -3206,6 +3206,13 @@ def _status_snapshot(args) -> dict:
         except Exception:
             snap["sync_state"] = {"last_sync": None, "files_seen": 0}
 
+    # Claude Code native telemetry block (WO-57). Same source as the human line.
+    try:
+        from clawmetry.instrument_claude import status as _instr_status
+        snap["claude_code_telemetry"] = _instr_status(probe=False)
+    except Exception:
+        snap["claude_code_telemetry"] = None
+
     # Runtimes. Same resolution as the human path.
     try:
         _plan = ""
@@ -3675,6 +3682,24 @@ def _cmd_status(args) -> None:
             else:
                 _status = str(_lic.get("status") or "invalid")
                 print(f"  License:     ⚠️  {_status}  (run `clawmetry license` for details)")
+    except Exception:
+        pass
+
+    # Claude Code native telemetry (WO-57): is the exporter block in place?
+    # Printed only when Claude Code is on this machine or the block exists,
+    # so a node without Claude Code sees no extra line.
+    try:
+        from clawmetry.instrument_claude import status as _instr_status
+        _cc = _instr_status(probe=False)
+        if _cc.get("configured") or _cc.get("telemetry_enabled"):
+            print()
+            _who = "by clawmetry" if _cc.get("configured") else "not by clawmetry"
+            print(f"  Claude Code telemetry: on ({_who}) -> "
+                  f"{_cc.get('endpoint') or '?'}")
+        elif os.path.isdir(os.path.expanduser("~/.claude")):
+            print()
+            print("  Claude Code telemetry: off  (run `clawmetry instrument "
+                  "claude` for permission, refusal and waiting-on-you signals)")
     except Exception:
         pass
 
@@ -7626,6 +7651,12 @@ def main() -> None:
     # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
     if len(sys.argv) > 1 and sys.argv[1] == "trace":
         raise SystemExit(trace_main(sys.argv[2:]))
+    # FAST PATH — `clawmetry instrument claude …` (WO-57): writes Claude
+    # Code's own OpenTelemetry env block into its settings file so its
+    # exporter reports to this ClawMetry. Stdlib-only, no dashboard import.
+    if len(sys.argv) > 1 and sys.argv[1] == "instrument":
+        from clawmetry.instrument_claude import cli_main as _instr_cli
+        raise SystemExit(_instr_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry hook claude-code --base <url>`: the LOCAL-first
     # PreToolUse gate client (auto-installed by the policy watcher — see
     # clawmetry/claude_code_gate.py). Runs on every gated Claude Code tool
@@ -8665,6 +8696,13 @@ def main() -> None:
         help="Claude Code approval hooks: install | uninstall | status | "
              "run {pretooluse|notification} (pre-execution gate + phone push)")
     p_hooks.add_argument("hooks_cmd", nargs="*")
+    # `instrument` is likewise intercepted by the fast path (WO-57).
+    p_instr = sub.add_parser(
+        "instrument",
+        help="Turn on a runtime's own OpenTelemetry export and point it at "
+             "this ClawMetry: instrument claude [--project] [--content] "
+             "[--uninstall | --status]")
+    p_instr.add_argument("instrument_args", nargs="*")
 
     # `hook` (singular) is likewise intercepted by its fast path in main();
     # this parser entry exists only for --help discovery. It is the

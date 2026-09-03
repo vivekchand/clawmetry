@@ -255,7 +255,7 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     over either format and there is no second mapping path to drift.
 
     Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
-    extra (a protobuf body, or JSON metrics); the HTTP layer turns that into
+    extra (a protobuf body); the HTTP layer turns that into
     501 with the install hint. Malformed bodies still raise (caller -> 400).
 
     OTLP/JSON traces and logs go through the stdlib decoder even when protobuf
@@ -270,7 +270,7 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     """
     ct = (content_type or "").lower()
     if ("application/json" in ct or "application/x-ndjson" in ct) and kind in (
-        "traces", "logs",
+        "traces", "logs", "metrics",
     ):
         from clawmetry.otlp_json import decode as _json_decode
         return _json_decode(pb_data, kind, content_encoding=content_encoding)
@@ -291,8 +291,8 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     from clawmetry.otlp_json import OtlpProtobufUnavailable
 
     raise OtlpProtobufUnavailable(
-        "this payload needs opentelemetry-proto; OTLP/JSON traces and logs "
-        "work without it (send Content-Type: application/json)"
+        "this payload needs opentelemetry-proto; OTLP/JSON traces, logs and "
+        "metrics work without it (send Content-Type: application/json)"
     )
 
 
@@ -2481,7 +2481,9 @@ def _get_dp_attrs(dp):
 
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP metrics protobuf/JSON and store relevant data."""
+    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
+    definition (search for "Claude Code native metrics (WO-57)") is the one
+    that runs. Edit that one."""
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
@@ -2707,7 +2709,9 @@ def _hex(b):
 
 
 def _otel_to_row(span, resource_attrs):
-    """Translate one OTel proto Span (plus its resource attributes) to the
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Translate one OTel proto Span (plus its resource attributes) to the
     dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
 
     Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
@@ -2993,7 +2997,9 @@ def _otel_to_row(span, resource_attrs):
 
 
 def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP traces protobuf and extract relevant span data.
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
     cache (the live dashboard's hot path — sub-second tiles for tokens /
@@ -11347,9 +11353,117 @@ def _get_dp_attrs(dp):
     return attrs
 
 
+# ── Claude Code native metrics (WO-57) ──────────────────────────────────────
+#
+# Claude Code's exporter emits these counters (code.claude.com/docs/en/
+# monitoring-usage). Cost and input/output tokens ALSO arrive on the
+# ``claude_code.api_request`` log record, which the logs path already turns
+# into cost/usage tiles and ``llm_call`` events. Feeding the same dollars in
+# from the metric would double the tile for anyone with both exporters on
+# (the block ``clawmetry instrument claude`` writes turns on both), so:
+#   * cacheRead / cacheCreation token types -> live tokens cache (the logs
+#     record does not carry them per type) + ledger
+#   * input / output tokens, cost.usage       -> ledger only (attributes)
+#   * everything else (session / lines_of_code / commit / pull_request /
+#     active_time / code_edit_tool.decision) -> ledger only, one row per
+#     data point, ``event_name`` = the metric name
+_CC_TOKEN_TYPE_FIELDS = {
+    "cacheread": "cache_read", "cache_read": "cache_read",
+    "cachecreation": "cache_write", "cache_creation": "cache_write",
+}
+
+
+def _cc_session_id(raw):
+    """Claude Code sends the bare session uuid; the daemon stores the same
+    session as ``claude_code:<uuid>`` (sync.py stamps every family session
+    ``<runtime>:<id>``). One key, or the two sources never join."""
+    sid = str(raw or "").strip()
+    if not sid:
+        return None
+    return sid if sid.startswith("claude_code:") else "claude_code:" + sid
+
+
+def _cc_metric_record_id(service_name, session_name_id, name, ts_ns, attrs, value):
+    import hashlib as _hl
+    parts = [str(service_name or ""), str(session_name_id or ""), str(name or ""),
+             str(ts_ns or 0), repr(value)]
+    for k in sorted(attrs):
+        parts.append("%s=%s" % (k, attrs[k]))
+    return _hl.sha256("\x1f".join(parts).encode("utf-8", "replace")).hexdigest()
+
+
+def _cc_metric(name, metric, resource_attrs, rows):
+    """Map one ``claude_code.*`` metric into tiles (cache tokens only) and
+    ledger rows (every data point). Appends to ``rows``; a bad data point is
+    skipped, never raised."""
+    service_name = resource_attrs.get("service.name") or "claude-code"
+    received_at = time.time()
+    for dp in _get_data_points(metric):
+        try:
+            attrs = _get_dp_attrs(dp)
+            try:
+                value = _get_dp_value(dp)
+            except Exception:
+                value = 0
+            ts_ns = int(getattr(dp, "time_unix_nano", 0) or 0)
+            ts = ts_ns / 1e9 if ts_ns > 0 else received_at
+            # Ledger rows keep the id as sent (REQ-OBS-006); nothing here
+            # writes events, so no prefixed form is needed.
+            session_id = (attrs.get("session.id")
+                          or resource_attrs.get("session.id") or None)
+            model = attrs.get("model") or resource_attrs.get("model") or ""
+            mtype = str(attrs.get("type") or "").strip()
+            cache_field = _CC_TOKEN_TYPE_FIELDS.get(mtype.lower())
+            if name == "claude_code.token.usage" and cache_field:
+                try:
+                    n = int(value or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                if n:
+                    _add_metric("tokens", {
+                        "timestamp": ts, "input": 0, "output": 0, "total": n,
+                        cache_field: n, "model": model,
+                        "channel": "", "provider": "anthropic",
+                        "_source": "claude_code.token.usage",
+                    })
+            rid = _cc_metric_record_id(
+                service_name, session_id, name, ts_ns, attrs, value)
+            rows.append({
+                "record_id": rid, "ts": ts, "received_at": received_at,
+                "event_name": name, "session_id": session_id,
+                "user_id": attrs.get("user.id") or resource_attrs.get("user.id"),
+                "user_email": (attrs.get("user.email")
+                               or resource_attrs.get("user.email")),
+                "org_id": (attrs.get("organization.id")
+                           or resource_attrs.get("organization.id")),
+                "team": (attrs.get("team.id") or resource_attrs.get("team.id")
+                         or resource_attrs.get("department")),
+                "repo": _otlp_repo_key(attrs.get("repository")
+                                       or resource_attrs.get("repository")),
+                "node_id": (resource_attrs.get("node.id")
+                            or resource_attrs.get("host.name") or "otlp"),
+                "agent_type": "claude_code", "service_name": service_name,
+                "model": model or None,
+                "provider": "anthropic" if model else None,
+                # Cost / token COLUMNS stay empty on metric rows: the rollup
+                # sums those columns and the api_request log row already
+                # carries the same dollars. The value rides in attributes.
+                "cost_usd": None, "tokens_input": None, "tokens_output": None,
+                "token_count": None, "duration_ms": None,
+                "tool_name": attrs.get("tool_name"),
+                "decision": attrs.get("decision"),
+                "success": None,
+                "attributes": {"resource": resource_attrs, "record": attrs,
+                               "value": value, "metric": name},
+            })
+        except Exception:
+            continue
+
+
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
+    _cc_rows = []  # claude_code.* ledger rows, one put_otlp_batch per POST
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -11362,6 +11476,9 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                 name = metric.name
                 ts = time.time()
 
+                if name.startswith("claude_code."):
+                    _cc_metric(name, metric, resource_attrs, _cc_rows)
+                    continue
                 if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
@@ -11544,6 +11661,22 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                             },
                         )
 
+    if _cc_rows:
+        try:
+            from clawmetry import local_store as _ls
+            _st = _ls.get_store()
+            if _st is not None:
+                # Keyword args: the dashboard's _ProxyStore forwards **kwargs
+                # only (same foot-gun as put_span / put_otlp_batch below).
+                _st.put_otlp_batch(records=_cc_rows, events=[])
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "claude_code metrics ledger write failed: %s", e)
+            except Exception:
+                pass
+
 
 _OTEL_SPAN_KIND_NAMES = {
     0: "UNSPECIFIED",
@@ -11688,8 +11821,12 @@ def _otel_to_row(span, resource_attrs):
     # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
     # stored as typed columns — they ride the attributes blob — but read here
     # so the derived cost below is cache-aware (matches the #2049 event path).
-    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # Claude Code's tracing beta names these ``cache_read_tokens`` /
+    # ``cache_creation_tokens`` on ``claude_code.llm_request`` spans (WO-57).
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens",
+                           "cache_read_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens",
+                            "cache_creation_tokens") or 0
     # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
     provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
@@ -11715,7 +11852,7 @@ def _otel_to_row(span, resource_attrs):
         except Exception:
             pass
     # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
-    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function", "tool_name")
     # session/conversation: semconv uses gen_ai.conversation.id.
     session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
@@ -11731,6 +11868,9 @@ def _otel_to_row(span, resource_attrs):
         derived = _otlp_service_name_to_agent_type(service_name)
         agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
+    if agent_type == "claude_code" and session_id:
+        # Same key the daemon stamps on the transcript session (WO-57).
+        session_id = _cc_session_id(session_id)
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
@@ -11875,6 +12015,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
     # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
     _otlp_sessions_seen = {}
+    # WO-57: Claude Code ``claude_code.tool.blocked_on_user`` spans are the
+    # time the agent sat waiting for a human. They become ``waiting_on_user``
+    # events on the (daemon-owned) session so turn anatomy can sum them.
+    _otlp_wait_events = []
+    _cc_tool_by_span = {}  # span_id -> tool_name, to name a wait by its parent
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -12001,7 +12146,40 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # sessions come from transcripts; only foreign apps
                         # need a span-derived sessions row.
                         _sid = _row.get("session_id")
-                        if _sid and (_row.get("agent_type") or "") != "openclaw":
+                        _atype = _row.get("agent_type") or ""
+                        if _atype == "claude_code" and _row.get("tool_name"):
+                            _cc_tool_by_span[str(_hex(span.span_id))] = _row.get("tool_name")
+                        if (_atype == "claude_code" and _sid
+                                and span.name.lower().endswith(".blocked_on_user")):
+                            try:
+                                _dur_ms = max(0.0, (span.end_time_unix_nano
+                                                    - span.start_time_unix_nano) / 1e6)
+                                _st_s = (span.start_time_unix_nano or 0) / 1e9 or time.time()
+                                _otlp_wait_events.append({
+                                    "id": "otlp:span:" + str(_hex(span.span_id)),
+                                    "node_id": _row.get("node_id") or "otlp",
+                                    "agent_type": "claude_code",
+                                    "agent_id": _row.get("agent_id") or "main",
+                                    "session_id": str(_sid),
+                                    "ts": datetime.fromtimestamp(
+                                        _st_s, timezone.utc).isoformat(),
+                                    "runtime_kind": "claude_code",
+                                    "event_type": "waiting_on_user",
+                                    "data": {
+                                        "tool": _row.get("tool_name")
+                                        or attrs.get("tool_name"),
+                                        "duration_ms": _dur_ms,
+                                        "_otlp": True,
+                                    },
+                                    "_parent_span": str(_hex(span.parent_span_id)),
+                                })
+                            except Exception:
+                                pass
+                        # Claude Code sessions come from the transcript on a
+                        # daemon machine and from the logs path otherwise;
+                        # never materialize a second one from spans (WO-57
+                        # blueprint ADR-003).
+                        if _sid and _atype not in ("openclaw", "claude_code"):
                             _env = (_row.get("attributes") or {}).get(
                                 "deployment.environment")
                             if _env or str(_sid) not in _otlp_sessions_seen:
@@ -12014,6 +12192,23 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             )
                         except Exception:
                             pass
+
+    if _store is not None and _otlp_wait_events:
+        # The blocked_on_user span carries no tool_name of its own (measured
+        # live, Claude Code 2.1.259); its parent claude_code.tool span does.
+        for _wev in _otlp_wait_events:
+            _parent = _wev.pop("_parent_span", None)
+            if not _wev["data"].get("tool") and _parent in _cc_tool_by_span:
+                _wev["data"]["tool"] = _cc_tool_by_span[_parent]
+        try:
+            _store.put_otlp_batch(records=[], events=_otlp_wait_events)
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "waiting_on_user events write failed: %s", e)
+            except Exception:
+                pass
 
     # One materialization call per export batch (not per span — get_store()
     # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
@@ -12059,6 +12254,48 @@ _OTLP_TOOL_CALL_EVENTS = frozenset(
 _OTLP_TOOL_RESULT_EVENTS = frozenset(
     {"tool_result", "tool_use_result"}
 )
+
+# WO-57: Claude Code events the transcript never carries. Each becomes an
+# ``events`` row of the SAME name so the session timeline, Guard and the
+# turn anatomy can read them; fields are copied by name, never invented.
+_OTLP_TYPED_EVENTS = frozenset({
+    "permission_mode_changed", "api_refusal", "api_error",
+    "mcp_server_connection", "auth", "user_prompt", "assistant_response",
+})
+_OTLP_TYPED_EVENT_FIELDS = {
+    "permission_mode_changed": ("from_mode", "to_mode", "trigger"),
+    "api_refusal": ("model", "category", "has_category", "has_explanation",
+                    "query_source", "attempt", "server_fallback_hop",
+                    "request_id"),
+    "api_error": ("model", "error", "status_code", "attempt", "duration_ms",
+                  "query_source", "request_id"),
+    "mcp_server_connection": ("status", "server_name", "transport_type",
+                              "server_scope", "duration_ms", "error_code",
+                              "is_plugin", "plugin.name"),
+    "auth": ("action", "success", "auth_method", "error_category",
+             "status_code"),
+    "user_prompt": ("prompt_length", "command_name", "command_source",
+                    "prompt"),
+    "assistant_response": ("response_length", "model", "query_source",
+                           "request_id", "response"),
+}
+# Attribution + cache fields Claude Code puts on api_request records.
+_OTLP_LLM_EXTRA_FIELDS = (
+    ("cache_read_tokens", "cache_read_tokens"),
+    ("cache_creation_tokens", "cache_creation_tokens"),
+    ("skill.name", "skill"), ("agent.name", "agent"),
+    ("mcp_server.name", "mcp_server"), ("mcp_tool.name", "mcp_tool"),
+    ("query_source", "query_source"), ("effort", "effort"), ("speed", "speed"),
+)
+
+
+def _otlp_typed_event_data(suffix, attrs, pick):
+    out = {}
+    for k in _OTLP_TYPED_EVENT_FIELDS.get(suffix, ()):
+        v = pick(attrs, k)
+        if v is not None:
+            out[k.replace(".", "_")] = v
+    return out
 
 
 # Record ids the live metrics cache has already counted. OTLP delivery is
@@ -12336,6 +12573,13 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     # therefore the join between two vendors' telemetry.
                     "cursor.conversation.id",
                 )
+                # The LEDGER keeps the session id exactly as sent (REQ-OBS-006:
+                # retain identity, derive nothing). EVENTS use the daemon's
+                # key, ``claude_code:<uuid>``, so they join the transcript
+                # session and bucket under the right runtime (WO-57).
+                ledger_session_id = session_id
+                if agent_type == "claude_code" and session_id:
+                    session_id = _cc_session_id(session_id)
                 user_id = _pick(
                     "user.id", "user.account_uuid", "enduser.id", "user_id",
                 )
@@ -12367,7 +12611,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                 suffix = _otlp_event_suffix(event_name)
 
                 record_id = _otlp_record_id(
-                    service_name, session_id, event_name, rec, attrs
+                    service_name, ledger_session_id, event_name, rec, attrs
                 )
                 # The tiles must not count a retried batch twice. The DuckDB
                 # write below is idempotent on record_id; this is the same
@@ -12477,7 +12721,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     "ts": ts,
                     "received_at": received_at,
                     "event_name": event_name or suffix or "log",
-                    "session_id": session_id,
+                    "session_id": ledger_session_id,
                     "user_id": user_id,
                     "user_email": user_email,
                     "org_id": org_id,
@@ -12529,6 +12773,20 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     if str(decision or "").strip().lower() in (
                         "reject", "rejected", "deny", "denied",
                     ):
+                        # WO-57: keep the fact that a human (or a hook, or
+                        # config) said no, as its own event. Still never a
+                        # tool CALL: the tool did not run.
+                        ev = dict(ev_common)
+                        ev["id"] = "otlp:" + record_id
+                        ev["event_type"] = "tool_decision"
+                        ev["data"] = {
+                            "tool": str(tool_name), "decision": decision,
+                            "source": _f(attrs, "source", "tool.source",
+                                         "decision_source"),
+                            "tool_source": _f(attrs, "tool_source"),
+                            "_otlp": True,
+                        }
+                        out_events.append(ev)
                         continue
                     args = _f(attrs, "tool_parameters", "tool.parameters",
                               "arguments", "input")
@@ -12552,6 +12810,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     ev["event_type"] = "tool_call"
                     ev["data"] = {
                         "tool": str(tool_name),
+                        "tool_name": str(tool_name),
                         "args": args,
                         "decision": decision,
                         "source": _f(attrs, "source", "tool.source"),
@@ -12565,11 +12824,21 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     ev["event_type"] = "tool_result"
                     ev["data"] = {
                         "tool": str(tool_name),
+                        "tool_name": str(tool_name),
                         "is_error": (success is False) or bool(err_text),
                         "error": err_text,
                         "duration_ms": dur_val,
                         "_otlp": True,
                     }
+                    out_events.append(ev)
+                elif suffix in _OTLP_TYPED_EVENTS:
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = suffix
+                    ev["data"] = _otlp_typed_event_data(suffix, attrs, _f)
+                    ev["data"]["_otlp"] = True
+                    if model:
+                        ev["model"] = model
                     out_events.append(ev)
                 elif cost_val is not None or tin is not None:
                     # The money records (api_request). Landing them in events
@@ -12592,6 +12861,10 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "duration_ms": dur_val,
                         "_otlp": True,
                     }
+                    for _k, _dk in _OTLP_LLM_EXTRA_FIELDS:
+                        _v = _f(attrs, _k)
+                        if _v is not None:
+                            ev["data"][_dk] = _v
                     out_events.append(ev)
 
     if _store is not None and (out_records or out_events):
