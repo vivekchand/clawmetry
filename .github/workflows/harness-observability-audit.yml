@@ -30,7 +30,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: harness-audit
@@ -39,6 +38,9 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     timeout-minutes: 45
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
