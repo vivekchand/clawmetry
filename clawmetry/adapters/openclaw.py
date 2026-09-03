@@ -2391,14 +2391,18 @@ class OpenClawAdapter(AgentAdapter):
                 meta.get("gatewaySupervisorMode", ""), running
             ):
                 meta["gatewayInRestartHandoff"] = True
+            # Gateway host/system status (#3551, #5431): host name, OS, runtime,
+            # uptime, CPU, memory, disk from the gateway.status RPC. Called
+            # unconditionally so remote/fleet gateways (where _gateway_live()
+            # checks localhost and returns False) still surface host fields when
+            # the WebSocket RPC connection is alive. The function self-guards:
+            # returns {} when _gw_ws_rpc is None or the call throws.
+            meta.update(_gateway_host_status())
             # Gateway plugin health (#3200): per-plugin state (loaded/errored/
             # disabled) added to gateway.status in harness 2026.6.9 (#93395).
             # Only meaningful — and safe to query — when the gateway is live.
             if running:
                 meta.update(_gateway_plugin_health())
-                # Gateway host/system status (#3551): host name, OS, runtime,
-                # uptime, CPU, memory, disk from the same gateway.status RPC.
-                meta.update(_gateway_host_status())
                 # Who's-online presence roster (#3884): connected users from the
                 # Control UI facepile, via the same gateway.status RPC.
                 meta.update(_gateway_presence_roster())
