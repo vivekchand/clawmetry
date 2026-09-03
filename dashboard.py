@@ -11418,6 +11418,22 @@ def _metric_is_cumulative(metric):
     return False
 
 
+def _cc_otel_allowed():
+    """Claude Code is a PAID runtime (entitlements.PAID_RUNTIMES). The generic
+    OTLP door stays free, exactly as it was: raw ledger rows, generic span
+    rows, the generic tool_call / tool_result / llm_call events. Everything
+    Claude Code SPECIFIC that this module adds (typed events, cache tiles,
+    the transcript-session join, waiting-on-you, span materialization)
+    follows the runtime entitlement: grace-permissive today, off in enforce
+    for a free install. Fails CLOSED: an entitlement lookup that errors is
+    not a licence."""
+    try:
+        from clawmetry.entitlements import get_entitlement
+        return bool(get_entitlement().allows_runtime("claude_code"))
+    except Exception:
+        return False
+
+
 def _cc_session_id(raw):
     """Claude Code sends the bare session uuid; the daemon stores the same
     session as ``claude_code:<uuid>`` (sync.py stamps every family session
@@ -11447,6 +11463,7 @@ def _cc_metric(name, metric, resource_attrs, rows):
     # to a tile would grow without bound. Claude Code defaults to delta and
     # the instrument command pins that; anything else is ledger-only.
     cumulative = _metric_is_cumulative(metric)
+    entitled = _cc_otel_allowed()
     for dp in _get_data_points(metric):
         try:
             attrs = _get_dp_attrs(dp)
@@ -11464,7 +11481,7 @@ def _cc_metric(name, metric, resource_attrs, rows):
             # ledger write, or a retried batch doubles the cache tokens.
             rid = _cc_metric_record_id(
                 service_name, session_id, name, ts_ns, attrs, value)
-            if (name == "claude_code.token.usage" and cache_field
+            if (entitled and name == "claude_code.token.usage" and cache_field
                     and value is not None and not cumulative):
                 try:
                     n = int(value)
@@ -11919,8 +11936,10 @@ def _otel_to_row(span, resource_attrs):
         derived = _otlp_service_name_to_agent_type(service_name)
         agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
-    if agent_type == "claude_code" and session_id:
+    if agent_type == "claude_code" and session_id and _cc_otel_allowed():
         # Same key the daemon stamps on the transcript session (WO-57).
+        # Paid runtime: without the entitlement the span keeps the bare id
+        # and stays a generic OTLP span, as before this change.
         session_id = _cc_session_id(session_id)
 
     # Span events: array of {time_unix_nano, name, attributes}.
@@ -12071,6 +12090,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     # events on the (daemon-owned) session so turn anatomy can sum them.
     _otlp_wait_events = []
     _cc_tool_by_span = {}  # span_id -> tool_name, to name a wait by its parent
+    _cc_entitled = _cc_otel_allowed()  # once per batch; cached lookup
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -12200,7 +12220,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         _atype = _row.get("agent_type") or ""
                         if _atype == "claude_code" and _row.get("tool_name"):
                             _cc_tool_by_span[str(_hex(span.span_id))] = _row.get("tool_name")
-                        if (_atype == "claude_code" and _sid
+                        if (_atype == "claude_code" and _sid and _cc_entitled
                                 and span.name.lower().endswith(".blocked_on_user")):
                             try:
                                 _dur_ms = max(0.0, (span.end_time_unix_nano
@@ -12232,6 +12252,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # and is left alone (its source is not otlp_spans);
                         # on a daemon-free machine this is the only way the
                         # session reaches the Sessions tab (WO-57 ADR-003).
+                        # A free install gets no Claude Code session row from
+                        # spans: the runtime is paid, and a session row IS the
+                        # product. Every other emitter materializes as before.
+                        if _atype == "claude_code" and not _cc_entitled:
+                            _sid = None
                         if _sid and _atype != "openclaw":
                             _env = (_row.get("attributes") or {}).get(
                                 "deployment.environment")
@@ -12663,7 +12688,8 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                 # key, ``claude_code:<uuid>``, so they join the transcript
                 # session and bucket under the right runtime (WO-57).
                 ledger_session_id = session_id
-                if agent_type == "claude_code" and session_id:
+                cc_enriched = agent_type == "claude_code" and _cc_otel_allowed()
+                if cc_enriched and session_id:
                     session_id = _cc_session_id(session_id)
                 user_id = _pick(
                     "user.id", "user.account_uuid", "enduser.id", "user_id",
@@ -12861,6 +12887,8 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         # WO-57: keep the fact that a human (or a hook, or
                         # config) said no, as its own event. Still never a
                         # tool CALL: the tool did not run.
+                        if not cc_enriched:
+                            continue
                         ev = dict(ev_common)
                         ev["id"] = "otlp:" + record_id
                         ev["event_type"] = "tool_decision"
@@ -12916,7 +12944,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "_otlp": True,
                     }
                     out_events.append(ev)
-                elif suffix in _OTLP_TYPED_EVENTS:
+                elif suffix in _OTLP_TYPED_EVENTS and cc_enriched:
                     ev = dict(ev_common)
                     ev["id"] = "otlp:" + record_id
                     ev["event_type"] = suffix
@@ -12946,7 +12974,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "duration_ms": dur_val,
                         "_otlp": True,
                     }
-                    for _k, _dk in _OTLP_LLM_EXTRA_FIELDS:
+                    for _k, _dk in (_OTLP_LLM_EXTRA_FIELDS if cc_enriched else ()):
                         _v = _f(attrs, _k)
                         if _v is not None:
                             ev["data"][_dk] = _v

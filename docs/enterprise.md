@@ -114,6 +114,9 @@ writes the same block (minus the headers) into `~/.claude/settings.json` for you
 pointed at the local receiver, with prompt and tool content OFF unless you pass
 `--content`. `clawmetry instrument claude --uninstall` removes exactly the keys it
 wrote. Running Claude Code sessions keep their old configuration until restarted.
+Claude Code is a paid runtime: the command and the Claude Code specific mapping
+(session join, typed events, cache tokens by type) follow the runtime entitlement;
+the generic ledger rows and rollups on this page do not.
 
 The header is not optional off the loopback interface. `/v1/*` is gated like
 `/api/*`: loopback is trusted, anything else needs the gateway token, and an

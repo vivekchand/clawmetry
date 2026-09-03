@@ -90,3 +90,8 @@ Verdict: APPROVED. Every round-1 blocking item verified against code (A1, A2, B1
 Advisories, addressed in commit 3: (1) `_dp_value_or_none` on the protobuf path used `HasField("sum")`, which raises for NumberDataPoint, so an absent value became 0; now `WhichOneof("value")` first, per-name guards after, with a protobuf test. (2) `_write_marker` swallowed failures and install still reported success; now returns a bool, surfaced as `marker_written` plus a printed warning, with a test. (4) `OSError` on the settings file read no longer reads as "not valid JSON". (5) `content` tag renamed `has_content` so a future attribute of that name is not clobbered.
 
 Advisory accepted as documented: (3) spans arriving before the daemon's first transcript poll create an OTLP-sourced row that the transcript upsert replaces on the next cycle (blueprint ADR-003 states it).
+
+
+## Round 3 (2026-09-03) — founder review
+
+Finding (blocking, requirements / tiering): Claude Code is a paid runtime; the feature added a second, ungated door into it through the free OTLP receiver. Decision: option 1, gate the Claude Code specific enrichment and the instrument command on the `claude_code` runtime entitlement, keep the generic OTLP door free. Delivered in commit 4 with AC-RSO-CCT-001.10, three tests (denied path end to end, grace default, fail-closed lookup), docs, CHANGELOG, requirement risk entry and blueprint contract.

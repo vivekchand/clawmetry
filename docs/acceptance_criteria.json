@@ -1007,6 +1007,12 @@
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
       "text": "docs/enterprise.md and docs/OPENTELEMETRY.md name CLAUDE_CODE_ENABLE_TELEMETRY, state that Claude Code has no default protocol, and show the block the command writes."
+    },
+    {
+      "id": "AC-RSO-CCT-001.10",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     }
   ]
 }

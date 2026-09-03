@@ -453,3 +453,29 @@ def test_unwritable_marker_is_surfaced(paths, tmp_path):
     res = ic.install(settings, probe=_probe(), managed={}, marker_path=bad_marker)
     assert res["status"] == "installed"
     assert res["marker_written"] is False
+
+
+def test_install_requires_the_claude_code_entitlement(paths):
+    """AC-RSO-CCT-001.10 -- without the runtime entitlement the command
+    writes nothing and says which plan is needed; uninstall and status keep
+    working so a lapsed plan can always remove its own keys.
+
+    AC-RSO-CCT-001.10
+    """
+    settings, marker = paths
+    with open(settings, "w") as f:
+        json.dump({"model": "opus"}, f)
+    res = ic.install(settings, probe=_probe(), managed={}, marker_path=marker, allowed=False)
+    assert res["status"] == "upgrade_required" and res["reason"] == "runtime_not_entitled"
+    assert "pricing" in res["message"]
+    assert _read(settings) == {"model": "opus"}
+    assert not os.path.exists(marker)
+    ic.install(settings, probe=_probe(), managed={}, marker_path=marker, allowed=True)
+    assert ic.uninstall(settings, marker_path=marker)["status"] == "uninstalled"
+    assert _read(settings) == {"model": "opus"}
+
+
+def test_grace_rollout_allows_the_command_today():
+    """AC-RSO-CCT-001.10 -- the default entitlement (grace) allows it."""
+    from clawmetry import entitlements as _ent
+    assert ic.entitled() == _ent.get_entitlement().allows_runtime("claude_code")

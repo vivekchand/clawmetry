@@ -1372,7 +1372,7 @@ def _claude_code_exporter_status():
     ``last_batch_*`` are ``None`` when the store could not be asked."""
     # ``configured`` starts as None: "could not ask" is not "no".
     out = {"configured": None, "settings_path": None, "endpoint": None,
-           "content": False, "telemetry_enabled": None,
+           "content": False, "telemetry_enabled": None, "entitled": None,
            "last_batch_ts": None, "last_batch_age_s": None, "records": None}
     try:
         from clawmetry.instrument_claude import status as _instr_status
@@ -1383,6 +1383,10 @@ def _claude_code_exporter_status():
             "endpoint": st.get("endpoint"),
             "content": bool(st.get("content")),
             "telemetry_enabled": bool(st.get("telemetry_enabled")),
+            # Paid runtime: false means batches are accepted but only the
+            # generic ledger/span rows are kept (no session join, no typed
+            # events); the UI can say why rather than look broken.
+            "entitled": st.get("entitled"),
         })
     except Exception:
         pass

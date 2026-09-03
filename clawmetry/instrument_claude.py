@@ -247,19 +247,44 @@ def managed_lock(paths: list | None = None) -> dict | None:
     return None
 
 
+# ── entitlement ─────────────────────────────────────────────────────────────
+
+_UPGRADE_HINT = ("Claude Code is a paid runtime. Start a trial or add a licence "
+                 "(clawmetry.com/pricing), or run `clawmetry license` on a "
+                 "self-hosted install.")
+
+
+def entitled() -> bool:
+    """Claude Code is in ``entitlements.PAID_RUNTIMES``; this command is
+    Claude Code observability, so it follows the runtime entitlement
+    (grace-permissive today). Fails closed. Uninstall and status never ask:
+    removing our own keys must always be possible."""
+    try:
+        from clawmetry.entitlements import get_entitlement
+        return bool(get_entitlement().allows_runtime("claude_code"))
+    except Exception:
+        return False
+
+
 # ── install / uninstall / status ────────────────────────────────────────────
 
 def install(settings_path: str | None = None, *, content: bool = False,
             endpoint: str | None = None, probe: dict | None = None,
             managed: dict | None = None, marker_path: str | None = None,
-            managed_paths: list | None = None) -> dict:
+            managed_paths: list | None = None,
+            allowed: bool | None = None) -> dict:
     """Write the telemetry ``env`` block. Idempotent; merges; never clobbers.
 
-    ``probe`` / ``managed`` / ``managed_paths`` exist so tests can inject the
-    receiver answer and the lock state without a network or root paths.
+    ``probe`` / ``managed`` / ``managed_paths`` / ``allowed`` exist so tests
+    can inject the receiver answer, the lock state and the entitlement
+    without a network, root paths or a licence.
     """
     path = _norm(settings_path or _SETTINGS_PATH)
     try:
+        if not (entitled() if allowed is None else allowed):
+            return {"status": "upgrade_required", "path": path,
+                    "reason": "runtime_not_entitled", "runtime": "claude_code",
+                    "message": _UPGRADE_HINT}
         lock = managed if managed is not None else managed_lock(managed_paths)
         if lock:
             return {"status": "refused", "path": path,
@@ -462,6 +487,7 @@ def status(settings_path: str | None = None, *, marker_path: str | None = None,
                         "configured": i["configured"],
                         "drifted": i["drifted"], "missing": i["missing"],
                         "unreadable": i["unreadable"]} for i in installs if i["ours"]]
+    out["entitled"] = entitled()
     if probe:
         out["receiver"] = probe_receiver()
     return out
@@ -537,6 +563,9 @@ def cli_main(argv: list | None = None) -> int:
 
 def _print_install(res: dict) -> None:
     st = res.get("status")
+    if st == "upgrade_required":
+        print("Not available on this plan: " + res.get("message", ""))
+        return
     if st == "refused":
         print("Refused: " + res.get("message", ""))
         if res.get("managed_path"):
@@ -575,6 +604,9 @@ def _print_status(res: dict) -> None:
     elif res.get("telemetry_enabled"):
         print("Claude Code telemetry: enabled, but not by clawmetry "
               "(or the block drifted)")
+    elif res.get("entitled") is False:
+        print("Claude Code telemetry: not available on this plan "
+              "(paid runtime; see clawmetry.com/pricing)")
     else:
         print("Claude Code telemetry: not configured "
               "(run `clawmetry instrument claude`)")

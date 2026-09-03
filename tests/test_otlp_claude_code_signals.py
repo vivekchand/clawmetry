@@ -535,3 +535,69 @@ def test_absent_value_is_null_on_the_protobuf_path_too():
     dp2 = m.NumberDataPoint()
     dp2.as_double = 1.5
     assert _d._dp_value_or_none(dp2) == 1.5
+
+
+# ── AC-RSO-CCT-001.10: paid runtime ─────────────────────────────────────────
+
+def test_without_the_entitlement_only_the_generic_free_path_remains(store, client, monkeypatch):
+    """AC-RSO-CCT-001.10 -- with the claude_code runtime NOT entitled, a
+    batch is still accepted (200) and the ledger keeps every record, but
+    nothing Claude Code specific happens: no cache tile, no typed events, no
+    rejected-decision event, no session-key join, no waiting event, no
+    session row. This is exactly what a free install got before WO-57.
+
+    AC-RSO-CCT-001.10
+    """
+    monkeypatch.setattr(_d, "_cc_otel_allowed", lambda: False)
+    c, _ = client
+    r = c.post("/v1/metrics", data=_metrics_payload([
+        _metric("claude_code.token.usage", [(42000, {"type": "cacheRead", "model": "m"})]),
+    ]), content_type="application/json")
+    assert r.status_code == 200
+    assert _d.metrics_store["tokens"] == []
+    assert store.count_otlp_records() == 1
+
+    now = int(time.time() * 1e9)
+    _d._process_otlp_logs(_logs_payload([
+        _log("claude_code.api_request", now, model="m", cost_usd=0.5, input_tokens=10, output_tokens=2, **{"skill.name": "deploy"}),
+        _log("claude_code.permission_mode_changed", now + 1, from_mode="default", to_mode="plan", trigger="shift_tab"),
+        _log("claude_code.tool_decision", now + 2, tool_name="Bash", decision="reject", source="user_reject"),
+        _log("claude_code.tool_decision", now + 3, tool_name="Read", decision="accept", source="config"),
+    ]), content_type="application/json")
+    assert _events(store, _STORED) == [], "no join to the transcript key without the entitlement"
+    free = _events(store, _SESSION)
+    types = sorted(e["event_type"] for e in free)
+    assert types == ["llm_call", "tool_call"], types
+    assert "skill" not in _data(next(e for e in free if e["event_type"] == "llm_call"))
+    assert store.count_otlp_records() == 5
+
+    t0 = int(time.time() * 1e9)
+    ms = 1_000_000
+    _d._process_otlp_traces(_traces_payload([
+        _span("claude_code.tool", t0, t0 + 500 * ms, "aa" * 8, tool_name="Bash"),
+        _span("claude_code.tool.blocked_on_user", t0, t0 + 200 * ms, "bb" * 8, parent="aa" * 8),
+    ]), content_type="application/json")
+    spans = store.query_spans(session_id=_SESSION, limit=10)
+    if isinstance(spans, dict):
+        spans = spans.get("result") or spans.get("rows") or []
+    assert len(spans) == 2, "generic span rows still land, under the bare id"
+    assert [e for e in free + _events(store, _STORED) if e["event_type"] == "waiting_on_user"] == []
+    sessions = store.list_sessions(limit=50) if hasattr(store, "list_sessions") else []
+    if isinstance(sessions, dict):
+        sessions = sessions.get("result") or sessions.get("rows") or []
+    assert not [s for s in (sessions or []) if _SESSION in str(s.get("id") or s.get("session_id") or "")]
+
+
+def test_entitlement_lookup_defaults_to_grace_and_fails_closed(monkeypatch):
+    """AC-RSO-CCT-001.10 -- the grace rollout allows the runtime; an
+    entitlement lookup that raises is treated as NOT entitled.
+
+    AC-RSO-CCT-001.10
+    """
+    from clawmetry import entitlements as _ent
+    assert _d._cc_otel_allowed() == _ent.get_entitlement().allows_runtime("claude_code")
+
+    def _boom(*a, **k):
+        raise RuntimeError("no licence server")
+    monkeypatch.setattr(_ent, "get_entitlement", _boom)
+    assert _d._cc_otel_allowed() is False

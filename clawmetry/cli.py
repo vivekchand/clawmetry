@@ -3698,8 +3698,12 @@ def _cmd_status(args) -> None:
                   f"{_cc.get('endpoint') or '?'}")
         elif os.path.isdir(os.path.expanduser("~/.claude")):
             print()
-            print("  Claude Code telemetry: off  (run `clawmetry instrument "
-                  "claude` for permission, refusal and waiting-on-you signals)")
+            if _cc.get("entitled") is False:
+                print("  Claude Code telemetry: off  (paid runtime; not on "
+                      "this plan)")
+            else:
+                print("  Claude Code telemetry: off  (run `clawmetry instrument "
+                      "claude` for permission, refusal and waiting-on-you signals)")
     except Exception:
         pass
 
