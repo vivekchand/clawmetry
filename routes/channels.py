@@ -2839,8 +2839,8 @@ def api_channel_buzz():
     return _d._generic_channel_data("buzz")
 
 
-@bp_channels.route("/api/channel/fishaudio")
-def api_channel_fishaudio():
+@bp_channels.route("/api/channel/fish-audio")
+def api_channel_fish_audio():
     """Issue #5045 — ingest Fish Audio voice/telephony channel transcripts."""
     import dashboard as _d
     if _local_store_read_enabled():
