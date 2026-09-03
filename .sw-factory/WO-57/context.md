@@ -3,7 +3,7 @@
 # Work Order Entity Index: WO-57
 
 **Initialized At (UTC):** 2026-09-03T17:25:12Z
-**Current Status:** in_progress
+**Current Status:** in_review
 
 ## Work Order
 
@@ -28,4 +28,4 @@ Blueprints reached through `@…` mentions and links while reading linked bluepr
 ## Delivery
 
 - Branch: cc-native-otel
-- Pull Request URL:
+- Pull Request URL: https://github.com/vivekchand/clawmetry/pull/5471
