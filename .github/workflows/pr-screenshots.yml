@@ -26,8 +26,7 @@ on:
       - ".github/scripts/post-visual-diff.mjs"
 
 permissions:
-  contents: write       # push to orphan pr-screenshots branch
-  pull-requests: write  # post comment
+  contents: read
 
 concurrency:
   group: pr-screenshots-${{ github.event.pull_request.number }}
@@ -55,6 +54,9 @@ env:
 jobs:
   visual-diff:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # push to orphan pr-screenshots branch
+      pull-requests: write  # post comment
     timeout-minutes: 20
     # Non-blocking: the bot is allowed to fail without holding up a merge.
     continue-on-error: true
