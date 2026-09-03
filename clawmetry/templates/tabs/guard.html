@@ -1,0 +1,49 @@
+<div id="guard" class="tab-content">
+  <div class="section-header">
+    <h2 data-i18n="guard.title">Guard</h2>
+    <p class="section-sub" data-i18n="guard.sub">
+      What is running right now, whether it has gone off track, and the button to stop it.
+    </p>
+  </div>
+
+  <div id="guard-enforce-banner" class="banner banner-info" style="display:none;">
+    <span id="guard-enforce-text"></span>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3 data-i18n="guard.running">Running sessions</h3>
+      <span id="guard-at-risk" class="section-sub" style="margin:0;font-variant-numeric:tabular-nums;"></span>
+      <button class="btn btn-sm" onclick="loadGuardTab()" data-i18n="guard.refresh">Refresh</button>
+    </div>
+    <div id="guard-sessions-body">
+      <div class="empty-state" data-i18n="guard.loading">Loading sessions...</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3 data-i18n="guard.policies">Policies</h3>
+      <button class="btn btn-sm btn-primary" onclick="guardShowPolicyForm()" data-i18n="guard.add_policy">Add policy</button>
+    </div>
+    <p class="section-sub" data-i18n="guard.policies_sub">
+      A policy watches for a detector signal and acts without anyone present. New policies start in
+      monitor mode: they record what they would have done and change nothing. A policy can escalate
+      over time, for example pause now and kill five minutes later if the agent is still stuck. Each
+      step runs only if the agent is still flagged when its wait is up.
+    </p>
+    <div id="guard-policy-form" style="display:none;"></div>
+    <div id="guard-policies-body">
+      <div class="empty-state" data-i18n="guard.loading">Loading policies...</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3 data-i18n="guard.decisions">Recent decisions</h3>
+    </div>
+    <div id="guard-actions-body">
+      <div class="empty-state" data-i18n="guard.loading">Loading...</div>
+    </div>
+  </div>
+</div>
