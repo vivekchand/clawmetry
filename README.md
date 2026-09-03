@@ -164,6 +164,15 @@ Or the one-liner: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawme
 Needs Python 3.8+ on macOS, Linux or Windows, and at least one agent runtime on
 the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 
+Or let the agent set it up for you. The [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)
+skill teaches Claude Code, Codex, Cursor, Gemini CLI, Copilot or OpenCode to
+install ClawMetry, report what the agents on the machine are doing and spending,
+stop one session on request, and hold risky tool calls for approval:
+
+```bash
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
+```
+
 ## Docs
 
 | | |
