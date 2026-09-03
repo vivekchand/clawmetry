@@ -117,6 +117,20 @@
           { name: 'AES-GCM', iv: raw.slice(0, 12) }, ck, raw.slice(12)
         );
       }).then(function (pt) {
+        /* The daemon may gzip the JSON before encrypting it (sync.py
+         * encrypt_payload, negotiated by the heartbeat `caps.blob_gzip`).
+         * gzip's magic bytes 0x1f 0x8b cannot begin a JSON document, so the
+         * plaintext says which it is. A browser without DecompressionStream
+         * gets null here, the same empty-card outcome as any unreadable
+         * blob; the server never advertises the codec to a node whose
+         * readers cannot inflate. */
+        var bytes = new Uint8Array(pt);
+        if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+          if (typeof DecompressionStream === 'undefined') { return null; }
+          var inflated = new Blob([bytes]).stream()
+            .pipeThrough(new DecompressionStream('gzip'));
+          return new Response(inflated).text().then(JSON.parse);
+        }
         return JSON.parse(new TextDecoder().decode(pt));
       }).catch(function () { return null; });
     } catch (e) {
