@@ -9476,6 +9476,11 @@ MEMORY_PUSH_MIN_INTERVAL_SEC = MEMORY_CACHE_TTL_SEC // 2
 # not a live feed; a fresh file reaching it within ten minutes is plenty, and
 # the push is the whole 5.9 MB snapshot encrypted and uploaded, not a delta.
 MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC = 600
+# Catalog categories that are runtime CONFIG rather than memory: hook
+# settings (settings.json / settings.local.json), MCP server manifests and
+# openclaw.json. They stay in the local catalog but never ride the cloud push,
+# because they routinely carry gateway tokens, bot tokens and provider keys.
+MEMORY_PUSH_EXCLUDED_CATEGORIES = frozenset({"hooks", "mcp"})
 # A file whose hash has changed on this many consecutive builds is runtime
 # state, not memory (2026-09-02: Grok Bot's ``local-exec-supervisor.json`` and
 # ``local-exec-daemon-connection.json`` rewrote every cycle, so the fingerprint
@@ -9646,6 +9651,12 @@ def _build_memory_cache_pushes(config: dict) -> list:
     dropped = 0
     for r in rows:
         path = r.get("path") or ""
+        # Runtime CONFIG files (settings.json, openclaw.json, mcp.json) are
+        # catalogued locally so the Memory tab can show hooks and servers, but
+        # they routinely hold gateway tokens, bot tokens and API keys. Those
+        # have no reason to leave the machine, sealed or not.
+        if (r.get("category") or "memory") in MEMORY_PUSH_EXCLUDED_CATEGORIES:
+            continue
         # Dedup on (runtime, path), never path alone. Several runtimes read
         # the SAME file on disk — AGENTS.md is Codex, opencode and Copilot;
         # a path-only key kept it for whichever runtime sorted first and left
@@ -10077,6 +10088,30 @@ def _build_alert_rules_cache_pushes(config: dict) -> list:
     }]
 
 
+def _audit_remote_action(atype: str, action: dict, refused: bool = False) -> None:
+    """Record a cloud-relayed action in ~/.clawmetry/audit.db. Never raises.
+
+    Only the action type and its identifiers are stored; the action body may
+    carry a server-supplied prompt, and the audit log is not the place to
+    persist that."""
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event(
+            "remote_action.refused" if refused else "remote_action.received",
+            actor="cloud-relay",
+            target=str(atype or ""),
+            result="refused" if refused else "accepted",
+            source="heartbeat",
+            metadata={
+                "id": str(action.get("id") or "")[:64],
+                "session_id": str(action.get("session_id") or "")[:128],
+                "cache_key": str(action.get("cache_key") or "")[:160],
+            },
+        )
+    except Exception:
+        pass
+
+
 def _dispatch_pending_action(config: dict, action: dict) -> None:
     """Handle a single action-style pending entry. Routes by ``type``.
 
@@ -10100,6 +10135,12 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     atype = action.get("type")
     if atype not in _PENDING_ACTIONS:
         return
+    # Every cloud-relayed action lands in the local audit log first, accepted
+    # or refused, so a node owner can see exactly what the server asked of
+    # this machine without trusting the server's own record of it.
+    _audit_remote_action(atype, action,
+                         refused=(atype in _PROMPT_BEARING_ACTIONS
+                                  and not _remote_prompts_enabled(config)))
     if atype in _PROMPT_BEARING_ACTIONS and not _remote_prompts_enabled(config):
         log.warning(
             "Refusing relayed action %r: it would run a server-supplied prompt "
@@ -22190,11 +22231,19 @@ def _is_placeholder_email(email) -> bool:
     return e.endswith("@clawmetry.auto") or e.endswith("@clawmetry.linked")
 
 
-def _cloud_get_json(path: str, timeout: float = 4.0):
-    """Best-effort GET app.clawmetry.com<path> -> dict (or None). Never raises."""
+def _cloud_get_json(path: str, timeout: float = 4.0, api_key: str = ""):
+    """Best-effort GET app.clawmetry.com<path> -> dict (or None). Never raises.
+
+    The account key rides in the ``X-Api-Key`` header, never in ``path``: the
+    server records the request line, so a ``?token=`` query would write a
+    whole account credential into its access logs on every call. Callers
+    must not put the key in the query string themselves.
+    """
     try:
         import urllib.request as _ur
-        with _ur.urlopen(_APP_BASE + path, timeout=timeout) as r:
+        headers = {"X-Api-Key": api_key} if api_key else {}
+        req = _ur.Request(_APP_BASE + path, headers=headers, method="GET")
+        with _ur.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
     except Exception:
         return None
@@ -22221,7 +22270,7 @@ def start_claim_watcher(config: dict):
         if not token.startswith("cm_") or not node_id:
             return
         # Only watch placeholder accounts; a real account never gets "claimed".
-        acct = _cloud_get_json("/api/cloud/account?token=" + _up.quote(token))
+        acct = _cloud_get_json("/api/cloud/account", api_key=token)
         if not acct or not _is_placeholder_email(acct.get("email")):
             return
         log.info("Placeholder account — watching for a one-step account claim (every 5s)")
@@ -22229,8 +22278,8 @@ def start_claim_watcher(config: dict):
             time.sleep(5)
             try:
                 res = _cloud_get_json(
-                    "/api/cloud/claim-status?token=%s&node_id=%s"
-                    % (_up.quote(token), _up.quote(node_id)))
+                    "/api/cloud/claim-status?node_id=%s" % _up.quote(node_id),
+                    api_key=token)
                 if not res or not res.get("claimed"):
                     continue
                 new_key = (res.get("api_key") or "").strip()
