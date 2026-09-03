@@ -1602,15 +1602,31 @@ def _nemoclaw_onboard_trace() -> dict:
                     spans.extend(ss.get("spans", []))
 
         _STATUS_RANK = {"ERROR": 2, "UNSET": 1, "OK": 0}
+        # OTel status codes: 0 = UNSET, 1 = OK, 2 = ERROR (the JSON export
+        # writes ``{"code": N}``; some exporters write ``STATUS_CODE_OK``).
+        _CODE_TO_STATUS = {0: "UNSET", 1: "OK", 2: "ERROR"}
+
+        def _norm_status(raw) -> str:
+            if isinstance(raw, dict):
+                raw = raw.get("code", raw.get("status_code", "UNSET"))
+            if isinstance(raw, bool):
+                return "UNSET"
+            if isinstance(raw, (int, float)):
+                return _CODE_TO_STATUS.get(int(raw), "UNSET")
+            text = str(raw or "UNSET").upper().strip()
+            if text.startswith("STATUS_CODE_"):
+                text = text[len("STATUS_CODE_"):]
+            return text if text in _STATUS_RANK else "UNSET"
+
         worst_rank = -1
-        worst_status = "UNKNOWN"
+        worst_status = "UNSET"
         error_names: list = []
 
         for span in spans:
             if not isinstance(span, dict):
                 continue
-            status = str(span.get("status", "UNSET")).upper()
-            rank = _STATUS_RANK.get(status, 0)
+            status = _norm_status(span.get("status", "UNSET"))
+            rank = _STATUS_RANK[status]
             if rank > worst_rank:
                 worst_rank = rank
                 worst_status = status

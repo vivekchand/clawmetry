@@ -188,3 +188,39 @@ def test_resource_spans_camel_case_scope_spans(monkeypatch, tmp_path):
     result = oc._nemoclaw_onboard_trace()
     assert result["nemoclawOnboardTraceStatus"] == "OK"
     assert result["nemoclawOnboardTraceSpanCount"] == 1
+
+
+def test_otel_export_shape_with_status_code_objects(monkeypatch, tmp_path):
+    """Standard OTel JSON export: resource_spans/scope_spans and {code: N} status."""
+    trace_file = tmp_path / "trace.json"
+    data = {"resource_spans": [{"scope_spans": [{"spans": [
+        {"name": "nemoclaw.onboard.phase.gateway", "status": {"code": 1}},
+        {"name": "nemoclaw.onboard.phase.inference", "status": {"code": 2}},
+        {"name": "nemoclaw.onboard.phase.sandbox", "status": "STATUS_CODE_OK"},
+        {"name": "nemoclaw.onboard.phase.unknown", "status": "weird-value"},
+    ]}]}]}
+    with open(trace_file, "w") as fh:
+        json.dump(data, fh)
+    monkeypatch.setenv("NEMOCLAW_TRACE", "1")
+    monkeypatch.setenv("NEMOCLAW_TRACE_FILE", str(trace_file))
+    monkeypatch.delenv("NEMOCLAW_TRACE_DIR", raising=False)
+    oc = _reload_adapter()
+    out = oc._nemoclaw_onboard_trace()
+    assert out["nemoclawOnboardTraceStatus"] == "ERROR"
+    assert out["nemoclawOnboardTraceSpanCount"] == 4
+    assert out["nemoclawOnboardTraceErrors"] == ["nemoclaw.onboard.phase.inference"]
+
+
+def test_unrecognised_status_strings_report_unset_not_raw(monkeypatch, tmp_path):
+    """Status is always one of OK/ERROR/UNSET, never an arbitrary raw string."""
+    trace_file = tmp_path / "trace.json"
+    _write_trace(str(trace_file), [
+        {"name": "nemoclaw.onboard.phase.gateway", "status": "bogus"},
+    ])
+    monkeypatch.setenv("NEMOCLAW_TRACE", "1")
+    monkeypatch.setenv("NEMOCLAW_TRACE_FILE", str(trace_file))
+    monkeypatch.delenv("NEMOCLAW_TRACE_DIR", raising=False)
+    oc = _reload_adapter()
+    out = oc._nemoclaw_onboard_trace()
+    assert out["nemoclawOnboardTraceStatus"] == "UNSET"
+    assert "nemoclawOnboardTraceErrors" not in out
