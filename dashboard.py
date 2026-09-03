@@ -255,7 +255,7 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     over either format and there is no second mapping path to drift.
 
     Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
-    extra (a protobuf body, or JSON metrics); the HTTP layer turns that into
+    extra (a protobuf body); the HTTP layer turns that into
     501 with the install hint. Malformed bodies still raise (caller -> 400).
 
     OTLP/JSON traces and logs go through the stdlib decoder even when protobuf
@@ -270,7 +270,7 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     """
     ct = (content_type or "").lower()
     if ("application/json" in ct or "application/x-ndjson" in ct) and kind in (
-        "traces", "logs",
+        "traces", "logs", "metrics",
     ):
         from clawmetry.otlp_json import decode as _json_decode
         return _json_decode(pb_data, kind, content_encoding=content_encoding)
@@ -291,8 +291,8 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     from clawmetry.otlp_json import OtlpProtobufUnavailable
 
     raise OtlpProtobufUnavailable(
-        "this payload needs opentelemetry-proto; OTLP/JSON traces and logs "
-        "work without it (send Content-Type: application/json)"
+        "this payload needs opentelemetry-proto; OTLP/JSON traces, logs and "
+        "metrics work without it (send Content-Type: application/json)"
     )
 
 
@@ -2481,7 +2481,9 @@ def _get_dp_attrs(dp):
 
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP metrics protobuf/JSON and store relevant data."""
+    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
+    definition (search for "Claude Code native metrics (WO-57)") is the one
+    that runs. Edit that one."""
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
@@ -2707,7 +2709,9 @@ def _hex(b):
 
 
 def _otel_to_row(span, resource_attrs):
-    """Translate one OTel proto Span (plus its resource attributes) to the
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Translate one OTel proto Span (plus its resource attributes) to the
     dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
 
     Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
@@ -2993,7 +2997,9 @@ def _otel_to_row(span, resource_attrs):
 
 
 def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP traces protobuf and extract relevant span data.
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
     cache (the live dashboard's hot path — sub-second tiles for tokens /
@@ -11347,9 +11353,160 @@ def _get_dp_attrs(dp):
     return attrs
 
 
+# ── Runtime-profile metrics (WO-57) ─────────────────────────────────────────
+#
+# The receiver knows OpenTelemetry, not vendors. What a runtime calls its
+# counters (and which of them may touch a tile) arrives as an
+# ``OtelRuntimeProfile`` (clawmetry/otel_profiles.py): free runtimes register
+# from this repo, paid ones from clawmetry-pro. With no profile registered a
+# ``<vendor>.*`` metric is ignored exactly as before.
+#
+# Cost and input/output tokens for these runtimes ALSO arrive on the request
+# log record, which the logs path already turns into cost/usage tiles and
+# ``llm_call`` events. Feeding the same dollars in from a metric would double
+# the tile, so a profile's metrics are ledger-only, with one exception: the
+# ``tile_token_metric``'s typed points (cache reads / cache writes, which the
+# log record does not carry per type) reach the tokens cache.
+_OTEL_CUMULATIVE = 2  # AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE
+
+
+def _otel_profile_for_resource(resource_attrs):
+    """The registered profile for this emitter, or None."""
+    try:
+        from clawmetry import otel_profiles
+        return otel_profiles.by_service_name(
+            (resource_attrs or {}).get("service.name") or "")
+    except Exception:
+        return None
+
+
+def _dp_value_or_none(dp):
+    """The data point's number, or ``None`` when it carried none. Never turn
+    "absent" into ``0``: a zero that was sent is a fact, a zero we invented
+    is not (blueprint: no fabricated figures)."""
+    # protobuf NumberDataPoint: the number is a oneof; HasField on a name
+    # the message does not define RAISES, so ask the oneof by name first.
+    which = getattr(dp, "WhichOneof", None)
+    if callable(which):
+        try:
+            field = which("value")
+            if field == "as_int":
+                return int(dp.as_int)
+            if field == "as_double":
+                return float(dp.as_double)
+        except Exception:
+            pass
+    has = getattr(dp, "HasField", None)
+    if callable(has):
+        for name, cast in (("as_int", int), ("as_double", float),
+                           ("sum", float), ("count", int)):
+            try:
+                if has(name):
+                    return cast(getattr(dp, name))
+            except Exception:
+                continue
+        return None
+    try:
+        return _get_dp_value(dp)
+    except Exception:
+        return None
+
+
+def _metric_is_cumulative(metric):
+    try:
+        if metric.HasField("sum"):
+            t = getattr(metric.sum, "aggregation_temporality", 0)
+            return int(t or 0) == _OTEL_CUMULATIVE
+    except Exception:
+        pass
+    return False
+
+
+def _profile_metric_record_id(service_name, session_id, name, ts_ns, attrs, value):
+    import hashlib as _hl
+    parts = [str(service_name or ""), str(session_id or ""), str(name or ""),
+             str(ts_ns or 0), repr(value)]
+    for k in sorted(attrs):
+        parts.append("%s=%s" % (k, attrs[k]))
+    return _hl.sha256("\x1f".join(parts).encode("utf-8", "replace")).hexdigest()
+
+
+def _profile_metric(prof, name, metric, resource_attrs, rows):
+    """Map one profile-owned metric into tiles (typed token points only)
+    and ledger rows (every data point). Appends to ``rows``; a bad data
+    point is skipped, never raised."""
+    service_name = resource_attrs.get("service.name") or (prof.service_names or ("",))[0]
+    received_at = time.time()
+    # A CUMULATIVE sum re-sends the running total every interval; adding it
+    # to a tile would grow without bound. Anything cumulative is ledger-only.
+    cumulative = _metric_is_cumulative(metric)
+    for dp in _get_data_points(metric):
+        try:
+            attrs = _get_dp_attrs(dp)
+            value = _dp_value_or_none(dp)
+            ts_ns = int(getattr(dp, "time_unix_nano", 0) or 0)
+            ts = ts_ns / 1e9 if ts_ns > 0 else received_at
+            # Ledger rows keep the id as sent (REQ-OBS-006); nothing here
+            # writes events, so no prefixed form is needed.
+            session_id = (attrs.get("session.id")
+                          or resource_attrs.get("session.id") or None)
+            model = attrs.get("model") or resource_attrs.get("model") or ""
+            mtype = str(attrs.get("type") or "").strip().lower()
+            cache_field = (prof.token_type_fields or {}).get(mtype)
+            # The id first: the tile push below must be as idempotent as the
+            # ledger write, or a retried batch doubles the cache tokens.
+            rid = _profile_metric_record_id(
+                service_name, session_id, name, ts_ns, attrs, value)
+            if (prof.tile_token_metric and name == prof.tile_token_metric
+                    and cache_field and value is not None and not cumulative):
+                try:
+                    n = int(value)
+                except (TypeError, ValueError):
+                    n = 0
+                if n and not _otlp_seen(rid):
+                    # ``total`` stays 0: cache tokens are not fresh tokens
+                    # and must not inflate the tokens tile.
+                    _add_metric("tokens", {
+                        "timestamp": ts, "input": 0, "output": 0, "total": 0,
+                        cache_field: n, "model": model,
+                        "channel": "", "provider": "",
+                        "_source": name,
+                    })
+            rows.append({
+                "record_id": rid, "ts": ts, "received_at": received_at,
+                "event_name": name, "session_id": session_id,
+                "user_id": attrs.get("user.id") or resource_attrs.get("user.id"),
+                "user_email": (attrs.get("user.email")
+                               or resource_attrs.get("user.email")),
+                "org_id": (attrs.get("organization.id")
+                           or resource_attrs.get("organization.id")),
+                "team": (attrs.get("team.id") or resource_attrs.get("team.id")
+                         or resource_attrs.get("department")),
+                "repo": _otlp_repo_key(attrs.get("repository")
+                                       or resource_attrs.get("repository")),
+                "node_id": (resource_attrs.get("node.id")
+                            or resource_attrs.get("host.name") or "otlp"),
+                "agent_type": prof.runtime, "service_name": service_name,
+                "model": model or None, "provider": None,
+                # Cost / token COLUMNS stay empty on metric rows: the rollup
+                # sums those columns and the request log row already
+                # carries the same dollars. The value rides in attributes.
+                "cost_usd": None, "tokens_input": None, "tokens_output": None,
+                "token_count": None, "duration_ms": None,
+                "tool_name": attrs.get("tool_name"),
+                "decision": attrs.get("decision"),
+                "success": None,
+                "attributes": {"resource": resource_attrs, "record": attrs,
+                               "value": value, "metric": name},
+            })
+        except Exception:
+            continue
+
+
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
+    _prof_rows = []  # profile-owned ledger rows, one put_otlp_batch per POST
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -11362,6 +11519,15 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                 name = metric.name
                 ts = time.time()
 
+                _prof = None
+                try:
+                    from clawmetry import otel_profiles as _op
+                    _prof = _op.for_metric(name)
+                except Exception:
+                    _prof = None
+                if _prof is not None:
+                    _profile_metric(_prof, name, metric, resource_attrs, _prof_rows)
+                    continue
                 if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
@@ -11544,6 +11710,22 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                             },
                         )
 
+    if _prof_rows:
+        try:
+            from clawmetry import local_store as _ls
+            _st = _ls.get_store()
+            if _st is not None:
+                # Keyword args: the dashboard's _ProxyStore forwards **kwargs
+                # only (same foot-gun as put_span / put_otlp_batch below).
+                _st.put_otlp_batch(records=_prof_rows, events=[])
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "profile metrics ledger write failed: %s", e)
+            except Exception:
+                pass
+
 
 _OTEL_SPAN_KIND_NAMES = {
     0: "UNSPECIFIED",
@@ -11688,8 +11870,14 @@ def _otel_to_row(span, resource_attrs):
     # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
     # stored as typed columns — they ride the attributes blob — but read here
     # so the derived cost below is cache-aware (matches the #2049 event path).
-    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # A registered runtime profile may name these differently on its own
+    # spans (WO-57); the aliases are data, the mapping stays generic.
+    _prof = _otel_profile_for_resource(resource_attrs)
+    _al = (_prof.span_attr_aliases if _prof is not None else {}) or {}
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens",
+                           *(_al.get("cache_read") or ())) or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens",
+                            *(_al.get("cache_write") or ())) or 0
     # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
     provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
@@ -11715,7 +11903,8 @@ def _otel_to_row(span, resource_attrs):
         except Exception:
             pass
     # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
-    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function",
+                      *(_al.get("tool_name") or ()))
     # session/conversation: semconv uses gen_ai.conversation.id.
     session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
@@ -11731,6 +11920,11 @@ def _otel_to_row(span, resource_attrs):
         derived = _otlp_service_name_to_agent_type(service_name)
         agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
+    if _prof is not None and session_id and _prof.session_key_prefix:
+        # The daemon's key for this runtime's sessions (``<runtime>:<id>``),
+        # so the span joins the transcript session (WO-57). No profile: the
+        # span keeps the bare id, as before.
+        session_id = _prof.session_key(session_id)
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
@@ -11875,6 +12069,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
     # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
     _otlp_sessions_seen = {}
+    # WO-57: a runtime profile may name a span that means "blocked on a
+    # human" (``wait_span_suffix``). Those become ``waiting_on_user`` events
+    # on the session so turn anatomy can sum them.
+    _otlp_wait_events = []
+    _wait_tool_by_span = {}  # span_id -> tool_name, to name a wait by its parent
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -12001,7 +12200,50 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # sessions come from transcripts; only foreign apps
                         # need a span-derived sessions row.
                         _sid = _row.get("session_id")
-                        if _sid and (_row.get("agent_type") or "") != "openclaw":
+                        _atype = _row.get("agent_type") or ""
+                        _wprof = _otel_profile_for_resource(resource_attrs)
+                        _wsuf = (_wprof.wait_span_suffix if _wprof is not None else "") or ""
+                        if _wprof is not None and _row.get("tool_name"):
+                            _wait_tool_by_span[str(_hex(span.span_id))] = _row.get("tool_name")
+                        if (_wsuf and _sid
+                                and span.name.lower().endswith(_wsuf.lower())):
+                            try:
+                                _dur_ms = max(0.0, (span.end_time_unix_nano
+                                                    - span.start_time_unix_nano) / 1e6)
+                                _st_s = (span.start_time_unix_nano or 0) / 1e9 or time.time()
+                                _otlp_wait_events.append({
+                                    "id": "otlp:span:" + str(_hex(span.span_id)),
+                                    "node_id": _row.get("node_id") or "otlp",
+                                    "agent_type": _wprof.runtime,
+                                    "agent_id": _row.get("agent_id") or "main",
+                                    "session_id": str(_sid),
+                                    "ts": datetime.fromtimestamp(
+                                        _st_s, timezone.utc).isoformat(),
+                                    "runtime_kind": _wprof.runtime,
+                                    "event_type": "waiting_on_user",
+                                    "data": {
+                                        "tool": _row.get("tool_name")
+                                        or attrs.get("tool_name"),
+                                        "duration_ms": _dur_ms,
+                                        "_otlp": True,
+                                    },
+                                    "_parent_span": str(_hex(span.parent_span_id)),
+                                })
+                            except Exception:
+                                pass
+                        # Claude Code spans go through the materializer too:
+                        # on a daemon machine the transcript row already
+                        # exists under the same ``claude_code:<uuid>`` key
+                        # and is left alone (its source is not otlp_spans);
+                        # on a daemon-free machine this is the only way the
+                        # session reaches the Sessions tab (WO-57 ADR-003).
+                        # A profiled runtime's spans go through the
+                        # materializer like any other app: on a daemon machine
+                        # the transcript row already exists under the same
+                        # ``<runtime>:<id>`` key and is left alone (its source
+                        # is not otlp_spans); on a daemon-free machine this is
+                        # the only way the session reaches the Sessions tab.
+                        if _sid and _atype != "openclaw":
                             _env = (_row.get("attributes") or {}).get(
                                 "deployment.environment")
                             if _env or str(_sid) not in _otlp_sessions_seen:
@@ -12014,6 +12256,39 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             )
                         except Exception:
                             pass
+
+    if _store is not None and _otlp_wait_events:
+        # A wait span may carry no tool name of its own (measured live); its
+        # parent tool span does.
+        for _wev in _otlp_wait_events:
+            _parent = _wev.pop("_parent_span", None)
+            if _wev["data"].get("tool") or not _parent:
+                continue
+            if _parent in _wait_tool_by_span:
+                _wev["data"]["tool"] = _wait_tool_by_span[_parent]
+                continue
+            # The wait ends before its parent tool span does, so a batching
+            # exporter routinely ships them in different POSTs. Events are
+            # insert-or-ignore and cannot be back-filled, so ask the store
+            # for the parent (one read per unresolved wait, rare).
+            try:
+                _prow = _store.query_spans(span_id=_parent, limit=1)
+                if isinstance(_prow, dict):
+                    _prow = _prow.get("result") or _prow.get("rows") or []
+                if _prow and (_prow[0].get("tool_name")):
+                    _wev["data"]["tool"] = _prow[0]["tool_name"]
+                    _wait_tool_by_span[_parent] = _prow[0]["tool_name"]
+            except Exception:
+                pass
+        try:
+            _store.put_otlp_batch(records=[], events=_otlp_wait_events)
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "waiting_on_user events write failed: %s", e)
+            except Exception:
+                pass
 
     # One materialization call per export batch (not per span — get_store()
     # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
@@ -12059,6 +12334,35 @@ _OTLP_TOOL_CALL_EVENTS = frozenset(
 _OTLP_TOOL_RESULT_EVENTS = frozenset(
     {"tool_result", "tool_use_result"}
 )
+
+# WO-57: events a runtime's exporter sends that the transcript never
+# carries (permission-mode changes, refusals, MCP health, ...). WHICH names
+# and WHICH fields come from the runtime's registered profile; each becomes
+# an ``events`` row of the same suffix, fields copied by name, never
+# invented. Free text (``prompt`` / ``response``) is capped and tagged.
+_OTLP_TEXT_CAP = 4000
+
+
+def _otlp_typed_event_data(prof, suffix, attrs, pick):
+    out = {}
+    text_fields = tuple(getattr(prof, "text_fields", ()) or ())
+    for k in (prof.typed_events or {}).get(suffix, ()):
+        v = pick(attrs, k)
+        if v is None:
+            continue
+        if k in text_fields:
+            # Only present when the user opted into content export. Capped,
+            # and tagged so a reader (cloud sync, Brain) can exclude it.
+            txt = str(v)
+            if txt == "<REDACTED>":
+                continue
+            out[k] = txt[:_OTLP_TEXT_CAP]
+            out["has_content"] = True
+            if len(txt) > _OTLP_TEXT_CAP:
+                out[k + "_truncated"] = True
+            continue
+        out[k.replace(".", "_")] = v
+    return out
 
 
 # Record ids the live metrics cache has already counted. OTLP delivery is
@@ -12336,6 +12640,14 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     # therefore the join between two vendors' telemetry.
                     "cursor.conversation.id",
                 )
+                # The LEDGER keeps the session id exactly as sent (REQ-OBS-006:
+                # retain identity, derive nothing). EVENTS use the daemon's
+                # key, ``claude_code:<uuid>``, so they join the transcript
+                # session and bucket under the right runtime (WO-57).
+                ledger_session_id = session_id
+                _prof = _otel_profile_for_resource(resource_attrs)
+                if _prof is not None and session_id and _prof.session_key_prefix:
+                    session_id = _prof.session_key(session_id)
                 user_id = _pick(
                     "user.id", "user.account_uuid", "enduser.id", "user_id",
                 )
@@ -12367,7 +12679,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                 suffix = _otlp_event_suffix(event_name)
 
                 record_id = _otlp_record_id(
-                    service_name, session_id, event_name, rec, attrs
+                    service_name, ledger_session_id, event_name, rec, attrs
                 )
                 # The tiles must not count a retried batch twice. The DuckDB
                 # write below is idempotent on record_id; this is the same
@@ -12477,7 +12789,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     "ts": ts,
                     "received_at": received_at,
                     "event_name": event_name or suffix or "log",
-                    "session_id": session_id,
+                    "session_id": ledger_session_id,
                     "user_id": user_id,
                     "user_email": user_email,
                     "org_id": org_id,
@@ -12529,6 +12841,22 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     if str(decision or "").strip().lower() in (
                         "reject", "rejected", "deny", "denied",
                     ):
+                        # WO-57: keep the fact that a human (or a hook, or
+                        # config) said no, as its own event. Still never a
+                        # tool CALL: the tool did not run.
+                        if _prof is None:
+                            continue
+                        ev = dict(ev_common)
+                        ev["id"] = "otlp:" + record_id
+                        ev["event_type"] = "tool_decision"
+                        ev["data"] = {
+                            "tool": str(tool_name), "decision": decision,
+                            "source": _f(attrs, "source", "tool.source",
+                                         "decision_source"),
+                            "tool_source": _f(attrs, "tool_source"),
+                            "_otlp": True,
+                        }
+                        out_events.append(ev)
                         continue
                     args = _f(attrs, "tool_parameters", "tool.parameters",
                               "arguments", "input")
@@ -12552,6 +12880,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     ev["event_type"] = "tool_call"
                     ev["data"] = {
                         "tool": str(tool_name),
+                        "tool_name": str(tool_name),
                         "args": args,
                         "decision": decision,
                         "source": _f(attrs, "source", "tool.source"),
@@ -12565,11 +12894,21 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     ev["event_type"] = "tool_result"
                     ev["data"] = {
                         "tool": str(tool_name),
+                        "tool_name": str(tool_name),
                         "is_error": (success is False) or bool(err_text),
                         "error": err_text,
                         "duration_ms": dur_val,
                         "_otlp": True,
                     }
+                    out_events.append(ev)
+                elif _prof is not None and suffix in (_prof.typed_events or {}):
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = suffix
+                    ev["data"] = _otlp_typed_event_data(_prof, suffix, attrs, _f)
+                    ev["data"]["_otlp"] = True
+                    if model:
+                        ev["model"] = model
                     out_events.append(ev)
                 elif cost_val is not None or tin is not None:
                     # The money records (api_request). Landing them in events
@@ -12592,6 +12931,10 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "duration_ms": dur_val,
                         "_otlp": True,
                     }
+                    for _k, _dk in ((_prof.llm_extra_fields or ()) if _prof is not None else ()):
+                        _v = _f(attrs, _k)
+                        if _v is not None:
+                            ev["data"][_dk] = _v
                     out_events.append(ev)
 
     if _store is not None and (out_records or out_events):
@@ -12629,6 +12972,8 @@ def _get_otel_usage_data():
     daily_cost = {}
     model_usage = {}
 
+    cache_read_total = 0
+    cache_write_total = 0
     with _metrics_lock:
         for entry in metrics_store["tokens"]:
             ts = entry.get("timestamp", 0)
@@ -12637,6 +12982,10 @@ def _get_otel_usage_data():
             daily_tokens[day] = daily_tokens.get(day, 0) + total
             model = entry.get("model", "unknown") or "unknown"
             model_usage[model] = model_usage.get(model, 0) + total
+            # Prompt-cache tokens by kind (Claude Code metrics, WO-57); same
+            # field names as the transcript path.
+            cache_read_total += int(entry.get("cache_read_tokens") or 0)
+            cache_write_total += int(entry.get("cache_write_tokens") or 0)
 
         for entry in metrics_store["cost"]:
             ts = entry.get("timestamp", 0)
@@ -12695,6 +13044,8 @@ def _get_otel_usage_data():
         "today": today_tok,
         "week": week_tok,
         "month": month_tok,
+        "cacheReadTokens": cache_read_total,
+        "cacheWriteTokens": cache_write_total,
         "todayCost": round(today_cost_val, 4),
         "weekCost": round(week_cost_val, 4),
         "monthCost": round(month_cost_val, 4),
