@@ -7424,7 +7424,8 @@ var _channelDisplayNames = {
   'tui':        'TUI',
   'synologychat': 'Synology Chat',
   'nextcloudtalk': 'Nextcloud Talk',
-  'clickclack':    'ClickClack'
+  'clickclack':    'ClickClack',
+  'fish-audio':    'Fish Audio'
 };
 
 function _channelDisplayName(provider) {
