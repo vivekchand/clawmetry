@@ -36,7 +36,8 @@ OTLP/JSON traces, logs **and metrics** work on a plain `pip install clawmetry`, 
     "OTEL_TRACES_EXPORTER": "otlp",
     "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta"
   }
 }
 ```

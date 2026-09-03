@@ -1370,8 +1370,9 @@ def _claude_code_exporter_status():
     """``{configured, settings_path, endpoint, content, last_batch_ts,
     last_batch_age_s, records}`` for the Claude Code native exporter.
     ``last_batch_*`` are ``None`` when the store could not be asked."""
-    out = {"configured": False, "settings_path": None, "endpoint": None,
-           "content": False, "telemetry_enabled": False,
+    # ``configured`` starts as None: "could not ask" is not "no".
+    out = {"configured": None, "settings_path": None, "endpoint": None,
+           "content": False, "telemetry_enabled": None,
            "last_batch_ts": None, "last_batch_age_s": None, "records": None}
     try:
         from clawmetry.instrument_claude import status as _instr_status

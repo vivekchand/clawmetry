@@ -207,10 +207,15 @@ def test_cache_token_types_land_in_cache_fields_and_ledger(store, client):
     assert r.status_code == 200, r.get_data(as_text=True)
 
     toks = _d.metrics_store["tokens"]
-    assert sum(t.get("cache_read", 0) for t in toks) == 42000
-    assert sum(t.get("cache_write", 0) for t in toks) == 7000
+    # Same field names the transcript path writes; ``total`` stays 0 so the
+    # tokens tile does not count cache reads as fresh tokens.
+    assert sum(t.get("cache_read_tokens", 0) for t in toks) == 42000
+    assert sum(t.get("cache_write_tokens", 0) for t in toks) == 7000
+    assert sum(t.get("total", 0) for t in toks) == 0
     assert sum(t.get("input", 0) for t in toks) == 0, "input tokens are ledger-only on the metric path"
     assert _d.metrics_store["cost"] == [], "cost.usage never feeds the cost tile (api_request does)"
+    usage = _d._get_otel_usage_data()
+    assert usage["cacheReadTokens"] == 42000 and usage["cacheWriteTokens"] == 7000
 
     rows = store.query_otlp_records(limit=100)
     if isinstance(rows, dict):
@@ -226,11 +231,38 @@ def test_cache_token_types_land_in_cache_fields_and_ledger(store, client):
     assert all(r.get("cost_usd") in (None, 0, 0.0) for r in rows), "metric rows must not carry cost columns"
     edit = [r for r in rows if r["event_name"] == "claude_code.code_edit_tool.decision"][0]
     assert edit["tool_name"] == "Edit" and edit["decision"] == "accept"
-    # Retry is a replace, not an add.
+    # Retry is a replace, not an add: ledger AND tile.
     n_before = store.count_otlp_records()
-    c.post("/v1/metrics", data=_metrics_payload([
-        _metric("claude_code.commit.count", [(1, {})])]), content_type="application/json")
-    assert store.count_otlp_records() >= n_before
+    payload = _metrics_payload([
+        _metric("claude_code.token.usage", [(5000, {"type": "cacheRead", "model": "m"})])])
+    c.post("/v1/metrics", data=payload, content_type="application/json")
+    c.post("/v1/metrics", data=payload, content_type="application/json")
+    assert store.count_otlp_records() == n_before + 1
+    assert sum(t.get("cache_read_tokens", 0) for t in _d.metrics_store["tokens"]) == 47000
+
+
+def test_cumulative_sums_and_absent_values_never_reach_a_tile(store, client):
+    """AC-RSO-CCT-001.4 -- a CUMULATIVE token sum is ledger-only (a running
+    total must not be added every interval); a data point with no number is
+    stored with value null, never 0.
+
+    AC-RSO-CCT-001.4
+    """
+    c, _ = client
+    cumulative = _metric("claude_code.token.usage", [(99999, {"type": "cacheRead", "model": "m"})])
+    cumulative["sum"]["aggregationTemporality"] = "AGGREGATION_TEMPORALITY_CUMULATIVE"
+    empty = {"name": "claude_code.commit.count", "sum": {"dataPoints": [
+        {"timeUnixNano": str(int(time.time() * 1e9)), "attributes": _ident()}]}}
+    r = c.post("/v1/metrics", data=_metrics_payload([cumulative, empty]),
+               content_type="application/json")
+    assert r.status_code == 200
+    assert _d.metrics_store["tokens"] == []
+    rows = store.query_otlp_records(limit=10)
+    if isinstance(rows, dict):
+        rows = rows.get("result") or rows.get("rows") or []
+    by = {r["event_name"]: r for r in rows}
+    assert by["claude_code.token.usage"]["attributes"]["value"] == 99999
+    assert by["claude_code.commit.count"]["attributes"]["value"] is None
 
 
 # ── AC-RSO-CCT-001.5: typed events ──────────────────────────────────────────
@@ -270,6 +302,18 @@ def test_typed_claude_code_events_are_persisted_with_their_fields(store):
     assert _data(by_type["mcp_server_connection"][0])["server_name"] == "github"
     assert _data(by_type["user_prompt"][0])["prompt_length"] == 88
     assert "prompt" not in _data(by_type["user_prompt"][0]), "no prompt text unless the exporter sent it"
+    # With content on, text is kept (capped) and the row is tagged; the
+    # literal "<REDACTED>" Claude Code sends when content is off is dropped.
+    _d._process_otlp_logs(_logs_payload([
+        _log("claude_code.user_prompt", now + 20, prompt_length=5000, prompt="x" * 5000),
+        _log("claude_code.assistant_response", now + 21, response_length=4, response="<REDACTED>"),
+    ]), content_type="application/json")
+    ups = [e for e in _events(store, _STORED) if e["event_type"] == "user_prompt"]
+    tagged = [e for e in ups if _data(e).get("content")]
+    assert len(tagged) == 1 and len(_data(tagged[0])["prompt"]) == 4000
+    assert _data(tagged[0])["prompt_truncated"] is True
+    resp = [e for e in _events(store, _STORED) if e["event_type"] == "assistant_response"]
+    assert all("response" not in _data(e) for e in resp)
     # Rejected decision: recorded as tool_decision, NOT as a tool_call.
     rejected = [e for e in by_type.get("tool_decision", [])]
     assert len(rejected) == 1 and _data(rejected[0])["source"] == "user_reject"
@@ -330,6 +374,16 @@ def test_tracing_beta_spans_carry_tokens_tool_names_and_waiting_time(store):
     ]), content_type="application/json")
     waits = [e for e in _events(store, _STORED) if e["event_type"] == "waiting_on_user"]
     assert sorted(_data(w)["tool"] for w in waits) == ["Bash", "Edit"]
+    # And when the parent shipped in an EARLIER batch (the wait ends before
+    # its parent, so batching exporters split them), the store answers.
+    _d._process_otlp_traces(_traces_payload([
+        _span("claude_code.tool", t0 + 10000 * ms, t0 + 12000 * ms, "88" * 8, parent="11" * 8, tool_name="Write"),
+    ]), content_type="application/json")
+    _d._process_otlp_traces(_traces_payload([
+        _span("claude_code.tool.blocked_on_user", t0 + 10000 * ms, t0 + 10800 * ms, "99" * 8, parent="88" * 8),
+    ]), content_type="application/json")
+    waits = [e for e in _events(store, _STORED) if e["event_type"] == "waiting_on_user"]
+    assert sorted(_data(w)["tool"] for w in waits) == ["Bash", "Edit", "Write"]
 
     sessions = store.list_sessions(limit=50) if hasattr(store, "list_sessions") else []
     if isinstance(sessions, dict):
@@ -359,6 +413,35 @@ def test_turn_anatomy_sums_waiting_on_you_per_turn():
     assert [s for s in turns[0]["spans"] if s["kind"] == "wait"][0]["label"].startswith("waiting on you")
     rows_no_wait = [r for r in rows if r["event_type"] != "waiting_on_user"]
     assert _build_turns(rows_no_wait)[0]["waiting_on_you_ms"] is None
+
+
+def test_turn_anatomy_daemon_free_session_splits_on_user_prompt_and_shows_markers():
+    """AC-RSO-CCT-001.6 -- with no transcript prompt (daemon-free machine)
+    the Claude Code ``user_prompt`` event is the turn boundary, an
+    ``api_error`` / rejected decision shows as a zero-width marker, and a
+    session that HAS transcript prompts ignores ``user_prompt`` entirely.
+
+    AC-RSO-CCT-001.6
+    """
+    from routes.turn_anatomy import _build_turns
+    t = 1_700_000_000_000
+    free = [
+        {"event_type": "user_prompt", "ts": t, "data": {"prompt_length": 72, "_otlp": True}},
+        {"event_type": "llm_call", "ts": t + 100, "data": {"model": "m"}, "model": "m"},
+        {"event_type": "api_error", "ts": t + 200, "data": {"status_code": 529, "error": "overloaded"}},
+        {"event_type": "tool_decision", "ts": t + 300, "data": {"tool": "Bash", "decision": "reject", "source": "user_reject"}},
+        {"event_type": "user_prompt", "ts": t + 5000, "data": {"prompt_length": 10, "_otlp": True}},
+        {"event_type": "llm_call", "ts": t + 5100, "data": {"model": "m"}, "model": "m"},
+    ]
+    turns = _build_turns(free)
+    assert len(turns) == 2
+    assert turns[0]["prompt"] == "prompt (72 chars)"
+    kinds = [s["kind"] for s in turns[0]["spans"]]
+    assert kinds.count("marker") == 2 and "model" in kinds
+    labels = [s["label"] for s in turns[0]["spans"] if s["kind"] == "marker"]
+    assert "API error 529" in labels and "Bash reject by user_reject" in labels
+    owned = [{"event_type": "prompt.submitted", "ts": t, "data": {"finalPromptText": "real"}}] + free[1:]
+    assert len(_build_turns(owned)) == 1, "user_prompt never splits a transcript-owned session"
 
 
 # ── AC-RSO-CCT-001.7: one session, two sources ──────────────────────────────

@@ -350,9 +350,15 @@ class _NumberDataPoint:
     number; both aliases and both spellings are accepted.
     """
     __slots__ = ("as_int", "as_double", "sum", "count", "attributes",
-                 "time_unix_nano", "start_time_unix_nano")
+                 "time_unix_nano", "start_time_unix_nano", "_present")
 
     def __init__(self, raw: dict):
+        self._present = {
+            "as_int": _get(raw, "asInt", "as_int") is not None,
+            "as_double": _get(raw, "asDouble", "as_double") is not None,
+            "sum": raw.get("sum") is not None,
+            "count": raw.get("count") is not None,
+        }
         self.as_int = _as_int(_get(raw, "asInt", "as_int"))
         d = _get(raw, "asDouble", "as_double")
         try:
@@ -370,14 +376,30 @@ class _NumberDataPoint:
         self.start_time_unix_nano = _as_int(
             _get(raw, "startTimeUnixNano", "start_time_unix_nano"))
 
+    def HasField(self, name: str) -> bool:  # noqa: N802 - mirrors the proto API
+        return bool(self._present.get(name))
+
+
+_AGG_TEMPORALITY = {
+    "AGGREGATION_TEMPORALITY_UNSPECIFIED": 0,
+    "AGGREGATION_TEMPORALITY_DELTA": 1,
+    "AGGREGATION_TEMPORALITY_CUMULATIVE": 2,
+}
+
 
 class _MetricData:
-    """The ``sum`` / ``gauge`` / ``histogram`` / ``summary`` container."""
-    __slots__ = ("data_points",)
+    """The ``sum`` / ``gauge`` / ``histogram`` / ``summary`` container.
+    ``aggregation_temporality`` is kept (sum / histogram) so the mapper can
+    refuse to add a CUMULATIVE running total to a tile."""
+    __slots__ = ("data_points", "aggregation_temporality", "is_monotonic")
 
     def __init__(self, raw: dict):
         pts = _get(raw, "dataPoints", "data_points", default=[]) or []
         self.data_points = [_NumberDataPoint(x) for x in pts if isinstance(x, dict)]
+        self.aggregation_temporality = _as_enum(
+            _get(raw, "aggregationTemporality", "aggregation_temporality"),
+            _AGG_TEMPORALITY)
+        self.is_monotonic = bool(_get(raw, "isMonotonic", "is_monotonic", default=False))
 
 
 class _Metric:

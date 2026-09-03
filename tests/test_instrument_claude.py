@@ -274,3 +274,166 @@ def test_docs_name_the_real_variable():
     assert "clawmetry instrument claude" in otel
     for k in ic.base_env("x"):
         assert k in otel, k
+
+
+# ── review round 1 findings (2026-09-03) ────────────────────────────────────
+
+def test_user_and_project_installs_have_separate_records(paths, tmp_path):
+    """A user-level install and a --project install coexist; uninstalling one
+    never touches the other, and a value the user set in the project file
+    is a conflict, not something a prior user-level record can claim.
+
+    AC-RSO-CCT-001.1
+    """
+    user, marker = paths
+    proj = str(tmp_path / "proj" / ".claude" / "settings.json")
+    os.makedirs(os.path.dirname(proj))
+    with open(proj, "w") as f:
+        json.dump({"env": {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:8900"}}, f)
+    ic.install(user, probe=_probe(port=8900), managed={}, marker_path=marker)
+    res = ic.install(proj, probe=_probe(port=4318), managed={}, marker_path=marker)
+    assert [c["key"] for c in res["conflicts"]] == ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+    assert _read(proj)["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:8900"
+    # Both records exist, keyed by file.
+    assert set(ic._read_marker_all(marker)) == {ic._norm(user), ic._norm(proj)}
+    # Uninstalling the user file removes only its own keys.
+    res = ic.uninstall(user, marker_path=marker)
+    assert res["status"] == "uninstalled"
+    assert "env" not in _read(user)
+    penv = _read(proj)["env"]
+    assert penv["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:8900"
+    assert penv["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+    # A file we have no record of is refused, and the other install named.
+    res = ic.uninstall(str(tmp_path / "nowhere.json"), marker_path=marker)
+    assert res["status"] == "not_installed"
+    assert res["other_installs"] == [ic._norm(proj)]
+
+
+def test_corrupt_settings_or_marker_never_crash_and_never_overwrite(paths):
+    """A settings file that is not JSON: install refuses without writing,
+    status and uninstall report rather than traceback. A corrupt marker is
+    treated as no record.
+
+    AC-RSO-CCT-001.1
+    """
+    settings, marker = paths
+    with open(settings, "w") as f:
+        f.write("{ this is not json")
+    before = open(settings).read()
+    res = ic.install(settings, probe=_probe(), managed={}, marker_path=marker)
+    assert res["status"] == "error" and res["reason"] == "settings_unreadable"
+    assert open(settings).read() == before
+    st = ic.status(settings, marker_path=marker, probe=False)
+    assert st["configured"] is False and st["unreadable"]
+    assert ic.uninstall(settings, marker_path=marker)["status"] == "not_installed"
+    with open(marker, "w") as f:
+        f.write("garbage")
+    assert ic.status(settings, marker_path=marker, probe=False)["configured"] is False
+    assert ic.uninstall(settings, marker_path=marker)["status"] == "not_installed"
+
+
+def test_non_object_env_is_refused(paths):
+    """AC-RSO-CCT-001.1 -- an ``env`` that is not an object is a user value;
+    refuse rather than replace it.
+
+    AC-RSO-CCT-001.1
+    """
+    settings, marker = paths
+    with open(settings, "w") as f:
+        json.dump({"env": "weird"}, f)
+    res = ic.install(settings, probe=_probe(), managed={}, marker_path=marker)
+    assert res["status"] == "refused" and res["reason"] == "env_not_object"
+    assert _read(settings) == {"env": "weird"}
+
+
+def test_windows_managed_settings_path_is_the_one_claude_code_reads():
+    """AC-RSO-CCT-001.3 -- Claude Code reads managed settings from
+    %ProgramFiles%\\ClaudeCode on Windows (not the legacy ProgramData
+    location); the lock check must look there, plus managed-settings.d.
+
+    AC-RSO-CCT-001.3
+    """
+    cands = ic.managed_candidates("Windows")
+    assert any("Program Files" in c and c.endswith("managed-settings.json") for c in cands), cands
+    assert ic.managed_candidates("Darwin")[0] == \
+        "/Library/Application Support/ClaudeCode/managed-settings.json"
+    assert ic.managed_candidates("Linux")[0] == "/etc/claude-code/managed-settings.json"
+
+
+def test_managed_settings_d_fragment_locks_too(paths, tmp_path):
+    """AC-RSO-CCT-001.3 -- a fragment under managed-settings.d that pins
+    the destination counts as a lock.
+
+    AC-RSO-CCT-001.3
+    """
+    settings, marker = paths
+    frag_dir = tmp_path / "managed-settings.d"
+    frag_dir.mkdir()
+    with open(frag_dir / "10-otel.json", "w") as f:
+        json.dump({"env": {"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer x"}}, f)
+    lock = ic.managed_lock([str(tmp_path / "managed-settings.json"),
+                            str(frag_dir / "10-otel.json")])
+    assert lock and lock["keys"] == ["OTEL_EXPORTER_OTLP_HEADERS"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink semantics differ on Windows")
+def test_symlinked_settings_file_is_written_through(paths, tmp_path):
+    """AC-RSO-CCT-001.1 -- a dotfiles symlink stays a symlink; the block
+    lands in the real file.
+
+    AC-RSO-CCT-001.1
+    """
+    _, marker = paths
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    with open(real, "w") as f:
+        json.dump({"model": "opus"}, f)
+    link = tmp_path / "settings.json"
+    os.symlink(str(real), str(link))
+    res = ic.install(str(link), probe=_probe(), managed={}, marker_path=marker)
+    assert res["status"] == "installed"
+    assert os.path.islink(str(link))
+    assert _read(str(real))["env"]["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+    ic.uninstall(str(link), marker_path=marker)
+    assert _read(str(real)) == {"model": "opus"}
+
+
+def test_explicit_endpoint_message_does_not_tell_user_to_start_clawmetry(paths, capsys, monkeypatch):
+    """AC-RSO-CCT-001.1 -- with --endpoint pointing at a non-ClawMetry
+    collector, the probe cannot confirm and the output says that, not
+    "start clawmetry".
+
+    AC-RSO-CCT-001.1
+    """
+    settings, marker = paths
+    monkeypatch.setattr(ic, "_url_alive", lambda *a, **k: False)
+    monkeypatch.setattr(ic, "_SETTINGS_PATH", settings)
+    monkeypatch.setattr(ic, "_MARKER_PATH", marker)
+    monkeypatch.setattr(ic, "managed_lock", lambda paths=None: None)
+    assert ic.cli_main(["claude", "--endpoint", "https://collector.corp"]) == 0
+    out = capsys.readouterr().out
+    assert "could not confirm a ClawMetry receiver" in out
+    assert "start `clawmetry`" not in out
+    assert _read(settings)["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://collector.corp"
+    assert _read(settings)["env"]["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] == "delta"
+
+
+def test_status_without_path_reports_any_intact_install(paths, tmp_path, monkeypatch):
+    """AC-RSO-CCT-001.8 -- a project-only install still reads as configured
+    from another cwd, with the user-level file reported first when both
+    exist.
+
+    AC-RSO-CCT-001.8
+    """
+    user, marker = paths
+    monkeypatch.setattr(ic, "_SETTINGS_PATH", user)
+    proj = str(tmp_path / "proj" / ".claude" / "settings.json")
+    os.makedirs(os.path.dirname(proj))
+    ic.install(proj, probe=_probe(), managed={}, marker_path=marker)
+    st = ic.status(marker_path=marker, probe=False)
+    assert st["configured"] is True
+    assert st["settings_path"] == ic._norm(proj)
+    ic.install(user, probe=_probe(port=8900), managed={}, marker_path=marker)
+    st = ic.status(marker_path=marker, probe=False)
+    assert st["settings_path"] == ic._norm(user)
+    assert {i["settings_path"] for i in st["installs"]} == {ic._norm(user), ic._norm(proj)}

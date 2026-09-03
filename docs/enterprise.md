@@ -102,6 +102,7 @@ export OTEL_METRICS_EXPORTER=otlp            # token / cost / lines-of-code coun
 export OTEL_TRACES_EXPORTER=otlp             # spans (needs the beta flag below)
 export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/json # REQUIRED: Claude Code has no default protocol
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://clawmetry.internal.example
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $CLAWMETRY_GATEWAY_TOKEN"
 # Optional, and what makes the rollups useful:

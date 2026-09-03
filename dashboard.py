@@ -11367,10 +11367,47 @@ def _get_dp_attrs(dp):
 #   * everything else (session / lines_of_code / commit / pull_request /
 #     active_time / code_edit_tool.decision) -> ledger only, one row per
 #     data point, ``event_name`` = the metric name
+# Same spelling the transcript path uses (``_extract_usage_metrics``), so a
+# reader that sums cache tokens sees one field per kind, not two.
 _CC_TOKEN_TYPE_FIELDS = {
-    "cacheread": "cache_read", "cache_read": "cache_read",
-    "cachecreation": "cache_write", "cache_creation": "cache_write",
+    "cacheread": "cache_read_tokens", "cache_read": "cache_read_tokens",
+    "cachecreation": "cache_write_tokens", "cache_creation": "cache_write_tokens",
 }
+_OTEL_CUMULATIVE = 2  # AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE
+
+
+def _dp_value_or_none(dp):
+    """The data point's number, or ``None`` when it carried none. Never turn
+    "absent" into ``0``: a zero that was sent is a fact, a zero we invented
+    is not (blueprint: no fabricated figures)."""
+    has = getattr(dp, "HasField", None)
+    try:
+        if callable(has):
+            if has("as_int"):
+                return int(dp.as_int)
+            if has("as_double"):
+                return float(dp.as_double)
+            if has("sum"):
+                return float(dp.sum)
+            if has("count"):
+                return int(dp.count)
+            return None
+    except Exception:
+        pass
+    try:
+        return _get_dp_value(dp)
+    except Exception:
+        return None
+
+
+def _metric_is_cumulative(metric):
+    try:
+        if metric.HasField("sum"):
+            t = getattr(metric.sum, "aggregation_temporality", 0)
+            return int(t or 0) == _OTEL_CUMULATIVE
+    except Exception:
+        pass
+    return False
 
 
 def _cc_session_id(raw):
@@ -11398,13 +11435,14 @@ def _cc_metric(name, metric, resource_attrs, rows):
     skipped, never raised."""
     service_name = resource_attrs.get("service.name") or "claude-code"
     received_at = time.time()
+    # A CUMULATIVE sum re-sends the running total every interval; adding it
+    # to a tile would grow without bound. Claude Code defaults to delta and
+    # the instrument command pins that; anything else is ledger-only.
+    cumulative = _metric_is_cumulative(metric)
     for dp in _get_data_points(metric):
         try:
             attrs = _get_dp_attrs(dp)
-            try:
-                value = _get_dp_value(dp)
-            except Exception:
-                value = 0
+            value = _dp_value_or_none(dp)
             ts_ns = int(getattr(dp, "time_unix_nano", 0) or 0)
             ts = ts_ns / 1e9 if ts_ns > 0 else received_at
             # Ledger rows keep the id as sent (REQ-OBS-006); nothing here
@@ -11414,20 +11452,25 @@ def _cc_metric(name, metric, resource_attrs, rows):
             model = attrs.get("model") or resource_attrs.get("model") or ""
             mtype = str(attrs.get("type") or "").strip()
             cache_field = _CC_TOKEN_TYPE_FIELDS.get(mtype.lower())
-            if name == "claude_code.token.usage" and cache_field:
+            # The id first: the tile push below must be as idempotent as the
+            # ledger write, or a retried batch doubles the cache tokens.
+            rid = _cc_metric_record_id(
+                service_name, session_id, name, ts_ns, attrs, value)
+            if (name == "claude_code.token.usage" and cache_field
+                    and value is not None and not cumulative):
                 try:
-                    n = int(value or 0)
+                    n = int(value)
                 except (TypeError, ValueError):
                     n = 0
-                if n:
+                if n and not _otlp_seen(rid):
+                    # ``total`` stays 0: cache tokens are not fresh tokens
+                    # and must not inflate the tokens tile.
                     _add_metric("tokens", {
-                        "timestamp": ts, "input": 0, "output": 0, "total": n,
+                        "timestamp": ts, "input": 0, "output": 0, "total": 0,
                         cache_field: n, "model": model,
                         "channel": "", "provider": "anthropic",
                         "_source": "claude_code.token.usage",
                     })
-            rid = _cc_metric_record_id(
-                service_name, session_id, name, ts_ns, attrs, value)
             rows.append({
                 "record_id": rid, "ts": ts, "received_at": received_at,
                 "event_name": name, "session_id": session_id,
@@ -12175,11 +12218,13 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                                 })
                             except Exception:
                                 pass
-                        # Claude Code sessions come from the transcript on a
-                        # daemon machine and from the logs path otherwise;
-                        # never materialize a second one from spans (WO-57
-                        # blueprint ADR-003).
-                        if _sid and _atype not in ("openclaw", "claude_code"):
+                        # Claude Code spans go through the materializer too:
+                        # on a daemon machine the transcript row already
+                        # exists under the same ``claude_code:<uuid>`` key
+                        # and is left alone (its source is not otlp_spans);
+                        # on a daemon-free machine this is the only way the
+                        # session reaches the Sessions tab (WO-57 ADR-003).
+                        if _sid and _atype != "openclaw":
                             _env = (_row.get("attributes") or {}).get(
                                 "deployment.environment")
                             if _env or str(_sid) not in _otlp_sessions_seen:
@@ -12198,8 +12243,24 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
         # live, Claude Code 2.1.259); its parent claude_code.tool span does.
         for _wev in _otlp_wait_events:
             _parent = _wev.pop("_parent_span", None)
-            if not _wev["data"].get("tool") and _parent in _cc_tool_by_span:
+            if _wev["data"].get("tool") or not _parent:
+                continue
+            if _parent in _cc_tool_by_span:
                 _wev["data"]["tool"] = _cc_tool_by_span[_parent]
+                continue
+            # The wait ends before its parent tool span does, so a batching
+            # exporter routinely ships them in different POSTs. Events are
+            # insert-or-ignore and cannot be back-filled, so ask the store
+            # for the parent (one read per unresolved wait, rare).
+            try:
+                _prow = _store.query_spans(span_id=_parent, limit=1)
+                if isinstance(_prow, dict):
+                    _prow = _prow.get("result") or _prow.get("rows") or []
+                if _prow and (_prow[0].get("tool_name")):
+                    _wev["data"]["tool"] = _prow[0]["tool_name"]
+                    _cc_tool_by_span[_parent] = _prow[0]["tool_name"]
+            except Exception:
+                pass
         try:
             _store.put_otlp_batch(records=[], events=_otlp_wait_events)
         except Exception as e:
@@ -12289,12 +12350,28 @@ _OTLP_LLM_EXTRA_FIELDS = (
 )
 
 
+_OTLP_TEXT_FIELDS = ("prompt", "response")
+_OTLP_TEXT_CAP = 4000
+
+
 def _otlp_typed_event_data(suffix, attrs, pick):
     out = {}
     for k in _OTLP_TYPED_EVENT_FIELDS.get(suffix, ()):
         v = pick(attrs, k)
-        if v is not None:
-            out[k.replace(".", "_")] = v
+        if v is None:
+            continue
+        if k in _OTLP_TEXT_FIELDS:
+            # Only present when the user opted into content export. Capped,
+            # and tagged so a reader (cloud sync, Brain) can exclude it.
+            txt = str(v)
+            if txt == "<REDACTED>":
+                continue
+            out[k] = txt[:_OTLP_TEXT_CAP]
+            out["content"] = True
+            if len(txt) > _OTLP_TEXT_CAP:
+                out[k + "_truncated"] = True
+            continue
+        out[k.replace(".", "_")] = v
     return out
 
 
@@ -12902,6 +12979,8 @@ def _get_otel_usage_data():
     daily_cost = {}
     model_usage = {}
 
+    cache_read_total = 0
+    cache_write_total = 0
     with _metrics_lock:
         for entry in metrics_store["tokens"]:
             ts = entry.get("timestamp", 0)
@@ -12910,6 +12989,10 @@ def _get_otel_usage_data():
             daily_tokens[day] = daily_tokens.get(day, 0) + total
             model = entry.get("model", "unknown") or "unknown"
             model_usage[model] = model_usage.get(model, 0) + total
+            # Prompt-cache tokens by kind (Claude Code metrics, WO-57); same
+            # field names as the transcript path.
+            cache_read_total += int(entry.get("cache_read_tokens") or 0)
+            cache_write_total += int(entry.get("cache_write_tokens") or 0)
 
         for entry in metrics_store["cost"]:
             ts = entry.get("timestamp", 0)
@@ -12968,6 +13051,8 @@ def _get_otel_usage_data():
         "today": today_tok,
         "week": week_tok,
         "month": month_tok,
+        "cacheReadTokens": cache_read_total,
+        "cacheWriteTokens": cache_write_total,
         "todayCost": round(today_cost_val, 4),
         "weekCost": round(week_cost_val, 4),
         "monthCost": round(month_cost_val, 4),

@@ -65,3 +65,19 @@ This file records review and verification rounds. Append new rounds; do not over
 ---
 
 <!-- Subsequent rounds: copy the structure above and increment the round number. -->
+
+
+## Round 1 (2026-09-03) — two delegates, bucket A (receiver/store) + bucket B (CLI/docs)
+
+Verdict: CHANGES_REQUESTED (both buckets).
+
+Blocking, all fixed in commit 2:
+- A1 `_cc_metric` tile push not retry-safe (no `_otlp_seen` gate) — requirements AC .4. Fixed: record id computed first, push gated.
+- A2 cache fields named `cache_read`/`cache_write`, unread by anything, and `total: n` inflated the tokens tile — requirements AC .4. Fixed: transcript spelling `cache_read_tokens`/`cache_write_tokens`, `total: 0`, surfaced as `cacheReadTokens`/`cacheWriteTokens` in the OTel usage aggregate.
+- B1 single-entry marker let a user-level record claim keys in a project file and let uninstall remove keys from the wrong file — requirements AC .1 / data safety. Fixed: marker keyed by realpath per settings file; uninstall/status refuse files with no record.
+- B2 `_read_json` crashed on corrupt settings/marker (JSONDecodeError traceback on `--status`/`--uninstall`) — never crash on bad input. Fixed: strict read for install (refuses, never overwrites), tolerant read elsewhere, `unreadable` surfaced.
+- B3 Windows managed-settings path was the legacy ProgramData location Claude Code no longer reads — AC .3. Fixed: ProgramFiles first, ProgramData kept as legacy, `managed-settings.d/*.json` globbed, output states only file-based policy was checked.
+
+Advisory, fixed: A3 cross-batch parent lookup for `blocked_on_user` tool names (store read); A4 Claude Code no longer excluded from span materialization (existing transcript row is left alone by the materializer's own guard); A5 `user_prompt` is a turn boundary on daemon-free sessions only, `api_error`/`api_refusal`/rejected `tool_decision` render as zero-width markers; A6 absent data-point values stored as null; A7 temporality preference pinned to `delta` in the block and cumulative sums kept off tiles; A8 prompt/response text capped at 4000 chars and tagged `content: true`, literal `<REDACTED>` dropped; A9 decoder docstring, `configured: null` when status cannot be asked; B4 realpath write-through for symlinks; B5 non-object `env` refused; B6 explicit-endpoint message; B8 `== "1"` test.
+
+Advisory, not done (stated): B4 read-modify-write has no lock against Claude Code's own saves (window is one JSON dump; comment added). Registry/plist/server-managed policy not checked (output says so).
