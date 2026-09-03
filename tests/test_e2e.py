@@ -303,3 +303,112 @@ class TestFlowDiagram:
                 break
 
         # No crash occurred - success
+
+
+# ---------------------------------------------------------------------------
+# Transcript turn TOC scroll-spy
+# ---------------------------------------------------------------------------
+
+
+def _open_transcripts_page(page: Page):
+    """Switch to the transcripts (Sessions) page via the app's own router.
+
+    The nav item's data-tab key has moved between IA passes, so go through
+    switchTab() directly; it is the same call the nav click makes.
+    """
+    ok = page.evaluate(
+        """() => { if (typeof switchTab !== 'function') return false; switchTab('transcripts'); return true; }"""
+    )
+    assert ok, "switchTab() is not defined on the dashboard page"
+    page.wait_for_timeout(600)
+
+
+class TestTranscriptTocScrollSpy:
+    """The sticky turn list beside a transcript must highlight the turn the
+    reader has scrolled to, not just the turn the replay scrubber sits on.
+
+    Regression guard for the bug where the TOC stayed on turn 0 (or whatever
+    the scrubber pointed at) no matter how far the reader scrolled. CI has no
+    real sessions, so this builds a synthetic trace of tall chapters inside
+    the real transcript containers and drives the real scroll listener.
+    """
+
+    _BUILD_TRACE = """() => {
+        const wrap = document.getElementById('transcript-messages');
+        const toc = document.getElementById('transcript-toc');
+        if (!wrap || !toc) return false;
+        // Make the transcript page the visible one regardless of nav state.
+        document.querySelectorAll('.page, [id^="page-"]').forEach(p => {
+            if (p.id && p.id.startsWith('page-')) p.style.display = (p.id === 'page-transcripts') ? '' : 'none';
+        });
+        const viewer = document.getElementById('transcript-viewer');
+        if (viewer) viewer.style.display = '';
+        const list = document.getElementById('transcript-list');
+        if (list) list.style.display = 'none';
+        let html = '', tocHtml = '<div class="turn-toc-list">';
+        for (let i = 0; i < 6; i++) {
+            html += '<section class="turn-chapter" id="turn-chapter-' + i + '" style="min-height:1400px">'
+                  + '<header class="turn-chapter-head">Turn ' + i + '</header></section>';
+            tocHtml += '<a class="turn-toc-item' + (i === 0 ? ' turn-toc-item-active' : '') + '"'
+                     + ' href="#turn-chapter-' + i + '" onclick="return _jumpToTurn(' + i + ');">'
+                     + '<span class="turn-toc-num">' + i + '</span></a>';
+        }
+        wrap.innerHTML = html;
+        toc.innerHTML = tocHtml + '</div>';
+        window._turnTocActive = null;
+        window._turnTocPin = null;
+        return true;
+    }"""
+
+    _ACTIVE = """() => {
+        const a = document.querySelector('#transcript-toc .turn-toc-item-active');
+        return a ? a.querySelector('.turn-toc-num').textContent : null;
+    }"""
+
+    def _scroll_to_chapter(self, page: Page, idx: int, extra: int = 0):
+        page.evaluate(
+            """([idx, extra]) => {
+                const el = document.getElementById('turn-chapter-' + idx);
+                el.scrollIntoView({ block: 'start' });
+                // Nudge whichever ancestor actually scrolls (window or pane).
+                let node = el.parentElement, scroller = null;
+                while (node && node !== document.body) {
+                    const oy = getComputedStyle(node).overflowY;
+                    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 1) { scroller = node; break; }
+                    node = node.parentElement;
+                }
+                if (scroller) scroller.scrollTop += extra; else window.scrollBy(0, extra);
+            }""",
+            [idx, extra],
+        )
+        page.wait_for_timeout(250)
+
+    def test_toc_follows_scroll_position(self, page: Page):
+        load_dashboard(page)
+        _open_transcripts_page(page)
+        assert page.evaluate("typeof _syncTurnTOCToScroll === 'function'"), \
+            "transcript TOC scroll-spy (_syncTurnTOCToScroll) is missing from app.js"
+        built = page.evaluate(self._BUILD_TRACE)
+        assert built, "#transcript-messages / #transcript-toc not present on the Sessions page"
+
+        self._scroll_to_chapter(page, 3)
+        assert page.evaluate(self._ACTIVE) == "3", "TOC did not follow the scroll to turn 3"
+
+        self._scroll_to_chapter(page, 4, extra=400)
+        assert page.evaluate(self._ACTIVE) == "4", "TOC did not follow a scroll into the middle of turn 4"
+
+        self._scroll_to_chapter(page, 0)
+        assert page.evaluate(self._ACTIVE) == "0", "TOC did not return to turn 0 at the top"
+
+    def test_toc_click_holds_target_until_arrival(self, page: Page):
+        load_dashboard(page)
+        _open_transcripts_page(page)
+        assert page.evaluate(self._BUILD_TRACE)
+        page.evaluate("() => document.querySelector('#transcript-toc a[href=\"#turn-chapter-5\"]').click()")
+        # Sample during the smooth scroll: the clicked turn must stay active the
+        # whole way (no flicker through 1..4) and still be active once landed.
+        seen = set()
+        for _ in range(10):
+            page.wait_for_timeout(150)
+            seen.add(page.evaluate(self._ACTIVE))
+        assert seen == {"5"}, f"TOC flickered during jump to turn 5: {sorted(seen, key=str)}"
