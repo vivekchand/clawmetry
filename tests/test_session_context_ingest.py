@@ -163,8 +163,10 @@ def test_family_adapter_shape_via_extra(store):
     """A paid adapter emits Event(type='context.compiled', extra={...}); the
     daemon wraps it as data={role, content, _runtime, extra}. Same rows."""
     sid = "claude_code:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    # NO agent_type key: the family ingest in sync.py does not set one, and a
+    # test that supplied it hid the bug that made this panel read empty.
     store.ingest({
-        "id": "claude_code:ctx-1", "agent_type": "claude_code", "node_id": "n",
+        "id": "claude_code:ctx-1", "node_id": "n",
         "agent_id": "main", "session_id": sid, "event_type": "context.compiled",
         "ts": "2026-09-04T11:00:00Z", "model": "claude-opus-4-1",
         "data": {"role": "", "content": "", "_runtime": "claude_code", "extra": {
@@ -194,13 +196,18 @@ def test_family_adapter_shape_via_extra(store):
     assert "mcpServers" not in meta and "contextFiles" not in meta
     # Bare-id lookup matched the prefixed row; the filter narrows by runtime.
     assert store.query_session_context(session_id=sid, agent_type="codex") == []
+    # The row is labelled with the runtime that produced it, which is what the
+    # Inputs panel asks for (?runtime=claude_code). Labelled "openclaw" the
+    # panel filters its own data out and says "Nothing captured".
+    assert {r["agent_type"] for r in rows} == {"claude_code"}
+    assert len(store.query_session_context(session_id=sid, agent_type="claude_code")) == len(rows)
 
 
 def test_family_raw_event_is_compacted_too(store):
     from clawmetry.session_context import CONTENT_CAP
     sid = "codex:bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
     store.ingest({
-        "id": "codex:ctx-1", "agent_type": "codex", "node_id": "n", "agent_id": "main",
+        "id": "codex:ctx-1", "node_id": "n", "agent_id": "main",
         "session_id": sid, "event_type": "context.compiled", "ts": "2026-09-04T11:00:00Z",
         "data": {"role": "", "content": "", "extra": {"systemPrompt": "y" * (CONTENT_CAP + 10),
                                                         "messages": [1, 2, 3]}},
@@ -275,3 +282,115 @@ def test_trajectory_sidecar_reader(store, tmp_path):
 def test_missing_sessions_dir_is_quiet(store, tmp_path):
     from clawmetry import sync as _sync
     assert _sync._sync_trajectory_context(str(tmp_path / "nope"), {}, "n") == 0
+
+
+# ── Runtime label on the row (the "empty panel" bug, 2026-09-04) ───────────
+
+def test_runtime_of_event_prefers_declared_then_stamped_then_prefix(monkeypatch):
+    from clawmetry import session_context as sc
+    # 1. The trajectory reader declares agent_type outright.
+    assert sc.runtime_of_event({"agent_type": "openclaw", "session_id": "s1"}) == "openclaw"
+    # 2. The family ingest declares nothing and stamps data._runtime.
+    assert sc.runtime_of_event({
+        "session_id": "claude_code:abc",
+        "data": {"role": "", "content": "", "_runtime": "claude_code", "extra": {}},
+    }) == "claude_code"
+    # 3. Neither: the session-id prefix, through the one shared resolver.
+    monkeypatch.setattr(
+        "clawmetry.waste_flags.runtime_from_session_id",
+        lambda sid: str(sid).split(":", 1)[0],
+    )
+    assert sc.runtime_of_event({"session_id": "cursor:abc", "data": {}}) == "cursor"
+    # 4. Nothing to go on: the only Free runtime, never a guess.
+    assert sc.runtime_of_event({"session_id": "plain-uuid", "data": {}}) == "openclaw"
+
+
+def test_family_rows_are_findable_under_their_own_runtime(store):
+    """The regression this file exists to hold: the Inputs panel asks for
+    ``?runtime=claude_code``; rows stamped ``openclaw`` filter themselves out
+    and the panel reports "Nothing captured for this session yet"."""
+    sid = "claude_code:11111111-aaaa-bbbb-cccc-222222222222"
+    store.ingest({
+        "id": "claude_code:ctx-live", "node_id": "n", "agent_id": "main",
+        "session_id": sid, "event_type": "context.compiled",
+        "ts": "2026-09-04T12:00:00Z",
+        "data": {"role": "", "content": "", "_runtime": "claude_code",
+                 "extra": {"prompt": "why is the panel empty?",
+                           "tools": ["Bash"],
+                           "runtimeMeta": {"cwd": "/Users/dev/proj"}}},
+    })
+    store._flush_now()
+    scoped = store.query_session_context(session_id=sid, agent_type="claude_code")
+    assert {r["kind"] for r in scoped} == {"user_prompt", "tools_available", "runtime_meta"}
+    assert store.query_session_context(session_id=sid, agent_type="openclaw") == []
+
+
+def test_reingesting_the_same_event_does_not_invent_turns(store):
+    """The family ingest re-reads a whole session every time it grows. The
+    same context event arriving again is the same occurrence, not a turn."""
+    sid = "claude_code:33333333-aaaa-bbbb-cccc-444444444444"
+    event = {
+        "id": "claude_code:ctx-dup", "node_id": "n", "agent_id": "main",
+        "session_id": sid, "event_type": "context.compiled",
+        "ts": "2026-09-04T12:00:00Z",
+        "data": {"role": "", "content": "", "_runtime": "claude_code",
+                 "extra": {"prompt": "one request", "tools": ["Bash"]}},
+    }
+    for _ in range(4):
+        store.ingest(dict(event))
+    store._flush_now()
+    rows = _by_kind(store.query_session_context(session_id=sid))
+    assert rows["user_prompt"][0]["turns"] == 1
+    # A genuinely later occurrence of the same fact still counts.
+    store.ingest(dict(event, id="claude_code:ctx-dup-2", ts="2026-09-04T12:30:00Z"))
+    store._flush_now()
+    rows = _by_kind(store.query_session_context(session_id=sid))
+    assert rows["user_prompt"][0]["turns"] == 2
+    assert rows["user_prompt"][0]["last_ts"] == "2026-09-04T12:30:00Z"
+
+
+def test_migration_relabels_rows_written_under_the_old_code(store):
+    """Stores written before the fix hold family rows stamped ``openclaw``.
+    Reopening relabels them from the session-id prefix, so the panel finds
+    history it already had rather than only sessions ingested since."""
+    store._conn.execute("""
+        INSERT INTO session_context (agent_type, session_id, node_id, kind,
+            sha256, size_bytes, content, summary, first_ts, last_ts, turns,
+            source, created_at)
+        VALUES ('openclaw', 'codex:55555555-aaaa-bbbb-cccc-666666666666', 'n',
+                'user_prompt', 'deadbeef', 11, NULL, '{"chars":11}',
+                '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', 1,
+                'context.compiled', 0)
+    """)
+    import clawmetry.local_store as ls
+    ls._apply_migrations(store._conn)
+    rows = store.query_session_context(
+        session_id="codex:55555555-aaaa-bbbb-cccc-666666666666",
+        agent_type="codex",
+    )
+    assert len(rows) == 1 and rows[0]["agent_type"] == "codex"
+    # Idempotent, and an unprefixed OpenClaw row is never touched.
+    ls._apply_migrations(store._conn)
+    assert len(store.query_session_context(
+        session_id="codex:55555555-aaaa-bbbb-cccc-666666666666")) == 1
+
+
+def test_migration_drops_the_stale_copy_instead_of_colliding(store):
+    """A session ingested both before and after the fix has the same fact
+    under two labels. The correctly-labelled row survives; the relabel must
+    not trip the primary key."""
+    for atype in ("openclaw", "cursor"):
+        store._conn.execute(f"""
+            INSERT INTO session_context (agent_type, session_id, node_id, kind,
+                sha256, size_bytes, content, summary, first_ts, last_ts, turns,
+                source, created_at)
+            VALUES ('{atype}', 'cursor:77777777-aaaa-bbbb-cccc-888888888888',
+                    'n', 'user_prompt', 'cafebabe', 7, NULL, '{{"chars":7}}',
+                    '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', 1,
+                    'context.compiled', 0)
+        """)
+    import clawmetry.local_store as ls
+    ls._apply_migrations(store._conn)
+    rows = store.query_session_context(
+        session_id="cursor:77777777-aaaa-bbbb-cccc-888888888888")
+    assert len(rows) == 1 and rows[0]["agent_type"] == "cursor"

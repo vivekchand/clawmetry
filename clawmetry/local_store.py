@@ -2302,6 +2302,61 @@ def _apply_migrations(conn) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     if "policy_actions" in existing_tables:
         _migrate_policy_actions_ladder(conn)
+    if "session_context" in existing_tables:
+        _migrate_session_context_runtime(conn)
+
+
+def _migrate_session_context_runtime(conn) -> None:
+    """Relabel Inputs & context rows stored under the wrong runtime.
+
+    Until 2026-09-04 ``session_context.agent_type`` came from the event's
+    ``agent_type`` column, which the family ingest never sets — so every
+    Claude Code / Codex / Cursor / … row landed as ``openclaw`` while its
+    ``session_id`` said otherwise. ``/api/sessions/<id>/context?runtime=X``
+    filters on that column, so the "What the agent was given" panel read
+    "Nothing captured for this session yet" on sessions whose inputs were
+    sitting in the table the whole time.
+
+    The prefix is the authority here (see
+    ``waste_flags.runtime_from_session_id``): a family session id is
+    ``<runtime>:<id>``, and OpenClaw's own ids carry no prefix, so this
+    cannot touch a correctly-labelled OpenClaw row. Rows whose corrected
+    label would collide with a row already written under the new code are
+    dropped rather than merged — they are the same facts, and the survivor
+    is the one the current ingest wrote.
+
+    Idempotent: a second run finds nothing left to move. Failure is
+    contained by the caller, which logs and continues.
+    """
+    mislabelled = conn.execute("""
+        SELECT COUNT(*) FROM session_context
+        WHERE agent_type = 'openclaw'
+          AND session_id LIKE '%:%'
+          AND split_part(session_id, ':', 1) <> ''
+    """).fetchone()
+    if not mislabelled or not mislabelled[0]:
+        return
+    # Drop the stale copy wherever the correctly-labelled row already exists,
+    # so the UPDATE below can never violate the primary key.
+    conn.execute("""
+        DELETE FROM session_context AS old
+        WHERE old.agent_type = 'openclaw'
+          AND old.session_id LIKE '%:%'
+          AND EXISTS (
+              SELECT 1 FROM session_context AS cur
+              WHERE cur.agent_type = split_part(old.session_id, ':', 1)
+                AND cur.session_id = old.session_id
+                AND cur.kind = old.kind
+                AND cur.sha256 = old.sha256
+          )
+    """)
+    conn.execute("""
+        UPDATE session_context
+        SET agent_type = split_part(session_id, ':', 1)
+        WHERE agent_type = 'openclaw'
+          AND session_id LIKE '%:%'
+          AND split_part(session_id, ':', 1) <> ''
+    """)
 
 
 def _migrate_policy_actions_ladder(conn) -> None:
@@ -14024,7 +14079,15 @@ class LocalStore(TrailStoreMixin):
         Keyed on (agent_type, session_id, kind, sha256). A row whose sha is
         already present bumps ``turns`` and ``last_ts`` and keeps the first
         stored content: the same system prompt on turn 40 is one fact seen 40
-        times, not 40 rows. Returns the number of rows written."""
+        times, not 40 rows. Returns the number of rows written.
+
+        ``turns`` only advances on a STRICTLY LATER ``last_ts``. The family
+        ingest re-reads a session's whole event list every time the session
+        grows, so an unconditional bump counted re-ingests, not turns: a
+        Claude Code session whose single context event was read four times
+        claimed "seen on 4 turns" when the runtime emitted it once. Replaying
+        the same timestamp is the same occurrence; only a new one is a new
+        turn."""
         if self._read_only:
             raise RuntimeError("local_store: ingest_session_context() on read-only store")
         n = 0
@@ -14050,7 +14113,9 @@ class LocalStore(TrailStoreMixin):
                         content, summary, first_ts, last_ts, turns, source, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT (agent_type, session_id, kind, sha256) DO UPDATE SET
-                        turns    = session_context.turns + 1,
+                        turns    = session_context.turns + CASE
+                                        WHEN excluded.last_ts > session_context.last_ts
+                                        THEN 1 ELSE 0 END,
                         last_ts  = CASE WHEN excluded.last_ts > session_context.last_ts
                                         THEN excluded.last_ts ELSE session_context.last_ts END,
                         first_ts = CASE WHEN excluded.first_ts < session_context.first_ts
