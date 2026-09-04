@@ -423,6 +423,10 @@ jobs:
             tests/test_cli_help_no_dashboard_import.py \
             tests/test_behaviour_signals.py \
             tests/test_signals_ui_contract.py \
+            tests/test_event_shape.py \
+            tests/test_schema_v15_migration.py \
+            tests/test_session_intent.py \
+            tests/test_session_git_outcomes_route.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
