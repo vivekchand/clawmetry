@@ -22,6 +22,8 @@ def app(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAWMETRY_GIT_OUTCOMES", raising=False)
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    from pathlib import Path
+    monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "events.duckdb")))
     import routes.sessions as sessions_mod
     importlib.reload(sessions_mod)
     a = Flask(__name__)

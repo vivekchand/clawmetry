@@ -87,6 +87,8 @@ def v14_store(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    from pathlib import Path
+    monkeypatch.setattr(ls, "DB_PATH", Path(str(path)))
     store = ls.get_store()
     yield store, ls, sid
     try:
@@ -152,6 +154,7 @@ def test_v15_migration_is_idempotent_on_reopen(v14_store, monkeypatch):
     store, ls, _sid = v14_store
     store.stop(flush=True)
     importlib.reload(ls)
+    monkeypatch.setattr(ls, "DB_PATH", ls.DB_PATH)  # re-pin after reload clears setattr
     again = ls.get_store()
     try:
         assert {"role", "block_kind", "tool_name", "is_error"} <= _cols(again, "events")
