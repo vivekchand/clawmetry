@@ -627,6 +627,13 @@ _DAEMON_METHODS = frozenset({
     # Inputs & context: /api/sessions/<id>/context reads the session_context
     # table (system prompt, tools, runtime setup) through the daemon.
     "query_session_context",
+    # Trail (schema v15): per-session intent + git outcome join. Read by
+    # routes/sessions.py (/api/transcript, /api/sessions/<id>/git-outcomes)
+    # from the dashboard process while the daemon holds the writer lock.
+    "get_session_intent",
+    "query_session_intents",
+    "query_session_git_outcomes",
+    "query_session_git_counts",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
     # (private helpers would be arbitrary SQL over the RPC), so on every

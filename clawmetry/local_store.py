@@ -45,6 +45,8 @@ import logging
 import os
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
+from clawmetry import event_shape as _event_shape  # v15 typed event columns
+from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
 import threading
 import time
 import uuid
@@ -315,7 +317,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -377,7 +379,16 @@ _DDL = [
         created_at      BIGINT NOT NULL,
         chain_prev_hash VARCHAR,
         chain_hash      VARCHAR,
-        runtime_kind    VARCHAR
+        runtime_kind    VARCHAR,
+        -- v15 Trail typed columns, filled by clawmetry.event_shape.classify
+        -- at ingest (and lazily back-filled for older rows). ``block_kind``
+        -- uses the replay_schema vocabulary: text | thinking | tool_use |
+        -- tool_result | system | other. NULL means "not yet classified",
+        -- never "no shape": the back-fill stamps every row it visits.
+        role            VARCHAR,
+        block_kind      VARCHAR,
+        tool_name       VARCHAR,
+        is_error        BOOLEAN
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -455,6 +466,14 @@ _DDL = [
         attention_since         BIGINT,
         attention_signal        VARCHAR,
         attention_tool          VARCHAR,
+        -- v15 Trail: what the user asked for. The FULL first user prompt
+        -- (the title is an 80-char truncation of the same turn), redacted
+        -- through clawmetry.redaction and capped at
+        -- event_shape.INTENT_MAX_CHARS. Set once and never overwritten;
+        -- intent_source records where it came from ('events', 'adapter',
+        -- 'none' when a session has events but no human prompt).
+        intent                  VARCHAR,
+        intent_source           VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -1902,6 +1921,15 @@ _MIGRATIONS_V2 = [
     # existing rows, which normalize_steps() reads as the single `action` —
     # so every policy authored before ladders keeps its exact behaviour.
     ("session_policy", "steps",       "VARCHAR DEFAULT ''"),
+    # v15 Trail typed event columns + session intent. NULL on existing rows;
+    # the daemon's bounded lazy back-fill (backfill_event_shapes /
+    # backfill_session_intents) fills them a few hundred rows per tick.
+    ("events",   "role",          "VARCHAR"),
+    ("events",   "block_kind",    "VARCHAR"),
+    ("events",   "tool_name",     "VARCHAR"),
+    ("events",   "is_error",      "BOOLEAN"),
+    ("sessions", "intent",        "VARCHAR"),
+    ("sessions", "intent_source", "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -2127,6 +2155,28 @@ def _clean_str(value: Any, limit: int = _MAX_PATH_LEN) -> str | None:
     except Exception:
         return None
     return s[:limit] if s else None
+
+
+def _clean_intent(value: Any) -> str | None:
+    """``sessions.intent`` value: the first user prompt, redacted through
+    ``clawmetry.redaction`` (secret-shaped substrings become fingerprints)
+    and capped at ``event_shape.INTENT_MAX_CHARS``. ``None`` for anything
+    that is not a non-empty string, so the upsert's COALESCE keeps what the
+    row already has."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        from clawmetry import redaction as _redaction
+        text = _redaction.redact_text(text)
+    except Exception:  # noqa: BLE001 - never lose the row on a redaction bug
+        pass
+    cap = _event_shape.INTENT_MAX_CHARS
+    if len(text) > cap:
+        text = text[: cap - 3].rstrip() + "..."
+    return text or None
 
 
 def _iso_utc(ts: float) -> str | None:
@@ -2852,7 +2902,7 @@ _DEDUPED_EVENTS_CTE = """
 """
 
 
-class LocalStore:
+class LocalStore(TrailStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -3408,6 +3458,38 @@ class LocalStore:
                         )
                         migration_failed = True
                         _migration_err = str(exc)
+                if not migration_failed and current < 15:
+                    # v14 -> v15: typed event columns (role / block_kind /
+                    # tool_name / is_error) and sessions.intent. The
+                    # column-adds themselves ran in _apply_migrations above
+                    # (idempotent ALTERs); nothing is rewritten here on
+                    # purpose. A multi-GB events table must not be scanned
+                    # inside a startup transaction (the v14 lesson), so the
+                    # existing rows are classified lazily by the daemon
+                    # tick, a bounded batch at a time.
+                    try:
+                        _v15_cols = {
+                            row[1] for row in self._conn.execute(
+                                "PRAGMA table_info('events')"
+                            ).fetchall()
+                        }
+                        if not {"role", "block_kind", "tool_name",
+                                "is_error"} <= _v15_cols:
+                            raise RuntimeError(
+                                "v15 typed event columns missing after ALTER"
+                            )
+                        log.info(
+                            "local store: v15 typed event columns ready; "
+                            "existing rows are classified by the daemon's "
+                            "lazy back-fill"
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v15 column check FAILED; schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -3905,9 +3987,16 @@ class LocalStore:
             upsert_params = []
             for atype, sid, session in prepared:
                 parts = _session_content_parts(session)
-                # content columns ... then updated_at, cwd, git_branch, hash
+                _intent = _clean_intent(session.get("intent"))
+                _intent_src = (
+                    (_clean_str(session.get("intent_source")) or "adapter")
+                    if _intent else None
+                )
+                # content columns ... then updated_at, cwd, git_branch,
+                # intent, intent_source, hash
                 upsert_params.append(
                     [atype, sid] + parts[2:14] + [now_ms] + parts[14:16]
+                    + [_intent, _intent_src]
                     + [_content_hash(parts)]
                 )
             with _txn(self._conn):
@@ -3917,8 +4006,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch, content_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, intent, intent_source, content_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -3938,6 +4027,12 @@ class LocalStore:
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
                         git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        -- FIRST wins: the intent is the opening prompt and a
+                        -- re-ingest must never replace it with a later one.
+                        intent         = COALESCE(sessions.intent, excluded.intent),
+                        intent_source  = CASE WHEN sessions.intent IS NULL
+                                              THEN excluded.intent_source
+                                              ELSE sessions.intent_source END,
                         content_hash   = excluded.content_hash
                 """, upsert_params)
                 try:
@@ -3951,6 +4046,8 @@ class LocalStore:
                     cache[(row[0], row[1])] = row[-1]
         return len(prepared)
 
+    # Trail: session intent, typed-event back-fill and per-session git
+    # outcomes live in clawmetry/trail_store.py (TrailStoreMixin).
     def update_session_location(
         self,
         session_id: str,
@@ -9874,11 +9971,13 @@ class LocalStore:
     _EVENT_INSERT_COLS = (
         "id, agent_type, node_id, agent_id, session_id, workspace_id, "
         "event_type, ts, data, cost_usd, token_count, model, created_at, "
-        "runtime_kind, chain_prev_hash, chain_hash"
+        "runtime_kind, role, block_kind, tool_name, is_error, "
+        "chain_prev_hash, chain_hash"
     )
+    _EVENT_INSERT_NCOLS = 20
 
     def _insert_event_rows_locked(self, rows16: list[tuple]) -> None:
-        """Bulk INSERT of fully-built event rows (the 14 ``_event_to_row``
+        """Bulk INSERT of fully-built event rows (the 20 ``_event_to_row``
         columns + the two chain columns). Multi-row VALUES in chunks so each
         statement is ONE vectorized insert — DuckDB's Python ``executemany``
         runs row-at-a-time and pays index maintenance per row, which is what
@@ -9887,9 +9986,9 @@ class LocalStore:
         (OR IGNORE stays as a belt-and-braces guard only)."""
         if not rows16:
             return
-        ncols = 16
+        ncols = self._EVENT_INSERT_NCOLS
         row_ph = "(" + ",".join("?" * ncols) + ")"
-        chunk_rows = 250  # 4000 bind params per statement — well within limits
+        chunk_rows = 200  # 4000 bind params per statement, well within limits
         for off in range(0, len(rows16), chunk_rows):
             chunk = rows16[off:off + chunk_rows]
             sql = (
@@ -14604,7 +14703,12 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata, s.cwd, s.git_branch,
                    s.attention_state, s.attention_since, s.attention_signal,
-                   s.attention_tool
+                   s.attention_tool,
+                   s.intent, s.intent_source,
+                   -- Trail outcome counts from the git join (plaintext,
+                   -- no subjects). 0 when no scan has linked this session.
+                   (SELECT COUNT(DISTINCT l.sha) FROM git_session_commits l
+                     WHERE l.session_id = s.session_id) AS commits
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -14618,10 +14722,17 @@ class LocalStore:
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
-                "attention_tool"]
+                "attention_tool", "intent", "intent_source", "commits"]
+        # PR counts need the commit -> PR join; one grouped query for the
+        # page rather than a correlated subquery per row.
+        pr_counts: dict[str, dict[str, int]] = {}
+        if any(int(r[-1] or 0) for r in rows):
+            pr_counts = self.query_session_git_counts()
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))
+            d["commits"] = int(d.get("commits") or 0)
+            d["prs"] = int((pr_counts.get(str(d.get("session_id"))) or {}).get("prs") or 0)
             raw = d.get("metadata")
             meta: dict[str, Any] = {}
             if raw:
@@ -17482,6 +17593,8 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
                 data = _ccr.compress(data)
     u = usage if usage is not None else _extract_event_usage(e)
     cost, tokens, model = u["cost"], u["tokens"], u["model"]
+    role, block_kind, tool_name, is_error = _event_shape.typed_columns(
+        e.get("event_type"), e.get("data"))
     return (
         str(e["id"]),
         str(e.get("agent_type") or "openclaw"),
@@ -17497,6 +17610,8 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         model,
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
+        # v15 Trail typed columns, stamped on every new row (clawmetry.event_shape).
+        role, block_kind, tool_name, is_error,
     )
 
 
