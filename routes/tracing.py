@@ -33,6 +33,7 @@ import json
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
+from clawmetry import event_shape as _event_shape
 
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 
@@ -723,28 +724,13 @@ def _build_spans(rows):
         # which meant Claude Code events (`data.content` directly, no
         # `message` wrapper) ended up with empty `detail` and the MLflow-
         # style Chat tab had nothing to render.
-        text = ""
-        msg = d.get("message")
-        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-            text = msg["content"]
-        elif isinstance(msg, dict) and isinstance(msg.get("content"), list):
-            # Anthropic SDK content list: [{type:'text',text:'…'}, …]
-            parts = [b.get("text", "") for b in msg["content"] if isinstance(b, dict)]
-            text = "\n".join(p for p in parts if p)
-        elif isinstance(d.get("finalPromptText"), str):
-            text = d["finalPromptText"]
-        elif isinstance(d.get("promptText"), str):
-            text = d["promptText"]
-        elif isinstance(d.get("content"), str):
-            # Claude Code shape: `data.content` is the message body directly
-            # (no `message` wrapper). Without this the user prompt is empty
-            # and falls through to a generic `message` span instead of a
-            # `prompt` span.
-            text = d["content"]
-        elif isinstance(d.get("content"), list):
-            parts = [b.get("text", "") for b in d["content"] if isinstance(b, dict)]
-            text = "\n".join(p for p in parts if p)
-        elif isinstance(d.get("text"), str):
+        # ONE normaliser for every shape (clawmetry.event_shape): the
+        # OpenClaw v3 ``finalPromptText`` / ``completionText`` keys, the
+        # Anthropic ``message.content`` block list, and the family-adapter
+        # ``data.content`` body all resolve to the same ``text``.
+        shape = _event_shape.classify(et, d)
+        text = shape["text"]
+        if not text and isinstance(d.get("text"), str):
             text = d["text"]
 
         if is_sub and sub_root is None:
@@ -799,7 +785,9 @@ def _build_spans(rows):
         if low == "thinking":
             # Standalone reasoning event (family adapters: claude_code, codex,
             # kimi, ...; replay_events kind=thinking via the fallback below).
-            think_text = text or ""
+            # event_shape keeps reasoning in ``thinking`` (never ``text``),
+            # so read that first; ``text`` covers the bare ``data.text`` shape.
+            think_text = shape["thinking"] or text or ""
             if not think_text.strip():
                 continue
             rs = _mk(eid, agent_parent, "think", "reasoning", start, nxt,
@@ -812,7 +800,8 @@ def _build_spans(rows):
                        ("chat " + (e.get("model") or "")).strip() or "chat",
                        "llm", start, nxt, is_sub=is_sub, model=e.get("model") or "",
                        tokens=e.get("token_count"), cost=_event_cost(e),
-                       status="error" if (d.get("isError") or d.get("is_error")) else "ok",
+                       status="error" if (d.get("isError") or d.get("is_error")
+                                          or shape["is_error"]) else "ok",
                        detail=text, event_type=et)
             # Thinking blocks carried INSIDE the assistant message (OpenClaw,
             # Anthropic-shaped transcripts, extra.thinking) nest under it.

@@ -112,6 +112,7 @@ from routes.delegated import bp_delegated
 from routes.readiness import bp_readiness
 from routes.guard import bp_guard
 from routes.signals import bp_signals
+from routes.selfdiag import bp_selfdiag
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -13345,6 +13346,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_guard)
     app.register_blueprint(bp_signals)
+    app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
