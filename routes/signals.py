@@ -94,20 +94,29 @@ class _ProxyStore:
     def query_signal_sessions(self, **kw):
         return self._call("query_signal_sessions", **kw)
 
+    def _call_nullable(self, method, probe, probe_kw, **kw):
+        """For store methods whose honest answer can be ``None`` ("no such
+        row"): a ``None`` is only "unavailable" when a cheap probe read is
+        ``None`` too."""
+        r = _ls_call(method, **kw)
+        if r is None and _ls_call(probe, **probe_kw) is None:
+            self.unavailable = True
+        return r
+
     def query_signal_issues(self, **kw):
         return self._call("query_signal_issues", **kw)
 
     def get_signal_issue(self, **kw):
-        return self._call("get_signal_issue", **kw)
+        return self._call_nullable("get_signal_issue", "query_signal_issues", {"limit": 1}, **kw)
 
     def set_signal_issue_status(self, **kw):
-        return self._call("set_signal_issue_status", **kw)
+        return self._call_nullable("set_signal_issue_status", "query_signal_issues", {"limit": 1}, **kw)
 
     def list_briefs(self, **kw):
         return self._call("list_briefs", **kw)
 
     def get_brief(self, **kw):
-        return self._call("get_brief", **kw)
+        return self._call_nullable("get_brief", "list_briefs", {"limit": 1}, **kw)
 
     def upsert_brief(self, **kw):
         return self._call("upsert_brief", **kw)

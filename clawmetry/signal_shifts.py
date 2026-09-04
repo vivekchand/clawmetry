@@ -420,7 +420,8 @@ def run_shift_tick(store, *, now_ms: int | None = None, deliver=None,
     store, opens / updates / reopens issues, and hands each *opened* or
     *reopened* issue to ``deliver(match)`` (the daemon's local alert path).
     Never raises; returns ``{checked, opened, reopened, updated}``."""
-    stats = {"checked": 0, "opened": 0, "reopened": 0, "updated": 0, "errors": 0}
+    stats = {"checked": 0, "opened": 0, "reopened": 0, "updated": 0, "ignored": 0,
+             "none": 0, "errors": 0}
     try:
         now_ms = int(now_ms or time.time() * 1000)
         inputs = store.query_signal_shift_inputs(

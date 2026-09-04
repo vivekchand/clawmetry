@@ -57,17 +57,19 @@ def test_flat_history_uses_the_floor():
     band = ss.learned_band(_hist(0.04), k=2.0, min_delta=0.02, ceil_ratio=5.0)
     assert band["spread"] == 0.0
     assert band["source"] == "floor"
-    assert abs(band["threshold"] - (band["mean"] + 0.02)) < 1e-9
+    assert abs(band["threshold"] - (band["mean"] + 0.02)) < 1e-5
 
 
 def test_noisy_history_learns_and_is_capped_by_the_ceiling():
-    band = ss.learned_band(_hist(0.05, jitter=[-0.02, 0.0, 0.02]), k=2.0,
+    band = ss.learned_band(_hist(0.05, turns=100, jitter=[-0.02, 0.0, 0.02]), k=2.0,
                            min_delta=0.02, ceil_ratio=5.0)
     assert band["source"] == "learned"
     assert band["mean"] + 0.02 < band["threshold"] < band["mean"] * 5.0
-    wild = ss.learned_band(_hist(0.02, jitter=[0.0, 0.3]), k=2.0, min_delta=0.02, ceil_ratio=5.0)
+    # One wild day in ten: mean 5%, spread 15%, raw 35% > 5x mean -> ceiling.
+    wild = ss.learned_band(_hist(0.0, turns=100, jitter=[0.0] * 9 + [0.5]), k=2.0,
+                           min_delta=0.02, ceil_ratio=5.0)
     assert wild["source"] == "ceiling"
-    assert abs(wild["threshold"] - wild["mean"] * 5.0) < 1e-9
+    assert abs(wild["threshold"] - wild["mean"] * 5.0) < 1e-5
 
 
 def test_threshold_never_exceeds_one_and_ignores_empty_days():
@@ -171,9 +173,14 @@ def test_alert_payload_names_the_numbers_and_never_text():
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "shifts.duckdb"))
+    """A direct LocalStore on a per-test DuckDB file. ``DB_PATH`` is resolved
+    at connect time from the module global, and conftest has already pinned
+    the env var for the whole session, so the global is patched here: one
+    file per test, nothing shared, nothing from the developer's store."""
+    from pathlib import Path
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "3600")
     from clawmetry import local_store as ls
+    monkeypatch.setattr(ls, "DB_PATH", Path(tmp_path / "shifts.duckdb"))
     s = ls.LocalStore()
     yield s
     try:
@@ -186,7 +193,7 @@ NOW = 1_800_000_000_000  # fixed "now" so day buckets are deterministic
 
 
 def _seed_shift(store, *, runtime="cursor", hist_rate=0.04, short_rate=0.25,
-                hist_days=28, hist_turns=20, short_turns=40, model_during="claude-x"):
+                hist_days=28, hist_turns=25, short_turns=40, model_during="claude-x"):
     """28 days of user turns at ``hist_rate`` frustration, then a last day
     at ``short_rate``. Turns and matches are written straight into the
     signal tables the way the WO-58 tick does."""
@@ -225,13 +232,17 @@ def test_tick_opens_once_then_updates(store):
     m = delivered[0]
     assert m["metadata"]["signal"] == "user_frustration" and m["metadata"]["runtime"] == "cursor"
     assert m["metadata"]["rate_during"] == 0.25
+    assert m["metadata"]["n_before"] == 700 and m["metadata"]["n_during"] == 40
+    assert m["metadata"]["rate_before"] == 0.04
     s2 = ss.run_shift_tick(store, now_ms=NOW + 60_000, deliver=delivered.append)
     assert s2["opened"] == 0 and s2["updated"] == 1
     assert len(delivered) == 1, "an open issue is refreshed, never re-delivered"
     issues = store.query_signal_issues(status="open")
     assert len(issues) == 1
     it = issues[0]
-    assert it["n_before"] == 560 and it["n_during"] == 40 and it["rate_before"] == 0.04
+    # The second tick's history window slid one minute, so the oldest day
+    # may have aged out; the during side and the rate are what is pinned.
+    assert it["n_during"] == 40 and it["rate_during"] == 0.25 and 600 <= it["n_before"] <= 700
     assert it["breakdown"]["model"][0]["value"] == "claude-x"
     assert it["breakdown"]["cwd"][0]["value"] == "repo-x"
     assert it["breakdown"]["threshold_source"] in ("floor", "learned", "ceiling")

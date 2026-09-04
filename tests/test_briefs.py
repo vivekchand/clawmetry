@@ -189,9 +189,14 @@ def test_unconfigured_channel_is_a_posted_failure_not_silence():
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "briefs.duckdb"))
+    """A direct LocalStore on a per-test DuckDB file. ``DB_PATH`` is resolved
+    at connect time from the module global, and conftest has already pinned
+    the env var for the whole session, so the global is patched here: one
+    file per test, nothing shared, nothing from the developer's store."""
+    from pathlib import Path
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "3600")
     from clawmetry import local_store as ls
+    monkeypatch.setattr(ls, "DB_PATH", Path(tmp_path / "briefs.duckdb"))
     s = ls.LocalStore()
     yield s
     try:
