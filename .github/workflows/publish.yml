@@ -23,7 +23,9 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
+      # write (not read) so the step below can attach the wheel, sdist and
+      # provenance to the GitHub release for this tag.
+      contents: write
       # Mints the short-lived OIDC token used for build provenance and, once
       # enabled, PyPI Trusted Publishing. Both are no-ops without it.
       id-token: write
@@ -117,9 +119,33 @@ jobs:
       # --repo vivekchand/clawmetry` works for anyone, including an auditor who
       # has no reason to take our word for what produced a wheel.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: "dist/*"
+
+      # Attach the artifacts and their provenance to the GitHub release, so a
+      # release download can be verified without trusting this log. Mirrors
+      # the same block in release-on-merge.yml, which is the workflow that
+      # actually runs for auto-releases; this path covers a hand-pushed tag.
+      - name: Attach artifacts and provenance to the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release upload "$TAG" dist/*.whl dist/*.tar.gz \
+            --clobber || echo "⚠ dist upload failed (non-blocking)"
+
+          BUNDLE="${{ steps.attest.outputs.bundle-path }}"
+          if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
+            PROV="dist/clawmetry-${TAG#v}.intoto.jsonl"
+            cp "$BUNDLE" "$PROV"
+            gh release upload "$TAG" "$PROV" \
+              --clobber || echo "⚠ provenance upload failed (non-blocking)"
+          else
+            echo "⚠ no attestation bundle at '$BUNDLE' — release has no provenance"
+          fi
 
       # ── Publishing: two mutually exclusive paths ───────────────────────────
       #
