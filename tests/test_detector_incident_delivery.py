@@ -32,12 +32,15 @@ class LatchStore:
         self.sent = {}
         self.recorded = []
 
-    def incident_alert_last_sent(self, sid, kind):
-        return self.sent.get((sid, kind), 0)
+    # Keyword-only on purpose: production calls these with kwargs because the
+    # dashboard's _ProxyStore drops positionals, and a fake that accepted
+    # positionals would let a regression to positional calls pass here.
+    def incident_alert_last_sent(self, *, session_id, kind):
+        return self.sent.get((session_id, kind), 0)
 
-    def record_incident_alert(self, sid, kind, delivered_via=None, severity=""):
-        self.sent[(sid, kind)] = int(time.time() * 1000)
-        self.recorded.append((sid, kind, list(delivered_via or []), severity))
+    def record_incident_alert(self, *, session_id, kind, delivered_via=None, severity=""):
+        self.sent[(session_id, kind)] = int(time.time() * 1000)
+        self.recorded.append((session_id, kind, list(delivered_via or []), severity))
 
 
 def _incident(kind="rate_limited", sev="warning", sid="codex:abc"):
@@ -185,13 +188,17 @@ def test_latch_survives_a_restart_on_a_real_store(sinks, tmp_path, monkeypatch):
     still see the earlier delivery."""
     pytest.importorskip("duckdb")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "t.duckdb"))
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     sys.modules.pop("clawmetry.local_store", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
     monkeypatch.setattr(ls, "_writer_owner", True)
-    store = ls.get_store()
+    # A real store, not get_store(): in CI's shared pytest process an earlier
+    # test can leave a daemon discovery file behind and get_store() then
+    # returns a _ProxyStore that drops positional args and knows no daemon.
+    store = ls.LocalStore(read_only=False)
     try:
         assert ia.deliver_incident(store, _incident())["delivered"] is True
         assert store.incident_alert_last_sent("codex:abc", "rate_limited") > 0

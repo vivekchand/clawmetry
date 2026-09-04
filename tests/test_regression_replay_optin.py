@@ -116,13 +116,17 @@ def test_compute_agreement():
 def store(tmp_path, monkeypatch):
     pytest.importorskip("duckdb")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "t.duckdb"))
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     sys.modules.pop("clawmetry.local_store", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
     monkeypatch.setattr(ls, "_writer_owner", True)
-    st = ls.get_store()
+    # A real store, not get_store(): in CI's shared pytest process an earlier
+    # test can leave a daemon discovery file behind and get_store() then
+    # returns a _ProxyStore that drops positional args and knows no daemon.
+    st = ls.LocalStore(read_only=False)
     yield st
     try:
         st.stop(flush=False)

@@ -106,6 +106,12 @@ def _load_alerts_config() -> dict:
 
 
 def _fleet_db_path() -> str:
+    # The env override wins everywhere (sync._local_alerts_fleet_db_path does
+    # the same): the dashboard's FLEET_DB_PATH is frozen at import, so asking
+    # it first would ignore an override set after it loaded.
+    env = (os.environ.get("CLAWMETRY_FLEET_DB") or "").strip()
+    if env:
+        return os.path.expanduser(env)
     d = _dashboard()
     if d is not None and hasattr(d, "_fleet_db_path"):
         try:
@@ -114,9 +120,6 @@ def _fleet_db_path() -> str:
                 return str(p)
         except Exception:
             pass
-    env = (os.environ.get("CLAWMETRY_FLEET_DB") or "").strip()
-    if env:
-        return os.path.expanduser(env)
     preferred = os.path.expanduser("~/.clawmetry")
     try:
         os.makedirs(preferred, exist_ok=True)
@@ -483,8 +486,10 @@ _MEMO: dict = {}
 def _last_sent(store: Any, sid: str, kind: str) -> int:
     fn = getattr(store, "incident_alert_last_sent", None)
     if callable(fn):
+        # Keyword args on purpose: the dashboard's _ProxyStore forwards
+        # kwargs only and silently drops positionals.
         try:
-            return int(fn(sid, kind) or 0)
+            return int(fn(session_id=sid, kind=kind) or 0)
         except Exception:
             pass
     return int(_MEMO.get((sid, kind)) or 0)
@@ -495,6 +500,6 @@ def _record(store: Any, sid: str, kind: str, via: list, sev: str) -> None:
     fn = getattr(store, "record_incident_alert", None)
     if callable(fn):
         try:
-            fn(sid, kind, delivered_via=via, severity=sev)
+            fn(session_id=sid, kind=kind, delivered_via=via, severity=sev)
         except Exception:
             pass

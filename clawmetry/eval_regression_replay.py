@@ -590,7 +590,8 @@ def update_agreement_stats(store: Any, session_id: str) -> dict | None:
         writer = getattr(store, "upsert_session_replay_stats", None)
         if not callable(reader) or not callable(writer):
             return None
-        outcomes = reader(session_id) or []
+        # Keyword args: the dashboard's _ProxyStore drops positionals.
+        outcomes = reader(session_id=session_id) or []
         if not outcomes:
             return None
         pct, majority = compute_agreement(outcomes)
@@ -599,7 +600,7 @@ def update_agreement_stats(store: Any, session_id: str) -> dict | None:
             agent_type = runtime_from_session_id(session_id) or "openclaw"
         except Exception:
             agent_type = "openclaw"
-        writer(session_id, runs=len(outcomes), agreement_pct=pct,
+        writer(session_id=session_id, runs=len(outcomes), agreement_pct=pct,
                outcomes=outcomes, agent_type=agent_type)
         return {"session_id": session_id, "runs": len(outcomes),
                 "agreement_pct": pct, "majority": majority,

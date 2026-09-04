@@ -27,16 +27,28 @@ def fresh(tmp_path, monkeypatch):
     pytest.importorskip("duckdb")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "t.duckdb"))
     monkeypatch.setenv("OPENCLAW_HOME", str(tmp_path))
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     sys.modules.pop("clawmetry.local_store", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
     monkeypatch.setattr(ls, "_writer_owner", True)
-    store = ls.get_store()
+    # A real store, not get_store(): in CI's shared pytest process an earlier
+    # test can leave a daemon discovery file behind and get_store() then
+    # returns a _ProxyStore that drops positional args and knows no daemon.
+    store = ls.LocalStore(read_only=False)
     sys.modules.pop("clawmetry.insights", None)
     import clawmetry.insights as ins
     importlib.reload(ins)
+    # Run the templates on THIS store. The production path goes through the
+    # daemon proxy; in CI's shared process that can point at another test's
+    # daemon, which is not what these tests are proving.
+    monkeypatch.setattr(
+        ins, "_run_sql_via_daemon",
+        lambda sql, params: store.raw_select_safe(
+            sql=sql, params=ins._filter_params_for_sql(sql, params),
+            timeout_secs=5) or [])
     yield store, ins
     try:
         store.stop(flush=False)
