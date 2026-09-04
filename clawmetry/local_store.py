@@ -1674,6 +1674,29 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_policy_actions_created ON policy_actions(created_at DESC)",
+    # WO-61: the instructions file(s) a session ran under, as the agent saw
+    # them. Content is stored REDACTED (secrets + personal data) and capped
+    # by the hook; ``sha256`` covers the full file so a changed CLAUDE.md is
+    # a comparable property across sessions. One row per (session, path):
+    # a re-load of the same path replaces the row and bumps ``loads``.
+    """
+    CREATE TABLE IF NOT EXISTS session_instructions (
+        agent_type        VARCHAR NOT NULL DEFAULT 'claude_code',
+        session_id        VARCHAR NOT NULL,
+        instruction_path  VARCHAR NOT NULL,
+        instruction_type  VARCHAR,
+        load_reason       VARCHAR,
+        sha256            VARCHAR,
+        byte_len          INTEGER,
+        truncated         BOOLEAN DEFAULT FALSE,
+        content           VARCHAR,
+        loads             INTEGER DEFAULT 1,
+        loaded_at         VARCHAR,
+        updated_at        BIGINT NOT NULL,
+        PRIMARY KEY (session_id, instruction_path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_instructions_sha ON session_instructions(sha256)",
 ]
 
 
@@ -14324,6 +14347,214 @@ class LocalStore:
             "compactions":       compactions,
             "overflow_sessions": overflow_sessions,
         }
+
+    # ── lifecycle facts from runtime hooks (WO-61) ─────────────────────────
+    #
+    # Written by routes/hooks.py::api_hook_claude_code_lifecycle through the
+    # daemon proxy. Events ride the normal ring buffer, so they are redacted
+    # at the same chokepoint as everything else and the INSERT OR IGNORE on
+    # ``id`` is what makes a second arrival of the same fact a no-op.
+
+    LIFECYCLE_EVENT_TYPES = (
+        "tool.failed", "subagent.started", "subagent.stopped",
+        "permission.denied", "context.compacted", "session.started",
+        "instructions.loaded",
+    )
+
+    def ingest_lifecycle_events(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        node_id: str | None = None,
+        agent_type: str = "claude_code",
+    ) -> int:
+        """Queue typed lifecycle events for a family-runtime session.
+
+        Each event needs ``id`` (deterministic, from the hook), ``session_id``
+        (bare or already prefixed), ``event_type`` (one of
+        ``LIFECYCLE_EVENT_TYPES``) and ``ts``. ``data`` is stored as the
+        event payload with ``source='hook'`` forced on, so a reader can tell
+        a hook-sourced row from a transcript-derived one. Returns the number
+        of rows queued. Never raises on a bad row: it is skipped.
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_lifecycle_events() on read-only store")
+        rt = _clean_str(agent_type) or "claude_code"
+        nid = _clean_str(node_id) or "unknown"
+        rows: list[dict[str, Any]] = []
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            etype = str(ev.get("event_type") or "")
+            sid = str(ev.get("session_id") or "").strip()
+            eid = str(ev.get("id") or "").strip()
+            ts = str(ev.get("ts") or "").strip()
+            if etype not in self.LIFECYCLE_EVENT_TYPES or not sid or not eid or not ts:
+                continue
+            if rt != "openclaw" and not sid.startswith(rt + ":"):
+                sid = f"{rt}:{sid}"
+            data = dict(ev.get("data") or {}) if isinstance(ev.get("data"), dict) else {}
+            data["source"] = "hook"
+            rows.append({
+                "id": eid[:64],
+                "node_id": nid,
+                "agent_type": rt,
+                "agent_id": _clean_str(data.get("agent_id")) or "main",
+                "session_id": sid,
+                "workspace_id": _clean_str(data.get("cwd")),
+                "event_type": etype,
+                "ts": ts[:40],
+                "data": data,
+                "runtime_kind": rt,
+            })
+        if rows:
+            self.ingest_many(rows)
+        return len(rows)
+
+    def upsert_session_instructions(
+        self,
+        row: dict[str, Any],
+        *,
+        agent_type: str = "claude_code",
+    ) -> bool:
+        """Store the instructions file a session loaded, redacted and capped.
+
+        Redaction (secret tier + personal-data tier) runs HERE, on the
+        daemon, so the hook process stays cheap and the contents never rest
+        unredacted. Content is capped again defensively at 32 KB; the hash
+        is the caller's (it covers the full file). Returns True when the
+        write went through; never raises.
+        """
+        if self._read_only or not isinstance(row, dict):
+            return False
+        sid = str(row.get("session_id") or "").strip()
+        path = str(row.get("instruction_path") or "").strip()
+        if not sid or not path:
+            return False
+        rt = _clean_str(agent_type) or "claude_code"
+        if rt != "openclaw" and not sid.startswith(rt + ":"):
+            sid = f"{rt}:{sid}"
+        content = row.get("content")
+        content = content if isinstance(content, str) else ""
+        cap = 32 * 1024
+        truncated = bool(row.get("truncated")) or len(content.encode("utf-8", "ignore")) > cap
+        if len(content.encode("utf-8", "ignore")) > cap:
+            content = content.encode("utf-8", "ignore")[:cap].decode("utf-8", "ignore")
+        try:
+            from clawmetry import redaction as _redaction
+            content = _redaction.redact_text(content)
+        except Exception:
+            pass  # never lose the row on a redaction bug
+        try:
+            byte_len = int(row.get("bytes")) if row.get("bytes") is not None else None
+        except (TypeError, ValueError):
+            byte_len = None
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        """
+                        INSERT INTO session_instructions (
+                            agent_type, session_id, instruction_path,
+                            instruction_type, load_reason, sha256, byte_len,
+                            truncated, content, loads, loaded_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        ON CONFLICT (session_id, instruction_path) DO UPDATE SET
+                            instruction_type = COALESCE(excluded.instruction_type, session_instructions.instruction_type),
+                            load_reason      = COALESCE(excluded.load_reason, session_instructions.load_reason),
+                            sha256           = excluded.sha256,
+                            byte_len         = excluded.byte_len,
+                            truncated        = excluded.truncated,
+                            content          = excluded.content,
+                            loads            = CASE WHEN session_instructions.loaded_at = excluded.loaded_at
+                                                     AND session_instructions.sha256 = excluded.sha256
+                                                    THEN session_instructions.loads
+                                                    ELSE session_instructions.loads + 1 END,
+                            loaded_at        = excluded.loaded_at,
+                            updated_at       = excluded.updated_at
+                        """,
+                        [rt, sid, path[:1000],
+                         _clean_str(row.get("instruction_type")),
+                         _clean_str(row.get("load_reason")),
+                         _clean_str(row.get("sha256")),
+                         byte_len, truncated, content,
+                         _clean_str(row.get("loaded_at")),
+                         int(time.time() * 1000)],
+                    )
+            return True
+        except Exception:
+            log.debug("local store: upsert_session_instructions failed for %s",
+                      sid, exc_info=True)
+            return False
+
+    def get_session_instructions(self, session_id: str) -> list[dict[str, Any]]:
+        """Every instructions row for a session (bare or prefixed id)."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        try:
+            rows = self._fetch(
+                """
+                SELECT agent_type, session_id, instruction_path,
+                       instruction_type, load_reason, sha256, byte_len,
+                       truncated, content, loads, loaded_at, updated_at
+                FROM session_instructions
+                WHERE session_id = ? OR session_id LIKE ?
+                ORDER BY loaded_at, instruction_path
+                """,
+                [sid, f"%:{sid}"],
+            )
+        except Exception:
+            return []
+        cols = ("agent_type", "session_id", "instruction_path",
+                "instruction_type", "load_reason", "sha256", "byte_len",
+                "truncated", "content", "loads", "loaded_at", "updated_at")
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_lifecycle_events(
+        self,
+        session_id: str,
+        *,
+        event_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Lifecycle rows for one session, newest last, ``data`` decoded.
+
+        This is the read the Behaviour Signals work counts denials from:
+        ``event_type='permission.denied'`` rows carry ``tool_name`` and
+        ``reason`` and nothing else about the call.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        try:
+            limit = max(1, min(2000, int(limit)))
+        except (TypeError, ValueError):
+            limit = 200
+        types = [event_type] if event_type in self.LIFECYCLE_EVENT_TYPES \
+            else list(self.LIFECYCLE_EVENT_TYPES)
+        placeholders = ",".join("?" for _ in types)
+        try:
+            rows = self._fetch(
+                f"""
+                SELECT id, session_id, event_type, ts, data, agent_type
+                FROM events
+                WHERE (session_id = ? OR session_id LIKE ?)
+                  AND event_type IN ({placeholders})
+                ORDER BY ts
+                LIMIT ?
+                """,
+                [sid, f"%:{sid}", *types, limit],
+            )
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = _from_blob(r[4])
+            out.append({"id": r[0], "session_id": r[1], "event_type": r[2],
+                        "ts": r[3], "data": d if isinstance(d, dict) else {},
+                        "agent_type": r[5]})
+        return out
 
     def query_context_coverage(
         self,

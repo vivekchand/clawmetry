@@ -8700,8 +8700,10 @@ def main() -> None:
     # entry below exists only so `clawmetry --help`-style discovery shows it.
     p_hooks = sub.add_parser(
         "hooks",
-        help="Claude Code approval hooks: install | uninstall | status | "
-             "run {pretooluse|notification} (pre-execution gate + phone push)")
+        help="Claude Code hooks: install | uninstall | status | "
+             "run <event> (pre-execution gate, phone push, and the "
+             "lifecycle events: tool failures, subagents, denials, "
+             "compactions, session start, instructions loaded)")
     p_hooks.add_argument("hooks_cmd", nargs="*")
     # `instrument` is likewise intercepted by the fast path (WO-57).
     p_instr = sub.add_parser(

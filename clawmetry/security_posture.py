@@ -70,12 +70,39 @@ def get_posture(runtime: str) -> dict:
     with _lock:
         fn = _providers.get(rt)
     if fn is None:
-        return _not_available(rt)
+        return _with_node_checks(_not_available(rt))
     result = fn()
     if isinstance(result, dict):
         result.setdefault("runtime", rt)
         result.setdefault("status", "ok")
-    return result
+    return _with_node_checks(result)
+
+
+def _with_node_checks(env: dict) -> dict:
+    """Append the checks that are true of the NODE, whichever runtime is
+    selected: today, the personal-data redaction line (WO-61). The line
+    states the operator's setting; it does not move the runtime's score,
+    because a redaction switch is not a misconfiguration of that runtime.
+    """
+    if not isinstance(env, dict):
+        return env
+    try:
+        from clawmetry.redaction import pii_posture_check
+        check = pii_posture_check()
+    except Exception:
+        return env
+    checks = env.get("checks")
+    if not isinstance(checks, list):
+        checks = []
+        env["checks"] = checks
+    if any(isinstance(c, dict) and c.get("id") == check["id"] for c in checks):
+        return env
+    checks.append(check)
+    for key, status in (("passed", "pass"), ("warnings", "warn"), ("failed", "fail")):
+        if check["status"] == status:
+            env[key] = int(env.get(key) or 0) + 1
+    env["total"] = int(env.get("total") or 0) + 1
+    return env
 
 
 def _runtime_label(rt: str) -> str:
