@@ -30,6 +30,11 @@ jobs:
       # but silently 403'd, so desktop-artifacts had to be dispatched by hand
       # to attach the .dmg to the release.
       actions: write
+      # Mints the short-lived OIDC token that signs the build provenance
+      # attached to every release below. Provenance minting is a no-op
+      # without both of these, and fails the step rather than warning.
+      id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -173,7 +178,9 @@ jobs:
           # two skips the hole. (Burned 0.12.504 on 2026-06-11: published then
           # deleted, leaving PyPI-latest 0.12.503 with 0.12.504 permanently
           # unusable; dashboard.py was reconciled to 0.12.504 so max()+1 = 0.12.505.)
-          PYPI=$(curl -s https://pypi.org/pypi/clawmetry/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          # Fetch to a file, then parse — see the note in auto-deploy-cloud.yml.
+          curl -fsSL https://pypi.org/pypi/clawmetry/json -o /tmp/pypi-clawmetry.json
+          PYPI=$(python3 -c "import json; print(json.load(open('/tmp/pypi-clawmetry.json'))['info']['version'])")
           DASH=$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('dashboard.py').read()).group(1))")
           OLD=$(python3 -c "
           def k(v): return tuple(int(x) for x in v.split('.'))
@@ -213,6 +220,20 @@ jobs:
 
       - name: Build package
         run: python3 -m build
+
+      # Build provenance: a signed, publicly verifiable statement binding
+      # these exact artifacts to this workflow run, commit and repo. It is
+      # generated here, from the same dist/ that twine uploads below, so the
+      # attestation covers the bytes that actually ship rather than a
+      # separate rebuild.
+      #
+      # Verify with:
+      #   gh attestation verify dist/clawmetry-*.whl --repo vivekchand/clawmetry
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: "dist/*"
 
       # Pre-publish smoke. PyPI uploads are irreversible (yanking exists
       # but is awkward and visible to users), so we gate twine upload
@@ -329,7 +350,10 @@ jobs:
       - name: Install Playwright + Chromium for cloud-contract spec
         working-directory: tests/e2e
         run: |
-          npm install
+          # `npm ci` — see the note in zero-click-auth-e2e.yml. This runs on
+          # the release path, where an unreviewed transitive bump deciding
+          # whether a release ships is exactly what must not happen.
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Pre-publish cloud-contract spec (normal user + KiloClaw deferred-sync)
@@ -421,6 +445,37 @@ jobs:
             --title "$NEW_TAG" \
             --notes "Released via PR: $PR_TITLE" \
             --draft || echo "Release already exists, skipping"
+
+          # Attach the sdist/wheel and their provenance to the release.
+          #
+          # Until now the only assets on a release were the desktop
+          # installers, attached later by desktop-artifacts.yml, and NOTHING
+          # on the release was signed or provenanced — anyone auditing a
+          # download had to take our word for what produced it. The .intoto
+          # .jsonl is the attestation minted by the "Attest build provenance"
+          # step above, renamed so it is recognisable as provenance by
+          # convention (and by OpenSSF Scorecard's Signed-Releases check,
+          # which scored 0 on exactly this).
+          #
+          # Non-blocking: the wheel is already on PyPI by this point, so a
+          # failed upload must not fail the release. It does mean a silent
+          # failure looks like success, which is why
+          # tests/test_release_provenance_attached.py asserts the wiring.
+          gh release upload "$NEW_TAG" dist/*.whl dist/*.tar.gz \
+            --clobber || echo "⚠ dist upload failed (non-blocking)"
+
+          # Uploaded separately so a missing attestation cannot also strand
+          # the wheel and sdist, which is what a single combined upload with
+          # a non-existent path would do.
+          BUNDLE="${{ steps.attest.outputs.bundle-path }}"
+          if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
+            PROV="dist/clawmetry-${{ steps.bump.outputs.new }}.intoto.jsonl"
+            cp "$BUNDLE" "$PROV"
+            gh release upload "$NEW_TAG" "$PROV" \
+              --clobber || echo "⚠ provenance upload failed (non-blocking)"
+          else
+            echo "⚠ no attestation bundle at '$BUNDLE' — release has no provenance"
+          fi
 
       # GitHub deliberately suppresses `on: push: tags:` cascade triggers
       # for anything created with the default GITHUB_TOKEN (see
