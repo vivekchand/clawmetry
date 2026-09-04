@@ -55,7 +55,11 @@ const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 // switchTab() name here, in CANONICAL_TABS, and in PR_SCREENSHOT_TABS.
 // `overview` is the implicit default -- listed first for a `root` baseline.
 const DEFAULT_TABS =
+<<<<<<< HEAD
   "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,guard,signals,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench";
+=======
+  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,clusters,history,channels,dives,harness,inventory,nemoclaw,guard,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench,trail";
+>>>>>>> e6a3ac0c1 (Register the trail tab in the C5 sweep, PR-screenshot and visual-diff tab lists)
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
   .split(",")
   .map((p) => p.trim())
