@@ -2925,8 +2925,118 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
 
+    # Inputs & context: the trajectory sidecars this loop deliberately skips
+    # (they would mint phantom sessions) are the ONLY place OpenClaw writes
+    # what the agent was given. Read just that event type out of them.
+    try:
+        total += _sync_trajectory_context(sessions_dir, state, node_id)
+    except Exception as _e:
+        log.debug("trajectory context sync skipped: %s", _e)
+
     _record_sync_progress("sessions", total, total)
     return total
+
+
+# Per-cycle cap on context.compiled lines read out of trajectory sidecars.
+# Each line can be hundreds of KB (it repeats the conversation), so this is a
+# byte budget as much as a line budget.
+_TRAJECTORY_CTX_MAX_LINES_PER_CYCLE = 400
+_TRAJECTORY_CTX_MAX_LINE_BYTES = 4 * 1024 * 1024
+
+
+def _trajectory_sidecars(sessions_dir) -> list[str]:
+    """``<sid>.trajectory.jsonl`` files next to the session transcripts.
+    Empty when the directory is missing or the runtime never wrote one
+    (``OPENCLAW_TRAJECTORY=0``)."""
+    out: list[str] = []
+    try:
+        for fname in os.listdir(str(sessions_dir)):
+            if fname.endswith(".trajectory.jsonl"):
+                out.append(os.path.join(str(sessions_dir), fname))
+    except OSError:
+        pass
+    return out
+
+
+def _sync_trajectory_context(sessions_dir, state: dict, node_id: str,
+                             agent_type: str = "openclaw") -> int:
+    """Ingest ``context.compiled`` events from OpenClaw trajectory sidecars.
+
+    The sidecar line shape (openclaw dist, run-attempt ``recordEvent``)::
+
+        {traceSchema: "openclaw-trajectory", schemaVersion: 1, type, ts, seq,
+         sessionId, sessionKey, runId, workspaceDir, provider, modelId,
+         modelApi, data: {systemPrompt, prompt, messages, tools[], ...}}
+
+    Only ``type == "context.compiled"`` lines are read; every other trajectory
+    event is already represented by the canonical transcript, and ingesting
+    the sidecar wholesale is what produced phantom ``<uuid>.trajectory``
+    sessions before. The session id is the sidecar's own ``sessionId`` (the
+    same uuid as ``<sid>.jsonl``), so the rows join the real session. Each
+    line becomes one ``events`` row (shrunk: see
+    ``session_context.compact_raw_event_data``) and, via the store's ingest
+    chokepoint, its ``session_context`` rows. Progress is a per-file line
+    cursor in ``state["trajectory_ctx_cursor"]``. Returns lines ingested."""
+    files = _trajectory_sidecars(sessions_dir)
+    if not files:
+        return 0
+    from clawmetry import local_store as _ls
+    store = _ls.get_store()
+    cursors: dict = state.setdefault("trajectory_ctx_cursor", {})
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    ingested = 0
+    for fpath in files:
+        if ingested >= _TRAJECTORY_CTX_MAX_LINES_PER_CYCLE:
+            break
+        fname = os.path.basename(fpath)
+        sid_from_name = fname[: -len(".trajectory.jsonl")]
+        start = int(cursors.get(fname, 0) or 0)
+        cursor = start
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for i, raw in enumerate(islice(fh, start, None), start=start):
+                    cursor = i + 1
+                    if not raw or len(raw) > _TRAJECTORY_CTX_MAX_LINE_BYTES:
+                        continue
+                    # Cheap pre-filter before json.loads on a large line.
+                    if '"context.compiled"' not in raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except Exception:
+                        continue
+                    if not isinstance(obj, dict) or obj.get("type") != "context.compiled":
+                        continue
+                    sid = str(obj.get("sessionId") or sid_from_name)
+                    ts = obj.get("ts") or obj.get("timestamp") or ""
+                    if not ts:
+                        continue
+                    seq = obj.get("seq")
+                    eid = f"{sid}:ctx:{seq}" if seq is not None else f"{sid}:ctx:{ts}"
+                    store.ingest({
+                        "id": eid,
+                        "agent_type": agent_type,
+                        "node_id": node_id,
+                        "agent_id": "main",
+                        "session_id": sid,
+                        "workspace_id": obj.get("workspaceDir"),
+                        "event_type": "context.compiled",
+                        "ts": str(ts),
+                        "data": obj,
+                        "model": obj.get("modelId") or None,
+                    })
+                    ingested += 1
+                    if ingested >= _TRAJECTORY_CTX_MAX_LINES_PER_CYCLE:
+                        break
+            cursors[fname] = cursor
+        except Exception as _e:
+            log.debug("trajectory context read failed (%s): %s", fname, _e)
+    if ingested:
+        try:
+            store.flush()
+        except Exception:
+            pass
+    return ingested
 
 
 def _parse_openclaw_subagent_index(index) -> dict:
@@ -16625,6 +16735,49 @@ def _build_usage_snapshot():
     return out
 
 
+def _build_session_context_snapshot(limit_sessions: int = 60):
+    """Inputs & context slice for the hosted dashboard (cm-cloud interceptor
+    for /api/sessions/<id>/context). Metadata only: kind, sha256, size,
+    turns, timestamps and the tool / MCP NAMES from ``summary``. Prompt
+    CONTENT is deliberately absent even though this snapshot is E2E
+    encrypted: a 64 KB system prompt per session would multiply the blob,
+    and the UI says plainly that the full text stays on the machine. A
+    160-char redacted preview rides along so the card is never blank."""
+    out: dict = {}
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        rows = store._fetch(
+            """
+            SELECT agent_type, session_id, kind, sha256, size_bytes, summary,
+                   first_ts, last_ts, turns, content
+            FROM session_context
+            WHERE session_id IN (
+                SELECT session_id FROM session_context
+                GROUP BY session_id ORDER BY MAX(last_ts) DESC LIMIT ?
+            )
+            ORDER BY session_id, kind, first_ts
+            """,
+            [int(limit_sessions)],
+        )
+        for at, sid, kind, sha, size, summary, fts, lts, turns, blob in rows:
+            item = {
+                "kind": kind, "sha256": sha, "size_bytes": size,
+                "summary": summary, "first_ts": fts, "last_ts": lts,
+                "turns": turns,
+            }
+            if kind in ("system_prompt", "user_prompt") and blob is not None:
+                try:
+                    item["preview"] = bytes(blob).decode("utf-8", "ignore")[:160]
+                except Exception:
+                    pass
+            bucket = out.setdefault(str(sid), {"agent_type": at, "items": []})
+            bucket["items"].append(item)
+    except Exception:
+        return {}
+    return out
+
+
 def _build_approvals_audit_snapshot():
     """Approvals audit slice (mirrors /api/approvals-audit). Trial-bug #22: the
     Policy tab's exec-approval audit was blank on the hosted dashboard."""
@@ -22314,6 +22467,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
         "usage": _build_usage_snapshot(),
+        # Inputs & context per session (Trail triad). Read by the cloud
+        # cm-cloud-session-context interceptor for /api/sessions/<id>/context.
+        "sessionContext": _build_session_context_snapshot(),
         "approvalsAudit": _build_approvals_audit_snapshot(),
         # Security tab: tamper-evident hash-chain verify + Enterprise audit
         # feed. Both are local-only data (DuckDB chain / SQLite audit.db) so
@@ -22474,6 +22630,17 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         }
     except Exception as _att_e:  # noqa: BLE001
         log.debug("attention snapshot slice failed (continuing): %s", _att_e)
+
+    # Agent self-reports (WO-59): counts per category per runtime plus the
+    # honesty rollup. No summaries ride the snapshot; those stay on the
+    # node. Built on the daemon's own store handle. Best-effort: the
+    # snapshot must still ship on a store without the table.
+    try:
+        from clawmetry import self_diagnostics as _sd
+        from clawmetry import local_store as _ls_sd
+        payload["selfReports"] = _sd.snapshot_slice(_ls_sd.get_store())
+    except Exception as _sd_e:  # noqa: BLE001
+        log.debug("selfReports snapshot slice failed (continuing): %s", _sd_e)
 
     log.info(
         f"System snapshot: {len(subagents_list)} subagents ({active_count} active)"
@@ -24004,6 +24171,19 @@ def run_daemon() -> None:
                             log.info(
                                 f"detectors: {n_det} incident(s) emitted"
                             )
+                        # Self-diagnostics (WO-59): place each agent
+                        # self-report next to the independent record for
+                        # the same session, if one exists. Same store
+                        # handle, same tick, read-mostly; never raises.
+                        try:
+                            from clawmetry import self_diagnostics as _sd
+                            n_cor = _sd.corroborate_pending(store_for_det)
+                            if n_cor:
+                                log.info(
+                                    f"self-diagnostics: {n_cor} report(s) corroborated"
+                                )
+                        except Exception as _sde:  # noqa: BLE001
+                            log.debug(f"self-diagnostics: tick errored: {_sde}")
                     except Exception as _de:
                         log.warning(
                             f"detectors: tick errored: {_de}"

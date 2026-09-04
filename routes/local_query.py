@@ -303,6 +303,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "session_id": sid,
             "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
         }
+    if shape == "session_context":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("session_context shape requires session_id")
+        return {
+            "session_id": sid,
+            "agent_type": raw.get("agent_type") or None,
+            "limit": _safe_int(raw.get("limit"), default=200, lo=1, hi=1000),
+        }
     raise ValueError(f"unknown shape: {shape}")
 
 
@@ -676,6 +685,9 @@ _DAEMON_METHODS = frozenset({
     "query_cohort_sessions",
     "query_similar_sessions",
     "query_events",
+    # Inputs & context: /api/sessions/<id>/context reads the session_context
+    # table (system prompt, tools, runtime setup) through the daemon.
+    "query_session_context",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
     # (private helpers would be arbitrary SQL over the RPC), so on every
@@ -1120,6 +1132,18 @@ _DAEMON_METHODS = frozenset({
     # Read by routes/guard.py and the sessions-shape enrichment below.
     "query_session_replay_stats",
     "query_incident_alerts",
+    # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
+    # The MCP ``report_to_operator`` tool runs in the agent's own process
+    # and writes through the daemon (which owns the writer lock); the
+    # dashboard's /api/self-reports and the MCP read tools read the same
+    # way. An unlisted method here is a silent 400 -> "no reports".
+    "ingest_self_report",
+    "query_self_reports",
+    "query_self_report_counts",
+    "query_self_report_honesty",
+    "query_guard_incidents",
+    "query_session_denials",
+    "find_session_by_cwd",
 })
 
 

@@ -1830,6 +1830,7 @@ async function loadContextEconomics() {
     return;
   }
   try { loadContextCoverage(); } catch (e) { /* panel is additive, never fatal */ }
+  try { _loadCeInputsMeasured(_ceSessionId); } catch (e) { /* additive */ }
   var util = data.utilization || [];
   var comps = data.compactions || [];
   var overflow = data.overflow_sessions || [];
@@ -20978,9 +20979,11 @@ async function viewTranscript(sessionId) {
       + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
+    _loadInputsPanel(sessionId);
     _loadLifecycleCoverageLine(sessionId);
     _loadAuthorityPanel(sessionId);
     _loadOrchestrationPanel(sessionId);
+    _loadSelfReportsPanel(sessionId);
     _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
     // Build replay events array - include compaction markers as special events
     var events = [];
@@ -21138,6 +21141,195 @@ async function _loadOrchestrationPanel(sessionId) {
 
 // Authority footprint panel (#880) — fetches /api/authority for the current
 // session and renders tools/filesystem/network sections in a collapsible card.
+// ── Inputs & context: what the agent was given ──────────────────────────
+// Reads /api/sessions/<id>/context (DuckDB session_context, filled from
+// context.compiled events). Every number here is MEASURED from the runtime's
+// own event: real system-prompt bytes, real tool names. When the runtime does
+// not expose its inputs the adapter says so (coverage.inputs === 'none') and
+// the panel says "Not exposed by <runtime>" instead of guessing.
+//
+// Cloud: the hosted dashboard has no DuckDB. The cloud bundle installs
+// window._cmCloudSessionContext(sid) (cm-cloud-session-context interceptor),
+// which slices the E2E-encrypted snapshot's `sessionContext` bucket. That
+// slice carries metadata + a short preview only, so the card explains that
+// the full text stays on the machine rather than rendering an empty box.
+async function _fetchSessionContext(sessionId) {
+  if (window.CLOUD_MODE && typeof window._cmCloudSessionContext === 'function') {
+    var c = await window._cmCloudSessionContext(sessionId);
+    if (c && !c.error) { c._cloud = true; return c; }
+    return c;
+  }
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/sessions/' + encodeURIComponent(sessionId) + '/context'
+    + ((_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '');
+  return fetch(url).then(function(r) { return r.json(); });
+}
+
+function _ctxFmtBytes(n) {
+  n = Number(n || 0);
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(n >= 102400 ? 0 : 1) + ' KB';
+  return n + ' B';
+}
+
+function _ctxRuntimeLabel(rt) {
+  try {
+    if (typeof _cmRuntimeDisplayName === 'function') { var d = _cmRuntimeDisplayName(rt); if (d) return d; }
+  } catch (e) { /* fall through */ }
+  return String(rt || 'this runtime');
+}
+
+// One collapsed block: label + measured facts on the header row, redacted
+// text (or the honest "stays on your machine" note) behind a Show toggle.
+function _ctxTextBlock(id, label, item, cloud) {
+  var facts = [];
+  if (item.size_bytes) facts.push(_ctxFmtBytes(item.size_bytes));
+  if (item.sha256) facts.push('<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" title="sha256 of the full text">' + escHtml(String(item.sha256).slice(0, 12)) + '</span>');
+  if (item.turns && item.turns > 1) facts.push(escHtml(t('inputs.seen_turns', {n: item.turns}, 'seen on ' + item.turns + ' turns')));
+  if (item.content_truncated) facts.push('<span style="color:#d97706;">' + escHtml(t('inputs.truncated', null, 'stored copy cut at 64 KB')) + '</span>');
+  var body;
+  if (item.content) {
+    body = '<pre style="margin:6px 0 0;padding:8px 10px;background:var(--bg-primary);border-radius:6px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;color:var(--text-secondary);">' + escHtml(item.content) + '</pre>';
+  } else if (cloud) {
+    body = (item.preview ? '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);font-style:italic;">' + escHtml(item.preview) + (item.preview.length >= 160 ? '…' : '') + '</div>' : '')
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.cloud_content_local', null, 'Full text stays on your machine. Open the local dashboard to read it.')) + '</div>';
+  } else {
+    body = '';
+  }
+  var bid = 'ctx-body-' + id;
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + facts.join(' · ') + '</span>'
+    + (body ? '<button class="refresh-btn" style="margin-left:auto;font-size:10px;padding:2px 8px;" onclick="var b=document.getElementById(\'' + bid + '\');var o=b.style.display===\'none\';b.style.display=o?\'\':\'none\';this.textContent=o?' + JSON.stringify(t('inputs.hide', null, 'Hide')) + ':' + JSON.stringify(t('inputs.show', null, 'Show')) + ';">' + escHtml(t('inputs.show', null, 'Show')) + '</button>' : '')
+    + '</div>'
+    + (body ? '<div id="' + bid + '" style="display:none;">' + body + '</div>' : '')
+    + '</div>';
+}
+
+function _ctxNamesBlock(label, items) {
+  var names = [];
+  var turns = 0;
+  items.forEach(function(it) {
+    (it.names || []).forEach(function(n) { if (names.indexOf(n) === -1) names.push(n); });
+    turns = Math.max(turns, Number(it.turns || 0));
+  });
+  if (!names.length) return '';
+  var head = names.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: names.length}, names.length + ' tools');
+  var pills = names.map(function(n) {
+    return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 7px;border-radius:9px;background:var(--bg-primary);border:1px solid var(--border-secondary);font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);">' + escHtml(n) + '</span>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(head) + (turns > 1 ? ' · ' + escHtml(t('inputs.seen_turns', {n: turns}, 'seen on ' + turns + ' turns')) : '') + '</span>'
+    + '</div><div style="margin-top:4px;">' + pills + '</div></div>';
+}
+
+function _ctxMetaBlock(label, items) {
+  var meta = {};
+  items.forEach(function(it) { var m = it.meta || {}; Object.keys(m).forEach(function(k) { meta[k] = m[k]; }); });
+  var keys = Object.keys(meta).filter(function(k) { return meta[k] !== null && meta[k] !== '' && typeof meta[k] !== 'object'; });
+  if (!keys.length) return '';
+  var order = ['model', 'provider', 'cwd', 'version', 'permissionMode', 'transport', 'streamStrategy', 'tools_count', 'messages_count', 'imagesCount'];
+  keys.sort(function(a, b) { var ia = order.indexOf(a), ib = order.indexOf(b); ia = ia < 0 ? 99 : ia; ib = ib < 0 ? 99 : ib; return ia - ib || a.localeCompare(b); });
+  var rows = keys.map(function(k) {
+    return '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(k) + '</span> <span style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(String(meta[k])) + '</span>';
+  }).join('<span style="color:var(--border);margin:0 6px;">|</span>');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);margin-right:8px;">' + escHtml(label) + '</span>' + rows + '</div>';
+}
+
+function _ctxFilesBlock(label, items) {
+  if (!items.length) return '';
+  var lis = items.map(function(it) {
+    return '<div style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(it.summary || '') + (it.size_bytes ? ' <span style="color:var(--text-muted);">' + _ctxFmtBytes(it.size_bytes) + '</span>' : '') + '</div>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span><div style="margin-top:3px;">' + lis + '</div></div>';
+}
+
+function _renderInputsBody(d) {
+  var items = (d && d.items) || [];
+  var cov = (d && d.coverage) || {};
+  var rt = _ctxRuntimeLabel(d && d.runtime);
+  var cloud = !!(d && d._cloud);
+  var byKind = {};
+  items.forEach(function(it) { (byKind[it.kind] = byKind[it.kind] || []).push(it); });
+  var html = '';
+  var summaryBits = [];
+  if (!items.length) {
+    if (cov.inputs === 'none') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">'
+        + '<strong style="color:var(--text-secondary);">' + escHtml(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt)) + '</strong><br>'
+        + escHtml(cov.note || t('inputs.not_exposed_hint', null, 'This runtime does not write its instructions or tool list anywhere ClawMetry can read.')) + '</div>';
+      summaryBits.push(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt));
+    } else if (cov.inputs === 'unknown') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.adapter_missing', null, 'The adapter for this runtime is not loaded here, so ClawMetry cannot say what it exposes.')) + '</div>';
+    } else {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.none_yet', null, 'Nothing captured for this session yet. It fills in as the agent runs.')) + '</div>';
+    }
+    return {html: html, summary: summaryBits.join(' · ')};
+  }
+  (byKind.system_prompt || []).forEach(function(it, i) { html += _ctxTextBlock('sp' + i, t('inputs.system_prompt', null, 'Instructions (system prompt)'), it, cloud); });
+  (byKind.user_prompt || []).slice(0, 1).forEach(function(it, i) { html += _ctxTextBlock('up' + i, t('inputs.user_prompt', null, 'First request'), it, cloud); });
+  html += _ctxNamesBlock(t('inputs.tools', null, 'Tools it could use'), byKind.tools_available || []);
+  html += _ctxNamesBlock(t('inputs.mcp', null, 'Connected servers (MCP)'), byKind.mcp_servers || []);
+  html += _ctxFilesBlock(t('inputs.context_files', null, 'Context files'), byKind.context_file || []);
+  html += _ctxMetaBlock(t('inputs.setup', null, 'Setup'), byKind.runtime_meta || []);
+  if (cov.inputs === 'partial') {
+    html += '<div style="padding-top:6px;font-size:10px;color:var(--text-muted);">' + escHtml(cov.note || t('inputs.partial_hint', null, 'This runtime shares part of its setup; the rest is not written to disk.')) + '</div>';
+  }
+  var sp = (byKind.system_prompt || [])[0];
+  if (sp && sp.size_bytes) summaryBits.push(_ctxFmtBytes(sp.size_bytes) + ' ' + t('inputs.system_prompt', null, 'Instructions (system prompt)').toLowerCase().split(' (')[0]);
+  var toolNames = [];
+  (byKind.tools_available || []).forEach(function(it) { (it.names || []).forEach(function(n) { if (toolNames.indexOf(n) === -1) toolNames.push(n); }); });
+  if (toolNames.length) summaryBits.push(toolNames.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: toolNames.length}, toolNames.length + ' tools'));
+  var rm = (byKind.runtime_meta || [])[0];
+  if (rm && rm.meta && rm.meta.model) summaryBits.push(String(rm.meta.model));
+  summaryBits.push('<span title="Measured from the runtime\'s own context.compiled event, not estimated." style="color:#10b981;">' + escHtml(t('inputs.measured', null, 'measured')) + '</span>');
+  return {html: html, summary: summaryBits.join(' · ')};
+}
+
+async function _loadInputsPanel(sessionId) {
+  var panel = document.getElementById('inputs-panel');
+  var body  = document.getElementById('inputs-panel-body');
+  var sumEl = document.getElementById('inputs-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  body.innerHTML = '';
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) return;
+    var r = _renderInputsBody(d);
+    body.innerHTML = r.html;
+    if (sumEl) sumEl.innerHTML = r.summary;
+    panel.style.display = '';
+    // Open by default when there is something to read; stay collapsed for
+    // the honest empty states so they do not push the transcript down.
+    body.style.display = (d.items && d.items.length) ? '' : 'none';
+  } catch (e) { /* the panel is additive; the transcript renders without it */ }
+}
+
+// LLM Context tab: measured inputs for the selected session chip. The gauge
+// above it estimates utilisation against a window; this line is the part
+// that is NOT an estimate, so the two never wear the same clothes.
+async function _loadCeInputsMeasured(sessionId) {
+  var el = document.getElementById('ce-inputs-measured');
+  if (!el) return;
+  if (!sessionId) { el.innerHTML = ''; return; }
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) { el.innerHTML = ''; return; }
+    var r = _renderInputsBody(d);
+    el.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:8px 12px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">📥 ' + escHtml(t('inputs.title', null, 'What the agent was given')) + '</span>'
+      + '<span style="font-size:11px;color:var(--text-muted);">' + r.summary + '</span></div>'
+      + r.html + '</div>';
+  } catch (e) { el.innerHTML = ''; }
+}
+
 // Per-runtime lifecycle honesty (WO-61). An empty "permission denials" row
 // on a Cursor session means Cursor never exposes one, not that nothing was
 // refused; this line says which. Reads /api/lifecycle/coverage, the one
@@ -30976,6 +31168,7 @@ function loadGuardTab() {
   loadGuardPolicies();
   loadGuardActions();
   loadGuardNondeterminism();
+  loadGuardSelfReports();
 }
 
 // Honest status line for the second "rogue agent" failure mode (same input,
@@ -31005,6 +31198,159 @@ function loadGuardNondeterminism() {
     html += '<span class="section-sub" style="margin:0">' + guardEsc(d.note || '') + '</span>';
     el.innerHTML = html;
   }).catch(function () { el.textContent = ''; });
+}
+
+// ── Agent self-reports (WO-59) ────────────────────────────────────────────
+// Category chips share one label table so the Guard card and the transcript
+// panel say the same thing.
+var SELFREPORT_CATEGORY_LABEL = {
+  missing_context: 'Missing context',
+  repeatedly_broken_tool: 'Tool kept failing',
+  capability_gap: 'Capability gap',
+  task_failure: 'Task not finished',
+  bypassed_block: 'Worked around a block',
+  noteworthy: 'Noteworthy'
+};
+var SELFREPORT_UNCORROBORATED_HINT =
+  'No independent evidence was found for this report. That is not the same as false.';
+
+function selfReportCategoryLabel(cat) {
+  if (SELFREPORT_CATEGORY_LABEL[cat]) return SELFREPORT_CATEGORY_LABEL[cat];
+  return String(cat || 'unknown').replace(/_/g, ' ');
+}
+
+function selfReportWhen(ms) {
+  var n = Number(ms) || 0;
+  if (!n) return '';
+  try { return new Date(n).toLocaleString(); } catch (e) { return ''; }
+}
+
+function selfReportCorroborationChip(r) {
+  if (r && r.corroborated) {
+    return '<span class="pill pill-ok" title="' + guardEsc('Independent evidence: ' + (r.corroboration_ref || '')) + '">Corroborated</span>';
+  }
+  return '<span class="pill" title="' + guardEsc(SELFREPORT_UNCORROBORATED_HINT) + '">Uncorroborated</span>';
+}
+
+function loadGuardSelfReports() {
+  var el = document.getElementById('guard-selfreports-body');
+  if (!el) return;
+  var winEl = document.getElementById('guard-selfreports-window');
+  if (window.CLOUD_MODE) {
+    el.innerHTML = '<div class="empty-state">Agent reports are read from the local store. They reach the hosted dashboard with a later cloud release.</div>';
+    return;
+  }
+  var rt = '';
+  try { rt = (typeof _cmRuntimeFilter === 'function') ? String(_cmRuntimeFilter() || '') : ''; } catch (e) { rt = ''; }
+  if (rt === 'all') rt = '';
+  var qs = '?window=7d' + (rt ? '&runtime=' + encodeURIComponent(rt) : '');
+  Promise.all([
+    fetch('/api/self-reports/honesty' + qs).then(function (r) { return r.json(); }),
+    fetch('/api/self-reports/support').then(function (r) { return r.json(); }).catch(function () { return null; })
+  ]).then(function (res) {
+    var d = res[0] || {};
+    var support = (res[1] && res[1].runtimes) || [];
+    if (winEl) winEl.textContent = 'last 7 days' + (rt ? ' on ' + rt : ', all runtimes');
+    var counts = d.counts || {};
+    var honesty = d.honesty || [];
+    var runtimes = Object.keys(counts).sort();
+    var html = '';
+
+    // Runtime-scoped honesty about MCP support comes first: a runtime that
+    // cannot register the server must say so, not show an empty table.
+    if (rt) {
+      var row = null;
+      support.forEach(function (s) { if (s.runtime === rt) row = s; });
+      if (row && row.mcp === 'not_supported') {
+        html += '<div class="empty-state">' + guardEsc(rt) + ' has no MCP support, so it cannot send reports. ' + guardEsc(row.detail || '') + '</div>';
+      } else if (row && row.mcp === 'unknown') {
+        html += '<div class="empty-state">ClawMetry has not verified where ' + guardEsc(rt) + ' keeps its MCP configuration. Register the server by hand to receive reports.</div>';
+      } else if (row && row.status !== 'registered' && row.status !== 'already_present') {
+        html += '<div class="empty-state">The ClawMetry MCP server is not registered with ' + guardEsc(rt) + ' yet. Run <code>clawmetry mcp install --runtime ' + guardEsc(rt) + '</code>.</div>';
+      }
+    } else {
+      var registered = support.filter(function (s) { return s.status === 'registered' || s.status === 'already_present'; });
+      var supported = support.filter(function (s) { return s.mcp === 'supported'; });
+      if (!registered.length && supported.length) {
+        html += '<div class="empty-state">No runtime has the ClawMetry MCP server registered yet, so agents cannot send reports. Run <code>clawmetry mcp install</code> (' + supported.map(function (s) { return guardEsc(s.label || s.runtime); }).join(', ') + ').</div>';
+      }
+    }
+
+    if (!runtimes.length) {
+      html += '<div class="empty-state">No agent reports in the last 7 days' + (rt ? ' from ' + guardEsc(rt) : '') + '.</div>';
+    } else {
+      var cats = {};
+      runtimes.forEach(function (r) { Object.keys(counts[r] || {}).forEach(function (c) { cats[c] = 1; }); });
+      var catList = Object.keys(cats).sort();
+      html += '<table class="data-table"><thead><tr><th>Runtime</th>' +
+        catList.map(function (c) { return '<th>' + guardEsc(selfReportCategoryLabel(c)) + '</th>'; }).join('') +
+        '<th>Total</th></tr></thead><tbody>';
+      runtimes.forEach(function (r) {
+        var total = 0;
+        var cells = catList.map(function (c) {
+          var n = Number((counts[r] || {})[c]) || 0; total += n;
+          return '<td>' + (n || '<span class="muted">0</span>') + '</td>';
+        }).join('');
+        html += '<tr><td>' + guardEsc(r) + '</td>' + cells + '<td>' + total + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '<div style="margin-top:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);">Honesty: detector findings the agent also reported</div>';
+    if (!honesty.length) {
+      html += '<div class="empty-state">No detector findings in this window, so there is nothing to compare reports against yet.</div>';
+    } else {
+      html += '<table class="data-table"><thead><tr><th>Runtime</th><th>Model</th><th>Findings</th><th>Reported</th><th>Share</th></tr></thead><tbody>';
+      honesty.forEach(function (h) {
+        var share;
+        if (h.withheld || h.honesty === null || h.honesty === undefined) {
+          share = '<span class="muted" title="' + guardEsc(h.reason || '') + '">Withheld: ' + guardEsc(h.reason || 'too few findings') + '</span>';
+        } else {
+          share = Math.round(Number(h.honesty) * 100) + '%';
+        }
+        html += '<tr><td>' + guardEsc(h.runtime) + '</td><td>' + guardEsc(h.model || 'unknown') + '</td>' +
+          '<td>' + (Number(h.incidents) || 0) + '</td><td>' + (Number(h.reported) || 0) + '</td><td>' + share + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load agent reports.</div>';
+  });
+}
+
+// Transcript view: the notes this session's agent sent, in time order.
+async function _loadSelfReportsPanel(sessionId) {
+  var panel = document.getElementById('selfreports-panel');
+  var body = document.getElementById('selfreports-panel-body');
+  var sumEl = document.getElementById('selfreports-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  if (window.CLOUD_MODE) return;  // local-store view; hosted copy comes with the snapshot slice
+  try {
+    var d = await fetch('/api/self-reports?session=' + encodeURIComponent(sessionId) + '&limit=200')
+      .then(function (r) { return r.json(); });
+    if (!d || d.error) return;
+    var rows = (d.reports || []).slice().sort(function (a, b) { return (Number(a.ts) || 0) - (Number(b.ts) || 0); });
+    panel.style.display = '';
+    if (!rows.length) {
+      if (sumEl) sumEl.textContent = 'none';
+      body.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">The agent sent no notes for this session. Reports need the ClawMetry MCP server registered with the runtime (clawmetry mcp install).</div>';
+      return;
+    }
+    var corroborated = rows.filter(function (r) { return r.corroborated; }).length;
+    if (sumEl) sumEl.textContent = rows.length + ' note' + (rows.length === 1 ? '' : 's') + ' · ' + corroborated + ' corroborated';
+    var html = '<div style="font-size:11px;color:var(--text-muted);margin:4px 0 8px;">' + escHtml(SELFREPORT_UNCORROBORATED_HINT) + '</div>';
+    rows.forEach(function (r) {
+      html += '<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--border-secondary);">' +
+        '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;min-width:120px;">' + escHtml(selfReportWhen(r.ts)) + '</span>' +
+        '<span class="pill" style="white-space:nowrap;">' + escHtml(selfReportCategoryLabel(r.category)) + '</span>' +
+        '<span style="flex:1;font-size:12px;color:var(--text-primary);">' + escHtml(r.summary_redacted || '') + '</span>' +
+        selfReportCorroborationChip(r) +
+        '</div>';
+    });
+    body.innerHTML = html;
+  } catch (e) { /* the panel is optional decoration on the transcript */ }
 }
 
 function loadGuardSessions() {

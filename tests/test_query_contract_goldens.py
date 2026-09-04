@@ -51,6 +51,8 @@ DISPATCH_ARGS = {
     "agent_graph": {},
     # #4813 session-replay: canonical replay-event rows for one session.
     "replay_events": {"session_id": "sess-a"},
+    # Inputs & context: system prompt / tools / setup rows for one session.
+    "session_context": {"session_id": "sess-a"},
     # WO-60 similar runs: nearest sessions by tool-call shape for one session.
     "similar_sessions": {"session_id": "sess-a"},
 }
