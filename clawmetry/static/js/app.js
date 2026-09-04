@@ -1025,6 +1025,18 @@ function _cmBannerDestination(alert) {
     if (sid) return { label: t('app.open_session', null, 'Open session →'), go: goSession(sid) };
   }
 
+  // Guard detector incidents delivered to a human (stuck / rate limited /
+  // crashed / waiting on you). The Guard tab lists the session with its
+  // Pause / Stop controls, which is the action the banner is asking for.
+  if (type === 'agent_attention') {
+    return {
+      label: t('app.open_guard', null, 'Open Guard →'),
+      go: goTab('guard', function () {
+        if (typeof loadGuardTab === 'function') loadGuardTab();
+      })
+    };
+  }
+
   // Security alarms. The rule_id here is the DETECTION rule (numbat's
   // rule_id, or a built-in signature id) — not a session — so we cannot jump
   // straight to a transcript. The findings log can: it lists this finding
@@ -10691,7 +10703,10 @@ var LOOP_KIND_LABEL = {
   file_blast_radius: 'Changed a lot of files at once',
   credential_access: 'Opened a password or key file',
   network_egress: 'Contacted somewhere new',
-  privilege_change: 'Asked for admin rights'
+  privilege_change: 'Asked for admin rights',
+  rate_limited: 'Being rate limited by its provider',
+  blocked_on_user: 'Waiting for you to answer',
+  crashed: 'Crashed and restarted'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -30880,7 +30895,11 @@ var GUARD_KIND_LABEL = {
   file_blast_radius: 'Wide or destructive file changes',
   credential_access: 'Read credentials',
   network_egress: 'Unusual network destination',
-  privilege_change: 'Privilege change'
+  privilege_change: 'Privilege change',
+  // Silent failure: it stopped, and nobody was told.
+  rate_limited: 'Rate limited by the provider',
+  blocked_on_user: 'Waiting on you',
+  crashed: 'Crashed and restarted'
 };
 
 // Money first: "$1.20 at risk" is the number that decides what to open next.
@@ -30916,6 +30935,36 @@ function loadGuardTab() {
   loadGuardSessions();
   loadGuardPolicies();
   loadGuardActions();
+  loadGuardNondeterminism();
+}
+
+// Honest status line for the second "rogue agent" failure mode (same input,
+// different answer). Measurement is opt-in because it re-runs the user's
+// agent for real money, so the card must say "not measured" until it is.
+function loadGuardNondeterminism() {
+  var el = document.getElementById('guard-nondeterminism-body');
+  if (!el) return;
+  fetch('/api/guard/nondeterminism').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d) { el.textContent = ''; return; }
+    var html = '';
+    if (d.enabled) {
+      html += '<span class="badge badge-ok">Measuring</span> ';
+      if (d.measured_sessions) {
+        html += guardEsc(String(d.measured_sessions)) + ' session' + (d.measured_sessions === 1 ? '' : 's') +
+          ' replayed so far';
+        if (typeof d.mean_agreement_pct === 'number') {
+          html += ', agent agreed with itself ' + guardEsc(String(d.mean_agreement_pct)) + '% of the time';
+        }
+        html += '. ';
+      } else {
+        html += 'No failed session has been replayed yet. ';
+      }
+    } else {
+      html += '<span class="badge">Not measured</span> ';
+    }
+    html += '<span class="section-sub" style="margin:0">' + guardEsc(d.note || '') + '</span>';
+    el.innerHTML = html;
+  }).catch(function () { el.textContent = ''; });
 }
 
 function loadGuardSessions() {
@@ -31120,6 +31169,9 @@ function guardShowPolicyForm() {
       '<option value="credential_access">Read credentials</option>' +
       '<option value="network_egress">Unusual network destination</option>' +
       '<option value="privilege_change">Privilege change</option>' +
+      '<option value="rate_limited">Rate limited by the provider</option>' +
+      '<option value="blocked_on_user">Waiting on you</option>' +
+      '<option value="crashed">Crashed and restarted</option>' +
     '</select></div>' +
     '<div class="form-row"><label>At least this severe</label><select id="gp-severity">' +
       '<option value="info">info</option>' +

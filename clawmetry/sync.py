@@ -20027,6 +20027,98 @@ SIGNALS_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_SIGNALS_INTERVAL", "60
 _DETECT_SEVERITY_COUNT = {"critical": 12, "warning": 8, "info": 5}
 
 
+# ── Non-determinism replay scheduler (opt-in) ───────────────────────────────
+# Measures the second way an agent goes rogue: the same input, a different
+# answer. ``eval_regression_replay`` already knows how to re-run one failed
+# session and judge it; this schedules it and turns N replays of one session
+# into an agreement percentage. It is OFF by default and stays off without
+# the env flag, because a replay re-runs the user's agent for real money.
+REPLAY_ENABLE_ENV = "CLAWMETRY_REGRESSION_REPLAY"
+REPLAY_TICK_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_REGRESSION_REPLAY_INTERVAL_SEC", "3600"))
+REPLAY_DAILY_BUDGET_ENV = "CLAWMETRY_REGRESSION_REPLAY_DAILY_BUDGET"
+REPLAY_MAX_PER_TICK_ENV = "CLAWMETRY_REGRESSION_REPLAY_MAX_PER_TICK"
+REPLAY_RUNS_PER_SESSION_ENV = "CLAWMETRY_REGRESSION_REPLAY_RUNS"
+REPLAY_DEFAULT_DAILY_BUDGET = 5
+REPLAY_DEFAULT_MAX_PER_TICK = 1
+REPLAY_DEFAULT_RUNS_PER_SESSION = 3
+
+
+def _regression_replay_enabled() -> bool:
+    """True ONLY when the operator set ``CLAWMETRY_REGRESSION_REPLAY=1``.
+    Absent, empty, "0", "false": off. Nothing else can turn it on."""
+    return (os.environ.get(REPLAY_ENABLE_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
+def _replay_budget_state(state: dict, now: float) -> dict:
+    """Per-UTC-day spend counter kept in daemon state (survives restarts)."""
+    import datetime as _dt
+    day = _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc).strftime("%Y-%m-%d")
+    b = state.get("replay_budget")
+    if not isinstance(b, dict) or b.get("day") != day:
+        b = {"day": day, "used": 0}
+        state["replay_budget"] = b
+    return b
+
+
+def _maybe_run_regression_replay(store, state: dict, now: float = None,
+                                 replay_fn=None) -> int:
+    """One scheduler tick. Returns replays performed (0 when disabled, out of
+    budget, or nothing to replay). Enforces, in order: the env flag, the
+    per-day budget, the per-tick cap. Then refreshes each replayed session's
+    agreement stats. Never raises into the daemon loop.
+
+    ``replay_fn`` is injectable for tests; the default is
+    ``eval_regression_replay.run_regression``."""
+    if not _regression_replay_enabled():
+        return 0
+    now = time.time() if now is None else now
+    try:
+        daily = max(0, int(os.environ.get(REPLAY_DAILY_BUDGET_ENV) or REPLAY_DEFAULT_DAILY_BUDGET))
+        per_tick = max(1, int(os.environ.get(REPLAY_MAX_PER_TICK_ENV) or REPLAY_DEFAULT_MAX_PER_TICK))
+        runs_per = max(1, int(os.environ.get(REPLAY_RUNS_PER_SESSION_ENV) or REPLAY_DEFAULT_RUNS_PER_SESSION))
+    except (TypeError, ValueError):
+        daily, per_tick, runs_per = REPLAY_DEFAULT_DAILY_BUDGET, REPLAY_DEFAULT_MAX_PER_TICK, REPLAY_DEFAULT_RUNS_PER_SESSION
+    budget = _replay_budget_state(state, now)
+    remaining = daily - int(budget.get("used") or 0)
+    if remaining <= 0:
+        log.debug("replay: daily budget of %d used; next UTC day", daily)
+        return 0
+    # Each session is replayed ``runs_per`` times so agreement means
+    # something; the budget counts individual replays.
+    sessions_now = max(0, min(per_tick, remaining // runs_per))
+    if sessions_now <= 0:
+        return 0
+    try:
+        from clawmetry import eval_regression_replay as _rr
+    except Exception as e:  # noqa: BLE001
+        log.warning("replay: eval_regression_replay import failed: %s", e)
+        return 0
+    fn = replay_fn or _rr.run_regression
+    replayed = 0
+    touched: set = set()
+    for _ in range(runs_per):
+        try:
+            run = fn(limit=sessions_now, store=store)
+        except Exception as e:  # noqa: BLE001
+            log.warning("replay: run_regression failed: %s", e)
+            break
+        results = list(getattr(run, "results", None) or [])
+        if not results:
+            break
+        replayed += len(results)
+        for r in results:
+            sid = getattr(r, "session_id", None) or (r.get("session_id") if isinstance(r, dict) else None)
+            if sid:
+                touched.add(str(sid))
+    budget["used"] = int(budget.get("used") or 0) + replayed
+    for sid in touched:
+        try:
+            _rr.update_agreement_stats(store, sid)
+        except Exception as e:  # noqa: BLE001
+            log.debug("replay: agreement update failed for %s: %s", sid, e)
+    return replayed
+
+
 def _candidate_active_sessions(store) -> list[dict]:
     """Recently-active, non-ended sessions — the same candidate set the stuck
     detector walks. Read-only, never raises (returns [] on any store error)."""
@@ -20095,7 +20187,8 @@ def _guard_enforcement_allowed() -> bool:
 # or where its workspace root is — and all three change what an incident MEANS.
 # The daemon already touches every candidate session on this tick, so gathering
 # them here is free, where a per-session store read would not be.
-def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
+def _detector_session_facts(sessions: list, state: dict, now: float,
+                            store=None) -> dict:
     """``session_id -> {cost_usd, bad_for_seconds, session_seconds, cwd,
     runtime, agent_id}``.
 
@@ -20107,6 +20200,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
     if not isinstance(first_seen, dict):
         first_seen = {}
         state["detector_first_seen"] = first_seen
+    pending_by_sid = _pending_approvals_by_session(store) if store is not None else {}
     facts: dict = {}
     for s in sessions or []:
         if not isinstance(s, dict):
@@ -20136,15 +20230,48 @@ def _detector_session_facts(sessions: list, state: dict, now: float) -> dict:
         except Exception:
             session_seconds = 0.0
         started = first_seen.get(sid)
+        # How long since the session last did anything, for blocked_on_user:
+        # a question asked two minutes ago is a conversation, one asked an
+        # hour ago is a silent stop.
+        idle_seconds = 0.0
+        try:
+            la = s.get("last_active_at") or s.get("started_at")
+            if la:
+                idle_seconds = max(0.0, float(_seconds_since(la)))
+        except Exception:
+            idle_seconds = 0.0
         facts[sid] = {
             "cost_usd": cost,
             "bad_for_seconds": max(0.0, now - started) if started else 0.0,
             "session_seconds": session_seconds,
+            "idle_seconds": idle_seconds,
+            "pending_approvals": int(pending_by_sid.get(sid, 0)),
             "runtime": _detector_runtime(sid, s.get("agent_type") or ""),
             "cwd": cwd,
             "agent_id": str(s.get("agent_id") or ""),
         }
     return facts
+
+
+def _pending_approvals_by_session(store) -> dict:
+    """``session_id -> pending approval count`` from the approvals table.
+
+    One read per tick (not per session). Any runtime that routes approvals
+    through ClawMetry (OpenClaw HITL, the Claude Code permission mirror, the
+    proxy) lands here, which is what makes ``blocked_on_user`` runtime-neutral
+    instead of a Claude Code OTel special case. Never raises; {} on error."""
+    try:
+        rows = store.query_approvals(status="pending", limit=500) or []
+    except Exception:
+        return {}
+    out: dict = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sid = str(r.get("requestor_session_id") or "").strip()
+        if sid:
+            out[sid] = out.get(sid, 0) + 1
+    return out
 
 
 # ── Learned baselines: what "normal" looks like for this cohort ────────────
@@ -20427,8 +20554,21 @@ def _apply_guard_policies(store, state: dict, incidents: list,
 
         # Record BEFORE acting. The row is the latch, so closing it first
         # means a crash mid-signal can never re-fire on the next tick.
-        if not actuating:
-            detail = "recorded (no action for this policy type)"
+        if action == "alert":
+            # A human is the actuator here. Deliver through the same
+            # channels the built-in monitors use (banner, Telegram, and any
+            # entitled webhook) and say exactly where it went, or why not.
+            inc = _incident_for_decision(incidents, d)
+            try:
+                from clawmetry import incident_alerts as _ia
+                res = _ia.deliver_incident(store, inc, source="policy",
+                                           force=True, policy_id=pid)
+            except Exception as _ae:  # noqa: BLE001
+                res = {"delivered": False, "delivered_via": [],
+                       "reason": f"alert failed: {type(_ae).__name__}"}
+            detail = str(res.get("reason") or "alert: nothing delivered")[:400]
+        elif not actuating:
+            detail = "recorded (monitor mode: watched, no action taken)"
         elif not enforce_env:
             detail = (f"DRY RUN: would {action} — set {_GUARD_ENFORCE}=1 "
                       f"to enforce")
@@ -20472,6 +20612,29 @@ def _apply_guard_policies(store, state: dict, incidents: list,
                  "ok" if ok else "FAILED", rdetail[:120], _ladder_suffix(d))
 
     return acted
+
+
+def _incident_for_decision(incidents: list, decision: dict) -> dict:
+    """The incident a policy decision was made on, so an ``alert`` action
+    delivers the detector's own words (title, detail, spend at risk) rather
+    than the policy's summary. Falls back to a minimal incident built from
+    the decision when no exact (session, kind) match is found."""
+    sid = str(decision.get("session_id") or "")
+    kind = str(decision.get("kind") or "")
+    for inc in incidents or []:
+        if not isinstance(inc, dict):
+            continue
+        if str(inc.get("session_id") or "") == sid and (
+                not kind or str(inc.get("kind") or "") == kind):
+            return inc
+    return {
+        "kind": kind or "policy", "session_id": sid,
+        "runtime": decision.get("runtime") or "",
+        "severity": "warning",
+        "title": str(decision.get("reason") or "Guard policy matched"),
+        "detail": str(decision.get("reason") or ""),
+        "evidence": decision.get("evidence") or {},
+    }
 
 
 def _record_policy_step(store, **kw) -> None:
@@ -20582,7 +20745,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
     # Facts (spend, how long it has been bad, workspace root) are built BEFORE
     # the loop so a detector can price an incident and judge a path escape on
     # the same tick it finds it.
-    facts_by_session = _detector_session_facts(candidates, state, now)
+    facts_by_session = _detector_session_facts(candidates, state, now, store=store)
     first_seen_memo = state.setdefault("detector_first_seen", {})
     if not isinstance(first_seen_memo, dict):
         first_seen_memo = {}
@@ -20662,6 +20825,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
                 continue
             sev = str(inc.get("severity") or "warning")
             count = _DETECT_SEVERITY_COUNT.get(sev, 5)
+            # Tell a human. warning/critical only; deduped per (session,
+            # kind) on a DuckDB latch so a restart cannot re-page anyone.
+            # Runs BEFORE the row write so the row can carry where it went.
+            delivered_via: list = []
+            try:
+                from clawmetry import incident_alerts as _ia
+                _res = _ia.deliver_incident(store, inc, source="detector")
+                delivered_via = list(_res.get("delivered_via") or [])
+            except Exception as _ie:  # noqa: BLE001
+                log.debug("detectors: alert delivery skipped: %s", _ie)
             try:
                 store.ingest_loop_signal(
                     session_id=sid,
@@ -20684,6 +20857,10 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         "spend_at_risk_usd": inc.get("spend_at_risk_usd"),
                         "spend_basis": inc.get("spend_basis"),
                         "burn_rate_usd_per_min": inc.get("burn_rate_usd_per_min"),
+                        # Which humans were told, this tick. Empty means the
+                        # cooldown latch held or nothing is configured; the
+                        # incident_alerts table has the last delivery time.
+                        "delivered_via": delivered_via,
                     },
                 )
                 memo[memo_key] = now
@@ -20776,6 +20953,10 @@ _LOOPS_KIND_BY_SIGNATURE = {
     "daemon_detect_no_progress": "no_progress",
     "daemon_detect_repeated_tool_failure": "repeated_tool_failure",
     "daemon_detect_action_discrepancy": "action_discrepancy",
+    # The silent-failure kinds (rate_limited / blocked_on_user / crashed) are
+    # deliberately NOT here: this slice is the device's LOOP river. They reach
+    # people through incident_alerts and the Guard tab (which reads
+    # details.kind directly), not through a whirlpool glyph.
 }
 _LOOPS_VALID_KINDS = frozenset(_LOOPS_KIND_BY_SIGNATURE.values())
 
@@ -23498,6 +23679,7 @@ def run_daemon() -> None:
     last_detect_eval = 0.0
     last_signals_eval = 0.0
     last_git_scan = 0.0
+    last_replay_tick = 0.0
 
     while True:
         try:
@@ -23855,6 +24037,27 @@ def run_daemon() -> None:
                         save_state(state)
                     except Exception:
                         pass
+            # ── Non-determinism replay (OPT-IN, costs money) ──
+            # Re-runs a failed session's first prompt through the user's
+            # agent and judges it, N times, to measure how often the agent
+            # agrees with itself. OFF unless CLAWMETRY_REGRESSION_REPLAY=1:
+            # every replay is a real agent call on the user's bill.
+            now_replay = time.time()
+            if (now_replay - last_replay_tick) >= REPLAY_TICK_INTERVAL_SEC:
+                last_replay_tick = now_replay
+                try:
+                    if _regression_replay_enabled():
+                        from clawmetry import local_store as _ls_rp
+                        _n_rp = _maybe_run_regression_replay(
+                            _ls_rp.get_store(), state)
+                        if _n_rp:
+                            log.info("replay: %d session(s) replayed", _n_rp)
+                            try:
+                                save_state(state)
+                            except Exception:
+                                pass
+                except Exception as _rpe:  # noqa: BLE001
+                    log.warning("replay: tick errored: %s", _rpe)
 
             # ── Git outcome scan (REQ-OBS-CEA-022) ──
             # The output half of the cost story: what the agent's work
@@ -25477,6 +25680,40 @@ def _post_local_alert_webhook(url: str, payload: dict) -> bool:
         return False
 
 
+def _alerts_loop_signals_slice(store, rules, alert_evaluator):
+    """The ``loop_signals`` rows the silent-failure rule types read, fetched
+    only when at least one such rule is enabled (otherwise ``None`` and those
+    types no-fire). Window = the widest ``window_minutes`` across them, 30 by
+    default. Never raises."""
+    try:
+        types = getattr(alert_evaluator, "ATTENTION_RULE_TYPES", frozenset())
+        widest = 0
+        for r in rules or []:
+            cond = r.get("condition_json") if isinstance(r, dict) else None
+            if isinstance(cond, str):
+                try:
+                    cond = json.loads(cond)
+                except Exception:
+                    cond = None
+            if not isinstance(cond, dict):
+                continue
+            t = cond.get("type") or cond.get("alert_type")
+            if t not in types:
+                continue
+            try:
+                wm = int(cond.get("window_minutes") or 0)
+            except (TypeError, ValueError):
+                wm = 0
+            widest = max(widest, wm or getattr(
+                alert_evaluator, "DEFAULT_ATTENTION_WINDOW_MINUTES", 30))
+        if widest <= 0:
+            return None
+        return store.query_recent_loop_signals(limit=200, since_minutes=widest) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("alerts: loop_signals slice unavailable: %s", e)
+        return None
+
+
 def _evaluate_alerts_local(config: dict, state: dict) -> int:
     """Local DuckDB evaluation -> LOCAL delivery for licensed self-hosted
     nodes (no ``cm_`` cloud token).
@@ -25572,11 +25809,13 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
             quality_by_runtime = None
 
     sig_node, sig_by_rt = _alerts_signal_windows(rules, store)
+    loop_sigs = _alerts_loop_signals_slice(store, rules, alert_evaluator)
     try:
         matches = alert_evaluator.evaluate(
             rules, events, last_eval_state, quality,
             quality_by_runtime=quality_by_runtime,
             signals=sig_node, signals_by_runtime=sig_by_rt,
+            loop_signals=loop_sigs,
         )
     except Exception as e:
         log.warning("alerts(local): evaluator errored: %s", e)
@@ -25717,9 +25956,11 @@ def evaluate_alerts(config: dict, state: dict) -> int:
             quality = None
 
     sig_node, sig_by_rt = _alerts_signal_windows(rules, store)
+    loop_sigs = _alerts_loop_signals_slice(store, rules, alert_evaluator)
     try:
         matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality,
-                                           signals=sig_node, signals_by_runtime=sig_by_rt)
+                                           signals=sig_node, signals_by_runtime=sig_by_rt,
+                                           loop_signals=loop_sigs)
     except Exception as e:
         log.warning("alerts: evaluator errored: %s", e)
         state["alerts_last_eval_ts"] = _iso_now()

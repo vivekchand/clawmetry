@@ -418,6 +418,12 @@ jobs:
             tests/test_cli_help_no_dashboard_import.py \
             tests/test_behaviour_signals.py \
             tests/test_signals_ui_contract.py \
+            tests/test_detector_incident_delivery.py \
+            tests/test_detectors_rate_limited_blocked_crashed.py \
+            tests/test_waste_flags_free_default.py \
+            tests/test_alert_rule_types_new.py \
+            tests/test_regression_replay_optin.py \
+            tests/test_insights_outcome_templates.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
