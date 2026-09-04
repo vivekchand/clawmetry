@@ -172,24 +172,24 @@ async function testZeroClickAutoLogin() {
     overlayHidden ? '' : 'overlay still visible after 5s — auto-login did not fire'
   );
 
-  // Dashboard root rendered. The overview tab is the canonical landing
-  // tab. Select by `data-tab="overview"` because IA refactor v2 (PR #1662)
-  // renamed the visible label to "Live trace" — text matching no longer
-  // works. Both the legacy top `.nav-tab` and the IA-v2 sidebar
-  // `.left-nav-item` get `.active` toggled by switchTab() and both
-  // carry data-tab.
-  const overviewTab = page
-    .locator('.nav-tab.active[data-tab="overview"], .left-nav-item.active[data-tab="overview"]')
+  // Dashboard root rendered. The Sessions list is the canonical landing
+  // tab (session-first IA, Trail 2026-09; it was Overview before). Select
+  // by `data-tab="transcripts"` because visible labels change — text
+  // matching does not survive IA refactors. Both the legacy top `.nav-tab`
+  // and the sidebar `.left-nav-item` get `.active` toggled by switchTab()
+  // and both carry data-tab.
+  const landingTab = page
+    .locator('.nav-tab.active[data-tab="transcripts"], .left-nav-item.active[data-tab="transcripts"]')
     .first();
-  let overviewVisible = false;
+  let landingVisible = false;
   try {
-    await overviewTab.waitFor({ state: 'visible', timeout: 5000 });
-    overviewVisible = true;
+    await landingTab.waitFor({ state: 'visible', timeout: 5000 });
+    landingVisible = true;
   } catch {}
   check(
-    'Overview tab is visible — dashboard root rendered',
-    overviewVisible,
-    overviewVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with data-tab="overview" found'
+    'Sessions tab is active — dashboard root rendered on the landing tab',
+    landingVisible,
+    landingVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with data-tab="transcripts" found'
   );
 
   // Token must be in localStorage — that's how every later /api/* call

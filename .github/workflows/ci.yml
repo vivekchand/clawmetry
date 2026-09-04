@@ -252,6 +252,14 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # Trail page + session-first landing: the live HTML must include
+      # tabs/trail.html (Jinja render, not a template grep), the default
+      # active page must be the Sessions list, and every Trail string must
+      # have an en.json key. The Phase-A nav guard runs alongside because the
+      # landing change re-ordered Tier-1.
+      - name: Trail page + session-first nav
+        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_beginner_nav_phase_a.py -q
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because

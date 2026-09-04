@@ -2082,6 +2082,16 @@ function switchTab(name) {
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
+  // Trail page (session-first IA): one session as Inputs / Decisions / Outcome.
+  // It borrows the transcript / trace / turn renderers' DOM nodes while open
+  // (static/js/trail.js), so every other tab first hands them back. The
+  // Sessions nav item stays highlighted because a trail is a session opened.
+  if (name !== 'trail' && typeof _trailRestoreHosts === 'function') { try { _trailRestoreHosts(); } catch (e) {} }
+  if (name === 'trail') {
+    var _trailNav = document.querySelector('.left-nav-item[data-tab="transcripts"]');
+    if (_trailNav) _trailNav.classList.add('active');
+    if (typeof loadTrailTab === 'function') loadTrailTab();
+  }
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
@@ -19694,6 +19704,12 @@ async function loadTranscripts() {
       // an absent badge is the quiet default, not a "no" badge.
       html += _cmAttentionBadge(
         tx.attention, tx.attention_signal, tx.attention_tool);
+      // Verdict (outcome colour + judge score when known) and the one-click
+      // trail. Both come from static/js/trail.js; an absent verdict renders
+      // nothing rather than a "no data" chip on every row.
+      if (typeof _cmVerdictBadge === 'function') html += _cmVerdictBadge(tx);
+      var _attrSafe = function (s) { return escHtml(s).replace(/"/g, '&quot;'); };
+      html += '<button type="button" class="cm-open-trail" data-sid="' + _attrSafe(raw) + '" onclick="event.stopPropagation();openTrail(this.getAttribute(\'data-sid\'))" title="' + _attrSafe(t('trail.open_tooltip', null, 'What it was asked, what it did, how it ended')) + '">' + escHtml(t('trail.open', null, 'Open trail')) + ' &rarr;</button>';
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
@@ -28720,6 +28736,27 @@ document.addEventListener('DOMContentLoaded', function() {
   try { _cmInitGlobalRuntimeSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
   try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
+  // Session-first landing: the product opens on the decision trail (the
+  // Sessions list, each row one click from its Trail), not on a KPI board.
+  // Overview stays one click away under Monitoring. Deep links win:
+  //   #trail=<agent_type>:<session_id>  -> that session's Trail page
+  //   #session=<id>                     -> Sessions, replay opened by loadTranscripts()
+  try { _cmBootLanding(); } catch (e) { /* non-fatal */ }
+});
+
+function _cmBootLanding() {
+  var trailSid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+  if (trailSid && typeof openTrail === 'function') { openTrail(trailSid); return; }
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Hash router. Only `#trail=` is routed here: `#session=` is consumed by
+// loadTranscripts() and its setters already call switchTab('transcripts').
+window.addEventListener('hashchange', function () {
+  try {
+    var sid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+    if (sid && typeof openTrail === 'function') openTrail(sid);
+  } catch (e) { /* non-fatal */ }
 });
 
 // The Tracing tab (Phoenix/Arize-style span waterfall + tree + agent graph) is
