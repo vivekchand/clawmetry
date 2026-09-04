@@ -176,3 +176,71 @@ def test_row_count_mismatch_aborts_and_keeps_original(tmp_path, monkeypatch):
     assert out["ran"] is False and "mismatch" in out["reason"], out
     assert db.exists() and not (tmp_path / "compact.duckdb.pre-compact").exists()
     assert not (tmp_path / "compact.duckdb.compacting").exists()
+
+
+# ── the rewrite runs in a helper process; a crash there cannot brick the daemon ──
+
+def test_startup_compaction_runs_in_a_child_and_reports(tmp_path, monkeypatch):
+    ls = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT="0")
+    _bloat(ls, n_spans=600, rewrites=8)
+    ls2 = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT_MIN_BYTES="0")
+    seen = {}
+    real_run = ls2.subprocess.run
+
+    def spy(cmd, **kw):
+        seen["cmd"] = cmd
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(ls2.subprocess, "run", spy)
+    s = ls2.LocalStore()
+    try:
+        last = s.health()["last_compaction"]
+        assert last["ran"] is True, last
+        assert seen["cmd"][0] == ls2.sys.executable and "-c" in seen["cmd"]
+        assert s._conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0] == 600
+    finally:
+        s.stop(flush=True)
+
+
+def test_helper_crash_mid_swap_restores_the_store(tmp_path, monkeypatch):
+    ls = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT="0")
+    _bloat(ls, n_spans=300, rewrites=4)
+    db = tmp_path / "compact.duckdb"
+    size = db.stat().st_size
+    ls2 = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT_MIN_BYTES="0")
+
+    def crash(cmd, **kw):
+        # Simulate a native crash after the first rename of the swap.
+        os.replace(db, tmp_path / "compact.duckdb.pre-compact")
+        (tmp_path / "compact.duckdb.compacting").write_bytes(b"partial")
+        return ls2.subprocess.CompletedProcess(cmd, -11, stdout="", stderr="Segmentation fault")
+
+    monkeypatch.setattr(ls2.subprocess, "run", crash)
+    s = ls2.LocalStore()
+    try:
+        last = s.health()["last_compaction"]
+        assert last["ran"] is False and "exited -11" in last["reason"], last
+        assert db.exists() and db.stat().st_size == size
+        assert not (tmp_path / "compact.duckdb.compacting").exists()
+        assert s._conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0] == 300
+    finally:
+        s.stop(flush=True)
+
+
+def test_helper_timeout_is_reported_and_store_kept(tmp_path, monkeypatch):
+    ls = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT="0")
+    _bloat(ls, n_spans=200, rewrites=3)
+    db = tmp_path / "compact.duckdb"
+    ls2 = _fresh(tmp_path, monkeypatch, CLAWMETRY_AUTO_COMPACT_MIN_BYTES="0")
+
+    def hang(cmd, **kw):
+        raise ls2.subprocess.TimeoutExpired(cmd, kw.get("timeout", 0))
+
+    monkeypatch.setattr(ls2.subprocess, "run", hang)
+    s = ls2.LocalStore()
+    try:
+        last = s.health()["last_compaction"]
+        assert last["ran"] is False and "timed out" in last["reason"], last
+        assert db.exists()
+    finally:
+        s.stop(flush=True)
