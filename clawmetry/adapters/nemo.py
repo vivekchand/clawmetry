@@ -1475,6 +1475,24 @@ class NemoClawAdapter(AgentAdapter):
             # subagents rows and sets parent_id + extra.kind='subagent' on
             # every persisted delegation (orchestration capture, nemoclaw leg).
             Capability.SUBAGENTS,
+            # Same transcript format as OpenClaw (the sandboxed agent writes
+            # OpenClaw session JSONL): thinking blocks survive when set.
+            Capability.REASONING,
+        }
+
+    def trail_coverage(self) -> dict:
+        """NemoClaw runs OpenClaw inside the sandbox, so the session rows it
+        ingests carry the same assistant ``message.content[]`` ``thinking``
+        blocks OpenClaw writes, under the same condition (a thinking level
+        set for the session). The guardrail audit log adds decisions but no
+        model reasoning of its own."""
+        return {
+            "inputs": "partial",
+            "reasoning": "partial",
+            "note": ("OpenClaw-format assistant message.content[] thinking "
+                     "blocks, present only while a thinking level is set; "
+                     "sandbox.audit_log rows carry guardrail decisions, not "
+                     "model reasoning"),
         }
 
 
