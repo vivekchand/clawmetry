@@ -74,6 +74,7 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.tracing import bp_tracing
+from routes.trail import bp_trail
 from routes.brain import bp_brain
 from routes.advisor import bp_advisor
 from routes.selfevolve import bp_selfevolve
@@ -109,6 +110,7 @@ from routes.harness import bp_harness
 from routes.delegated import bp_delegated
 from routes.readiness import bp_readiness
 from routes.guard import bp_guard
+from routes.signals import bp_signals
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -141,6 +143,7 @@ from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
 from routes.bench import bp_bench
+from routes.cohort import bp_cohort
 from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
@@ -13340,6 +13343,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_delegated)
     app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_guard)
+    app.register_blueprint(bp_signals)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
@@ -13366,6 +13370,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
     app.register_blueprint(bp_tracing)
+    app.register_blueprint(bp_trail)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
@@ -13508,6 +13513,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
     app.register_blueprint(bp_bench)
+    app.register_blueprint(bp_cohort)
     app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)
@@ -14141,6 +14147,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label" data-i18n="nav.guard">Guard</span>
         <span id="nav-guard-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+      <div class="left-nav-item" data-tab="signals" onclick="switchTab('signals')" data-i18n-title="nav.signals_tooltip" title="What people and agents say about a run: frustration, praise, refusals, giving up">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.signals">Signals</span>
+      </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
@@ -14260,6 +14270,7 @@ DASHBOARD_HTML = r"""
 
 <!-- ALERTS (Cloud-Pro feature) -->
 {% include 'tabs/guard.html' %}
+{% include 'tabs/signals.html' %}
 {% include 'tabs/alerts.html' %}
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->

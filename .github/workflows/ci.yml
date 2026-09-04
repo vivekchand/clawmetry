@@ -387,8 +387,13 @@ jobs:
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
+            tests/test_session_context_ingest.py \
+            tests/test_session_context_route.py \
+            tests/test_tracing_reasoning_spans.py \
+            tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
+            tests/test_cohort_compare.py \
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
@@ -396,6 +401,7 @@ jobs:
             tests/test_duckdb_cpu_cap.py \
             tests/test_heartbeat_rows_stay_small.py \
             tests/test_reads_never_take_the_write_lock.py \
+            tests/test_ingest_upsert_dedupe.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
@@ -415,6 +421,8 @@ jobs:
             tests/test_wake_poll.py \
             tests/test_cli_unattended_update.py \
             tests/test_cli_help_no_dashboard_import.py \
+            tests/test_behaviour_signals.py \
+            tests/test_signals_ui_contract.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────

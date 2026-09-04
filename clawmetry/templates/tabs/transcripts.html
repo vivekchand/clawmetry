@@ -39,6 +39,16 @@
       </div>
       <div id="orchestration-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
     </div>
+    <!-- Inputs panel: what the agent was given (system prompt, tools, setup).
+         Fed by /api/sessions/<id>/context (DuckDB session_context, measured
+         from context.compiled events). Populated async by _loadInputsPanel(). -->
+    <div id="inputs-panel" style="display:none;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+      <div onclick="var b=document.getElementById('inputs-panel-body');b.style.display=b.style.display==='none'?'':'none'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">📥 <span data-i18n="inputs.title">What the agent was given</span></span>
+        <span id="inputs-panel-summary" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="inputs-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
+    </div>
     <!-- Session Replay Controls -->
     <div id="replay-controls" style="
       display:none;
@@ -193,6 +203,17 @@
       <div class="chat-messages" id="transcript-messages"></div>
       <aside class="transcript-toc" id="transcript-toc"
              title="Every user prompt in this session — click to jump"></aside>
+    </div>
+    <!-- Runs shaped like this one (WO-60). Below the fold, a power tool: the
+         other sessions whose ordered tool calls look like this one, so a
+         one-off can be told from a pattern. JS: app.js loadSimilarRuns() ->
+         /api/sessions/<id>/similar (local only; the hosted dashboard says so). -->
+    <div id="similar-runs-card" style="display:none;margin-top:18px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:14px 18px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">🧬 <span data-i18n="transcripts.similar_runs_title">Runs shaped like this one</span></div>
+        <div style="font-size:11px;color:var(--text-muted);" data-i18n="transcripts.similar_runs_hint">Same order of tool calls, last 30 days. A one-off or a pattern?</div>
+      </div>
+      <div id="similar-runs-body" style="font-size:12px;color:var(--text-muted);"></div>
     </div>
   </div>
 </div>
