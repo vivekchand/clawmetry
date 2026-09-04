@@ -523,10 +523,18 @@ def _tool_get_guard_status(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_get_signal_rates(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Behaviour-signal rates (WO-58) shaped the same way the Signals tab
+    shapes them: grouped counts come from the daemon, the rate arithmetic
+    runs here. A daemon that predates the signals store says so."""
+    import time as _time
+
+    window = _window_secs(arguments.get("window"))
+    runtime = str(arguments.get("runtime") or "").strip().lower()
+    days = max(1, int(round(window / 86400.0)))
     res = _method(
-        "query_signal_rates",
-        since_secs=_window_secs(arguments.get("window")),
-        runtime=str(arguments.get("runtime") or ""),
+        "query_signal_grouped",
+        since_ms=int((_time.time() - window) * 1000),
+        runtime=runtime or None,
     )
     if "error" in res:
         if res.get("code") == "refused":
@@ -537,7 +545,16 @@ def _tool_get_signal_rates(arguments: dict[str, Any]) -> dict[str, Any]:
                         "list_incidents and list_self_reports.",
             }
         return res
-    return {"available": True, "rates": res.get("result")}
+    grouped = res.get("result") if isinstance(res.get("result"), dict) else {}
+    try:
+        from clawmetry import behaviour_signals as _bs
+        rates = _bs.shape_rates(grouped.get("turns") or [], grouped.get("matches") or [],
+                                window_days=days, runtime=runtime or None)
+    except Exception as exc:  # noqa: BLE001
+        return {"available": True, "grouped": grouped,
+                "note": f"raw grouped counts; rate shaping failed: {exc}"}
+    return {"available": True, "window_secs": window, "runtime": runtime or "all",
+            "rates": rates}
 
 
 def _tool_list_self_reports(arguments: dict[str, Any]) -> dict[str, Any]:

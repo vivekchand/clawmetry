@@ -169,6 +169,21 @@ def test_old_daemon_refusal_names_the_upgrade(monkeypatch):
     assert out["code"] == "refused" and "too old" in out["error"]
 
 
+def test_signal_rates_shape_grouped_counts_from_daemon(monkeypatch):
+    seen = {}
+
+    def fake_method(name, **kw):
+        seen["name"] = name
+        seen.update(kw)
+        return {"result": {"turns": [], "matches": []}}
+
+    monkeypatch.setattr(ms, "_method", fake_method)
+    out = ms._call_tool("get_signal_rates", {"window": "7d", "runtime": "codex"})
+    assert seen["name"] == "query_signal_grouped" and seen["runtime"] == "codex"
+    assert out["available"] is True and out["runtime"] == "codex"
+    assert isinstance(out["rates"], dict)
+
+
 def test_report_tool_rejects_unknown_category_before_touching_daemon(monkeypatch):
     monkeypatch.setattr(ms, "_read_discovery", lambda: None)
     out = ms._call_tool("report_to_operator", {"category": "nope", "summary": "x"})
