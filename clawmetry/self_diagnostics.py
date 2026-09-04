@@ -128,7 +128,9 @@ def clip_summary(value: Any) -> str:
 
 # ── Windows ──────────────────────────────────────────────────────────────────
 
-_WINDOW_RE = re.compile(r"^\s*(\d+)\s*([smhdw]?)\s*$", re.IGNORECASE)
+# No optional whitespace inside the pattern: the input is stripped first, so
+# there is no ambiguous ``\s*`` pair for a long run of spaces to backtrack on.
+_WINDOW_RE = re.compile(r"^(\d{1,12})([smhdw]?)$")
 _WINDOW_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 7 * 86400}
 
 
@@ -139,11 +141,11 @@ def parse_window_secs(value: Any, default: int = DEFAULT_WINDOW_SECS) -> int:
         return default
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return max(1, int(value))
-    m = _WINDOW_RE.match(str(value))
+    m = _WINDOW_RE.match(str(value).strip().lower()[:32])
     if not m:
         return default
     n = int(m.group(1))
-    unit = m.group(2).lower()
+    unit = m.group(2)
     return max(1, n * _WINDOW_UNITS.get(unit, 1))
 
 

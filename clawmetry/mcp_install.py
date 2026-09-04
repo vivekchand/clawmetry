@@ -541,13 +541,19 @@ def support_matrix(home: Optional[str] = None) -> List[dict]:
             mcp = "not_supported"
         else:
             mcp = "unknown"
+        # An ``error`` row carries an OSError message in ``detail``. The CLI
+        # prints it; the dashboard route does not, so the served row gets a
+        # fixed sentence instead of exception text.
+        detail = st.get("detail", "")
+        if st.get("status") == ERROR:
+            detail = "could not read this runtime's configuration file"
         rows.append({
             "runtime": rid,
             "label": SUPPORTED.get(rid, {}).get("label", rid),
             "mcp": mcp,
             "status": st.get("status"),
             "path": st.get("path", ""),
-            "detail": st.get("detail", ""),
+            "detail": detail,
         })
     return rows
 
