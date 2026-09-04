@@ -12168,7 +12168,10 @@ var _CM_CAP_TABS = {
 // inside Memory/Skills would be unreachable because the whole tab was
 // hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
 // was selected in the top-of-page runtime dropdown.
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','skills'];
+// guard: one Guard view ranks running sessions from EVERY runtime by spend
+// at risk, and policies apply node-wide. It was in _CM_RT_ALL_TABS but in
+// no capability map, so selecting any runtime hid it (0.12.806 field hit).
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
