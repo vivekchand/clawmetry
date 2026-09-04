@@ -425,6 +425,10 @@ jobs:
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
+            tests/test_event_shape.py \
+            tests/test_schema_v15_migration.py \
+            tests/test_session_intent.py \
+            tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
             -q
 

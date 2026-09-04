@@ -773,6 +773,67 @@ def split_session_title(title: str, enc_key: str | None, fallback: str) -> tuple
         return fallback, None
 
 
+def seal_session_intent(intent: str, enc_key: str | None) -> str | None:
+    """Encrypted companion blob for ``sessions.intent`` (the full first user
+    prompt). Same rule as :func:`split_session_title`: prompt text is content
+    and rides ONLY the E2E-encrypted field; a node with no key sends nothing.
+    Never raises."""
+    text = (intent or "").strip()
+    if not text or not enc_key:
+        return None
+    try:
+        return encrypt_payload({"intent": text}, enc_key)
+    except Exception:
+        return None
+
+
+def _trail_decorate_cloud_session_rows(rows: list, enc_key: str | None) -> None:
+    """Attach the Trail outcome fields to cloud ``/ingest/sessions`` rows.
+
+    * ``intent_blob``: the session's intent, sealed with the node key (the
+      same encrypted channel that carries ``title_blob`` /
+      ``display_name_blob``). Never a plaintext ``intent`` key.
+    * ``commits`` / ``prs``: plaintext COUNTS from the git join. Subjects and
+      PR titles stay local; a count is not content.
+
+    One store read per batch for each; best-effort, never raises, and leaves
+    rows untouched when the store is unavailable.
+    """
+    if not rows:
+        return
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception:
+        return
+    if store is None:
+        return
+    intents: dict = {}
+    counts: dict = {}
+    try:
+        intents = store.query_session_intents() or {}
+    except Exception:
+        intents = {}
+    try:
+        counts = store.query_session_git_counts() or {}
+    except Exception:
+        counts = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sid = str(r.get("session_id") or "")
+        if not sid:
+            continue
+        r.pop("intent", None)  # belt and braces: never plaintext
+        blob = seal_session_intent(intents.get(sid, ""), enc_key)
+        if blob:
+            r["intent_blob"] = blob
+        c = counts.get(sid)
+        if c:
+            r["commits"] = int(c.get("commits") or 0)
+            r["prs"] = int(c.get("prs") or 0)
+
+
 def decrypt_payload(blob: str, key_b64: str) -> dict:
     """Decrypt a blob produced by encrypt_payload. Used by clients."""
     cipher = _get_aesgcm(key_b64)
@@ -4342,6 +4403,18 @@ def _local_ingest_session_batch(
         })
     if rows:
         store.ingest_many(rows)
+        # Trail: the session's intent is the FULL first user prompt (the
+        # title is its 80-char truncation). First wins inside the store, so
+        # a later batch of the same session cannot overwrite it; a session
+        # row that does not exist yet is picked up by the daemon's lazy
+        # back-fill. Non-fatal.
+        try:
+            from clawmetry import event_shape as _event_shape
+            _intent = _event_shape.first_user_prompt(rows)
+            if _intent:
+                store.update_session_intent(session_id, _intent, source="events")
+        except Exception as _e:
+            log.debug("session intent update skipped (non-fatal): %s", _e)
     # Stamp where this session is running. Runs after ingest_many so a session
     # row created by this same batch is already there to update. Non-fatal and
     # non-blocking: a session with no location is a cosmetic gap, never a
@@ -13280,6 +13353,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                                               float(_t.get("cost_usd") or 0.0))
             except Exception as _e:
                 log.debug("event-cost bridge skipped (push uses JSONL value): %s", _e)
+            # Trail: sealed intent + plaintext commit/PR counts.
+            try:
+                _trail_decorate_cloud_session_rows(rows, config.get("encryption_key"))
+            except Exception as _e:
+                log.debug("trail decoration skipped (non-fatal): %s", _e)
             _post("/ingest/sessions", {"node_id": node_id, "sessions": rows}, api_key)
             return len(rows)
 
@@ -15214,6 +15292,14 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _fcwd = ((getattr(s, "cwd", "") or "").strip() or None) \
                     or _session_cwd(metadata)
                 _fbranch = _session_git_branch(metadata)
+                # Trail: full first user prompt (redacted + capped by the
+                # store). None when the adapter exposes no user turn, so the
+                # upsert's COALESCE keeps whatever the row already has.
+                try:
+                    from clawmetry import event_shape as _event_shape
+                    _fintent = _event_shape.first_user_prompt(_events) or None
+                except Exception:
+                    _fintent = None
                 # Local upsert (the sessions list reads this).
                 try:
                     store.ingest_session({
@@ -15222,6 +15308,8 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "node_id": node_id,
                         "agent_id": "main",
                         "title": _row_title,
+                        "intent": _fintent,
+                        "intent_source": "adapter" if _fintent else None,
                         "started_at": started,
                         "last_active_at": ended or started,
                         "ended_at": _fended,
@@ -15495,6 +15583,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
     # Push session rows to cloud so the cloud Sessions list shows them. Mirrors
     # sync_session_metadata's cloud push; best-effort and never blocks.
     if cloud_session_rows and api_key:
+        # Trail: sealed intent + plaintext commit/PR counts, same channel
+        # as ``title_blob``.
+        try:
+            _trail_decorate_cloud_session_rows(
+                cloud_session_rows, config.get("encryption_key"))
+        except Exception as _e:
+            log.debug("trail decoration skipped (non-fatal): %s", _e)
         try:
             _post(
                 "/ingest/sessions",
@@ -20498,6 +20593,54 @@ def _git_scan_tick(store) -> int:
     return done
 
 
+# ── Trail lazy back-fill (schema v15) ──────────────────────────────────────
+
+#: Seconds between back-fill batches. Short on purpose: each batch is small.
+TRAIL_BACKFILL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_TRAIL_BACKFILL_INTERVAL", "20"))
+#: Events classified per batch (FLYWHEEL 1e: bounded work per tick).
+TRAIL_BACKFILL_EVENTS = int(os.environ.get("CLAWMETRY_TRAIL_BACKFILL_EVENTS", "500"))
+#: Sessions whose intent is derived per batch.
+TRAIL_BACKFILL_SESSIONS = int(os.environ.get("CLAWMETRY_TRAIL_BACKFILL_SESSIONS", "25"))
+
+
+#: Once a batch finds nothing to do, the next scan waits this long. New
+#: events are typed on INSERT and new sessions get their intent at ingest,
+#: so an idle store only needs an occasional sweep for stragglers.
+TRAIL_BACKFILL_IDLE_SEC = int(os.environ.get("CLAWMETRY_TRAIL_BACKFILL_IDLE", "600"))
+_TRAIL_BACKFILL_STATE: dict = {"idle_until": 0.0}
+
+
+def _trail_backfill_tick() -> dict:
+    """One bounded back-fill batch for the typed event columns and the
+    session intents. Returns ``{events, sessions}`` counts; never raises
+    into the daemon loop (the caller logs at debug)."""
+    out = {"events": 0, "sessions": 0}
+    if os.environ.get("CLAWMETRY_TRAIL_BACKFILL", "1").strip().lower() in (
+        "0", "false", "no", ""
+    ):
+        return out
+    if time.time() < float(_TRAIL_BACKFILL_STATE.get("idle_until") or 0.0):
+        return out
+    from clawmetry import local_store as _ls
+    store = _ls.get_store()
+    if store is None:
+        return out
+    try:
+        out["events"] = int(store.backfill_event_shapes(limit=TRAIL_BACKFILL_EVENTS) or 0)
+    except Exception as e:  # noqa: BLE001
+        log.debug("trail back-fill: events failed: %s", e)
+    try:
+        out["sessions"] = int(store.backfill_session_intents(limit=TRAIL_BACKFILL_SESSIONS) or 0)
+    except Exception as e:  # noqa: BLE001
+        log.debug("trail back-fill: intents failed: %s", e)
+    if out["events"] or out["sessions"]:
+        log.info("trail back-fill: %d event(s) typed, %d intent(s) set",
+                 out["events"], out["sessions"])
+    else:
+        _TRAIL_BACKFILL_STATE["idle_until"] = time.time() + TRAIL_BACKFILL_IDLE_SEC
+    return out
+
+
 def _epoch_of(ts: Any) -> int:
     """Epoch seconds for a session timestamp string; 0 when undecidable."""
     s = str(ts or "").strip()
@@ -23689,6 +23832,7 @@ def run_daemon() -> None:
     except Exception as _be:
         log.debug("briefs: scheduler not started: %s", _be)
     last_git_scan = 0.0
+    last_trail_backfill = 0.0
 
     while True:
         try:
@@ -24085,6 +24229,21 @@ def run_daemon() -> None:
                     save_state(state)
                 except Exception:
                     pass
+
+            # ── Trail lazy back-fill (schema v15) ──
+            # Typed event columns (role / block_kind / tool_name / is_error)
+            # and sessions.intent for rows written before v15. Bounded per
+            # tick (TRAIL_BACKFILL_EVENTS rows, TRAIL_BACKFILL_SESSIONS
+            # sessions) so a multi-GB store is classified over minutes in
+            # the background instead of in one startup scan; idles to zero
+            # work once every row is stamped.
+            now_trail = time.time()
+            if (now_trail - last_trail_backfill) >= TRAIL_BACKFILL_INTERVAL_SEC:
+                try:
+                    _trail_backfill_tick()
+                except Exception as _te:
+                    log.debug("trail back-fill: tick errored: %s", _te)
+                last_trail_backfill = now_trail
 
             # ── Eval scheduler (issue #1619 Phase 1) ──
             # Sister of the alerts evaluator. Picks unscored completed

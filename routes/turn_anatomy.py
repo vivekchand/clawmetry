@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry import event_shape as _event_shape
 from routes.tracing import _thinking_texts
 
 bp_turn_anatomy = Blueprint("turn_anatomy", __name__)
@@ -137,10 +138,16 @@ def _classify(e, otlp_prompt_ok=False):
     if "compact" in et:
         return "compaction"
     d = _data(e)
-    role = (d.get("role") or "").lower()
+    # Speaker / tool / error come from the ONE normaliser
+    # (clawmetry.event_shape) rather than a private ``data.role`` sniff, so
+    # a Claude Code ``tool_result`` block, a Codex ``tool_result`` row and an
+    # OpenClaw ``tool.result`` event all land on the same span kind.
+    shape = _event_shape.classify(et, d)
+    role = shape["role"] or (d.get("role") or "").lower()
 
     # Tool plumbing first (a tool_call row may also have role=assistant).
-    if "tool_result" in et or "tool_use_result" in et or role == "tool":
+    if "tool_result" in et or "tool_use_result" in et or role == "tool" \
+            or shape["block_kind"] == "tool_result":
         return "tool_result"
     if "tool_call" in et or "tool.call" in et or d.get("tool_name") or d.get("tool_calls"):
         return "tool_call"
@@ -157,21 +164,23 @@ def _classify(e, otlp_prompt_ok=False):
             or (role == "assistant" and et in ("message", "text")):
         return "model"
 
-    if et == "thinking":
+    if et == "thinking" or shape["block_kind"] == "thinking":
         # Its own kind: the reasoning that drove the next action, never folded
         # into "model" (a model call is what the thinking produced).
         return "thinking"
+    if role == "user" and shape["block_kind"] == "text" and shape["text"]:
+        return "prompt"
+    if role == "assistant" and shape["block_kind"] in ("text", "tool_use"):
+        return "model"
     return ""
 
 
 def _tool_name(e):
-    d = _data(e)
-    name = d.get("tool_name")
-    if name:
-        return str(name).replace("mcp__openclaw__", "")
-    tcs = d.get("tool_calls")
-    if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
-        n = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+    shape = _event_shape.classify(e.get("event_type"), _data(e))
+    if shape["tool_name"]:
+        return shape["tool_name"]
+    if shape["tool_uses"]:
+        n = shape["tool_uses"][0].get("name")
         if n:
             return str(n).replace("mcp__openclaw__", "")
     return "tool"
@@ -198,6 +207,8 @@ def _tool_result_id(e):
 
 def _is_error(e):
     d = _data(e)
+    if _event_shape.classify(e.get("event_type"), d)["is_error"]:
+        return True
     ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
     return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
                 or (e.get("event_type") or "").endswith("error"))
