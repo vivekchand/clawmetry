@@ -21464,8 +21464,12 @@ async function _loadReplayTree(sessionId) {
   if (!mount) {
     mount = document.createElement('div');
     mount.id = 'replay-tree-container';
+    // The Trail page re-parents #transcript-messages into its own card, so
+    // the anchor is not always a child of #transcript-viewer; inserting
+    // relative to the anchor's real parent avoids the NotFoundError seen on
+    // the hosted dashboard (0.12.811) when a trail opened the replay.
     var anchor = document.getElementById('transcript-messages');
-    if (anchor) viewer.insertBefore(mount, anchor);
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mount, anchor);
     else viewer.appendChild(mount);
   } else {
     mount.innerHTML = '';
