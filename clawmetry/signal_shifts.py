@@ -61,6 +61,11 @@ from typing import Any
 
 log = logging.getLogger("clawmetry.signal_shifts")
 
+__all__ = [
+    "learned_band", "detect_shift", "rank_breakdown", "issue_headline",
+    "shift_alert_match", "evaluate_pairs", "run_shift_tick", "build_snapshot_slice",
+]
+
 # ── tunables (env-overridable) ──────────────────────────────────────────────
 # The short window the rate is compared over, and the history it is compared
 # against. History always EXCLUDES the short window.
@@ -200,7 +205,9 @@ def _basename(path: str | None) -> str:
 def rank_breakdown(turn_rows: Iterable[dict], match_rows: Iterable[dict], *,
                    cwd_of: dict[str, str] | None = None,
                    tool_of: dict[str, str] | None = None,
-                   top_n: int = BREAKDOWN_TOP_N) -> dict:
+                   top_n: int = BREAKDOWN_TOP_N,
+                   threshold: float | None = None,
+                   threshold_source: str | None = None) -> dict:
     """Rank, per dimension, which value explains most of the shift.
 
     ``turn_rows`` / ``match_rows`` are per-session counts for the signal's
@@ -216,7 +223,10 @@ def rank_breakdown(turn_rows: Iterable[dict], match_rows: Iterable[dict], *,
 
     Returns ``{"model": [...], "runtime_version": [...], "tool": [...],
     "cwd": [...], "top": {...} | None}`` where each entry is
-    ``{value, rate_before, rate_during, n_before, n_during, share}``.
+    ``{value, rate_before, rate_during, n_before, n_during, share}``. When
+    the shift verdict's ``threshold`` and ``threshold_source`` (learned /
+    floor / ceiling) are given they are carried in the result too, so the
+    stored ``breakdown_json`` records which clamp the issue crossed.
     """
     cwd_of = cwd_of or {}
     tool_of = tool_of or {}
@@ -284,6 +294,10 @@ def rank_breakdown(turn_rows: Iterable[dict], match_rows: Iterable[dict], *,
             if best is None or cand["share"] > best["share"]:
                 best = cand
     result["top"] = best
+    if threshold is not None:
+        result["threshold"] = threshold
+    if threshold_source is not None:
+        result["threshold_source"] = str(threshold_source)
     return result
 
 
@@ -438,17 +452,20 @@ def run_shift_tick(store, *, now_ms: int | None = None, deliver=None,
                     short_hours=SHORT_HOURS, history_days=HISTORY_DAYS) or {}
                 breakdown = rank_breakdown(rows.get("turns") or [], rows.get("matches") or [],
                                            cwd_of=rows.get("cwd") or {},
-                                           tool_of=rows.get("tool") or {})
+                                           tool_of=rows.get("tool") or {},
+                                           threshold=shift["threshold"],
+                                           threshold_source=shift["threshold_source"])
             except Exception as e:  # noqa: BLE001
                 log.debug("signal shifts: breakdown failed for %s/%s: %s", sig, rt, e)
                 breakdown = {d: [] for d in BREAKDOWN_DIMENSIONS}
                 breakdown["top"] = None
+                breakdown["threshold"] = shift["threshold"]
+                breakdown["threshold_source"] = shift["threshold_source"]
             res = store.upsert_signal_issue(
                 signal=sig, agent_type=rt, node_id=hit.get("node_id") or node_id or "",
                 rate_before=shift["rate_before"], rate_during=shift["rate_during"],
                 n_before=shift["n_before"], n_during=shift["n_during"],
-                breakdown_json=json.dumps({**breakdown, "threshold": shift["threshold"],
-                                           "threshold_source": shift["threshold_source"]}),
+                breakdown_json=json.dumps(breakdown),
                 now_ms=now_ms, reopen_after_ms=SHORT_HOURS * _HOUR_MS,
             ) or {}
             action = str(res.get("action") or "none")

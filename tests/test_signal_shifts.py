@@ -130,6 +130,12 @@ def test_breakdown_handles_empty_input():
     assert bd["top"] is None and all(bd[d] == [] for d in ss.BREAKDOWN_DIMENSIONS)
 
 
+def test_breakdown_carries_the_threshold_it_was_given():
+    bd = ss.rank_breakdown([], [], threshold=0.06, threshold_source="floor")
+    assert bd["threshold"] == 0.06 and bd["threshold_source"] == "floor"
+    assert "threshold" not in ss.rank_breakdown([], [])
+
+
 # ── plain words ─────────────────────────────────────────────────────────────
 
 def _issue(**kw):
