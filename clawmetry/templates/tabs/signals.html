@@ -1,0 +1,58 @@
+<!-- SIGNALS TAB (WO-58 Behaviour Signals): what people and agents say about a run.
+     Six preset signals counted over every transcript in the store, judge-free.
+     Leads with the one sentence that moved most, then a table per signal, then
+     a coverage strip that states which runtimes expose user / assistant text.
+     The wrapper must be a .page panel keyed page-<stem>: the dashboard only
+     hides and shows those (memory: tab-template-wrapper trap). -->
+<div class="page" id="page-signals">
+  <div class="sig-header">
+    <div>
+      <h2 data-i18n="signals.title">Signals</h2>
+      <p class="sig-sub" data-i18n="signals.sub">
+        What people say to your agents and what the agents say back. Frustration, praise, refusals, work handed back, giving up, and retries, counted from the transcripts you already have. No model reads them.
+      </p>
+    </div>
+    <div class="sig-controls">
+      <div class="sig-seg" id="signals-window-seg" role="tablist">
+        <button data-window="1d" onclick="signalsSetWindow('1d')" data-i18n="signals.win_1d">Today</button>
+        <button data-window="7d" class="active" onclick="signalsSetWindow('7d')" data-i18n="signals.win_7d">7 days</button>
+        <button data-window="30d" onclick="signalsSetWindow('30d')" data-i18n="signals.win_30d">30 days</button>
+      </div>
+      <button class="sig-btn" onclick="loadSignalsTab()" data-i18n="signals.refresh">Refresh</button>
+    </div>
+  </div>
+
+  <div class="sig-card sig-headline-card">
+    <div class="sig-headline" id="signals-headline" data-i18n="signals.loading">Loading signals...</div>
+    <div class="sig-headline-sub" id="signals-headline-sub"></div>
+  </div>
+
+  <div class="sig-card">
+    <div class="sig-card-head">
+      <h3 data-i18n="signals.table_title">Each signal this window</h3>
+      <span class="sig-muted" id="signals-scope-note"></span>
+    </div>
+    <div id="signals-table-body">
+      <div class="sig-empty" data-i18n="signals.loading">Loading signals...</div>
+    </div>
+  </div>
+
+  <div class="sig-card" id="signals-sessions-card" style="display:none;">
+    <div class="sig-card-head">
+      <h3 id="signals-sessions-title"></h3>
+      <button class="sig-btn sig-btn-sm" onclick="signalsCloseSessions()" data-i18n="signals.close">Close</button>
+    </div>
+    <p class="sig-sub" data-i18n="signals.sessions_note">Sessions are listed, never the matched phrases. Open a session to read the turn in its transcript.</p>
+    <div id="signals-sessions-body"></div>
+  </div>
+
+  <div class="sig-card">
+    <div class="sig-card-head">
+      <h3 data-i18n="signals.coverage_title">What each runtime exposes</h3>
+    </div>
+    <p class="sig-sub" data-i18n="signals.coverage_note">A runtime that does not write user prompts to disk cannot have a frustration rate. That reads as "not exposed", never as zero. Presets are English first.</p>
+    <div id="signals-coverage-body">
+      <div class="sig-empty" data-i18n="signals.loading">Loading signals...</div>
+    </div>
+  </div>
+</div>

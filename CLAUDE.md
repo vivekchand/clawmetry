@@ -40,6 +40,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `routes/crons.py` | ~1,500 | `bp_crons` — cron CRUD + run log + health summary |
 | `routes/meta.py` | ~1,600 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
 | `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
+| `routes/signals.py` | ~200 | `bp_signals` — Behaviour Signals read API: `/api/signals` (per signal: rate, count, eligible turns, trend, per-day, by model, by runtime version; plus coverage per runtime and a plain-words headline), `/api/signals/<name>/sessions` (sessions, never phrases), `/api/signals/coverage`. Reads the store through the daemon proxy |
 | `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
 | `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
 | `routes/runtime_ingest.py` | ~87 | `bp_runtime_ingest` — custom runtime HTTP ingest API (`/api/v1/runtimes`, `/api/v1/runs/*`; Pro feature) |
@@ -57,6 +58,7 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | `clawmetry/detector_surface.py` | ~290 | What a tool call touched (paths, command, hosts, heredoc bodies stripped) and what a finding may repeat back. Every function here is new in this change |
 | `clawmetry/detector_behaviour.py` | ~470 | The four **behavioural** detectors (is it doing something it does not normally do?): `file_blast_radius`, `credential_access`, `network_egress`, `privilege_change`, with their pattern tables |
 | `clawmetry/detector_calibration.py` | ~280 | Where a threshold comes from: module defaults → `RUNTIME_PROFILES` → the cohort's learned baseline → a per-runtime env override. `resolve_thresholds` reports which layer set each value |
+| `clawmetry/behaviour_signals.py` | ~750 | Behaviour Signals (WO-58): six preset judge-free signals over every transcript in the store (`user_frustration`, `user_praise`, `assistant_refusal`, `assistant_laziness`, `task_failure`, `user_retry`). Precompiled word-boundary matchers with negation, positive-context and front-of-turn guards, evaluated on the daemon tick over new turns (watermark on `events.created_at`, capped per pass), persisted to the additive `signal_turns` + `signal_matches` tables (never the text; PK dedupes re-runs). Also the rate aggregation, per-runtime coverage (`user_text` / `assistant_text` / `none`; an adapter's `signal_coverage()` wins over inference), the headline sentence and the `signals` / `signalsByRuntime` snapshot slices |
 | `clawmetry/detector_money.py` | ~130 | `spend_at_risk_usd` and the ranking. Only a measured basis may promote a warning to `critical` |
 | `clawmetry/git_outcomes.py` | ~660 | **Read-only** Git reader (REQ-OBS-CEA-022) — commits, merge state by default-branch reachability, pull-request state via `gh` when present, line survival for rework, and session↔commit correlation with a recorded confidence. Every subprocess passes one chokepoint that rejects anything outside an allowlist of read-only plumbing subcommands |
 | `clawmetry/interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
@@ -112,7 +114,8 @@ The daemon owns the DuckDB writer lock and runs a localhost query server so the 
 - `/api/system-health` — Disk, memory, uptime, GPU
 - `/api/nodes` — Multi-node fleet view
 - `/api/budget/*` — Budget monitoring and alerts
-- `/api/alerts/*` — Custom alert rules
+- `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample)
+- `/api/signals` — Behaviour signal rates per window (`1d|7d|30d`) and `?runtime=`, with coverage and headline; `/api/signals/<name>/sessions` lists matching sessions, never phrases
 
 ## Dependencies
 Minimal by design, and this list had drifted — `setup.py` is the source of truth:
@@ -189,6 +192,7 @@ CLAWMETRY_GIT_MAX_COMMITS=500          # Commit ceiling per scan (keeps the NEWE
 CLAWMETRY_GIT_MAX_BLAME_FILES=40       # Files blamed for line survival (rework), most-changed first
 CLAWMETRY_GIT_BLAME_BUDGET=10          # Seconds the whole blame pass may take
 CLAWMETRY_GIT_REPO_BUDGET=25           # Seconds one repository's whole scan may take
+CLAWMETRY_SIGNALS=1                    # Behaviour Signals tick on/off; CLAWMETRY_SIGNALS_EVENTS_PER_TICK (2000) and CLAWMETRY_SIGNALS_SCAN_CHARS (2000) bound each pass
 DEBUG=1                                # Enable debug logging
 ```
 

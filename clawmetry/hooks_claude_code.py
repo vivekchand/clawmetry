@@ -24,6 +24,40 @@ Three hook events, one dispatcher (`clawmetry hooks run <event>`):
                  assistant turn — a push per reply is noise; idle_prompt is
                  the real "finished, waiting on you" signal).
 
+Lifecycle events (WO-61) — seven more, all OBSERVE-ONLY and all installed
+with Claude Code's ``"async": true`` so the runtime never waits on them:
+
+  PostToolUseFailure  → tool.failed          (tool_name, tool_use_id, error)
+  SubagentStart       → subagent.started     (agent_id, agent_type)
+  SubagentStop        → subagent.stopped     (agent_id, agent_type)
+  PermissionDenied    → permission.denied    (tool_name, reason; NO args)
+  PostCompact         → context.compacted    (trigger)
+  SessionStart        → session.started      (start_reason, model, cwd)
+  InstructionsLoaded  → instructions.loaded  (path, type, reason, sha256)
+
+Each handler maps the payload to one typed event with a DETERMINISTIC id
+(session + event type + the fact's own key: tool_use_id, agent_id, path
+and hash, ...) and POSTs it to the local dashboard's
+``/api/hooks/claude-code/lifecycle`` intake with a 3s timeout. The intake
+writes through the daemon (the only DuckDB writer); the store's
+INSERT OR IGNORE on the id makes a second arrival of the same fact a
+no-op. Unknown payload fields are accepted and their NAMES recorded, so a
+Claude Code release that adds a field is visible without a code change.
+
+InstructionsLoaded carries the PATH of the loaded file, not its contents
+(verified against code.claude.com/docs/en/hooks). The handler reads the
+file at that moment, caps it at ``INSTRUCTIONS_CAP_BYTES``, and sends it
+with a sha256 of the FULL file so a changed instructions file is a
+comparable property; the store redacts it (secrets + personal data) before
+it rests. On a Claude Code build without InstructionsLoaded, SessionStart
+falls back to the cwd's CLAUDE.md chain and says so in the event.
+
+Which events a build offers is PROBED, not assumed from a version table:
+the event name is a literal string in the resolved ``claude`` binary (or
+its ``cli.js``), so the installer greps for it and skips, with a note,
+any event the build does not name. An unlocatable binary installs all of
+them (Claude Code ignores hook events it does not fire).
+
 FAIL-OPEN by contract: any error, missing key, unparseable stdin, or
 unmatched tool → exit 0 with no output, which per the hook contract means
 "no opinion" — Claude Code's normal permission flow continues. A protection
@@ -71,6 +105,28 @@ _SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
 _HOOK_CMD_PRETOOL = "clawmetry hooks run pretooluse"
 _HOOK_CMD_NOTIFICATION = "clawmetry hooks run notification"
 _HOOK_CMD_STOP = "clawmetry hooks run stop"
+
+# Lifecycle events (WO-61). Order = install order = the order the trail
+# presents the facts. ``run`` names are the lower-cased event names.
+LIFECYCLE_EVENTS: tuple = (
+    "PostToolUseFailure", "SubagentStart", "SubagentStop",
+    "PermissionDenied", "PostCompact", "SessionStart", "InstructionsLoaded",
+)
+LIFECYCLE_EVENT_TYPES: dict = {
+    "PostToolUseFailure": "tool.failed",
+    "SubagentStart": "subagent.started",
+    "SubagentStop": "subagent.stopped",
+    "PermissionDenied": "permission.denied",
+    "PostCompact": "context.compacted",
+    "SessionStart": "session.started",
+    "InstructionsLoaded": "instructions.loaded",
+}
+_LIFECYCLE_RUN_NAMES: dict = {ev.lower(): ev for ev in LIFECYCLE_EVENTS}
+_LIFECYCLE_TIMEOUT_S = 5          # not enforced on async hooks; documented cap
+_LIFECYCLE_POST_TIMEOUT_S = 3.0   # the handler never waits longer than this
+INSTRUCTIONS_CAP_BYTES = 32 * 1024
+_ERROR_CAP_CHARS = 2000
+_SERVER_INFO_PATH = os.path.expanduser("~/.clawmetry/server.json")
 # Any command containing this marker is ours (covers the stale-branch
 # spelling `clawmetry hook claude-code` too, so uninstall cleans both).
 _HOOK_CMD_MARKERS = ("clawmetry hooks run", "clawmetry hook claude-code")
@@ -396,6 +452,324 @@ def main_stop() -> int:
     return 0
 
 
+# ── lifecycle events (WO-61) ──────────────────────────────────────────────
+
+def _dashboard_base() -> str:
+    """Where the local dashboard listens. ``routes/hooks.py`` writes
+    ``~/.clawmetry/server.json`` with the bound port; 8900 otherwise."""
+    base = os.environ.get("CLAWMETRY_URL", "").strip().rstrip("/")
+    if base:
+        return base
+    port = 8900
+    try:
+        info = json.load(open(_SERVER_INFO_PATH))
+        port = int(info.get("port") or 8900)
+    except Exception:
+        pass
+    return f"http://127.0.0.1:{port}"
+
+
+def lifecycle_event_id(session_id: str, event_type: str, key: str) -> str:
+    """Deterministic id for one lifecycle fact. Same fact -> same id, so the
+    store's INSERT OR IGNORE turns a second arrival into a no-op."""
+    import hashlib
+    raw = f"cc-hook:{session_id}:{event_type}:{key}"
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:32]
+
+
+# Fields every hook payload documents (code.claude.com/docs/en/hooks). Any
+# other top-level key is "unknown" and its NAME is recorded on the event.
+_KNOWN_PAYLOAD_FIELDS = frozenset({
+    "session_id", "prompt_id", "transcript_path", "cwd", "permission_mode",
+    "effort", "hook_event_name", "agent_id", "agent_type",
+    "tool_name", "tool_input", "tool_use_id", "tool_response", "tool_error",
+    "denial_reason", "agent_instructions", "last_assistant_message",
+    "trigger", "start_reason", "model", "instruction_path",
+    "instruction_type", "load_reason", "end_reason",
+})
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + \
+        f".{int((time.time() % 1) * 1000):03d}Z"
+
+
+def read_instructions_file(path: str, cap: int = INSTRUCTIONS_CAP_BYTES) -> "dict | None":
+    """Read an instructions file as the agent just saw it.
+
+    Returns ``{content, sha256, bytes, truncated}`` or None when the path
+    is unreadable. The hash covers the FULL file; the content is capped so
+    a 4 MB CLAUDE.md cannot bloat the store. Redaction happens in the
+    store, not here: this runs in a hook process and must stay cheap.
+    """
+    import hashlib
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except Exception:
+        return None
+    digest = hashlib.sha256(raw).hexdigest()
+    truncated = len(raw) > cap
+    body = raw[:cap] if truncated else raw
+    return {
+        "content": body.decode("utf-8", "replace"),
+        "sha256": digest,
+        "bytes": len(raw),
+        "truncated": truncated,
+    }
+
+
+def _fallback_instruction_paths(cwd: str) -> list:
+    """The CLAUDE.md chain a Claude Code build without InstructionsLoaded
+    would have read: walk from cwd to the filesystem root, then the user
+    file. Only existing files are returned."""
+    out = []
+    seen = set()
+    try:
+        cur = os.path.abspath(cwd or os.getcwd())
+        while True:
+            for rel in ("CLAUDE.md", os.path.join(".claude", "CLAUDE.md")):
+                p = os.path.join(cur, rel)
+                if p not in seen and os.path.isfile(p):
+                    seen.add(p)
+                    out.append(p)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        user = os.path.expanduser(os.path.join("~", ".claude", "CLAUDE.md"))
+        if user not in seen and os.path.isfile(user):
+            out.append(user)
+    except Exception:
+        pass
+    return out
+
+
+def _lifecycle_skipped_events() -> set:
+    try:
+        data = json.load(open(_MARKER_PATH))
+        return set((data.get("claude_code") or {}).get("skipped") or [])
+    except Exception:
+        return set()
+
+
+def map_lifecycle_event(event_name: str, payload: dict, ts: "str | None" = None,
+                        read_file=read_instructions_file) -> list:
+    """Pure mapping: one hook payload -> typed event dicts for the intake.
+
+    Never raises on a strange payload; unknown fields are tolerated and
+    their names recorded under ``unknown_fields``. Returns [] when the
+    payload carries no session id (nothing to attach the fact to).
+    """
+    if not isinstance(payload, dict):
+        return []
+    sid = str(payload.get("session_id") or "").strip()
+    if not sid:
+        return []
+    ts = ts or _now_iso()
+    etype = LIFECYCLE_EVENT_TYPES.get(event_name)
+    if not etype:
+        return []
+    unknown = sorted(k for k in payload if isinstance(k, str)
+                     and k not in _KNOWN_PAYLOAD_FIELDS)
+    common = {
+        "source": "hook",
+        "hook_event_name": event_name,
+        "cwd": str(payload.get("cwd") or "")[:300],
+        "permission_mode": str(payload.get("permission_mode") or "")[:32],
+        "unknown_fields": unknown[:20],
+    }
+    if payload.get("agent_id"):
+        common["agent_id"] = str(payload["agent_id"])[:120]
+    if payload.get("agent_type"):
+        common["agent_type"] = str(payload["agent_type"])[:120]
+
+    def _evt(key: str, data: dict) -> dict:
+        d = dict(common)
+        d.update(data)
+        return {
+            "id": lifecycle_event_id(sid, etype, key),
+            "session_id": sid,
+            "event_type": etype,
+            "ts": ts,
+            "data": d,
+        }
+
+    out = []
+    if event_name == "PostToolUseFailure":
+        tuid = str(payload.get("tool_use_id") or "").strip()
+        out.append(_evt(tuid or ts, {
+            "tool_name": str(payload.get("tool_name") or "")[:120],
+            "tool_use_id": tuid,
+            "error": str(payload.get("tool_error") or "")[:_ERROR_CAP_CHARS],
+        }))
+    elif event_name in ("SubagentStart", "SubagentStop"):
+        aid = str(payload.get("agent_id") or "").strip()
+        data = {"agent_id": aid,
+                "agent_type": str(payload.get("agent_type") or "")[:120]}
+        if event_name == "SubagentStop":
+            msg = payload.get("last_assistant_message")
+            data["last_message_chars"] = len(msg) if isinstance(msg, str) else 0
+        out.append(_evt(aid or ts, data))
+    elif event_name == "PermissionDenied":
+        tuid = str(payload.get("tool_use_id") or "").strip()
+        # Deliberately no tool_input: the Behaviour Signals work counts
+        # these, it does not need the arguments, and the arguments are
+        # where a secret would be.
+        out.append(_evt(tuid or ts, {
+            "tool_name": str(payload.get("tool_name") or "")[:120],
+            "tool_use_id": tuid,
+            "reason": str(payload.get("denial_reason") or "")[:500],
+        }))
+    elif event_name == "PostCompact":
+        trig = str(payload.get("trigger") or "")[:32]
+        key = str(payload.get("prompt_id") or "") or ts
+        out.append(_evt(f"{trig}:{key}", {"trigger": trig}))
+    elif event_name == "SessionStart":
+        reason = str(payload.get("start_reason") or "")[:32]
+        out.append(_evt(f"{reason}:{ts[:16]}", {
+            "start_reason": reason,
+            "model": str(payload.get("model") or "")[:80],
+            "transcript_path": str(payload.get("transcript_path") or "")[:400],
+        }))
+        if "InstructionsLoaded" in _lifecycle_skipped_events():
+            for path in _fallback_instruction_paths(payload.get("cwd") or ""):
+                info = read_file(path)
+                if not info:
+                    continue
+                out.append({
+                    "id": lifecycle_event_id(sid, "instructions.loaded",
+                                             f"{path}:{info['sha256']}"),
+                    "session_id": sid,
+                    "event_type": "instructions.loaded",
+                    "ts": ts,
+                    "data": dict(common, instruction_path=path,
+                                 instruction_type="claude_md",
+                                 load_reason="session_start_fallback",
+                                 sha256=info["sha256"], bytes=info["bytes"],
+                                 truncated=info["truncated"]),
+                    "instructions": info,
+                })
+    elif event_name == "InstructionsLoaded":
+        path = str(payload.get("instruction_path") or "").strip()
+        info = read_file(path) if path else None
+        sha = info["sha256"] if info else ""
+        evt = _evt(f"{path}:{sha}", {
+            "instruction_path": path[:400],
+            "instruction_type": str(payload.get("instruction_type") or "")[:32],
+            "load_reason": str(payload.get("load_reason") or "")[:32],
+            "sha256": sha,
+            "bytes": info["bytes"] if info else None,
+            "truncated": info["truncated"] if info else None,
+            "readable": bool(info),
+        })
+        if info:
+            evt["instructions"] = info
+        out.append(evt)
+    return out
+
+
+def post_lifecycle(events: list, base: "str | None" = None,
+                   timeout: float = _LIFECYCLE_POST_TIMEOUT_S) -> bool:
+    """POST typed events to the local intake. Never raises, never blocks
+    past ``timeout``: the hook is async on the runtime side, but a stuck
+    process is still a process."""
+    if not events:
+        return False
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{base or _dashboard_base()}/api/hooks/claude-code/lifecycle",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def main_lifecycle(event_name: str) -> int:
+    """Handler for every lifecycle event: read stdin, map, post, exit 0."""
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return 0
+    try:
+        events = map_lifecycle_event(event_name, payload)
+        post_lifecycle(events)
+    except Exception:
+        pass
+    return 0
+
+
+# ── which events does this Claude Code build fire? ────────────────────────
+
+def _claude_binary_candidates() -> list:
+    """Files that could carry Claude Code's hook-event string table."""
+    import shutil
+    cands = []
+    found = shutil.which("claude")
+    for p in (found,
+              os.path.expanduser("~/.local/bin/claude"),
+              os.path.expanduser("~/.claude/local/claude"),
+              os.path.expanduser("~/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js")):
+        if not p:
+            continue
+        try:
+            rp = os.path.realpath(p)
+        except Exception:
+            continue
+        if os.path.isfile(rp) and rp not in cands:
+            cands.append(rp)
+        # npm shim: a small launcher next to a package dir holding cli.js.
+        try:
+            if os.path.getsize(rp) < 1_000_000:
+                d = os.path.dirname(rp)
+                for _ in range(4):
+                    cli = os.path.join(d, "node_modules", "@anthropic-ai",
+                                       "claude-code", "cli.js")
+                    if os.path.isfile(cli) and cli not in cands:
+                        cands.append(cli)
+                        break
+                    d = os.path.dirname(d)
+        except Exception:
+            pass
+    return cands
+
+
+def probe_claude_events(events=LIFECYCLE_EVENTS, binaries: "list | None" = None) -> dict:
+    """``{event: True|False|None}`` -- None means "could not verify".
+
+    A hook event name is a literal string in the build that fires it, so
+    presence in the resolved binary (or cli.js) is a checkable fact. The
+    scan is one pass per event over an mmap; ~200 MB in well under a
+    second. A build we cannot locate answers None for everything.
+    """
+    import mmap
+    cands = binaries if binaries is not None else _claude_binary_candidates()
+    result = {ev: None for ev in events}
+    for path in cands:
+        try:
+            with open(path, "rb") as f:
+                try:
+                    mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                except (ValueError, OSError):
+                    mm = f.read()  # empty file / platform without mmap
+                try:
+                    for ev in events:
+                        hit = mm.find(ev.encode("ascii")) != -1
+                        result[ev] = bool(result[ev]) or hit
+                finally:
+                    if hasattr(mm, "close"):
+                        mm.close()
+        except Exception:
+            continue
+    return result
+
+
 # ── install / uninstall / status ──────────────────────────────────────────
 
 def _read_settings(path: str) -> dict:
@@ -453,7 +827,7 @@ def _has_our_hook(entries: list) -> bool:
     return False
 
 
-def _write_marker(events: list) -> None:
+def _write_marker(events: list, skipped: "list | None" = None) -> None:
     try:
         os.makedirs(os.path.dirname(_MARKER_PATH), exist_ok=True)
         data = {}
@@ -463,6 +837,10 @@ def _write_marker(events: list) -> None:
             pass
         data["claude_code"] = {
             "events": events,
+            # Lifecycle events this Claude Code build does not fire (per the
+            # binary probe). SessionStart reads this to decide whether to
+            # fall back to the cwd's CLAUDE.md chain.
+            "skipped": list(skipped or []),
             "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         tmp = _MARKER_PATH + ".tmp"
@@ -473,9 +851,11 @@ def _write_marker(events: list) -> None:
         pass
 
 
-def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
-    """Register the PreToolUse gate + Notification push in Claude Code's
-    settings.json (idempotent per event; merges, never clobbers).
+def install(settings_path: "str | None" = None, matcher: str = "*",
+            probe: "dict | None" = None) -> dict:
+    """Register the PreToolUse gate + Notification push + the seven
+    lifecycle events in Claude Code's settings.json (idempotent per event;
+    merges, never clobbers). ``probe`` overrides the binary scan (tests).
 
     Matcher default "*": policies cover write/web/secrets tools, not just
     Bash, and the no-match fast path costs ~40ms. The marker file written
@@ -528,12 +908,44 @@ def install(settings_path: "str | None" = None, matcher: str = "*") -> dict:
             added.append("Stop")
             modified = True
 
+        # Lifecycle events (WO-61): observe-only, async so the runtime never
+        # waits on them, and only the ones this build actually fires.
+        supported = probe_claude_events(LIFECYCLE_EVENTS) if probe is None else probe
+        installed_lifecycle = []
+        skipped = []
+        for ev in LIFECYCLE_EVENTS:
+            if supported.get(ev) is False:
+                skipped.append(ev)
+                continue
+            entries = hooks.setdefault(ev, [])
+            if _drop_stale_our_hooks(entries):
+                modified = True
+            if not _has_our_hook(entries):
+                entries.append({
+                    "hooks": [{"type": "command",
+                               "command": f"clawmetry hooks run {ev.lower()}",
+                               "timeout": _LIFECYCLE_TIMEOUT_S,
+                               "async": True}],
+                })
+                added.append(ev)
+                modified = True
+            installed_lifecycle.append(ev)
+
         if modified:
             _write_settings(path, settings)
-        _write_marker(["PreToolUse", "Notification", "Stop"])
+        _write_marker(["PreToolUse", "Notification", "Stop"] + installed_lifecycle,
+                      skipped=skipped)
+        notes = [f"{ev}: not offered by the installed Claude Code build, skipped"
+                 for ev in skipped]
+        if all(v is None for v in supported.values()):
+            notes.append("Claude Code binary not found; every lifecycle event "
+                         "was installed unverified (the runtime ignores events "
+                         "it does not fire)")
         return {"status": "installed" if added else "already_present",
                 "path": path, "added": added, "matcher": matcher,
-                "timeout": _PRETOOL_TIMEOUT_S}
+                "timeout": _PRETOOL_TIMEOUT_S,
+                "lifecycle": installed_lifecycle, "skipped": skipped,
+                "notes": notes}
     except Exception as e:
         return {"status": "error", "path": path, "error": str(e)}
 
@@ -603,6 +1015,8 @@ def cli_main(argv: "list | None" = None) -> int:
             return main_notification()
         if event == "stop":
             return main_stop()
+        if event in _LIFECYCLE_RUN_NAMES:
+            return main_lifecycle(_LIFECYCLE_RUN_NAMES[event])
         sys.stderr.write(f"unknown hook event: {event!r}\n")
         return 1
     if cmd == "install":
@@ -614,6 +1028,8 @@ def cli_main(argv: "list | None" = None) -> int:
                 pass
         res = install(matcher=matcher)
         print(json.dumps(res, indent=2))
+        for note in res.get("notes") or []:
+            print(f"note: {note}")
         if res.get("status") == "installed":
             print("\nDone. Claude Code tool calls matching your approval "
                   "policies now pause for a decision on your phone "
@@ -628,5 +1044,6 @@ def cli_main(argv: "list | None" = None) -> int:
         return 0
     sys.stderr.write(
         "usage: clawmetry hooks {install [--matcher RE] | uninstall | "
-        "status | run {pretooluse|notification|stop}}\n")
+        "status | run {pretooluse|notification|stop|"
+        + "|".join(sorted(_LIFECYCLE_RUN_NAMES)) + "}}\n")
     return 1
