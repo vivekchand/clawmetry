@@ -119,6 +119,236 @@ DB_PATH = Path(
 LEGACY_DB_PATH = Path(os.path.expanduser("~/.clawmetry/events.duckdb"))
 
 
+# ── #5498 — startup compaction ──────────────────────────────────────────────
+#
+# DuckDB never shrinks its file: freed blocks stay allocated and a row group
+# is only merged away once ~25% of adjacent rows are deleted, so the dead row
+# versions left by rewrites (the pre-#5496 restart re-ingest, retention
+# deletes, heartbeat churn) accumulate for the life of the file. A real node
+# measured 1,634 MB on disk for data that ``COPY FROM DATABASE`` rewrote into
+# 575 MB, and every cold start after a release paid for the difference.
+# The only real compaction DuckDB offers is that rewrite, and it needs the
+# file closed, so it runs here: once, at writer startup, before the
+# connection the daemon keeps for its lifetime is opened, and only when the
+# file is mostly dead space. The previous file is kept beside the store for
+# ``AUTO_COMPACT_BACKUP_KEEP_DAYS`` so a bad rewrite is recoverable by hand.
+#   CLAWMETRY_AUTO_COMPACT=0             kill switch
+#   CLAWMETRY_AUTO_COMPACT_MIN_DEAD_PCT  dead-space share that triggers it (0.40)
+#   CLAWMETRY_AUTO_COMPACT_MIN_BYTES     files smaller than this are left alone (64 MB)
+AUTO_COMPACT_ENABLED = os.environ.get("CLAWMETRY_AUTO_COMPACT", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+try:
+    AUTO_COMPACT_MIN_DEAD_PCT = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_MIN_DEAD_PCT", "0.40"))
+except ValueError:
+    AUTO_COMPACT_MIN_DEAD_PCT = 0.40
+try:
+    AUTO_COMPACT_MIN_BYTES = int(os.environ.get("CLAWMETRY_AUTO_COMPACT_MIN_BYTES", str(64 * 1024 * 1024)))
+except ValueError:
+    AUTO_COMPACT_MIN_BYTES = 64 * 1024 * 1024
+try:
+    AUTO_COMPACT_BACKUP_KEEP_DAYS = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_BACKUP_KEEP_DAYS", "7"))
+except ValueError:
+    AUTO_COMPACT_BACKUP_KEEP_DAYS = 7.0
+# Last compaction outcome for this process (surfaced by ``health()``).
+_LAST_COMPACTION: dict[str, Any] = {}
+
+
+def _compaction_backup_path(db_path: Path) -> Path:
+    return db_path.with_name(db_path.name + ".pre-compact")
+
+
+def _prune_compaction_backup(db_path: Path, *, now: float | None = None) -> None:
+    """Delete a ``.pre-compact`` backup once it is older than the keep window."""
+    bak = _compaction_backup_path(db_path)
+    try:
+        age_days = ((now if now is not None else time.time()) - bak.stat().st_mtime) / 86400.0
+    except OSError:
+        return
+    if age_days >= AUTO_COMPACT_BACKUP_KEEP_DAYS:
+        try:
+            bak.unlink()
+            log.info("local store: removed compaction backup %s (%.1f days old)", bak, age_days)
+        except OSError:
+            pass
+
+
+def measure_dead_space(conn) -> dict[str, Any]:
+    """How much of the open file is dead: free blocks DuckDB will not give
+    back plus row versions that deletes and rewrites left inside used
+    blocks (``duckdb_tables().estimated_size`` counts those; ``COUNT(*)``
+    does not). Returns the pieces and ``dead_pct`` in ``[0, 1]``."""
+    total_blocks, used_blocks, free_blocks = conn.execute(
+        "SELECT total_blocks, used_blocks, free_blocks FROM pragma_database_size()"
+    ).fetchone()
+    total_blocks = int(total_blocks or 0)
+    used_blocks = int(used_blocks or 0)
+    free_blocks = int(free_blocks or 0)
+    versions = 0
+    live = 0
+    per_table: dict[str, tuple[int, int]] = {}
+    for name, est in conn.execute(
+        "SELECT table_name, estimated_size FROM duckdb_tables() "
+        "WHERE NOT internal AND estimated_size > 1000"
+    ).fetchall():
+        try:
+            n = int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+        except Exception:
+            continue
+        est = int(est or 0)
+        per_table[str(name)] = (est, n)
+        versions += max(est, n)
+        live += n
+    dead_rows = max(0, versions - live)
+    row_dead_share = (dead_rows / versions) if versions else 0.0
+    if total_blocks:
+        dead_pct = (free_blocks / total_blocks) + (used_blocks / total_blocks) * row_dead_share
+    else:
+        dead_pct = 0.0
+    return {
+        "total_blocks": total_blocks, "used_blocks": used_blocks,
+        "free_blocks": free_blocks, "dead_rows": dead_rows, "live_rows": live,
+        "dead_pct": round(min(1.0, dead_pct), 4), "per_table": per_table,
+    }
+
+
+def compact_store_file(db_path: Path, *, force: bool = False) -> dict[str, Any]:
+    """Rewrite ``db_path`` into a fresh DuckDB file and swap it in.
+
+    Must be called with NO connection open on the file (the daemon calls it
+    from ``LocalStore.__init__`` before opening its writer). Steps: open,
+    ``CHECKPOINT`` (folds the WAL in), measure, and unless ``force`` return
+    early when the file is small or mostly live; else ``COPY FROM DATABASE``
+    into ``<db>.compacting``, verify every table's row count matches, close
+    both, move the old file to ``<db>.pre-compact`` and the new one into
+    place. Any failure leaves the original untouched. Never raises."""
+    out: dict[str, Any] = {"ran": False, "path": str(db_path)}
+    tmp = db_path.with_name(db_path.name + ".compacting")
+    cfg = _duckdb_runtime_config()
+    try:
+        try:
+            size_before = db_path.stat().st_size
+        except OSError:
+            out["reason"] = "missing"
+            return out
+        wal = db_path.with_suffix(db_path.suffix + ".wal")
+        try:
+            size_before += wal.stat().st_size
+        except OSError:
+            pass
+        out["before_bytes"] = size_before
+        if not force and size_before < AUTO_COMPACT_MIN_BYTES:
+            out["reason"] = "small"
+            return out
+        try:
+            conn = duckdb.connect(str(db_path), read_only=False, config=cfg)
+        except Exception as exc:
+            # Another process holds the file (IOException "Conflicting lock"),
+            # or this process already has a handle open on it (DuckDB refuses
+            # a second instance with a different config): either way it is
+            # not ours to rewrite right now.
+            out["reason"] = f"locked: {str(exc)[:120]}"
+            return out
+        try:
+            try:
+                conn.execute("CHECKPOINT")
+            except Exception:
+                pass
+            m = measure_dead_space(conn)
+            out.update({k: v for k, v in m.items() if k != "per_table"})
+            if not force and m["dead_pct"] < AUTO_COMPACT_MIN_DEAD_PCT:
+                out["reason"] = "healthy"
+                return out
+            for leftover in (tmp, tmp.with_suffix(tmp.suffix + ".wal")):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+            t0 = time.monotonic()
+            conn.execute(f"ATTACH '{tmp.as_posix()}' AS _compact_target")
+            # The attached catalog is named after the file stem ("clawmetry").
+            conn.execute(f'COPY FROM DATABASE "{db_path.stem}" TO _compact_target')
+            # Verify before trusting the copy: every table, same row count.
+            mismatched = []
+            for (name,) in conn.execute(
+                "SELECT table_name FROM duckdb_tables() "
+                "WHERE NOT internal AND database_name = ?", [db_path.stem]
+            ).fetchall():
+                a = conn.execute(f'SELECT COUNT(*) FROM "{db_path.stem}"."{name}"').fetchone()[0]
+                b = conn.execute(f'SELECT COUNT(*) FROM _compact_target."{name}"').fetchone()[0]
+                if a != b:
+                    mismatched.append((name, a, b))
+            conn.execute("DETACH _compact_target")
+            if mismatched:
+                out["reason"] = f"row-count mismatch: {mismatched[:3]}"
+                log.error("local store: compaction ABORTED, %s", out["reason"])
+                for leftover in (tmp, tmp.with_suffix(tmp.suffix + ".wal")):
+                    try:
+                        leftover.unlink()
+                    except OSError:
+                        pass
+                return out
+            out["copy_secs"] = round(time.monotonic() - t0, 2)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # Swap. The old WAL was folded in by the CHECKPOINT above and removed on
+        # close; a stale one must not be replayed onto the new file.
+        bak = _compaction_backup_path(db_path)
+        try:
+            bak.unlink()
+        except OSError:
+            pass
+        os.replace(db_path, bak)
+        try:
+            os.replace(tmp, db_path)
+        except Exception:
+            os.replace(bak, db_path)  # put the original back, nothing lost
+            raise
+        for stale in (wal, tmp.with_suffix(tmp.suffix + ".wal")):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        out["after_bytes"] = db_path.stat().st_size
+        out["ran"] = True
+        out["backup"] = str(bak)
+        log.info(
+            "local store: compacted %s: %.1f MB -> %.1f MB (dead %.0f%%, %.1fs); "
+            "previous file kept at %s for %g days",
+            db_path, size_before / 1e6, out["after_bytes"] / 1e6,
+            100 * float(out.get("dead_pct", 0)), out.get("copy_secs", 0.0), bak,
+            AUTO_COMPACT_BACKUP_KEEP_DAYS,
+        )
+        return out
+    except Exception as exc:
+        out["reason"] = f"error: {str(exc)[:200]}"
+        log.exception("local store: compaction failed (store left as it was)")
+        for leftover in (tmp, tmp.with_suffix(tmp.suffix + ".wal")):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+        return out
+    finally:
+        _LAST_COMPACTION.clear()
+        _LAST_COMPACTION.update(out)
+        _LAST_COMPACTION["at"] = int(time.time() * 1000)
+
+
+def _maybe_compact_on_startup() -> None:
+    """Writer-startup hook: prune an old backup, then compact if warranted."""
+    if not AUTO_COMPACT_ENABLED:
+        return
+    try:
+        _prune_compaction_backup(DB_PATH)
+        compact_store_file(DB_PATH)
+    except Exception:
+        log.exception("local store: startup compaction check failed (continuing)")
+
+
 def _migrate_legacy_db_path() -> None:
     """If the old events.duckdb exists and the new clawmetry.duckdb doesn't,
     rename in place. Single os.rename — atomic on POSIX. Safe to call on
@@ -3011,6 +3241,8 @@ class LocalStore(TrailStoreMixin):
             # exist yet, the daemon hasn't started, and there's nothing to
             # read anyway.
             _migrate_legacy_db_path()
+            # #5498 — rewrite a mostly-dead file while nothing holds it.
+            _maybe_compact_on_startup()
         # One automatic index rebuild per process (see
         # ``recover_invalidated_db``). A second invalidation is not a stale
         # index and must not become a loop.
@@ -16922,6 +17154,8 @@ class LocalStore(TrailStoreMixin):
             "schema_version": SCHEMA_VERSION,
             "last_flush_ago_s": round(time.monotonic() - self._last_flush_ts, 2),
             "sync_dlq_depth": self.dlq_count(),
+            # #5498 — outcome of this process's startup compaction check.
+            "last_compaction": dict(_LAST_COMPACTION),
         }
 
     def _current_memory_limit(self) -> str | None:
