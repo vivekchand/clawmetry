@@ -119,6 +119,8 @@ def store(tmp_path, monkeypatch):
     sys.modules.pop("clawmetry.local_store", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    from pathlib import Path
+    monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
     st = ls.get_store()
     yield st
     try:

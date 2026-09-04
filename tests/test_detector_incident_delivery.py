@@ -187,6 +187,8 @@ def test_latch_survives_a_restart_on_a_real_store(sinks, tmp_path, monkeypatch):
     sys.modules.pop("clawmetry.local_store", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    from pathlib import Path
+    monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
     store = ls.get_store()
     try:
         assert ia.deliver_incident(store, _incident())["delivered"] is True
