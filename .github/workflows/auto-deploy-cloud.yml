@@ -56,7 +56,12 @@ jobs:
         # pin never advances at all). The Dockerfile installs from PyPI,
         # so the published version is exactly what a pin means.
         run: |
-          VERSION=$(curl -fsSL https://pypi.org/pypi/clawmetry/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])")
+          # Downloaded to a file and then parsed, rather than piped straight
+          # into an interpreter. The payload is data either way, but `curl |
+          # python3` is indistinguishable from piping remote code into a shell
+          # to any reader or scanner looking at this line.
+          curl -fsSL https://pypi.org/pypi/clawmetry/json -o /tmp/pypi-clawmetry.json
+          VERSION=$(python3 -c "import json; print(json.load(open('/tmp/pypi-clawmetry.json'))['info']['version'])")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Latest published OSS version: $VERSION"
 

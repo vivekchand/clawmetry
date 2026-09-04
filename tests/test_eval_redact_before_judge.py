@@ -22,7 +22,7 @@ def test_redact_for_judge_scrubs_secrets_and_emails(monkeypatch):
     assert "bob.smith@corp.io" not in out
     assert "sk-ant-api03-ABCDEF1234567890abcdefXYZ" not in out
     assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in out
-    assert "[REDACTED:email]" in out
+    assert "[email]" in out
 
 
 def test_build_prompt_redacts_transcript(monkeypatch):

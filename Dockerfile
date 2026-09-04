@@ -1,7 +1,12 @@
 # Dockerfile for ClawMetry
 # Quick start: docker build -t clawmetry . && docker run -p 8900:8900 clawmetry
 
-FROM python:3.11-slim
+# Pinned by digest, not just the `3.11-slim` tag: a tag is mutable, so an
+# identical `docker build` could pull different bytes tomorrow. The tag is
+# kept in the reference so the line stays readable, and Dependabot's docker
+# ecosystem (.github/dependabot.yml) advances the digest -- without that, a
+# digest pin would freeze this image at today's CVEs forever.
+FROM python:3.11-slim@sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534
 
 LABEL maintainer="ClawMetry Contributors"
 LABEL description="Real-time observability dashboard for OpenClaw AI agents"
