@@ -46,6 +46,7 @@ test enforces both directions).
 | `runtimes` | live | plaintext | `query_rollup_runtime_daily` | `since`, `until`, `limit` (default 1000, range 1..10000) | Per-runtime daily activity/cost rollup (claude_code, openclaw, ...). |
 | `search` | live | e2e | `query_search` | `q` (required), `model`, `status`, `since`, `until`, `limit` (default 50, range 1..500) | Full-text search over session titles and eval reasons. |
 | `sessions` | live | e2e | `query_sessions` | `agent_id`, `since`, `until`, `limit` (default 100, range 1..2000) | One row per session_id with start/end, event count, cost. |
+| `similar_sessions` | live | e2e | `query_similar_sessions` | `session_id` (required), `window_days` (default 30, range 1..365), `limit` (default 10, range 1..50) | Runs shaped like this one (WO-60): nearest sessions by tool-call n-gram similarity inside a window, same runtime first, with score, runtime, model, cost, outcome. Carries session titles, so content class. |
 | `spans` | live | e2e | `query_spans` | `trace_id`, `session_id`, `agent_type`, `since`, `until`, `limit` (default 200, range 1..2000) | OTel span rows with full filters (trace/session/agent/time). |
 | `traces` | live | e2e | `query_traces` | `session_id`, `agent_type`, `since`, `until`, `limit` (default 100, range 1..1000) | One row per trace_id with aggregate span stats. |
 | `transcript` | live | e2e | `query_events` | `session_id` (required), `limit` (default 500, range 1..5000) | Alias of events scoped to one required session_id. |
@@ -56,4 +57,4 @@ test enforces both directions).
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 15. Planned methods: 5.
+Live methods: 16. Planned methods: 5.
