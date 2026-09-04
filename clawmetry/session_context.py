@@ -290,9 +290,11 @@ def compact_raw_event_data(data: Any) -> Any:
     out = dict(data)
     inner_key = None
     inner = out
-    if isinstance(out.get("data"), dict) and any(k in out["data"] for k in _PAYLOAD_KEYS):
-        inner_key = "data"
-        inner = dict(out["data"])
+    for nk in ("data", "extra"):
+        if isinstance(out.get(nk), dict) and any(k in out[nk] for k in _PAYLOAD_KEYS):
+            inner_key = nk
+            inner = dict(out[nk])
+            break
     if isinstance(inner.get("messages"), list):
         inner["messagesCount"] = len(inner["messages"])
         del inner["messages"]

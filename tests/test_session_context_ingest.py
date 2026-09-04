@@ -196,6 +196,25 @@ def test_family_adapter_shape_via_extra(store):
     assert store.query_session_context(session_id=sid, agent_type="codex") == []
 
 
+def test_family_raw_event_is_compacted_too(store):
+    from clawmetry.session_context import CONTENT_CAP
+    sid = "codex:bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+    store.ingest({
+        "id": "codex:ctx-1", "agent_type": "codex", "node_id": "n", "agent_id": "main",
+        "session_id": sid, "event_type": "context.compiled", "ts": "2026-09-04T11:00:00Z",
+        "data": {"role": "", "content": "", "extra": {"systemPrompt": "y" * (CONTENT_CAP + 10),
+                                                        "messages": [1, 2, 3]}},
+    })
+    store._flush_now()
+    ev = store.query_events(session_id=sid, event_type="context.compiled", limit=5)[0]
+    data = ev["data"] if isinstance(ev["data"], dict) else json.loads(ev["data"])
+    assert "messages" not in data["extra"] and data["extra"]["messagesCount"] == 3
+    assert data["extra"]["systemPromptTruncated"] is True
+    assert len(data["extra"]["systemPrompt"]) <= CONTENT_CAP
+    spr = _by_kind(store.query_session_context(session_id=sid))["system_prompt"][0]
+    assert spr["size_bytes"] == CONTENT_CAP + 10
+
+
 def test_non_context_events_produce_no_rows(store):
     store.ingest({
         "id": "e1", "agent_type": "openclaw", "node_id": "n", "agent_id": "main",
