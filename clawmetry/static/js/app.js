@@ -31808,6 +31808,8 @@ function signalsSetWindow(w) {
 
 function loadSignalsTab() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  loadSignalsIssues(rt);
+  loadSignalsBriefs();
   var url = '/api/signals?window=' + encodeURIComponent(_sigState.window) +
     (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
   fetch(url).then(function (r) { return r.json(); }).then(function (d) {
@@ -32013,4 +32015,235 @@ function signalsRenderCoverage(d, rt) {
   });
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ── Signal shifts: open issues (WO-62) ─────────────────────────────────────
+// One issue per (signal, runtime) whose last 24h left the band learned from
+// its own 28 days. Plain words, Resolve and Ignore, never the matched text.
+// The card is hidden when no issue exists; the honest "why nothing" lives
+// in the headline card's sub line.
+function _sigPostJson(url, body) {
+  return fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  }).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
+}
+
+function loadSignalsIssues(rt) {
+  rt = rt || ((typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all');
+  var url = '/api/signals/issues?status=open' +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    signalsRenderIssues(d || {}, rt);
+  }).catch(function () { signalsRenderIssues({ issues: [], store: 'unavailable' }, rt); });
+}
+
+function signalsIssueBreakdownLine(issue) {
+  var bd = (issue && issue.breakdown) || {};
+  var parts = [];
+  ['model', 'runtime_version', 'tool', 'cwd'].forEach(function (dim) {
+    var list = bd[dim] || [];
+    if (!list.length || list[0].value === 'unknown' || !(list[0].share > 0)) return;
+    var word = { model: _sigT('signals.bd_model', null, 'model'),
+      runtime_version: _sigT('signals.bd_version', null, 'version'),
+      tool: _sigT('signals.bd_tool', null, 'tool'),
+      cwd: _sigT('signals.bd_repo', null, 'repository') }[dim];
+    parts.push(word + ' ' + list[0].value + ' ' + Math.round(list[0].share * 100) + '%');
+  });
+  return parts.length ? _sigT('signals.bd_explains', { parts: parts.join(' · ') }, 'Explains the move: {parts}') : '';
+}
+
+function signalsRenderIssues(d, rt) {
+  var card = document.getElementById('signals-issues-card');
+  var body = document.getElementById('signals-issues-body');
+  var note = document.getElementById('signals-issues-note');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!card || !body) return;
+  var items = (d && d.issues) || [];
+  _sigState.issues = items;
+  if (!items.length) {
+    card.style.display = 'none';
+    body.innerHTML = '';
+    if (sub && d && d.store !== 'unavailable' && d.min_samples) {
+      var ms = d.min_samples;
+      sub.textContent = _sigT('signals.issues_none', { short: ms.short, history: ms.history },
+        'No signal has left its normal band. An issue needs at least {short} turns in the last day and {history} in the month before, per runtime.');
+    }
+    return;
+  }
+  card.style.display = '';
+  if (note) note.textContent = _sigT('signals.issues_count', { n: items.length }, '{n} open');
+  var html = '';
+  items.forEach(function (it) {
+    var sample = _sigT('signals.issue_sample', { during: it.n_during || 0, before: it.n_before || 0 },
+      '{during} turns in the last day, {before} in the month before');
+    var reopened = (it.reopen_count > 0) ? ' <span class="sig-issue-tag">' +
+      sigEsc(_sigT('signals.issue_reopened', { n: it.reopen_count }, 'reopened {n}x')) + '</span>' : '';
+    var bdLine = signalsIssueBreakdownLine(it);
+    html += '<div class="sig-issue" data-issue="' + sigEsc(it.id) + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(it.headline || '') + reopened + '</div>' +
+        '<div class="sig-hint">' + sigEsc(sample) + (bdLine ? ' · ' + sigEsc(bdLine) : '') + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsOpenSessions(\'' + sigEsc(it.signal) + '\')">' +
+          sigEsc(_sigT('signals.issue_sessions', null, 'Sessions')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'resolved\')">' +
+          sigEsc(_sigT('signals.issue_resolve', null, 'Resolve')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'ignored\')">' +
+          sigEsc(_sigT('signals.issue_ignore', null, 'Ignore')) + '</button>' +
+      '</div></div>';
+  });
+  body.innerHTML = html;
+}
+
+function signalsSetIssueStatus(id, status) {
+  _sigPostJson('/api/signals/issues/' + encodeURIComponent(id) + '/status', { status: status })
+    .then(function (j) {
+      if (!j || !j.ok) {
+        var note = document.getElementById('signals-issues-note');
+        if (note) note.textContent = _sigT('signals.issue_err', null, 'Could not update the issue.');
+        return;
+      }
+      loadSignalsIssues();
+    }).catch(function () {});
+}
+
+// ── Briefs (WO-62) ─────────────────────────────────────────────────────────
+var _sigBriefs = { list: [], channels: [], offered: null, max: 10 };
+
+function loadSignalsBriefs() {
+  fetch('/api/briefs').then(function (r) { return r.json(); }).then(function (d) {
+    _sigBriefs.list = (d && d.briefs) || [];
+    _sigBriefs.channels = (d && d.channels) || ['dashboard', 'webhook', 'slack', 'discord', 'telegram'];
+    _sigBriefs.offered = (d && d.offered) || null;
+    _sigBriefs.max = (d && d.max) || 10;
+    signalsRenderBriefs(d || {});
+  }).catch(function () { signalsRenderBriefs({ briefs: [], store: 'unavailable' }); });
+}
+
+function signalsBriefStatusWords(b) {
+  if (!b.last_run_at) return _sigT('signals.brief_never_ran', null, 'Has not run yet');
+  var when = new Date(b.last_run_at).toLocaleString();
+  if (b.last_status === 'ok') return _sigT('signals.brief_last_ok', { when: when }, 'Last run {when}: posted');
+  return _sigT('signals.brief_last_failed', { when: when, err: b.last_error || '' }, 'Last run {when}: failed. {err}');
+}
+
+function signalsRenderBriefs(d) {
+  var el = document.getElementById('signals-briefs-body');
+  var note = document.getElementById('signals-briefs-note');
+  var sel = document.getElementById('signals-brief-channel');
+  if (!el) return;
+  if (sel && !sel.options.length) {
+    _sigBriefs.channels.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+  }
+  var list = _sigBriefs.list;
+  if (note) note.textContent = _sigT('signals.briefs_count', { n: list.length, max: _sigBriefs.max }, '{n} of {max}');
+  var html = '';
+  if (d && d.store === 'unavailable') {
+    html += '<div class="sig-empty">' + sigEsc(_sigT('signals.no_daemon_short', null, 'No daemon connected.')) + '</div>';
+  } else if (!list.length) {
+    html += '<div class="sig-empty">' + sigEsc(_sigT('signals.briefs_none', null, 'No briefs yet. Nothing is scheduled and nothing will be posted.')) + '</div>';
+  }
+  list.forEach(function (b) {
+    html += '<div class="sig-brief' + (b.enabled ? '' : ' sig-brief-off') + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(b.title) +
+          (b.builtin ? ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_builtin', null, 'built in')) + '</span>' : '') +
+          (b.enabled ? '' : ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_off', null, 'off')) + '</span>') + '</div>' +
+        '<div class="sig-hint">' + sigEsc(b.question) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.brief_meta', { cron: b.cron_expr, channel: b.channel_ref || 'dashboard' }, 'Schedule {cron} · channel {channel}')) +
+          ' · ' + sigEsc(signalsBriefStatusWords(b)) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsToggleBrief(\'' + sigEsc(b.id) + '\', ' + (b.enabled ? 'false' : 'true') + ')">' +
+          sigEsc(b.enabled ? _sigT('signals.brief_disable', null, 'Switch off') : _sigT('signals.brief_enable', null, 'Switch on')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsRunBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_run', null, 'Run now')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsDeleteBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_delete', null, 'Delete')) + '</button>' +
+      '</div></div>';
+  });
+  if (_sigBriefs.offered) {
+    var o = _sigBriefs.offered;
+    html += '<div class="sig-brief sig-brief-offer">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(_sigT('signals.digest_offer', null, 'Daily digest')) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.digest_offer_sub', { cron: o.cron_expr },
+          'Sessions, spend and tokens per runtime, every morning ({cron}). Runs without a model credential. Off until you switch it on.')) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsEnableDigest()">' +
+          sigEsc(_sigT('signals.digest_enable', null, 'Switch on')) + '</button>' +
+      '</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function signalsToggleBriefForm(show) {
+  var f = document.getElementById('signals-brief-form');
+  if (!f) return;
+  if (show === undefined) show = f.style.display === 'none';
+  f.style.display = show ? '' : 'none';
+}
+
+function signalsSaveBrief(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  var msg = document.getElementById('signals-brief-form-msg');
+  var body = {
+    title: (document.getElementById('signals-brief-title') || {}).value || '',
+    question: (document.getElementById('signals-brief-question') || {}).value || '',
+    cron_expr: (document.getElementById('signals-brief-cron') || {}).value || '',
+    channel_ref: (document.getElementById('signals-brief-channel') || {}).value || 'dashboard',
+    enabled: true
+  };
+  _sigPostJson('/api/briefs', body).then(function (j) {
+    if (!j || !j.ok) {
+      if (msg) msg.textContent = (j && j.error) || _sigT('signals.brief_err', null, 'Could not save the brief.');
+      return;
+    }
+    if (msg) msg.textContent = '';
+    signalsToggleBriefForm(false);
+    loadSignalsBriefs();
+  }).catch(function () {
+    if (msg) msg.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+  return false;
+}
+
+function signalsEnableDigest() {
+  var o = _sigBriefs.offered || { id: 'builtin_daily_digest' };
+  _sigPostJson('/api/briefs', { id: o.id, enabled: true, channel_ref: o.channel_ref || 'dashboard' })
+    .then(function () { loadSignalsBriefs(); }).catch(function () {});
+}
+
+function signalsToggleBrief(id, enabled) {
+  var b = null;
+  _sigBriefs.list.forEach(function (x) { if (x.id === id) b = x; });
+  if (!b) return;
+  _sigPostJson('/api/briefs', { id: b.id, title: b.title, question: b.question, cron_expr: b.cron_expr,
+    tz: b.tz || '', channel_ref: b.channel_ref || 'dashboard', enabled: !!enabled })
+    .then(function () { loadSignalsBriefs(); }).catch(function () {});
+}
+
+function signalsRunBrief(id) {
+  var note = document.getElementById('signals-briefs-note');
+  if (note) note.textContent = _sigT('signals.brief_running', null, 'Running...');
+  _sigPostJson('/api/briefs/' + encodeURIComponent(id) + '/run', {}).then(function (j) {
+    loadSignalsBriefs();
+    if (note && j && j.result) {
+      note.textContent = j.ok
+        ? _sigT('signals.brief_ran_ok', null, 'Posted.')
+        : _sigT('signals.brief_ran_failed', { err: j.result.error || '' }, 'Failed: {err}');
+    }
+  }).catch(function () {
+    if (note) note.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+}
+
+function signalsDeleteBrief(id) {
+  fetch('/api/briefs/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(function () { loadSignalsBriefs(); }).catch(function () {});
 }
